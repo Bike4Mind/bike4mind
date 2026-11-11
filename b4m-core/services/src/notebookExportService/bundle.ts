@@ -50,6 +50,14 @@ const validPath = (value: string) =>
   !value.includes('\\') &&
   value.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..');
 
+const parseJson = (text: string, where: string): unknown => {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error(`Invalid JSON in ${where}`);
+  }
+};
+
 const rowsOf = async function* (source: Iterable<unknown> | AsyncIterable<unknown>): AsyncGenerator<unknown> {
   for await (const row of source) yield row;
 };
@@ -130,8 +138,13 @@ export async function readExportBundle(read: BundleRead): Promise<{
   collections: Record<string, unknown[]>;
   files: Map<string, Uint8Array>;
 }> {
-  const manifest = JSON.parse(Buffer.from(await read('manifest.json')).toString('utf8')) as ExportBundleManifest;
+  const manifest = parseJson(
+    Buffer.from(await read('manifest.json')).toString('utf8'),
+    'manifest.json'
+  ) as ExportBundleManifest | null;
   if (
+    !manifest ||
+    typeof manifest !== 'object' ||
     manifest.exportVersion !== BUNDLE_EXPORT_VERSION ||
     !Number.isFinite(Date.parse(manifest.exportedAt)) ||
     typeof manifest.platform !== 'string' ||
@@ -139,7 +152,8 @@ export async function readExportBundle(read: BundleRead): Promise<{
     !manifest.collections ||
     typeof manifest.collections !== 'object' ||
     Array.isArray(manifest.collections) ||
-    !Array.isArray(manifest.files)
+    !Array.isArray(manifest.files) ||
+    (manifest.exportedBy !== undefined && typeof manifest.exportedBy !== 'string')
   ) {
     throw new Error('Invalid bundle manifest');
   }
@@ -168,7 +182,7 @@ export async function readExportBundle(read: BundleRead): Promise<{
       ? text
           .slice(0, -1)
           .split('\n')
-          .map(line => JSON.parse(line) as unknown)
+          .map((line, index) => parseJson(line, `${entry.path} line ${index + 1}`))
       : [];
     if (rows.length !== entry.count) throw new Error(`Collection count mismatch: ${name}`);
     collections[name] = rows;
@@ -184,6 +198,7 @@ type NotebookCollections = 'notebooks' | 'chat-messages' | 'knowledge' | 'artifa
 const childCollections = ['chat-messages', 'knowledge', 'artifacts', 'tools', 'agents'] as const;
 const notebookKeys = ['chatHistory', 'knowledge', 'artifacts', 'tools', 'agents'] as const;
 
+/** Buffers every row and file until the end, so memory grows with the export; use createExportBundle with `append` to stream. */
 export async function createNotebookBundle(
   notebooks: Iterable<ExportedNotebook> | AsyncIterable<ExportedNotebook>,
   write: BundleWrite,
@@ -199,7 +214,10 @@ export async function createNotebookBundle(
   };
   const files: BundleFile[] = [];
   const filePaths = new Set<string>();
+  const notebookIds = new Set<string>();
   for await (const notebook of rowsOf(notebooks) as AsyncGenerator<ExportedNotebook>) {
+    if (notebookIds.has(notebook.id)) throw new Error(`Duplicate notebook: ${notebook.id}`);
+    notebookIds.add(notebook.id);
     const { chatHistory, knowledge, artifacts, tools, agents, ...record } = notebook;
     collections.notebooks.push(record);
     const children = [chatHistory, knowledge, artifacts, tools, agents];
@@ -220,6 +238,7 @@ export async function createNotebookBundle(
           row.images = row.images.map(image => {
             if (
               typeof image !== 'string' ||
+              image === '' ||
               !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(image)
             ) {
               return image;
@@ -269,7 +288,7 @@ export async function readNotebookBundle(read: BundleRead): Promise<NotebookExpo
     for (const value of collections[name]) {
       if (!value || typeof value !== 'object') throw new Error(`Invalid ${name} record`);
       const { notebookId, ...record } = value as Record<string, unknown>;
-      const notebook = byId.get(String(notebookId));
+      const notebook = typeof notebookId === 'string' ? byId.get(notebookId) : undefined;
       if (!notebook) throw new Error(`Unknown notebook in ${name}`);
       if (name === 'knowledge' && record.contentPath !== undefined) {
         const path = record.contentPath;
