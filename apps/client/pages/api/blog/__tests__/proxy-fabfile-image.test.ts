@@ -32,6 +32,9 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
 const findById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({ fabFileRepository: { findById } }));
 
+const getSignedUrl = vi.hoisted(() => vi.fn().mockResolvedValue('https://signed.example/a.png'));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl }) }));
+
 const axiosGet = vi.hoisted(() => vi.fn());
 vi.mock('axios', () => ({ default: { get: axiosGet } }));
 
@@ -49,7 +52,7 @@ const ownImage = {
   userId: 'u1',
   mimeType: 'image/png',
   fileName: 'a.png',
-  fileUrl: 'https://storage.example.com/a.png',
+  filePath: 'a.png',
   moderationStatus: 'clean',
 };
 
@@ -82,6 +85,8 @@ describe('POST /api/blog/proxy-fabfile-image', () => {
     const { req, res } = request({ fabFileId: 'f1' });
 
     await mockRefs.handler!(req, res);
+    expect(getSignedUrl).toHaveBeenCalledWith('a.png', 'get', { expiresIn: 300 });
+    expect(axiosGet).toHaveBeenCalledWith('https://signed.example/a.png', expect.anything());
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ success: true, mimeType: 'image/png' });
   });
@@ -101,8 +106,8 @@ describe('POST /api/blog/proxy-fabfile-image', () => {
     expect(findById).not.toHaveBeenCalled();
   });
 
-  it('rejects a file with no stored url as a bad request', async () => {
-    findById.mockResolvedValue({ ...ownImage, fileUrl: undefined });
+  it('rejects a file with no stored path as a bad request', async () => {
+    findById.mockResolvedValue({ ...ownImage, filePath: undefined });
     const { req, res } = request({ fabFileId: 'f1' });
 
     await expect(mockRefs.handler!(req, res)).rejects.toBeInstanceOf(BadRequestError);

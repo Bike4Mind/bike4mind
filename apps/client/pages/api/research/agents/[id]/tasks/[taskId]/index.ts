@@ -4,6 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { researchTaskService } from '@bike4mind/services';
 import { researchDataRepository, researchTaskRepository } from '@bike4mind/database';
 import { ResearchTaskType } from '@bike4mind/common';
+import { browserFileStorage } from '@server/files/browserFileSigner';
 
 const taskIdParamSchema = z.object({ taskId: z.string() });
 
@@ -27,6 +28,7 @@ const handler = baseApi({ auth: true })
             researchTasks: researchTaskRepository,
             researchData: researchDataRepository,
           },
+          storage: browserFileStorage(),
         }
       );
 

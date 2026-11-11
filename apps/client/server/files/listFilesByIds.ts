@@ -5,6 +5,7 @@ import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { fileContentUrl } from '@server/files/browserFileSigner';
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { adminSettingsRepository } from '@bike4mind/database/infra';
@@ -20,15 +21,20 @@ const isObjectIdHex = (id: string) => /^[a-f0-9]{24}$/i.test(id);
  *
  * Shared by the SPA-internal GET /api/files/byIds and the public GET /api/v1/files/by-ids, so the
  * two doors cannot authorize differently.
+ * `browser` hands out the stable app URL (browserFileSigner.ts) instead of a raw S3 link.
  */
-export async function listFilesByIds(req: Request, ids: string[]) {
+export async function listFilesByIds(req: Request, ids: string[], { browser = false }: { browser?: boolean } = {}) {
   const adapter = {
     db: { fabFiles: fabFileRepository, users: userRepository, adminSettings: adminSettingsRepository },
     storage: {
-      ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
-      generateSignedUrl: async (path: string, expireInSeconds: number) => {
-        return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds, audience: 'browser' });
+      generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
+        return await getFilesStorage().getSignedUrl(path, 'get', {
+          expiresIn: expireInSeconds,
+          audience: 'browser',
+          signingDate: options?.signingDate,
+        });
       },
+      ...(browser && { contentUrl: fileContentUrl }),
     },
   };
 
