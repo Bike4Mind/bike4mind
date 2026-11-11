@@ -115,6 +115,29 @@ describe('v2 bundle', () => {
     await expect(readNotebookBundle(read)).rejects.toThrow('checksum mismatch');
   });
 
+  it('rejects many references to one file before expanding them into base64', async () => {
+    const { write, read } = memoryBundle();
+    const image = Buffer.alloc(1024, 42).toString('base64');
+    const source = {
+      ...notebook,
+      knowledge: [],
+      chatHistory: Array.from({ length: 10 }, (_, index) => ({
+        ...notebook.chatHistory[0],
+        id: `msg-${index}`,
+        images: [image],
+      })),
+    };
+    const manifest = await createNotebookBundle([source], write);
+    expect(manifest.files).toHaveLength(1);
+    const storedBytes =
+      Object.values(manifest.collections).reduce((sum, entry) => sum + entry.bytes, 0) +
+      manifest.files.reduce((sum, entry) => sum + entry.bytes, 0);
+    const twoImagesBudget = storedBytes + 2 * image.length;
+    await expect(readNotebookBundle(read, storedBytes - 1)).rejects.toThrow('Bundle byte budget exceeded');
+    await expect(readNotebookBundle(read, twoImagesBudget)).rejects.toThrow('Bundle byte budget exceeded');
+    expect((await readNotebookBundle(read, storedBytes + 10 * image.length)).notebooks[0].chatHistory).toHaveLength(10);
+  });
+
   it('keeps image storage keys when explicitly requested', async () => {
     const { data, write, read } = memoryBundle();
     const source = {

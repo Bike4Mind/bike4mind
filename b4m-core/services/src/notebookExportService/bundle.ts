@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { ExportedNotebook, NotebookExportFormat } from './types';
 
 export const BUNDLE_EXPORT_VERSION = '2.0.0';
+export const MAX_NOTEBOOK_BUNDLE_IMPORT_BYTES = 64 * 1024 * 1024;
 
 export interface BundleEntry {
   path: string;
@@ -139,7 +140,10 @@ function isEntry(value: unknown): value is BundleEntry {
   );
 }
 
-export async function readExportBundle(read: BundleRead): Promise<{
+export async function readExportBundle(
+  read: BundleRead,
+  maxBytes = Number.MAX_SAFE_INTEGER
+): Promise<{
   manifest: ExportBundleManifest;
   collections: Record<string, unknown[]>;
   files: Map<string, Uint8Array>;
@@ -163,6 +167,25 @@ export async function readExportBundle(read: BundleRead): Promise<{
     (manifest.exportedBy !== undefined && typeof manifest.exportedBy !== 'string')
   ) {
     throw new Error('Invalid bundle manifest');
+  }
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error('Invalid bundle byte budget');
+  let remainingBytes = maxBytes;
+  for (const [name, entry] of Object.entries(manifest.collections)) {
+    if (
+      !/^[a-z][a-z0-9-]*$/.test(name) ||
+      !isEntry(entry) ||
+      entry.path !== `collections/${name}.jsonl` ||
+      !Number.isSafeInteger(entry.count) ||
+      entry.count < 0
+    )
+      throw new Error(`Invalid collection: ${name}`);
+    if (entry.bytes > remainingBytes) throw new Error('Bundle byte budget exceeded');
+    remainingBytes -= entry.bytes;
+  }
+  for (const entry of manifest.files) {
+    if (!isEntry(entry) || !entry.path.startsWith('files/')) throw new Error('Invalid external file entry');
+    if (entry.bytes > remainingBytes) throw new Error('Bundle byte budget exceeded');
+    remainingBytes -= entry.bytes;
   }
   const seen = new Set<string>();
   const checked = async (entry: BundleEntry, expectedPath?: string): Promise<Buffer> => {
@@ -267,8 +290,21 @@ export async function createNotebookBundle(
   return createExportBundle({ collections, files, ...bundleMetadata }, write);
 }
 
-export async function readNotebookBundle(read: BundleRead): Promise<NotebookExportFormat> {
-  const { manifest, collections, files } = await readExportBundle(read);
+export async function readNotebookBundle(
+  read: BundleRead,
+  maxDecodedBytes = MAX_NOTEBOOK_BUNDLE_IMPORT_BYTES
+): Promise<NotebookExportFormat> {
+  const { manifest, collections, files } = await readExportBundle(read, maxDecodedBytes);
+  let remainingBytes = maxDecodedBytes;
+  for (const entry of [...Object.values(manifest.collections), ...manifest.files]) remainingBytes -= entry.bytes;
+  const decodeFile = (path: unknown, kind: string): string => {
+    const bytes = typeof path === 'string' ? files.get(path) : undefined;
+    if (!bytes) throw new Error(`Missing ${kind} file`);
+    const encodedLength = Math.ceil(bytes.length / 3) * 4;
+    if (encodedLength > remainingBytes) throw new Error('Bundle byte budget exceeded');
+    remainingBytes -= encodedLength;
+    return Buffer.from(bytes).toString('base64');
+  };
   if (!Array.isArray(collections.notebooks)) throw new Error('Missing notebook collection');
   const notebooks = collections.notebooks.map(row => {
     if (!row || typeof row !== 'object' || typeof (row as ExportedNotebook).id !== 'string') {
@@ -296,22 +332,14 @@ export async function readNotebookBundle(read: BundleRead): Promise<NotebookExpo
       const notebook = typeof notebookId === 'string' ? byId.get(notebookId) : undefined;
       if (!notebook) throw new Error(`Unknown notebook in ${name}`);
       if (name === 'knowledge' && record.contentPath !== undefined) {
-        const path = record.contentPath;
-        const bytes = typeof path === 'string' ? files.get(path) : undefined;
-        if (!bytes) {
-          throw new Error('Missing knowledge file');
-        }
-        record.content = Buffer.from(bytes).toString('base64');
+        record.content = decodeFile(record.contentPath, 'knowledge');
         delete record.contentPath;
       }
       if (name === 'chat-messages' && Array.isArray(record.images)) {
         record.images = record.images.map(image => {
           if (typeof image === 'string') return image;
           if (!image || typeof image !== 'object' || !('contentPath' in image)) throw new Error('Invalid image entry');
-          const path = (image as { contentPath: unknown }).contentPath;
-          const bytes = typeof path === 'string' ? files.get(path) : undefined;
-          if (!bytes) throw new Error('Missing image file');
-          return Buffer.from(bytes).toString('base64');
+          return decodeFile((image as { contentPath: unknown }).contentPath, 'image');
         });
       }
       (notebook[key] as unknown[]).push(record);

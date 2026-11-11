@@ -159,6 +159,36 @@ describe('bundle import errors and version scope', () => {
     });
   });
 
+  it('rejects reference fan-out before any notebook is written', async () => {
+    const { adapters } = makeAdapters();
+    const data = new Map<string, Uint8Array>();
+    const image = Buffer.alloc(1024 * 1024, 42).toString('base64');
+    const source: ExportedNotebook = {
+      ...NOTEBOOK,
+      tags: [],
+      isAutoNamed: false,
+      chatHistory: Array.from({ length: 50 }, (_, index) => ({
+        ...MESSAGE,
+        id: `message-${index}`,
+        images: [image],
+      })),
+    } as ExportedNotebook;
+    await createNotebookBundle([source], async (path, bytes) => {
+      data.set(path, Buffer.from(bytes));
+    });
+    const read = async (path: string) => {
+      const bytes = data.get(path);
+      if (!bytes) throw new Error(`Missing ${path}`);
+      return bytes;
+    };
+    await expect(new NotebookImportService(adapters).importBundle('user-1', read, OPTIONS)).rejects.toMatchObject({
+      name: 'NotebookImportError',
+      code: 'INVALID_FORMAT',
+      message: 'Bundle byte budget exceeded',
+    });
+    expect(adapters.sessionRepository.create).not.toHaveBeenCalled();
+  });
+
   it('rejects a single-file payload labelled 2.0.0', async () => {
     const { adapters } = makeAdapters();
     await expect(

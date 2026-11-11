@@ -106,6 +106,8 @@ Only `notebooks` is required; a reader treats a missing child collection as empt
 Message `images` may contain `{ "contentPath": "files/<sha256>" }` for embedded image bytes,
 or a string storage reference if the producer exported images as keys. Consumers need
 access to the original storage system for a string reference.
+The notebook bundle importer limits stored records and files plus reconstructed base64
+references to 64 MiB. A bundle with more data must be split before import.
 
 The published [manifest JSON Schema](https://docs.bike4mind.com/schemas/export-v2/manifest.schema.json)
 and [notebook](https://docs.bike4mind.com/schemas/export-v2/notebook.schema.json),
