@@ -1,4 +1,6 @@
 import { IFeedbackDocument, FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
+import type { FeedbackView } from './feedbackTabSearch';
+import type { FeedbackReceivedWindow } from './feedbackTrends';
 
 // Extended feedback document with MongoDB _id field. `contentExpired` is added by the API's
 // hydrateFeedbackText join - true when content was submitted but has since aged out under the
@@ -31,6 +33,8 @@ export interface FeedbackFilters {
   subject?: FeedbackSubject;
   /** Empty is every type. */
   types: FeedbackType[];
+  /** Undefined is any age. */
+  received?: FeedbackReceivedWindow;
   sortAscending: boolean;
 }
 
@@ -54,6 +58,7 @@ export interface FeedbackListFilterParams {
   /** `Feedback` also matches reports with no type (help modal, older reports). */
   type?: FeedbackType[];
   organization?: string[];
+  received?: FeedbackReceivedWindow;
   search?: string;
   sort: 'asc' | 'desc';
 }
@@ -92,6 +97,10 @@ export interface UseFeedbackFiltersReturn {
   setSubject: (subject: FeedbackSubject | undefined) => void;
   /** Empty clears the filter back to every type. */
   setTypes: (types: FeedbackType[]) => void;
+  /** Undefined clears the filter back to any age. */
+  setReceived: (received: FeedbackReceivedWindow | undefined) => void;
+  /** Replaces every filter with the defaults plus `view`, and clears the search box. */
+  showOnly: (view: Partial<Pick<FeedbackView, 'statusFilters' | 'types' | 'received'>>) => void;
   toggleSortDirection: () => void;
   /** Debounced, server-ready filter query. Feeds both the list and the CSV export. */
   filterParams: FeedbackListFilterParams;

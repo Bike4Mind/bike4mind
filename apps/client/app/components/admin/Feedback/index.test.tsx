@@ -65,6 +65,8 @@ vi.mock('./FeedbackDetailDrawer', () => ({
       </div>
     ) : null,
 }));
+// Covered by FeedbackTrendStrip.test.tsx; it reads its own query, which these tests do not provide.
+vi.mock('./FeedbackTrendStrip', () => ({ default: () => null }));
 
 import FeedbackTab from './index';
 
@@ -121,6 +123,8 @@ const defaultFiltersReturn: UseFeedbackFiltersReturn = {
   setSelectedOrganizations: vi.fn(),
   setSubject: vi.fn(),
   setTypes: vi.fn(),
+  setReceived: vi.fn(),
+  showOnly: vi.fn(),
   toggleSortDirection: vi.fn(),
   filterParams: { sort: 'desc' },
 };
@@ -557,12 +561,12 @@ describe('FeedbackTab', () => {
       expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No feedback matches these filters');
       await userEvent.click(screen.getByTestId('feedback-empty-clear-btn'));
 
-      expect(defaultFiltersReturn.setSubject).toHaveBeenCalledWith(undefined);
-      expect(defaultFiltersReturn.setSelectedOrganizations).toHaveBeenCalledWith([]);
-      expect(defaultFiltersReturn.setStatusFilters).toHaveBeenCalledWith({
-        [FeedbackStatus.New]: true,
-        [FeedbackStatus.InProgress]: true,
-        [FeedbackStatus.Closed]: true,
+      expect(defaultFiltersReturn.showOnly).toHaveBeenCalledWith({
+        statusFilters: {
+          [FeedbackStatus.New]: true,
+          [FeedbackStatus.InProgress]: true,
+          [FeedbackStatus.Closed]: true,
+        },
       });
     });
 

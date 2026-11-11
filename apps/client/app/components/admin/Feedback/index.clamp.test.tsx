@@ -19,6 +19,7 @@ vi.mock('@client/app/utils/feedbackAPICalls', () => ({
   deleteFeedbackFromServer: mocks.deleteFeedbackFromServer,
   updateFeedbackOnServer: vi.fn(),
   getAllFeedbackForExport: vi.fn(),
+  getFeedbackTrendsFromServer: vi.fn(() => new Promise(() => undefined)),
   FEEDBACK_EXPORT_MAX_ROWS: 5000,
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
