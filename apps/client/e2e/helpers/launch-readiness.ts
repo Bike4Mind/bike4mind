@@ -32,9 +32,9 @@ export async function throttleToSlowLink(page: Page): Promise<void> {
 
 /**
  * Asserts a control can be used as-is on the current viewport: scrolled to, fully inside the
- * viewport, and the topmost element at the centre and both horizontal ends of each line box, so no dialog, toast,
- * banner or overlay sits over it. Call it only on an enabled control, since a disabled Joy button
- * drops pointer events and would never be hit.
+ * viewport, and the topmost element at the centre and both horizontal ends of each line box, so
+ * no dialog, toast, banner or overlay sits over it. Call it only on an enabled control, since a
+ * disabled Joy button drops pointer events and would never be hit.
  */
 export async function expectReachable(control: Locator, name: string): Promise<void> {
   await control.scrollIntoViewIfNeeded();
