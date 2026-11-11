@@ -1,4 +1,3 @@
-import { GENERATED_CONTENT_KEY_RE } from '@bike4mind/common';
 import { Session } from '@bike4mind/database';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
@@ -7,7 +6,7 @@ import {
   MAX_PURGE_SESSION_IDS,
   enqueueGeneratedMediaPurge,
 } from '@server/sessions/generatedMediaPurgeQueue';
-import { runGeneratedMediaPurge } from '@server/sessions/purgeDeletedNotebookMedia';
+import { GENERATED_MEDIA_KEY_RE, runGeneratedMediaPurge } from '@server/sessions/purgeDeletedNotebookMedia';
 import { z, ZodError } from 'zod';
 
 // Under the 5-minute Lambda timeout (infra/queues.ts), leaving room for the CDN flush.
@@ -23,7 +22,7 @@ const Payload = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('keys'),
-    keys: z.array(z.string().regex(GENERATED_CONTENT_KEY_RE)).min(1).max(MAX_PURGE_KEYS),
+    keys: z.array(z.string().regex(GENERATED_MEDIA_KEY_RE)).min(1).max(MAX_PURGE_KEYS),
     ownerIds: z.array(z.string().min(1)).min(1).max(MAX_PURGE_OWNER_IDS),
   }),
 ]);

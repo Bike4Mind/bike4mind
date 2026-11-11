@@ -234,7 +234,7 @@ describe('runGeneratedMediaPurge', () => {
         { sessionIds: ids },
         { deadline: Date.now() + PURGE_BUDGET_MS, deletedSessionIds: new Set(ids), logger }
       );
-      expect(leftovers).toEqual({ leftoverSessionIds: [], leftoverKeys: [] });
+      expect(leftovers).toEqual({ leftoverSessionIds: [], leftoverKeys: [], ownerIds: ['u1'] });
       expect(pageFinds(find)).toBe(3);
     } finally {
       vi.restoreAllMocks();
@@ -288,7 +288,7 @@ describe('runGeneratedMediaPurge', () => {
         { sessionIds: ids },
         { deadline: Date.now() - 1, deletedSessionIds: new Set(ids), logger }
       );
-      expect(leftovers).toEqual({ leftoverSessionIds: ids, leftoverKeys: [] });
+      expect(leftovers).toEqual({ leftoverSessionIds: ids, leftoverKeys: [], ownerIds: [] });
       expect(find).not.toHaveBeenCalled();
     } finally {
       vi.restoreAllMocks();

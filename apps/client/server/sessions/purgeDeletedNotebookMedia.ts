@@ -1,4 +1,3 @@
-import { GENERATED_CONTENT_KEY_RE } from '@bike4mind/common';
 import { FabFile, GenerationJobModel, Quest, Session, questRepository, sessionRepository } from '@bike4mind/database';
 import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import {
@@ -27,9 +26,11 @@ export const MAX_DELETES_PER_RUN = MAX_PATHS_PER_BATCH;
 
 const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
 
-// Only the bare `<uuid>.<ext>` keys the generation tools mint are ever purged.
+// Only the bare `<uuid>.<ext>` keys the generation tools mint are ever purged. Wider than
+// GENERATED_CONTENT_KEY_RE (@bike4mind/common) only in admitting digits in the extension (.mp4).
+export const GENERATED_MEDIA_KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-z0-9]+$/i;
 export const isGeneratedContentKey = (key: unknown): key is string =>
-  typeof key === 'string' && GENERATED_CONTENT_KEY_RE.test(key);
+  typeof key === 'string' && GENERATED_MEDIA_KEY_RE.test(key);
 
 // Keys some LIVE notebook other than the deleted ones, or some LIVE file, still references.
 async function findRetainedKeys(keys: string[], deleted: Set<string>): Promise<Set<string>> {
