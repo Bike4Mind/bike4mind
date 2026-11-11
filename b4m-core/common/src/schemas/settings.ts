@@ -5332,7 +5332,7 @@ export const settingsMap = {
     min: 0,
     int: true,
     description:
-      'Largest Signup Grant Initial Credits or Invite Bonus Credits that can be saved while the Signup Grant Assessment Policy is off. A larger grant needs a valid, enabled policy, and the policy cannot be turned off while a grant is above this limit. Full administrators only.',
+      'Largest Signup Grant Initial Credits or Invite Bonus Credits that can be saved while the Signup Grant Assessment Policy is off. A larger grant needs a valid, enabled policy, and the policy cannot be turned off while a grant is above this limit. While the policy is off, the first signup tranche paid at verification is also capped at this limit and the rest waits for the unlock. Full administrators only.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
