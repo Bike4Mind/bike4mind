@@ -26,17 +26,6 @@ export const domain =
   // If SEED_STAGE_NAME is set, it appends it to 'previewDomain' to form a subdomain.
   ((process.env.SEED_STAGE_NAME || '').length > 0 ? `${process.env.SEED_STAGE_NAME}.${previewDomain}` : undefined);
 
-export function getAllowedOrigins(domain: string | undefined): string[] {
-  const origins = ['http://localhost:3000', 'https://localhost:3000'];
-
-  if (domain) {
-    origins.push(`https://app.${domain}`);
-    origins.push(`https://staging.${domain}`);
-  }
-
-  return origins;
-}
-
 // const router = isPermanentStage
 //   ? new sst.aws.Router('Router', {
 //       domain: {

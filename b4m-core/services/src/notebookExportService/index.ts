@@ -474,17 +474,15 @@ export class NotebookExportService {
               if (content !== null) {
                 exportedFile.content = content.toString('base64');
               } else {
-                exportedFile.contentUrl = file.fileUrl ?? storagePath; // Fallback to URL or path reference
+                exportedFile.contentUrl = storagePath; // Fallback to path reference
               }
-            } else {
-              exportedFile.contentUrl = file.fileUrl; // No storage path; use available URL
             }
           } catch (error) {
             this.adapters.logger.warn('Failed to export file content', { fileId: file.id, error });
-            exportedFile.contentUrl = file.fileUrl ?? file.filePath; // Fallback to reference
+            exportedFile.contentUrl = file.filePath; // Fallback to reference
           }
         } else {
-          exportedFile.contentUrl = file.fileUrl ?? file.filePath;
+          exportedFile.contentUrl = file.filePath;
         }
 
         return exportedFile;
@@ -513,14 +511,14 @@ export class NotebookExportService {
     // matter once the query above began resolving rows at all.
     //
     // The `$or` is the same predicate `ArtifactRepository.findByUserWithAccess` expresses and
-    // `artifactService/get` enforces via `canUserAccessArtifact`. It is needed HERE because
+    // `artifactService/get` enforces via `readAccess`. It is needed HERE because
     // `getSessionsToExport` scopes SESSIONS by userId and the scoping stops there:
     // `session.artifactIds` is a client-supplied `z.array(z.string())` that `updateSession` writes
     // through unvalidated, so an id arriving here is not necessarily the caller's. Reachable only
     // since this query started resolving rows - before that it threw and returned nothing.
     //
     // Two consequences that are visible rather than hidden, both deliberate: neither this clause
-    // nor `canUserAccessArtifact` honours `visibility: 'project' | 'organization'`, so an
+    // nor `readAccess` honours `visibility: 'project' | 'organization'`, so an
     // org-shared artifact drops out of an export - this makes export exactly as strict as
     // `GET /artifacts/:id` and no stricter, which is the right default but is a change. And in a
     // collaborative session an artifact owned by another participant now leaves the owner's

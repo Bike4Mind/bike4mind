@@ -555,6 +555,9 @@ export interface IUser extends ICreditHolder {
   aupAcceptedAt?: Date | null;
   /** True when the user attested to being 18 or older. No DOB is collected or stored. */
   ageAttestedAdult?: boolean | null;
+  /** Terms version (`CURRENT_POLICY_VERSION`) accepted on Stripe Checkout's consent checkbox, and when. */
+  checkoutTermsAcceptedVersion?: string | null;
+  checkoutTermsAcceptedAt?: Date | null;
 
   // email verification
   emailVerified: boolean;

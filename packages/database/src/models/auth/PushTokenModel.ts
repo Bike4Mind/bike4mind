@@ -138,6 +138,23 @@ export class PushTokenRepository {
   async findByUser(userId: string, kind: PushTokenKind): Promise<IPushTokenDocument[]> {
     return PushTokenModel.find({ userId: new Types.ObjectId(userId), kind }).exec();
   }
+
+  /** The live activity tokens registered for one quest; scoped to the owner so a quest id alone reaches no one. */
+  async findLiveActivityByQuest(userId: string, questId: string): Promise<IPushTokenDocument[]> {
+    if (!mongoose.isObjectIdOrHexString(userId)) return [];
+    return PushTokenModel.find({ userId: new Types.ObjectId(userId), kind: 'liveActivity', questId }).exec();
+  }
+
+  /** Drops a finished quest's live activity tokens; returns how many rows were removed. */
+  async removeLiveActivityByQuest(userId: string, questId: string): Promise<number> {
+    if (!mongoose.isObjectIdOrHexString(userId)) return 0;
+    const result = await PushTokenModel.deleteMany({
+      userId: new Types.ObjectId(userId),
+      kind: 'liveActivity',
+      questId,
+    }).exec();
+    return result.deletedCount;
+  }
 }
 
 export const pushTokenRepository = new PushTokenRepository();

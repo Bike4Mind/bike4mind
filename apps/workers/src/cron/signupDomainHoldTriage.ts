@@ -1,14 +1,15 @@
 /**
- * Works the Signup Domain Holds queue (/admin?tab=signup-domain-holds) for the holds that need no
- * judgment. A hold only ever keeps free credits held, so this job may confirm a hold but never
- * releases one: a release pays out credits and stays an admin action in the route
- * apps/client/pages/api/admin/signup-domain-holds.ts.
+ * Works the Signup Domain Holds queue (/admin?tab=signup-domain-holds). The rule below only confirms
+ * (keeps free credits held). Only the advisory assessment may release, and only when an operator
+ * turned auto-release on and its code guards pass; otherwise a release stays an admin action in the
+ * route apps/client/pages/api/admin/signup-domain-holds.ts.
  *
  * Rule: a `disposable-aggregate` hold is confirmed when the autoConfirmDisposableAggregateHolds
  * setting is on. Each confirmation writes a strict Admin Audit Log entry attributed to the system in
  * the same transaction, and the hold's autoDecision marks the row in the admin tab.
  * Advisory assessment: after the rule, pending young-domain holds get a Decisions verdict when
- * signupDomainHoldAssessmentEnabled is on; a confident abuse verdict confirms the same way (see
+ * signupDomainHoldAssessmentEnabled is on; a confident abuse verdict confirms the same way, and a
+ * confident legitimate verdict releases under the auto-release guards and daily cap (see
  * apps/client/server/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts).
  * Young-domain recheck: last, runSignupDomainAgeRecheck (signupDomainAgeRecheck.ts) marks pending
  * young-domain holds whose domain has since aged, for an admin to release. It never releases.

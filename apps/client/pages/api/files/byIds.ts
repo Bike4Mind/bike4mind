@@ -26,7 +26,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       return res.status(400).json({ message: `Too many ids (max ${MAX_IDS})` });
     }
 
-    const results = await listFilesByIds(req, ids);
+    const results = await listFilesByIds(req, ids, { browser: true });
 
     return res.json(results);
   }
