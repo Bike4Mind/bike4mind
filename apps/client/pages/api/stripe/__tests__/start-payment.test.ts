@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { CreditPackageId, TransactionType } from '@client/lib/credits/types';
-import { CreditPurchaseEvents, MIN_PRICE_PER_CREDIT_USD } from '@bike4mind/common';
+import { CreditPurchaseEvents, CURRENT_POLICY_VERSION, MIN_PRICE_PER_CREDIT_USD } from '@bike4mind/common';
 
 type Middleware = (req: unknown, res: unknown, next: (error?: unknown) => void) => void;
 
@@ -35,11 +35,14 @@ vi.mock('@server/middlewares/requireStripeWebhook', () => ({
 }));
 
 const mockUserUpdate = vi.fn();
+const mockGetSettingsValue = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   userRepository: {
     update: (...args: unknown[]) => mockUserUpdate(...args),
   },
-  adminSettingsRepository: {},
+  adminSettingsRepository: {
+    getSettingsValue: (...args: unknown[]) => mockGetSettingsValue(...args),
+  },
 }));
 
 let storedSettings: Record<string, unknown> = {};
@@ -464,6 +467,65 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
       await (handler as HandlerFn)(req, res);
 
       expect(mockPaymentIntentsCreate.mock.calls[0][0]).not.toHaveProperty('payment_method_options');
+    });
+  });
+
+  describe('terms consent for credit purchases', () => {
+    const packageBody = { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 };
+    const termsSetting = (on: boolean) =>
+      mockGetSettingsValue.mockImplementation(async (key: string) =>
+        key === 'requireCheckoutTermsConsent' ? on : undefined
+      );
+
+    it('refuses with 400 before touching Stripe when the setting is on and terms were not accepted', async () => {
+      termsSetting(true);
+      const { req, res } = makeReq(packageBody, { stripeCustomerId: undefined });
+
+      await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockCreateCustomer).not.toHaveBeenCalled();
+      expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
+    });
+
+    it('stamps the current terms version on the intent when the setting is on and terms were accepted', async () => {
+      termsSetting(true);
+      const { req, res } = makeReq({ ...packageBody, acceptedTerms: true });
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockPaymentIntentsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ termsAcceptedVersion: CURRENT_POLICY_VERSION }),
+        })
+      );
+    });
+
+    it('never takes the terms version from the request body', async () => {
+      const forged = {
+        ...packageBody,
+        acceptedTerms: true,
+        termsAcceptedVersion: 'forged',
+        metadata: { termsAcceptedVersion: 'forged' },
+      };
+      const send = async () => {
+        const { req, res } = makeReq(forged);
+        await (handler as HandlerFn)(req, res);
+      };
+      termsSetting(false);
+      await send();
+      termsSetting(true);
+      await send();
+
+      expect(mockPaymentIntentsCreate.mock.calls[0][0].metadata).not.toHaveProperty('termsAcceptedVersion');
+      expect(mockPaymentIntentsCreate.mock.calls[1][0].metadata.termsAcceptedVersion).toBe(CURRENT_POLICY_VERSION);
+    });
+
+    it('adds no terms version while the setting is off', async () => {
+      termsSetting(false);
+      const { req, res } = makeReq({ ...packageBody, acceptedTerms: true });
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockPaymentIntentsCreate.mock.calls[0][0].metadata).not.toHaveProperty('termsAcceptedVersion');
     });
   });
 });

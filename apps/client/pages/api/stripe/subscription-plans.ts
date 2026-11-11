@@ -1,11 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { isEnforceCreditsLocked } from '@bike4mind/common';
+import { getWebsiteUrl, isEnforceCreditsLocked, WEBSITE_URL } from '@bike4mind/common';
 import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
 import type { Request, Response } from 'express';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
+import { isCheckoutTermsConsentRequired } from '@server/integrations/stripe/termsConsent';
 import { z } from 'zod';
 import type Stripe from 'stripe';
 
@@ -33,7 +34,12 @@ const desktopCatalog = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
     configured(Config.STRIPE_SECRET_KEY) &&
     configured(Config.STRIPE_PUBLISHABLE_KEY) &&
     (isDevelopment() || configured(Config.STRIPE_WEBHOOK_SECRET));
-  if (!billingEnabled) return res.json({ billingEnabled: false, plans: [], ...creditPackages });
+  if (!billingEnabled) {
+    return res.json({ billingEnabled: false, termsConsentRequired: false, plans: [], ...creditPackages });
+  }
+  const termsConsentRequired = await isCheckoutTermsConsentRequired();
+  // The desktop app has no build-time website URL, so the server names the page the checkbox links to.
+  const termsUrl = termsConsentRequired && WEBSITE_URL ? getWebsiteUrl('terms-of-service') : null;
   const plans = await Promise.all(
     SUBSCRIPTION_PLANS.filter(plan => !plan.hidden && plan.name === 'Professional' && configured(plan.priceId)).map(
       async plan => {
@@ -65,7 +71,13 @@ const desktopCatalog = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
       }
     )
   );
-  return res.json({ billingEnabled, plans: plans.filter(plan => plan !== null), ...creditPackages });
+  return res.json({
+    billingEnabled,
+    termsConsentRequired,
+    termsUrl,
+    plans: plans.filter(plan => plan !== null),
+    ...creditPackages,
+  });
 });
 
 const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {

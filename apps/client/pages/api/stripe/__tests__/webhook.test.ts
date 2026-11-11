@@ -157,6 +157,7 @@ vi.mock('@server/billing/billingEventStore', () => ({ recordBillingEvent: mocks.
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' }, App: { stage: 'test' } } }));
 
 import '@pages/api/stripe/webhook';
+import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 
@@ -1176,5 +1177,70 @@ describe('checkout.session.completed - terms consent', () => {
     await deliver(completed({ client_reference_id: null, consent: { terms_of_service: 'accepted' } }));
 
     expect(mocks.updateUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('payment_intent.succeeded - credit purchase terms consent', () => {
+  const succeeded = (metadata: Record<string, unknown>) => ({
+    type: 'payment_intent.succeeded',
+    created: 1_800_000_000,
+    data: {
+      object: {
+        object: 'payment_intent',
+        id: 'pi_terms',
+        amount: 2000,
+        currency: 'usd',
+        customer: 'cus_1',
+        metadata: { environment: 'test', credits: '100', userId: 'user_1', ...metadata },
+      },
+    },
+  });
+
+  // The grant and everything after it have their own suites; stopping there keeps this to the terms record.
+  beforeEach(() => {
+    vi.mocked(grantCreditPurchase).mockRejectedValueOnce(new Error('stop after terms'));
+  });
+
+  it('records the version the buyer accepted at start and the event time on the resolved user', async () => {
+    mocks.findUserByStripeCustomerId.mockResolvedValue({ ...owner, id: 'user_by_customer' });
+
+    await expect(deliver(succeeded({ termsAcceptedVersion: '2020-01-01' }))).rejects.toThrow('stop after terms');
+
+    expect(mocks.updateUser).toHaveBeenCalledWith({
+      id: 'user_by_customer',
+      checkoutTermsAcceptedVersion: '2020-01-01',
+      checkoutTermsAcceptedAt: new Date(1_800_000_000 * 1000),
+    });
+  });
+
+  it('records nothing when the intent carries no terms version', async () => {
+    mocks.findUserByStripeCustomerId.mockResolvedValue(owner);
+
+    await expect(deliver(succeeded({}))).rejects.toThrow('stop after terms');
+
+    expect(mocks.updateUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('checkout.session.completed - terms consent in payment mode', () => {
+  it('records the acceptance for a one-time payment session too', async () => {
+    await deliver({
+      type: 'checkout.session.completed',
+      created: 1_800_000_000,
+      data: {
+        object: {
+          id: 'cs_pay',
+          mode: 'payment',
+          client_reference_id: 'user_1',
+          consent: { terms_of_service: 'accepted' },
+        },
+      },
+    });
+
+    expect(mocks.updateUser).toHaveBeenCalledWith({
+      id: 'user_1',
+      checkoutTermsAcceptedVersion: CURRENT_POLICY_VERSION,
+      checkoutTermsAcceptedAt: new Date(1_800_000_000 * 1000),
+    });
   });
 });
