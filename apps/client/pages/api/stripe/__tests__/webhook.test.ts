@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 /**
@@ -160,7 +161,12 @@ import '@pages/api/stripe/webhook';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 
 /** Deliver `event` as a signed webhook. The raw body is irrelevant: constructEvent is mocked. */
-const deliver = async (event: { id?: string; type: string; data: { object: Record<string, unknown> } }) => {
+const deliver = async (event: {
+  id?: string;
+  type: string;
+  created?: number;
+  data: { object: Record<string, unknown> };
+}) => {
   mocks.constructEvent.mockReturnValue(event);
   const { res } = createMocks();
   const req = {
@@ -1139,5 +1145,36 @@ describe('BillingEvent recording', () => {
       { data: { dunningNoticeSent: true } },
       logger
     );
+  });
+});
+
+describe('checkout.session.completed - terms consent', () => {
+  const completed = (object: Record<string, unknown>) => ({
+    type: 'checkout.session.completed',
+    created: 1_800_000_000,
+    data: { object: { id: 'cs_1', ...object } },
+  });
+
+  it('records the current terms version and the event time on the buyer when terms were accepted', async () => {
+    await deliver(completed({ client_reference_id: 'user_1', consent: { terms_of_service: 'accepted' } }));
+
+    expect(mocks.updateUser).toHaveBeenCalledWith({
+      id: 'user_1',
+      checkoutTermsAcceptedVersion: CURRENT_POLICY_VERSION,
+      checkoutTermsAcceptedAt: new Date(1_800_000_000 * 1000),
+    });
+  });
+
+  it('records nothing when the session collected no terms consent', async () => {
+    await deliver(completed({ client_reference_id: 'user_1', consent: null }));
+    await deliver(completed({ client_reference_id: 'user_1' }));
+
+    expect(mocks.updateUser).not.toHaveBeenCalled();
+  });
+
+  it('records nothing when the session names no buyer', async () => {
+    await deliver(completed({ client_reference_id: null, consent: { terms_of_service: 'accepted' } }));
+
+    expect(mocks.updateUser).not.toHaveBeenCalled();
   });
 });

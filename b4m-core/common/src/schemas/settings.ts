@@ -459,6 +459,7 @@ export const SettingKeySchema = z.enum([
   'apiKeyAccountAgeTrustsKeys',
   'requireThreeDSecureOnFirstPurchase',
   'threeDSecureNewAccountDays',
+  'requireCheckoutTermsConsent',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
   'apiKeyUntrustedRequestsPerDay',
@@ -2630,6 +2631,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'paymentRiskFlagHostingNetwork', order: 37 },
       { key: 'requireThreeDSecureOnFirstPurchase', order: 38 },
       { key: 'threeDSecureNewAccountDays', order: 39 },
+      { key: 'requireCheckoutTermsConsent', order: 39.5 },
       { key: 'signupNetworkAlertsEnabled', order: 40 },
       { key: 'signupNetworkAlertWindowMinutes', order: 41 },
       { key: 'signupNetworkAlertMaxPerIp', order: 42 },
@@ -5997,6 +5999,17 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     order: 39,
     dependsOn: 'requireThreeDSecureOnFirstPurchase',
+  }),
+  // Read by apps/client/server/integrations/stripe/termsConsent.ts at subscription checkout.
+  requireCheckoutTermsConsent: makeBooleanSetting({
+    key: 'requireCheckoutTermsConsent',
+    name: 'Require Terms of Service Acceptance at Checkout',
+    defaultValue: false,
+    description:
+      'Adds a required Terms of Service checkbox to Stripe Checkout for subscriptions, and records the acceptance on the account. Stripe rejects the checkout unless a Terms of Service URL is set in the Stripe dashboard (Settings > Public details), so set that first in every Stripe account this stage uses.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    order: 39.5,
   }),
   signupNetworkAlertsEnabled: makeBooleanSetting({
     key: 'signupNetworkAlertsEnabled',
