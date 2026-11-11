@@ -1038,6 +1038,7 @@ describe('POST /api/embed/chat - server-side tools', () => {
     ['global.anthropic.claude-sonnet-5', 'bedrock'],
     ['claude-sonnet-5', 'anthropic'],
     ['gpt-4.1-mini-2025-04-14', 'openai'],
+    ['gemini-2.5-flash', 'gemini'],
   ])('accepts adapter-literal model %s, which carries a backend and no adapterFamily', async (id, backend) => {
     // Only a model the catalog resolved carries adapterFamily. Every built-in model
     // routes on backend alone, so a family-only gate refuses all of them.
