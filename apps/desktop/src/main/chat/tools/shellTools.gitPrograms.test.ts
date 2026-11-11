@@ -243,11 +243,11 @@ const ROWS: [string, string, string][] = [
   ['mv src src.old && mv bad src && git -C src st', '', 'aaaa'],
   ['mv a.ts b.ts && git st', '', 'rrrr'],
   ['rm -rf dist && git st', '', 'rrrr'],
-  ['rm -rf build && mkdir build && cd build && git st', '', 'rrrr'],
-  ['rm -rf build && mkdir -p build && git -C build st', '', 'rrrr'],
-  ['rm -rf tmp && mkdir tmp && cd tmp && git st', '', 'rrrr'],
-  ['rm -rf dist && mkdir dist && cd dist && git lg -3', '', 'rrrr'],
-  ['rm -rf cl && git clone origin.git cl && cd cl && git st', '', 'rrrr'],
+  ['rm -rf build && mkdir build && cd build && git st', '', 'aaaa'],
+  ['rm -rf build && mkdir -p build && git -C build st', '', 'aaaa'],
+  ['rm -rf tmp && mkdir tmp && cd tmp && git st', '', 'aaaa'],
+  ['rm -rf dist && mkdir dist && cd dist && git lg -3', '', 'aaaa'],
+  ['rm -rf cl && git clone origin.git cl && cd cl && git st', '', 'aaaa'],
   ['rm -rf lib && mv bad lib && git -C lib st', '', 'aaaa'],
   ['rm -rf lib && mkdir lib && mv bad/.git lib/ && git -C lib st', '', 'aaaa'],
   ['rm -rf lib && mkdir lib && cp -r bad/. lib && git -C lib st', '', 'aaaa'],
@@ -258,7 +258,14 @@ const ROWS: [string, string, string][] = [
   ['rm -rf **/node_modules && git st', '', 'rrrr'],
   ['rm -rf **/lib && mv bad d3/x/lib && git -C d3/x/lib st', '', 'rrrr'],
   ['rm -rf */lib && git st', '', 'rrrr'],
-  ['rmdir -p tmp/x && git st', '', 'arrr'],
+  ['rmdir -p tmp/x && git st', '', 'aaaa'],
+  ['rmdir elib && mv bad elib && git -C elib st', '', 'aaaa'],
+  ['cp -r bad stage && rmdir elib && mv stage elib && git -C elib st', '', 'aaaa'],
+  ['rmdir -p pa/elib && mv bad pa/elib && git -C pa/elib st', '', 'aaaa'],
+  ['rm -rf outer/lib && mkdir outer/lib && git -C outer/lib st', '', 'aaaa'],
+  ['cd outer && rm -rf lib && mkdir lib && cd lib && git st', '', 'aaaa'],
+  ['rm -rf outer/lib && mkdir -p outer/lib/sub && git -C outer/lib/sub st', '', 'aaaa'],
+  ['rm -rf lib && mkdir lib && git -C lib init && git -C lib st', '', 'aaaa'],
   ['git fetch HTTP::x', '', 'aaaa'],
   ['git fetch HTTPS::x', '', 'aaaa'],
   ['git fetch https://github.com/a/b', '', 'rrrr'],
@@ -272,7 +279,7 @@ const ROWS: [string, string, string][] = [
   ['rm -rf .g* && git st', '', 'aaaa'],
   ['shopt -s dotglob; rm -rf * && git st', '', 'aaaa'],
   ['rm -rf lrepo/* && mv bad/. lrepo && git -C lrepo st', '', 'aaaa'],
-  ['rm -rf * && git st', '', 'rrrr'],
+  ['rm -rf * && git st', '', 'aaaa'],
   ['cp -r vend dist6 && pnpm exec git -C dist6/lib st', '', 'aaaa'],
   ['cp -r vend dist6 && npx git -C dist6/lib st', '', 'aaaa'],
   ['cp -r vend dist6 && npm exec -- git -C dist6/lib st', '', 'aaaa'],
@@ -376,6 +383,13 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     git(join(proj, 'bad'), 'config', 'alias.st', '!touch MARK');
     repository(join(proj, 'lib'), { 'x.ts': 'x' });
     repository(join(proj, 'd3', 'x', 'lib'), { 'x.ts': 'x' });
+    mkdirSync(join(proj, 'elib'));
+    mkdirSync(join(proj, 'pa', 'elib'), { recursive: true });
+    repository(join(proj, 'outer'), { 'x.ts': 'x' });
+    git(join(proj, 'outer'), 'config', 'alias.st', '!touch MARK');
+    repository(join(proj, 'outer', 'lib'), { 'x.ts': 'x' });
+    file(join(proj, 'evil', '.bin', 'git-st'), '#!/bin/sh\ntouch MARK\n', 0o755);
+    file(join(proj, 'evil', '.bin', 'git-foo'), '#!/bin/sh\ntouch MARK\n', 0o755);
     file(join(proj, 'srcx', 'git-hello'), '#!/bin/sh\n', 0o755);
     mkdirSync(join(proj, 'sub', 'deep'), { recursive: true });
     symlinkSync('sub', join(proj, 'sublink'));
@@ -504,9 +518,12 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     });
 
     it.each([
-      ['rm -rf node_modules && git st', 'rrrr'],
-      ['rm -rf node_modules && pnpm i && git st', 'rrrr'],
-      ['mv node_modules nm.old && git st', 'rrrr'],
+      ['rm -rf node_modules && git st', 'aaaa'],
+      ['rm -rf node_modules && pnpm i && git st', 'aaaa'],
+      ['mv node_modules nm.old && git st', 'aaaa'],
+      ['rm -rf node_modules && mv evil node_modules && git st', 'aaaa'],
+      ['mv node_modules nm.old && mv evil node_modules && git foo', 'aaaa'],
+      ['rm -rf node_modules && ln -s evil node_modules && git st', 'aaaa'],
       ['rm -rf node_modules && mkdir -p node_modules/.bin && cp x node_modules/.bin/git-st && git st', 'aaaa'],
     ])('decides %s as %s', async (command, expected) => {
       expect(await cells(command, '')).toBe(expected);

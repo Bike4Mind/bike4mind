@@ -5197,12 +5197,13 @@ const TRUNCATE_VALUED = /^(-s|-r|--size|--reference)$/;
 const TOUCH_VALUED = /^(-r|-d|-t|--reference|--date|--time)$/;
 
 /**
- * The operand words `program` takes away: all of rm and unlink's, the sources of mv's. Null for another program, or one
- * that names a `.git`.
+ * The operand words `program` takes away: all of rm, rmdir and unlink's, the sources of mv's. Null for another program,
+ * or one that names a `.git` or removes parent folders too.
  */
 function removedOperands(program: string, raw: readonly string[]): string[] | null {
   let words: string[];
-  if (/^(rm|unlink)$/.test(program)) {
+  if (/^(rm|rmdir|unlink)$/.test(program)) {
+    if (program === 'rmdir' && raw.some(word => /^(-[^-]*p|--parents)/.test(wordValue(word)))) return null;
     const end = raw.findIndex(word => wordValue(word) === '--');
     words = raw.filter(
       (word, index) => (end !== -1 && index > end) || (index !== end && !wordValue(word).startsWith('-'))
@@ -5381,7 +5382,7 @@ function freshFolder(sub: string, rest: readonly string[]): { folder: string; us
 /** Subcommands taking `--strategy NAME`. */
 const STRATEGY_COMMANDS: ReadonlySet<string> = new Set(['merge', 'pull', 'rebase', 'cherry-pick', 'revert']);
 
-/** Short flags that may precede `-s` in one cluster (a superset: some are letters git rejects there), for the subcommands where `-s` is the strategy. */
+/** Short flags that may precede `-s` in one cluster (a superset), for the subcommands where `-s` is the strategy. */
 const MERGE_NO_VALUE_FLAGS: ReadonlyMap<string, string> = new Map([
   ['merge', 'nqvef'],
   ['pull', 'nqvefakptu46'],
@@ -5391,7 +5392,7 @@ const MERGE_NO_VALUE_FLAGS: ReadonlyMap<string, string> = new Map([
 /** Subcommands whose operands may name a remote by `<name>::<address>`. */
 const REMOTE_HELPER_COMMANDS: ReadonlySet<string> = new Set(['fetch', 'pull', 'push', 'clone', 'ls-remote']);
 
-/** Remote helpers git runs from its own exec path before PATH; the name is matched as written, as git looks up `git-remote-<name>` by it. */
+/** Remote helpers git runs from its own exec path before PATH; names are matched as written. */
 const BUILT_IN_REMOTE_HELPERS: ReadonlySet<string> = new Set(['http', 'https', 'ftp', 'ftps', 'ext']);
 
 /** Merge strategies git builds in; any other name runs a git-merge-<name> program from PATH. */
@@ -6110,16 +6111,9 @@ export async function scanShell(
     const backgrounded =
       tree.rootNode.descendantsOfType('&').length > 0 ||
       tree.rootNode.descendantsOfType('command_name').some(name => name?.text === 'coproc');
-    // Writes alias reads are checked against: a path, none for any config, or `unlisted` (counts only near a config place).
-    // A `removal` takes a tree away (rm, a mv source) and makes no config of its own.
-    const configWrites: {
-      id: number;
-      path?: string;
-      tree?: boolean;
-      unlisted?: boolean;
-      removal?: boolean;
-      recreated?: boolean;
-    }[] = [];
+    // Writes alias reads are checked against: a path, none for any config, or `unlisted` (counts when a config place
+    // lies in the roots). A `removal` takes a tree away (rm, a mv source) and makes no config of its own.
+    const configWrites: { id: number; path?: string; tree?: boolean; unlisted?: boolean; removal?: boolean }[] = [];
     const gitCommands = new Set<number>();
     let writer: number | null = null;
     const aliasChecks: {
@@ -6282,20 +6276,6 @@ export async function scanShell(
       return [...named, ...(followed as string[])].map(place => guardForm(place));
     };
 
-    /** Whether `removal` took a folder away that a mkdir or clone made anew, with no other command writing into it. */
-    const emptyAgain = (removal: (typeof configWrites)[number]): boolean => {
-      if (!removal.removal || !removal.recreated || removal.path === undefined) return false;
-      const form = guardForm(removal.path);
-      return !configWrites.some(
-        write =>
-          !write.removal &&
-          write.path !== undefined &&
-          !mkdirIds.has(write.id) &&
-          !createdFolders.has(write.id) &&
-          guardFormWithin(form, guardForm(write.path))
-      );
-    };
-
     /** Whether `write` (to `target`, as named or as its links lead) may change a config git reads aliases from. */
     const configTouchedAt = (
       write: (typeof configWrites)[number],
@@ -6304,13 +6284,11 @@ export async function scanShell(
     ): boolean => {
       const form = guardForm(target);
       // A program written into a PATH folder, or a folder there laid down around it, may run in place of an alias.
-      const onPath =
-        write.removal !== true &&
-        folders.some(
-          folder =>
-            guardFormWithin(folder, form) ||
-            (write.tree === true && guardFormWithin(form, folder) && (fresh || existing.has(folder)))
-        );
+      const onPath = folders.some(
+        folder =>
+          guardFormWithin(folder, form) ||
+          (write.tree === true && guardFormWithin(form, folder) && (fresh || existing.has(folder)))
+      );
       // A git writer rewrites work-tree files, which may include a file a place names; a clone or work tree lays
       // down a folder that may hold programs.
       if (gitCommands.has(write.id)) {
@@ -6326,8 +6304,6 @@ export async function scanShell(
       if (parent !== null && [guardForm(cwd), real].some(place => guardFormWithin(parent, place))) return true;
       const name = posix.basename(form);
       if (name === '.gitconfig' || name === 'gitconfig') return true;
-      // A new empty folder made where one was taken away holds no config until something is written into it.
-      if (emptyAgain(write)) return false;
       // A folder taken away at or above where git runs may be put back holding a `.git`.
       if (write.removal && [guardForm(cwd), real].some(place => guardFormWithin(form, place))) return true;
       // The git dir and common dir may sit outside any `.git` folder (a `.bare` layout, a linked work tree).
@@ -6841,10 +6817,7 @@ export async function scanShell(
             !guardFormWithin(guardForm(write.path), target)));
       const made = configWrites.some(write => makes(write) && write.path !== undefined && within(write, true));
       const other = configWrites.some(
-        write =>
-          !makes(write) &&
-          !emptyAgain(write) &&
-          (write.path === undefined || within(write, true) || within(write, false))
+        write => !makes(write) && (write.path === undefined || within(write, true) || within(write, false))
       );
       return made && !other ? existing : cwd;
     };
@@ -6875,7 +6848,7 @@ export async function scanShell(
       for (const [id, made] of createdFolders) {
         if (!guardFormWithin(guardForm(made.folder), target)) continue;
         const touched = configWrites.some(
-          write => write.id !== id && !mkdirIds.has(write.id) && !emptyAgain(write) && changesConfigNear(write, target)
+          write => write.id !== id && !mkdirIds.has(write.id) && changesConfigNear(write, target)
         );
         if (touched) break;
         if (!made.user) return { folder: await lookupFolder(made.from), user: false, from: made.from };
@@ -7111,7 +7084,10 @@ export async function scanShell(
       aliasChecks.push(check);
     };
 
-    /** Records the trees `words` take away (see removedOperands) as removals; false, recording none, when one cannot be placed. */
+    /**
+     * Records the trees `words` take away (see removedOperands) as removals; false, recording none, when one cannot be
+     * placed. A glob counts as the folder it opens from when that lies away from where bash is, else as what it matches.
+     */
     const noteRemovals = async (node: Node, words: readonly string[]): Promise<boolean> => {
       if (sep !== '/' || wslLocation(state.cwd) !== null) return false;
       const removed: string[] = [];
@@ -7146,16 +7122,6 @@ export async function scanShell(
       }
       for (const path of removed) configWrites.push({ id: node.id, path, tree: true, removal: true });
       return true;
-    };
-
-    /** Marks removals of `path` or a folder above it as followed by a new empty folder there (a mkdir or clone). */
-    const markRecreated = (path: string): void => {
-      const form = guardForm(path);
-      for (const write of configWrites) {
-        if (write.removal && write.path !== undefined && guardFormWithin(guardForm(write.path), form)) {
-          write.recreated = true;
-        }
-      }
     };
 
     /** The programs a git subcommand looks up on PATH: merge strategies and remote helpers. */
@@ -7277,10 +7243,8 @@ export async function scanShell(
         if (git !== null && !git.unread) await checkGitPrograms(node, git);
         if (feeds && namesInput(wrappedRest, replace)) unreadOperands++;
         const fresh = git === null || git.unread ? null : await noteFreshFolder(node, wrappedRest, git);
-        if (fresh !== null && fresh !== 'reinit') {
-          if (git?.sub === 'clone' && fresh.path !== undefined) markRecreated(fresh.path);
-          configWrites.push(fresh);
-        } else if (fresh === null && git !== null && (git.unread || writesGitConfig(git.sub, git.rest))) {
+        if (fresh !== null && fresh !== 'reinit') configWrites.push(fresh);
+        else if (fresh === null && git !== null && (git.unread || writesGitConfig(git.sub, git.rest))) {
           configWrites.push({ id: node.id });
         } else if (fresh === null && git !== null && GIT_TREE_WRITERS.has(git.sub)) {
           configWrites.push({ id: node.id, path: (await findRepositoryRoot(git.cwd)) ?? git.cwd, tree: true });
@@ -7317,14 +7281,12 @@ export async function scanShell(
             continue;
           }
           for (const target of operandTargets(state.cwd, expand(unquote(word)))) {
-            if (inner === 'mkdir') markRecreated(target);
             configWrites.push({ id: node.id, path: target });
           }
         }
       } else if (
         !CHANGES_DIRECTORY.has(program) &&
         !onlyReads(tokens) &&
-        inner !== 'rmdir' &&
         !configWrites.some(write => write.id === node.id)
       ) {
         const removed = inner === 'mv' ? null : removedOperands(inner, wrappedRest);
