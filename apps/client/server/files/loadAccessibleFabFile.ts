@@ -100,10 +100,8 @@ export async function loadAccessibleFabFile(
     // recorded; preserve the original 404 exactly as getFabFile raised it.
     if (!candidate || grantors.length === 0) throw error;
     const fabFile = await fabFilesService.generateSignedUrl(candidate, adapter);
-    const bypass = await adminBypassLakeIds(
-      req,
-      grantors.map(lake => lake.id)
-    );
+    const resolvedLakeIds = grantors.map(lake => lake.id);
+    const bypass = await adminBypassLakeIds(req, resolvedLakeIds);
     // Same single-file read as the articles `?id=` deep link, via the direct-fetch fallback;
     // strict for an admin-bypass read.
     await dataLakeService.recordLakeAccessEvent(
@@ -111,7 +109,7 @@ export async function loadAccessibleFabFile(
       {
         ...resolveAuditPrincipal(user, req.apiKeyInfo),
         organizationId: normalizeId(user.organizationId),
-        resolvedLakeIds: grantors.map(lake => lake.id),
+        resolvedLakeIds,
         fileIds: [candidate.id],
         ...(bypass.length ? { adminBypassLakeIds: bypass } : {}),
         surface: 'data-lake-file-fallback',
