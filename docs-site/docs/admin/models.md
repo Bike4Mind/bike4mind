@@ -57,8 +57,8 @@ Select a column header to sort by it; select it again to reverse the order. Sort
 | Limited | Users can pick it, but only some of them: access is restricted to tags or entitlements, or the free tier is locked out |
 | Needs review | It waits for a decision before users can pick it |
 | Hidden | No user can pick it. The reason is shown, for example the model is turned off or its provider has no API key configured |
-| Retiring | It is deprecated, or due to be deprecated or retired within 90 days |
-| Retired | It is past its deprecation date, or its provider has retired it |
+| Retiring | Its lifecycle status is deprecated or retired, or the earlier of its deprecation date and retirement date is within 90 days or already passed. A model still served after its retirement date, with no earlier deprecation date, shows as Retiring. It does not apply to a model that is Retired, Hidden or Needs review |
+| Retired | Its deprecation date is today or earlier (UTC), or its provider has retired it and no admin turned it off, or this deployment does not serve it and its lifecycle status is legacy, deprecated or retired. A passed retirement date alone does not make it Retired |
 
 A fix action next to the reason takes you to the change that resolves it: **Turn on**, **Add price**, **Run discovery**, **Review suggestion**, or **Open key settings**.
 
