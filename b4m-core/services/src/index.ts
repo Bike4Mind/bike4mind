@@ -30,6 +30,7 @@ export * as tagService from './tagService';
 export * as artifactService from './artifactService';
 export * as notebookExportService from './notebookExportService';
 export * as notebookImportService from './notebookImportService';
+export * as agentConfigurationService from './agentConfigurationService';
 export * as notebookCurationService from './notebookCurationService';
 export * as dataLakeService from './dataLakeService';
 export * as dataLakeResearchService from './dataLakeResearchService';
