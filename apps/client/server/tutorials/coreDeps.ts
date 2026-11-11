@@ -12,6 +12,7 @@ import {
 } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
 import { getOrCreateSession } from '@server/managers/sessionCrud';
+import { setCoreSessionMarker } from './sessionMarker';
 import { tutorialSheets } from './sheet';
 import type { TutorialServiceDeps } from './service';
 
@@ -68,10 +69,7 @@ export function coreTutorialDepsFor(req: Request): TutorialServiceDeps {
       );
       return true;
     },
-    setSessionMarker: async (sessionId, userId, moduleId) => {
-      if (!(await sessionRepository.findByIdAndUserId(sessionId, userId))) return;
-      await sessionRepository.update({ id: sessionId, tutorial: moduleId ? { owner: 'core', moduleId } : null });
-    },
+    setSessionMarker: setCoreSessionMarker,
     warn: message => req.logger.warn(message),
   };
 }

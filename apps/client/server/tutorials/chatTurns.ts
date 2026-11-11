@@ -6,9 +6,9 @@ import type {
   IUserDocument,
   WorkspaceTurnReply,
 } from '@bike4mind/common';
-import { sessionRepository } from '@bike4mind/database';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { CORE_TUTORIAL_SETTING } from './settingName';
+import { setCoreSessionMarker } from './sessionMarker';
 import { resolveCoreTutorial } from './registry';
 import { coreTutorialVisibleTo } from './visibility';
 
@@ -29,10 +29,7 @@ async function turnsFor(ctx: Omit<CoreTutorialTurnContext, 'quest'>) {
     modules: modules.filter(m => m.id === moduleId),
     models: coreModels,
     // Clears the marker when the script ends the walk, so later turns skip this check.
-    setSessionMarker: async (sessionId, userId, moduleId) => {
-      if (!(await sessionRepository.findByIdAndUserId(sessionId, userId))) return;
-      await sessionRepository.update({ id: sessionId, tutorial: moduleId ? { owner: 'core', moduleId } : null });
-    },
+    setSessionMarker: setCoreSessionMarker,
     warn: message => ctx.logger?.warn(message),
   });
 }
