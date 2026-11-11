@@ -2708,12 +2708,12 @@ function launchedGitCommands(tokens: readonly string[]): string[][] {
 }
 
 /**
- * Whether the git words in `raw` (after `git`) leave the subcommand to words fed in (`inputSub`), or name `placeholder`
- * (`{}`, an xargs replace string) in a global option or the subcommand.
+ * Whether the git words xargs runs, `raw` (after `git`), leave the subcommand to the words it is fed, or name its
+ * replace string `placeholder` in a global option or the subcommand.
  */
-function namesInput(raw: readonly string[], placeholder: string | null, inputSub: boolean): boolean {
+function namesInput(raw: readonly string[], placeholder: string | null): boolean {
   const at = gitSubcommandAt(raw);
-  if (at === null) return inputSub;
+  if (at === null) return true;
   const upto = at === 'open' ? raw : raw.slice(0, at + 1);
   return placeholder !== null && upto.some(word => wordValue(word).includes(placeholder));
 }
@@ -7146,7 +7146,7 @@ export async function scanShell(
       if (expanded === null) unreadOperands++;
       for (const launched of launchedGitCommands(written)) {
         const words = withoutWrappers(launched).slice(1);
-        if ((await gitAliasExpansion(node, launched)) === null || namesInput(words, '{}', false)) unreadOperands++;
+        if ((await gitAliasExpansion(node, launched)) === null) unreadOperands++;
         const git = gitSubcommand(words.map(unquote), state.cwd);
         if (git !== null && !git.unread) await checkGitPrograms(node, git);
       }
@@ -7244,7 +7244,7 @@ export async function scanShell(
         }
         const git = gitSubcommand(wrappedRest.map(unquote), state.cwd);
         if (git !== null && !git.unread) await checkGitPrograms(node, git);
-        if (feeds && namesInput(wrappedRest, replace, true)) unreadOperands++;
+        if (feeds && namesInput(wrappedRest, replace)) unreadOperands++;
         const fresh = git === null || git.unread ? null : await noteFreshFolder(node, wrappedRest, git);
         if (fresh !== null && fresh !== 'reinit') configWrites.push(fresh);
         else if (fresh === null && git !== null && (git.unread || writesGitConfig(git.sub, git.rest))) {
