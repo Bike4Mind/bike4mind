@@ -9,6 +9,7 @@ export type ProfileAction =
   | 'restrict'
   | 'shadowTier'
   | 'role'
+  | 'permissions'
   | 'productAccess'
   | 'tags'
   | 'mfaReset'

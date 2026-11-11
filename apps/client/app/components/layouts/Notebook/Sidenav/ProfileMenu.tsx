@@ -9,6 +9,7 @@ import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useReferralModal } from '@client/app/components/referrals/ReferralModal';
 import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useGetFriendRequests, useReturnToAdmin, useUserLogout } from '@client/app/hooks/data/user';
@@ -276,6 +277,7 @@ const ProfileMenu = () => {
   const isDesktopPromoEnabled = useDesktopPromoEnabled();
   const isPreferenceArenaEnabled = usePreferenceArenaEnabled();
 
+  const { updatePreferences } = useUserSettings();
   const toggleReferralModal = useReferralModal(s => s.toggle);
   const openCookieSettings = useCookieSettings(s => s.open);
   const logEvent = useLogEvent();
@@ -548,6 +550,16 @@ const ProfileMenu = () => {
               }}
             />
           )}
+          <MenuRow
+            testId="profile-menu-send-feedback"
+            icon={<FeedbackOutlinedIcon sx={{ fontSize: '18px' }} />}
+            label={t('feedback.send', 'Send Feedback')}
+            onClick={() => {
+              closeToTrigger();
+              // Set, not toggle: the row must open the form even when it is already showing.
+              updatePreferences({ showHelp: true });
+            }}
+          />
           {modeToggleEnabled && (
             <Box
               role="group"
