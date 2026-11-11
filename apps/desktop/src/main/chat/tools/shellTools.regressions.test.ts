@@ -1445,7 +1445,6 @@ describe('shell approval in a project with a large node_modules', () => {
     ['git config core.worktree .. && git st', 'qrepo'],
     ['git config "$K" x && git st', 'qrepo'],
     ['git config --add && git st', 'qrepo'],
-    ['git init -q x && git st', 'qrepo'],
     ['git submodule add ./s && git st', 'qrepo'],
     ['make && git st', 'qrepo'],
     ["python3 -c 'print(1)' && git st", 'yrepo'],
@@ -1898,8 +1897,8 @@ describe('shell approval in a project with a large node_modules', () => {
     }
   );
 
-  it('asks in every mode for an alias after a sourced file that moves bash', async () => {
-    expect(await judge('source .venv/bin/moves && git st', 'frepo')).toMatchObject(asks);
+  it('asks only in auto mode for an alias after a sourced file, whose PATH and config the scan does not read', async () => {
+    expect(await judge('source .venv/bin/moves && git st', 'frepo')).toMatchObject({ auto: false, full: true });
   });
 
   it.each([
@@ -1913,12 +1912,13 @@ describe('shell approval in a project with a large node_modules', () => {
     'cp -r src dist && git st',
     'rsync -a src/ dist/ && git st',
     'cp -r tpl2/. src && git st',
+    'git init -q x && git st',
+    'mkdir newdir && git init newdir && cd newdir && git st',
   ])('runs %s (in proj/frepo) unasked, as nothing it does reaches the config git reads', async command => {
     expect(await judge(command, 'frepo')).toMatchObject({ auto: true, full: true });
   });
 
   it.each([
-    'mkdir newdir && git init newdir && cd newdir && git st',
     'mkdir newdir && cp -r tpl/. newdir && cd newdir && git st',
     'mkdir newdir && echo x > newdir/y && cd newdir && git st',
     'git submodule add ./s && git st',
