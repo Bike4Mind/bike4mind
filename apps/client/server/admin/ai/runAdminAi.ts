@@ -61,9 +61,9 @@ export type AdminAiRunInput = {
   evidenceLinks?: string[];
   /** Bump to re-ask for the same evidence after a prompt or question change. */
   policyVersion: string;
-  /** Decision-engine features only. */
+  /** Decision-engine features only. Sent verbatim, not pseudonymised: keep identifiers in `evidence`. */
   question?: DecisionQuestion;
-  /** Text-engine features only. */
+  /** Text-engine features only. Sent verbatim, not pseudonymised: keep identifiers in `evidence`. */
   prompt?: { system: string; outputSchema: z.ZodType<AdminAiTextOutput> };
 };
 
