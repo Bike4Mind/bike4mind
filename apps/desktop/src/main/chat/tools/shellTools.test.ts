@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -659,6 +659,13 @@ describe('a worktree session reading its main checkout', () => {
     await writeFile(join(other, '.git', 'worktrees', 'fake', 'gitdir'), join(base, 'elsewhere', '.git'));
     await writeFile(join(worktree, '.git'), `gitdir: ${join(other, '.git', 'worktrees', 'fake')}`);
     expect(await mainCheckoutOf(worktree)).toBeNull();
+  });
+
+  it('does not map a folder whose .git is a link to a worktree onto that worktree\'s repository', async () => {
+    const foreign = join(base, 'foreign');
+    await mkdir(foreign);
+    await symlink(join(worktree, '.git'), join(foreign, '.git'));
+    expect(await mainCheckoutOf(foreign)).toBeNull();
   });
 
   it.each([

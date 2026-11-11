@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { BackgroundProcessInfo } from '@shared/chat';
@@ -814,6 +814,8 @@ export const bashExecute: ToolDefinition = {
  * the main checkout's side is outside it, so a forged `.git` file cannot widen what reads go unasked.
  */
 export async function mainCheckoutOf(directory: string): Promise<string | null> {
+  // A linked worktree's `.git` is a plain file; a symlink would borrow another folder's links.
+  if ((await lstat(join(directory, '.git')).catch(() => null))?.isSymbolicLink()) return null;
   const pointer = await readFile(join(directory, '.git'), 'utf8').catch(() => null);
   const gitdir = pointer === null ? undefined : /^gitdir: (.+)$/m.exec(pointer)?.[1]?.trim();
   if (!gitdir) return null;
