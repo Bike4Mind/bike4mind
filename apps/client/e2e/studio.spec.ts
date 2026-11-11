@@ -13,14 +13,28 @@ import {
 const parseCredits = (text: string | null): number => Number((text ?? '').replace(/[^0-9]/g, ''));
 
 test.describe('Studio - navigation', () => {
-  test('sidenav More menu opens Studio on the first usable tab', async ({ page, basePage, studioPage }) => {
+  test('sidenav Studio entry opens Studio on the first usable tab', async ({ page, basePage, studioPage }) => {
     await page.goto('/');
     await page.waitForLoadState('domcontentloaded');
     await studioPage.handleGearsDiscoveryModal();
     await basePage.dismissModals();
 
-    await page.getByTestId('sidenav-nav-more').click();
-    await page.getByTestId('sidenav-more-studio').click();
+    // Studio is a direct row unless the user has enough rows to fold it into More (SidenavNav
+    // MAX_NAV_ROWS), and it only appears once the model lists settle, so retry until either path works.
+    const studioRow = page.getByTestId('sidenav-nav-studio');
+    await expect(async () => {
+      if (await studioRow.isVisible()) {
+        await studioRow.click();
+        return;
+      }
+      await page.getByTestId('sidenav-nav-more').click({ timeout: TIMEOUTS.POST_ACTION });
+      try {
+        await page.getByTestId('sidenav-more-studio').click({ timeout: TIMEOUTS.POST_ACTION });
+      } catch (error) {
+        await page.keyboard.press('Escape');
+        throw error;
+      }
+    }).toPass({ timeout: TIMEOUTS.NAVIGATION });
 
     await expect(
       page,

@@ -3,6 +3,7 @@ import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } fro
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
 import OtcNoCodeHint from './OtcNoCodeHint';
+import RedirectProductHint from './RedirectProductHint';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import MFAModal from './common/MFAModal';
@@ -433,6 +434,7 @@ const Register: React.FC = () => {
             >
               {currentStep === 'form' ? t('welcome', { name: theme.branding.name }) : t('auth.checkYourEmail')}
             </Typography>
+            {currentStep === 'form' && <RedirectProductHint mode="signUp" />}
             <Typography
               className="register-subtitle"
               variant="plain"

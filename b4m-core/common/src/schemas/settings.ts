@@ -798,6 +798,7 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryPriceBandPct',
   'modelDiscoveryAutoRemap',
   'modelDiscoveryProbeNewModels',
+  'modelListRevision',
   // PR REPORT GENERATOR
   'prReportRepo',
   'prReportIdentityMap',
@@ -8128,6 +8129,14 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
     order: 7,
+  }),
+  modelListRevision: makeStringSetting({
+    key: 'modelListRevision',
+    name: 'Model List Revision',
+    defaultValue: '',
+    description:
+      'Internal stamp rewritten whenever a catalog or price change alters the model list, so open tabs refetch it. Written by packages/server-utils/src/modelDiscovery/modelListRevision.ts; not user-configurable.',
+    category: 'AI',
   }),
   prReportRepo: makeStringSetting({
     key: 'prReportRepo',
