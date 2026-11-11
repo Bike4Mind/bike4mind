@@ -62,7 +62,7 @@ describe('ensure-native-dev-oauth-client', () => {
   });
 
   it('falls back to STAGE for CLI runs', async () => {
-    vi.stubEnv('SEED_STAGE_NAME', undefined as unknown as string);
+    vi.stubEnv('SEED_STAGE_NAME', undefined);
     vi.stubEnv('STAGE', 'pr1');
     await migration.up();
     expect(updateOne).toHaveBeenCalledTimes(1);
