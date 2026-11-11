@@ -2,11 +2,18 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqRegistry, getDlqUrl, type RegisteredDlqDescriptor } from '@bike4mind/server-utils/utils/dlqRegistry';
-import { buildLogsInsightsUrl, resolveConsumerLogsForSourceQueue } from '@bike4mind/server-utils/utils/dlqConsumerLogs';
+import {
+  buildLogsInsightsUrl,
+  resolveConsumerLogsForSourceQueue,
+  settleWithinBudget,
+} from '@bike4mind/server-utils/utils/dlqConsumerLogs';
 import { getQueueAttributes } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
 
 const QUEUE_LOGS_WINDOW_MS = 24 * 60 * 60_000;
+// Well under the web server's 60s Lambda timeout (infra/web.ts): a slow Lambda control plane drops
+// logs links instead of failing the whole queue list.
+const CONSUMER_LOGS_BUDGET_MS = 15_000;
 
 // Overlay-contributed entries carry no help fields, so those keys are left undefined.
 function queueMeta(entry: RegisteredDlqDescriptor) {
@@ -43,7 +50,10 @@ const handler = adminApi({
   const [results, consumerLogs] = await Promise.all([
     // async so a registry throw for a missing DLQ URL becomes that row's -1 fallback, not a 500.
     Promise.allSettled(registry.map(async entry => getQueueAttributes(getDlqUrl(entry.label)))),
-    Promise.all(registry.map(entry => resolveConsumerLogsForSourceQueue(entry.sourceQueue))),
+    settleWithinBudget(
+      registry.map(entry => resolveConsumerLogsForSourceQueue(entry.sourceQueue)),
+      CONSUMER_LOGS_BUDGET_MS
+    ),
   ]);
 
   const queues = results.map((result, index) => {

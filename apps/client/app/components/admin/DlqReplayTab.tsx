@@ -517,9 +517,7 @@ const DlqReplayTab: React.FC = () => {
                     startDecorator={<ReplayIcon />}
                     onClick={handleReplayAll}
                     loading={replayMutation.isPending}
-                    disabled={
-                      permissionDisabled || !selectedQueueInfo || selectedQueueInfo.approximateMessageCount === 0
-                    }
+                    disabled={permissionDisabled || selectedQueueInfo.approximateMessageCount === 0}
                     data-testid="dlq-replay-all"
                   >
                     Replay All (up to 100)

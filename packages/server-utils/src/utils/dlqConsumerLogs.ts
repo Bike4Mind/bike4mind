@@ -20,6 +20,7 @@ const MAX_RETRY_WINDOW_MS = 24 * 60 * 60_000;
 const DEFAULT_VISIBILITY_TIMEOUT_S = 30;
 const CACHE_TTL_MS = 10 * 60_000;
 const NULL_CACHE_TTL_MS = 60_000;
+// Only mappings being torn down are skipped; Creating/Enabling/Updating still name a live function.
 const INACTIVE_MAPPING_STATES = new Set(['Disabled', 'Deleting']);
 const REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d$/;
 // The queue list resolves every registered queue at once; Lambda's control-plane API shares a low
@@ -194,7 +195,22 @@ export function messageLogWindow(
   now: number = Date.now()
 ): { start: number; end: number } | null {
   if (!Number.isFinite(sentMs)) return null;
-  return { start: sentMs - 2 * 60_000, end: Math.min(now, sentMs + retryWindowMs + 5 * 60_000) };
+  const end = Math.min(now, sentMs + retryWindowMs + 5 * 60_000);
+  // min() keeps start <= end when a producer clock stamped the send time in the future.
+  return { start: Math.min(sentMs, end) - 2 * 60_000, end };
+}
+
+/** Settles each lookup still pending after budgetMs to null, so slow lookups never hold up the caller. */
+export async function settleWithinBudget<T>(lookups: Promise<T | null>[], budgetMs: number): Promise<(T | null)[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>(resolve => {
+    timer = setTimeout(() => resolve(null), budgetMs);
+  });
+  try {
+    return await Promise.all(lookups.map(lookup => Promise.race([lookup, deadline])));
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // The console's Logs Insights hash takes a rison-like value whose strings are URI-encoded with

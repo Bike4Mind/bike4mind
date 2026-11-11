@@ -9,6 +9,7 @@ import {
   resetConsumerLogsCacheForTests,
   resolveConsumerLogs,
   resolveConsumerLogsForSourceQueue,
+  settleWithinBudget,
 } from './dlqConsumerLogs';
 
 const registry = vi.hoisted(() => ({ getSourceQueueUrl: vi.fn() }));
@@ -274,5 +275,34 @@ describe('messageLogWindow', () => {
 
   it('returns null for a NaN send time', () => {
     expect(messageLogWindow(Number.parseInt('', 10), 900_000)).toBeNull();
+  });
+
+  it('keeps start before end when the send time is in the future', () => {
+    const now = 1_000_000_000;
+    expect(messageLogWindow(now + 600_000, 900_000, now)).toEqual({ start: now - 120_000, end: now });
+  });
+});
+
+describe('settleWithinBudget', () => {
+  it('returns settled values and nulls lookups still pending at the budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const never = new Promise<string | null>(() => {});
+      const result = settleWithinBudget([Promise.resolve('a'), never, Promise.resolve(null)], 15_000);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(result).resolves.toEqual(['a', null, null]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not wait for the budget when every lookup settles', async () => {
+    vi.useFakeTimers();
+    try {
+      await expect(settleWithinBudget([Promise.resolve(1), Promise.resolve(2)], 15_000)).resolves.toEqual([1, 2]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
