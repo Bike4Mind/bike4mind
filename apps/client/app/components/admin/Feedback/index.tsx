@@ -328,6 +328,14 @@ const FeedbackTab: React.FC = () => {
       HelpArticle: feedbackItem.helpContext?.slug ?? '',
       Organization: feedbackItem.organization,
       UpdatedAt: feedbackItem.updatedAt,
+      Platform: feedbackItem.clientContext?.platform ?? '',
+      AppVersion: feedbackItem.clientContext?.appVersion ?? '',
+      Page: feedbackItem.clientContext?.path ?? '',
+      Viewport: feedbackItem.clientContext?.viewport
+        ? `${feedbackItem.clientContext.viewport.width}x${feedbackItem.clientContext.viewport.height}`
+        : '',
+      Model: feedbackItem.clientContext?.model ?? '',
+      UserAgent: feedbackItem.clientContext?.userAgent ?? '',
     }));
 
     const csv = Papa.unparse(csvData, { escapeFormulae: CSV_FORMULA_PREFIX });
