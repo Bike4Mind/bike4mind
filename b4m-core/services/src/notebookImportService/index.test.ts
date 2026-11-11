@@ -148,6 +148,29 @@ describe('v1 and v2 notebook re-import', () => {
   });
 });
 
+describe('bundle import errors and version scope', () => {
+  it('wraps bundle read failures as INVALID_FORMAT', async () => {
+    const { adapters } = makeAdapters();
+    const read = async () => Buffer.from('{');
+    await expect(new NotebookImportService(adapters).importBundle('user-1', read, OPTIONS)).rejects.toMatchObject({
+      name: 'NotebookImportError',
+      code: 'INVALID_FORMAT',
+      message: 'Invalid JSON in manifest.json',
+    });
+  });
+
+  it('rejects a single-file payload labelled 2.0.0', async () => {
+    const { adapters } = makeAdapters();
+    await expect(
+      new NotebookImportService(adapters).importNotebooks(
+        'user-1',
+        { ...PAYLOAD, exportVersion: '2.0.0' } as never,
+        OPTIONS
+      )
+    ).rejects.toMatchObject({ code: 'UNSUPPORTED_VERSION' });
+  });
+});
+
 /** Runs an import and returns the first message handed to the store. */
 async function runImport(opts: Record<string, unknown>, { existing = [] as unknown[], payload = PAYLOAD } = {}) {
   const { adapters, bulkCreate } = makeAdapters(existing);

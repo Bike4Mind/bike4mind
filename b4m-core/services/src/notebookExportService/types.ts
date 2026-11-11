@@ -243,7 +243,7 @@ export interface FormatVersion {
 }
 
 export const CURRENT_EXPORT_VERSION = '1.0.0';
-export const SUPPORTED_IMPORT_VERSIONS = ['1.0.0', '2.0.0'];
+export const SUPPORTED_IMPORT_VERSIONS = ['1.0.0'];
 
 // Error types
 /**
