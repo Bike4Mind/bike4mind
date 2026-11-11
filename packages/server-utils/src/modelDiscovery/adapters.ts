@@ -15,6 +15,7 @@ import { modelDiscoveryService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { createBedrockControlPlane } from './bedrockControlPlane';
+import { bumpModelListRevision } from './modelListRevision';
 
 type ModelDiscoveryAdapters = modelDiscoveryService.ModelDiscoveryAdapters;
 type DiscoveryEnv = modelDiscoveryService.DiscoveryEnv;
@@ -198,6 +199,9 @@ export function buildModelDiscoveryAdapters(logger: Logger): ModelDiscoveryAdapt
     },
     sources: buildSources(catalogView),
     refreshCatalogView: catalogView.refresh,
+    onModelListChanged: async () => {
+      await bumpModelListRevision();
+    },
     resolveCredentials: options =>
       modelDiscoveryService.getDiscoveryCredentials(
         { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },

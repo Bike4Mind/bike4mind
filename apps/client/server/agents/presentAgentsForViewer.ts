@@ -31,6 +31,9 @@ export type ViewerAgent = Pick<
   | 'deniedTools'
   | 'maxIterations'
   | 'defaultThoroughness'
+  | 'confidenceGateThreshold'
+  | 'confidenceGateMode'
+  | 'confidenceGateSelfReport'
   | 'personality'
   | 'identity'
   | 'createdAt'
@@ -71,6 +74,9 @@ function toViewerAgent(agent: IAgent): ViewerAgent {
     deniedTools: agent.deniedTools,
     maxIterations: agent.maxIterations,
     defaultThoroughness: agent.defaultThoroughness,
+    confidenceGateThreshold: agent.confidenceGateThreshold,
+    confidenceGateMode: agent.confidenceGateMode,
+    confidenceGateSelfReport: agent.confidenceGateSelfReport,
     personality: agent.personality,
     identity: agent.identity,
     visual: { portraitUrl: agent.visual?.portraitUrl ?? '', style: agent.visual?.style ?? '' },

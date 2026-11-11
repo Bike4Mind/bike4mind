@@ -437,6 +437,32 @@ describe('GenerationSettingsPicker', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it('clears unparseable text from a blank field even when its draft never changed', async () => {
+    await render(LOCAL);
+    await open();
+    const temperature = input('temperature');
+    expect(temperature.value).toBe('');
+    // A "-" typed into a blank number field leaves its value blank, so React sees no change to report.
+    Object.defineProperty(temperature, 'validity', { configurable: true, value: { badInput: true } });
+    const tracked =
+      Object.getOwnPropertyDescriptor(temperature, 'value') ??
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    const written: unknown[] = [];
+    Object.defineProperty(temperature, 'value', {
+      configurable: true,
+      get() {
+        return tracked?.get?.call(this);
+      },
+      set(value: unknown) {
+        written.push(value);
+        tracked?.set?.call(this, value);
+      },
+    });
+    await blur('temperature');
+    expect(written).toEqual(['']);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('does not save the shown value over a stored one after a bad entry and a plain focus', async () => {
     await render(ADAPTIVE, { maxOutputTokens: 2048 });
     await open();

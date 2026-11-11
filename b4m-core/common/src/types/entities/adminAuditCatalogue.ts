@@ -73,6 +73,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.reinstated': { category: 'access', severity: 'notice', write: 'strict' },
   'user.restricted': { category: 'access', severity: 'notice', write: 'strict' },
   'user.restriction_lifted': { category: 'access', severity: 'notice', write: 'strict' },
+  // The linked-account propagation run once for accounts an admin suspended together
+  // (apps/client/pages/api/admin/users/linked-suspend-propagation.ts). bestEffort: it is written after the
+  // locks it reports, which have already happened.
+  'user.linked_accounts.propagated': { category: 'access', severity: 'notice', write: 'bestEffort' },
 
   'user.deleted': { category: 'account', severity: 'critical', write: 'strict' },
   'user.deletion.scheduled': { category: 'account', severity: 'critical', write: 'strict' },
@@ -129,6 +133,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.api_key_trust.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
   'user.new_account_spend_cap.lifted': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.new_account_spend_cap.restored': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  'user.file_embedding_window.reset': { category: 'credits', severity: 'notice', write: 'strict' },
   // Analytics classification (User.isInternal): grants nothing, but decides whether an account
   // counts as a customer, so both directions keep a record.
   'user.internal.marked': { category: 'account', severity: 'notice', write: 'strict' },

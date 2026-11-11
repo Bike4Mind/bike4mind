@@ -1,6 +1,12 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
-import type { ClaudeChatImportSummary, ClaudeCodeImportSettings, WebSyncSettings } from '@shared/claudeImport';
+import type {
+  ClaudeChatImportSummary,
+  ClaudeCodeImportSettings,
+  SyncHintId,
+  WebSyncSettings,
+} from '@shared/claudeImport';
+import { isSyncHintId } from '@shared/claudeImport';
 import { assertScopeKey } from '../chat/sessionScope';
 import type { CodeMapState } from './claudeCodeMapper';
 
@@ -65,6 +71,8 @@ export interface ScopeImportState {
   webNotebooks: Record<string, WebNotebookCursor>;
   webLastSyncAt: string | null;
   webLastSyncMs: number | null;
+  /** Sidebar sync hints this account closed; they never come back. */
+  dismissedHints: SyncHintId[];
 }
 
 function emptyScopeState(): ScopeImportState {
@@ -79,6 +87,7 @@ function emptyScopeState(): ScopeImportState {
     webNotebooks: {},
     webLastSyncAt: null,
     webLastSyncMs: null,
+    dismissedHints: [],
   };
 }
 
@@ -152,6 +161,7 @@ export class ImportStateStore {
       loading = readJson(this.scopePath(scopeKey)).then(raw => {
         const parsed = raw as Partial<ScopeImportState> | null;
         const state = parsed?.version === 1 ? { ...emptyScopeState(), ...parsed } : emptyScopeState();
+        state.dismissedHints = Array.isArray(state.dismissedHints) ? state.dismissedHints.filter(isSyncHintId) : [];
         this.loaded.set(scopeKey, state);
         return state;
       });
@@ -165,6 +175,13 @@ export class ImportStateStore {
     if (!state) return;
     const snapshot = JSON.stringify(state);
     await this.queue(() => atomicWrite(this.scopePath(scopeKey), snapshot));
+  }
+
+  async dismissHint(scopeKey: string, id: SyncHintId): Promise<void> {
+    const state = await this.scope(scopeKey);
+    if (state.dismissedHints.includes(id)) return;
+    state.dismissedHints.push(id);
+    await this.saveScope(scopeKey);
   }
 
   private scopePath(scopeKey: string): string {

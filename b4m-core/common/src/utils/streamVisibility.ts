@@ -8,7 +8,8 @@ import type { AdapterFamily } from '../types/entities/ModelCatalogTypes';
  * Reasoning-capable backends do not signal hidden thinking out-of-band; they wrap it in these
  * markers inside the streamed text itself. Every one that supports reasoning emits the pair -
  * anthropicBackend, bedrockBackend/anthropic, kimiBackend, deepseekBackend, xaiBackend and
- * ollamaBackend all open it as the thinking block starts - so the markers are the only cross-provider signal for
+ * ollamaBackend all wrap their reasoning in it (the Anthropic two open it only once reasoning text arrives, so a
+ * block that streams none leaves no empty pair) - so the markers are the only cross-provider signal for
  * visibility, and the chat UI strips exactly this pair when rendering.
  *
  * Grep the tag constants below rather than trusting a line number: these emit sites move.

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 const mocks = vi.hoisted(() => ({
   resource: { App: { stage: 'production' } },
   connect: vi.fn(),
@@ -20,7 +21,7 @@ beforeEach(() => {
     total: { signups: 1 },
     census: [{ userId: 'user', timeline: [] }],
   });
-  vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  vi.spyOn(Logger, 'info').mockImplementation(() => undefined);
 });
 
 describe('scheduled signup baseline', () => {
@@ -46,9 +47,10 @@ describe('scheduled signup baseline', () => {
       staffDomains: 'staff.example.org',
       testPattern: 'test',
     });
-    expect(console.log).toHaveBeenCalledTimes(2);
-    expect(String(vi.mocked(console.log).mock.calls[0][0])).not.toContain('userId');
-    expect(JSON.parse(String(vi.mocked(console.log).mock.calls[1][0]))).toMatchObject({
+    expect(Logger.info).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(Logger.info).mock.calls[0][1]).toMatchObject({ report: 'signup-baseline' });
+    expect(vi.mocked(Logger.info).mock.calls[0][1]).not.toHaveProperty('userId');
+    expect(vi.mocked(Logger.info).mock.calls[1][1]).toMatchObject({
       report: 'signup-baseline-census',
       userId: 'user',
     });

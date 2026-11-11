@@ -26,6 +26,8 @@ const { mockListAll, mockList, mockToAccessContext, REPO, captured } = vi.hoiste
 
 // The route is baseApi().use(...).get(fn).post(fn), so `get` must return the chain for `.post` to
 // exist. Capture the GET handler on the way through rather than reading it off the default export.
+// The plan gate has its own tests (server/entitlements/lakePlanGate.test.ts).
+vi.mock('@server/entitlements/lakePlanGate', () => ({ assertLakePlanAllowed: vi.fn(async () => undefined) }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};

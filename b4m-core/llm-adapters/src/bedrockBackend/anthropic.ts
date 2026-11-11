@@ -9,7 +9,8 @@ import {
   MessageContentText,
   ModelBackend,
   NO_TEMPERATURE_MODELS,
-  REFUSAL_FALLBACK_MODELS,
+  refusalFallsBack,
+  THINK_OPEN_TAG,
   TOOL_SEARCH_BLOCK_TYPES,
   type ModelInfo,
   type ProviderBlock,
@@ -33,6 +34,7 @@ import { capCacheControlMarkers, getCachingAdapter, withRequestTtlMarkers } from
 import { systemContentToText } from '../systemContent';
 import { sortToolsForStableCacheKey } from '../caching/stableToolOrder';
 import { DispatchModel } from '../dispatchModel';
+import { closeThinkMarker } from '../thinkMarkers';
 import {
   applyAnthropicOutputCeiling,
   buildThinkingParams,
@@ -45,6 +47,7 @@ import {
 import { toAnthropicContent } from '../anthropicContent';
 import { ensureToolPairingIntegrity } from '../toolPairingUtils';
 import { TOOL_CHANGES_BETA } from '../toolChanges';
+import { SafetyRefusalError } from '../llmRefusalErrors';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from '../identityReminder';
 
 /**
@@ -58,7 +61,7 @@ function safetyRefusalError(model: string): Error {
       model,
     }
   );
-  return new Error(`Anthropic safety classifier refusal for ${model} - falling back to an alternative model`);
+  return new SafetyRefusalError(model);
 }
 
 enum ClaudeChunkTypes {
@@ -293,8 +296,18 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     return true;
   }
 
+  protected override closeOpenReasoning(): { index: number; text: string } | undefined {
+    if (!this.isInThinkingBlock) return undefined;
+    this.isInThinkingBlock = false;
+    const text = closeThinkMarker(this.reasoningEscaper.flush(), this.thinkMarkerOpened);
+    return text ? { index: this.thinkingBlockIndex, text } : undefined;
+  }
+
   // Track thinking block state
   private isInThinkingBlock = false;
+  // Waits for the first reasoning text; see closeThinkMarker.
+  private thinkMarkerOpened = false;
+  private thinkingBlockIndex = 0;
   private reasoningEscaper = createThinkMarkerEscaper();
   /**
    * Blocks of the assistant turn currently being translated, indexed by the stream's
@@ -346,6 +359,15 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
    */
   private modelRecordFor(model: string): ModelInfo | undefined {
     return this.getModelInfoList().find(m => m.id === model) ?? this._dispatch.for(model);
+  }
+
+  /** Catalog record first: an operator row's refusalFallback must win over the table (see resolveApiSurface). */
+  private fallsBackOnRefusal(model: string, options?: Partial<ICompletionOptions>): boolean {
+    if (options?.settleRefusal) return false;
+    return refusalFallsBack(
+      this._dispatch.for(model) ??
+        this.getModelInfoList().find(m => m.id === model) ?? { id: model, backend: ModelBackend.Bedrock }
+    );
   }
 
   /**
@@ -1318,7 +1340,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
   translateChunk(
     model: string,
-    chunk: Record<string, unknown>
+    chunk: Record<string, unknown>,
+    options?: Partial<ICompletionOptions>
   ): { done: boolean; chunk?: ICompletionResponseChunk | undefined } {
     try {
       // Parse the response from Anthropic API
@@ -1354,7 +1377,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       }
 
       const stopReason = (response as { stop_reason?: string }).stop_reason;
-      if (stopReason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model)) {
+      if (stopReason === 'refusal' && this.fallsBackOnRefusal(model, options)) {
         throw safetyRefusalError(model);
       }
 
@@ -1415,7 +1438,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     }
   }
 
-  translateStreamChunk(model: string, chunk: unknown): { done: boolean; chunk?: ICompletionResponseChunk } {
+  translateStreamChunk(
+    model: string,
+    chunk: unknown,
+    options?: Partial<ICompletionOptions>
+  ): { done: boolean; chunk?: ICompletionResponseChunk } {
     let done = false;
     let refused = false;
     let choice: IChoice;
@@ -1465,9 +1492,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           this.assistantContent[chunk.index] = { type: 'tool_use', id: contentBlock.id, name: contentBlock.name };
         } else if (isThinkingContentBlock(contentBlock)) {
           this.isInThinkingBlock = true;
+          this.thinkMarkerOpened = false;
+          this.thinkingBlockIndex = chunk.index;
           // thinking_delta / signature_delta accumulate into this block for the replay.
           this.assistantContent[chunk.index] = { ...contentBlock, thinking: contentBlock.thinking ?? '' };
-          choice.chunkText = '<think>';
           choice.channel = 'reasoning';
         } else if (isRedactedThinkingContentBlock(contentBlock)) {
           // Arrives whole and carries no readable text, so it opens no <think> markers -
@@ -1510,7 +1538,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         } else if (isThinkingDelta(delta)) {
           // Escaped for the transcript; the replay copy in assistantContent stays
           // raw since it is resent to the API verbatim in tool-use loops.
-          choice.chunkText = this.reasoningEscaper.push(delta.thinking);
+          const escaped = this.reasoningEscaper.push(delta.thinking);
+          const opensMarker = !!escaped && this.isInThinkingBlock && !this.thinkMarkerOpened;
+          choice.chunkText = opensMarker ? THINK_OPEN_TAG + escaped : escaped;
+          if (opensMarker) this.thinkMarkerOpened = true;
           choice.channel = 'reasoning';
           const block = this.assistantContent[chunk.index];
           if (block?.type === 'thinking') block.thinking = `${block.thinking}${delta.thinking}`;
@@ -1525,7 +1556,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         choice = {
           status: ChoiceStatus.STREAM,
           index: chunk.index,
-          chunkText: this.isInThinkingBlock ? this.reasoningEscaper.flush() + '</think>' : '',
+          chunkText: this.isInThinkingBlock
+            ? closeThinkMarker(this.reasoningEscaper.flush(), this.thinkMarkerOpened)
+            : '',
           ...(this.isInThinkingBlock ? { channel: 'reasoning' as const } : {}),
         } as IChoice;
 
@@ -1551,7 +1584,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           providerBlocks.push({ providerBlock: anthropicBlock(serverBlock), textOffset: 0 });
         }
       } else if (isMessageDelta(chunk)) {
-        refused = chunk.delta?.stop_reason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model);
+        refused = chunk.delta?.stop_reason === 'refusal' && this.fallsBackOnRefusal(model, options);
         // Anthropic's native vocabulary is the canonical one, so it passes through unchanged. base.ts
         // forwards it to CompletionInfo.stopReason; without it a max_tokens cut-off is silent. pause_turn
         // additionally tells the caller to re-send and resume a paused server tool loop.

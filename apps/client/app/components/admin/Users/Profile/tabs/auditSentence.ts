@@ -32,6 +32,7 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.api_key_trust.revoked': 'Revoked API key trust',
   'user.new_account_spend_cap.lifted': 'Lifted the new-account spend cap',
   'user.new_account_spend_cap.restored': 'Restored the new-account spend cap',
+  'user.file_embedding_window.reset': 'Reset the file indexing window',
   'user.internal.marked': 'Marked as an internal account',
   'user.internal.unmarked': 'Stopped marking as an internal account',
   'user.role.admin_granted': 'Granted the Super Admin role',
@@ -208,6 +209,8 @@ export const auditUndo = (
     patch: {
       ...Object.fromEntries(changes.map(change => [change.field, change.before ?? defaultFor(change.field)])),
       ...(touchesStatus && reason && { statusChangeReason: undoAdminReason(reason) }),
+      // Undoing a suspend entry removes the detection grades that suspend recorded (see SuspendDialog).
+      ...(changes.some(change => change.field === 'isBanned' && change.after === true) && { undoSuspension: true }),
     },
     redo: {
       ...Object.fromEntries(changes.map(change => [change.field, change.after])),

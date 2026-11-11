@@ -1,9 +1,9 @@
 import {
+  CREDITS_PAGE_READ,
   ADMIN_LEDGER_EXPORT_MAX_ROWS,
   adminLedgerFilterSchema,
   BadRequestError,
   CreditHolderType,
-  ForbiddenError,
   isContiguousLedgerFilter,
   NotFoundError,
   type AdminLedgerRow,
@@ -11,7 +11,7 @@ import {
 import { creditTransactionRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { escapeCsvCell } from '@client/app/utils/csv';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import {
   balanceAfterFirstRow,
   buildLedgerRows,
@@ -94,10 +94,8 @@ type ExportRequestQuery = {
  * `# Truncated at N rows` line instead of an `X-Export-Truncated` header. Balance-after follows the
  * same rule as the ledger route.
  */
-const handler = baseApi({ auth: 'jwtOnly' }).get(
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: CREDITS_PAGE_READ } }).get(
   asyncHandler<{}, unknown, unknown, ExportRequestQuery>(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
-
     const { userId } = req.query;
     if (typeof userId !== 'string' || !userId) throw new BadRequestError('Invalid user ID');
 

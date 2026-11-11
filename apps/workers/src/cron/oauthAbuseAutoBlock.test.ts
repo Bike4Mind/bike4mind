@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 const h = vi.hoisted(() => ({ connectDB: vi.fn(), run: vi.fn() }));
 
@@ -23,9 +24,9 @@ describe('oauthAbuseAutoBlock cron', () => {
 
   it('logs an error when some IPs failed to block', async () => {
     h.run.mockResolvedValue({ evaluatedSince: new Date(), blocked: [], failed: ['1.1.1.1'] });
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const error = vi.spyOn(Logger, 'error').mockImplementation(() => {});
     await handler();
-    expect(error).toHaveBeenCalledWith('[oauthAbuseAutoBlock] failed to block', ['1.1.1.1']);
+    expect(error).toHaveBeenCalledWith('[oauthAbuseAutoBlock] failed to block', { failed: ['1.1.1.1'] });
   });
 
   it('registers a 1-minute self-host task that runs on startup', async () => {

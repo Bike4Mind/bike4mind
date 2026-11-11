@@ -324,10 +324,10 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         break;
       }
 
-      await StripeEvents.InvoicePaymentSucceeded.publish({
-        invoiceId: invoice.id,
-        subscriptionId,
-      });
+      await StripeEvents.InvoicePaymentSucceeded.publish(
+        { invoiceId: invoice.id, subscriptionId },
+        { requireAcceptance: true }
+      );
 
       break;
     }
@@ -455,9 +455,10 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     case 'customer.subscription.updated': {
       const subscription = event.data.object;
 
-      await StripeEvents.CustomerSubscriptionUpdated.publish({
-        subscriptionId: subscription.id,
-      });
+      await StripeEvents.CustomerSubscriptionUpdated.publish(
+        { subscriptionId: subscription.id },
+        { requireAcceptance: true }
+      );
 
       break;
     }

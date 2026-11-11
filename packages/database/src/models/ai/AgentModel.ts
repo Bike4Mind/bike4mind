@@ -7,6 +7,7 @@ import {
   IMemoryEntry,
   IPendingAgentMessage,
   IWorldMemoryEntry,
+  CONFIDENCE_GATE_MODES,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
@@ -462,6 +463,9 @@ export const AgentSchema = new Schema<IAgent, IAgentModel, IAgentMethods>(
     deniedTools: { type: [String] },
     maxIterations: { type: MaxIterationsSchema },
     defaultThoroughness: { type: String, enum: THOROUGHNESS_LEVELS },
+    confidenceGateThreshold: { type: Number, min: 0, max: 1 },
+    confidenceGateMode: { type: String, enum: CONFIDENCE_GATE_MODES },
+    confidenceGateSelfReport: { type: Boolean },
     defaultVariables: {
       type: mongoose.Schema.Types.Mixed,
       validate: {

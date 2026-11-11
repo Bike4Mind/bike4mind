@@ -7,6 +7,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import {
+  AdminSettings,
   DataLakeModel,
   DataLakeAccessGrantModel,
   LakeConfigChangeEventModel,
@@ -15,7 +16,8 @@ import {
   dataLakeRepository,
   lakeConnectorClaimRepository,
 } from '@bike4mind/database';
-import { GITHUB_LAKE_PLACEHOLDER_NAME, NotFoundError } from '@bike4mind/common';
+import { DATA_LAKE_PLAN_REQUIRED_CODE, GITHUB_LAKE_PLACEHOLDER_NAME, NotFoundError } from '@bike4mind/common';
+import { clearLakePlanGateCache } from '@server/entitlements/lakePlanGate';
 import { nameLakeAfterRepository } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -141,10 +143,24 @@ afterEach(async () => {
     DataLakeAccessGrantModel.deleteMany({}),
     LakeConfigChangeEventModel.deleteMany({}),
     LakeConnectorClaim.deleteMany({}),
+    AdminSettings.deleteMany({}),
   ]);
+  clearLakePlanGateCache();
 });
 
 describe('POST /api/data-lakes/github-connect', () => {
+  it('refuses a caller without paid standing when dataLakeRequirePaidPlan is on, creating no lake', async () => {
+    await AdminSettings.create({ settingName: 'dataLakeRequirePaidPlan', settingValue: true });
+    clearLakePlanGateCache();
+    const { res, json } = makeRes();
+    await expect(run(makeReq({}), res)).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { code: DATA_LAKE_PLAN_REQUIRED_CODE },
+    });
+    expect(json).not.toHaveBeenCalled();
+    expect(await counts()).toEqual({ lakes: 0, grants: 0, audits: 0 });
+  });
+
   it('creates a draft connector-fed org lake awaiting GitHub and returns its authorize URL', async () => {
     const { res, json, setCookies } = makeRes();
     await run(makeReq({ organizationId: ORG }), res);

@@ -15,6 +15,8 @@ import {
   getImageModelCapabilities,
   isImageModel,
   isModelDeprecated,
+  MODEL_LIST_REVISION_CACHE_KEY,
+  modelListRevisionOf,
   PAID_PLAN_ENTITLEMENT_KEY,
   type IUserDocument,
   type ModelAccessLock,
@@ -30,7 +32,18 @@ import { modelCatalogListingOptions } from '@server/utils/modelCatalogOptions';
  * The models one caller can use, shared by `GET /api/models` (internal shape, SPA + CLI) and
  * `GET /api/v1/models` (public projection) so the two can never disagree on which models exist.
  */
-type CatalogModelList = { models: ModelInfo[]; supersededModels: SupersededModelInfo[] };
+type CatalogModelList = {
+  models: ModelInfo[];
+  supersededModels: SupersededModelInfo[];
+  /**
+   * The model-list revision the list was built under (modelListRevision.ts in server-utils), null before
+   * the first bump or when catalogUnavailable. A tab compares it with the revision its adminsettings
+   * subscription pushes.
+   */
+  modelListRevision: string | null;
+  /** The catalog or price overlay could not be read: an adapter-table fallback the client refetches soon. */
+  catalogUnavailable: boolean;
+};
 
 /** `lockedModels`: paid-only models a free account sees but cannot select (see ModelInfo.access). */
 export type CallerModelList = CatalogModelList & { lockedModels: ModelInfo[] };
@@ -53,7 +66,11 @@ function withImageCapabilities(model: ModelInfo): ModelInfo {
   return { ...model, image: getImageModelCapabilities(model.id) };
 }
 
-async function buildCallerModelList(userId: string | null, enforceCredits: boolean): Promise<CatalogModelList> {
+async function buildCallerModelList(
+  userId: string | null,
+  enforceCredits: boolean,
+  modelListRevision: string | null
+): Promise<CatalogModelList> {
   const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
   const coreKeys = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
 
@@ -62,7 +79,14 @@ async function buildCallerModelList(userId: string | null, enforceCredits: boole
   // provider missing from the table is a provider no user can select.
   const apiKeys = buildApiKeyTable(coreKeys);
 
-  const listedModels = await getAvailableModels(apiKeys, modelCatalogListingOptions());
+  let catalogUnavailable = false;
+  const listedModels = await getAvailableModels(apiKeys, {
+    ...modelCatalogListingOptions(),
+    ...(modelListRevision ? { catalogRevision: modelListRevision } : {}),
+    onCatalogUnavailable: () => {
+      catalogUnavailable = true;
+    },
+  });
   // Same rule createModelAdmission refuses at call time (llm/modelAdmission.ts): with credits on,
   // an unpriced text model settles at $0, so the picker must not offer it either.
   const offered = enforceCredits ? listedModels.filter(model => !isUnpricedTextModel(model)) : listedModels;
@@ -71,7 +95,13 @@ async function buildCallerModelList(userId: string | null, enforceCredits: boole
   // Superseded pins the client can offer to upgrade, resolved by llm-adapters
   // through the same catalog-overlay-then-static-map chain a pinned request takes.
   // Reads the fan-out getAvailableModels just did, so it costs no extra work.
-  return { models, supersededModels: getSupersededModels(offered) };
+  return {
+    models,
+    supersededModels: getSupersededModels(offered),
+    // A fallback may lack the very model the revision announced, so it must not pass for that revision.
+    modelListRevision: catalogUnavailable ? null : modelListRevision,
+    catalogUnavailable,
+  };
 }
 
 // Fails closed to "free" for the listing: a failed subscription read must not 500 the picker.
@@ -112,6 +142,7 @@ async function withoutPaidOnlyModels(list: CatalogModelList, user: IUserDocument
   const offeredIds = new Set<string>(models.map(model => model.id));
   // An upgrade offer pointing at a paid-only model would only lead to a refusal.
   return {
+    ...list,
     models,
     supersededModels: list.supersededModels.filter(entry => offeredIds.has(entry.replacementId)),
     lockedModels,
@@ -165,23 +196,34 @@ async function getCachedCallerModelList(
   // The flag is in the key so toggling enforceCredits takes effect immediately, not after the TTL.
   const cacheKey = `${CacheKeys.modelList(userId ?? ANONYMOUS_CACHE_ID)}:credits-${enforceCredits ? 'on' : 'off'}`;
 
-  const cached = await cacheRepository.findOne({ key: cacheKey });
-  if (cached) {
+  // The entry and the revision it must match come back from one query, so checking it adds no round trip.
+  const docs = await cacheRepository.find({ key: { $in: [cacheKey, MODEL_LIST_REVISION_CACHE_KEY] } });
+  const modelListRevision = modelListRevisionOf(docs.find(doc => doc.key === MODEL_LIST_REVISION_CACHE_KEY));
+  const cached = docs.find(doc => doc.key === cacheKey)?.result as Partial<CatalogModelList> | undefined;
+  // An entry written before revisions existed carries none, which matches only while none has been bumped.
+  if (cached?.models && (cached.modelListRevision ?? null) === modelListRevision) {
     logger.log(`Cache hit for key: ${cacheKey}`);
-    return cached.result as CatalogModelList;
+    return {
+      models: cached.models,
+      supersededModels: cached.supersededModels ?? [],
+      modelListRevision,
+      catalogUnavailable: false,
+    };
   }
 
-  logger.log(`Cache miss for key: ${cacheKey}`);
-  const payload = await buildCallerModelList(userId, enforceCredits);
+  logger.log(`Cache ${cached ? 'stale (model list revision moved)' : 'miss'} for key: ${cacheKey}`);
+  const payload = await buildCallerModelList(userId, enforceCredits, modelListRevision);
 
   // Don't cache an empty result. If every backend timed out (network blip, all
   // providers slow at once), caching `{ models: [] }` for 60s would hide healthy
-  // backends from the next request until expiry.
+  // backends from the next request until expiry. An adapter-table fallback is
+  // skipped for the same reason.
   //
   // INVARIANT: this function is the only writer of `model-list:*`. The entries
   // are per-caller views built from that caller's keys, so background jobs (model
-  // discovery included) must bust these keys, never populate them.
-  if (payload.models.length > 0) {
+  // discovery included) must never populate them; they invalidate every entry at
+  // once through bumpModelListRevision.
+  if (payload.models.length > 0 && !payload.catalogUnavailable) {
     await cacheRepository.createOrUpdate({
       key: cacheKey,
       result: payload,

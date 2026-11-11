@@ -1,4 +1,5 @@
 import { ModalModel } from '@bike4mind/database';
+import { modalImageAppUrl } from '@client/server/tools/modalImageUrls';
 import { usableObjectIds } from '@bike4mind/db-core';
 import { ApiKeyScope, IModalDocument } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -96,7 +97,7 @@ const handler = adminApi({
     }
 
     if (modal.imageUrl) {
-      html += `<img src="${escapeHtml(modal.imageUrl)}" alt="${escapeHtml(modal.title || '')}" style="max-width: 100%; height: auto; margin-bottom: 12px; border-radius: 8px;" />`;
+      html += `<img src="${escapeHtml(modalImageAppUrl(modal.imageUrl))}" alt="${escapeHtml(modal.title || '')}" style="max-width: 100%; height: auto; margin-bottom: 12px; border-radius: 8px;" />`;
     }
 
     if (modal.description) {

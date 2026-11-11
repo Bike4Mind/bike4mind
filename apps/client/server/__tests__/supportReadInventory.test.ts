@@ -28,7 +28,7 @@ const routeFiles = (dir: string): string[] =>
     return entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') ? [full] : [];
   });
 
-const SUPPORT_READ_CONSTANTS = new Set(['SETTINGS_PAGE_READ', 'MODERATION_PAGE_READ']);
+const SUPPORT_READ_CONSTANTS = new Set(['SETTINGS_PAGE_READ', 'CREDITS_PAGE_READ', 'MODERATION_PAGE_READ']);
 // ADMIN_USERS_BULK_ROUTE_PERMISSIONS is the union of the bulk action permissions and holds no support:read.
 const KNOWN_PERMISSION_CONSTANTS = new Set([...SUPPORT_READ_CONSTANTS, 'ADMIN_USERS_BULK_ROUTE_PERMISSIONS']);
 

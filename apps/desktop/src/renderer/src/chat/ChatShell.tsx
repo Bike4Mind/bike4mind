@@ -69,7 +69,7 @@ import { CacheExpiryNote } from './CacheExpiryNote';
 import { ContextRing } from './ContextRing';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { SESSION_PANEL_ID, SessionPanel } from './SessionPanel';
-import { panelFitsBesideThread, SESSION_PANEL_SPACE, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
+import { SESSION_PANEL_SPACE, sessionPanelLayout, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
 import { createPullRequestPrompt } from './changesBarModel';
 import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { openInSessionBrowser } from './prLinks';
@@ -145,6 +145,8 @@ import { prefersReducedMotion } from './orchestrator/motion';
 import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
+import { SidebarSyncHints } from './SyncHints';
+import type { ClaudeImportKind } from '@shared/claudeImport';
 
 /** How long the orchestrator's "Read the report" keeps the summary highlighted (ms). */
 const REPORT_HIGHLIGHT_MS = 2400;
@@ -269,10 +271,13 @@ export function ChatShell({
   auth,
   account,
   onOpenModelServers,
+  onOpenImportSettings,
 }: {
   auth?: AuthState | null;
   account?: AccountStrip;
   onOpenModelServers?: () => void;
+  /** Settings > Import, scrolled to one source; the sidebar's sync hints are shown only with it. */
+  onOpenImportSettings?: (focus: ClaudeImportKind) => void;
 }) {
   const {
     sessions,
@@ -332,7 +337,11 @@ export function ChatShell({
   // A conversation picked before its transcript has been read would otherwise show the empty
   // thread's "send a message" line for a frame - or, on a switch, the PREVIOUS conversation's
   // transcript under this one's id until the read lands.
-  const opening = settling || (!!activeId && conversation.session?.id !== activeId);
+  const opening =
+    settling || (!!activeId && conversation.session?.id !== activeId && conversation.openFailedFor !== activeId);
+  // The composer's per-chat settings show conversation.session: the previous chat's while opening, none after a failed open.
+  const chatSettingsLocked = !activeId || settling || conversation.session?.id !== activeId;
+  const openFailed = !!activeId && conversation.openFailedFor === activeId && conversation.session?.id !== activeId;
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
   const heldRelays = useHeldRelays(activeId);
   const markSessionStart = useSessionStartTiming(sessions);
@@ -914,16 +923,18 @@ export function ChatShell({
    * The session panel: a Code session with a folder after its first message. Until then the same
    * controls are centered in the empty transcript. A loop also makes the panel available in Chat.
    *
-   * Docked when it fits beside the reading column, and then its open flag is remembered; on a
-   * narrower pane it folds into the header button and opens as a popover, which is never left open
-   * across conversations or launches.
+   * Docked (`beside` or `push`, see sessionPanelLayout) while the region has room, and then its open
+   * flag is remembered; on a narrower region it folds into the header button and opens as an overlay,
+   * which is never left open across conversations, launches or a resize.
    */
   const panelProject =
     !opening && !initialCodeSetup && conversation.session?.mode === 'code' ? conversation.session.project : undefined;
   const panelAvailable = !!panelProject || (!opening && !!loop);
-  const panelDocked = threadRegionWidth === null || panelFitsBesideThread(threadRegionWidth);
+  const orchestratorShown = orchestrating && activeId !== null;
+  const panelLayout = sessionPanelLayout(threadRegionWidth, { centeredColumn: !orchestratorShown });
+  const panelDocked = panelLayout !== 'overlay';
   const panelShown = panelAvailable && (panelDocked ? panelPrefs.open : panelPopoverOpen);
-  const panelSpace = panelShown && panelDocked ? SESSION_PANEL_SPACE : 0;
+  const panelSpace = panelShown && panelLayout === 'push' ? SESSION_PANEL_SPACE : 0;
   const bindingErrorHidden =
     !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
   const { toggleOpen: togglePanelOpen } = panelPrefs;
@@ -991,11 +1002,13 @@ export function ChatShell({
    */
   const disabledPlaceholder = settling
     ? ''
-    : creatingCode
-      ? 'Starting a session...'
-      : mode === 'code'
-        ? 'Start a Code session to type here'
-        : 'Start a conversation to type here';
+    : openFailed
+      ? 'This conversation could not be opened'
+      : creatingCode
+        ? 'Starting a session...'
+        : mode === 'code'
+          ? 'Start a Code session to type here'
+          : 'Start a conversation to type here';
 
   const setQuote = useCallback((sessionId: string, quote: string | null) => {
     setQuotes(current => {
@@ -1527,7 +1540,6 @@ export function ChatShell({
     </VideoJobsContext.Provider>
   );
 
-  const orchestratorShown = orchestrating && activeId !== null;
   const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
 
   return (
@@ -1592,6 +1604,13 @@ export function ChatShell({
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         onOpenModels={() => setScreen('models')}
+        syncHints={
+          onOpenImportSettings
+            ? (empty, fallback) => (
+                <SidebarSyncHints empty={empty} fallback={fallback} onOpenSettings={onOpenImportSettings} />
+              )
+            : undefined
+        }
         footer={account?.(
           <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
         )}
@@ -1809,7 +1828,7 @@ export function ChatShell({
                 // Keyed so an action error or an unfolded list does not follow the user to the next
                 // conversation.
                 key={`panel-${activeId ?? 'none'}`}
-                variant={panelDocked ? 'docked' : 'popover'}
+                variant={panelDocked ? 'docked' : 'overlay'}
                 collapsed={panelPrefs.collapsed}
                 onToggleSection={panelPrefs.toggleSection}
                 onDismiss={closePanelPopover}
@@ -2029,7 +2048,7 @@ export function ChatShell({
 
             <Composer
               sessionId={activeId}
-              disabled={!activeId || creatingCode}
+              disabled={!activeId || creatingCode || openFailed}
               disabledPlaceholder={disabledPlaceholder}
               streaming={turnOpen}
               attachments={draft}
@@ -2067,7 +2086,7 @@ export function ChatShell({
               // Chat: for a frame after a mode switch, the open session is still the old mode's.
               addFolder={
                 mode === 'chat' && (conversation.session?.mode ?? 'chat') === 'chat'
-                  ? { onClick: () => void addFolder(), disabled: opening }
+                  ? { onClick: () => void addFolder(), disabled: opening || openFailed }
                   : null
               }
               sessionMode={conversation.session?.mode ?? 'chat'}
@@ -2088,8 +2107,9 @@ export function ChatShell({
               leading={
                 <>
                   <ApprovalModePill
+                    key={`approval:${activeId ?? ''}`}
                     mode={conversation.session?.approvalMode ?? 'ask'}
-                    disabled={!activeId}
+                    disabled={chatSettingsLocked}
                     onSelect={mode => void conversation.setApprovalMode(mode)}
                   />
                   {orchestrateCapable && (
@@ -2110,9 +2130,10 @@ export function ChatShell({
                   trailing={
                     <>
                       <ModelPicker
+                        key={`model:${activeId ?? ''}`}
                         catalog={catalog}
                         modelId={conversation.session?.model ?? null}
-                        disabled={!activeId}
+                        disabled={chatSettingsLocked}
                         onSelect={model => void conversation.setModel(model)}
                         noLocal={noLocal}
                         local={localMode}
@@ -2131,11 +2152,12 @@ export function ChatShell({
                   {compact => (
                     <>
                       <ReasoningEffortPicker
+                        key={`effort:${activeId ?? ''}`}
                         models={catalog.models}
                         modelId={conversation.session?.model ?? null}
                         effort={conversation.session?.reasoningEffort ?? 'default'}
                         defaultEffort={defaultEffort}
-                        disabled={!activeId}
+                        disabled={chatSettingsLocked}
                         compact={compact}
                         onSelect={effort => void conversation.setReasoningEffort(effort)}
                       />
@@ -2146,15 +2168,16 @@ export function ChatShell({
                         generation={conversation.session?.generation}
                         modelDefaults={modelDefaults ?? undefined}
                         effort={conversation.session?.reasoningEffort ?? 'default'}
-                        disabled={!activeId}
+                        disabled={chatSettingsLocked}
                         compact={compact}
                         onChange={conversation.setGeneration}
                       />
                       <PromptCacheTtlPicker
+                        key={`cache:${activeId ?? ''}`}
                         model={modelOption}
                         ttl={sessionCacheTtl}
                         contextTokens={composerUsage.contextTokens ?? 0}
-                        disabled={!activeId}
+                        disabled={chatSettingsLocked}
                         compact={compact}
                         onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
                       />

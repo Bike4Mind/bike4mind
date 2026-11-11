@@ -92,6 +92,7 @@ const VerdictEntrySchema = new Schema<ShadowDetectionVerdictEntry>(
     reviewerId: { type: String, required: true },
     reviewedAt: { type: Date, required: true },
     source: { type: String, enum: SHADOW_DETECTION_VERDICT_SOURCES },
+    accountId: { type: String },
   },
   { _id: false }
 );
@@ -264,6 +265,7 @@ const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => ({
     reviewerId: entry.reviewerId,
     reviewedAt: entry.reviewedAt,
     ...(entry.source ? { source: entry.source } : {}),
+    ...(entry.accountId ? { accountId: entry.accountId } : {}),
   })),
   revision: doc.revision ?? 0,
 });
@@ -404,12 +406,28 @@ class ShadowDetectionRepository {
     throw new Error(`Shadow detection ${doc._id.toString()} kept changing while removing a deleted user`);
   }
 
-  /** Detections naming this user that no reviewer has judged legitimate (unreviewed included). */
-  async countOpenForUser(userId: string): Promise<number> {
+  /**
+   * Detections naming this user that no reviewer has judged legitimate (unreviewed included),
+   * optionally from one detector only.
+   */
+  async countOpenForUser(userId: string, detector?: ShadowDetector): Promise<number> {
     return ShadowDetectionModel.countDocuments({
       userIds: userId,
+      ...(detector ? { detector } : {}),
       verdict: { $nin: ['legitimate_human', 'legitimate_automation'] },
     }).exec();
+  }
+
+  /** Full detections from these detectors naming this user, newest first, at most `limit`. */
+  async listForUser(
+    userId: string,
+    query: { detectors: readonly ShadowDetector[]; limit: number }
+  ): Promise<{ data: ShadowDetectionItem[]; truncated: boolean }> {
+    const docs = await ShadowDetectionModel.find({ userIds: userId, detector: { $in: [...query.detectors] } })
+      .sort({ detectedAt: -1, _id: -1 })
+      .limit(query.limit + 1)
+      .lean<LeanShadowDetection[]>();
+    return { data: docs.slice(0, query.limit).map(toItem), truncated: docs.length > query.limit };
   }
 
   /**
@@ -541,18 +559,54 @@ class ShadowDetectionRepository {
     const candidates = await ShadowDetectionModel.find({ userIds: input.userId, ...open }).lean<
       LeanShadowDetection[]
     >();
-    const peerIds = [...new Set(candidates.flatMap(doc => doc.userIds ?? []).filter(id => id !== input.userId))].filter(
-      id => Types.ObjectId.isValid(id)
-    );
-    const suspendedPeers = new Set(
-      peerIds.length === 0
-        ? []
-        : (
-            await User.find({ _id: { $in: peerIds }, isBanned: true }, { _id: 1 }).lean<{ _id: Types.ObjectId }[]>()
-          ).map(({ _id }) => _id.toString())
-    );
-    const eligible = candidates.filter(doc => !(doc.userIds ?? []).some(id => suspendedPeers.has(id)));
+    const eligible = await this.withoutSuspendedPeers(candidates, input.userId);
     return this.appendStatusVerdicts(eligible, open, 'legitimate_human', 'reinstatement', input);
+  }
+
+  /**
+   * An admin undid this account's suspension: removes the confirmed_abuse grade that suspension recorded and
+   * restores the verdict the record had before it (null when it had none), so an undone mis-click neither
+   * stands as confirmed abuse nor reads as reviewed legitimate. Acts only on a record whose latest entry is
+   * this account's own suspension grade; a reviewer's verdict, another account's grade, or a record naming
+   * another still-suspended account is left graded.
+   * Returns the records it changed.
+   */
+  async revertSuspensionGrades(input: AccountStatusVerdictInput): Promise<ShadowDetectionItem[]> {
+    const candidates = await ShadowDetectionModel.find({
+      userIds: input.userId,
+      verdict: 'confirmed_abuse',
+      $nor: [HAS_REVIEW_VERDICT],
+    }).lean<LeanShadowDetection[]>();
+    const reverted: ShadowDetectionItem[] = [];
+    for (const doc of await this.withoutSuspendedPeers(candidates, input.userId)) {
+      const entries = doc.verdicts ?? [];
+      const latest = entries.at(-1);
+      if (latest?.source !== 'suspension' || latest.accountId !== input.userId) continue;
+      const updated = await ShadowDetectionModel.findOneAndUpdate(
+        { _id: doc._id, revision: doc.revision },
+        { $pop: { verdicts: 1 }, $set: { verdict: entries.at(-2)?.verdict ?? null }, $inc: { revision: 1 } },
+        { new: true }
+      ).lean<LeanShadowDetection>();
+      if (updated) reverted.push(toItem(updated));
+    }
+    return reverted;
+  }
+
+  /** Drops records that name an account other than `userId` that is still suspended. */
+  private async withoutSuspendedPeers(
+    candidates: LeanShadowDetection[],
+    userId: string
+  ): Promise<LeanShadowDetection[]> {
+    const peerIds = [...new Set(candidates.flatMap(doc => doc.userIds ?? []).filter(id => id !== userId))].filter(id =>
+      Types.ObjectId.isValid(id)
+    );
+    if (peerIds.length === 0) return candidates;
+    const suspendedPeers = new Set(
+      (await User.find({ _id: { $in: peerIds }, isBanned: true }, { _id: 1 }).lean<{ _id: Types.ObjectId }[]>()).map(
+        ({ _id }) => _id.toString()
+      )
+    );
+    return candidates.filter(doc => !(doc.userIds ?? []).some(id => suspendedPeers.has(id)));
   }
 
   /**
@@ -574,6 +628,7 @@ class ShadowDetectionRepository {
         reviewerId: input.reviewerId,
         reviewedAt: new Date(),
         source,
+        accountId: input.userId,
       };
       const updated = await ShadowDetectionModel.findOneAndUpdate(
         { _id: doc._id, revision: doc.revision, ...stillOpen },
