@@ -298,4 +298,19 @@ export const AI_AND_CONTENT_GUIDE: readonly AdminGuideEntry[] = [
     ],
     keywords: ['changelog', 'what changed', 'product updates', 'releases', 'embargo', 'publish release notes'],
   },
+  {
+    id: 'tutorials',
+    title: 'Tutorials',
+    summary:
+      'Switch the guided tutorials on or off, switch off or reword a single tutorial without a deploy, and see the tutorials each package contributes.',
+    views: ['admin.tutorials'],
+    settings: [],
+    howTo: [
+      'The Guided tutorials switch under Core shows or hides the tutorials for every user who can see them.',
+      'Under Tutorial modules, enter a reason, then switch one tutorial off, or use Edit to change its words and step order and Save edits. Reset step and Reset module go back to the text in the code.',
+      'A learner part way through a tutorial you change is told it changed on their next step. A module the code holds off stays off here.',
+      'Each package section lists its tutorials and their state; use Edit in <package> to change them on that package page.',
+    ],
+    keywords: ['guided tutorials', 'walkthrough', 'onboarding', 'coach marks', 'tutorial modules', 'tutorial text'],
+  },
 ];
