@@ -226,6 +226,36 @@ describe('AdminGenerateApiKeyModal - ingest scopes for a delegate', () => {
   });
 });
 
+describe('AdminGenerateApiKeyModal - write permissions', () => {
+  it('disables minting without keys:revoke or users:impersonate', () => {
+    useUser.setState({ currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['keys:revoke'] } as never });
+    renderModal();
+    fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'new key' } });
+    fireEvent.click(
+      screen.getByTestId(`admin-generate-key-scope-${GENERIC_MODAL_API_KEY_SCOPES[0].value}`).querySelector('input')!
+    );
+    expect(screen.getByText('Generate API Key').closest('button')).toBeDisabled();
+    expect(h.mutate).not.toHaveBeenCalled();
+  });
+
+  it('disables minting for a protected admin target even with both delegate permissions', () => {
+    useUser.setState({
+      currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['keys:revoke', 'users:impersonate'] } as never,
+    });
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <AdminGenerateApiKeyModal open onClose={vi.fn()} user={{ ...USER, isAdmin: true }} />
+      </CssVarsProvider>
+    );
+    fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'new key' } });
+    fireEvent.click(
+      screen.getByTestId(`admin-generate-key-scope-${GENERIC_MODAL_API_KEY_SCOPES[0].value}`).querySelector('input')!
+    );
+    expect(screen.getByText('Generate API Key').closest('button')).toBeDisabled();
+    expect(h.mutate).not.toHaveBeenCalled();
+  });
+});
+
 describe('AdminGenerateApiKeyModal - reason for admin-provisioned scopes', () => {
   const scopeInput = (value: string) => screen.getByTestId(`admin-generate-key-scope-${value}`).querySelector('input')!;
   const submitButton = () => screen.getByTestId('admin-generate-key-action-dialog-confirm-btn');
