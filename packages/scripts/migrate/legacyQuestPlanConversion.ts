@@ -55,13 +55,17 @@ export interface ConversionLogger {
   warn: (msg: string) => void;
 }
 
-export interface ConversionCounts {
+/** What the source walk itself counts, before a source reaches the conversion or the check. */
+export interface SourceCounts {
   live: number;
+  skippedEmpty: number;
+  skippedNoOwner: number;
+}
+
+export interface ConversionCounts extends SourceCounts {
   created: number;
   refreshed: number;
   unchanged: number;
-  skippedEmpty: number;
-  skippedNoOwner: number;
   skippedUserDeleted: number;
   skippedUserEdited: number;
   failed: number;
@@ -113,6 +117,38 @@ const asDate = (value: unknown): Date => {
   return Number.isNaN(d.getTime()) ? new Date(0) : d;
 };
 
+type Db = NonNullable<typeof mongoose.connection.db>;
+
+const connectedDb = (): Db => {
+  const db = mongoose.connection.db;
+  if (!db) throw new Error('Database connection not established');
+  return db;
+};
+
+const archiveKey = (item: Pick<Item, 'ownerId' | 'id'>): string => `${item.ownerId}:${item.id}`;
+
+// One lookup per page. Includes soft-deleted rows so a file the user deleted is not recreated.
+const archiveFilesByKey = async (items: Item[]) => {
+  const existing = await FabFile.find(
+    {
+      userId: { $in: [...new Set(items.map(i => i.ownerId))] },
+      sourceType: FabFileSourceType.QUESTMASTER_ARCHIVE,
+      'sourceMetadata.sourceId': { $in: items.map(i => i.id) },
+    },
+    null,
+    { includeDeleted: true }
+  ).lean();
+  return new Map(existing.map(f => [`${f.userId}:${f.sourceMetadata?.sourceId}`, f]));
+};
+
+// A size that no longer matches what was written, or a charge stamp (only a user rewrite sets one
+// on an exempt row), means the user rewrote the file.
+const isUserRewritten = (file: {
+  fileSize?: number | null;
+  storageChargedAt?: unknown;
+  sourceMetadata?: Record<string, unknown> | null;
+}): boolean => file.fileSize !== file.sourceMetadata?.generatedBytes || file.storageChargedAt != null;
+
 export async function convertLegacyQuestPlans(deps: {
   storage: ArchiveStorage;
   logger: ConversionLogger;
@@ -124,8 +160,7 @@ export async function convertLegacyQuestPlans(deps: {
   const { storage, logger, now } = deps;
   const batchSize = deps.batchSize ?? BATCH_SIZE;
   const deadline = (deps.deadline ?? new Date(Date.now() + DEFAULT_RUN_MS)).getTime();
-  const db = mongoose.connection.db;
-  if (!db) throw new Error('Database connection not established');
+  const db = connectedDb();
 
   const exportedOn = now.toISOString().slice(0, 10);
   const limit = pLimit(CONCURRENCY);
@@ -141,23 +176,13 @@ export async function convertLegacyQuestPlans(deps: {
 
   const processItems = async (items: Item[], counts: ConversionCounts) => {
     if (items.length === 0) return;
-    // One lookup per page. Includes soft-deleted rows so a file the user deleted is not recreated.
-    const existing = await FabFile.find(
-      {
-        userId: { $in: [...new Set(items.map(i => i.ownerId))] },
-        sourceType: FabFileSourceType.QUESTMASTER_ARCHIVE,
-        'sourceMetadata.sourceId': { $in: items.map(i => i.id) },
-      },
-      null,
-      { includeDeleted: true }
-    ).lean();
-    const existingByKey = new Map(existing.map(f => [`${f.userId}:${f.sourceMetadata?.sourceId}`, f]));
+    const existingByKey = await archiveFilesByKey(items);
 
     await Promise.all(
       items.map(item =>
         limit(async () => {
           try {
-            const file = existingByKey.get(`${item.ownerId}:${item.id}`);
+            const file = existingByKey.get(archiveKey(item));
             const sourceUpdatedAt = item.updatedAt.toISOString();
             const content = () => item.render(exportedOn);
 
@@ -204,9 +229,7 @@ export async function convertLegacyQuestPlans(deps: {
               counts.unchanged++;
               return;
             }
-            // A size that no longer matches what was written, or a charge stamp (only a user rewrite
-            // sets one on an exempt row), means the user rewrote the file.
-            if (file.fileSize !== file.sourceMetadata?.generatedBytes || file.storageChargedAt != null) {
+            if (isUserRewritten(file)) {
               counts.skippedUserEdited++;
               return;
             }
@@ -249,6 +272,40 @@ export async function convertLegacyQuestPlans(deps: {
     );
   };
 
+  const plans = emptyCounts();
+  const graphs = emptyCounts();
+  const { stoppedEarly, noOwner } = await walkLegacySources({
+    db,
+    logger,
+    batchSize,
+    deadline,
+    plans,
+    graphs,
+    onItems: processItems,
+  });
+
+  logger.info(`Quest plan conversion (v4 plans): ${JSON.stringify(plans)}`);
+  if (noOwner.length) logger.warn(`Plans with no resolvable owner (sample): ${noOwner.join(', ')}`);
+  logger.info(`Quest plan conversion (v5 graphs): ${JSON.stringify(graphs)}`);
+  return { plans, graphs, stoppedEarly };
+}
+
+/**
+ * Pages through every live legacy plan and graph, resolves each owner, and hands the non-empty,
+ * owned ones to `onItems`. Shared by the conversion and the coverage check so both agree on which
+ * sources count.
+ */
+async function walkLegacySources<C extends SourceCounts>(opts: {
+  db: Db;
+  logger: ConversionLogger;
+  batchSize: number;
+  /** Epoch ms. */
+  deadline: number;
+  plans: C;
+  graphs: C;
+  onItems: (items: Item[], counts: C) => Promise<void>;
+}): Promise<{ stoppedEarly: boolean; noOwner: string[] }> {
+  const { db, logger, batchSize, deadline, plans, graphs, onItems } = opts;
   let stoppedEarly = false;
   // One query per page: the ids that name a live account (a non-ObjectId never does).
   const existingUsers = async (ids: string[]): Promise<Set<string>> => {
@@ -283,9 +340,6 @@ export async function convertLegacyQuestPlans(deps: {
       }
     }
   };
-
-  const plans = emptyCounts();
-  const graphs = emptyCounts();
 
   // v4 plans
   const noOwner: string[] = [];
@@ -330,7 +384,7 @@ export async function convertLegacyQuestPlans(deps: {
         render: exportedOn => questPlanToMarkdown(plan, { exportedOn, frontMatter: true }),
       });
     }
-    await processItems(items, plans);
+    await onItems(items, plans);
   });
 
   // v5 graphs
@@ -375,11 +429,84 @@ export async function convertLegacyQuestPlans(deps: {
         render: exportedOn => questGraphToMarkdown(graph, nodes, { exportedOn, frontMatter: true }),
       });
     }
-    await processItems(items, graphs);
+    await onItems(items, graphs);
   });
 
-  logger.info(`Quest plan conversion (v4 plans): ${JSON.stringify(plans)}`);
-  if (noOwner.length) logger.warn(`Plans with no resolvable owner (sample): ${noOwner.join(', ')}`);
-  logger.info(`Quest plan conversion (v5 graphs): ${JSON.stringify(graphs)}`);
-  return { plans, graphs, stoppedEarly };
+  return { stoppedEarly, noOwner };
+}
+
+export interface CoverageCounts extends SourceCounts {
+  /** Non-empty sources with a live owner: each must have a file. */
+  expected: number;
+  /** Sources whose file is accounted for: `current + userDeleted + userEdited`. */
+  files: number;
+  current: number;
+  userDeleted: number;
+  userEdited: number;
+  missing: number;
+  stale: number;
+  uncoveredSamples: string[];
+}
+
+const emptyCoverage = (): CoverageCounts => ({
+  live: 0,
+  skippedEmpty: 0,
+  skippedNoOwner: 0,
+  expected: 0,
+  files: 0,
+  current: 0,
+  userDeleted: 0,
+  userEdited: 0,
+  missing: 0,
+  stale: 0,
+  uncoveredSamples: [],
+});
+
+/**
+ * Read-only check that every non-empty, owned legacy plan and graph has a file matching its current
+ * state. A file the user deleted or rewrote counts as covered: it is theirs now, and the conversion
+ * leaves it alone for the same reason. `covered` is false if any source is missing a file, has a
+ * stale one, or the walk stopped before visiting everything.
+ */
+export async function verifyLegacyQuestPlanCoverage(deps: {
+  logger: ConversionLogger;
+  batchSize?: number;
+  deadline?: Date;
+}): Promise<{ plans: CoverageCounts; graphs: CoverageCounts; stoppedEarly: boolean; covered: boolean }> {
+  const { logger } = deps;
+
+  const check = async (items: Item[], counts: CoverageCounts) => {
+    if (items.length === 0) return;
+    counts.expected += items.length;
+    const existingByKey = await archiveFilesByKey(items);
+    for (const item of items) {
+      const file = existingByKey.get(archiveKey(item));
+      if (file?.deletedAt) counts.userDeleted++;
+      else if (file?.sourceMetadata?.sourceUpdatedAt === item.updatedAt.toISOString()) counts.current++;
+      else if (file && isUserRewritten(file)) counts.userEdited++;
+      else {
+        if (file) counts.stale++;
+        else counts.missing++;
+        if (counts.uncoveredSamples.length < MAX_SAMPLES) counts.uncoveredSamples.push(item.id);
+      }
+    }
+    counts.files = counts.current + counts.userDeleted + counts.userEdited;
+  };
+
+  const plans = emptyCoverage();
+  const graphs = emptyCoverage();
+  const { stoppedEarly } = await walkLegacySources({
+    db: connectedDb(),
+    logger,
+    batchSize: deps.batchSize ?? BATCH_SIZE,
+    deadline: (deps.deadline ?? new Date(Date.now() + DEFAULT_RUN_MS)).getTime(),
+    plans,
+    graphs,
+    onItems: check,
+  });
+
+  logger.info(`Quest plan coverage (v4 plans): ${JSON.stringify(plans)}`);
+  logger.info(`Quest plan coverage (v5 graphs): ${JSON.stringify(graphs)}`);
+  const covered = !stoppedEarly && plans.files === plans.expected && graphs.files === graphs.expected;
+  return { plans, graphs, stoppedEarly, covered };
 }
