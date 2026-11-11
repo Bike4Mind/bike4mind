@@ -27,8 +27,10 @@ const LibraryFilterBar: FC<LibraryFilterBarProps> = ({
   showModelFilter = false,
   showStarredFilter = false,
 }) => {
-  const withModel = showModelFilter && !isFilterLocked(lockedFilters, 'model');
-  const withStarred = showStarredFilter && !isFilterLocked(lockedFilters, 'starred');
+  // A filter the user holds (e.g. from initialFilters) always gets its control, so it can be cleared.
+  const withModel = (showModelFilter || Boolean(value.filters?.model)) && !isFilterLocked(lockedFilters, 'model');
+  const withStarred =
+    (showStarredFilter || value.filters?.starred === true) && !isFilterLocked(lockedFilters, 'starred');
   const { data: modelIds = [] } = useGenerationModelIds({ enabled: withModel });
   const starred = value.filters?.starred === true;
 

@@ -988,7 +988,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async listGenerationModelIds(userId: string): Promise<string[]> {
     const modelIds: unknown[] = await this.fabFileModel.distinct('sourceMetadata.generation.modelId', {
       userId,
+      // The same live-file conjuncts as buildFabFileSearchQuery, so every option can match a file.
       deletedAt: null,
+      archivedAt: null,
       'sourceMetadata.generation.modelId': { $type: 'string' },
     });
     return modelIds.filter((id): id is string => typeof id === 'string' && id.length > 0).sort();

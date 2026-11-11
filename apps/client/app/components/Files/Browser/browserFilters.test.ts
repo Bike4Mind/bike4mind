@@ -61,6 +61,7 @@ describe('locked filter helpers', () => {
     expect(isFilterLocked({ source: 'generated' }, 'source')).toBe(true);
     expect(isFilterLocked({ starred: false }, 'starred')).toBe(false);
     expect(isFilterLocked(undefined, 'type')).toBe(false);
+    expect(isFilterLocked({ model: '' }, 'model')).toBe(false);
   });
 
   it('labels the locked filters in a stable order', () => {

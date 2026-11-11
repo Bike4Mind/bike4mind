@@ -27,7 +27,6 @@ import {
   fabFileRepository,
   projectRepository,
   userRepository,
-  favoriteRepository,
 } from '@bike4mind/database';
 import type { EntitlementRequest } from '@bike4mind/server-utils/entitlements/index';
 import type { Logger } from '@bike4mind/observability';
@@ -266,7 +265,6 @@ export async function queryDataLakeArticles(
       users: userRepository,
       adminSettings: adminSettingsRepository,
       projects: projectRepository,
-      favorites: favoriteRepository,
     },
     storage: {
       generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {

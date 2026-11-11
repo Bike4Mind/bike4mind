@@ -253,6 +253,13 @@ describe('fabFileService search - Library filters', () => {
     expect(filtersArgOf(fabFilesSearch).restrictToFileIds).toEqual([]);
   });
 
+  it('fails loudly when a caller without the favorites adapter is asked for stars', async () => {
+    const { adapters: a } = adapters();
+    delete a.db.favorites;
+
+    await expect(search('u1', { filters: { starred: true } }, a)).rejects.toThrow('favorites adapter');
+  });
+
   it('does not read favorites when starred is off', async () => {
     const { adapters: a, favoritesFind } = adapters();
 

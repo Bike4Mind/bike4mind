@@ -24,11 +24,11 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: (options: unknown) => ((mockRefs.baseApiOptions = options), chain) };
 });
 
-vi.mock('@bike4mind/database', () => ({ fabFileRepository: { name: 'files' }, favoriteRepository: { name: 'favs' } }));
+const favoriteRepository = vi.hoisted(() => ({ findOne: vi.fn(), delete: vi.fn() }));
+vi.mock('@bike4mind/database', () => ({ fabFileRepository: { name: 'files' }, favoriteRepository }));
 
 const addFavorite = vi.hoisted(() => vi.fn());
-const deleteFavorite = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/services', () => ({ fabFilesService: { addFavorite, deleteFavorite } }));
+vi.mock('@bike4mind/services', () => ({ fabFilesService: { addFavorite } }));
 
 import '@pages/api/files/[id]/favorite';
 
@@ -41,7 +41,8 @@ function mocks(method: 'POST' | 'DELETE') {
 describe('/api/files/[id]/favorite', () => {
   beforeEach(() => {
     addFavorite.mockReset();
-    deleteFavorite.mockReset();
+    favoriteRepository.findOne.mockReset();
+    favoriteRepository.delete.mockReset();
   });
 
   it('requires the write-files scope', () => {
@@ -57,23 +58,49 @@ describe('/api/files/[id]/favorite', () => {
     expect(addFavorite).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-a' }),
       { fileId: 'file-1' },
-      { db: { fabFiles: { name: 'files' }, favorites: { name: 'favs' } } }
+      { db: { fabFiles: { name: 'files' }, favorites: favoriteRepository } }
     );
     expect(res._getJSONData()).toEqual({ id: 'fav-1', documentId: 'file-1' });
   });
 
-  it('unstars the file through the access-checked service', async () => {
-    deleteFavorite.mockResolvedValue(true);
+  it('returns the existing star when the file is already starred', async () => {
+    addFavorite.mockRejectedValue(Object.assign(new Error('E11000 duplicate key error'), { code: 11000 }));
+    favoriteRepository.findOne.mockResolvedValue({ id: 'fav-1', documentId: 'file-1' });
+    const { req, res } = mocks('POST');
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(favoriteRepository.findOne).toHaveBeenCalledWith({
+      userId: 'user-a',
+      documentId: 'file-1',
+      documentType: 'files',
+    });
+    expect(res._getJSONData()).toEqual({ id: 'fav-1', documentId: 'file-1' });
+  });
+
+  it("unstars only the caller's own star, without needing access to the file", async () => {
+    favoriteRepository.findOne.mockResolvedValue({ id: 'fav-1' });
     const { req, res } = mocks('DELETE');
 
     await mockRefs.deleteHandler!(req, res);
 
-    expect(deleteFavorite).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'user-a' }),
-      { fileId: 'file-1' },
-      expect.anything()
-    );
-    expect(res._getJSONData()).toBe(true);
+    expect(favoriteRepository.findOne).toHaveBeenCalledWith({
+      userId: 'user-a',
+      documentId: 'file-1',
+      documentType: 'files',
+    });
+    expect(favoriteRepository.delete).toHaveBeenCalledWith('fav-1');
+    expect(res._getJSONData()).toEqual({ removed: true });
+  });
+
+  it('treats unstarring an unstarred file as done', async () => {
+    favoriteRepository.findOne.mockResolvedValue(null);
+    const { req, res } = mocks('DELETE');
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(favoriteRepository.delete).not.toHaveBeenCalled();
+    expect(res._getJSONData()).toEqual({ removed: false });
   });
 
   it('propagates the service rejection for a file the caller cannot access', async () => {

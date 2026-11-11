@@ -42,6 +42,8 @@ export interface FileBrowserInstanceValue {
   fileToShare: IFabFileDocument | null;
   setFileToShare: (file: IFabFileDocument | null) => void;
   config: FileBrowserConfig;
+  /** False for an instance rendered inline, which has nothing to close back to. Undefined = closable. */
+  closable?: boolean;
 }
 
 const EMPTY_CONFIG: FileBrowserConfig = {};

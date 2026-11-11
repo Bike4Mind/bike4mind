@@ -16,7 +16,7 @@ const noop = () => {};
  * The per-instance state every embedded browser owns: selection and the share target stay local, so
  * several instances on one screen never collide (see instanceContext).
  */
-function useInstanceValue(config: FileBrowserConfig, open: boolean, setOpen: (open: boolean) => void) {
+function useInstanceValue(config: FileBrowserConfig, open: boolean, setOpen: (open: boolean) => void, closable = true) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [fileToShare, setFileToShare] = useState<IFabFileDocument | null>(null);
   const {
@@ -50,6 +50,7 @@ function useInstanceValue(config: FileBrowserConfig, open: boolean, setOpen: (op
         enableModelFilter,
         initialViewMode,
       },
+      closable,
     }),
     [
       open,
@@ -65,6 +66,7 @@ function useInstanceValue(config: FileBrowserConfig, open: boolean, setOpen: (op
       enableStar,
       enableModelFilter,
       initialViewMode,
+      closable,
     ]
   );
 
@@ -137,7 +139,7 @@ export const InlineFileBrowser = ({
   'data-testid': testId = 'inline-file-browser',
   ...config
 }: InlineFileBrowserProps) => {
-  const { value } = useInstanceValue(config, true, noop);
+  const { value } = useInstanceValue(config, true, noop, false);
   return (
     <FileBrowserInstanceProvider value={value}>
       <Box

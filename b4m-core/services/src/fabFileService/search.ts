@@ -64,7 +64,8 @@ type SearchFabFilesAdapters = GetFabFileAdapter & {
   db: GetFabFileAdapter['db'] & {
     fabFiles: IFabFileRepository;
     projects: IProjectRepository;
-    favorites: Pick<IFavoriteRepository, 'find'>;
+    /** Only needed to answer `filters.starred`; a caller that never offers stars may omit it. */
+    favorites?: Pick<IFavoriteRepository, 'find'>;
   };
 };
 
@@ -129,9 +130,10 @@ export const search = async (
   // Starred narrows whatever restriction is already in force, never widens it: it only ever
   // intersects with an allow-list, and ownership/visibility still applies in the query itself.
   if (filters?.starred === true) {
+    if (!db.favorites) throw new Error('fabFilesService.search: filters.starred needs the favorites adapter');
     const favorites = await db.favorites.find({ userId, documentType: FavoriteDocumentType.Files });
-    const starredIds = favorites.map(favorite => favorite.documentId);
-    restrictToFileIds = restrictToFileIds ? restrictToFileIds.filter(id => starredIds.includes(id)) : starredIds;
+    const starredIds = new Set(favorites.map(favorite => favorite.documentId));
+    restrictToFileIds = restrictToFileIds ? restrictToFileIds.filter(id => starredIds.has(id)) : [...starredIds];
   }
 
   const fabFiles = await db.fabFiles.search(

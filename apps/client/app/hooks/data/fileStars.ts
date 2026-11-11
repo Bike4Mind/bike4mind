@@ -23,6 +23,8 @@ export function useStarredFileIds({ enabled = true }: { enabled?: boolean } = {}
 export function useToggleFileStar() {
   const queryClient = useQueryClient();
   return useMutation({
+    // Serialized, so a quick star-then-unstar reaches the server in click order and the last click wins.
+    scope: { id: 'file-star' },
     mutationFn: async ({ fileId, starred }: { fileId: string; starred: boolean }) => {
       const url = `/api/files/${encodeURIComponent(fileId)}/favorite`;
       await (starred ? api.post(url) : api.delete(url));
@@ -37,7 +39,8 @@ export function useToggleFileStar() {
       return { previous };
     },
     onError: (_error, _variables, context) => {
-      queryClient.setQueryData(fabFileKeys.starredIds, context?.previous);
+      // `previous` is undefined when the stars had not loaded yet; setQueryData ignores undefined.
+      queryClient.setQueryData(fabFileKeys.starredIds, context?.previous ?? new Set<string>());
       toast.error('Could not update the star');
     },
     onSettled: () =>

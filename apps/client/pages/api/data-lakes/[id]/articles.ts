@@ -10,7 +10,6 @@ import {
   projectRepository,
   userRepository,
   lakeAccessEventRepository,
-  favoriteRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -112,7 +111,6 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           fabFiles: fabFileRepository,
           users: userRepository,
           projects: projectRepository,
-          favorites: favoriteRepository,
           adminSettings: adminSettingsRepository,
         },
         storage: {

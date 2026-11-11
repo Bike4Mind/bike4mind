@@ -54,8 +54,9 @@ export const hasUserFilters = (params: ISearchFabFilesParams): boolean =>
     params.filters?.starred
   );
 
+/** Truthy, matching `toSearchFilters`: a lock that filters nothing (`false`, `''`) does not hide the control. */
 export const isFilterLocked = (locked: FileBrowserFilters | undefined, key: FileBrowserFilterKey): boolean =>
-  locked?.[key] !== undefined && locked[key] !== false;
+  Boolean(locked?.[key]);
 
 const SOURCE_LABELS: Record<FileSourceFilter, string> = { generated: 'Generated', uploaded: 'Uploaded' };
 

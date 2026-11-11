@@ -75,7 +75,8 @@ const FileBrowserContent = () => {
   const { t } = useTranslation();
   const { currentUser } = useUser();
   const confirm = useConfirmation();
-  const { selectedIds, setSelectedIds, setOpen, fileToShare, setFileToShare, config } = useFileBrowserInstance();
+  const { selectedIds, setSelectedIds, setOpen, fileToShare, setFileToShare, config, closable } =
+    useFileBrowserInstance();
   const [showBulkShareModal, setShowBulkShareModal] = useState(false);
   const model = useLLM(state => state.model);
   const { data: modelInfo } = useModelInfo();
@@ -573,7 +574,7 @@ const FileBrowserContent = () => {
         <Box sx={{ display: { xs: 'block', md: 'none' } }}>
           <MobileTopBar
             title="File Browser"
-            onClose={() => setOpen(false)}
+            onClose={closable === false ? undefined : () => setOpen(false)}
             rightContent={
               <Button
                 onClick={() => setIsTagSidebarOpen(!isTagSidebarOpen)}
