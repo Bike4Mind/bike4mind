@@ -76,11 +76,19 @@ test.describe('pod replacement verdict', () => {
     expect(podsWereReplaced([pod('a', '1')], [pod('b', '')]).ok).toBe(false);
   });
 
-  test('ignores terminating pods when listing', () => {
+  test('lists only running pods that are not terminating', () => {
     const json = JSON.stringify({
       items: [
-        { metadata: { name: 'old', uid: '1', deletionTimestamp: '2026-01-01T00:00:00Z' } },
-        { metadata: { name: 'new', uid: '2' }, spec: { containers: [{ image: 'app:1' }] } },
+        {
+          metadata: { name: 'old', uid: '1', deletionTimestamp: '2026-01-01T00:00:00Z' },
+          status: { phase: 'Running' },
+        },
+        { metadata: { name: 'evicted', uid: '3' }, status: { phase: 'Failed' } },
+        {
+          metadata: { name: 'new', uid: '2' },
+          spec: { containers: [{ image: 'app:1' }] },
+          status: { phase: 'Running' },
+        },
       ],
     });
     expect(parseAppPods(json)).toEqual([{ name: 'new', uid: '2', images: ['app:1'] }]);
@@ -132,6 +140,17 @@ test.describe('configuration', () => {
     expect(() => readUploadReadableConfig({ ...base, SELFHOST_EMAIL: '' })).toThrow();
     expect(() => readUploadReadableConfig({ ...base, SELFHOST_MUTATE_EXPECTED: 'yes' })).toThrow();
     expect(() => readUploadReadableConfig({ ...base, SELFHOST_READY_TIMEOUT_MS: '0' })).toThrow();
+    expect(() => readUploadReadableConfig({ ...base, SELFHOST_READY_TIMEOUT_MS: '3600000000' })).toThrow();
+  });
+
+  test('normalizes the base URL the way a browser reports request URLs', () => {
+    const base = { ...ENV, SELFHOST_KUBE_NAMESPACE: 'ns' };
+    expect(readUploadReadableConfig({ ...base, SELFHOST_URL: 'HTTPS://Host.Example:443/' }).baseUrl).toBe(
+      'https://host.example'
+    );
+    expect(readUploadReadableConfig({ ...base, SELFHOST_URL: 'http://localhost:3000/b4m/' }).baseUrl).toBe(
+      'http://localhost:3000/b4m'
+    );
   });
 });
 

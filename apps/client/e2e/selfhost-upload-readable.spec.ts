@@ -4,7 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Request } from '@playwright/test';
 import { TIMEOUTS } from './constants';
 import { BasePage } from './pages/BasePage';
 import { FileUploadPage } from './pages/FileUploadPage';
@@ -54,8 +54,17 @@ import {
 
 const run = promisify(execFile);
 
-const kubectl = async (args: string[]): Promise<string> =>
-  (await run('kubectl', args, { maxBuffer: 16 * 1024 * 1024 })).stdout;
+/** Bounded so an unreachable API server fails the step by name instead of hanging the whole test. */
+const kubectl = async (args: string[], timeoutMs = 60_000): Promise<string> => {
+  try {
+    return (await run('kubectl', args, { maxBuffer: 16 * 1024 * 1024, timeout: timeoutMs })).stdout;
+  } catch (error) {
+    const stderr = (error as { stderr?: string }).stderr?.trim().slice(-600);
+    throw new Error(
+      `kubectl ${args.join(' ')} failed${stderr ? `: ${stderr}` : ` (no answer within ${timeoutMs}ms?)`}`
+    );
+  }
+};
 
 type BrowserRead =
   | { stage: 'read'; base64: string; fileUrl: string; filePath?: string }
@@ -112,16 +121,22 @@ const fetchInBrowser = (page: Page, url: string, authorization?: string): Promis
     { url, authorization }
   );
 
-/** The newest sign-in code Mailpit holds for `email`, sent no earlier than `since`. */
-async function signInCodeFromMailpit(config: UploadReadableConfig, since: number): Promise<string | undefined> {
-  const search = `${config.mailpitUrl}/api/v1/search?query=${encodeURIComponent(`to:"${config.email}"`)}&limit=5`;
+/** IDs of the newest messages Mailpit holds for the account, newest first. */
+async function mailpitMessageIds(config: UploadReadableConfig): Promise<string[]> {
+  const search = `${config.mailpitUrl}/api/v1/search?query=${encodeURIComponent(`to:"${config.email}"`)}&limit=20`;
   const found = await fetch(search, { signal: AbortSignal.timeout(10_000) });
-  if (!found.ok) return undefined;
-  const { messages = [] } = (await found.json()) as { messages?: { ID: string; Created: string }[] };
-  // 5s of slack for clock skew between this machine and the mail pod.
-  const fresh = messages.find(m => Date.parse(m.Created) >= since - 5_000);
+  if (!found.ok) throw new Error(`Mailpit search answered HTTP ${found.status}`);
+  return (((await found.json()) as { messages?: { ID: string }[] }).messages ?? []).map(m => m.ID);
+}
+
+/**
+ * The sign-in code from the newest message that was not in Mailpit before the code was requested.
+ * Told apart by ID, not by timestamp, so clock skew between this machine and the cluster is moot.
+ */
+async function signInCodeFromMailpit(config: UploadReadableConfig, seen: Set<string>): Promise<string | undefined> {
+  const fresh = (await mailpitMessageIds(config)).find(id => !seen.has(id));
   if (!fresh) return undefined;
-  const message = await fetch(`${config.mailpitUrl}/api/v1/message/${encodeURIComponent(fresh.ID)}`, {
+  const message = await fetch(`${config.mailpitUrl}/api/v1/message/${encodeURIComponent(fresh)}`, {
     signal: AbortSignal.timeout(10_000),
   });
   if (!message.ok) return undefined;
@@ -130,13 +145,14 @@ async function signInCodeFromMailpit(config: UploadReadableConfig, since: number
 
 async function signIn(page: Page, config: UploadReadableConfig): Promise<void> {
   const login = new LoginPage(page);
-  const requestedAt = Date.now();
+  // Fails here, by name, when Mailpit is not reachable - before a code is spent on it.
+  const seen = new Set(await mailpitMessageIds(config));
   await login.goto();
   await login.fillEmail(config.email);
 
   let code: string | undefined;
   await expect
-    .poll(async () => (code = await signInCodeFromMailpit(config, requestedAt).catch(() => undefined)), {
+    .poll(async () => (code = await signInCodeFromMailpit(config, seen).catch(() => undefined)), {
       timeout: 60_000,
       intervals: [2_000],
       message: `no sign-in code for the account reached Mailpit at ${config.mailpitUrl}`,
@@ -159,9 +175,14 @@ async function signIn(page: Page, config: UploadReadableConfig): Promise<void> {
 }
 
 /** The bearer token the app itself sends: memory-only, so it is re-read after every full load. */
-const isAuthedApiRequest =
-  (config: UploadReadableConfig) => (request: { url(): string; headers(): Record<string, string> }) =>
-    request.url().startsWith(`${config.baseUrl}/api/`) && /^Bearer \S+/.test(request.headers()['authorization'] ?? '');
+const bearerOf = async (request: Request): Promise<string> => {
+  // headerValue reads the complete header set; headers() can omit security-related ones.
+  const value = (await request.headerValue('authorization')) ?? '';
+  return /^Bearer \S+/.test(value) ? value : '';
+};
+
+const isAuthedApiRequest = (config: UploadReadableConfig) => async (request: Request) =>
+  request.url().startsWith(`${config.baseUrl}/api/`) && (await bearerOf(request)) !== '';
 
 /**
  * Reload and return the token the reloaded app obtained from its session cookie. Retried until
@@ -179,9 +200,10 @@ async function reloadSignedIn(
     const authed = page.waitForRequest(isAuthedApiRequest(config), { timeout: 30_000 });
     authed.catch(() => {});
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 });
-    authorization = (await authed).headers()['authorization'];
+    authorization = await bearerOf(await authed);
     // A request the old page fired just before the reload committed would carry the old token.
-    expect(authorization, 'the request seen was from before the reload').not.toBe(previous);
+    // Compared as a boolean so a failure message never prints the token.
+    expect(authorization !== previous, 'the request seen was from before the reload').toBe(true);
   }, 'the reloaded app made no signed-in API request; the session did not survive').toPass({ timeout });
   return authorization;
 }
@@ -190,7 +212,7 @@ async function replaceAppPod(config: UploadReadableConfig): Promise<{ before: Ap
   const kube = config.kube!;
   const before = parseAppPods(await kubectl(appPodsArgs(kube)));
   await kubectl(restartAppArgs(kube));
-  await kubectl(rolloutStatusArgs(kube, config.readyTimeoutMs));
+  await kubectl(rolloutStatusArgs(kube, config.readyTimeoutMs), config.readyTimeoutMs + 30_000);
 
   let after: AppPod[] = [];
   await expect(async () => {
@@ -240,9 +262,15 @@ test('an uploaded file reads back byte-identical after reload and app pod replac
     let last: BrowserRead | undefined;
     await expect(async () => {
       last = await readInBrowser(page, fileId, authorization);
-      expect(last.stage, `${phase}: the browser could not read the file: ${JSON.stringify(last).slice(0, 300)}`).toBe(
-        'read'
-      );
+      // A thrown fetch is the browser refusing the request before any status exists.
+      const hint =
+        last.stage === 'threw'
+          ? ' (is the object store at S3_PRESIGN_ENDPOINT reachable from this machine, and does it allow cross-origin reads from the app origin?)'
+          : '';
+      expect(
+        last.stage,
+        `${phase}: the browser could not read the file: ${JSON.stringify(last).slice(0, 300)}${hint}`
+      ).toBe('read');
     }).toPass({ timeout, intervals: [3_000] });
     const read = last as Extract<BrowserRead, { stage: 'read' }>;
     const actual = Buffer.from(read.base64, 'base64');
@@ -281,8 +309,8 @@ test('an uploaded file reads back byte-identical after reload and app pod replac
       const id = body.id ?? body._id;
       expect(id, 'createFabFile returned no id').toBeTruthy();
       expect((await stored).ok(), 'the upload proxy refused the bytes').toBe(true);
-      const token = response.request().headers()['authorization'];
-      expect(token, 'the upload request carried no bearer token').toMatch(/^Bearer \S+/);
+      const token = await bearerOf(response.request());
+      expect(token !== '', 'the upload request carried no bearer token').toBe(true);
       return { fileId: id!, authorization: token };
     });
     receipt.fileId = fileId;

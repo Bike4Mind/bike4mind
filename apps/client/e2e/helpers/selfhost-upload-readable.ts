@@ -29,12 +29,16 @@ const USAGE = [
   '  SELFHOST_MUTATE_EXPECTED=true, SELFHOST_READY_TIMEOUT_MS (default 600000)',
 ].join('\n');
 
+const MAX_READY_TIMEOUT_MS = 3_600_000;
+
 const httpUrl = (name: string, raw: string): string => {
-  const trimmed = raw.replace(/\/+$/, '');
-  if (!URL.canParse(trimmed) || !/^https?:$/.test(new URL(trimmed).protocol)) {
+  if (!URL.canParse(raw) || !/^https?:$/.test(new URL(raw).protocol)) {
     throw new Error(`${name} must be an http: or https: URL\n${USAGE}`);
   }
-  return trimmed;
+  // Normalized the way a browser reports request URLs (lowercase host, default port dropped), so
+  // the spec can match requests against it by prefix.
+  const url = new URL(raw);
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
 };
 
 // kubectl takes these as argv (never through a shell), but a value starting with '-' would still
@@ -72,8 +76,11 @@ export function readUploadReadableConfig(env: NodeJS.ProcessEnv): UploadReadable
 
   const rawTimeout = env.SELFHOST_READY_TIMEOUT_MS;
   const readyTimeoutMs = rawTimeout ? Number(rawTimeout) : 600_000;
-  if (!Number.isInteger(readyTimeoutMs) || readyTimeoutMs <= 0) {
-    throw new Error(`SELFHOST_READY_TIMEOUT_MS must be a positive integer\n${USAGE}`);
+  // Capped well below the 2^31-1 ms where Node timers overflow; the spec waits up to three of these.
+  if (!Number.isInteger(readyTimeoutMs) || readyTimeoutMs <= 0 || readyTimeoutMs > MAX_READY_TIMEOUT_MS) {
+    throw new Error(
+      `SELFHOST_READY_TIMEOUT_MS must be a positive integer no greater than ${MAX_READY_TIMEOUT_MS}\n${USAGE}`
+    );
   }
 
   return {
@@ -194,16 +201,20 @@ export interface AppPod {
   images: string[];
 }
 
-/** Live (not terminating) app pods from `kubectl get pods -o json`. */
+/**
+ * Running, non-terminating app pods from `kubectl get pods -o json`. Failed or Succeeded leftovers
+ * (an evicted pod, say) match the selector too and keep their UID, so they are left out.
+ */
 export function parseAppPods(json: string): AppPod[] {
   const parsed = JSON.parse(json) as {
     items?: {
       metadata?: { name?: string; uid?: string; deletionTimestamp?: string };
       spec?: { containers?: { image?: string }[] };
+      status?: { phase?: string };
     }[];
   };
   return (parsed.items ?? [])
-    .filter(item => !item.metadata?.deletionTimestamp)
+    .filter(item => !item.metadata?.deletionTimestamp && item.status?.phase === 'Running')
     .map(item => ({
       name: item.metadata?.name ?? '',
       uid: item.metadata?.uid ?? '',
