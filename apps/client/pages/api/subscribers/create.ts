@@ -1,5 +1,6 @@
 import {
   SUBSCRIBER_SOURCES,
+  isSignupClosedSource,
   TURNSTILE_ACTION_SUBSCRIBE,
   escapeSlackLine,
   neutralizeSlackBroadcastMentions,
@@ -105,10 +106,9 @@ const handler = baseApi({ auth: false })
         );
       } else if (alert.action === 'post') {
         const brand = process.env.APP_NAME || '';
-        const blockedSignupNote =
-          validatedBody.source === 'subscribe_page'
-            ? ''
-            : `\nThey tried to sign up while registration was closed (source: \`${validatedBody.source}\`).\n`;
+        const blockedSignupNote = isSignupClosedSource(validatedBody.source)
+          ? `\nThey tried to sign up while registration was closed (source: \`${validatedBody.source}\`).\n`
+          : '';
         const slackMessage = `🎯 **New Subscriber Alert!**
 
 📧 **${slackSafeName(validatedBody.firstName)} ${slackSafeName(validatedBody.lastName)}** (${escapeSlackLine(validatedBody.email)}) just requested an invite code!

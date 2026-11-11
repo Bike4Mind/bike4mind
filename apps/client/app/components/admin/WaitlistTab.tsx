@@ -1,6 +1,6 @@
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { deleteSubscriber, fetchSubscribers } from '@client/app/utils/subscriberAPICalls';
-import { ISubscriberDocument, SubscriberSource } from '@bike4mind/common';
+import { ISubscriberDocument, SubscriberSource, isSignupClosedSource } from '@bike4mind/common';
 import { APP_NAME } from '@client/config/general'; // brand externalized
 import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCounts';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
@@ -49,11 +49,12 @@ const SOURCE_LABELS: Record<SubscriberSource, string> = {
   login_signup_closed: 'Blocked sign-in',
   register_signup_closed: 'Blocked sign-up',
   oauth_signup_closed: 'Blocked Google/GitHub',
+  coming_soon_page: 'Coming soon page',
 };
 
 // Entries from before the source field existed all came through the waitlist page.
 const SubscriberSourceChip = ({ source = 'subscribe_page' }: { source?: SubscriberSource }) => (
-  <Chip size="sm" variant="outlined" color={source === 'subscribe_page' ? 'neutral' : 'warning'}>
+  <Chip size="sm" variant="outlined" color={isSignupClosedSource(source) ? 'warning' : 'neutral'}>
     {SOURCE_LABELS[source]}
   </Chip>
 );

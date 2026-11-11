@@ -306,6 +306,7 @@ import EnsureGeneratedMediaPurgeIndexes from './20260921240060_ensure-generated-
 import EnsureSessionGroupReadIndex from './20260921240080_ensure-session-group-read-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import ResearchConfigSourceTiers from './20260921240100_research-config-source-tiers';
+import CloseFeedbackTriageNoise from './20260921240070_close-feedback-triage-noise';
 import ConvertLegacyQuestPlansToFiles from './20260921239990_convert-legacy-quest-plans-to-files';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import PinSignupGrantScheduleKeys from './20260921237480_pin-signup-grant-schedule-keys';
@@ -559,6 +560,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureSessionGroupReadIndex,
   ResealOAuthProviderTokens,
   ResearchConfigSourceTiers,
+  CloseFeedbackTriageNoise,
   ModalImageUrlToKey,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
