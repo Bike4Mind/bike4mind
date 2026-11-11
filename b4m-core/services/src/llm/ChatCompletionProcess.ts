@@ -73,6 +73,7 @@ import {
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
   respondFromWorkspace,
+  respondFromCoreTutorial,
   createReasoningWithholder,
   reasoningChannelOf,
   withholdsReasoning,
@@ -1294,6 +1295,7 @@ export class ChatCompletionProcess {
   private abilityGetter: IChatCompletionServiceOptions['abilityGetter'];
   private workspaceDeniedTools: IChatCompletionServiceOptions['workspaceDeniedTools'];
   private workspaceSessionSettings: IChatCompletionServiceOptions['workspaceSessionSettings'];
+  private coreTutorialTurns: IChatCompletionServiceOptions['coreTutorialTurns'];
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   private customMcp: IChatCompletionServiceOptions['customMcp'];
@@ -1376,6 +1378,7 @@ export class ChatCompletionProcess {
     this.abilityGetter = options.abilityGetter;
     this.workspaceDeniedTools = options.workspaceDeniedTools;
     this.workspaceSessionSettings = options.workspaceSessionSettings;
+    this.coreTutorialTurns = options.coreTutorialTurns;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
     this.getThinkingVisibility = options.getThinkingVisibility;
@@ -2507,15 +2510,17 @@ export class ChatCompletionProcess {
         return;
       }
 
-      const workspaceReply = await respondFromWorkspace(
-        {
-          user: this.user,
-          logger,
-          session,
-          quest: { id: questId, prompt: quest.prompt, fabFileIds: quest.fabFileIds },
-        },
-        this.workspaceSessionSettings
-      );
+      const turnQuest = { id: questId, prompt: quest.prompt, fabFileIds: quest.fabFileIds };
+      // Ahead of the workspace hook: a core marker sits only on main-surface sessions, so the two never both answer.
+      const workspaceReply =
+        (await respondFromCoreTutorial(
+          { user: this.user, logger, session: { id: sessionId, tutorial: session.tutorial }, quest: turnQuest },
+          this.coreTutorialTurns
+        )) ??
+        (await respondFromWorkspace(
+          { user: this.user, logger, session, quest: turnQuest },
+          this.workspaceSessionSettings
+        ));
       if (workspaceReply) {
         quest.replies = workspaceReply.replies;
         quest.reply = workspaceReply.replies.join('');

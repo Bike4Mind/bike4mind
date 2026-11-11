@@ -722,3 +722,53 @@ describe('enabledModules', () => {
     expect(listed).toEqual([door]);
   });
 });
+
+describe('the session marker', () => {
+  function withMarker() {
+    const made = makeDeps();
+    const marks: [string, string | null][] = [];
+    made.deps.setSessionMarker = async (sessionId, _userId, moduleId) => {
+      marks.push([sessionId, moduleId]);
+    };
+    return { ...made, marks };
+  }
+
+  it('is written on start and again on a restart', async () => {
+    const { deps, marks, sessions } = withMarker();
+    await startModule(deps, 'u1', 'demo');
+    await startModule(deps, 'u1', 'demo');
+    expect(marks).toEqual([
+      [sessions[0].id, 'demo'],
+      [sessions[1].id, 'demo'],
+    ]);
+  });
+
+  it('is cleared when the walk finishes or is abandoned, not while it runs', async () => {
+    const { deps, marks, sessions } = withMarker();
+    await startModule(deps, 'u1', 'demo');
+    marks.length = 0;
+    await recordPosition(deps, 'u1', { moduleId: 'demo', stepId: 'finish', status: 'in_progress' });
+    expect(marks).toEqual([]);
+    await recordPosition(deps, 'u1', { moduleId: 'demo', stepId: 'finish', status: 'finished' });
+    expect(marks).toEqual([[sessions[0].id, null]]);
+    await startModule(deps, 'u1', 'demo');
+    await recordPosition(deps, 'u1', { moduleId: 'demo', stepId: 'attach-sheet', status: 'left' });
+    expect(marks.at(-1)).toEqual([sessions[1].id, null]);
+  });
+
+  it('fails the start when the mark cannot be written, and only warns when it cannot be cleared', async () => {
+    const { deps, warnings } = makeDeps();
+    deps.setSessionMarker = async () => {
+      throw new Error('db down');
+    };
+    await expect(startModule(deps, 'u1', 'demo')).rejects.toThrow('db down');
+    deps.setSessionMarker = async (_s, _u, moduleId) => {
+      if (moduleId) return;
+      throw new Error('db down');
+    };
+    await startModule(deps, 'u1', 'demo');
+    const r = await recordPosition(deps, 'u1', { moduleId: 'demo', stepId: 'finish', status: 'finished' });
+    expect(r.ok).toBe(true);
+    expect(warnings.some(w => w.includes('could not unmark'))).toBe(true);
+  });
+});
