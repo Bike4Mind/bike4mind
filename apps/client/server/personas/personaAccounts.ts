@@ -161,7 +161,7 @@ export const personaExpiresAt = (now: Date, ttlDays: number) => new Date(now.get
 export const PERSONA_KEY_ACTOR: AuditActor = {
   kind: 'script',
   scope: 'platform',
-  name: 'Persona admin key',
+  name: 'Persona mint key',
   wasAdmin: false,
 };
 

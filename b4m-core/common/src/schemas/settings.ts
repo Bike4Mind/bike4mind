@@ -4712,7 +4712,7 @@ export const settingsMap = {
     max: 1000,
     int: true,
     description:
-      'How many test persona accounts the persona key may create in any 24 hours. 0 turns minting off. Only matters on stages where the PERSONA_ADMIN_KEY secret is set.',
+      'How many test persona accounts the persona key may create in any 24 hours. 0 turns minting off. Only matters on stages where the PERSONA_MINT_KEY secret is set.',
     category: 'SecOps',
   }),
   PersonaMaxLive: makeNumberSetting({

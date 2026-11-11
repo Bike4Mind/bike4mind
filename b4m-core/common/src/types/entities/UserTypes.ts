@@ -910,7 +910,7 @@ export interface IUser extends ICreditHolder {
   isInternal?: boolean;
 
   /**
-   * Minted with the persona key (pages/api/admin/personas), never through signup. Only these
+   * Minted with the persona key (pages/api/personas), never through signup. Only these
    * accounts can be deleted with that key, and the expiry sweep disables them at `personaExpiresAt`.
    */
   isPersona?: boolean;

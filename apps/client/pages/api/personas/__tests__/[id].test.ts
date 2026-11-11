@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-/** DELETE /api/admin/personas/:id must only ever delete persona accounts, and only with the persona key. */
+/** DELETE /api/personas/:id must only ever delete persona accounts, and only with the persona key. */
 
 const KEY = 'p'.repeat(40);
 const ID = '64b000000000000000000001';
@@ -37,7 +37,7 @@ vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
 vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: h.hardDeleteUser }));
 vi.mock('sst', () => ({
   Resource: {
-    get PERSONA_ADMIN_KEY() {
+    get PERSONA_MINT_KEY() {
       return h.secret;
     },
   },
@@ -59,13 +59,13 @@ import handler from '../[id]';
 
 const persona = { id: ID, username: 'persona-alpha-123', email: 'a@x.test', isPersona: true, isAdmin: false };
 
-const del = async (id: string = ID, headers: Record<string, string> = { 'x-persona-admin-key': KEY }) => {
+const del = async (id: string = ID, headers: Record<string, string> = { 'x-persona-mint-key': KEY }) => {
   const json = vi.fn();
   const status = vi.fn(() => ({ json }));
   await handler(
     {
       method: 'DELETE',
-      url: `/api/admin/personas/${id}`,
+      url: `/api/personas/${id}`,
       query: { id },
       headers,
       logger: { error: vi.fn(), log: vi.fn(), info: vi.fn(), warn: vi.fn() },
@@ -82,7 +82,7 @@ beforeEach(() => {
   h.hardDeleteUser.mockResolvedValue({ result: true, subscriptionCancellation: null });
 });
 
-describe('DELETE /api/admin/personas/:id', () => {
+describe('DELETE /api/personas/:id', () => {
   it('answers 404 when the stage secret is unset', async () => {
     h.secret = undefined;
     const { status, json } = await del();
@@ -103,7 +103,7 @@ describe('DELETE /api/admin/personas/:id', () => {
 
   it.each([
     ['no key', {}],
-    ['a wrong key', { 'x-persona-admin-key': 'q'.repeat(40) }],
+    ['a wrong key', { 'x-persona-mint-key': 'q'.repeat(40) }],
     ['a user API key', { authorization: 'Bearer b4m_live_0123456789abcdef' }],
   ])('refuses %s', async (_label, headers) => {
     const { status } = await del(ID, headers);
@@ -143,7 +143,7 @@ describe('DELETE /api/admin/personas/:id', () => {
     expect(h.recordAdminAction).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'user.persona.deleted',
-        actor: expect.objectContaining({ name: 'Persona admin key' }),
+        actor: expect.objectContaining({ name: 'Persona mint key' }),
         target: expect.objectContaining({ id: ID }),
       }),
       expect.anything()

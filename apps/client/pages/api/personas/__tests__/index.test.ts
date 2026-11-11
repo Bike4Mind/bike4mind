@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**
- * POST /api/admin/personas mints test personas for QA bots with the per-stage PERSONA_ADMIN_KEY.
+ * POST /api/personas mints test personas for QA bots with the per-stage PERSONA_MINT_KEY.
  * Every refusal here is a security property: no key = no endpoint, only the exact key works, the
  * body cannot pick a username, email, role, flag or credits, and the caps hold.
  */
@@ -53,7 +53,7 @@ vi.mock('@server/auth/issueSession', () => ({ issueSessionForRequest: h.issueSes
 vi.mock('@server/auth/tokenGenerator', () => ({ ACCESS_TOKEN_TTL_SECONDS: 1800 }));
 vi.mock('sst', () => ({
   Resource: {
-    get PERSONA_ADMIN_KEY() {
+    get PERSONA_MINT_KEY() {
       return h.secret;
     },
   },
@@ -93,10 +93,10 @@ import handler from '../index';
 
 const makeReq = (
   body: unknown = { name: 'alpha' },
-  headers: Record<string, string> = { 'x-persona-admin-key': KEY }
+  headers: Record<string, string> = { 'x-persona-mint-key': KEY }
 ) => ({
   method: 'POST',
-  url: '/api/admin/personas',
+  url: '/api/personas',
   query: {},
   body,
   headers,
@@ -125,7 +125,7 @@ beforeEach(() => {
   h.domainGrants = new Set();
   h.partnerMatch = false;
   h.reserve.mockResolvedValue({ success: true, expiresAt: new Date() });
-  delete process.env.PERSONA_ADMIN_KEY;
+  delete process.env.PERSONA_MINT_KEY;
   h.disableExpiredPersonas.mockResolvedValue({ disabled: 0 });
   h.createUser.mockImplementation(async (params: { username: string; email: string }) => ({
     id: '64b000000000000000000001',
@@ -137,7 +137,7 @@ beforeEach(() => {
   h.issueSessionForRequest.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt', sid: 's1' });
 });
 
-describe('POST /api/admin/personas', () => {
+describe('POST /api/personas', () => {
   describe('auth', () => {
     it.each([
       ['unset', undefined],
@@ -161,7 +161,7 @@ describe('POST /api/admin/personas', () => {
     });
 
     it('refuses a wrong key', async () => {
-      const { status } = await post({ name: 'alpha' }, { 'x-persona-admin-key': 'q'.repeat(40) });
+      const { status } = await post({ name: 'alpha' }, { 'x-persona-mint-key': 'q'.repeat(40) });
       expect(status).toHaveBeenCalledWith(401);
     });
 
@@ -275,7 +275,7 @@ describe('POST /api/admin/personas', () => {
       expect(h.recordAdminAction).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'user.persona.created',
-          actor: expect.objectContaining({ kind: 'script', name: 'Persona admin key' }),
+          actor: expect.objectContaining({ kind: 'script', name: 'Persona mint key' }),
           target: expect.objectContaining({ kind: 'user', id: '64b000000000000000000001' }),
           context: expect.objectContaining({ source: 'script' }),
         }),

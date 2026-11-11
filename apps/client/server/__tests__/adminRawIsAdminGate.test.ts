@@ -29,8 +29,6 @@ const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api', 'admin');
  */
 const OUTSIDE_ADMIN_GATE = new Map<string, string>([
   ['emergency-login.ts', 'break-glass sign-in: reads the target account isAdmin, then requires its second factor'],
-  ['personas/[id].ts', 'QA persona delete, authenticated by the PERSONA_ADMIN_KEY header; persona accounts only'],
-  ['personas/index.ts', 'QA persona mint, authenticated by the PERSONA_ADMIN_KEY header; persona accounts only'],
   ['rate-limits/ingest.ts', 'MCP Lambda push, authenticated by the rate-limit ingest token'],
   ['security-dashboard/attack-simulation-ingest.ts', 'scanner push, authenticated by its ingest token'],
   ['security-dashboard/cloud-prowler-ingest.ts', 'scanner push, authenticated by its ingest token'],

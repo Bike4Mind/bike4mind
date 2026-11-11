@@ -15,11 +15,11 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 import {
-  PERSONA_ADMIN_KEY_HEADER,
+  PERSONA_MINT_KEY_HEADER,
   PERSONA_ENDPOINT_OFF_CODE,
-  isValidPersonaAdminKey,
-  readPersonaAdminKey,
-} from '@server/personas/personaAdminKey';
+  isValidPersonaMintKey,
+  readPersonaMintKey,
+} from '@server/personas/personaMintKey';
 import {
   MintPersonaBodySchema,
   PERSONA_KEY_ACTOR,
@@ -42,9 +42,9 @@ const isDuplicateKeyError = (error: unknown) =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
 
 /**
- * POST /api/admin/personas - mint a synthetic test-persona account for QA bots, so they never go
+ * POST /api/personas - mint a synthetic test-persona account for QA bots, so they never go
  * through the public signup (and its Turnstile challenge). Authenticated only by the stage's
- * PERSONA_ADMIN_KEY in the x-persona-admin-key header: no session, no API key. Unset key = 404.
+ * PERSONA_MINT_KEY in the x-persona-mint-key header: no session, no API key. Unset key = 404.
  *
  * The fence is server-side: the body is exactly `{ name }`, the server builds the username and the
  * email, forces isPersona/isSynthetic, grants no credits and no role. Mints are capped per 24 hours
@@ -54,13 +54,13 @@ const isDuplicateKeyError = (error: unknown) =>
  */
 const handler = baseApi({ auth: false, allowedMethods: ['POST'] })
   // Before the key check, so guessing at the key is throttled too.
-  .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'admin-personas' }))
+  .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'personas-mint' }))
   .post(
     asyncHandler(async (req: Request, res: Response) => {
-      const expectedKey = readPersonaAdminKey();
+      const expectedKey = readPersonaMintKey();
       if (!expectedKey) return res.status(404).json({ error: 'Not found', code: PERSONA_ENDPOINT_OFF_CODE });
-      if (!isValidPersonaAdminKey(req.headers[PERSONA_ADMIN_KEY_HEADER], expectedKey)) {
-        return res.status(401).json({ error: 'Invalid persona admin key' });
+      if (!isValidPersonaMintKey(req.headers[PERSONA_MINT_KEY_HEADER], expectedKey)) {
+        return res.status(401).json({ error: 'Invalid persona mint key' });
       }
 
       const parsed = MintPersonaBodySchema.safeParse(req.body ?? {});
