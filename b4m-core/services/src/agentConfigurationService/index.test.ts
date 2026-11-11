@@ -243,4 +243,34 @@ describe('agent configuration egress', () => {
     expect(db.skills.create).toHaveBeenCalledWith(expect.not.objectContaining({ isSystem: true }));
     expect(db.prompts.create).toHaveBeenCalledWith(expect.objectContaining({ userId: 'target' }));
   });
+
+  it('exports visual fields without the portrait URL', async () => {
+    const db = exportAdapters();
+    vi.mocked(db.agents.find).mockResolvedValue([
+      { ...agent, visual: { portraitUrl: 'https://temp.example/p.png', style: 'ink', generationPrompt: 'a fox' } },
+    ] as never);
+    const archive = await exportAgentConfiguration('source', db);
+
+    expect(archive.agents[0].visual).toEqual({ style: 'ink', generationPrompt: 'a fox' });
+  });
+
+  it('does not pass an archived portrait URL to agent creation', async () => {
+    const archive = await exportAgentConfiguration('source', exportAdapters());
+    const withPortrait = {
+      ...archive,
+      agents: [
+        {
+          ...archive.agents[0],
+          visual: { portraitUrl: 'https://temp.example/p.png', style: 'ink', generationPrompt: 'a fox' },
+        },
+      ],
+    } as AgentConfigurationArchive;
+    const db = importAdapters();
+    await importAgentConfiguration('target', withPortrait, db);
+
+    expect(db.agents.create).toHaveBeenCalledWith(
+      expect.objectContaining({ visual: { style: 'ink', generationPrompt: 'a fox' } })
+    );
+    expect(JSON.stringify(vi.mocked(db.agents.create).mock.calls)).not.toContain('temp.example');
+  });
 });

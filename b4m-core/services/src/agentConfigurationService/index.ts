@@ -10,7 +10,7 @@ import type {
   IUserPreferences,
 } from '@bike4mind/common';
 
-type Agent = Pick<
+type AgentFields = Pick<
   IAgentDocument,
   | 'id'
   | 'name'
@@ -37,6 +37,7 @@ type Agent = Pick<
   | 'identity'
   | 'projectId'
 >;
+type Agent = Omit<AgentFields, 'visual'> & { visual?: Omit<AgentFields['visual'], 'portraitUrl'> };
 type Skill = Pick<
   ISkillDocument,
   | 'id'
@@ -198,7 +199,7 @@ const agentOf = (row: Agent): Agent => ({
   temperature: row.temperature,
   maxTokens: row.maxTokens,
   personality: row.personality,
-  visual: row.visual,
+  visual: row.visual && { style: row.visual.style, generationPrompt: row.visual.generationPrompt },
   identity: row.identity,
   projectId: row.projectId,
 });
