@@ -15,7 +15,7 @@ export const accountDataExportKey = (userId: string, exportJobId: string): strin
 export const ADMIN_DATA_EXPORT_FILENAME = 'data-subject-export.zip';
 
 // An admin-requested export of the same person. It stays under that person's account-data prefix so
-// the account purge's prefix delete (apps/client/server/users/purgeAccountFiles.ts) removes it too,
+// the account purge's prefix delete (packages/server-utils/src/users/purgeAccountFiles.ts) removes it too,
 // and the literal `admin` segment can never collide with a self-serve export's UUID job id.
 export const adminDataExportKey = (userId: string, exportJobId: string): string =>
   `exports/account-data/${encodeURIComponent(userId)}/admin/${encodeURIComponent(exportJobId)}/${ADMIN_DATA_EXPORT_FILENAME}`;
