@@ -272,8 +272,8 @@ const handler = baseApi().put(
       // Request flags, not user fields: deferLinkPropagation (see linked-suspend-propagation.ts) and
       // undoSuspension (an Undo of the admin's own suspend; see gradeDetectionsForStatusChange).
       const { deferLinkPropagation, undoSuspension, ...adminBody } = rawBody;
-      // Zod strips unknown keys, so a misnamed admin field (the `adminNote` vs
-      // `creditReason` mix-up in useUpdateUserCredits was exactly this) parses away
+      // Zod strips unknown keys, so a misnamed admin field (e.g. `adminNote` instead of
+      // `creditReason`) parses away
       // and the 200 reads as "fully applied" when a credit grant, tag, or role
       // change never happened. Report them instead. Mirrors the self-service branch.
       const adminKeys = new Set(Object.keys(userService.adminUpdateUserSchema.shape));

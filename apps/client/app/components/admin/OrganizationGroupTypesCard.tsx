@@ -168,7 +168,7 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
             ? 'Revoking a type removes its group and unassigns its members. Re-adding the type will not restore those assignments.'
             : 'The new group types will be available to this organization.'
         }
-        reasonPresets={ADMIN_REASON_PRESETS.productAccess}
+        reasonPresets={ADMIN_REASON_PRESETS.orgGroupTypes}
         confirmLabel="Update group types"
         blockedReason={isDirty ? null : 'Choose a different set of group types.'}
         pending={saveMutation.isPending}

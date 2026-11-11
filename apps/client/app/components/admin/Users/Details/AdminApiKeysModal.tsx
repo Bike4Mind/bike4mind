@@ -6,6 +6,7 @@ import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import { Chip, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
 import {
   ActionDialog,
+  ADMIN_REASON_PRESETS,
   AdminDialog,
   DataTable,
   EmptyState,
@@ -217,7 +218,7 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
         onClose={() => setResettingKey(null)}
         title="Reset rate limit"
         description={`Reset the minute and day rate-limit counters for "${resettingKey?.name ?? ''}"? The next request opens a fresh window. This reset cannot be undone.`}
-        reasonPresets={['Support request', 'Key locked out', 'Counter correction']}
+        reasonPresets={ADMIN_REASON_PRESETS.rateLimitReset}
         confirmLabel="Reset rate limit"
         onConfirm={handleReset}
         pending={resetMutation.isPending}

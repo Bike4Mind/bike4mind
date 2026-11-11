@@ -237,7 +237,7 @@ describe('PUT /api/organizations/[id] - admin credit edit', () => {
     expect(update).toHaveBeenCalledTimes(1);
   });
 
-  it.each([null, '', '  ', '1,000'])('rejects currentCredits %j and writes nothing', async currentCredits => {
+  it.each([null, '', '  ', '1,000', 100.5, '100.5'])('rejects currentCredits %j and writes nothing', async currentCredits => {
     const { req, res } = putAsAdmin({ currentCredits, creditReason: 'goodwill grant' });
     await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ name: 'ZodError' });
     expect(credits.withTransaction).not.toHaveBeenCalled();

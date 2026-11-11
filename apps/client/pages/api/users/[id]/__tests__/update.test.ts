@@ -510,8 +510,8 @@ describe('PUT /api/users/:id/update - admin unknown-field discard', () => {
   });
 
   it('rejects a credit change whose reason was misnamed adminNote, instead of dropping it', async () => {
-    // `adminNote` is the real misnaming that shipped once (see useUpdateUserCredits): the intended
-    // field is `creditReason`. It parses away, so the reason check now turns it into a 400.
+    // `adminNote` is a misnaming of the intended field, `creditReason`.
+    // It parses away, so the reason check now turns it into a 400.
     const { promise } = run({ user: ADMIN, userId: 'other-user', body: { currentCredits: 500, adminNote: 'comped' } });
 
     await expect(promise).rejects.toMatchObject({ statusCode: 400 });
