@@ -201,7 +201,11 @@ const MessageDrawer: React.FC<{
             <Typography level="body-sm" sx={{ wordBreak: 'break-word' }} data-testid="dlq-failure-reason">
               {message.failure?.errorMessage ?? 'Unknown'}
             </Typography>
-            <StatusChip tone="neutral" label={message.failure?.category ?? 'Unknown'} data-testid="dlq-failure-category" />
+            <StatusChip
+              tone="neutral"
+              label={message.failure?.category ?? 'Unknown'}
+              data-testid="dlq-failure-category"
+            />
           </Box>
 
           <Box>
@@ -557,16 +561,16 @@ const DlqReplayTab: React.FC = () => {
                       {msg.sentTimestamp ? new Date(parseInt(msg.sentTimestamp, 10)).toLocaleString() : '-'}
                     </Typography>
                   </td>
-                  <td style={{ textAlign: 'right' }}>
-                    <Typography level="body-xs" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                      {msg.approximateReceiveCount ?? '-'}
-                    </Typography>
-                  </td>
                   <AgeExpiryCells
                     sentTimestamp={msg.sentTimestamp}
                     retentionSeconds={selectedQueueInfo?.messageRetentionSeconds}
                     messageId={msg.messageId}
                   />
+                  <td style={{ textAlign: 'right' }}>
+                    <Typography level="body-xs" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                      {msg.approximateReceiveCount ?? '-'}
+                    </Typography>
+                  </td>
                   <td>
                     <Stack direction="row" gap={0.5}>
                       <Tooltip title="View details">
