@@ -115,12 +115,15 @@ final class AppServices {
     return current.account
   }
 
-  /// The signed-in account's first name for greetings; fixture runs have no session, so they get a stand-in.
-  func accountFirstName() async -> String? {
+  /// The signed-in account's profile claims for the greeting, avatar and Settings header; fixture runs have no
+  /// session, so they get a stand-in.
+  func accountProfile() async -> AccountProfile? {
     #if DEBUG
-      if FixtureServices.isEnabled { return "Alex" }
+      if FixtureServices.isEnabled {
+        return AccountProfile(firstName: "Alex", displayName: "Alex Rivera", email: "alex@example.com")
+      }
     #endif
-    return await auth.firstName()
+    return await auth.profile()
   }
 
   var stepUp: any StepUpAPI {

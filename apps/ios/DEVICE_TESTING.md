@@ -73,7 +73,8 @@ CI. Work through it before the first TestFlight build and again before each rele
 - [ ] Siri phrases for Ask, Start quest and Capture note are recognized; the actions appear in Shortcuts and Spotlight and only
       open the composer with a draft (never send): Ask and Capture note on the Chat home, Start quest in the chosen notebook.
 - [ ] Widgets: Credits (small), Latest generation (small, medium) and Running agents (small, medium) in the gallery,
-      placeholder and signed-out appearance, dark mode, and a tap landing on the right screen.
+      placeholder and signed-out appearance, dark mode, and a tap landing on the right screen (Credits opens Settings on the
+      Chat tab, with Back to the Chat home).
 - [ ] Lock-screen accessory widgets render and refresh: Credits (circular, rectangular, inline) and Running agents (rectangular, inline).
 
 ## Account deletion (App Store 5.1.1(v))
@@ -110,7 +111,10 @@ Run on the first TestFlight build and every release candidate:
 - [ ] Chat: send, stream, reply settles, credits update.
 - [ ] Navigation: the Chat tab opens on the start-of-chat home with the tab bar showing; the top-left Notebooks button pushes
       the notebook list, and its New Conversation button pops back home. Sending from home pushes the new notebook; Back lands
-      on home with the draft cleared and the greeting back.
+      on home with the draft cleared and the greeting back. The tab bar shows only Chat and Media; the top-right avatar (the
+      first initial, or a person symbol when the token carries no name) pushes Settings, whose header shows the name and email.
+      A conversation hides the tab bar so its composer sits at the bottom edge; Back (also with the keyboard up) brings the
+      bar back without a jump.
 - [ ] Push: register, receive, tap through.
 - [ ] Share: share a link and an image from another app.
 - [ ] Live Activity: start, update, end.

@@ -47,7 +47,7 @@ final class AssistantIntentRoutingTests: XCTestCase {
 final class ComposeNavigationTests: XCTestCase {
   func testNewConversationRequestLandsOnHomeAndIsTakenOnce() {
     let navigator = AppNavigator()
-    navigator.selectedTab = .settings
+    navigator.selectedTab = .media
     navigator.apply(AssistantRequest.ask(prompt: "hi").route)
     XCTAssertEqual(navigator.selectedTab, .sessions)
     XCTAssertTrue(navigator.isShowing(.home))

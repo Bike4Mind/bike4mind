@@ -5,10 +5,13 @@ struct SettingsView: View {
   @Environment(AuthController.self) private var auth
   @Environment(AppServices.self) private var services
   @State private var isConfirmingSignOut = false
+  @State private var profile: AccountProfile?
 
   var body: some View {
     @Bindable var auth = auth
     Form {
+      profileHeader
+
       CreditsSection()
 
       Section {
@@ -60,10 +63,34 @@ struct SettingsView: View {
     }
     .brandedListChrome()
     .navigationTitle("Settings")
+    .task { profile = await services.accountProfile() }
     .confirmationDialog("Sign out of Bike4Mind?", isPresented: $isConfirmingSignOut, titleVisibility: .visible) {
       Button("Sign Out", role: .destructive) {
         Task { await services.signOutEverywhere() }
       }
     }
+  }
+
+  private var profileHeader: some View {
+    Section {
+      HStack(spacing: Tokens.Spacing.m) {
+        AccountAvatar(initial: profile?.initial, diameter: 56)
+        VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+          Text(profile?.displayName ?? profile?.firstName ?? "Your account")
+            .font(.headline)
+            .foregroundStyle(Tokens.Palette.primaryText)
+          if let email = profile?.email {
+            Text(email)
+              .font(Tokens.Typography.caption)
+              .foregroundStyle(Tokens.Palette.secondaryText)
+              .textSelection(.enabled)
+          }
+        }
+      }
+      .padding(.vertical, Tokens.Spacing.xs)
+      .accessibilityElement(children: .combine)
+      .accessibilityIdentifier("settings-profile-header")
+    }
+    .listRowBackground(Tokens.Palette.groupedBackground)
   }
 }

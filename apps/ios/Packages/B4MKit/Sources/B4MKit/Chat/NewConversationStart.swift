@@ -59,25 +59,8 @@ public enum StarterChip: String, CaseIterable, Sendable, Identifiable {
 }
 
 extension AccessToken {
-  /// The account's first name from the access token's profile claims, for the greeting only (never trusted
-  /// for authorization). `given_name` wins; otherwise the first word of `name`.
+  /// The account's first name for the greeting (see `AccountProfile`).
   static func firstName(ofJWT jwt: String) -> String? {
-    let segments = jwt.split(separator: ".")
-    guard segments.count == 3,
-      let payload = Base64URL.decode(String(segments[1])),
-      let claims = try? JSONSerialization.jsonObject(with: payload) as? [String: Any]
-    else { return nil }
-    let given = (claims["given_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-    if let given, !given.isEmpty { return given }
-    let full = (claims["name"] as? String)?.split(separator: " ").first.map(String.init)
-    return full.flatMap { $0.isEmpty ? nil : $0 }
-  }
-}
-
-extension AuthController {
-  /// The signed-in account's first name for the greeting, or `nil` when the token carries none.
-  public func firstName() async -> String? {
-    guard let token = try? await accessToken() else { return nil }
-    return AccessToken.firstName(ofJWT: token)
+    AccountProfile(jwt: jwt)?.firstName
   }
 }

@@ -26,7 +26,7 @@ needs a device or signing.
 
 ## Account deletion
 
-App Store Guideline 5.1.1(v). Settings > Delete Account requires typing `DELETE` and states the 30-day grace period. The wire is
+App Store Guideline 5.1.1(v). Settings (the avatar on the Chat home) > Delete Account requires typing `DELETE` and states the 30-day grace period. The wire is
 hand-written (`B4MKit/Account/AccountDeletionWire.swift`) because the routes are not in the OpenAPI snapshot yet:
 `DELETE /api/users/me`, `POST /api/users/me/restore-deletion`, a 409 `account_deletion_org_transfer_required` envelope listing
 organizations, and the 403 `{accountDeletionPending, deletionScheduledFor}` gate. `URLSessionTransport` recognizes that 403 on any
@@ -100,6 +100,7 @@ Sessions upload chip can be watched; the first send to the Receipts lake fails o
 
 - **Widgets** (`Widgets/`): the app writes a `WidgetSnapshot` JSON into the `group.com.bike4mind.app` container and the extension only reads it, with no network or auth in the widget process. The app calls `WidgetCenter.reloadTimelines` when a chat turn settles, credits load, or the latest image changes. A missing container degrades to placeholders. `Widgets/Bike4MindWidgets.swift` is the bundle entry point and registers the widgets plus `QuestLiveActivity`, which reuses `Widgets/Shared/`.
 - **App Intents** (`Bike4Mind/Features/Intents/`): Ask, Start quest and Capture note only open the composer with a draft (`AssistantRequest.route`); they never send. Ask and Capture note land on the Chat home, the root of the Chat tab's stack.
+- **Settings** (`Bike4Mind/Features/Settings/`): there is no Settings tab. The avatar on the Chat home pushes Settings onto the Chat stack, and `Route.settings` (deep links, the Credits widget) lands there too. The profile header reads the access token's claims (`AccountProfile`); there is no profile endpoint.
 - **Media tab** (`Bike4Mind/Features/Media/`): a grid over the Files API via the hand-written `MediaClient`. Presigned URLs are re-fetched near expiry and at most twice after a playback failure. Under `B4M_UI_FIXTURES=1` the tab and the widgets show canned data.
 ## Share and capture
 

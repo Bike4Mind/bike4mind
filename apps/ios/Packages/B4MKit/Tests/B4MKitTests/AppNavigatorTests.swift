@@ -6,7 +6,7 @@ import XCTest
 final class AppNavigatorTests: XCTestCase {
   func testSessionRouteSelectsTabAndPushesDetail() {
     let navigator = AppNavigator()
-    navigator.selectedTab = .settings
+    navigator.selectedTab = .media
     navigator.apply(.session(id: "s1"))
     XCTAssertEqual(navigator.selectedTab, .sessions)
     XCTAssertEqual(navigator.sessionPath.map(\.sessionID), ["s1"])
@@ -26,19 +26,32 @@ final class AppNavigatorTests: XCTestCase {
     XCTAssertEqual(navigator.sessionPath.map(\.sessionID), ["s2"])
   }
 
-  func testTabRootsSelectTheirTab() {
+  func testMediaRouteSelectsItsTab() {
     let navigator = AppNavigator()
     navigator.apply(.media)
     XCTAssertEqual(navigator.selectedTab, .media)
+    XCTAssertTrue(navigator.isShowing(.media))
+  }
+
+  func testSettingsRoutePushesSettingsOnHomeFromAnyTab() {
+    let navigator = AppNavigator()
+    navigator.selectedTab = .media
+    navigator.sessionPath = [.sessionList, .session(.placeholder(id: "s1"))]
     navigator.apply(.settings)
-    XCTAssertEqual(navigator.selectedTab, .settings)
+    XCTAssertEqual(navigator.selectedTab, .sessions)
+    XCTAssertEqual(navigator.sessionPath, [.settings])
+    XCTAssertTrue(navigator.isShowing(.settings))
+    // Home's composer drops focus whenever home is covered, Settings included.
+    XCTAssertFalse(navigator.isShowing(.home))
+    navigator.selectedTab = .media
+    XCTAssertFalse(navigator.isShowing(.settings))
   }
 
   func testLakesRouteOpensTheWebInsteadOfAMissingTab() {
     let navigator = AppNavigator()
-    navigator.apply(.settings)
+    navigator.apply(.media)
     navigator.apply(.lakes)
-    XCTAssertEqual(navigator.selectedTab, .settings)
+    XCTAssertEqual(navigator.selectedTab, .media)
     XCTAssertEqual(navigator.externalURL, URL(string: "https://app.bike4mind.com/lakes"))
     XCTAssertFalse(navigator.isShowing(.lakes))
   }

@@ -16,6 +16,7 @@ public enum Route: Hashable, Sendable {
   case lake(id: String)
   /// The Media tab root.
   case media
+  /// Settings, pushed on the Chat tab's home (opened from the profile avatar); there is no Settings tab.
   case settings
   /// Open the composer with text already in it. Raised by App Intents (Siri, Shortcuts, Spotlight); the
   /// text is only prefilled, never sent, so a misheard phrase cannot spend credits.
@@ -26,9 +27,8 @@ public enum Route: Hashable, Sendable {
   /// The tab a route lives in; `nil` for what opens on the web.
   public var tab: AppTab? {
     switch self {
-    case .home, .sessions, .session, .compose: .sessions
+    case .home, .sessions, .session, .compose, .settings: .sessions
     case .media: .media
-    case .settings: .settings
     case .lakes, .lake, .web: nil
     }
   }
@@ -36,7 +36,7 @@ public enum Route: Hashable, Sendable {
 
 public enum AppTab: Hashable, Sendable {
   /// Labelled "Chat": its stack roots at the start-of-chat screen.
-  case sessions, lakes, media, settings
+  case sessions, lakes, media
 }
 
 /// A request to open a composer with a draft: in an existing session, or in a new conversation.

@@ -17,9 +17,13 @@ struct MainTabView: View {
               SessionsView()
             case .session(let session):
               SessionDetailView(session: session)
+                // Conversations are full-bleed so the composer sits at the bottom edge; Back brings the bar back.
+                .toolbar(.hidden, for: .tabBar)
                 // Opening a conversation is the first moment the app has shown the user value, so this is
                 // when the one-time system notification prompt appears.
                 .task { await services.push.userDidReachValueMoment() }
+            case .settings:
+              SettingsView()
             }
           }
       }
@@ -31,12 +35,6 @@ struct MainTabView: View {
       }
       .tabItem { Label("Media", systemImage: "photo.on.rectangle") }
       .tag(AppTab.media)
-
-      NavigationStack {
-        SettingsView()
-      }
-      .tabItem { Label("Settings", systemImage: "gearshape") }
-      .tag(AppTab.settings)
     }
     .inAppSafari(
       url: Binding(

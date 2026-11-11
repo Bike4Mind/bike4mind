@@ -47,6 +47,8 @@ public final class AppNavigator {
       sessionPath = []
     case .sessions:
       sessionPath = [.sessionList]
+    case .settings:
+      sessionPath = [.settings]
     case .session(let id):
       // A deep link carries only the id; the detail screen loads the transcript and looks the name up.
       showSession(.placeholder(id: id))
@@ -56,7 +58,7 @@ public final class AppNavigator {
       case .newConversation: sessionPath = []
       case .session(let id): showSession(.placeholder(id: id, name: request.sessionName))
       }
-    case .media, .settings:
+    case .media:
       break
     case .lakes:
       externalURL = Self.webURLForLakes
@@ -112,8 +114,9 @@ public final class AppNavigator {
     switch route {
     case .home: return sessionPath.isEmpty
     case .sessions: return sessionPath.last == .sessionList
+    case .settings: return sessionPath.last == .settings
     case .session(let id): return sessionPath.last?.sessionID == id
-    case .media, .settings: return true
+    case .media: return true
     case .lakes, .lake, .web, .compose: return false
     }
   }
@@ -124,6 +127,7 @@ public enum SessionsDestination: Hashable, Sendable {
   /// The conversation history list.
   case sessionList
   case session(SessionSummary)
+  case settings
 
   public var sessionID: String? {
     guard case .session(let session) = self else { return nil }

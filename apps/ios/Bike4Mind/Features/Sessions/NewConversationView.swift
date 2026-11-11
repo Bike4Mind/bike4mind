@@ -8,7 +8,7 @@ import SwiftUI
 struct NewConversationView: View {
   @Environment(AppServices.self) private var services
   @State private var model: NewConversationViewModel
-  @State private var firstName: String?
+  @State private var profile: AccountProfile?
   @State private var isRecordingVoice = false
   @FocusState private var focused: Bool
 
@@ -40,6 +40,7 @@ struct NewConversationView: View {
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItem(placement: .topBarLeading) { notebooksButton }
+      ToolbarItem(placement: .topBarTrailing) { profileButton }
     }
     .sheet(isPresented: $isRecordingVoice) {
       VoiceRecorderPanel(
@@ -50,7 +51,7 @@ struct NewConversationView: View {
         },
         onCancel: { isRecordingVoice = false })
     }
-    .task { firstName = await services.accountFirstName() }
+    .task { profile = await services.accountProfile() }
     .onChange(of: services.navigator.composeRequest, initial: true) { _, _ in takeComposeRequest() }
     // A field left focused under a pushed screen (or another tab) is refocused on return, and that refocus
     // does not lift the safeAreaInset composer above the keyboard: drop focus whenever home is covered.
@@ -69,9 +70,19 @@ struct NewConversationView: View {
     .accessibilityIdentifier("home-conversations-btn")
   }
 
+  private var profileButton: some View {
+    Button {
+      services.navigator.apply(.settings)
+    } label: {
+      AccountAvatar(initial: profile?.initial, diameter: 32)
+    }
+    .accessibilityLabel("Profile and settings")
+    .accessibilityIdentifier("home-profile-btn")
+  }
+
   private var greeting: some View {
     VStack(spacing: Tokens.Spacing.xs) {
-      Text(StartGreeting.headline(at: Date(), firstName: firstName))
+      Text(StartGreeting.headline(at: Date(), firstName: profile?.firstName))
         .font(Tokens.Typography.wordmark)
         .foregroundStyle(Tokens.Palette.primaryText)
         .multilineTextAlignment(.center)
