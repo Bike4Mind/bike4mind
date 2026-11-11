@@ -86,7 +86,7 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
   // The input holds a string while typing; an empty or non-numeric value ("1,000") is NaN.
   const rawCredits = String(editedOrg.currentCredits ?? 0).trim();
   const editedCredits = rawCredits === '' ? NaN : Number(rawCredits);
-  const creditsValid = Number.isFinite(editedCredits) && editedCredits >= 0;
+  const creditsValid = Number.isSafeInteger(editedCredits) && editedCredits >= 0;
   const creditsChanged = editedCredits !== savedCredits;
 
   const handleUpdate = async () => {
@@ -210,7 +210,7 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
                   />
                   {!creditsValid && (
                     <FormHelperText data-testid="org-profile-credits-error">
-                      Enter a number of credits (0 or more), without commas.
+                      Enter a whole number of credits (0 or more), without commas.
                     </FormHelperText>
                   )}
                 </FormControl>

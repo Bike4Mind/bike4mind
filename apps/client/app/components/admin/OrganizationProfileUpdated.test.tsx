@@ -127,4 +127,12 @@ describe('OrganizationProfileUpdated - storage limit', () => {
       })
     );
   });
+
+  it('blocks fractional credits instead of sending a fractional ledger adjustment', () => {
+    renderModal(makeOrg({ currentCredits: 100 }));
+    fireEvent.change(screen.getByTestId('org-profile-credits-input'), { target: { value: '0.5' } });
+
+    expect(screen.getByTestId('org-profile-credits-error')).toHaveTextContent('whole number');
+    expect(screen.getByTestId('org-profile-adjust-credits-btn')).toBeDisabled();
+  });
 });
