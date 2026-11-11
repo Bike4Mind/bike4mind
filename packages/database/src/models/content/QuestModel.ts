@@ -1466,6 +1466,33 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return new Map([...byKey].map(([key, ids]) => [key, [...ids]]));
   }
 
+  // findSessionIdsByMediaKeys over live quests only, minus `excludeQuestId`: when one message is
+  // deleted its notebook is still live, so only another live quest's reference may retain a key.
+  async findLiveSessionIdsByMediaKeys(
+    keys: string[],
+    { excludeQuestId }: { excludeQuestId?: string } = {}
+  ): Promise<Map<string, string[]>> {
+    const wanted = new Set(keys.filter(Boolean));
+    const byKey = new Map<string, Set<string>>();
+    if (wanted.size === 0) return new Map();
+    const list = [...wanted];
+    const filter: Record<string, unknown> = {
+      $or: [{ images: { $in: list } }, { videos: { $in: list } }],
+      deletedAt: null,
+    };
+    if (excludeQuestId) filter._id = { $ne: convertId(excludeQuestId) };
+    const docs = await this.model.find(filter, { sessionId: 1, images: 1, videos: 1 }).lean();
+    for (const doc of docs) {
+      for (const key of [...(doc.images ?? []), ...(doc.videos ?? [])]) {
+        if (!wanted.has(key)) continue;
+        const ids = byKey.get(key) ?? new Set<string>();
+        ids.add(String(doc.sessionId));
+        byKey.set(key, ids);
+      }
+    }
+    return new Map([...byKey].map(([key, ids]) => [key, [...ids]]));
+  }
+
   // Every organization a user's quests were recorded under, soft-deleted ones included: a DSAR
   // export or deletion has to reach rows the user can no longer see, and telemetry hashes are keyed
   // by that organization. One full scan of the user's quests, which is why it is not on a read path.

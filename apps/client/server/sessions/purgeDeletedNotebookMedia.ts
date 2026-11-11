@@ -27,7 +27,14 @@ async function findRetainedKeys(keys: string[], deleted: Set<string>): Promise<S
   );
   const retained = new Set<string>();
   for (const [key, ids] of sessionsByKey) if (ids.some(id => liveIds.has(id))) retained.add(key);
+  for (const key of await findFileRetainedKeys(keys)) retained.add(key);
+  return retained;
+}
 
+// Keys some live library file was copied from (its `sourceMetadata.generatedCopyKey`).
+export async function findFileRetainedKeys(keys: string[]): Promise<Set<string>> {
+  const retained = new Set<string>();
+  if (keys.length === 0) return retained;
   const files = await FabFile.find(
     { 'sourceMetadata.generatedCopyKey': { $in: keys } },
     { 'sourceMetadata.generatedCopyKey': 1 }
