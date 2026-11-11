@@ -113,13 +113,18 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
   }, 0);
   const service = AnthropicBatchService.fromApiKey(apiKey, req.logger);
 
-  const requests: BatchTransformRequest[] = body.requests.map(r => ({
-    clientRef: r.client_ref,
-    model: runModelInfos.get(r.model)?.id ?? r.model,
-    maxTokens: r.max_tokens,
-    system: r.system,
-    messages: r.messages as MessageParam[],
-  }));
+  const requests: BatchTransformRequest[] = body.requests.map(r => {
+    const run = runModelInfos.get(r.model);
+    // A derived max_tokens is a default, not a real ceiling, so only a declared limit clamps.
+    const runLimit = run && !run.maxOutputTokensDerived ? run.max_tokens : undefined;
+    return {
+      clientRef: r.client_ref,
+      model: run?.id ?? r.model,
+      maxTokens: runLimit ? Math.min(r.max_tokens, runLimit) : r.max_tokens,
+      system: r.system,
+      messages: r.messages as MessageParam[],
+    };
+  });
 
   const reservation = await reserveCompletionCredits(req, ceilingUsd, 'batch transforms', {
     holdTtlMs: BATCH_CREDIT_HOLD_TTL_MS,

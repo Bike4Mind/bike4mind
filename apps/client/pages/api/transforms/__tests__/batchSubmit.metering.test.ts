@@ -289,6 +289,36 @@ describe('POST /api/transforms/batch metering', () => {
       expect(Object.keys(created.billingModels)).toEqual(['claude-opus-4-6']);
     });
 
+    it('clamps max_tokens to the substitute declared output limit without changing the hold', async () => {
+      m.catalogModels = [opus, haiku];
+      m.substitute.mockResolvedValue({ ...haiku, max_tokens: 400 });
+
+      await submit([item('a')]);
+
+      expect(m.submitBatch.mock.calls[0][0][0].maxTokens).toBe(400);
+      expect(m.ceiling.mock.calls.every(c => c[0].id === 'claude-opus-4-6' && c[2] === 1000)).toBe(true);
+      expect(m.reserve.mock.calls[0][1]).toBe(1);
+    });
+
+    it('leaves max_tokens alone when the substitute limit is derived or higher', async () => {
+      m.catalogModels = [opus, haiku];
+      m.substitute.mockResolvedValue({ ...haiku, max_tokens: 400, maxOutputTokensDerived: true });
+      await submit([item('a')]);
+      expect(m.submitBatch.mock.calls[0][0][0].maxTokens).toBe(1000);
+
+      m.substitute.mockResolvedValue({ ...haiku, max_tokens: 8000 });
+      await submit([item('a')]);
+      expect(m.submitBatch.mock.calls[1][0][0].maxTokens).toBe(1000);
+    });
+
+    it('sends the requested max_tokens unchanged when nothing is substituted', async () => {
+      m.catalogModels = [opus, haiku];
+
+      await submit([item('a')]);
+
+      expect(m.submitBatch.mock.calls[0][0][0].maxTokens).toBe(1000);
+    });
+
     it('rewrites only the requests of the substituted model in a mixed batch', async () => {
       m.catalogModels = [opus, sonnet, haiku];
       m.substitute.mockImplementation(async (_req: unknown, info: { id: string }) =>
