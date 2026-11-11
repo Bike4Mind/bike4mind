@@ -56,7 +56,7 @@ export async function exportPrincipalMemory(deps: {
   }
   const exportedAt = deps.now ?? new Date().toISOString();
   const events = await listPrincipalLedger(deps);
-  let bytes = JSON.stringify(events).length;
+  let bytes = Buffer.byteLength(JSON.stringify(events), 'utf8');
   if (bytes > MAX_EXPORT_BYTES) throw tooLarge();
   const mementos: ExportedMemento[] = [];
   if (deps.principal.kind === 'user' && deps.mementos) {
@@ -100,7 +100,7 @@ export async function exportPrincipalMemory(deps: {
           createdAt,
           updatedAt,
         };
-        bytes += JSON.stringify(memento).length;
+        bytes += Buffer.byteLength(JSON.stringify(memento), 'utf8');
         if (bytes > MAX_EXPORT_BYTES) throw tooLarge();
         mementos.push(memento);
         afterId = id;
@@ -109,7 +109,7 @@ export async function exportPrincipalMemory(deps: {
     }
   }
   const activation = activationConfigForKind(deps.principal.kind);
-  return {
+  const exported: PrincipalMemoryExport = {
     formatVersion: MEMORY_EXPORT_FORMAT_VERSION,
     activation,
     principal: deps.principal,
@@ -118,4 +118,6 @@ export async function exportPrincipalMemory(deps: {
     beliefs: foldEvents(events, { now: exportedAt, activation }),
     mementos,
   };
+  if (Buffer.byteLength(JSON.stringify(exported), 'utf8') > MAX_EXPORT_BYTES) throw tooLarge();
+  return exported;
 }

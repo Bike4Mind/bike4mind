@@ -118,6 +118,12 @@ describe('exportPrincipalMemory', () => {
       await expect(exportWith(findByUserId)).rejects.toMatchObject({ statusCode: 413 });
     });
 
+    it('charges UTF-8 bytes rather than code units for non-ASCII mementos', async () => {
+      const fullContent = String.fromCodePoint(0x4e00).repeat(2_100_000);
+      const findByUserId = vi.fn().mockResolvedValue([{ ...row('a', MementoTier.HOT), fullContent }]);
+      await expect(exportWith(findByUserId)).rejects.toMatchObject({ statusCode: 413 });
+    });
+
     it('rejects with 413 when the page limit is reached', async () => {
       let n = 0;
       const findByUserId = vi.fn(async () =>
@@ -134,6 +140,36 @@ describe('exportPrincipalMemory', () => {
         cause: { message: 'Invalid owner or cursor in memento export' },
       });
     });
+  });
+
+  it('includes folded beliefs and the wrapper in the final UTF-8 response cap', async () => {
+    const { repo } = makeFakeLedger();
+    const { provider } = makeFakeKeyring();
+    for (const subject of ['first', 'second']) {
+      await appendMemoryEvent(
+        repo,
+        provider,
+        'u1',
+        {
+          principal,
+          kind: 'assert',
+          subject,
+          fact: 'x'.repeat(1_600_000),
+          at: '2026-07-01T00:00:00.000Z',
+        },
+        { startedAt: new Date() }
+      );
+    }
+    await expect(
+      exportPrincipalMemory({
+        principal,
+        ownerUserId: 'u1',
+        ledger: repo,
+        keys: provider,
+        mementos: { findByUserId: async () => [] },
+        now: '2026-07-03T00:00:00.000Z',
+      })
+    ).rejects.toMatchObject({ statusCode: 413 });
   });
 
   it('does not query keys or mementos for a foreign user', async () => {

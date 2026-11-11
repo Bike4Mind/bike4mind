@@ -425,6 +425,65 @@ describe('listPrincipalLedger', () => {
     expect((await list(repo, provider)).map(e => e.fact)).toEqual(['A', 'B']);
   });
 
+  it.each(['factCipher', 'factIv', 'factTag', 'salt'] as const)(
+    'rejects a live encrypted assert missing %s',
+    async field => {
+      const { repo, store, provider } = await seedTwo();
+      delete store[0][field];
+      await expect(list(repo, provider)).rejects.toMatchObject({
+        message: 'Memory ledger failed integrity checks.',
+      });
+    }
+  );
+
+  it('rejects a live assert whose entire encrypted payload is missing', async () => {
+    const { repo, store, provider } = await seedTwo();
+    delete store[0].factCipher;
+    delete store[0].factIv;
+    delete store[0].factTag;
+    await expect(list(repo, provider)).rejects.toThrow('Memory ledger failed integrity checks.');
+  });
+
+  it('checks the committed payload of a factless event too', async () => {
+    const { repo, store } = makeFake();
+    const { provider } = makeKeys();
+    await appendEvent(repo, provider, 'u1', input({ kind: 'affirm', fact: 'Lost payload' }));
+    delete store[0].factCipher;
+    delete store[0].factIv;
+    delete store[0].factTag;
+    await expect(list(repo, provider)).rejects.toThrow('Memory ledger failed integrity checks.');
+  });
+
+  it('returns a valid encrypted empty fact, which has an empty ciphertext', async () => {
+    const { repo, store } = makeFake();
+    const { provider } = makeKeys();
+    await appendEvent(repo, provider, 'u1', input({ fact: '' }));
+    expect(store[0].factCipher).toBe('');
+    expect((await list(repo, provider))[0].fact).toBe('');
+  });
+
+  it('keeps legacy plaintext, factless events and shredded payloads valid', async () => {
+    const { repo, store } = makeFake();
+    const { provider } = makeKeys();
+    await appendEvent(repo, provider, 'u1', input({ fact: 'Legacy', salt: '' }));
+    store[0].fact = 'Legacy';
+    delete store[0].factCipher;
+    delete store[0].factIv;
+    delete store[0].factTag;
+    await appendEvent(repo, provider, 'u1', input({ kind: 'affirm' }));
+    await appendEvent(repo, provider, 'u1', input({ kind: 'retract' }));
+    await appendEvent(repo, provider, 'u1', input({ subject: 'other', fact: 'Shredded' }));
+    store[3].shredded = true;
+    delete store[3].factIv;
+    const events = await list(repo, provider);
+    expect(events[0].fact).toBe('Legacy');
+    expect(events[1].fact).toBeUndefined();
+    expect(events[2].fact).toBeUndefined();
+    expect(events[3]).toMatchObject({ shredded: true });
+    expect(events[3]).not.toHaveProperty('fact');
+    expect(events[3]).not.toHaveProperty('salt');
+  });
+
   it('rejects a chain with a seq gap', async () => {
     const { repo, store, provider } = await seedTwo();
     store[1].seq = 5;

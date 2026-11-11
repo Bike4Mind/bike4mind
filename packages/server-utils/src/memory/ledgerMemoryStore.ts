@@ -1,6 +1,8 @@
 import type { IMemoryLedgerEvent, MemoryPrincipalKind } from '@bike4mind/database';
+import { z } from 'zod';
 import { InternalServerError, MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 import {
+  commitFact,
   foldEvents,
   activationConfigForKind,
   sealEvent,
@@ -157,6 +159,17 @@ export async function appendMemoryEvent(
   throw new Error('memory ledger append: exceeded retry budget under concurrent contention');
 }
 
+const factEnvelopeSchema = z
+  .object({
+    factCipher: z.string(),
+    factIv: z.string().min(1),
+    factTag: z.string().min(1),
+  })
+  .transform(({ factCipher, factIv, factTag }) => ({ cipher: factCipher, iv: factIv, tag: factTag }));
+const livePayloadSchema = z.object({ salt: z.string(), fact: z.string().optional() });
+const hasFactEnvelope = (event: IMemoryLedgerEvent) =>
+  event.factCipher !== undefined || event.factIv !== undefined || event.factTag !== undefined;
+
 /**
  * Rehydrate a stored document into the core's `MemoryEvent` shape, decrypting the fact with the
  * principal's `dek`. A ciphered fact that will not decrypt - because the key was destroyed (shred)
@@ -165,8 +178,9 @@ export async function appendMemoryEvent(
 function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
   let fact = d.shredded ? undefined : d.fact; // legacy plaintext, for events written before at-rest encryption
   let shredded = d.shredded;
-  if (!shredded && d.factCipher && d.factIv && d.factTag) {
-    const plain = dek ? decryptFact(dek, { cipher: d.factCipher, iv: d.factIv, tag: d.factTag }) : null;
+  const envelope = !shredded && hasFactEnvelope(d) ? factEnvelopeSchema.safeParse(d) : undefined;
+  if (envelope?.success) {
+    const plain = dek ? decryptFact(dek, envelope.data) : null;
     if (plain === null) {
       fact = undefined;
       shredded = true;
@@ -232,8 +246,11 @@ export async function listPrincipalLedger(deps: {
     withEmbeddings: false,
   });
   if (docs.length === 0) return [];
+  if (docs.some(d => !d.shredded && hasFactEnvelope(d) && !factEnvelopeSchema.safeParse(d).success)) {
+    throw integrityError(LEDGER_INTEGRITY_MESSAGE, 'Memory ledger contains an incomplete live encryption envelope');
+  }
   const dek = await deps.keys.getDek(deps.principal);
-  if (docs.some(d => !d.shredded && d.factCipher && !dek)) {
+  if (docs.some(d => !d.shredded && hasFactEnvelope(d) && !dek)) {
     throw integrityError(LEDGER_INTEGRITY_MESSAGE, 'Memory ledger contains live ciphertext without its decryption key');
   }
   const events = docs.map(d => toMemoryEvent(d, dek));
@@ -250,6 +267,18 @@ export async function listPrincipalLedger(deps: {
     )
   ) {
     throw integrityError(LEDGER_INTEGRITY_MESSAGE, 'Memory ledger contains an incomplete or mismatched chain');
+  }
+  const invalidPayload = events.some(event => {
+    if (event.shredded) return false;
+    const payload = livePayloadSchema.safeParse(event);
+    return (
+      !payload.success ||
+      (event.kind === 'assert' && payload.data.fact === undefined) ||
+      event.commitment !== commitFact(payload.data.salt, payload.data.fact)
+    );
+  });
+  if (invalidPayload) {
+    throw integrityError(LEDGER_INTEGRITY_MESSAGE, 'Memory ledger contains an incomplete or inconsistent live payload');
   }
   const verification = verifyChain(events);
   if (!verification.ok)
