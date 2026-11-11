@@ -1,18 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, MODERATION_PAGE_READ, missingAdminPermissionMessage } from '@bike4mind/common';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
-    const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign((req: { method?: string }, res: unknown) => handlers[req.method ?? 'GET']?.(req, res), {
-      use: () => chain,
-      get: (fn: (req: unknown, res: unknown) => unknown) => ((handlers.GET = fn), chain),
-      _config: config,
-    });
-    return chain;
-  },
-}));
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/middlewares/__tests__/adminApiMock')).adminApiMock()
+);
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
@@ -43,12 +35,20 @@ describe('GET /api/admin/users/export', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: MODERATION_PAGE_READ },
     });
   });
 
-  it('refuses a non-admin before reading anything', async () => {
-    await expect(call({}, { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
+  it('refuses a delegate without a moderation read permission before reading anything', async () => {
+    const delegate = { id: 'd'.repeat(24), isAdmin: false, adminPermissions: ['credits:adjust'] };
+    await expect(call({}, delegate)).rejects.toThrow(missingAdminPermissionMessage(MODERATION_PAGE_READ));
     expect(mockExport).not.toHaveBeenCalled();
+  });
+
+  it.each(['support:read', 'users:moderate'])('admits a delegate holding %s', async permission => {
+    const res = await call({}, { id: 'd'.repeat(24), isAdmin: false, adminPermissions: [permission] });
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockExport).toHaveBeenCalledTimes(1);
   });
 
   it('exports with the parsed filter and no-store caching', async () => {

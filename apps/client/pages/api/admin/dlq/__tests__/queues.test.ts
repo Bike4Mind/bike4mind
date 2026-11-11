@@ -101,4 +101,36 @@ describe('GET /api/admin/dlq/queues', () => {
     expect(contributed).not.toHaveProperty('description');
     expect(contributed).not.toHaveProperty('replay');
   });
+
+  describe('message retention', () => {
+    beforeEach(() => {
+      h.registry = [
+        { label: 'short-dlq', displayName: 'Short', application: 'app', sourceQueue: 'short' },
+        { label: 'long-dlq', displayName: 'Long', application: 'app', sourceQueue: 'long' },
+        { label: 'broken-dlq', displayName: 'Broken', application: 'app', sourceQueue: 'broken' },
+      ];
+      h.getQueueAttributes.mockImplementation(async (url: string) => {
+        if (url.endsWith('broken-dlq')) throw new Error('SQS unreachable');
+        return {
+          approximateMessageCount: 2,
+          approximateNotVisibleCount: 0,
+          messageRetentionSeconds: url.endsWith('short-dlq') ? 345600 : 1209600,
+        };
+      });
+    });
+
+    it('returns each queue with its own message retention', async () => {
+      const { queues } = await callRoute();
+
+      expect(queues.find(q => q.label === 'short-dlq')?.messageRetentionSeconds).toBe(345600);
+      expect(queues.find(q => q.label === 'long-dlq')?.messageRetentionSeconds).toBe(1209600);
+    });
+
+    it('returns a queue whose attributes failed to load without retention', async () => {
+      const broken = (await callRoute()).queues.find(q => q.label === 'broken-dlq');
+
+      expect(broken?.approximateMessageCount).toBe(-1);
+      expect(broken?.messageRetentionSeconds).toBeUndefined();
+    });
+  });
 });

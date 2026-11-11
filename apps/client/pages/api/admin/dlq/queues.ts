@@ -21,7 +21,7 @@ function queueMeta(entry: RegisteredDlqDescriptor) {
 /**
  * GET /api/admin/dlq/queues
  *
- * Returns all DLQs with their approximate message counts and replay help.
+ * Returns all DLQs with their approximate message counts, message retention and replay help.
  */
 const handler = adminApi({
   adminPermissions: { GET: 'support:read' },
@@ -42,6 +42,7 @@ const handler = adminApi({
         ...queueMeta(entry),
         approximateMessageCount: attrs.approximateMessageCount,
         approximateNotVisibleCount: attrs.approximateNotVisibleCount,
+        messageRetentionSeconds: attrs.messageRetentionSeconds,
       };
     })
   );

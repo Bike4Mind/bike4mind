@@ -6,6 +6,8 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import DlqReplayTab from './DlqReplayTab';
 
 const state = vi.hoisted(() => ({
+  retentionSeconds: undefined as number | undefined,
+  sentTimestamp: '1700000000000',
   history: [] as Array<{
     id: string;
     queueLabel: string;
@@ -34,13 +36,13 @@ vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUs
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({
-    data: state.queues,
+    data: state.queues.map(q => ({ messageRetentionSeconds: state.retentionSeconds, ...q })),
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
   }),
   useDlqMessages: () => ({
-    data: [{ messageId: 'm1', body: '{}', sentTimestamp: '1700000000000', approximateReceiveCount: '1' }],
+    data: [{ messageId: 'm1', body: '{}', sentTimestamp: state.sentTimestamp, approximateReceiveCount: '1' }],
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -87,6 +89,8 @@ const renderWithQueueSelected = async (name = /Queue One/) => {
 beforeEach(() => {
   state.history = [];
   state.queues = [QUEUE_ONE];
+  state.retentionSeconds = undefined;
+  state.sentTimestamp = '1700000000000';
   h.user = null;
 });
 
@@ -234,5 +238,77 @@ describe('DlqReplayTab queue hint', () => {
 
     expect(screen.getByTestId('dlq-replay-all')).toBeInTheDocument();
     expect(screen.queryByTestId('dlq-queue-hint')).not.toBeInTheDocument();
+  });
+});
+
+describe('DlqReplayTab age and expiry', () => {
+  const HOUR = 3600 * 1000;
+
+  it('shows age and time until expiry per message', async () => {
+    state.retentionSeconds = 14 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-age-m1')).toHaveTextContent('10h 30m');
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('13d 13h');
+  });
+
+  it('shows a different expiry for a shorter retention', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('3d 13h');
+  });
+
+  it('flags a message within 24 hours of expiry', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 80.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    const expires = screen.getByTestId('dlq-expires-m1');
+    expect(expires).toHaveTextContent(/^15h \d+m$/);
+    expect(expires).toHaveAttribute('data-warn', 'true');
+  });
+
+  it('does not flag a message with plenty of time left', async () => {
+    state.retentionSeconds = 14 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveAttribute('data-warn', 'false');
+  });
+
+  it('shows N/A for expiry when retention is unknown', async () => {
+    state.sentTimestamp = String(Date.now() - HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('N/A');
+  });
+
+  it('shows age and expiry in the message drawer', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+
+    expect(await screen.findByTestId('dlq-drawer-expiry')).toHaveTextContent('10h 30m old, expires in 3d 13h');
+  });
+
+  it('omits the expiry from the message drawer when retention is unknown', async () => {
+    state.sentTimestamp = String(Date.now() - HOUR);
+
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+
+    const drawerExpiry = await screen.findByTestId('dlq-drawer-expiry');
+    expect(drawerExpiry).toHaveTextContent('1h 0m old');
+    expect(drawerExpiry).not.toHaveTextContent('expires');
   });
 });
