@@ -1,6 +1,7 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
 import {
   ILoopEvent,
+  LOOP_CONFIG_CHANGE_BY,
   ILoopEventRepository,
   LOOP_EVENT_KINDS,
   LoopAskedFields,
@@ -64,8 +65,8 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
     await this.loopEventModel.insertMany([row('out'), row('in')]);
   }
 
-  async recordConfigChanged({ loopId, userId, reason, at }: LoopConfigChangedFields): Promise<void> {
-    await this.loopEventModel.create({
+  async recordConfigChanged({ loopId, userId, reason, config, at }: LoopConfigChangedFields): Promise<string> {
+    const doc = await this.loopEventModel.create({
       loopId,
       userId,
       kind: 'config_changed',
@@ -73,7 +74,32 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
       executionId: `config:${loopId}:${at.getTime()}`,
       requestedAt: at,
       reason,
+      ...(config && { config }),
     });
+    return doc.id;
+  }
+
+  async listConfigChanges(userId: string, loopId: string, limit: number): Promise<ILoopEvent[]> {
+    const results = await this.loopEventModel
+      .find({ userId, loopId, kind: 'config_changed' })
+      .sort({ createdAt: -1 })
+      .limit(limit);
+    return results.map(doc => doc.toJSON());
+  }
+
+  async findConfigChange(id: string, userId: string, loopId: string): Promise<ILoopEvent | null> {
+    if (!mongoose.isValidObjectId(id)) return null;
+    const doc = await this.loopEventModel.findOne({ _id: id, userId, loopId, kind: 'config_changed' });
+    return doc ? doc.toJSON() : null;
+  }
+
+  async markConfigUndone(id: string, undoneBy: string): Promise<boolean> {
+    if (!mongoose.isValidObjectId(id)) return false;
+    const result = await this.loopEventModel.updateOne(
+      { _id: id, kind: 'config_changed', config: { $exists: true }, 'config.undoneBy': { $exists: false } },
+      { $set: { 'config.undoneBy': undoneBy } }
+    );
+    return result.modifiedCount === 1;
   }
 
   async listForLoopSince(
@@ -227,6 +253,19 @@ export const LoopEventSchema = new Schema<ILoopEvent, ILoopEventModel>(
           via: { type: String, enum: ['trigger'] },
           executionId: { type: String },
           note: { type: String },
+        },
+        { _id: false }
+      ),
+    },
+    config: {
+      type: new Schema(
+        {
+          by: { type: String, enum: LOOP_CONFIG_CHANGE_BY, required: true },
+          // Server-built loop field values (see LOOP_VERSIONED_FIELDS); an undo replays them through the PATCH validators.
+          before: { type: Schema.Types.Mixed, default: {} },
+          after: { type: Schema.Types.Mixed, default: {} },
+          suggestionKey: { type: String },
+          undoneBy: { type: String },
         },
         { _id: false }
       ),

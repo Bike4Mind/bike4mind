@@ -48,7 +48,7 @@ const HOLD_LABEL_MAX = 100;
 const INTERVAL_MIN = 5;
 
 /** One week. */
-const INTERVAL_MAX = 10_080;
+export const INTERVAL_MAX = 10_080;
 
 export function validateString(field: string, value: unknown, max: number): string {
   if (typeof value !== 'string' || !value.trim()) {

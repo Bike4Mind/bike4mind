@@ -218,8 +218,9 @@ export const aiHolders = {
       // Whoever answered the unsure or asked event.
       { path: 'resolution.by', matchBy: 'userId', action: 'anonymize' },
     ],
-    // Who handed the ticket off: 'run' or 'owner', not a person.
-    unrelatedPaths: ['handoff.by'],
+    // Who handed the ticket off: 'run' or 'owner', not a person. Who changed the settings: 'owner', 'coach',
+    // 'trial' or 'undo'; `config.undoneBy` is the id of the undo event.
+    unrelatedPaths: ['handoff.by', 'config.by', 'config.undoneBy'],
   },
   LoopRunnerPresence: {
     kind: 'holder',

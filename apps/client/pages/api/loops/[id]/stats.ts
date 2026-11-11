@@ -2,20 +2,10 @@ import { z } from 'zod';
 import { LOOP_STATS_WINDOWS, type LoopStatsWindow } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import {
-  agentExecutionRepository,
-  loopDirectiveRepository,
-  loopEventRepository,
-  loopRepository,
-  workItemRepository,
-} from '@bike4mind/database';
+import { loopRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@server/utils/loopValidation';
-import { computeLoopStats } from '@server/utils/loopStats';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-/** ponytail: events and directives read per stats request; a busier loop's eras and directive counts are a prefix. */
-const LOOP_STATS_EVENTS = 500;
+import { readLoopStats } from '@server/utils/loopStats';
 
 const Query = z.object({
   days: z.coerce
@@ -39,35 +29,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const loop = await loopRepository.findByIdAndUserId(id, userId);
     if (!loop) throw new NotFoundError('Loop not found for id: ' + id);
 
-    const now = new Date();
-    const since = new Date(now.getTime() - 2 * days * DAY_MS);
-    const [runs, tickets, eras, unresolved, directives] = await Promise.all([
-      agentExecutionRepository.listLoopRunsSince(loop.id, since),
-      workItemRepository.listForLoopStats(userId, loop.id, since),
-      loopEventRepository.listForLoopSince(
-        userId,
-        loop.id,
-        new Date(now.getTime() - days * DAY_MS),
-        ['config_changed'],
-        LOOP_STATS_EVENTS
-      ),
-      loopEventRepository.listUnresolvedUnsure(userId, loop.id, LOOP_STATS_EVENTS),
-      loopDirectiveRepository.listToLoop(userId, loop.id, LOOP_STATS_EVENTS),
-    ]);
-
-    res.json(
-      computeLoopStats({
-        loop,
-        days,
-        now,
-        runs: runs.runs,
-        tickets: tickets.items,
-        eras,
-        unresolved,
-        directives,
-        truncated: runs.truncated || tickets.truncated,
-      })
-    );
+    res.json((await readLoopStats(loop, userId, days, new Date())).stats);
   });
 
 export default handler;

@@ -531,6 +531,32 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
       },
     },
     wakeMode: { type: String, enum: LOOP_WAKE_MODES },
+    coachTrial: {
+      type: new Schema(
+        {
+          stage: { type: String, required: true },
+          model: { type: String, required: true },
+          previousModel: { type: String },
+          baselineModel: { type: String, required: true },
+          tickets: { type: Number, required: true, min: 1 },
+          startedAt: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+    },
+    coachDismissed: {
+      type: [
+        new Schema(
+          {
+            key: { type: String, required: true },
+            reason: { type: String, required: true },
+            at: { type: Date, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     hold: {
       type: new Schema(
         {

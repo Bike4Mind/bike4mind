@@ -124,6 +124,36 @@ describe('LoopEventRepository', () => {
     expect(await loopEventRepository.hasUnfolded(since[0].executionId)).toBe(false);
   });
 
+  it('a versioned config change lists newest first, is owner-scoped, and is marked undone once', async () => {
+    const config = { by: 'coach' as const, before: { budgetCreditsPerDay: 100 }, after: { budgetCreditsPerDay: 125 } };
+    const first = await loopEventRepository.recordConfigChanged({
+      loopId: LOOP,
+      userId: USER,
+      reason: 'budget 100 -> 125',
+      config: { ...config, suggestionKey: 'raise_budget' },
+      at: new Date(1000),
+    });
+    const second = await loopEventRepository.recordConfigChanged({
+      loopId: LOOP,
+      userId: USER,
+      reason: 'trial kept',
+      config: { by: 'trial', before: {}, after: {} },
+      at: new Date(2000),
+    });
+    await loopEventRepository.recordUnsure(fields());
+
+    const listed = await loopEventRepository.listConfigChanges(USER, LOOP, 10);
+    expect(listed.map(event => event.id)).toEqual([second, first]);
+    expect(listed[1].config).toMatchObject({ ...config, suggestionKey: 'raise_budget' });
+    expect(await loopEventRepository.listConfigChanges('user-2', LOOP, 10)).toEqual([]);
+    expect(await loopEventRepository.findConfigChange(first, 'user-2', LOOP)).toBeNull();
+    expect(await loopEventRepository.findConfigChange('nope', USER, LOOP)).toBeNull();
+
+    expect(await loopEventRepository.markConfigUndone(first, 'undo-1')).toBe(true);
+    expect(await loopEventRepository.markConfigUndone(first, 'undo-2')).toBe(false);
+    expect((await loopEventRepository.findConfigChange(first, USER, LOOP))?.config?.undoneBy).toBe('undo-1');
+  });
+
   it('listUnresolvedUnsure lists only the open questions and gates of the loop', async () => {
     await loopEventRepository.recordUnsure(fields({ executionId: 'open' }));
     await loopEventRepository.resolveUnsure(fields({ executionId: 'done' }), { outcome: 'resumed', at: new Date() });

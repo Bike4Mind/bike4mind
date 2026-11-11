@@ -11,7 +11,13 @@ import {
   type LoopStatsWindow,
   WORK_ITEM_STAGE_HISTORY_MAX,
 } from '@bike4mind/common';
-import type { LoopStatsRun } from '@bike4mind/database';
+import {
+  agentExecutionRepository,
+  loopDirectiveRepository,
+  loopEventRepository,
+  workItemRepository,
+  type LoopStatsRun,
+} from '@bike4mind/database';
 import { median } from '@server/qa/runInsights';
 import { UNSURE_PREFIX } from './loopTickets';
 
@@ -19,6 +25,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Runs expire after 90 days (the AgentExecution TTL), so an older baseline has no run data. */
 const RUN_TTL_MS = 90 * DAY_MS;
 const TOP_TOOLS = 5;
+/** ponytail: events and directives read per stats request; a busier loop's eras and directive counts are a prefix. */
+const LOOP_STATS_EVENTS = 500;
 
 export interface LoopStatsInput {
   loop: Pick<ILoop, 'stages' | 'budgetCreditsPerDay'>;
@@ -261,4 +269,43 @@ export function computeLoopStats(input: LoopStatsInput): ILoopStats {
       historyStarts.length > 0 && { historyBegins: new Date(Math.min(...historyStarts)).toISOString() }),
     truncated: input.truncated,
   };
+}
+
+/**
+ * Reads what `computeLoopStats` needs and computes it. Shared by the stats and coach routes; `runsSince` reads runs
+ * further back than the window and its baseline (the coach's trial baseline), which the stats ignore.
+ */
+export async function readLoopStats(
+  loop: Pick<ILoop, 'id' | 'stages' | 'budgetCreditsPerDay'>,
+  userId: string,
+  days: LoopStatsWindow,
+  now: Date,
+  runsSince?: Date
+): Promise<{ stats: ILoopStats; runs: LoopStatsRun[]; tickets: IWorkItem[] }> {
+  const since = new Date(now.getTime() - 2 * days * DAY_MS);
+  const [runs, tickets, eras, unresolved, directives] = await Promise.all([
+    agentExecutionRepository.listLoopRunsSince(loop.id, runsSince && runsSince < since ? runsSince : since),
+    workItemRepository.listForLoopStats(userId, loop.id, since),
+    loopEventRepository.listForLoopSince(
+      userId,
+      loop.id,
+      new Date(now.getTime() - days * DAY_MS),
+      ['config_changed'],
+      LOOP_STATS_EVENTS
+    ),
+    loopEventRepository.listUnresolvedUnsure(userId, loop.id, LOOP_STATS_EVENTS),
+    loopDirectiveRepository.listToLoop(userId, loop.id, LOOP_STATS_EVENTS),
+  ]);
+  const stats = computeLoopStats({
+    loop,
+    days,
+    now,
+    runs: runs.runs,
+    tickets: tickets.items,
+    eras,
+    unresolved,
+    directives,
+    truncated: runs.truncated || tickets.truncated,
+  });
+  return { stats, runs: runs.runs, tickets: tickets.items };
 }

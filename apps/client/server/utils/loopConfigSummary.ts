@@ -10,6 +10,7 @@ type LoopConfig = Pick<
   | 'tools'
   | 'triageModel'
   | 'escalationModel'
+  | 'intervalMinutes'
 >;
 
 const SUMMARY_MAX = 500;
@@ -48,6 +49,7 @@ export function loopConfigChangeSummary(before: LoopConfig, after: LoopConfig): 
   scalar('lanes', before.maxConcurrent ?? 1, after.maxConcurrent ?? 1);
   scalar('triage model', before.triageModel, after.triageModel);
   scalar('escalation model', before.escalationModel, after.escalationModel);
+  scalar('interval', before.intervalMinutes, after.intervalMinutes);
 
   const toolsAdded = after.tools.filter(tool => !before.tools.includes(tool)).map(tool => `+${tool}`);
   const toolsRemoved = before.tools.filter(tool => !after.tools.includes(tool)).map(tool => `-${tool}`);

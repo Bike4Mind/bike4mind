@@ -353,9 +353,115 @@ export interface ILoop {
   triggers?: ILoopTrigger[];
   /** Absent means `interval`. In `tickets` mode `nextRunAt` is set only when a ticket makes the loop due. */
   wakeMode?: LoopWakeMode;
+  /** The coach's model trial on one stage (apps/client/server/utils/loopCoach.ts). The scheduler never reads it. */
+  coachTrial?: ILoopCoachTrial;
+  /** Coach suggestions the owner dismissed; a key fires again 30 days after `at`. Newest last. */
+  coachDismissed?: ILoopCoachDismissal[];
 
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * A stage running on `model` for `tickets` tickets so the owner can compare it with `baselineModel` (the stage's
+ * effective model when it started). `previousModel` is the stage's own model then; absent means it inherited the
+ * loop's. Never reverts by itself: the owner keeps or reverts it.
+ */
+export interface ILoopCoachTrial {
+  stage: string;
+  model: string;
+  previousModel?: string;
+  baselineModel: string;
+  tickets: number;
+  startedAt: Date;
+}
+
+export interface ILoopCoachDismissal {
+  key: string;
+  reason: string;
+  at: Date;
+}
+
+/**
+ * The loop fields a `config_changed` event versions (before/after) and an undo restores. Owner-only writes: the
+ * scheduler never writes them.
+ */
+export const LOOP_VERSIONED_FIELDS = [
+  'stages',
+  'stageConfig',
+  'model',
+  'budgetCreditsPerDay',
+  'maxConcurrent',
+  'tools',
+  'triageModel',
+  'escalationModel',
+  'intervalMinutes',
+] as const;
+export type LoopVersionedField = (typeof LOOP_VERSIONED_FIELDS)[number];
+
+/** Who made a settings change: the owner's edit, a coach suggestion applied, a model trial, or an undo. */
+export const LOOP_CONFIG_CHANGE_BY = ['owner', 'coach', 'trial', 'undo'] as const;
+export type LoopConfigChangeBy = (typeof LOOP_CONFIG_CHANGE_BY)[number];
+
+/** Only the changed fields, each whole (the full `stageConfig` array); `null` means unset. */
+export interface ILoopConfigChange {
+  by: LoopConfigChangeBy;
+  before: Partial<Record<LoopVersionedField, unknown>>;
+  after: Partial<Record<LoopVersionedField, unknown>>;
+  suggestionKey?: string;
+  /** The id of the `undo` event that reverted this one. */
+  undoneBy?: string;
+}
+
+export const LOOP_COACH_KINDS = ['budget', 'schedule', 'model', 'tool', 'stage'] as const;
+export type LoopCoachKind = (typeof LOOP_COACH_KINDS)[number];
+
+/** One coach suggestion. No `patch`: advice only. `patch` is a PATCH /api/loops/:id body the server recomputes. */
+export interface LoopCoachSuggestion {
+  key: string;
+  kind: LoopCoachKind;
+  stage?: string;
+  title: string;
+  evidence: string;
+  patch?: Record<string, unknown>;
+  trialable: boolean;
+  /** Set when the patch cannot be applied yet (e.g. the stage still holds tickets). */
+  disabledReason?: string;
+}
+
+/** One side of a trial comparison. Rates are 0..1, `null` with nothing to measure. */
+export interface LoopCoachTrialSide {
+  model: string;
+  runs: number;
+  tickets: number;
+  up: number;
+  down: number;
+  creditsPerRun: number | null;
+  medianRunMs: number | null;
+  doneRate: number | null;
+}
+
+/** `GET /api/loops/:id/coach`. Dates are ISO strings. */
+export interface LoopCoachResponse {
+  suggestions: LoopCoachSuggestion[];
+  dismissed: { key: string; reason: string; at: string }[];
+  trial?: Omit<ILoopCoachTrial, 'startedAt'> & {
+    startedAt: string;
+    done: number;
+    complete: boolean;
+    trial: LoopCoachTrialSide;
+    baseline: LoopCoachTrialSide;
+  };
+  /** Newest first. `undoable` marks the one change Undo is offered on. */
+  versions: {
+    id: string;
+    at: string;
+    reason: string;
+    by: LoopConfigChangeBy;
+    suggestionKey?: string;
+    undone: boolean;
+    undoable: boolean;
+  }[];
 }
 
 /**
@@ -518,6 +624,8 @@ export interface ILoopEvent {
   /** Set once the scheduler has folded a resumed run back into its ticket. */
   foldedAt?: Date;
   handoff?: ILoopEventHandoff;
+  /** `config_changed` written from this feature on: what changed and who changed it. */
+  config?: ILoopConfigChange;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -559,14 +667,20 @@ export interface LoopHandoffFields {
 
 export type LoopAutoResumedFields = Pick<ILoopEvent, 'loopId' | 'userId' | 'executionId' | 'reason' | 'requestedAt'>;
 
-export type LoopConfigChangedFields = Pick<ILoopEvent, 'loopId' | 'userId' | 'reason'> & { at: Date };
+export type LoopConfigChangedFields = Pick<ILoopEvent, 'loopId' | 'userId' | 'reason' | 'config'> & { at: Date };
 
 export interface ILoopEventRepository extends IBaseRepository<ILoopEvent> {
   /** Records an unsure event once per gate (`executionId` + `requestedAt`); a repeat is a no-op. */
   recordUnsure(fields: LoopUnsureFields | LoopAskedFields): Promise<void>;
   recordAutoResumed(fields: LoopAutoResumedFields): Promise<void>;
   recordHandoff(fields: LoopHandoffFields): Promise<void>;
-  recordConfigChanged(fields: LoopConfigChangedFields): Promise<void>;
+  /** Returns the new event's id. */
+  recordConfigChanged(fields: LoopConfigChangedFields): Promise<string>;
+  /** The loop's `config_changed` events, newest first. */
+  listConfigChanges(userId: string, loopId: string, limit: number): Promise<ILoopEvent[]>;
+  findConfigChange(id: string, userId: string, loopId: string): Promise<ILoopEvent | null>;
+  /** Sets `config.undoneBy` unless already set. False when nothing matched. */
+  markConfigUndone(id: string, undoneBy: string): Promise<boolean>;
   /** Events created since `since` (of `kinds` when given), oldest first, capped at `limit`. */
   listForLoopSince(
     userId: string,
