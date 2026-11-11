@@ -1,4 +1,4 @@
-import { useState, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { Box, Button, Link, Stack, Tooltip, Typography } from '@mui/joy';
 import { useRouter } from '@tanstack/react-router';
 import { ActionDialog } from './ActionDialog';
@@ -111,7 +111,16 @@ export function AiSuggestion({
     initialOverriding && onOverride && suggestion ? suggestion.id : null
   );
   const [whyWrong, setWhyWrong] = useState<AiOverrideReason | null>(null);
-  const [undoing, setUndoing] = useState(false);
+  const [undoingId, setUndoingId] = useState<string | null>(null);
+  const undoingRef = useRef<string | null>(null);
+  // Null once unmounted, so a revert that settles late cannot report for a suggestion no longer shown.
+  const liveIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    liveIdRef.current = suggestion?.id ?? null;
+    return () => {
+      liveIdRef.current = null;
+    };
+  }, [suggestion?.id]);
   const router = useRouter({ warn: false });
   if (!suggestion || dismissedId === suggestion.id) return null;
   const overriding = overridingId === suggestion.id;
@@ -184,16 +193,21 @@ export function AiSuggestion({
     decide('dismissed');
   };
   const undo = async () => {
-    setUndoing(true);
+    const id = suggestion.id;
+    // The ref blocks a second click landing before the loading state renders.
+    if (undoingRef.current === id) return;
+    undoingRef.current = id;
+    setUndoingId(id);
+    let reverted = true;
     try {
       await onUndo?.();
     } catch {
       // The host surfaces its own revert error; a failed revert is not reported as undone.
-      setUndoing(false);
-      return;
+      reverted = false;
     }
-    setUndoing(false);
-    decide('undone');
+    if (undoingRef.current === id) undoingRef.current = null;
+    setUndoingId(current => (current === id ? null : current));
+    if (reverted && liveIdRef.current === id) decide('undone');
   };
   // Plain clicks route in-app; modified clicks keep the anchor's open-in-new-tab behavior.
   const followInApp = (href: string) => (event: MouseEvent<HTMLAnchorElement>) => {
@@ -296,7 +310,7 @@ export function AiSuggestion({
               variant="outlined"
               color="neutral"
               onClick={undo}
-              loading={undoing}
+              loading={undoingId === suggestion.id}
               data-testid={`${testId}-undo-btn`}
             >
               Undo

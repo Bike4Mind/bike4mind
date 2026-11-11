@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -22,6 +22,7 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={theme}>{children}</CssVarsProvider>
 );
 const renderThemed = (ui: ReactNode) => render(ui, { wrapper: TestWrapper });
+const settle = () => act(() => new Promise<void>(resolve => setTimeout(resolve, 0)));
 
 const suggestion = (overrides: Partial<AiSuggestionData> = {}): AiSuggestionData => ({
   id: 's1',
@@ -230,6 +231,46 @@ describe('AiSuggestion actions', () => {
     fireEvent.click(screen.getByTestId('sug-undo-btn'));
     await waitFor(() => expect(screen.getByTestId('sug-undo-btn')).not.toBeDisabled());
     expect(failing).not.toHaveBeenCalled();
+  });
+
+  it('reverts once on a double click and drops undone when the suggestion changes or unmounts mid-revert', async () => {
+    const finishes: Array<() => void> = [];
+    const onUndo = vi.fn(() => new Promise<void>(resolve => finishes.push(resolve)));
+    const onDecision = vi.fn();
+    const props = { onUndo, onDecision, 'data-testid': 'sug' } as const;
+    const { rerender, unmount } = renderDetail({ suggestion: suggestion({ status: 'auto_applied' }), ...props });
+    fireEvent.click(screen.getByTestId('sug-undo-btn'));
+    fireEvent.click(screen.getByTestId('sug-undo-btn'));
+    expect(onUndo).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <AiSuggestion variant="detail" suggestion={suggestion({ id: 's2', status: 'auto_applied' })} {...props} />
+    );
+    expect(screen.getByTestId('sug-undo-btn')).not.toBeDisabled();
+    finishes[0]();
+    await settle();
+    expect(onDecision).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('sug-undo-btn'));
+    expect(onUndo).toHaveBeenCalledTimes(2);
+    unmount();
+    finishes[1]();
+    await settle();
+    expect(onDecision).not.toHaveBeenCalled();
+  });
+
+  it('treats a synchronous throw from onUndo as a failed revert', async () => {
+    const onDecision = vi.fn();
+    renderDetail({
+      suggestion: suggestion({ status: 'auto_applied' }),
+      onUndo: () => {
+        throw new Error('revert failed');
+      },
+      onDecision,
+    });
+    fireEvent.click(screen.getByTestId('sug-undo-btn'));
+    await waitFor(() => expect(screen.getByTestId('sug-undo-btn')).not.toBeDisabled());
+    expect(onDecision).not.toHaveBeenCalled();
   });
 
   it('routes a plain click on an in-app evidence link and leaves modified clicks to the browser', () => {
