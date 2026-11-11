@@ -8,6 +8,9 @@ import { Config } from '@bike4mind/server-utils/utils/config';
  * stays the same across instances. Without a usable salt it fails closed to fixed redaction markers:
  * an empty-salt HMAC of an email is reversible by dictionary.
  *
+ * Free text is scanned for emails, ids and IPs only; names and phone numbers are caught only under a
+ * named key (see sensitiveKeyKind), so a caller must not put them in a notes-style string.
+ *
  * Plain objects and arrays are walked; functions, undefined, symbols and class instances are dropped.
  * Evidence links a consumer needs are kept server-side, never passed through here.
  */

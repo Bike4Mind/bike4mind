@@ -101,6 +101,7 @@ export const AdminAiSuggestionSchema: Schema<IAdminAiSuggestionDocument> = new S
 AdminAiSuggestionSchema.index({ feature: 1, entityId: 1, inputHash: 1, policyVersion: 1 }, { unique: true });
 AdminAiSuggestionSchema.index({ feature: 1, status: 1, createdAt: -1 });
 AdminAiSuggestionSchema.index({ entityType: 1, entityId: 1, createdAt: -1 });
+AdminAiSuggestionSchema.index({ feature: 1, entityId: 1, createdAt: -1 });
 
 export const AdminAiSuggestionModel: Model<IAdminAiSuggestionDocument> =
   (mongoose.models.AdminAiSuggestion as unknown as Model<IAdminAiSuggestionDocument>) ??
@@ -164,14 +165,17 @@ export class AdminAiSuggestionRepository {
   /** Stores a pending suggestion; when another writer already stored this key, returns that row instead. */
   async createPending(input: CreatePendingAdminAiSuggestionInput): Promise<AdminAiSuggestionItem> {
     const { model: aiModel, ...fields } = input;
-    try {
-      const doc = await AdminAiSuggestionModel.create({ ...fields, aiModel, status: 'pending' });
-      return toItem(doc.toObject() as unknown as LeanAdminAiSuggestion);
-    } catch (error) {
-      if (!isDuplicateKeyError(error)) throw error;
-      const existing = await this.findByKey(input);
-      if (!existing) throw error;
-      return existing;
+    // One retry: the conflicting row can vanish between the duplicate-key error and the read.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const doc = await AdminAiSuggestionModel.create({ ...fields, aiModel, status: 'pending' });
+        return toItem(doc.toObject() as unknown as LeanAdminAiSuggestion);
+      } catch (error) {
+        if (!isDuplicateKeyError(error)) throw error;
+        const existing = await this.findByKey(input);
+        if (existing) return existing;
+        if (attempt >= 1) throw error;
+      }
     }
   }
 

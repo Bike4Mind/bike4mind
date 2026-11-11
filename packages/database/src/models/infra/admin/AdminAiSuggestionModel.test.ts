@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Types } from 'mongoose';
 import { setupMongoTest } from '../../../__test__/utils';
 import {
@@ -32,6 +32,10 @@ describe('AdminAiSuggestionRepository', () => {
     await AdminAiSuggestionModel.syncIndexes();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('dedups on the (feature, entity, input hash, policy version) key', async () => {
     const first = await adminAiSuggestionRepository.createPending(pending());
     const second = await adminAiSuggestionRepository.createPending(pending({ verdict: 'legitimate_automation' }));
@@ -52,6 +56,23 @@ describe('AdminAiSuggestionRepository', () => {
 
     expect(new Set(results.map(r => r.id)).size).toBe(1);
     expect(await AdminAiSuggestionModel.countDocuments()).toBe(1);
+  });
+
+  it('retries once when the conflicting row is not found on the first read', async () => {
+    const first = await adminAiSuggestionRepository.createPending(pending());
+    const findByKey = vi.spyOn(adminAiSuggestionRepository, 'findByKey').mockResolvedValueOnce(null);
+
+    const second = await adminAiSuggestionRepository.createPending(pending());
+
+    expect(second.id).toBe(first.id);
+    expect(findByKey).toHaveBeenCalledTimes(2);
+  });
+
+  it('rethrows the duplicate-key error when the conflicting row is missing on both reads', async () => {
+    await adminAiSuggestionRepository.createPending(pending());
+    vi.spyOn(adminAiSuggestionRepository, 'findByKey').mockResolvedValue(null);
+
+    await expect(adminAiSuggestionRepository.createPending(pending())).rejects.toMatchObject({ code: 11000 });
   });
 
   it('round-trips a stored suggestion with model and defaults', async () => {
