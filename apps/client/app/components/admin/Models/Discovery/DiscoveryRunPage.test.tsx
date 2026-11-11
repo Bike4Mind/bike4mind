@@ -493,6 +493,40 @@ describe('DiscoveryRunPage what changed', () => {
     );
   });
 
+  it('reports a flat row that a published long-context ladder outruns, apart from the price flags', async () => {
+    run = runWith({
+      priceFlags: [],
+      longContextGaps: [
+        {
+          modelId: 'gpt-5.6-luna',
+          source: 'openai',
+          base: { inputPerMTok: 2.5, outputPerMTok: 15 },
+          brackets: [{ aboveTokens: 272000, inputPerMTok: 5, outputPerMTok: 22.5 }],
+          detail:
+            'openai publishes in 2.5/out 15 $/MTok, above 272000 in 5/out 22.5 $/MTok but the row is flat at ' +
+            'in 2.5/out 15 $/MTok, so prompts above 272000 tokens bill at the base rate',
+        },
+      ],
+    });
+    await renderLoaded();
+
+    const item = screen.getByTestId('discovery-changed-long-context-gpt-5.6-luna');
+    expect(item).toHaveTextContent('Billed flat at $2.5 in / $15 out per 1M');
+    expect(item).toHaveTextContent('openai charges $5 in / $22.5 out above 272,000 tokens');
+    expect(screen.queryByTestId('discovery-decision-gpt-5.6-luna')).not.toBeInTheDocument();
+
+    openDetails();
+    const row = screen.getByTestId('discovery-run-long-context-gap-row-gpt-5.6-luna');
+    expect(row).toHaveTextContent('$2.5 in / $15 out');
+    expect(row).toHaveTextContent('$5 in / $22.5 out above 272,000 tokens');
+    expect(row).toHaveTextContent('openai');
+    expect(row).toHaveTextContent('bill at the base rate');
+    expect(screen.getByTestId('discovery-run-long-context-gaps-table-card')).toHaveTextContent(
+      'Long-context rates not stored (1)'
+    );
+    expect(screen.queryByTestId('discovery-run-price-flags-table-card')).not.toBeInTheDocument();
+  });
+
   it('does not claim anything was applied on a run that wrote nothing', async () => {
     run = runWith({
       mode: 'report',
@@ -530,13 +564,14 @@ describe('DiscoveryRunPage what changed', () => {
     expect(screen.getByTestId('discovery-run-operator-conflicts')).toHaveTextContent('gpt-owned');
   });
 
-  it('says so when the run changed nothing, and renders a run written before overrides existed', async () => {
-    run = runWith({ priceFlags: [], priceOverrides: undefined, changes: EMPTY_CHANGES });
+  it('says so when the run changed nothing, and renders a run written before overrides and gaps existed', async () => {
+    run = runWith({ priceFlags: [], priceOverrides: undefined, longContextGaps: undefined, changes: EMPTY_CHANGES });
     await renderLoaded();
 
     expect(screen.getByTestId('discovery-run-changes')).toHaveTextContent('This run changed nothing.');
     openDetails();
     expect(screen.queryByTestId('discovery-run-price-overrides-table-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('discovery-run-long-context-gaps-table-card')).not.toBeInTheDocument();
   });
 });
 

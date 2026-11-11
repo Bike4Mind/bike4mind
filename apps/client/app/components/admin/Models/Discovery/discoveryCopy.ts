@@ -204,6 +204,10 @@ export const usdPerMTok = (value: number | undefined): string =>
 export const inOut = (rates: PerMTokRates | undefined): string =>
   rates ? `${usdPerMTok(rates.inputPerMTok)} in / ${usdPerMTok(rates.outputPerMTok)} out` : '-';
 
+/** The published brackets a flat row does not carry, e.g. "$5 in / $22.5 out above 272,000 tokens". */
+export const longContextBrackets = (brackets: ReadonlyArray<PerMTokRates & { aboveTokens: number }>): string =>
+  brackets.map(bracket => `${inOut(bracket)} above ${bracket.aboveTokens.toLocaleString('en-US')} tokens`).join('; ');
+
 /** A capped detail array's count, which never passes the stored slice off as the whole set. */
 export const countLabel = (shown: number, total: number | undefined): string =>
   total !== undefined && total > shown ? `first ${shown} of ${total}` : `${shown}`;

@@ -137,7 +137,7 @@ When discovery is off, the section says so and offers **Open settings**. **Run d
 
 ### Run page
 
-A run's page shows what the run changed, grouped as **Added**, **Listed**, **Repriced**, **Lifecycle changes**, and **Overruled sources**. A run in report-only mode shows the same groups as **Would add**, **Would list**, and **Would reprice**. Models from the run that still need a decision are listed with their reasons, their fix actions, and **Open model**. Runs are kept for 90 days.
+A run's page shows what the run changed, grouped as **Added**, **Listed**, **Repriced**, **Lifecycle changes**, **Overruled sources**, and **Long-context rates not stored** (flat price rows whose source charges more for long prompts, so those prompts bill at the flat rate). A run in report-only mode shows the same groups as **Would add**, **Would list**, and **Would reprice**. Models from the run that still need a decision are listed with their reasons, their fix actions, and **Open model**. Runs are kept for 90 days.
 
 ## Settings
 

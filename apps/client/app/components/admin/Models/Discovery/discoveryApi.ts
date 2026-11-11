@@ -89,6 +89,15 @@ export interface RunPriceOverride {
   detail: string;
 }
 
+/** A flat row that a trusted source's published long-context ladder outruns; kept apart from the price flags. */
+export interface RunLongContextGap {
+  modelId: string;
+  source: string;
+  base: PerMTokRates;
+  brackets: Array<PerMTokRates & { aboveTokens: number }>;
+  detail: string;
+}
+
 export interface RunLifecycleTransition {
   modelId: string;
   from?: string;
@@ -116,6 +125,7 @@ export interface RunDetailTotals {
   priceFlags?: number;
   priceRows?: number;
   priceOverrides?: number;
+  longContextGaps?: number;
   priceSkips?: number;
   lifecycleTransitions?: number;
   catalogDiff?: number;
@@ -156,6 +166,8 @@ export interface DiscoveryRun {
   priceRows: RunPriceRow[];
   /** Optional: runs written before provider prices could overrule a mirror carry none. */
   priceOverrides?: RunPriceOverride[];
+  /** Optional: runs written before long-context gaps were reported carry none. */
+  longContextGaps?: RunLongContextGap[];
   priceSkips: Array<{ modelId: string; reason: string }>;
   lifecycleTransitions: RunLifecycleTransition[];
   catalogDiff: RunCatalogDiffEntry[];

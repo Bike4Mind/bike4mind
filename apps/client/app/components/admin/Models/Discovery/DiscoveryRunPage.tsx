@@ -30,6 +30,7 @@ import {
   inOut,
   isDecisionBlocker,
   lifecycleWord,
+  longContextBrackets,
   modelStatusCopy,
   runResult,
   runSentence,
@@ -246,6 +247,7 @@ function WhatChanged({ run, index }: { run: DiscoveryRun; index: ModelIndex }) {
     .map((row, rowIndex) => ({ ...row, rowIndex }))
     .filter(row => !row.sources.includes(ADAPTER_LITERAL_PRICE_SOURCE));
   const overrides = run.priceOverrides ?? [];
+  const longContextGaps = run.longContextGaps ?? [];
   const groups: ReactNode[] = [];
 
   if (run.changes.added.length > 0) {
@@ -342,6 +344,20 @@ function WhatChanged({ run, index }: { run: DiscoveryRun; index: ModelIndex }) {
             <Muted>
               {inOut(override.applied)} per 1M from {override.source}, over {override.dissenting.join(', ')}.{' '}
               {override.detail}
+            </Muted>
+          </ChangeItem>
+        ))}
+      </ChangeGroup>
+    );
+  }
+  if (longContextGaps.length > 0) {
+    groups.push(
+      <ChangeGroup key="long-context" title="Long-context rates not stored" testId="discovery-changed-long-context">
+        {longContextGaps.map(gap => (
+          <ChangeItem key={gap.modelId} modelId={gap.modelId} index={index} group="long-context">
+            <Muted>
+              Billed flat at {inOut(gap.base)} per 1M, but {gap.source} charges {longContextBrackets(gap.brackets)}, so
+              longer prompts bill at the flat rate.
             </Muted>
           </ChangeItem>
         ))}

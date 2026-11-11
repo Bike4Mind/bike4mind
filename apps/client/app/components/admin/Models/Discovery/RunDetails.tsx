@@ -9,6 +9,7 @@ import {
   flagCopy,
   formatRunTime,
   inOut,
+  longContextBrackets,
   modeLabel,
   priceSkipCopy,
   runResult,
@@ -151,6 +152,7 @@ export function RunDetails({ run }: { run: DiscoveryRun }) {
   const totals = run.detailTotals ?? {};
   const result = runResult(run);
   const overrides = run.priceOverrides ?? [];
+  const longContextGaps = run.longContextGaps ?? [];
   const sourceRows: SourceRow[] = [
     ...run.sources.map(source => ({
       key: `attempted:${source.name}`,
@@ -279,6 +281,24 @@ export function RunDetails({ run }: { run: DiscoveryRun }) {
           getRowId={override => override.modelId}
           testId="discovery-run-price-overrides-table"
           rowTestId={override => `discovery-run-price-override-row-${override.modelId}`}
+        />
+      )}
+
+      {/* Apart from the price flags: these rows were written or left standing, and are not refusals. */}
+      {longContextGaps.length > 0 && (
+        <DetailCard
+          title={`Long-context rates not stored (${countLabel(longContextGaps.length, totals.longContextGaps)})`}
+          rows={longContextGaps}
+          columns={[
+            { id: 'model', label: 'Model', render: gap => <Mono>{gap.modelId}</Mono> },
+            { id: 'flat', label: 'Flat per 1M', render: gap => inOut(gap.base) },
+            { id: 'published', label: 'Published', render: gap => longContextBrackets(gap.brackets) },
+            { id: 'source', label: 'Source', render: gap => gap.source },
+            { id: 'detail', label: 'Why', width: '18rem', render: gap => gap.detail },
+          ]}
+          getRowId={gap => gap.modelId}
+          testId="discovery-run-long-context-gaps-table"
+          rowTestId={gap => `discovery-run-long-context-gap-row-${gap.modelId}`}
         />
       )}
 

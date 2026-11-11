@@ -119,6 +119,7 @@ export const RUN: DiscoveryRun = {
   priceFlags: [LUNA_FLAG],
   priceRows: [],
   priceOverrides: [],
+  longContextGaps: [],
   priceSkips: [],
   lifecycleTransitions: [],
   catalogDiff: [],
