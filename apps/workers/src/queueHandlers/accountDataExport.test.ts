@@ -845,6 +845,18 @@ describe('account data export worker', () => {
         );
         expect(h.permanentDelete).toHaveBeenCalledWith(ADMIN_KEY);
       });
+
+      it('records an account that is gone by the time the lease claim fails', async () => {
+        h.leaseClaim.mockResolvedValue(null);
+        h.userFindById.mockResolvedValueOnce({ email: 'ada@example.com' }).mockResolvedValueOnce(null);
+        await runForAdmin();
+        expect(h.sendToQueue).not.toHaveBeenCalled();
+        expect(h.recordAdminAction).toHaveBeenCalledExactlyOnceWith(
+          skipEntry('account_gone', 'ada@example.com'),
+          expect.anything()
+        );
+        expect(h.permanentDelete).toHaveBeenCalledWith(ADMIN_KEY);
+      });
     });
 
     it('adds the registry records under its own key and emails no one', async () => {
