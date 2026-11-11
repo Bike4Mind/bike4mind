@@ -8,6 +8,8 @@ import {
   ICreditTransactionRepository,
   IApiKeyUsage,
   ISourceUsage,
+  ILedgerUsageTotal,
+  LEDGER_USAGE_TRANSACTION_TYPES,
   ILedgerPage,
   ILedgerQueryOptions,
   COMPLETION_SOURCES,
@@ -648,6 +650,23 @@ export class CreditTransactionRepository
       { $project: { _id: 0, apiKeyId: '$_id', requests: 1, creditsSpent: 1, inputTokens: 1, outputTokens: 1 } },
       { $sort: { creditsSpent: -1 } },
     ]);
+  }
+
+  async usageTotalForOwner(
+    ownerId: string,
+    ownerType: CreditHolderType,
+    days: number = 30
+  ): Promise<ILedgerUsageTotal> {
+    const from = new Date();
+    from.setDate(from.getDate() - days);
+    const [total] = await this.model.aggregate<ILedgerUsageTotal>([
+      {
+        $match: { ownerId, ownerType, createdAt: { $gte: from }, type: { $in: [...LEDGER_USAGE_TRANSACTION_TYPES] } },
+      },
+      { $group: { _id: null, creditsCharged: { $sum: { $abs: '$credits' } }, transactions: { $sum: 1 } } },
+      { $project: { _id: 0, creditsCharged: 1, transactions: 1 } },
+    ]);
+    return total ?? { creditsCharged: 0, transactions: 0 };
   }
 
   async sourceUsageForOwner(ownerId: string, ownerType: CreditHolderType, days: number = 30): Promise<ISourceUsage[]> {

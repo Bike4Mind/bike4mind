@@ -266,7 +266,7 @@ async function handleChat(
     },
   };
   // wait=true runs tools inline: one that re-reads the owner by id must see the same role as req.user.
-  // Kept out of the literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.test.ts).
+  // Kept out of the literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.repo.test.ts).
   chatCompletionOptions.db = {
     ...chatCompletionOptions.db,
     users: requesterScopedUsers(req, chatCompletionOptions.db.users),

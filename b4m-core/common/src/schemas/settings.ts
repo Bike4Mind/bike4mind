@@ -65,6 +65,16 @@ import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } fro
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 import { ReleaseNotesConfigSchema } from './releaseNotes';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
+import {
+  DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_DEFAULT,
+  DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_MAX,
+  FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_DEFAULT,
+  FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_MAX,
+  FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_DEFAULT,
+  FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_MAX,
+  FILE_EMBEDDING_USER_WINDOW_HOURS_DEFAULT,
+  FILE_EMBEDDING_USER_WINDOW_HOURS_MAX,
+} from '../constants/fileEmbeddingLimits';
 
 /**
  * The measured per-space floors, rendered for an admin-facing description (e.g. "75 for
@@ -459,6 +469,7 @@ export const SettingKeySchema = z.enum([
   'apiKeyAccountAgeTrustsKeys',
   'requireThreeDSecureOnFirstPurchase',
   'threeDSecureNewAccountDays',
+  'requireCheckoutTermsConsent',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
   'apiKeyUntrustedRequestsPerDay',
@@ -513,6 +524,7 @@ export const SettingKeySchema = z.enum([
   'signupNetworkAlertMaxPerHostingAsn',
   'signupNetworkAlertMaxPerAsn',
   'shadowDetectionRecordingEnabled',
+  'shadowDetectionAutoGradeAfterDays',
   'paymentRiskAutoRefundEnabled',
   'paymentRiskAutoRefundMinUnspentPercent',
   'paymentRiskCheckoutMaxBlockedAttempts',
@@ -613,6 +625,12 @@ export const SettingKeySchema = z.enum([
   'LakeAccessAuditRetentionDays',
   'LakeAccessQueryTextRetentionDays',
   'LakeConfigAuditRetentionDays',
+
+  // FILE INDEXING LIMITS (see fileEmbeddingService and claimScopedSettingChange)
+  'fileEmbeddingUserBudgetPerWindowUsd',
+  'fileEmbeddingUserTokensPerWindow',
+  'fileEmbeddingUserWindowHours',
+  'DefaultChunkSizeChangeCooldownHours',
 
   // New MaxContentLength setting
   'MaxContentLength',
@@ -1665,6 +1683,25 @@ export const SignupDomainHoldAssessmentConfigSchema = z.object({
     title: 'Confirm confidence',
     description: 'Least confidence in an abuse verdict that confirms the hold; anything lower leaves it pending.',
   }),
+  autoReleaseEnabled: z.boolean().prefault(false).meta({
+    title: 'Auto-release legitimate holds',
+    description:
+      'Release a hold, paying out its held free credits, when the model judges it legitimate and every guard passes: a site with real content, Google or Microsoft mail, no disposable-mail wording on the site, known residential signup networks, and few waiting accounts. An auto-released domain stays under burst detection.',
+  }),
+  minReleaseConfidence: z.number().min(0.8).max(1).prefault(0.95).meta({
+    title: 'Release confidence',
+    description: 'Least confidence in a legitimate verdict that releases the hold; anything lower leaves it pending.',
+  }),
+  maxAutoReleasesPerDay: z.number().int().min(0).max(50).prefault(5).meta({
+    title: 'Auto-releases per 24 hours',
+    description:
+      'Holds released automatically per 24h window (opened by the first release); further ones wait for an admin.',
+  }),
+  maxAutoReleaseSignups: z.number().int().min(1).max(10).prefault(2).meta({
+    title: 'Most accounts to auto-release',
+    description:
+      'A domain with more verified accounts waiting than this always waits for an admin; it also caps the payout.',
+  }),
 });
 
 export type SignupDomainHoldAssessmentConfig = z.infer<typeof SignupDomainHoldAssessmentConfigSchema>;
@@ -1867,6 +1904,7 @@ export type LogoSettings = z.infer<typeof LogoSettingsSchema>;
 
 // RapidReply Settings Schema
 export const RapidReplySettingsSchema = z.object({
+  /** @deprecated Nothing writes this; the global toggle is the `EnableRapidReply` setting. */
   enabled: z.boolean().prefault(false),
   allowedUserTags: z.array(z.string()).prefault([]),
   defaultMaxTokens: z.number().prefault(150),
@@ -2323,6 +2361,20 @@ export const API_SERVICE_GROUPS = {
       { key: 'dataLakeEmbeddingBudgetPerOwnerPeriodUsd', order: 11 },
     ],
   },
+  FILE_INDEXING_LIMITS: {
+    id: 'fileIndexingLimits',
+    name: 'File Indexing Limits',
+    description:
+      'Per-user limits on embedding files outside a data lake, and the minimum interval between ' +
+      'changes of a scope owner\'s chunk size. Budgets are USD; 0 means stop, not "use the default".',
+    icon: 'Savings',
+    settings: [
+      { key: 'fileEmbeddingUserBudgetPerWindowUsd', order: 1 },
+      { key: 'fileEmbeddingUserTokensPerWindow', order: 2 },
+      { key: 'fileEmbeddingUserWindowHours', order: 3 },
+      { key: 'DefaultChunkSizeChangeCooldownHours', order: 4 },
+    ],
+  },
   VOICE_SESSION: {
     id: 'voiceSessionService',
     name: 'Voice Session Service',
@@ -2631,12 +2683,14 @@ export const API_SERVICE_GROUPS = {
       { key: 'paymentRiskFlagHostingNetwork', order: 37 },
       { key: 'requireThreeDSecureOnFirstPurchase', order: 38 },
       { key: 'threeDSecureNewAccountDays', order: 39 },
+      { key: 'requireCheckoutTermsConsent', order: 39.5 },
       { key: 'signupNetworkAlertsEnabled', order: 40 },
       { key: 'signupNetworkAlertWindowMinutes', order: 41 },
       { key: 'signupNetworkAlertMaxPerIp', order: 42 },
       { key: 'signupNetworkAlertMaxPerHostingAsn', order: 43 },
       { key: 'signupNetworkAlertMaxPerAsn', order: 44 },
       { key: 'shadowDetectionRecordingEnabled', order: 44.5 },
+      { key: 'shadowDetectionAutoGradeAfterDays', order: 44.6 },
       { key: 'paymentRiskAutoRefundEnabled', order: 45 },
       { key: 'paymentRiskAutoRefundMinUnspentPercent', order: 46 },
       { key: 'paymentRiskCheckoutMaxBlockedAttempts', order: 47 },
@@ -3567,6 +3621,61 @@ export const settingsMap = {
       clamp: (value: number) =>
         Math.min(Math.max(Math.floor(value), MIN_PASSAGE_TOKEN_TARGET), OVERSIZED_PASSAGE_TOKEN_THRESHOLD),
     },
+  }),
+  fileEmbeddingUserBudgetPerWindowUsd: makeNumberSetting({
+    key: 'fileEmbeddingUserBudgetPerWindowUsd',
+    name: 'Per-User File Embedding Budget (USD per window)',
+    defaultValue: FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_DEFAULT,
+    min: 0,
+    max: FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_MAX,
+    description:
+      'Most USD one user may spend embedding files outside a data lake per window (see the window-hours ' +
+      'setting), whether or not that work is billed to them. A file that would exceed it fails with a ' +
+      'message naming when the window resets. 0 stops non-lake file embedding.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 1,
+  }),
+  fileEmbeddingUserTokensPerWindow: makeNumberSetting({
+    key: 'fileEmbeddingUserTokensPerWindow',
+    name: 'Per-User File Embedding Tokens (per window)',
+    defaultValue: FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_DEFAULT,
+    min: 0,
+    max: FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_MAX,
+    int: true,
+    description:
+      'Most tokens one user may embed from files outside a data lake per window. Metered beside the USD ' +
+      'budget because an unpriced model meters as free. 0 stops non-lake file embedding.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 2,
+  }),
+  fileEmbeddingUserWindowHours: makeNumberSetting({
+    key: 'fileEmbeddingUserWindowHours',
+    name: 'Per-User File Embedding Window (hours)',
+    defaultValue: FILE_EMBEDDING_USER_WINDOW_HOURS_DEFAULT,
+    min: 1,
+    max: FILE_EMBEDDING_USER_WINDOW_HOURS_MAX,
+    int: true,
+    description:
+      "Length of the per-user file embedding window in hours. The window opens at a user's first " +
+      'embedding after the previous one closed.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 3,
+  }),
+  DefaultChunkSizeChangeCooldownHours: makeNumberSetting({
+    key: 'DefaultChunkSizeChangeCooldownHours',
+    name: 'Chunk Size Change Cooldown (hours)',
+    defaultValue: DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_DEFAULT,
+    min: 0,
+    max: DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_MAX,
+    description:
+      'Minimum hours between two changes (set or clear) of one organization or owner Default Chunk Size ' +
+      "override. A new chunk size re-embeds that owner's files. 0 disables the cooldown.",
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 4,
   }),
   ModerationEnabled: makeBooleanSetting({
     key: 'ModerationEnabled',
@@ -4644,7 +4753,8 @@ export const settingsMap = {
     key: 'serverStatus',
     name: 'Server Status',
     defaultValue: ServerStatusEnum.Live,
-    description: 'The current status of the server.',
+    description:
+      'What non-admins see. live: the app. maintenance: the maintenance screen. offline: the coming-soon page with the waitlist form. Admins always get the app.',
     category: 'Admin',
     group: API_SERVICE_GROUPS.ADMIN.id,
     order: 1,
@@ -5887,14 +5997,14 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
-      'Lets a Decisions model judge pending young-domain Signup Domain Holds (abuse, legitimate or insufficient evidence) from a summary of counts and flags: domain age, mail provider class, whether the site answers with content, signup timing and network spread. It never sees emails, IPs, the domain name or site text. It only ever confirms a hold (keeps free credits held) on a confident abuse verdict, recorded in the Admin Audit Log as a system action; it never releases one, and every other verdict leaves the hold for an admin. Paid from the platform key and budget. Off means no provider calls.',
+      'Lets a Decisions model judge pending young-domain Signup Domain Holds (abuse, legitimate or insufficient evidence) from a summary of counts and flags: domain age, mail provider class, whether the site answers with content, signup timing and network spread. It never sees emails, IPs, the domain name or site text. A confident abuse verdict confirms the hold (keeps free credits held). A confident legitimate verdict releases it only when auto-release is on and every code guard passes; an auto-released domain stays watched and is re-held on a new risk signal. Each decision is recorded in the Admin Audit Log as a system action, and every other verdict leaves the hold for an admin. Paid from the platform key and budget. Off means no provider calls.',
   }),
   signupDomainHoldAssessmentConfig: makeObjectSetting({
     key: 'signupDomainHoldAssessmentConfig',
     name: 'Advisory Assessment of Young-Domain Holds: Model and Limits',
     defaultValue: SignupDomainHoldAssessmentConfigSchema.parse({}),
     description:
-      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, holds per 10-minute run, and the least confidence in an abuse verdict that confirms a hold. The defaults make no calls. The assessment only ever confirms; it never releases a hold.',
+      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, holds per 10-minute run, the least confidence in an abuse verdict that confirms a hold, and the auto-release switch, confidence and caps. The defaults make no calls and never release.',
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     dependsOn: 'signupDomainHoldAssessmentEnabled',
@@ -5999,6 +6109,17 @@ export const settingsMap = {
     order: 39,
     dependsOn: 'requireThreeDSecureOnFirstPurchase',
   }),
+  // Read by apps/client/server/integrations/stripe/termsConsent.ts at subscription checkout.
+  requireCheckoutTermsConsent: makeBooleanSetting({
+    key: 'requireCheckoutTermsConsent',
+    name: 'Require Terms of Service Acceptance at Checkout',
+    defaultValue: false,
+    description:
+      'Adds a required Terms of Service checkbox to Stripe Checkout for subscriptions, and records the acceptance on the account. Stripe rejects the checkout unless a Terms of Service URL is set in the Stripe dashboard (Settings > Public details), so set that first in every Stripe account this stage uses.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    order: 39.5,
+  }),
   signupNetworkAlertsEnabled: makeBooleanSetting({
     key: 'signupNetworkAlertsEnabled',
     name: 'Signup Network Burst Alerts',
@@ -6065,6 +6186,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Record what the abuse detectors (such as the signup network burst and payment risk alerts) would have done to an account, for admin review on the Detections page. Recording never acts: no access, credits or API keys change.',
+  }),
+  shadowDetectionAutoGradeAfterDays: makeNumberSetting({
+    key: 'shadowDetectionAutoGradeAfterDays',
+    name: 'Shadow Detections: Auto-grade Stale Signup Bursts After (days)',
+    defaultValue: 7,
+    int: true,
+    min: 0,
+    max: 365,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Ungraded signup network burst detections older than this are graded insufficient evidence by automation, unless an account in them was since suspended, reinstated or flagged by another detector, or the latest advisory assessment says anything but insufficient evidence. Automation verdicts are shown apart from admin verdicts. 0 turns it off.',
   }),
   paymentRiskAutoRefundEnabled: makeBooleanSetting({
     key: 'paymentRiskAutoRefundEnabled',

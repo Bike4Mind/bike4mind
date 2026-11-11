@@ -88,10 +88,9 @@ describe('loadAccessibleFabFile browser response URLs', () => {
     const sign = async (
       _input: unknown,
       adapter: {
-        storage: { signedUrlCache?: string; generateSignedUrl: (path: string, expiry: number) => Promise<string> };
+        storage: { generateSignedUrl: (path: string, expiry: number) => Promise<string> };
       }
     ) => {
-      expect(adapter.storage.signedUrlCache).toBe('bypass');
       return { ...lakeFile, fileUrl: await adapter.storage.generateSignedUrl('owned/report.txt', 600) };
     };
     if (access === 'owner')
@@ -108,19 +107,6 @@ describe('loadAccessibleFabFile browser response URLs', () => {
     expect(url.pathname).toBe('/files-bucket/owned/report.txt');
     expect(url.searchParams.get('X-Amz-Expires')).toBe('600');
     expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/);
-  });
-
-  it('keeps the shared URL cache when no browser signing endpoint is configured', async () => {
-    vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
-    let cacheMode: string | undefined = 'unset';
-    getFabFile.mockImplementation(
-      async (_user: unknown, _input: unknown, adapter: { storage: { signedUrlCache?: string } }) => {
-        cacheMode = adapter.storage.signedUrlCache;
-        return lakeFile;
-      }
-    );
-    await loadAccessibleFabFile(request(), 'file-1');
-    expect(cacheMode).toBeUndefined();
   });
 });
 

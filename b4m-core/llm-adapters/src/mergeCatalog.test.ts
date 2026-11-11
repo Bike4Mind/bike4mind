@@ -1344,7 +1344,8 @@ describe('mergeCatalog: the apiSurface group', () => {
     toolChanges: true,
     deferredToolAddition: true,
   };
-  const served: ApiSurface = { ...inherited, refusalFallback: false } as ApiSurface;
+  // Refusal fallback comes from the seed tier, which lists claude-fable-5-2.
+  const served: ApiSurface = { ...inherited, refusalFallback: true } as ApiSurface;
   const discoveryRow = (apiSurface: Partial<ApiSurface> | null) =>
     row({
       modelId: fable52.id,
@@ -1416,9 +1417,10 @@ describe('mergeCatalog: the apiSurface group', () => {
 
   it('keeps the operator value over a later discovery row', () => {
     const later = { ...discoveryRow(inherited), effectiveFrom: new Date('2026-03-01T00:00:00Z') };
-    const [merged] = mergeCatalog([], [operatorRow({ refusalFallback: true }), later], ANTHROPIC_KEY);
+    const [merged] = mergeCatalog([], [operatorRow({ refusalFallback: false }), later], ANTHROPIC_KEY);
 
-    expect(merged.refusalFallback).toBe(true);
+    expect(merged.refusalFallback).toBe(false);
+    expect(resolveApiSurface(merged).refusalFallback).toBe(false);
     expect(merged.toolSearch).toBe(true);
   });
 

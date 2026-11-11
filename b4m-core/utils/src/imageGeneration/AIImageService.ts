@@ -4,6 +4,7 @@ import {
   OpenAIImageSize,
   type OpenAIImageBackground,
   type ImageOutputFormat,
+  type BflEditRegion,
 } from '@bike4mind/common';
 
 export interface AIImageGenerationOptions {
@@ -60,6 +61,7 @@ export interface AIImageGenerationOptions {
 export type ImageEditOptions = Omit<AIImageGenerationOptions, 'size'> & {
   mask?: string | null;
   size?: OpenAIImageSize;
+  edit_regions?: BflEditRegion[];
   /**
    * gpt-image style-anchor images (URLs or data URLs), appended after the edit source in the
    * order given. Only OpenAIImageService.edit reads them; BFL and Gemini ignore them.

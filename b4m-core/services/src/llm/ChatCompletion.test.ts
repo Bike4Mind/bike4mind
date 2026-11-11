@@ -7253,6 +7253,74 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    it('prices the tool rounds a refused hop already ran as COGS on its refusal row', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      mockedGetLlmWithFallback.mockResolvedValue(null);
+      enableAdminFlags('enforceCredits');
+      mockDb.users = {
+        update: vi.fn(),
+        findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
+        incrementCredits: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
+      };
+      mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+      // Shaped like llm-adapters' SafetyRefusalError, which the services side matches by name.
+      const refusal = Object.assign(
+        new Error(`Anthropic safety classifier refusal for ${ChatModels.GPT4} - falling back to an alternative model`),
+        {
+          name: 'SafetyRefusalError',
+          usage: { inputTokens: 1000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 200 },
+        }
+      );
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(refusal),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: ChatModels.GPT4,
+          provider: ModelBackend.OpenAI,
+          status: 'refusal',
+          creditsCharged: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          providerInputTokens: 1000,
+          providerOutputTokens: 200,
+          settledBasis: 'provider',
+          costUsd: expect.closeTo(1000 * (10 / 1_000_000) + 200 * (30 / 1_000_000), 10),
+        })
+      );
+    });
+
     // Shared arrange for the usage-event gating tests below. `primaryComplete` drives the first hop;
     // when it throws, a fallback model answers 'Hello from the fallback'.
     const arrangeUsageEventScenario = (opts: {

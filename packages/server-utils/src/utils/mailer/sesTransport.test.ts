@@ -108,6 +108,7 @@ describe('SesTransport', () => {
       from: 'noreply@example.com',
       to: 'user@test.com',
       bcc: 'hidden@test.com',
+      messageId: '<contains-bcc@example.com>',
       subject: 'Report',
       html: '<p>Attached</p>',
       attachments: [{ filename: 'a.txt', content: 'x', contentType: 'text/plain' }],
@@ -117,7 +118,7 @@ describe('SesTransport', () => {
     expect(input.Destination?.BccAddresses).toEqual(['hidden@test.com']);
     const mime = rawText(input);
     expect(mime).toContain('To: user@test.com');
-    expect(mime.toLowerCase()).not.toContain('bcc');
+    expect(mime).not.toMatch(/^bcc:/im);
     expect(mime).not.toContain('hidden@test.com');
   });
 

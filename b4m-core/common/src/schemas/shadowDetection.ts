@@ -32,10 +32,18 @@ export const SELF_ASSESSED_SHADOW_DETECTORS: readonly ShadowDetector[] = ['signu
 /**
  * The action the detector's policy maps the detection to. contain/suspend/restrict match the admin
  * bulk user actions; blockIp is for actors with no signed-in account, where containing a user is not
- * possible. confirmHold/none are the signup domain hold assessment's outcomes (confirm the hold, or
- * leave it for an admin).
+ * possible. confirmHold/releaseHold/none are the signup domain hold assessment's outcomes (confirm the
+ * hold, release it, or leave it for an admin).
  */
-export const SHADOW_DETECTION_ACTIONS = ['contain', 'suspend', 'restrict', 'blockIp', 'confirmHold', 'none'] as const;
+export const SHADOW_DETECTION_ACTIONS = [
+  'contain',
+  'suspend',
+  'restrict',
+  'blockIp',
+  'confirmHold',
+  'releaseHold',
+  'none',
+] as const;
 export type ShadowDetectionAction = (typeof SHADOW_DETECTION_ACTIONS)[number];
 
 export const SHADOW_DETECTION_VERDICTS = [
@@ -92,10 +100,21 @@ export type ShadowDetectionPayment = z.infer<typeof shadowDetectionPaymentSchema
 /**
  * Where a verdict came from. `review` is a grade recorded on the Detections page; `suspension` and
  * `reinstatement` are recorded for the admin who suspended or reinstated an account the detection
- * names. Absent on entries written before the field existed, which were all reviews.
+ * names; `automation` is the stale-detection grader (apps/client/server/security/shadowDetectionAutoGrade.ts),
+ * which never counts as a human verdict. Absent on entries written before the field existed, which
+ * were all reviews.
  */
-export const SHADOW_DETECTION_VERDICT_SOURCES = ['review', 'suspension', 'reinstatement'] as const;
+export const SHADOW_DETECTION_VERDICT_SOURCES = ['review', 'suspension', 'reinstatement', 'automation'] as const;
 export type ShadowDetectionVerdictSource = (typeof SHADOW_DETECTION_VERDICT_SOURCES)[number];
+
+/** reviewerId on an `automation` verdict entry: no admin made it. */
+export const SHADOW_DETECTION_AUTOMATION_REVIEWER_ID = 'automation';
+
+/** True when the record's latest verdict was recorded by the automation grader. */
+export const isAutomationVerdict = (item: {
+  verdict: ShadowDetectionVerdict | null;
+  verdicts: readonly { source?: ShadowDetectionVerdictSource }[];
+}): boolean => item.verdict !== null && item.verdicts.at(-1)?.source === 'automation';
 
 export const shadowDetectionVerdictEntrySchema = z.object({
   verdict: z.enum(SHADOW_DETECTION_VERDICTS),
@@ -146,7 +165,10 @@ export const shadowDetectionSummaryRowSchema = z.object({
   confirmedAbuse: z.number(),
   legitimateHuman: z.number(),
   legitimateAutomation: z.number(),
+  /** insufficient_evidence verdicts given by a reviewer; automation verdicts are counted apart. */
   insufficientEvidence: z.number(),
+  /** Records whose latest verdict is the automation grader's; never in the verdict counts above. */
+  automated: z.number(),
 });
 export type ShadowDetectionSummaryRow = z.infer<typeof shadowDetectionSummaryRowSchema>;
 
@@ -159,7 +181,8 @@ export type ShadowDetectionList = z.infer<typeof shadowDetectionListSchema>;
 
 export const shadowDetectionListQuerySchema = z.object({
   detector: z.enum(SHADOW_DETECTORS).optional(),
-  verdict: z.enum([...SHADOW_DETECTION_VERDICTS, 'unreviewed']).optional(),
+  /** `automated` lists records whose latest verdict is the automation grader's. */
+  verdict: z.enum([...SHADOW_DETECTION_VERDICTS, 'unreviewed', 'automated']).optional(),
 });
 export type ShadowDetectionListQuery = z.infer<typeof shadowDetectionListQuerySchema>;
 
@@ -171,6 +194,35 @@ export const shadowDetectionVerdictRequestSchema = z.object({
   reason: z.unknown(),
 });
 export type ShadowDetectionVerdictRequest = z.infer<typeof shadowDetectionVerdictRequestSchema>;
+
+/** Detections one bulk verdict request may grade. */
+export const SHADOW_DETECTION_BULK_VERDICT_LIMIT = 200;
+
+/**
+ * One verdict and reason for many detections. Each item names the revision it was selected at, so a
+ * record graded by someone else since then is reported back as a conflict instead of overwritten.
+ */
+export const shadowDetectionBulkVerdictRequestSchema = z.object({
+  items: z
+    .array(z.object({ id: ObjectIdStringSchema, expectedRevision: z.number().int().min(0) }))
+    .min(1)
+    .max(SHADOW_DETECTION_BULK_VERDICT_LIMIT)
+    .refine(items => new Set(items.map(item => item.id.toLowerCase())).size === items.length, 'Duplicate detection id'),
+  verdict: z.enum(SHADOW_DETECTION_VERDICTS),
+  reason: z.unknown(),
+});
+export type ShadowDetectionBulkVerdictRequest = z.infer<typeof shadowDetectionBulkVerdictRequestSchema>;
+
+export const shadowDetectionBulkVerdictResponseSchema = z.object({
+  graded: z.array(shadowDetectionItemSchema),
+  /** Records changed since they were selected, at their current state; not graded. */
+  conflicts: z.array(shadowDetectionItemSchema),
+  /** Ids that no longer exist (e.g. purged with a deleted account). */
+  missing: z.array(z.string()),
+  /** Ids whose write errored; they may or may not have been graded. */
+  failed: z.array(z.string()),
+});
+export type ShadowDetectionBulkVerdictResponse = z.infer<typeof shadowDetectionBulkVerdictResponseSchema>;
 
 /**
  * Suspension reasons that mean the admin judged the account abusive, so its open detections are graded

@@ -69,6 +69,14 @@ const h = vi.hoisted(() => ({
     owner: { type: 'user', id: 'owner-1' } as { type: string; id: string } | undefined,
   })),
   releaseOwnerEmbeddingSpend: vi.fn(async () => undefined),
+  fileWindowRelease: vi.fn(async () => undefined),
+  enforceFileEmbeddingSpendWindow: vi.fn(),
+  FileEmbeddingSpendDeniedError: class FileEmbeddingSpendDeniedError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'FileEmbeddingSpendDeniedError';
+    }
+  },
   // Mirrors the real resolver's rule closely enough for the handler's branch: batch uploads and
   // tag-joined members are both lake work, everything else is not. Its own decision table is
   // pinned in resolveIngestSpendScope.test.ts.
@@ -154,6 +162,11 @@ vi.mock('@bike4mind/services', () => ({
         this.retryAfterMs = options?.retryAfterMs;
       }
     },
+  },
+  fileEmbeddingService: {
+    enforceFileEmbeddingSpendWindow: h.enforceFileEmbeddingSpendWindow,
+    FileEmbeddingSpendDeniedError: h.FileEmbeddingSpendDeniedError,
+    FileEmbeddingLimitResolutionError: class FileEmbeddingLimitResolutionError extends Error {},
   },
   scopedSettingsService: { resolveScopedSetting: vi.fn(), scopeForLake: vi.fn() },
 }));
@@ -1663,6 +1676,131 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
     h.reserveRequestCredits.mockResolvedValue({ refund: h.reservationRefund, settle: h.reservationSettle });
     h.reservationSettle.mockResolvedValue(1);
     h.deferFailureIfRetryable.mockReset().mockResolvedValue(false);
+    h.enforceFileEmbeddingSpendWindow.mockResolvedValue({ release: h.fileWindowRelease });
+  });
+
+  it('gives the window reservation back when the provider call fails', async () => {
+    h.getVector.mockRejectedValueOnce(new Error('provider 503'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('provider 503');
+
+    expect(h.fileWindowRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the window reservation back when the holder cannot cover the credit hold', async () => {
+    h.reserveRequestCredits.mockRejectedValueOnce(
+      Object.assign(new Error('insufficient credits'), { additionalInfo: { errorCode: 'insufficient_credits' } })
+    );
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.fileWindowRelease).toHaveBeenCalledTimes(1);
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'insufficient credits');
+  });
+
+  it('keeps the provider error when giving the window reservation back also fails', async () => {
+    h.getVector.mockRejectedValueOnce(new Error('provider 503'));
+    h.fileWindowRelease.mockRejectedValueOnce(new Error('cache down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('provider 503');
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('failed to release reservation'));
+  });
+
+  it('defers, without failing the file, when the window limits cannot be read on a non-final delivery', async () => {
+    const { fileEmbeddingService } = await import('@bike4mind/services');
+    h.enforceFileEmbeddingSpendWindow.mockRejectedValueOnce(
+      new fileEmbeddingService.FileEmbeddingLimitResolutionError('could not resolve file embedding limits')
+    );
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(
+      'could not resolve file embedding limits'
+    );
+
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+  });
+
+  it('gives the window reservation back, and rethrows for a retry, when the billing check fails', async () => {
+    h.isOperationalBillingEnabled.mockRejectedValueOnce(new Error('plan lookup down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(
+      'File indexing is temporarily unavailable'
+    );
+
+    expect(h.fileWindowRelease).toHaveBeenCalledTimes(1);
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+    expect(h.getVector).not.toHaveBeenCalled();
+  });
+
+  it('keeps the window reservation once the embedding succeeded', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.fileWindowRelease).not.toHaveBeenCalled();
+  });
+
+  it('stores user-safe copy when the window limits cannot be read on the last delivery', async () => {
+    const { fileEmbeddingService } = await import('@bike4mind/services');
+    h.enforceFileEmbeddingSpendWindow.mockRejectedValueOnce(
+      new fileEmbeddingService.FileEmbeddingLimitResolutionError('could not resolve file embedding limits')
+    );
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger).catch(() => undefined);
+
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith(
+      'ff1',
+      'File indexing is temporarily unavailable. Re-index the file to try again.'
+    );
+  });
+
+  it("reserves the uploader's file embedding window before any credit hold", async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceFileEmbeddingSpendWindow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        estimatedTokens: 5,
+        reservationId: expect.stringMatching(/^ff1:.+:[0-9a-f]{64}$/),
+      })
+    );
+    expect(h.enforceFileEmbeddingSpendWindow.mock.invocationCallOrder[0]).toBeLessThan(
+      h.reserveRequestCredits.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('names a redelivery of the same job with the same reservation id', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    const [first, second] = h.enforceFileEmbeddingSpendWindow.mock.calls.map(
+      ([params]) => (params as { reservationId: string }).reservationId
+    );
+    expect(second).toBe(first);
+  });
+
+  it('fails the file with the window message, without billing, embedding or retrying, on a window denial', async () => {
+    h.enforceFileEmbeddingSpendWindow.mockRejectedValueOnce(
+      new h.FileEmbeddingSpendDeniedError('file indexing limit reached')
+    );
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'file indexing limit reached');
+  });
+
+  it('does not apply the file window to data-lake work', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceFileEmbeddingSpendWindow).not.toHaveBeenCalled();
   });
 
   it('asks the billing policy about the uploader with the plan resolver', async () => {

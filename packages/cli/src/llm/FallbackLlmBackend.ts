@@ -1,4 +1,4 @@
-import type { IMessage, ModelInfo } from '@bike4mind/common';
+import { isProviderRefusalStopReason, MODEL_DECLINED_MESSAGE, type IMessage, type ModelInfo } from '@bike4mind/common';
 import type {
   ICompletionBackend,
   ICompletionOptions,
@@ -6,8 +6,32 @@ import type {
   IChoiceEndToolUse,
 } from '@bike4mind/llm-adapters';
 import { logger } from '../utils/Logger';
+import { ModelCallError } from './modelCallError';
 
 const SERVER_MODEL_PREFIX = 'local:srv-';
+
+const USAGE_FIELDS = [
+  'inputTokens',
+  'outputTokens',
+  'reasoningTokens',
+  'cacheReadInputTokens',
+  'cacheCreationInputTokens',
+  'cacheWrite1hInputTokens',
+  'creditsUsed',
+  'usdCost',
+] as const satisfies readonly (keyof CompletionInfo)[];
+
+type CompletionUsage = Pick<CompletionInfo, (typeof USAGE_FIELDS)[number]>;
+
+function addUsage(previous: CompletionUsage, current: CompletionUsage): CompletionUsage {
+  const combined: CompletionUsage = {};
+  for (const field of USAGE_FIELDS) {
+    if (previous[field] !== undefined || current[field] !== undefined) {
+      combined[field] = (previous[field] ?? 0) + (current[field] ?? 0);
+    }
+  }
+  return combined;
+}
 
 /**
  * LLM backend decorator that provides model-level fallback routing.
@@ -59,6 +83,7 @@ export class FallbackLlmBackend implements ICompletionBackend {
     const modelsToTry = [model, ...this.fallbackModels.filter(m => m !== model)];
 
     let lastError: Error | undefined;
+    let refusedUsage: CompletionUsage = {};
 
     for (let i = 0; i < modelsToTry.length; i++) {
       const modelToTry = modelsToTry[i];
@@ -70,17 +95,34 @@ export class FallbackLlmBackend implements ICompletionBackend {
       // double-content bug). Failures before any output, like rate limits and
       // auth errors, still fall back.
       let delivered = false;
+      // A refusal settled before anything reached the caller is held back so the next model can answer,
+      // as the server's declined-request error frame once was. The last model's refusal is delivered.
+      let refused = false;
+      const attemptUsage: CompletionUsage = {};
+      const canFallBack = i + 1 < modelsToTry.length;
       const trackingCallback = async (
         text: (string | null | undefined)[],
         completionInfo?: CompletionInfo
       ): Promise<void> => {
+        if (refused || (!delivered && canFallBack && isProviderRefusalStopReason(completionInfo?.stopReason))) {
+          refused = true;
+          // Frames report cumulative usage, so a trailing settlement replaces each reported field.
+          for (const field of USAGE_FIELDS) {
+            if (completionInfo?.[field] !== undefined) attemptUsage[field] = completionInfo[field];
+          }
+          return;
+        }
         delivered = true;
-        await callback(text, completionInfo);
+        await callback(
+          text,
+          completionInfo ? { ...completionInfo, ...addUsage(refusedUsage, completionInfo) } : undefined
+        );
       };
 
       try {
         await this.inner.complete(modelToTry, messages, options, trackingCallback);
-        return;
+        if (!refused) return;
+        throw new ModelCallError('refused', MODEL_DECLINED_MESSAGE);
       } catch (error) {
         // Abort, or output already delivered: propagate - no fallback
         if (options.abortSignal?.aborted || delivered) {
@@ -88,6 +130,7 @@ export class FallbackLlmBackend implements ICompletionBackend {
         }
 
         lastError = error instanceof Error ? error : new Error(String(error));
+        if (refused) refusedUsage = addUsage(refusedUsage, attemptUsage);
 
         const nextModel = modelsToTry[i + 1];
         if (nextModel) {

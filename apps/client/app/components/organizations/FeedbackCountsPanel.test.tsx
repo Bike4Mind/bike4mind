@@ -96,6 +96,16 @@ describe('FeedbackCountsPanel drill-down', () => {
     expect(screen.getByTestId('org-analysis-item-content-note').textContent).toContain('not shown here');
   });
 
+  it('words the note for a report with no stored text', () => {
+    useOrgFeedbackItem.mockReturnValue({ ...idle, data: { ...ITEM, contentStored: false } });
+    renderPanel();
+
+    fireEvent.click(screen.getByTestId('org-analysis-by-subject-row-product'));
+    fireEvent.click(screen.getByTestId('org-analysis-drilldown-row-f1'));
+
+    expect(screen.getByTestId('org-analysis-item-content-note').textContent).toBe('No text on file.');
+  });
+
   it('closes the drill-down when the same count is clicked again', () => {
     renderPanel();
 

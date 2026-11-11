@@ -428,6 +428,16 @@ describe('AnthropicBedrockBackend safety-classifier refusal fallback', () => {
     expect(() => backend.translateStreamChunk(ChatModels.CLAUDE_5_OPUS_BEDROCK, refusalDelta)).not.toThrow();
     expect(() => backend.translateChunk(ChatModels.CLAUDE_5_OPUS_BEDROCK, refusalResponse)).not.toThrow();
   });
+
+  it('settles a Bedrock Fable refusal when the caller has no fallback loop', () => {
+    const settle = { settleRefusal: true };
+    expect(
+      backend.translateStreamChunk(ChatModels.CLAUDE_FABLE_5_BEDROCK, refusalDelta, settle).chunk?.stopReason
+    ).toBe('refusal');
+    expect(backend.translateChunk(ChatModels.CLAUDE_FABLE_5_1_BEDROCK, refusalResponse, settle).chunk?.stopReason).toBe(
+      'refusal'
+    );
+  });
 });
 
 describe('AnthropicBedrockBackend non-streaming stop_reason', () => {
