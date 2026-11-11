@@ -44,6 +44,7 @@ import {
   DlqHistoryFilters,
 } from '@client/app/hooks/data/dlqManagement';
 import { AdminPermissionAction } from './shared/MissingPermission';
+import { formatDuration, formatExpiresIn, getDlqExpiry } from './dlqExpiry';
 
 const StatusChip: React.FC<{ status: 'success' | 'failed' | 'skipped' }> = ({ status }) => {
   const config = {
@@ -83,12 +84,43 @@ const StatsCard: React.FC<{
   );
 };
 
+const AgeExpiryCells: React.FC<{
+  sentTimestamp?: string;
+  retentionSeconds?: number;
+  messageId: string;
+}> = ({ sentTimestamp, retentionSeconds, messageId }) => {
+  const expiry = getDlqExpiry(sentTimestamp, retentionSeconds);
+  return (
+    <>
+      <td>
+        <Typography level="body-xs" data-testid={`dlq-age-${messageId}`}>
+          {expiry ? formatDuration(expiry.ageMs) : 'N/A'}
+        </Typography>
+      </td>
+      <td>
+        <Typography
+          level="body-xs"
+          color={expiry?.warn ? 'warning' : undefined}
+          fontWeight={expiry?.warn ? 'lg' : undefined}
+          data-testid={`dlq-expires-${messageId}`}
+          data-warn={expiry?.warn ? 'true' : 'false'}
+        >
+          {expiry ? formatExpiresIn(expiry) : 'N/A'}
+        </Typography>
+      </td>
+    </>
+  );
+};
+
 const MessageDrawer: React.FC<{
   message: DlqMessage | null;
+  retentionSeconds?: number;
   open: boolean;
   onClose: () => void;
-}> = ({ message, open, onClose }) => {
+}> = ({ message, retentionSeconds, open, onClose }) => {
   if (!message) return null;
+
+  const expiry = getDlqExpiry(message.sentTimestamp, retentionSeconds);
 
   const formatBody = (body: string) => {
     try {
@@ -133,6 +165,17 @@ const MessageDrawer: React.FC<{
                 Sent At
               </Typography>
               <Typography level="body-sm">{new Date(parseInt(message.sentTimestamp, 10)).toLocaleString()}</Typography>
+            </Box>
+          )}
+
+          {expiry && (
+            <Box>
+              <Typography level="body-sm" fontWeight="bold">
+                Age / Expires in
+              </Typography>
+              <Typography level="body-sm" color={expiry.warn ? 'warning' : undefined} data-testid="dlq-drawer-expiry">
+                {formatDuration(expiry.ageMs)} old, expires in {formatExpiresIn(expiry)}
+              </Typography>
             </Box>
           )}
 
@@ -449,6 +492,8 @@ const DlqReplayTab: React.FC = () => {
                 <th style={{ width: 250 }}>Message ID</th>
                 <th>Body Preview</th>
                 <th style={{ width: 160 }}>Sent At</th>
+                <th style={{ width: 90 }}>Age</th>
+                <th style={{ width: 110 }}>Expires in</th>
                 <th style={{ width: 100 }}>Receives</th>
                 <th style={{ width: 80 }}>Actions</th>
               </tr>
@@ -456,14 +501,14 @@ const DlqReplayTab: React.FC = () => {
             <tbody>
               {messagesLoading && (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: 24 }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: 24 }}>
                     <CircularProgress size="sm" />
                   </td>
                 </tr>
               )}
               {!messagesLoading && messagesError && (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: 24 }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: 24 }}>
                     <Typography level="body-sm" color="danger">
                       Failed to load messages. Try refreshing.
                     </Typography>
@@ -472,7 +517,7 @@ const DlqReplayTab: React.FC = () => {
               )}
               {!messagesLoading && !messagesError && (!messages || messages.length === 0) && (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: 24 }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: 24 }}>
                     <Typography level="body-sm" color="neutral">
                       No messages in this DLQ
                     </Typography>
@@ -504,6 +549,11 @@ const DlqReplayTab: React.FC = () => {
                       {msg.sentTimestamp ? new Date(parseInt(msg.sentTimestamp, 10)).toLocaleString() : 'N/A'}
                     </Typography>
                   </td>
+                  <AgeExpiryCells
+                    sentTimestamp={msg.sentTimestamp}
+                    retentionSeconds={selectedQueueInfo?.messageRetentionSeconds}
+                    messageId={msg.messageId}
+                  />
                   <td>
                     <Typography level="body-xs">{msg.approximateReceiveCount ?? 'N/A'}</Typography>
                   </td>
@@ -689,7 +739,12 @@ const DlqReplayTab: React.FC = () => {
       )}
 
       {/* Message Detail Drawer */}
-      <MessageDrawer message={selectedMessage} open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+      <MessageDrawer
+        message={selectedMessage}
+        retentionSeconds={selectedQueueInfo?.messageRetentionSeconds}
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+      />
 
       {/* Confirmation Modal - Replay All */}
       <Modal open={confirmOpen} onClose={() => setConfirmOpen(false)}>
