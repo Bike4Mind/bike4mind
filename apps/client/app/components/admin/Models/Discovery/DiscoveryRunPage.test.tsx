@@ -229,7 +229,7 @@ describe('DiscoveryRunPage decisions', () => {
     }
   });
 
-  it('keeps a write-mode flag card for a model the list does not carry, with its id and Open model', async () => {
+  it('keeps a write-mode flag card for a model the list does not carry, with Open prices and no Open model', async () => {
     rows = [];
     await renderLoaded();
 
@@ -237,9 +237,9 @@ describe('DiscoveryRunPage decisions', () => {
     expect(card).toHaveTextContent('gpt-5.6-luna');
     expect(screen.getByTestId('discovery-decision-flag-gpt-5.6-luna')).toHaveTextContent(LUNA_FLAG.detail);
     expect(screen.queryByTestId('discovery-decision-not-saved-gpt-5.6-luna')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('discovery-decision-action-gpt-5.6-luna')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('discovery-decision-open-gpt-5.6-luna'));
-    expect(m.nav.openModel).toHaveBeenCalledWith('gpt-5.6-luna');
+    expect(screen.queryByTestId('discovery-decision-open-gpt-5.6-luna')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('discovery-decision-action-gpt-5.6-luna'));
+    expect(m.nav.openPrices).toHaveBeenCalledWith('gpt-5.6-luna');
   });
 
   it('shows no button when the server gives the reason no fix action', async () => {
@@ -285,6 +285,7 @@ describe('DiscoveryRunPage decisions', () => {
     renderPage();
 
     expect(await screen.findByTestId('discovery-decision-action-gpt-5.6-luna')).toHaveTextContent('Open prices');
+    expect(screen.queryByTestId('discovery-decision-open-gpt-5.6-luna')).not.toBeInTheDocument();
   });
 
   it('skips a touched model that no longer needs a decision', async () => {
@@ -323,6 +324,7 @@ describe('DiscoveryRunPage decisions', () => {
     );
     expect(screen.getByTestId('discovery-decision-reasons-gpt-planned')).toHaveTextContent('No price yet.');
     expect(screen.queryByTestId('discovery-decision-action-gpt-planned')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('discovery-decision-open-gpt-planned')).not.toBeInTheDocument();
   });
 
   it('shows no blocker or flag code outside Run details', async () => {

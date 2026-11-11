@@ -46,6 +46,8 @@ type Decision = {
   reasons: string[];
   flags: RunPriceFlag[];
   notSaved: boolean;
+  /** The model list carries it, so it has a page to open. */
+  hasRow: boolean;
   /** The first open reason's server fix action, on the model's own row. */
   fix: { action: AdminModelFixAction; row: AdminModelRow } | null;
   /** Flags with no open reason to act on: the price is the decision. */
@@ -56,10 +58,10 @@ const unique = (ids: readonly string[]) => [...new Set(ids)];
 
 /**
  * One card per model this run touched whose status is Needs review now (docs/admin-models-spec.md section 5.3),
- * plus this run's price flags, which phase 1 does not yet persist on the model. A report-mode run's new models have
- * no catalog row, so they show what they would need and no action; a write-mode flag on a model the list does not
- * carry still gets a card. Without the index (`indexFailed`) only the run's own findings are known, so nothing is
- * claimed about catalog rows.
+ * plus this run's price flags, which phase 1 does not yet persist on the model. A model the list does not carry (a
+ * report-mode run's new model, or a write-mode flag on one) still gets a card, with no model page to open: Open prices
+ * when it has price flags, otherwise no action. Without the index (`indexFailed`) only the run's own findings are
+ * known, so nothing is claimed about catalog rows.
  */
 function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexFailed: boolean): Decision[] {
   const flagsByModel = new Map<string, RunPriceFlag[]>();
@@ -86,8 +88,9 @@ function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexFailed: boole
         reasons: blockers.map(blockerCopy),
         flags,
         notSaved: run.mode === 'report' && !indexFailed,
+        hasRow: false,
         fix: null,
-        openPrices: indexFailed && flags.length > 0,
+        openPrices: flags.length > 0,
       });
       continue;
     }
@@ -100,6 +103,7 @@ function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexFailed: boole
       reasons: open.map(reason => reason.message),
       flags,
       notSaved: false,
+      hasRow: true,
       fix: fixAction ? { action: fixAction, row } : null,
       openPrices: open.length === 0,
     });
@@ -108,7 +112,7 @@ function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexFailed: boole
 }
 
 function DecisionCard({ decision, index }: { decision: Decision; index: ModelIndex }) {
-  const { modelId, reasons, flags, notSaved, fix } = decision;
+  const { modelId, reasons, flags, notSaved, hasRow, fix } = decision;
   const { openModel, openPrices } = useModelsNavigation();
   const actionTestId = `discovery-decision-action-${modelId}`;
   return (
@@ -136,15 +140,17 @@ function DecisionCard({ decision, index }: { decision: Decision; index: ModelInd
           <Typography level="body-xs" fontFamily="code" sx={{ overflowWrap: 'anywhere' }}>
             {modelId}
           </Typography>
-          <Link
-            component="button"
-            type="button"
-            level="body-sm"
-            onClick={() => void openModel(modelId)}
-            data-testid={`discovery-decision-open-${modelId}`}
-          >
-            Open model
-          </Link>
+          {hasRow && (
+            <Link
+              component="button"
+              type="button"
+              level="body-sm"
+              onClick={() => void openModel(modelId)}
+              data-testid={`discovery-decision-open-${modelId}`}
+            >
+              Open model
+            </Link>
+          )}
         </Stack>
       </Fact>
       {notSaved && (
