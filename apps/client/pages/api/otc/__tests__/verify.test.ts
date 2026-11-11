@@ -71,7 +71,7 @@ vi.mock('@server/auth/networkMeta', () => ({
 }));
 const mockAssertSignupNetworkWithinLimits = vi.fn().mockResolvedValue(undefined);
 const mockSignupRiskCollector = vi.fn();
-vi.mock('@server/auth/signupNetworkLimits', () => ({
+vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({
   assertSignupNetworkWithinLimits: (...a: any[]) => mockAssertSignupNetworkWithinLimits(...a),
   createSignupRiskCollector: () => mockSignupRiskCollector,
 }));

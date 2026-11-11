@@ -10,7 +10,7 @@ import { AuthEvents, AuthStrategy, clientIdFromAuthorizeRedirect } from '@bike4m
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { LOG_URL_TRUNCATE_LENGTH } from '@server/auth/oktaConstants';
 import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
-import { isLocalAppUrl } from '@server/utils/validators';
+import { isLocalAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import type { OAuthUser } from '@server/utils/auth/verifyCallback';

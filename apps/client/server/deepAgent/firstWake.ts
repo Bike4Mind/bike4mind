@@ -4,7 +4,7 @@ import { createReActRunAct, noopRunAct, runWakeCycle, type WakeDeps, type WakeOu
 import '@bike4mind/server-utils/deepAgent/contributedToolbelts';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
-import { createDeepAgentToolMaterializer } from './toolMaterializer';
+import { createDeepAgentToolMaterializer } from '@bike4mind/server-utils/deepAgent/toolMaterializer';
 import { loadLinkedAgentContext } from '@bike4mind/server-utils/deepAgent/missions';
 import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';

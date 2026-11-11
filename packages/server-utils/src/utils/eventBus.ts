@@ -134,7 +134,7 @@ export const EmailEvents = {
 
 /**
  * Push to a user's first-party native clients. Publish through publishPushNotification
- * (apps/client/server/utils/pushNotifications.ts), which never throws into the host path; the consumer is
+ * (./pushNotifications.ts), which never throws into the host path; the consumer is
  * apps/workers/src/events/sendPush.ts.
  */
 export const NotificationEvents = {

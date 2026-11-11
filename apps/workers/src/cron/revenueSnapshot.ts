@@ -1,7 +1,7 @@
 /**
  * Writes the admin Revenue trend's RevenueSnapshot for the UTC day that just ended; upsert, so reruns replace it.
  * Schedule: daily at 00:20 UTC (infra/cron.ts revenueSnapshot); a missed day stays a gap, only current state exists.
- * Self-host: none yet. Math: apps/client/server/admin/revenue/revenueSnapshot.ts.
+ * Self-host: none yet. Math: packages/server-utils/src/admin/revenue/revenueSnapshot.ts.
  */
 
 import { Context } from 'aws-lambda';
@@ -10,7 +10,7 @@ import { Logger } from '@bike4mind/observability';
 import { connectDB, revenueSnapshotRepository } from '@bike4mind/database';
 import { isStripeConfigured } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { computeRevenueSnapshot } from '@server/admin/revenue/revenueSnapshot';
+import { computeRevenueSnapshot } from '@bike4mind/server-utils/admin/revenue/revenueSnapshot';
 import { Resource } from 'sst';
 
 const DAY_MS = 86_400_000;

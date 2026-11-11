@@ -5,7 +5,7 @@ import {
   withTransaction,
   type PendingCreditHold,
 } from '@bike4mind/database';
-import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
 import { creditService } from '@bike4mind/services';
 import type { CompletionCreditHolds } from '@bike4mind/services/cliCompletions';
 import type { Logger } from '@bike4mind/observability';

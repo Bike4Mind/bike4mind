@@ -71,7 +71,7 @@ vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
   loadFreeTierAllowedModels: async () => undefined,
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 0 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ resolveBillingOrgId: vi.fn() }));
 vi.mock('openai', () => ({
   default: class {

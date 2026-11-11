@@ -54,7 +54,7 @@ import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecond
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
-import { assertSignupNetworkWithinLimits } from '@server/auth/signupNetworkLimits';
+import { assertSignupNetworkWithinLimits } from '@bike4mind/server-utils/auth/signupNetworkLimits';
 import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';

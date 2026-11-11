@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { assertCustomMcpEnabled } from '@server/mcpConnections/customMcpAccess';
+import { assertCustomMcpEnabled } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { completeUserConnectionOAuth } from '@server/mcpConnections/oauth/completeOAuth';
 import { parseMcpConnectionBody } from '@server/validators/mcpConnectionValidators';
 

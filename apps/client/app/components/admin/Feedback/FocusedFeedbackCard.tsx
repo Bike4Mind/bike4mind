@@ -7,6 +7,7 @@ import { getFeedbackDisplayContent } from './types';
 import { feedbackRecordQueryKey } from './queryKeys';
 import FeedbackRowLinks from './FeedbackRowLinks';
 import HelpContextChip from './HelpContextChip';
+import ClientContextChips from './ClientContextChips';
 import { FEEDBACK_STATUS_LABELS } from './constants';
 
 interface FocusedFeedbackCardProps {
@@ -72,6 +73,7 @@ const FocusedFeedbackCard = ({ feedbackId, onDismiss }: FocusedFeedbackCardProps
                 <Typography level="body-xs">{relativeTimeFormat(new Date(feedbackItem.createdAt))}</Typography>
               </Stack>
               <HelpContextChip feedbackItem={feedbackItem} />
+              <ClientContextChips feedbackItem={feedbackItem} />
               <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap' }}>
                 {getFeedbackDisplayContent(feedbackItem, 'No content')}
               </Typography>

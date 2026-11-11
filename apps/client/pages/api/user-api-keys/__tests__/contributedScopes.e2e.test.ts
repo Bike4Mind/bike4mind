@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: vi.fn().mockResolvedValue(undefined) }));
 const scopeAccess = vi.hoisted(() => ({ entitlements: new Set<string>() }));
-vi.mock('@server/entitlements', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
   getUserEntitlements: vi.fn(async () => [...scopeAccess.entitlements]),
   getRequestEntitlements: vi.fn(async () => [...scopeAccess.entitlements]),
 }));

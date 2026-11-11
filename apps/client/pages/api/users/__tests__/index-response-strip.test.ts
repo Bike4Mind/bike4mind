@@ -32,7 +32,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@server/users/sharedWorkspaceUserIds', () => ({ findSharedWorkspaceUserIds: vi.fn() }));
 vi.mock('@server/users/pendingProjectInviteeIds', () => ({ findPendingProjectInviteeIds: vi.fn() }));
-vi.mock('@server/users/signupAnomaly', () => ({ getDomainGroups: vi.fn(), SIGNUP_SCAN_LIMIT: 5000 }));
+vi.mock('@bike4mind/server-utils/users/signupAnomaly', () => ({ getDomainGroups: vi.fn(), SIGNUP_SCAN_LIMIT: 5000 }));
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 vi.mock('@bike4mind/utils/escapeRegex', () => ({ escapeRegex: (s: string) => s }));
 

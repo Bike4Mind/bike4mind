@@ -11,7 +11,7 @@ import {
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { loadFindingForLake } from '@server/dataLakes/loadFindingForLake';
 import { recordFindingResolutionBelief } from '@server/dataLakes/recordFindingResolutionBelief';
 import { respond } from '@server/utils/respond';

@@ -2774,6 +2774,9 @@ importers:
       '@googleapis/drive':
         specifier: ^22.0.0
         version: 22.0.0
+      '@modelcontextprotocol/sdk':
+        specifier: 1.32.1
+        version: 1.32.1(zod@4.6.6)
       '@octokit/auth-app':
         specifier: ^8.2.0
         version: 8.2.0

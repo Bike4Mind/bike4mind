@@ -8,7 +8,7 @@ import {
   CLI_ACCESS_DENIED_MESSAGE,
   SUBSCRIPTION_REQUIRED_ERROR,
   isApiKeyAccessAllowed,
-} from '@server/utils/apiKeyAccessGate';
+} from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 import { LEGACY_DEVICE_CLIENT_ID, OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';

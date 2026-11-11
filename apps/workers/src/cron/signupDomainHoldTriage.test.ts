@@ -26,7 +26,7 @@ vi.mock('@bike4mind/services', () => ({
   userService: { getDomainIntel: vi.fn() },
 }));
 vi.mock('./signupDomainAgeRecheck', () => ({ runSignupDomainAgeRecheck: h.runAgeRecheck }));
-vi.mock('@server/security/signupDomainHoldAssessment/signupDomainHoldAssessment', () => ({
+vi.mock('@workers/security/signupDomainHoldAssessment/signupDomainHoldAssessment', () => ({
   runSignupDomainHoldAssessments: h.runAssessments,
   defaultSignupDomainHoldAssessmentDeps: h.assessmentDeps,
 }));

@@ -28,6 +28,7 @@ const TransformBatchSchema = new Schema<ITransformBatch, ITransformBatchModel, I
             customId: { type: String, required: true },
             clientRef: { type: String, required: true },
             model: { type: String },
+            executedModel: { type: String },
           },
           { _id: false }
         ),

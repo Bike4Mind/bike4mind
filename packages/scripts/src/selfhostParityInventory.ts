@@ -143,6 +143,7 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'sst.aws.Cluster', reason: 'Container host for inventoried sst.aws.Service declarations.' },
   { shape: 'aws.ec2.SecurityGroup', reason: 'Network plumbing.' },
   { shape: 'aws.ec2.SecurityGroupRule', reason: 'Network plumbing.' },
+  { shape: 'aws.ec2.VpcEndpoint', reason: 'Network plumbing.' },
   { shape: 'aws.servicediscovery.Service', reason: 'Service discovery plumbing.' },
   { shape: 'aws.servicediscovery.PrivateDnsNamespace', reason: 'Service discovery plumbing.' },
   { shape: 'aws.wafv2.WebAcl', reason: 'Hosted edge protection, no compute.' },

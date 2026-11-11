@@ -27,8 +27,8 @@ import { subscriptionPlanCatalog } from '@server/admin/subscriptionsList/adminSu
 import { toAdminSubscriptionRows, type SubscriptionDoc } from '@server/admin/subscriptionsList/listAdminSubscriptions';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { applyStripeSubscriptionState } from '@server/subscriptions/applyStripeSubscriptionState';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { applyStripeSubscriptionState } from '@bike4mind/server-utils/subscriptions/applyStripeSubscriptionState';
 import { stripeSyncChanges } from '@server/subscriptions/stripeSyncChanges';
 import {
   denySelfAdminAction,

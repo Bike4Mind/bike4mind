@@ -7,7 +7,7 @@ import type {
   AdminUsersBulkPreviewRequest,
   AdminUsersBulkResult,
   AdminUsersBulkUndoResult,
-} from '@client/app/utils/adminUsersBulk';
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import type { ApprovalPendingResponse } from '@client/app/hooks/data/adminApprovals';
 
 /** Dry run: writes nothing. `null` keeps it idle while the dialog's inputs are incomplete. */

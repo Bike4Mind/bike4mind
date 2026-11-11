@@ -18,7 +18,7 @@ import {
   type OAuthFixtureOptions,
   type OAuthFixtureServer,
 } from '../../../../../b4m-core/mcp/src/remote/__fixtures__/oauthFixtureServer';
-import type { CustomMcpContext } from '../customMcpAccess';
+import type { CustomMcpContext } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 
 /**
  * Sign-in, refresh, revoke and the bad-state cases end to end: a real mongod (the lease and the
@@ -47,7 +47,7 @@ vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
     create: () => ({ success: vi.fn(), failure: vi.fn(), rateLimited: vi.fn() }),
   },
 }));
-vi.mock('./oauthFetch', () => ({
+vi.mock('@bike4mind/server-utils/mcpConnections/oauth/oauthFetch', () => ({
   withOAuthFetch: (_network: unknown, override: typeof fetch | undefined, fn: (f: typeof fetch) => Promise<unknown>) =>
     fn(override ?? fx.fetch),
 }));
