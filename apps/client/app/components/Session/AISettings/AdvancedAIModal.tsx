@@ -33,7 +33,6 @@ import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import {
   B4MLLMTools,
   BFL_SAFETY_TOLERANCE,
-  ChatModels,
   FIXED_TEMPERATURE_MODELS,
   NO_TEMPERATURE_MODELS,
   IMAGE_SIZE_CONSTRAINTS,
@@ -47,7 +46,6 @@ import {
   OpenAIImageQuality,
   OpenAIImageSize,
   OpenAIImageStyle,
-  REASONING_SUPPORTED_MODELS,
   UserReasoningEffort,
   isKontextModel as isKontextImageModel,
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
@@ -113,6 +111,7 @@ import {
   withInertNote,
 } from './inertImageSettings';
 import { imageSizeUpdate } from './imageSizeUpdate';
+import { reasoningEffortOptionsFor, type ReasoningEffortOption } from './reasoningEffortOptions';
 import { defaultImageSize, getAvailableImageSizes, showsImageSizeRow } from './imageSizeOptions';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
@@ -321,31 +320,20 @@ const SAFETY_TOLERANCE_OPTIONS = Array.from(
   }
 );
 
-const BASE_REASONING_EFFORT_OPTIONS: { value: UserReasoningEffort; label: string }[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'low', label: 'Low (Fast)' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High (Best)' },
-];
-
-const XHIGH_OPTION = { value: 'xhigh' as UserReasoningEffort, label: 'Extra High (Best)' };
-
-const GPT5_2_MODEL_IDS: ReadonlySet<string> = new Set([ChatModels.GPT5_2, ChatModels.GPT5_2_CHAT_LATEST]);
-
 const ReasoningEffortSelector: React.FC<{
   model: ModelName;
   mode: 'dark' | 'light';
-}> = ({ model, mode }) => {
-  const isGPT52 = GPT5_2_MODEL_IDS.has(model);
-  const options = isGPT52
-    ? [...BASE_REASONING_EFFORT_OPTIONS.map(o => (o.value === 'high' ? { ...o, label: 'High' } : o)), XHIGH_OPTION]
-    : BASE_REASONING_EFFORT_OPTIONS;
+  options: ReasoningEffortOption[];
+  readOnly: boolean;
+}> = ({ model, mode, options, readOnly }) => {
   const { currentUser, setCurrentUser } = useUser();
   const currentValue: UserReasoningEffort = currentUser?.preferredReasoningEffort ?? 'auto';
+  const offersCurrent = options.some(o => o.value === currentValue);
 
-  // Reset to 'auto' if current value is 'xhigh' but model doesn't support it
+  // The preference is shared by every model, so a level this one does not offer goes back to 'auto'.
+  // Not while previewing: that would rewrite the active model's setting from a model that is not running.
   useEffect(() => {
-    if (currentValue === 'xhigh' && !isGPT52 && currentUser) {
+    if (!offersCurrent && !readOnly && currentUser) {
       api
         .put(`/api/users/${currentUser.id}/update`, { preferredReasoningEffort: 'auto' })
         .then(response => setCurrentUser(response.data))
@@ -368,6 +356,7 @@ const ReasoningEffortSelector: React.FC<{
   return (
     <SettingsRow label="Reasoning Effort" tooltip={FIELD_TOOLTIPS.reasoningEffort}>
       <Select
+        data-testid="reasoning-effort-select"
         value={currentValue}
         onChange={handleChange}
         indicator={<KeyboardArrowDownIcon />}
@@ -514,14 +503,16 @@ const ResetButton: React.FC<{
   const resetScope = isImageModel(model)
     ? 'temperature and every image setting, including the seed'
     : 'temperature, output tokens, response history and spoken words';
-  const resetExclusions = REASONING_SUPPORTED_MODELS.has(model)
-    ? 'Tools and reasoning effort are not affected.'
-    : 'Tools are not affected.';
+  const resetExclusions =
+    reasoningEffortOptionsFor(model, modelInfo).length > 0
+      ? 'Tools and reasoning effort are not affected.'
+      : 'Tools are not affected.';
   const tooltip = `Resets ${resetScope} to this model's defaults. ${resetExclusions}`;
 
   return (
     <Tooltip title={tooltip}>
       <IconButton
+        data-testid="advanced-settings-reset-btn"
         size="sm"
         variant="outlined"
         onClick={handleReset}
@@ -703,6 +694,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   // the input remainder negative). Show the default that selecting it would apply instead - that
   // is genuinely what you get, since buildModelSelectionPatch recomputes it on every switch.
   const outputTokens = readOnly ? computeDefaultMaxTokens(modelInfo) : (max_tokens ?? 4096);
+  const reasoningEffortOptions = reasoningEffortOptionsFor(model, modelInfo);
   // A derived ceiling states nothing about the model (see computeDefaultMaxTokens), so the
   // slider's range must not fall back below the default it just rendered above - that would
   // put the read-out outside its own track and snap the budget back down on the first drag.
@@ -1226,8 +1218,9 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               </SettingsRow>
             )}
 
-            {/* Reasoning Effort - only for reasoning-capable models */}
-            {REASONING_SUPPORTED_MODELS.has(model) && <ReasoningEffortSelector model={model} mode={mode} />}
+            {reasoningEffortOptions.length > 0 && (
+              <ReasoningEffortSelector model={model} mode={mode} options={reasoningEffortOptions} readOnly={readOnly} />
+            )}
           </Box>
         </Box>
 

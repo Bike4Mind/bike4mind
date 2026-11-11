@@ -66,7 +66,6 @@ import {
   visibleReplyText,
   tokenEstimateMultiplier,
   pairDataLakeTools,
-  isClaudeModelId,
   questGenerationJobs,
   resolveWorkspaceDeniedTools,
   filterRunnableModels,
@@ -160,6 +159,7 @@ import {
   type ICompletionOptionTools,
   convertOpenAIToolHistoryToCanonical,
   openAIEffortIncompatibleWithTools,
+  chatReasoningEffortFor,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { refusedUsageOf, timedOutAttemptUsageFields } from './timedOutAttemptUsage';
@@ -5302,7 +5302,7 @@ export class ChatCompletionProcess {
         logitBias: logitBias ?? undefined,
         // Pass query complexity for auto-classification of reasoning effort
         complexity: queryComplexity as 'simple' | 'contextual' | 'complex',
-        // Pass explicit user reasoning effort preference (if not 'auto'); withheld from Claude per attempt below
+        // Pass explicit user reasoning effort preference (if not 'auto'); narrowed per attempt below
         reasoningEffort: explicitReasoningEffort,
         // Gate on can_think so we never ask a non-thinking model to think:
         // Ollama returns a hard 400 ("does not support thinking") for think:true
@@ -5869,12 +5869,9 @@ export class ChatCompletionProcess {
                 // Per attempt: a fallback hop must name the model that actually serves it.
                 modelDisplayName: attemptLedgerModel.name,
                 modelIdentityId: attemptLedgerModel.id,
-                // The preference is set from a selector shown only for OpenAI-style reasoning models, so
-                // it must not retune Claude, whose adapters honour reasoningEffort for the completions API.
-                // Checked per attempt: a fallback can swap a GPT model for a Claude one (and back).
-                // Claude still follows the auto-classified `complexity` below, which the adapters map
-                // to a low effort on simple/contextual queries.
-                reasoningEffort: isClaudeModelId(currentModel.id) ? undefined : options.reasoningEffort,
+                // Per attempt: a fallback can swap a GPT model for a Claude one (and back). Unset, the
+                // adapter falls back to the auto-classified `complexity`, then the model default.
+                reasoningEffort: chatReasoningEffortFor(currentModel, options.reasoningEffort),
                 // Per attempt too: the explicit think-off is Ollama's alone, and a fallback can change backend.
                 thinking: withOllamaThinkingDefault(options.thinking, currentModel),
                 abortSignal: abortController.signal,
@@ -7230,7 +7227,9 @@ export class ChatCompletionProcess {
                 stopReason: providerStopReason,
                 maxOutputTokens: safeMaxTokens,
                 limiter: this.turnCreditLimiter,
-                reasoningEffort: explicitReasoningEffort ?? (queryComplexity ? `auto:${queryComplexity}` : undefined),
+                reasoningEffort:
+                  chatReasoningEffortFor(currentModel, explicitReasoningEffort) ??
+                  (queryComplexity ? `auto:${queryComplexity}` : undefined),
                 thinkingBudgetTokens:
                   thinking?.enabled && currentModel.can_think ? (thinking.budget_tokens ?? 16000) : undefined,
                 functionCalls: quest.promptMeta?.functionCalls,
