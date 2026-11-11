@@ -61,6 +61,7 @@ describe('AiSuggestion display', () => {
     expect(chip).toHaveAttribute('data-tone', 'neutral');
     expect(chip).toHaveTextContent(`${AI_ADVISORY_MARK} Confirmed abuse, High`);
     expect(screen.getByTestId('sug')).toHaveAttribute('aria-label', expect.stringContaining('90%'));
+    expect(screen.getByTestId('sug')).toHaveAttribute('role', 'img');
   });
 
   it('leaves the word off the row chip when the probability is unknown', () => {
@@ -77,6 +78,21 @@ describe('AiSuggestion display', () => {
     expect(screen.getByTestId('sug-meta')).toHaveTextContent('example-model');
     expect(screen.getByTestId('sug-meta')).toHaveTextContent('5 minutes ago');
   });
+
+  it.each(['https://example.com/x', '//example.com/x', '/\\example.com/x', 'data:text/html,x', 'javascript:alert(1)'])(
+    'renders a reason with the non-app href %s as plain text',
+    evidenceHref => {
+      renderThemed(
+        <AiSuggestion
+          variant="detail"
+          suggestion={suggestion({ reasons: [{ text: 'Seen', evidenceHref }] })}
+          data-testid="sug"
+        />
+      );
+      expect(screen.getByTestId('sug-reason-0')).toHaveTextContent('Seen');
+      expect(screen.getByTestId('sug-reason-0').querySelector('a')).toBeNull();
+    }
+  );
 
   it('caps the reasons at three', () => {
     const reasons = ['a', 'b', 'c', 'd'].map(text => ({ text }));
@@ -129,12 +145,46 @@ describe('AiSuggestion actions', () => {
     expect(onOverride).toHaveBeenLastCalledWith(AI_OVERRIDE_REASONS[1]);
   });
 
+  it('opens with the why-wrong picker when asked to', () => {
+    const onOverride = vi.fn();
+    renderDetail({ onOverride, initialOverriding: true });
+    expect(screen.queryByTestId('sug-override-btn')).toBeNull();
+    fireEvent.click(screen.getByTestId('sug-why-0'));
+    fireEvent.click(screen.getByTestId('sug-override-continue-btn'));
+    expect(onOverride).toHaveBeenCalledWith(AI_OVERRIDE_REASONS[0]);
+  });
+
   it('dismiss hides the suggestion and reports it', () => {
     const onDecision = vi.fn();
     renderDetail({ onDecision });
     fireEvent.click(screen.getByTestId('sug-dismiss-btn'));
     expect(screen.queryByTestId('sug')).toBeNull();
     expect(onDecision).toHaveBeenCalledWith({ suggestionId: 's1', status: 'dismissed' });
+  });
+
+  it('shows a new suggestion in the slot after the previous one was dismissed', () => {
+    const { rerender } = renderThemed(
+      <AiSuggestion
+        variant="detail"
+        suggestion={suggestion()}
+        onDecision={vi.fn()}
+        onOverride={vi.fn()}
+        data-testid="sug"
+      />
+    );
+    fireEvent.click(screen.getByTestId('sug-dismiss-btn'));
+    expect(screen.queryByTestId('sug')).toBeNull();
+    rerender(
+      <AiSuggestion
+        variant="detail"
+        suggestion={suggestion({ id: 's2' })}
+        onDecision={vi.fn()}
+        onOverride={vi.fn()}
+        data-testid="sug"
+      />
+    );
+    expect(screen.getByTestId('sug-proposal')).toHaveTextContent('Confirmed abuse');
+    expect(screen.getByTestId('sug-override-btn')).toBeTruthy();
   });
 
   it('shows Done by AI with Undo for an auto-applied suggestion', () => {

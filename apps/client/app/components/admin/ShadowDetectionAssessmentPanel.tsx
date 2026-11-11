@@ -15,7 +15,7 @@ import {
 } from '@client/app/hooks/data/shadowDetections';
 import { getErrorMessage } from '@client/app/utils/error';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
-import { AiSuggestion, StatusChip, formatUtc, type AiSuggestionData } from './shared';
+import { AiSuggestion, StatusChip, formatUtc, type AiOverrideReason, type AiSuggestionData } from './shared';
 
 const muted = { color: 'admin.inkMuted' } as const;
 
@@ -74,19 +74,32 @@ export const assessmentToSuggestion = (
   if (!proposal) return null;
   return {
     verdict: proposal.verdict,
-    // Assessments carry no reasons; the probabilities and evidence below stand in for them.
-    suggestion: { id: item.id, proposal: proposal.label, probability: item.confidence, createdAt: item.assessedAt },
+    // Assessments carry no reasons; the probabilities and evidence below stand in for them. The word reads
+    // the proposed result's own probability, as the row chip does, not `confidence` (a spread measure).
+    // No createdAt: the model line below already dates the assessment.
+    suggestion: {
+      id: item.id,
+      proposal: proposal.label,
+      probability: item.probabilities.find(entry => entry.value === item.result)?.probability ?? null,
+    },
   };
 };
 
 type DecisionProps = {
   /** Fills the host's verdict control with the proposed verdict; the host records it. */
   onAccept?: (verdict: ShadowDetectionVerdict) => void;
-  /** Leaves the verdict to the admin. */
-  onOverride?: () => void;
+  /** Leaves the verdict to the admin, with the optional why-wrong pick. */
+  onOverride?: (reason?: AiOverrideReason) => void;
+  /** Opens the suggestion with its why-wrong picker showing. */
+  initialOverriding?: boolean;
 };
 
-const LatestAssessment: React.FC<{ item: AbuseAssessmentRow } & DecisionProps> = ({ item, onAccept, onOverride }) => {
+const LatestAssessment: React.FC<{ item: AbuseAssessmentRow } & DecisionProps> = ({
+  item,
+  onAccept,
+  onOverride,
+  initialOverriding,
+}) => {
   const proposed = assessmentToSuggestion(item);
   return (
     <Stack gap={0.75} data-testid="shadow-detection-assessment-latest">
@@ -95,7 +108,8 @@ const LatestAssessment: React.FC<{ item: AbuseAssessmentRow } & DecisionProps> =
           variant="detail"
           suggestion={proposed.suggestion}
           onAccept={onAccept && (() => onAccept(proposed.verdict))}
-          onOverride={onOverride && (() => onOverride())}
+          onOverride={onOverride}
+          initialOverriding={initialOverriding}
           data-testid="shadow-detection-assessment-suggestion"
         />
       ) : (
@@ -163,7 +177,13 @@ const EarlierAssessments: React.FC<{ items: AbuseAssessmentRow[] }> = ({ items }
 type Props = { detectionId: string; enabled: boolean } & DecisionProps;
 
 /** An advisory model assessment of one detection, shown beside the facts it was made from. */
-export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({ detectionId, enabled, onAccept, onOverride }) => {
+export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({
+  detectionId,
+  enabled,
+  onAccept,
+  onOverride,
+  initialOverriding,
+}) => {
   const assessments = useAbuseAssessments(detectionId, { enabled });
   const request = useRequestAbuseAssessment();
   const { currentUser } = useUser();
@@ -203,7 +223,12 @@ export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({ detectionId, e
           {getErrorMessage(assessments.error)}
         </Alert>
       ) : latest ? (
-        <LatestAssessment item={latest} onAccept={onAccept} onOverride={onOverride} />
+        <LatestAssessment
+          item={latest}
+          onAccept={onAccept}
+          onOverride={onOverride}
+          initialOverriding={initialOverriding}
+        />
       ) : (
         <Typography level="body-sm" sx={muted} data-testid="shadow-detection-assessment-empty">
           Not assessed yet.

@@ -346,14 +346,15 @@ Pre-toolkit imports are recorded in `eslint-rules/admin-joy-legacy.mjs` (file, c
 
 An AI proposal is shown with `AiSuggestion` (`shared/AiSuggestion.tsx`), beside the admin's own control and never in its place. The admin decides; the AI only proposes. Reference host: Shadow detections (`ShadowDetectionsTab.tsx`, `ShadowDetectionAssessmentPanel.tsx`).
 
-- **Two variants.** `row` is a neutral `StatusChip` for a table cell: the AI mark, the proposal and a confidence word, with the percentage and the `A`/`O` hint in its tooltip. `detail` is for a record or dialog: proposal, confidence word (percentage on hover), up to three reasons (each a link when it has evidence), model and age, then the actions.
+- **Two variants.** `row` is a neutral `StatusChip` for a table cell: the AI mark, the proposal and a confidence word, with the percentage, an optional `note` (which record it is about) and the `A`/`O` hint in its tooltip. `detail` is for a record or dialog: proposal, confidence word (percentage on hover), up to three reasons (each a link when its evidence is an in-app path; any other href renders as plain text), model and age, then the actions.
 - **Neutral tone, always.** A suggestion is advisory, so it never uses `bad` or `good`, even when it proposes abuse. The verdict chip beside it keeps the real state.
 - **Confidence is a word.** High (>= 80%), Medium (>= 50%), Low (below). The raw percentage is secondary and lives in a tooltip. No probability, no word.
 - **No suggestion, no slot.** Pass `suggestion={null}` when AI is off, over budget, failed or forbidden (a 403): the component renders nothing. No empty box, no error banner, no "AI unavailable".
 - **Accept goes through the host's own write.** `onAccept` opens the host's `ActionDialog` prefilled: the proposed value and `ACCEPTED_AI_REASON` ("Accepted AI suggestion") via `initialReason`, still editable. Bump `formKey` to re-seed an already open dialog. The admin still confirms, so nothing is applied on a click.
-- **Override opens the manual control.** `onOverride` follows an optional "Why was the AI wrong?" pick (`AI_OVERRIDE_REASONS`); the host opens its control with nothing preselected.
+- **Override opens the manual control.** `onOverride` follows an optional "Why was the AI wrong?" pick (`AI_OVERRIDE_REASONS`) and receives it; the host opens its control with nothing preselected. A row's `O` key reaches the same picker: the host opens its record with `initialOverriding` on the detail suggestion. Shadow detections does not record the pick yet (see Recording decisions).
 - **Dismiss** hides the suggestion locally. **Done by AI** (`status: 'auto_applied'`) shows a chip and, with `onUndo`, an Undo.
 - **Keys.** Give `DataTable` `rowShortcuts` returning `a`/`o` only for rows with a suggestion and only when the admin holds the permission the host's write needs; otherwise return `{}` so the keys stay inert.
+- **Row coverage follows the host's data.** Shadow detections' row chip reads the per-user AI advisory, which keeps each open account's strongest abuse judgment from the last 24 hours, so an unreviewed detection can carry an assessment without a row chip or `A`/`O`. Its review dialog still shows the latest assessment.
 - **Bulk.** `AiSuggestionBulkAccept` accepts only pending High suggestions, behind an `ActionDialog` with a `ChangePreview`. It takes `reversible: true` as a literal, so an irreversible action cannot use it.
 
 ### Recording decisions
@@ -363,6 +364,7 @@ An AI proposal is shown with `AiSuggestion` (`shared/AiSuggestion.tsx`), beside 
 ### Copy
 
 - Name the proposal as the value the admin would record ("Confirmed abuse"), not as a judgment of the person.
+- Reasons name the evidence ("Burst of signups from one network"), never the model process ("The model analyzed the signups").
 - Say "AI suggestion" or "AI advisory", never "AI verdict" or "AI decided".
 - Pair any AI statement that could prompt action with its limit: "Advisory only" or "review before acting".
 - The prefilled reason is exactly "Accepted AI suggestion"; admins add to it rather than replace it.

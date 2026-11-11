@@ -188,7 +188,8 @@ export function DataTable<Row>({
     if (event.target !== event.currentTarget) return;
     const plainKey =
       !event.metaKey && !event.ctrlKey && !event.altKey && !event.repeat && !event.nativeEvent.isComposing;
-    const shortcut = plainKey ? rowShortcuts?.(row)[event.key.toLowerCase() as DataTableRowShortcut] : undefined;
+    const shortcut =
+      plainKey && !event.shiftKey ? rowShortcuts?.(row)[event.key.toLowerCase() as DataTableRowShortcut] : undefined;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       focusSiblingRow(event.currentTarget, event.key === 'ArrowDown' ? 1 : -1);

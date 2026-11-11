@@ -96,6 +96,7 @@ describe('DataTable', () => {
     fireEvent.keyDown(row, { key: 'a', altKey: true });
     fireEvent.keyDown(row, { key: 'a', repeat: true });
     fireEvent.keyDown(row, { key: 'a', isComposing: true });
+    fireEvent.keyDown(row, { key: 'A', shiftKey: true });
     expect(accept).not.toHaveBeenCalled();
     fireEvent.keyDown(row, { key: 'A' });
     expect(accept).toHaveBeenCalledTimes(1);

@@ -453,6 +453,8 @@ type VerdictDialogProps = {
   onRowChange: (row: ShadowDetectionRow) => void;
   initialVerdict?: ShadowDetectionVerdict;
   initialReason?: AdminReasonDraft;
+  /** Opens the AI suggestion's why-wrong picker, for a dialog reached through the row's O key. */
+  initialOverriding?: boolean;
 };
 
 type Grading = { row: ShadowDetectionRow; prefill?: 'accept' | 'override' };
@@ -481,6 +483,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
   onRowChange,
   initialVerdict,
   initialReason,
+  initialOverriding,
 }) => {
   const mutation = useShadowDetectionVerdict();
   const [verdict, setVerdict] = useState<ShadowDetectionVerdict | null>(initialVerdict ?? null);
@@ -579,7 +582,9 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
             setReasonSeed(ACCEPTED_AI_REASON);
             setFormKey(key => key + 1);
           }}
+          // The why-wrong pick is not recorded until suggestion decisions are stored.
           onOverride={() => setVerdict(null)}
+          initialOverriding={initialOverriding}
         />
       )}
       <VerdictHistory row={row} now={now} />
@@ -845,6 +850,7 @@ export const ShadowDetectionsTab: React.FC = () => {
           onRowChange={row => setGrading({ row })}
           initialVerdict={grading.prefill === 'accept' ? 'confirmed_abuse' : undefined}
           initialReason={grading.prefill === 'accept' ? ACCEPTED_AI_REASON : undefined}
+          initialOverriding={grading.prefill === 'override'}
         />
       )}
     </Stack>

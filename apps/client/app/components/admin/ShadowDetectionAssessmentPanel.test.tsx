@@ -69,6 +69,28 @@ describe('ShadowDetectionAssessmentPanel', () => {
     expect(screen.getByTestId('shadow-detection-assessment-suggestion-confidence').textContent).toContain('Medium');
   });
 
+  it('words the suggestion from the proposed result probability, and dates it once', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [
+        makeItem({
+          probabilities: [
+            { value: 'abuse', probability: 0.85 },
+            { value: 'legitimate_automation', probability: 0.1 },
+            { value: 'insufficient_evidence', probability: 0.05 },
+          ],
+          confidence: 0.6,
+        }),
+      ],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    const word = screen.getByTestId('shadow-detection-assessment-suggestion-confidence');
+    expect(word.textContent).toContain('High');
+    expect(word).toHaveAttribute('data-confidence', 'high');
+    expect(screen.queryByTestId('shadow-detection-assessment-suggestion-meta')).toBeNull();
+  });
+
   it('renders unknown with its failure in plain words', () => {
     hooks.useAbuseAssessments.mockReturnValue({
       data: [makeItem({ result: 'unknown', probabilities: [], confidence: null, failure: 'provider_overloaded' })],

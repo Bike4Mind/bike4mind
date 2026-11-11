@@ -27,11 +27,16 @@ export const formatAiProbability = (probability: number): string => `${Math.roun
 
 export type AiSuggestionReason = { text: string; evidenceHref?: string };
 
+// Reasons may be model-written, so only an in-app path becomes a link.
+const isInAppPath = (href: string): boolean => /^\/(?![/\\])/.test(href);
+
 export type AiSuggestionData = {
   id: string;
   /** What the AI proposes, as the action it would take: "Confirmed abuse". */
   proposal: string;
   probability: number | null;
+  /** Row tooltip context after the proposal, e.g. which record the suggestion is about. */
+  note?: string;
   reasons?: AiSuggestionReason[];
   model?: string;
   createdAt?: string;
@@ -40,7 +45,7 @@ export type AiSuggestionData = {
 
 const MAX_REASONS = 3;
 
-/** Mirrors the status enum of the shared AI suggestion store; keep the two in sync. */
+/** Every state a suggestion can reach; nothing persists them yet (see DESIGN_GUIDE.md section 10). */
 export const AI_SUGGESTION_STATUSES = [
   'pending',
   'accepted',
@@ -74,6 +79,8 @@ export type AiSuggestionProps = {
   onDecision?: (decision: AiSuggestionDecision) => void;
   /** Reverts an `auto_applied` suggestion. */
   onUndo?: () => void;
+  /** Detail only: open with the why-wrong picker showing, for a host reached through its Override key. */
+  initialOverriding?: boolean;
   /**
    * Derived ids: `<id>-chip`, `<id>-proposal`, `<id>-confidence`, `<id>-reason-<i>`, `<id>-meta`,
    * `<id>-accept-btn`, `<id>-override-btn`, `<id>-dismiss-btn`, `<id>-why-<i>`, `<id>-override-continue-btn`,
@@ -90,12 +97,21 @@ export function AiSuggestion({
   onOverride,
   onDecision,
   onUndo,
+  initialOverriding = false,
   'data-testid': testId = 'admin-ai-suggestion',
 }: AiSuggestionProps) {
-  const [dismissed, setDismissed] = useState(false);
-  const [overriding, setOverriding] = useState(false);
+  // Keyed on the suggestion id so a new suggestion in the same slot starts fresh.
+  const [dismissedId, setDismissedId] = useState<string | null>(null);
+  const [overridingId, setOverridingId] = useState<string | null>(
+    initialOverriding && onOverride && suggestion ? suggestion.id : null
+  );
   const [whyWrong, setWhyWrong] = useState<AiOverrideReason | null>(null);
-  if (!suggestion || dismissed) return null;
+  if (!suggestion || dismissedId === suggestion.id) return null;
+  const overriding = overridingId === suggestion.id;
+  const setOverriding = (open: boolean) => {
+    setOverridingId(open ? suggestion.id : null);
+    setWhyWrong(null);
+  };
   const word = confidenceWord(suggestion.probability);
   const label = word ? AI_CONFIDENCE_LABELS[word] : null;
   const percent = word && suggestion.probability !== null ? formatAiProbability(suggestion.probability) : null;
@@ -104,7 +120,7 @@ export function AiSuggestion({
   if (variant === 'row') {
     const title = autoApplied
       ? `Done by AI: ${suggestion.proposal}. Open the record to undo.`
-      : `AI suggestion: ${suggestion.proposal}${percent ? ` (${percent} confidence)` : ''}. Advisory only.`;
+      : `AI suggestion: ${suggestion.proposal}${percent ? ` (${percent} confidence)` : ''}${suggestion.note ? ` ${suggestion.note}` : ''}. Advisory only.`;
     const keys = !autoApplied && (onAccept || onOverride);
     return (
       <Tooltip
@@ -135,6 +151,7 @@ export function AiSuggestion({
         <Box
           component="span"
           tabIndex={0}
+          role="img"
           aria-label={title}
           data-testid={testId}
           onClick={event => event.stopPropagation()}
@@ -156,7 +173,7 @@ export function AiSuggestion({
 
   const decide = (status: AiSuggestionDecision['status']) => onDecision?.({ suggestionId: suggestion.id, status });
   const dismiss = () => {
-    setDismissed(true);
+    setDismissedId(suggestion.id);
     decide('dismissed');
   };
   const undo = () => {
@@ -164,9 +181,9 @@ export function AiSuggestion({
     decide('undone');
   };
   const continueOverride = () => {
+    const reason = whyWrong ?? undefined;
     setOverriding(false);
-    onOverride?.(whyWrong ?? undefined);
-    setWhyWrong(null);
+    onOverride?.(reason);
   };
 
   const reasons = (suggestion.reasons ?? []).slice(0, MAX_REASONS);
@@ -202,7 +219,11 @@ export function AiSuggestion({
         <Box component="ul" sx={{ m: 0, pl: 2.5 }} data-testid={`${testId}-reasons`}>
           {reasons.map((reason, index) => (
             <Typography key={index} component="li" level="body-sm" data-testid={`${testId}-reason-${index}`}>
-              {reason.evidenceHref ? <Link href={reason.evidenceHref}>{reason.text}</Link> : reason.text}
+              {reason.evidenceHref && isInAppPath(reason.evidenceHref) ? (
+                <Link href={reason.evidenceHref}>{reason.text}</Link>
+              ) : (
+                reason.text
+              )}
             </Typography>
           ))}
         </Box>
