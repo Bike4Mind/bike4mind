@@ -123,6 +123,36 @@ describe('listAdminDataExports', () => {
     expect(getMetadata).not.toHaveBeenCalled();
   });
 
+  it('shows an export the worker skipped as failed with its reason, and ignores an unknown reason', async () => {
+    const requested = (exportJobId: string) => ({
+      occurredAt: new Date(NOW - 60_000),
+      actor: { name: 'Grace' },
+      details: { exportJobId },
+    });
+    auditLog(
+      [requested('deleted'), requested('odd')],
+      [
+        {
+          occurredAt: new Date(NOW - 30_000),
+          actor: { name: 'worker' },
+          details: { exportJobId: 'deleted', skipReason: 'deletion_due' },
+        },
+        {
+          occurredAt: new Date(NOW - 30_000),
+          actor: { name: 'worker' },
+          details: { exportJobId: 'odd', skipReason: 'unheard_of' },
+        },
+      ]
+    );
+
+    const exports = await listAdminDataExports(USER_ID, { getMetadata: vi.fn() } as never, NOW);
+
+    expect(exports.map(entry => entry.status)).toEqual([
+      { state: 'failed', reason: 'deletion_due' },
+      { state: 'failed' },
+    ]);
+  });
+
   it('surfaces a storage failure other than a missing object', async () => {
     auditLog([{ occurredAt: new Date(NOW), actor: { name: 'Grace' }, details: { exportJobId: 'x' } }]);
     const getMetadata = vi.fn().mockRejectedValue(new Error('AccessDenied'));
