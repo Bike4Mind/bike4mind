@@ -437,6 +437,20 @@ describe('fixed third-party protocol exception', () => {
     expect(run(dir)).toEqual({ status: 1, stdout: 'apps/workers/src/other.ts\n', stderr: '' });
   });
 
+  it('rejects a second declaration of the exempt handler, whatever its settings', () => {
+    const dir = writeTree({
+      'infra/turborepoCache.ts':
+        declaration(cacheHandler) + declaration(cacheHandler).replace('url: { cors: false }', 'url: true'),
+      [cacheSource]: RAW_HANDLER,
+    });
+    const result = run(dir);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain(
+      `::error::infra/turborepoCache.ts: 2 declarations use the protocol exception for '${cacheHandler}'; it covers exactly one`
+    );
+  });
+
   it('still fails closed when the exempt handler source is missing', () => {
     const dir = writeTree({ 'infra/turborepoCache.ts': declaration(cacheHandler) });
     const result = run(dir);

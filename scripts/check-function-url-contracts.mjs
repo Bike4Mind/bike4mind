@@ -45,6 +45,7 @@ const IMPORT_ALIASES = [['@workers/', 'apps/workers/src/']];
 // The app's JSON/auth adapter is not this transport; the cache handler owns bearer auth
 // and read/write roles. See docs/architecture/turbo-remote-cache.md and handler.test.ts.
 // Match both the infra declaration file and exact handler export, never a directory/import.
+// Each entry covers exactly one declaration: main() fails when a second one names the same handler.
 const FIXED_PROTOCOL_EXCEPTIONS = new Map([['infra/turborepoCache.ts', 'apps/workers/src/turboCache/handler.handler']]);
 
 const MAX_IMPORT_DEPTH = 3;
@@ -506,13 +507,24 @@ function main() {
 
   const { exposed, problems } = findUrlFunctions(sources);
   const violations = new Set();
+  const exceptionMatches = new Map();
   for (const { file, handler } of exposed) {
     if (isOverlayHandler(handler)) continue;
     const handlerFile = resolveHandlerFile(root, handler);
+    const isException = FIXED_PROTOCOL_EXCEPTIONS.get(file) === handler;
+    if (isException) exceptionMatches.set(file, (exceptionMatches.get(file) ?? 0) + 1);
     if (!handlerFile) {
       problems.push(`${file}: no source file for handler '${handler}'`);
-    } else if (FIXED_PROTOCOL_EXCEPTIONS.get(file) !== handler && !usesDefineLambdaRoute(root, handlerFile)) {
+    } else if (!isException && !usesDefineLambdaRoute(root, handlerFile)) {
       violations.add(handlerFile);
+    }
+  }
+  // The exception was reviewed against one declaration; a duplicate could carry different link, CORS or URL settings.
+  for (const [file, count] of exceptionMatches) {
+    if (count > 1) {
+      problems.push(
+        `${file}: ${count} declarations use the protocol exception for '${FIXED_PROTOCOL_EXCEPTIONS.get(file)}'; it covers exactly one`
+      );
     }
   }
 
@@ -522,7 +534,7 @@ function main() {
   if (problems.length > 0) {
     for (const problem of problems) console.error(`::error::${problem}`);
     console.error(
-      `ERROR: ${problems.length} unreadable Function URL declaration(s) under infra/; the contract gate cannot verify them.`
+      `ERROR: ${problems.length} unverifiable Function URL declaration(s) under infra/; the contract gate cannot verify them.`
     );
     process.exit(2);
   }

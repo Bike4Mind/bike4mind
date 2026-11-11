@@ -246,6 +246,47 @@ describe('turboCache handler', () => {
     expect(mockGetSignedUrl.mock.calls[0][1].input.Key).toBe('team_Ab-9/abc123def456');
   });
 
+  const preflightPut = (queryStringParameters: Record<string, string>) =>
+    makeEvent({
+      method: 'OPTIONS',
+      headers: { authorization: 'Bearer test-token-abc123', 'access-control-request-method': 'PUT' },
+      path: '/v8/artifacts/abc123def456',
+      queryStringParameters,
+    });
+
+  it('accepts a team at the 64-character limit', async () => {
+    const team = 'x'.repeat(64);
+    const result = await handler(preflightPut({ slug: team }));
+    expect(result.statusCode).toBe(200);
+    expect(mockGetSignedUrl.mock.calls[0][1].input.Key).toBe(`${team}/abc123def456`);
+  });
+
+  it('prefers slug over teamId and never reads a junk teamId', async () => {
+    const result = await handler(preflightPut({ slug: 'bike4mind', teamId: '../escape' }));
+    expect(result.statusCode).toBe(200);
+    expect(mockGetSignedUrl.mock.calls[0][1].input.Key).toBe('bike4mind/abc123def456');
+  });
+
+  it('rejects a junk slug even when teamId is valid', async () => {
+    const result = await handler(preflightPut({ slug: '../escape', teamId: 'team_Ab-9' }));
+    expect(result.statusCode).toBe(400);
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty slug instead of falling through to a valid teamId', async () => {
+    const result = await handler(preflightPut({ slug: '', teamId: 'team_Ab-9' }));
+    expect(result.statusCode).toBe(400);
+    expect(result.body).toBe(JSON.stringify({ error: 'Invalid team' }));
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it('keys a team-less request on the bare hash', async () => {
+    const result = await handler(preflightPut({}));
+    expect(result.statusCode).toBe(200);
+    expect(mockGetSignedUrl.mock.calls[0][1].input.Key).toBe('abc123def456');
+  });
+
   it('returns 405 for unsupported methods', async () => {
     const event = makeEvent({ method: 'DELETE', path: '/v8/artifacts/abc123def456' });
     const result = await handler(event);

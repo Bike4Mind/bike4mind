@@ -112,7 +112,10 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   };
   const path = event.rawPath;
   const team = event.queryStringParameters?.slug ?? event.queryStringParameters?.teamId;
-  // The team becomes the S3 key prefix; keep every key in the `<team>/<hash>` shape.
+  // When a team is given it becomes the S3 key prefix (`<team>/<hash>`), so it must be one safe path
+  // segment. Requests with no team are valid and key on the bare `<hash>` at the bucket root.
+  // `slug` wins when both are sent, and a present-but-empty `slug` is rejected, not skipped in favor
+  // of `teamId`: silently switching prefixes would read and write a different namespace.
   if (team !== undefined && !TEAM_PATTERN.test(team)) {
     return { statusCode: 400, body: JSON.stringify({ error: 'Invalid team' }) };
   }
