@@ -607,6 +607,44 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
+   * Pipelines for the same reasons as `removeMember`: a stored `null` breaks `$addToSet`/`$pull`, and ids
+   * compare via `$toString` so a legacy ObjectId entry still matches. One targeted write, so two owners'
+   * concurrent edits of different managers both survive (the full-replace PUT /admins would drop one).
+   */
+  async addAdmin(organizationId: string, userId: string): Promise<boolean> {
+    const current = { $ifNull: ['$adminUserIds', []] };
+    const result = await this.organizationModel.updateOne({ _id: organizationId, 'users.userId': userId }, [
+      {
+        $set: {
+          adminUserIds: {
+            $cond: [
+              { $in: [userId, { $map: { input: current, in: { $toString: '$$this' } } }] },
+              current,
+              { $concatArrays: [current, [userId]] },
+            ],
+          },
+        },
+      },
+    ]);
+    return result.matchedCount > 0;
+  }
+
+  async removeAdmin(organizationId: string, userId: string): Promise<void> {
+    await this.organizationModel.updateOne({ _id: organizationId }, [
+      {
+        $set: {
+          adminUserIds: {
+            $filter: {
+              input: { $ifNull: ['$adminUserIds', []] },
+              cond: { $ne: [{ $toString: '$$this' }, userId] },
+            },
+          },
+        },
+      },
+    ]);
+  }
+
+  /**
    * Seed a zero-usage `userDetails` row for a member if one is not already present. Safe to call on
    * every membership grant and as a self-heal before a spend: the `userDetails.id != member.id`
    * guard means a member who already has a row matches no document and the `$push` is skipped.
