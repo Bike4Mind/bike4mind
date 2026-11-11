@@ -86,3 +86,25 @@ describe('by-design path-token routes', () => {
     expect(requestLogUrl(url)).toBe(url);
   });
 });
+
+describe('token query parameters', () => {
+  const token = 'synthetic-query-token-0123456789';
+
+  it.each([
+    [
+      `/api/publish/artifact/draft-upload?draftId=d1&token=${token}`,
+      '/api/publish/artifact/draft-upload?draftId=d1&token=[redacted]',
+    ],
+    [`/api/skills/market/l1?token=${token}`, '/api/skills/market/l1?token=[redacted]'],
+    [`/api/email/unsubscribe?TOKEN=${token}#x`, '/api/email/unsubscribe?TOKEN=[redacted]#x'],
+    [`/api/x?shareToken=${token}&access_token=${token}`, '/api/x?shareToken=[redacted]&access_token=[redacted]'],
+    [`/api/file-links/${token}?token=${token}`, '/api/file-links/[redacted]?token=[redacted]'],
+  ])('redacts the token value in %s', (url, expected) => {
+    expect(requestLogUrl(url)).toBe(expected);
+    expect(redactTokenPath(url)).not.toContain(token);
+  });
+
+  it.each(['/api/admin/users?limit=10', '/api/x?tokenizer', '/api/x?page=2&sort=top'])('leaves %s unchanged', url => {
+    expect(requestLogUrl(url)).toBe(url);
+  });
+});

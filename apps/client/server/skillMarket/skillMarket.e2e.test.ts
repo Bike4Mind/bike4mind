@@ -1169,7 +1169,7 @@ describe('Skill Market (real mongod)', () => {
     expect((await recommendListings('viewer-1', [ORG])).map(r => r.id)).toEqual([pub.id]);
   });
 
-  it('by-token: opens an unlisted listing and 404s a malformed token', async () => {
+  it('by-token (deprecated path route): opens an unlisted listing and 404s a malformed token', async () => {
     const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'unlisted');
     const res = await call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken });
     expect(res._getStatusCode()).toBe(200);
@@ -1196,6 +1196,13 @@ describe('Skill Market (real mongod)', () => {
       call(detailHandler, 'GET', OTHER, { id: listing.id }, {}, false, new Date(0), headers);
     await expect(detail({})).rejects.toMatchObject({ statusCode: 404 });
     const res = await detail({ 'x-share-token': listing.shareToken });
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().listing).toMatchObject({ id: listing.id });
+  });
+
+  it('detail (deprecated ?token=): the query token still unlocks an unlisted listing', async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'unlisted');
+    const res = await call(detailHandler, 'GET', OTHER, { id: listing.id, token: listing.shareToken });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().listing).toMatchObject({ id: listing.id });
   });

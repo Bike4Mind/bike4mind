@@ -39,11 +39,21 @@ function decodeSegment(segment: string): string {
   }
 }
 
+// Any query parameter whose name contains "token" (`token`, `shareToken`, `access_token`, ...), so
+// a caller that logs the full URL instead of the pathname still never logs a token value.
+const TOKEN_PARAM = /([?&;][^=&;#]*token[^=&;#]*=)[^&;#]*/gi;
+
+function redactTokenParams(suffix: string): string {
+  return suffix.replace(TOKEN_PARAM, '$1[redacted]');
+}
+
 // Segments are compared decoded (the serve route resolves from decoded query segments, so `%61` is
-// served as `a`) and case-insensitively; over-redacting a non-token path is harmless.
+// served as `a`) and case-insensitively; over-redacting a non-token path is harmless. The query
+// string keeps its shape with token parameter values redacted (redactTokenParams).
 export function redactTokenPath(url: string): string {
   const cut = url.search(/[?#]/);
   const path = cut === -1 ? url : url.slice(0, cut);
+  const suffix = cut === -1 ? '' : redactTokenParams(url.slice(cut));
   const parts = path.split('/');
   const indexes = parts.flatMap((part, i) => (part ? [i] : []));
   const decoded = indexes.map(i => decodeSegment(parts[i]));
@@ -52,12 +62,12 @@ export function redactTokenPath(url: string): string {
     if (decoded.length <= tokenAt || !prefix.every((segment, k) => decoded[k] === segment)) continue;
     if (except.includes(decoded[tokenAt])) continue;
     parts[indexes[tokenAt]] = '[redacted]';
-    return parts.join('/') + (cut === -1 ? '' : url.slice(cut));
+    return parts.join('/') + suffix;
   }
-  return url;
+  return path + suffix;
 }
 
-/** Log-safe form of a request URL: drops an identifier search's query and redacts a path token. */
+/** Log-safe form of a request URL: drops an identifier search's query and redacts path and query tokens. */
 export function requestLogUrl(url: string): string {
   const pathname = url.split('?')[0];
   return pathname === '/api/admin/search' ? pathname : redactTokenPath(url);
