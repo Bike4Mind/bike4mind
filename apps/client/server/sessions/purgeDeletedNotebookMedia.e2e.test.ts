@@ -25,7 +25,13 @@ vi.mock('@bike4mind/server-utils/security/wafSharedHelpers', () => ({
   resolveRouterDistributionId: () => 'E1A2B3C4D5E6F',
 }));
 
-import { PURGE_BUDGET_MS, purgeDeletedNotebookMedia } from './purgeDeletedNotebookMedia';
+import {
+  PURGE_BUDGET_MS,
+  SESSION_PAGE,
+  purgeDeletedNotebookMedia,
+  type GeneratedMediaPurgeLeftovers,
+  runGeneratedMediaPurge,
+} from './purgeDeletedNotebookMedia';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -141,5 +147,130 @@ describe('purgeDeletedNotebookMedia', () => {
     expect(invalidatedPaths()).toEqual([['/generated/ok.png']]);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('s3 down'));
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('throttled'));
+  });
+});
+
+describe('runGeneratedMediaPurge', () => {
+  // Two full pages plus a partial one, every notebook with its own image and one shared by all.
+  async function notebooks(count = SESSION_PAGE * 2 + 5) {
+    const ids: string[] = [];
+    for (let i = 0; i < count; i++) ids.push(await notebook({ images: [`own${i}.png`, 'shared.png'] }));
+    return ids;
+  }
+
+  // Page lookups only; the retention queries also go through Quest.find.
+  const pageFinds = (find: { mock: { calls: unknown[][] } }) =>
+    find.mock.calls.filter(([filter]) => (filter as Record<string, unknown> | undefined)?.sessionId).length;
+
+  // Moves the clock past `deadline` once the `afterFinds`-th page lookup starts.
+  function expireAfterFinds(afterFinds: number) {
+    const start = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const originalFind = Quest.find.bind(Quest);
+    let finds = 0;
+    const find = vi.spyOn(Quest, 'find').mockImplementation(((...args: Parameters<typeof Quest.find>) => {
+      if ((args[0] as Record<string, unknown> | undefined)?.sessionId && ++finds === afterFinds) {
+        now.mockReturnValue(start + 2_000);
+      }
+      return originalFind(...args);
+    }) as typeof Quest.find);
+    return { deadline: start + 1_000, find, restore: () => vi.restoreAllMocks() };
+  }
+
+  it('pages the lookup and deletes a key shared across pages once', async () => {
+    const ids = await notebooks();
+    const find = vi.spyOn(Quest, 'find');
+    try {
+      const leftovers = await runGeneratedMediaPurge(
+        { sessionIds: ids },
+        { deadline: Date.now() + PURGE_BUDGET_MS, deletedSessionIds: new Set(ids), logger }
+      );
+      expect(leftovers).toEqual({ leftoverSessionIds: [], leftoverKeys: [] });
+      expect(pageFinds(find)).toBe(3);
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(deletedKeys()).toHaveLength(ids.length + 1);
+    expect(effects.deleteGenerated.mock.calls.filter(([key]) => key === 'shared.png')).toHaveLength(1);
+    expect(invalidatedPaths()).toHaveLength(1);
+  });
+
+  it('stops looking up once the budget expires mid-lookup and returns the unscanned notebooks', async () => {
+    const ids = await notebooks();
+    const clock = expireAfterFinds(2);
+    let leftovers: GeneratedMediaPurgeLeftovers = { leftoverSessionIds: [], leftoverKeys: [] };
+    try {
+      leftovers = await runGeneratedMediaPurge(
+        { sessionIds: ids },
+        { deadline: clock.deadline, deletedSessionIds: new Set(ids), logger }
+      );
+      expect(pageFinds(clock.find)).toBe(2);
+    } finally {
+      clock.restore();
+    }
+    expect(leftovers.leftoverSessionIds).toEqual(ids.slice(SESSION_PAGE));
+    expect(leftovers.leftoverKeys).toEqual([]);
+    expect(deletedKeys()).toEqual([...ids.slice(0, SESSION_PAGE).map((_, i) => `own${i}.png`), 'shared.png'].sort());
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Time budget spent'));
+  });
+
+  it('forwards every notebook with zero queries when the deadline has already passed', async () => {
+    const ids = await notebooks(3);
+    const find = vi.spyOn(Quest, 'find');
+    try {
+      const leftovers = await runGeneratedMediaPurge(
+        { sessionIds: ids },
+        { deadline: Date.now() - 1, deletedSessionIds: new Set(ids), logger }
+      );
+      expect(leftovers).toEqual({ leftoverSessionIds: ids, leftoverKeys: [] });
+      expect(find).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(effects.deleteGenerated).not.toHaveBeenCalled();
+  });
+
+  it('forwards a page whose lookup fails and still purges the next page', async () => {
+    const ids = await notebooks(SESSION_PAGE + 1);
+    const originalFind = Quest.find.bind(Quest);
+    vi.spyOn(Quest, 'find').mockImplementationOnce((() => {
+      throw new Error('lookup down');
+    }) as typeof Quest.find);
+    vi.spyOn(Quest, 'find').mockImplementation(((...args: Parameters<typeof Quest.find>) =>
+      originalFind(...args)) as typeof Quest.find);
+    let leftovers: GeneratedMediaPurgeLeftovers = { leftoverSessionIds: [], leftoverKeys: [] };
+    try {
+      leftovers = await runGeneratedMediaPurge(
+        { sessionIds: ids },
+        { deadline: Date.now() + PURGE_BUDGET_MS, deletedSessionIds: new Set(ids), logger }
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(leftovers.leftoverSessionIds).toEqual(ids.slice(0, SESSION_PAGE));
+    expect(deletedKeys()).toEqual([`own${SESSION_PAGE}.png`, 'shared.png'].sort());
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('lookup down'));
+  });
+
+  it('deletes already-resolved keys directly and returns those the deadline cut off', async () => {
+    const keys = Array.from({ length: 40 }, (_, i) => `k${i}.png`);
+    const start = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    effects.deleteGenerated.mockImplementationOnce(async () => {
+      now.mockReturnValue(start + PURGE_BUDGET_MS + 1);
+    });
+    let leftovers: GeneratedMediaPurgeLeftovers = { leftoverSessionIds: [], leftoverKeys: [] };
+    try {
+      leftovers = await runGeneratedMediaPurge(
+        { keys },
+        { deadline: start + PURGE_BUDGET_MS, deletedSessionIds: new Set<string>(), logger }
+      );
+    } finally {
+      now.mockRestore();
+    }
+    const deleted = deletedKeys();
+    expect([...deleted, ...leftovers.leftoverKeys].sort()).toEqual([...keys].sort());
+    expect(leftovers.leftoverKeys.length).toBeGreaterThan(0);
+    expect(invalidatedPaths()).toEqual([deleted.map(key => `/generated/${key}`).sort()]);
   });
 });
