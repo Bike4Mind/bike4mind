@@ -244,17 +244,11 @@ describe('findExistingResearchData utils', () => {
         ContentType: 'text/markdown',
         ContentLength: Buffer.byteLength(content, 'utf8'),
       });
-      expect(mockStorage.generateSignedUrl).toHaveBeenCalledWith(
-        'test/path/file.md',
-        432000, // 5 days in seconds
-        'get'
-      );
-      expect(mockFabFilesRepo.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          fileUrl: 'https://s3.example.com/new-signed-url',
-          updatedAt: expect.any(Date),
-        })
-      );
+      expect(mockStorage.generateSignedUrl).toHaveBeenCalledWith('test/path/file.md', 3600, 'get');
+      expect(mockFabFilesRepo.update).toHaveBeenCalledWith({
+        id: expect.anything(),
+        updatedAt: expect.any(Date),
+      });
       expect(mockLogger.info).toHaveBeenCalledWith(
         '🗃️ [RESEARCH_DATA_EXISTS] Research data already exists for https://example.com'
       );
@@ -557,7 +551,7 @@ describe('findExistingResearchData utils', () => {
         expect(result!.file.fileUrl).toBeUndefined();
       });
 
-      it('still re-mints and persists a fileUrl for a clean image on re-crawl (unaffected)', async () => {
+      it('still re-signs a response fileUrl for a clean image on re-crawl (unaffected)', async () => {
         // Arrange
         const cleanImageFile = {
           ...mockFabFile,
@@ -579,7 +573,7 @@ describe('findExistingResearchData utils', () => {
         );
 
         // Assert
-        expect(mockStorage.generateSignedUrl).toHaveBeenCalledWith('test/path/file.md', 432000, 'get');
+        expect(mockStorage.generateSignedUrl).toHaveBeenCalledWith('test/path/file.md', 3600, 'get');
         expect(result!.file.fileUrl).toBe('https://s3.example.com/new-signed-url');
       });
 
@@ -600,7 +594,7 @@ describe('findExistingResearchData utils', () => {
         );
 
         // Assert
-        expect(mockStorage.generateSignedUrl).toHaveBeenCalledWith('test/path/file.md', 432000, 'get');
+        expect(mockStorage.generateSignedUrl).toHaveBeenCalledWith('test/path/file.md', 3600, 'get');
         expect(result!.file.fileUrl).toBe('https://s3.example.com/new-signed-url');
       });
 

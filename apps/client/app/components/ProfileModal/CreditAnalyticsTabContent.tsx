@@ -30,7 +30,14 @@ import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy/styles';
 import { useTranslation } from 'react-i18next';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
-import { CreditHolderType, ModelBackend, ModelInfo, REFERRAL_REWARD_REASON, usdToCredits } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  LEDGER_USAGE_TRANSACTION_TYPES,
+  ModelBackend,
+  ModelInfo,
+  REFERRAL_REWARD_REASON,
+  usdToCredits,
+} from '@bike4mind/common';
 import { bedrockChipLabels, dedupePricingRows, textModelPriceCells } from './modelPricingRows';
 import { aggregateUsageByModel } from './usageByModel';
 import SectionContainer from './SectionContainer';
@@ -106,8 +113,9 @@ const CreditAnalyticsTabContent: React.FC = () => {
     );
 
     // Separate transactions by type.
-    // When adding a new transaction type: add filtering here, include in allDeductTransactions,
-    // add to daily data processing, and add a tooltip label in getTooltipLabel().
+    // When adding a new transaction type: add filtering here, add to daily data processing, and add a
+    // tooltip label in getTooltipLabel(). A new deduct type goes in CREDIT_DEDUCT_TRANSACTION_TYPES
+    // (b4m-core/common), which feeds allDeductTransactions and GET /api/usage.
     const purchaseTransactions = sortedTransactions.filter(t => t.type === 'purchase');
     const subscriptionTransactions = sortedTransactions.filter(t => t.type === 'subscription');
     const referralRewardTransactions = sortedTransactions.filter(
@@ -131,21 +139,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const videoUsageTransactions = sortedTransactions.filter(t => t.type === 'video_generation_usage');
 
     // Combined deduct transactions for burn rate calculation
-    const allDeductTransactions = [
-      ...genericDeductTransactions,
-      ...textUsageTransactions,
-      ...completionApiUsageTransactions,
-      ...decisionUsageTransactions,
-      ...imageUsageTransactions,
-      ...imageEditUsageTransactions,
-      ...voiceUsageTransactions,
-      ...toolUsageTransactions,
-      ...speechToTextUsageTransactions,
-      ...textToSpeechUsageTransactions,
-      ...soundEffectsUsageTransactions,
-      ...musicUsageTransactions,
-      ...videoUsageTransactions,
-    ];
+    const allDeductTransactions = sortedTransactions.filter(t => LEDGER_USAGE_TRANSACTION_TYPES.includes(t.type));
 
     const { burnRate, usageTrend, daysRemaining, observedDays } = computeBurnStats({
       usage: allDeductTransactions,
@@ -227,21 +221,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     });
 
     // Create combined usage (all usage types including generic deducts)
-    [
-      ...genericDeductTransactions,
-      ...textUsageTransactions,
-      ...completionApiUsageTransactions,
-      ...decisionUsageTransactions,
-      ...imageUsageTransactions,
-      ...imageEditUsageTransactions,
-      ...voiceUsageTransactions,
-      ...toolUsageTransactions,
-      ...speechToTextUsageTransactions,
-      ...textToSpeechUsageTransactions,
-      ...soundEffectsUsageTransactions,
-      ...musicUsageTransactions,
-      ...videoUsageTransactions,
-    ].forEach(transaction => {
+    allDeductTransactions.forEach(transaction => {
       const day = dayjs(transaction.createdAt).format('YYYY-MM-DD');
       if (!allUsageDailyData.has(day)) {
         allUsageDailyData.set(day, { x: day, y: 0 });
@@ -994,7 +974,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
               <Typography level="title-md">{t('credits.usage_by_model')}</Typography>
             </Stack>
             <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
-              From the credit ledger over the range selected above; may differ from the usage-event breakdown below.
+              From the credit ledger over the range selected above.
             </Typography>
 
             <Box sx={{ height: 340 }}>
@@ -1067,14 +1047,18 @@ const CreditAnalyticsTabContent: React.FC = () => {
         {/* Removed bottom current balance card (duplicated at top) */}
       </Stack>
 
-      {/* Owner-scoped usage-event breakdown. It keeps its own 30/60/90-day toggle: the credit
-          ledger behind the charts above offers different ranges. */}
+      {/* Owner-scoped breakdown, on the ledger's range toggle so both cover the same window. */}
       {currentUser?.id && (
         <Box data-testid="usage-spend-breakdown">
           <Divider sx={{ my: 4 }}>
             <Typography level="title-md">Spend by key, model, feature and source</Typography>
           </Divider>
-          <UsageDashboard ownerType={CreditHolderType.User} ownerId={currentUser.id} />
+          <UsageDashboard
+            ownerType={CreditHolderType.User}
+            ownerId={currentUser.id}
+            days={parseInt(timePeriod, 10)}
+            reconcileLedger
+          />
         </Box>
       )}
 

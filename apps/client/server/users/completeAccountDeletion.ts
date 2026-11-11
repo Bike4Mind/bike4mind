@@ -5,6 +5,7 @@ import { adminAuditService, authSessionService } from '@bike4mind/services';
 import { hardDeleteUser } from '@server/services/hardDeleteUser';
 import { systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 import { sendAccountDeletionCompleteEmail } from './accountDeletionEmail';
+import { classifyOwnedOrganizations, deleteSoleOwnedOrganizations } from './ownedOrganizations';
 import { purgeAccountContent } from './purgeAccountContent';
 import { purgeAccountFiles } from './purgeAccountFiles';
 
@@ -16,6 +17,12 @@ export type AccountDeletionCompletion = { deleted: true } | { deleted: false; re
 // while the permanent purgeStartedAt marker keeps cancellation closed after any data was removed.
 const PURGE_LEASE_MS = 15 * 60 * 1000;
 const dueFilter = (userId: string, now: Date) => ({ _id: userId, 'deletion.scheduledFor': { $lte: now } });
+
+const assertNoSharedOrganizations = async (userId: string): Promise<void> => {
+  if ((await classifyOwnedOrganizations(userId)).shared.length > 0) {
+    throw new Error(`Account deletion refused: user ${userId} still owns an organization with other members`);
+  }
+};
 
 const assertNoOwnedOrganizations = async (userId: string): Promise<void> => {
   if (await Organization.exists({ userId, deletedAt: null, personal: { $ne: true } })) {
@@ -67,7 +74,7 @@ export async function completeAccountDeletion(
   if (!(await User.exists(dueFilter(userId, now)))) {
     return { deleted: false, reason: (await User.exists({ _id: userId })) ? 'not_due' : 'not_found' };
   }
-  await assertNoOwnedOrganizations(userId);
+  await assertNoSharedOrganizations(userId);
   const leaseId = randomUUID();
   const user = await claimPurge(userId, now, leaseId);
   if (!user) return { deleted: false, reason: 'not_due' };
@@ -80,6 +87,7 @@ export async function completeAccountDeletion(
   };
 
   try {
+    await deleteSoleOwnedOrganizations(userId, { logger, assertLease });
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
     await assertLease();

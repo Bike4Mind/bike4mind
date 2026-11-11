@@ -80,7 +80,9 @@ describe('assertReferenceImagesSupported (generate, FLUX 3)', () => {
     ).not.toThrow();
   });
 
-  it('still rejects references on FLUX 3 edit', () => {
-    expect(() => assertReferenceImagesSupported(ImageModels.FLUX_3_IMAGE, ['ref'])).toThrow('not supported');
+  it('accepts references on FLUX 3 edit up to the limit', () => {
+    // FLUX 3 edit supports references: getMaxEditReferenceImages returns 9 (10 total cap minus 1 for edit_source).
+    expect(() => assertReferenceImagesSupported(ImageModels.FLUX_3_IMAGE, ids(9))).not.toThrow();
+    expect(() => assertReferenceImagesSupported(ImageModels.FLUX_3_IMAGE, ids(10))).toThrow('at most 9 images');
   });
 });

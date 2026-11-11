@@ -31,6 +31,7 @@ import {
 import type { EntitlementRequest } from '@server/entitlements';
 import type { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { fileContentUrl } from '@server/files/browserFileSigner';
 import { toAccessContext } from './toAccessContext';
 import {
   grantingLakes,
@@ -245,17 +246,18 @@ export async function queryDataLakeArticles(
       projects: projectRepository,
     },
     storage: {
-      ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
-      generateSignedUrl: async (path: string, expireInSeconds: number) => {
+      generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
         try {
           return await getFilesStorage().getSignedUrl(path, 'get', {
             expiresIn: expireInSeconds,
+            signingDate: options?.signingDate,
             audience: 'browser',
           });
         } catch {
           return null;
         }
       },
+      contentUrl: fileContentUrl,
     },
   };
 

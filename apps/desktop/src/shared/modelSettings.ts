@@ -18,6 +18,8 @@ export {
   MODEL_SETTINGS_FILE_NAME,
   parseModelSettingsFile,
   parseModelSettingsInput,
+  parseModelSettingsJson,
+  modelSettingsJsonProblem,
   quotedForMessage,
   storedModelEntry,
   type KeepAliveSeconds,

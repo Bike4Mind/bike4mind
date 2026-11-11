@@ -21,7 +21,8 @@ export const SHADOW_DETECTION_TAB_PARAMS = [
 /** The verdict filter value that lists every detection; an absent filter means Unreviewed. */
 export const ALL_VERDICTS_FILTER = 'all';
 
-export type VerdictFilter = ShadowDetectionVerdict | 'unreviewed' | typeof ALL_VERDICTS_FILTER;
+/** `automated` lists records whose latest verdict is the automation grader's. */
+export type VerdictFilter = ShadowDetectionVerdict | 'unreviewed' | 'automated' | typeof ALL_VERDICTS_FILTER;
 
 const isDetector = (value: string): value is ShadowDetector => (SHADOW_DETECTORS as readonly string[]).includes(value);
 const isVerdict = (value: string): value is ShadowDetectionVerdict =>
@@ -36,7 +37,7 @@ export function readShadowDetectionFilters(filters: Record<string, string>): {
   const verdict = filters.verdict ?? '';
   return {
     detector: isDetector(detector) ? detector : undefined,
-    verdict: verdict === ALL_VERDICTS_FILTER || isVerdict(verdict) ? verdict : 'unreviewed',
+    verdict: verdict === ALL_VERDICTS_FILTER || verdict === 'automated' || isVerdict(verdict) ? verdict : 'unreviewed',
   };
 }
 

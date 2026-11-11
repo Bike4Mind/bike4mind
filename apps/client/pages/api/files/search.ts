@@ -8,7 +8,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
     const parsed = qs.parse(req.query as Record<string, any>);
 
-    const result = await searchFilesForRequest(req, parsed);
+    const result = await searchFilesForRequest(req, parsed, { browser: true });
 
     return res.json(result);
   })

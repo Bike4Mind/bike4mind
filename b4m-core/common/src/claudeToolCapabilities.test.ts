@@ -14,7 +14,7 @@ import {
   supportsToolSearch,
   type ApiSurfaceModel,
 } from './claudeToolCapabilities';
-import { CHAT_MODELS, ChatModels, isClaudeModelId, ModelBackend } from './models';
+import { CHAT_MODELS, ChatModels, isClaudeModelId, ModelBackend, REFUSAL_FALLBACK_MODELS } from './models';
 
 // [tool search, tool changes, assistant prefill]. Every Claude id in ChatModels must be listed, so a new one forces a decision.
 const EXPECTED: Record<string, [boolean, boolean, boolean]> = {
@@ -285,8 +285,9 @@ describe('resolveApiSurface', () => {
   };
 
   it('gives an unknown adaptive-thinking model no forced tool_choice, no prefill and no optional features', () => {
-    expect(seedApiSurface(fable52)).toBeUndefined();
-    expect(resolveApiSurface(fable52)).toEqual({
+    const fable53 = { ...fable52, id: 'claude-fable-5-3' };
+    expect(seedApiSurface(fable53)).toBeUndefined();
+    expect(resolveApiSurface(fable53)).toEqual({
       forcedToolChoice: false,
       assistantPrefill: false,
       toolSearch: false,
@@ -303,16 +304,18 @@ describe('resolveApiSurface', () => {
     expect(supportsToolSearch({ ...model, backend: ModelBackend.OpenAI })).toBe(false);
   });
 
-  it('reads the flags a catalog row states for a catalog-only Fable 5.2', () => {
-    const inherited = { ...fable52, ...seedApiSurface({ id: 'claude-fable-5-1', backend: ModelBackend.Anthropic }) };
+  it('reads the flags a catalog row states for a catalog-only Fable 5.2, and its refusal fallback from the seed', () => {
+    const sibling = seedApiSurface({ id: 'claude-fable-5-1', backend: ModelBackend.Anthropic }) ?? {};
+    const inherited = { ...fable52, ...inheritApiSurface(fable52, sibling) };
 
+    expect(inherited).not.toHaveProperty('refusalFallback');
     expect(supportsForcedToolChoice(inherited)).toBe(false);
     expect(supportsAssistantPrefill(inherited)).toBe(false);
     expect(supportsToolSearch(inherited)).toBe(true);
     expect(completionsSupportsToolSearch(inherited)).toBe(true);
     expect(supportsToolChanges(inherited)).toBe(true);
     expect(chatSupportsDeferredToolAddition(inherited)).toBe(true);
-    expect(refusalFallsBack(inherited)).toBe(false);
+    expect(refusalFallsBack(inherited)).toBe(true);
   });
 
   it('lets a stated flag beat the seed tables, one key at a time', () => {
@@ -347,13 +350,44 @@ describe('resolveApiSurface', () => {
     expect(seedDescribes({ id: 'claude-opus-5-5' })).toBe(true);
   });
 
-  it('seeds refusalFallback from REFUSAL_FALLBACK_MODELS only', () => {
-    expect(refusalFallsBack({ id: ChatModels.CLAUDE_FABLE_5, backend: ModelBackend.Anthropic })).toBe(true);
-    expect(refusalFallsBack({ id: ChatModels.CLAUDE_FABLE_5_1_BEDROCK, backend: ModelBackend.Bedrock })).toBe(true);
-    expect(refusalFallsBack({ id: ChatModels.CLAUDE_4_8_OPUS, backend: ModelBackend.Anthropic })).toBe(false);
+  it('seeds refusalFallback for exactly the listed Fable ids', () => {
+    expect([...REFUSAL_FALLBACK_MODELS].sort()).toEqual(
+      [
+        ChatModels.CLAUDE_FABLE_5,
+        'claude-fable-5-1',
+        'claude-fable-5-2',
+        ChatModels.CLAUDE_FABLE_5_BEDROCK,
+        ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+      ].sort()
+    );
+    for (const id of REFUSAL_FALLBACK_MODELS) {
+      expect(refusalFallsBack({ id, backend: nativeBackend(id) }), id).toBe(true);
+    }
+    for (const id of [
+      ChatModels.CLAUDE_4_8_OPUS,
+      ChatModels.CLAUDE_5_5_OPUS,
+      'claude-fable-5-3',
+      'claude-mythos-5-2',
+    ]) {
+      expect(refusalFallsBack({ id, backend: ModelBackend.Anthropic }), id).toBe(false);
+    }
     expect(
       refusalFallsBack({ id: ChatModels.CLAUDE_FABLE_5, backend: ModelBackend.Anthropic, refusalFallback: false })
     ).toBe(false);
+    expect(refusalFallsBack({ id: 'claude-fable-5-2', backend: ModelBackend.Anthropic, refusalFallback: false })).toBe(
+      false
+    );
+  });
+
+  it('seeds only refusalFallback for a listed id the version tables do not name', () => {
+    expect(seedApiSurface({ id: 'claude-fable-5-2' })).toEqual({ refusalFallback: true });
+    expect(seedDescribes({ id: 'claude-fable-5-2' })).toBe(false);
+    expect(seedDescribes({ id: 'claude-fable-5-1' })).toBe(true);
+    expect(seedApiSurface({ id: 'claude-fable-5-1', backend: ModelBackend.Anthropic })).toMatchObject({
+      forcedToolChoice: false,
+      toolSearch: true,
+      refusalFallback: true,
+    });
   });
 });
 

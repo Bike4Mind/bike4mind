@@ -92,11 +92,9 @@ describe('GET /api/files/byIds', () => {
       await handler(makeReq([OWNED_ID]), res);
       const adapter = listFabFiles.mock.calls[0][2] as {
         storage: {
-          signedUrlCache?: string;
           generateSignedUrl: (path: string, expiry: number) => Promise<string | null>;
         };
       };
-      expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
       await adapter.storage.generateSignedUrl('owned/report.txt', 600);
       expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', {
         expiresIn: 600,

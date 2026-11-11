@@ -11,7 +11,7 @@ import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@bike4mind/server-utils/utils/orgAccess';
-import { editImageContract } from '@bike4mind/common';
+import { editImageContract, validateBflEditRegions, isFlux3ImageModel } from '@bike4mind/common';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
@@ -24,6 +24,19 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
   const requestedOrgId = resolveBillingOrgInput(req.validated);
   const { callbackUrl, organization_id: _orgAlias, ...body } = req.validated;
   assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
+
+  if (isFlux3ImageModel(body.model) && body.fabFileIds.length)
+    return res.status(400).json({ error: 'FLUX 3 edits take no mask; omit fabFileIds' });
+
+  if (body.edit_regions?.length) {
+    if (!isFlux3ImageModel(body.model)) {
+      return res.status(400).json({ error: 'edit_regions are only supported on FLUX 3 models' });
+    }
+    const regionIssues = validateBflEditRegions(body.edit_regions);
+    if (regionIssues.length) {
+      return res.status(422).json({ error: regionIssues.join('; ') });
+    }
+  }
   const callback = await resolveGenerationCallback(req, callbackUrl);
 
   // Reject a session the caller can't write to before the service appends a quest to it.

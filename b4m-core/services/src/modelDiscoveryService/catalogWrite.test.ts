@@ -2765,7 +2765,7 @@ describe('apiSurface inheritance', () => {
       toolSearch: true,
       toolChanges: true,
       deferredToolAddition: true,
-      refusalFallback: false,
+      refusalFallback: true,
     });
   });
 

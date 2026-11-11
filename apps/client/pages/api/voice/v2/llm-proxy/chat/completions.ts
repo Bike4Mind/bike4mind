@@ -173,7 +173,7 @@ async function runFullPipeline(
     invokeLambda: async () => {},
   };
   // A tool that re-reads the owner by id must see the same withheld role as `user`. Kept out of the
-  // literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.test.ts).
+  // literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.repo.test.ts).
   if (sessionCtx.adminRoleWithheld) {
     chatCompletionOptions.db = {
       ...chatCompletionOptions.db,

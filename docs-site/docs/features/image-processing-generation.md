@@ -24,6 +24,7 @@ Create stunning images and edit existing ones using AI-powered tools. Bike4Mind 
 **Using the Command:**
 
 You can also use the `/gen_image` command followed by your prompt:
+
 ```
 /gen_image A serene mountain landscape at sunset with a lake reflection
 ```
@@ -33,11 +34,13 @@ Once the model generates your image, you can view, download, or edit the result.
 ### Available Models
 
 #### OpenAI (DALL-E / GPT-Image)
+
 - **GPT-Image-1**: Latest OpenAI image generation
 - **Quality options**: Standard or HD
 - **Sizes**: 1024x1024, 1024x1536, 1536x1024
 
 #### Flux (Black Forest Labs)
+
 - **FLUX Pro 1.1**: Professional quality standard generation
 - **FLUX Pro Ultra**: Premium quality with custom aspect ratios
 - **FLUX Kontext**: Transform existing images based on prompts
@@ -53,12 +56,12 @@ FLUX 3 Image does not take a seed or an output format, so those settings have no
 
 ### Generation Settings
 
-| Setting | Description |
-|---------|-------------|
-| **Quality** | Standard or HD (affects detail and credits) |
-| **Size/Aspect Ratio** | Choose dimensions for your image |
-| **Number of Images** | Generate 1-4 images per request |
-| **Safety Level** | Content moderation sensitivity (Flux models) |
+| Setting               | Description                                  |
+| --------------------- | -------------------------------------------- |
+| **Quality**           | Standard or HD (affects detail and credits)  |
+| **Size/Aspect Ratio** | Choose dimensions for your image             |
+| **Number of Images**  | Generate 1-4 images per request              |
+| **Safety Level**      | Content moderation sensitivity (Flux models) |
 
 ---
 
@@ -96,17 +99,18 @@ Transform an entire image based on a new prompt:
 
 Every generated image includes these options:
 
-| Action | Description |
-|--------|-------------|
-| **Download** | Save to your device |
-| **Copy** | Copy to clipboard |
-| **Edit** | Open in the image editor |
-| **Zoom** | View at full resolution |
-| **Gallery** | Browse multiple images |
+| Action       | Description              |
+| ------------ | ------------------------ |
+| **Download** | Save to your device      |
+| **Copy**     | Copy to clipboard        |
+| **Edit**     | Open in the image editor |
+| **Zoom**     | View at full resolution  |
+| **Gallery**  | Browse multiple images   |
 
 ### Image Gallery
 
 When multiple images are generated:
+
 - Use arrow keys or buttons to navigate
 - Click thumbnails for quick selection
 - Download individual or all images
@@ -135,6 +139,7 @@ When multiple images are generated:
 ## Credit Usage
 
 Image generation uses credits based on:
+
 - **Model**: Different models have different costs
 - **Quality**: HD images cost more than standard
 - **Size**: Larger images use more credits
@@ -189,3 +194,26 @@ Remove references or start a fresh request if the generation reports that the to
 - [Notebooks](./notebooks.md) - Where images are generated
 - [Artifacts](./artifacts-system.md) - Save images as artifacts
 - [Knowledge Management](./knowledge-management.md) - Organize generated images
+
+## FLUX 3 region edits through the API
+
+`POST /api/v1/image-edits` supports up to eight regions on `flux-3-image` and `flux-3-image-klein`. Each region has its own instruction and a normalized bounding box in **vertical-first** order: `[y_min, x_min, y_max, x_max]`.
+
+For example, this request targets the top part of an existing image:
+
+```json
+{
+  "model": "flux-3-image-klein",
+  "sessionId": "<notebook-id>",
+  "image": "https://example.com/source.png",
+  "fabFileIds": [],
+  "prompt": "Replace the selected sky with a starry night",
+  "edit_regions": [{ "prompt": "A clear night sky filled with stars", "bbox": [0, 0, 0.4, 1] }]
+}
+```
+
+Use a source image URL the service can fetch and your notebook's ID. These models take no mask: omit `fabFileIds` or send an empty array. Up to nine `referenceImageFabFileIds` may accompany the source. Without `edit_regions`, the same models support ordinary prompt-based editing.
+
+Coordinates must be between 0 and 1, with each minimum below its maximum. They are rounded to the provider's 0–1000 grid; a box that collapses on that grid is rejected. Invalid boxes or more than eight regions return 422. Regions supplied to another model, or a mask supplied to FLUX 3, return 400. The response is a queued quest; poll it until it completes to retrieve the edited image.
+
+Region selection is currently an API capability. The chat's paint-mask editor continues to use its existing editing models.

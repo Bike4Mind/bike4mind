@@ -92,6 +92,24 @@ describe('PushTokenModel repository', () => {
     expect((await PushTokenModel.find({})).map(t => t.token)).toEqual(['token-2']);
   });
 
+  it('finds and removes live activity tokens by quest, scoped to the owner and kind', async () => {
+    const activity = (token: string, overrides: Record<string, unknown> = {}) =>
+      registration({ token, kind: 'liveActivity', activityId: token, questId: 'q1', ...overrides });
+    await pushTokenRepository.upsert(registration());
+    await pushTokenRepository.upsert(registration({ token: 'device-q', questId: 'q1' }));
+    await pushTokenRepository.upsert(activity('act-1'));
+    await pushTokenRepository.upsert(activity('act-2', { questId: 'q2' }));
+    await pushTokenRepository.upsert(activity('act-3', { userId: USER_B }));
+
+    expect((await pushTokenRepository.findLiveActivityByQuest(USER_A, 'q1')).map(t => t.token)).toEqual(['act-1']);
+    expect(await pushTokenRepository.findLiveActivityByQuest('not-an-object-id', 'q1')).toEqual([]);
+
+    expect(await pushTokenRepository.removeLiveActivityByQuest(USER_A, 'q1')).toBe(1);
+    expect((await PushTokenModel.find({})).map(t => t.token).sort()).toEqual(
+      ['act-2', 'act-3', 'device-q', 'token-1'].sort()
+    );
+  });
+
   it('rejects an unknown platform', async () => {
     await expect(pushTokenRepository.upsert(registration({ platform: 'palmos' }))).rejects.toThrow();
   });

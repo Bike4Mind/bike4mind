@@ -7,6 +7,8 @@ import {
   FeedbackEvents,
   FeedbackStatus,
   FeedbackType,
+  hasFeedbackComment,
+  isFeedbackTriageNoise,
   Permission,
   PromptMetaZodSchema,
   redactPromptMetaForViewer,
@@ -371,7 +373,9 @@ const handler = baseApi()
       _id: feedbackId,
       userId: req.isAuthenticated() ? req.user.id : userId,
       tags,
-      status: FeedbackStatus.New,
+      status: isFeedbackTriageNoise({ type, hasContent: hasFeedbackComment(content), tags })
+        ? FeedbackStatus.Closed
+        : FeedbackStatus.New,
       username: req.isAuthenticated() ? req.user.username : username,
       userEmail: req.isAuthenticated() ? req.user.email : userEmail,
       organization: organization,

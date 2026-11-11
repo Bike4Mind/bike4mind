@@ -463,7 +463,7 @@ export const ModelLifecycleTab: React.FC = () => {
         </Alert>
       )}
 
-      <DiscoveryStatusCard />
+      <DiscoveryStatusCard onRunFinished={() => void fetchStatus()} />
 
       {error && !status ? (
         <Box data-testid="model-lifecycle-error">
