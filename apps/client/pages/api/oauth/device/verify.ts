@@ -8,7 +8,7 @@ import {
   CLI_ACCESS_DENIED_MESSAGE,
   SUBSCRIPTION_REQUIRED_ERROR,
   isApiKeyAccessAllowed,
-} from '@server/utils/apiKeyAccessGate';
+} from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 
 const VerifyRequestSchema = z.object({
   user_code: z.string(),

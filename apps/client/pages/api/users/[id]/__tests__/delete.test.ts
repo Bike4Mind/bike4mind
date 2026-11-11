@@ -85,8 +85,8 @@ vi.mock('@server/services/purgeDeletedUserData', () => ({
   readUserIntegrationGrants: (...a: unknown[]) => mockReadGrants(...a),
 }));
 
-vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/cancelAccountSubscriptions')>()),
   cancelAccountSubscriptions: (...a: unknown[]) => mockCancelSubscriptions(...a),
 }));
 

@@ -26,7 +26,7 @@ import {
   isKnownApiKeyScope,
 } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
-import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
+import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import { Request } from 'express';

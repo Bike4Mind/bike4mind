@@ -27,6 +27,9 @@ const catalogSchema = z.object({
       })
     )
     .optional(),
+  // Absent from servers that predate credit-purchase terms consent.
+  termsConsentRequired: z.boolean().optional(),
+  termsUrl: z.string().url().nullable().optional(),
 });
 const dateSchema = z.string().datetime({ offset: true }).nullable().optional();
 const subscriptionsSchema = z.array(
@@ -109,9 +112,11 @@ export class BillingService {
     }
   }
 
-  async purchaseCredits(packageId: unknown): Promise<SubscribePlanResult> {
+  async purchaseCredits(packageId: unknown, acceptedTerms?: unknown): Promise<SubscribePlanResult> {
     if (typeof packageId !== 'string' || !packageId || packageId.length > 255)
       return { ok: false, error: 'Choose an available credit pack.' };
+    if (acceptedTerms !== undefined && typeof acceptedTerms !== 'boolean')
+      return { ok: false, error: 'Accept the Terms of Service to buy credits.' };
     if (this.checkoutInFlight) return { ok: false, error: 'Checkout is already open.' };
     const context = this.deps.getContext();
     if (!context) return { ok: false, error: 'Sign in to buy credits.' };
@@ -121,10 +126,13 @@ export class BillingService {
       this.assertCurrent(context);
       const pack = billing.creditPackages?.find(pack => pack.id === packageId);
       if (!billing.billingEnabled || !pack) return { ok: false, error: 'This credit pack is not available.' };
+      if (billing.termsConsentRequired && acceptedTerms !== true)
+        return { ok: false, error: 'Accept the Terms of Service to buy credits.' };
       const response = await context.api.post<unknown>('/api/stripe/start-payment', {
         transactionType: 'package',
         packageId,
         allowRedirects: false,
+        ...(acceptedTerms === true && { acceptedTerms: true }),
       });
       this.assertCurrent(context);
       const payment = z
@@ -162,7 +170,7 @@ export class BillingService {
           return null;
         }),
     ]);
-    const { billingEnabled, plans, creditPackages } = catalogSchema.parse(catalog);
+    const { billingEnabled, plans, creditPackages, termsConsentRequired, termsUrl } = catalogSchema.parse(catalog);
     const subscriptions = subscriptionsSchema
       .parse(rows)
       .filter(row => row.status !== 'canceled' && row.status !== 'incomplete_expired')
@@ -175,7 +183,14 @@ export class BillingService {
         canceledAt: row.canceledAt ?? null,
       }));
     this.assertCurrent(context);
-    return { billingEnabled, balance, plans, subscriptions, ...(creditPackages && { creditPackages }) };
+    return {
+      billingEnabled,
+      balance,
+      plans,
+      subscriptions,
+      ...(creditPackages && { creditPackages }),
+      ...(termsConsentRequired && { termsConsentRequired, ...(termsUrl && { termsUrl }) }),
+    };
   }
 
   private logFailure(operation: string, error: unknown): void {

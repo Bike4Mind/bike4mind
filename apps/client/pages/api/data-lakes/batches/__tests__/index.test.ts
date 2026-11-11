@@ -100,7 +100,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
     },
   };
 });
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (r: { user: { id: string; administeredOrgIds?: string[] } }) => ({
     userId: r.user.id,
     isAdmin: false,

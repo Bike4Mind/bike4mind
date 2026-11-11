@@ -7,7 +7,7 @@ const { resolveTierLimit, incrementBucket } = vi.hoisted(() => ({
   incrementBucket: vi.fn(),
 }));
 
-vi.mock('@server/utils/userRateTier', () => ({
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({
   resolveUserRateLimitPerMin: resolveTierLimit,
 }));
 vi.mock('@bike4mind/database', () => ({

@@ -24,7 +24,7 @@ import { assertGenerateUploadDeletable } from '@server/files/assertGenerateUploa
 import { holdsApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { Request } from 'express';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 
 // baseApi's scope gate is per route, so it admits either files scope (and ai:generate, for the

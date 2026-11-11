@@ -34,7 +34,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...a: unknown[]) => mocks.audit(...a),
 }));
-vi.mock('@server/billing/linkedAccounts', () => ({
+vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({
   propagateBatchAccountRisk: (...a: unknown[]) => mocks.propagateBatchAccountRisk(...a),
 }));
 

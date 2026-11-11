@@ -57,7 +57,7 @@ vi.mock('@bike4mind/database', () => ({
   lakeMembershipRemovalRepository: { upsertRemoval: vi.fn(), findLive: vi.fn().mockResolvedValue(null) },
   scopedSettingsRepository: { findOverrides: vi.fn().mockResolvedValue([]) },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccessById: h.assertLakeAccessById,

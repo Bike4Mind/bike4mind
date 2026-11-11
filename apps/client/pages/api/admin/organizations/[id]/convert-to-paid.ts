@@ -8,6 +8,7 @@ import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
+import { termsConsentSessionParams } from '@server/integrations/stripe/termsConsent';
 import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
@@ -102,6 +103,8 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
       { stripeCustomerId: organization.stripeCustomerId, accountCreatedAt: organization.createdAt },
       req.logger
     );
+    // The org owner completes this checkout, so the acceptance is recorded on them, not the admin.
+    const termsConsentParams = await termsConsentSessionParams(organization.userId);
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
@@ -109,6 +112,7 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
       customer: organization.stripeCustomerId,
       payment_method_types: ['card'],
       ...threeDSecureOptions,
+      ...termsConsentParams,
       line_items: [
         {
           price: ORGANIZATION_SUBSCRIPTION_PRICE_ID,

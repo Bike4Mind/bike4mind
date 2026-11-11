@@ -19,6 +19,8 @@ const m = vi.hoisted(() => ({
   create: vi.fn(),
   cancel: vi.fn(),
   ceiling: vi.fn(),
+  substitute: vi.fn(),
+  catalogModels: [] as unknown[],
 }));
 
 vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
@@ -35,7 +37,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
 vi.mock('@bike4mind/database', () => ({ transformBatchRepository: { create: m.create } }));
 vi.mock('@bike4mind/llm-adapters', () => ({
-  getAvailableModels: async () => [{ id: 'claude-opus-4-6', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } }],
+  getAvailableModels: async () => m.catalogModels,
   AnthropicBatchService: { fromApiKey: () => ({ submitBatch: m.submitBatch }) },
 }));
 vi.mock('@anthropic-ai/sdk', () => ({
@@ -50,6 +52,7 @@ vi.mock('@server/billing/meterPlatformCompletion', () => ({
     },
   }),
   completionCeilingUsd: (...args: unknown[]) => m.ceiling(...args),
+  resolveShadowSubstitute: (...args: unknown[]) => m.substitute(...args),
   isCreditsEnforced: async () => m.enforced,
   reserveCompletionCredits: (...args: unknown[]) => m.reserve(...args),
 }));
@@ -75,8 +78,19 @@ async function submit(requests: unknown[]) {
   return res;
 }
 
+const opus = {
+  id: 'claude-opus-4-6',
+  backend: 'anthropic',
+  type: 'text',
+  pricing: { 200_000: { input: 1e-6, output: 2e-6 } },
+};
+const sonnet = { ...opus, id: 'claude-sonnet-4-6' };
+const haiku = { ...opus, id: 'claude-haiku-4-5', pricing: { 200_000: { input: 1e-7, output: 2e-7 } } };
+
 beforeEach(() => {
   vi.clearAllMocks();
+  m.catalogModels = [opus];
+  m.substitute.mockResolvedValue(undefined);
   m.quotaAdmission.mockResolvedValue({ release: vi.fn() });
   m.denied.clear();
   m.enforced = true;
@@ -221,5 +235,108 @@ describe('POST /api/transforms/batch metering', () => {
 
     m.enforced = false;
     expect((await submit([item('a', 'mystery-model')]))._getStatusCode()).toBe(202);
+  });
+
+  describe('restricted-tier substitution', () => {
+    it('runs the substitute while the hold and credit model stay on the requested model', async () => {
+      m.catalogModels = [opus, haiku];
+      m.substitute.mockResolvedValue(haiku);
+
+      await submit([item('a'), item('b')]);
+
+      expect(m.submitBatch.mock.calls[0][0].map((r: { model: string }) => r.model)).toEqual([
+        'claude-haiku-4-5',
+        'claude-haiku-4-5',
+      ]);
+      expect(m.ceiling.mock.calls.every(c => c[0].id === 'claude-opus-4-6')).toBe(true);
+      expect(m.reserve.mock.calls[0][1]).toBe(2);
+      const created = m.create.mock.calls[0][0];
+      expect(created.customIdMap).toEqual([
+        { customId: 'req_0', clientRef: 'a', model: 'claude-opus-4-6', executedModel: 'claude-haiku-4-5' },
+        { customId: 'req_1', clientRef: 'b', model: 'claude-opus-4-6', executedModel: 'claude-haiku-4-5' },
+      ]);
+      expect(Object.keys(created.billingModels).sort()).toEqual(['claude-haiku-4-5', 'claude-opus-4-6']);
+    });
+
+    it('refunds and masks the provider error when a substituted batch fails to submit', async () => {
+      m.catalogModels = [opus, haiku];
+      m.substitute.mockResolvedValue(haiku);
+      m.submitBatch.mockRejectedValue(new Error('model claude-haiku-4-5 overloaded'));
+
+      await expect(submit([item('a')])).rejects.toThrow(/^Batch submission failed$/);
+      expect(m.refund).toHaveBeenCalledTimes(1);
+      expect(m.create).not.toHaveBeenCalled();
+    });
+
+    it('offers only Anthropic models as substitute candidates', async () => {
+      m.catalogModels = [opus, haiku, { ...opus, id: 'gpt-x', backend: 'openai' }];
+
+      await submit([item('a')]);
+
+      const candidates = m.substitute.mock.calls[0][2] as { backend: string }[];
+      expect(candidates.length).toBeGreaterThan(0);
+      expect(candidates.every(c => c.backend === 'anthropic')).toBe(true);
+    });
+
+    it('sends the requested model and records no executedModel when nothing is substituted', async () => {
+      m.catalogModels = [opus, haiku];
+
+      await submit([item('a')]);
+
+      expect(m.submitBatch.mock.calls[0][0][0].model).toBe('claude-opus-4-6');
+      const created = m.create.mock.calls[0][0];
+      expect(created.customIdMap[0]).not.toHaveProperty('executedModel');
+      expect(Object.keys(created.billingModels)).toEqual(['claude-opus-4-6']);
+    });
+
+    it('clamps max_tokens to the substitute declared output limit without changing the hold', async () => {
+      m.catalogModels = [opus, haiku];
+      m.substitute.mockResolvedValue({ ...haiku, max_tokens: 400 });
+
+      await submit([item('a')]);
+
+      expect(m.submitBatch.mock.calls[0][0][0].maxTokens).toBe(400);
+      expect(m.ceiling.mock.calls.every(c => c[0].id === 'claude-opus-4-6' && c[2] === 1000)).toBe(true);
+      expect(m.reserve.mock.calls[0][1]).toBe(1);
+    });
+
+    it('leaves max_tokens alone when the substitute limit is derived or higher', async () => {
+      m.catalogModels = [opus, haiku];
+      m.substitute.mockResolvedValue({ ...haiku, max_tokens: 400, maxOutputTokensDerived: true });
+      await submit([item('a')]);
+      expect(m.submitBatch.mock.calls[0][0][0].maxTokens).toBe(1000);
+
+      m.substitute.mockResolvedValue({ ...haiku, max_tokens: 8000 });
+      await submit([item('a')]);
+      expect(m.submitBatch.mock.calls[1][0][0].maxTokens).toBe(1000);
+    });
+
+    it('sends the requested max_tokens unchanged when nothing is substituted', async () => {
+      m.catalogModels = [opus, haiku];
+
+      await submit([item('a')]);
+
+      expect(m.submitBatch.mock.calls[0][0][0].maxTokens).toBe(1000);
+    });
+
+    it('rewrites only the requests of the substituted model in a mixed batch', async () => {
+      m.catalogModels = [opus, sonnet, haiku];
+      m.substitute.mockImplementation(async (_req: unknown, info: { id: string }) =>
+        info.id === 'claude-opus-4-6' ? haiku : undefined
+      );
+
+      await submit([item('a'), item('b', 'claude-sonnet-4-6'), item('c')]);
+
+      expect(m.substitute).toHaveBeenCalledTimes(2);
+      expect(m.submitBatch.mock.calls[0][0].map((r: { model: string }) => r.model)).toEqual([
+        'claude-haiku-4-5',
+        'claude-sonnet-4-6',
+        'claude-haiku-4-5',
+      ]);
+      const map = m.create.mock.calls[0][0].customIdMap;
+      expect(map[0].executedModel).toBe('claude-haiku-4-5');
+      expect(map[1]).not.toHaveProperty('executedModel');
+      expect(map[1].model).toBe('claude-sonnet-4-6');
+    });
   });
 });

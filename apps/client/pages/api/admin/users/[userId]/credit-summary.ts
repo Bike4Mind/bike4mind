@@ -12,7 +12,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { isFreeTierCapUser, utcMidnight } from '@server/billing/freeTierDailyCapGate';
+import { isFreeTierCapUser, utcMidnight } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { chargedSpend, zeroFilledDailySpend } from '@server/utils/adminCreditSummary';

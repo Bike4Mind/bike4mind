@@ -1,5 +1,8 @@
 import type { AuditEntry } from '@bike4mind/common';
-import { findApiKeyScopeOption, isAdminProvisionedApiKeyScope } from '@client/app/constants/apiKeyScopes';
+import {
+  findApiKeyScopeOption,
+  isAdminProvisionedApiKeyScope,
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 
 export type AuditKeyScope = {
   value: string;

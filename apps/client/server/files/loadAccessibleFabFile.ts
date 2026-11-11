@@ -10,7 +10,7 @@ import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
-import type { EntitlementRequest } from '@server/entitlements';
+import type { EntitlementRequest } from '@bike4mind/server-utils/entitlements/index';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { fileContentUrl } from '@server/files/browserFileSigner';
 import type { Logger } from '@bike4mind/observability';

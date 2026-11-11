@@ -1,5 +1,5 @@
 import { toast } from 'sonner';
-import type { AdminUsersBulkResult } from '@client/app/utils/adminUsersBulk';
+import type { AdminUsersBulkResult } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { useUndoToast } from '../../shared/UndoToast';
 import { useAdminUsersBulkUndo } from './useAdminUsersBulk';
 

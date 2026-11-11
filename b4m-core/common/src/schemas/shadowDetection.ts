@@ -24,7 +24,7 @@ export type ShadowDetector = (typeof SHADOW_DETECTORS)[number];
 
 /**
  * Detectors whose detections already carry their own Decisions verdict
- * (apps/client/server/security/signupDomainHoldAssessment), so the abuse assessment sweep and the
+ * (apps/workers/src/security/signupDomainHoldAssessment), so the abuse assessment sweep and the
  * Detections assessment panel leave them alone.
  */
 export const SELF_ASSESSED_SHADOW_DETECTORS: readonly ShadowDetector[] = ['signupDomainHold'];

@@ -5,7 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { isOpenRegistrationAllowed } from '@server/utils/auth/openRegistration';
 import { getTurnstilePolicy } from '@server/utils/auth/turnstile';
 import { getAppleConfig } from '@bike4mind/server-utils/auth/appleConfig';
-import { publicAppUrl } from '@server/utils/validators';
+import { publicAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { configuredSupportEmail } from '@server/auth/blockedSignIn';
 
 export type ServerConfigPublic = {

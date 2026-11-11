@@ -10,7 +10,7 @@ import {
   NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS,
   notebookConvertedDownloadKey,
   notebookZipDownloadKey,
-} from '@server/notebooks/downloadCopyKeys';
+} from '@bike4mind/server-utils/notebooks/downloadCopyKeys';
 import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import { z } from 'zod';
 import archiver from 'archiver';

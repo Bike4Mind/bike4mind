@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import type { ActivationFunnel } from '@client/app/utils/activationFunnel';
 import { getErrorMessage } from '@client/app/utils/error';
-import type { UserFunnelStep } from '@client/app/utils/adminUsersFilter';
+import type { UserFunnelStep } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import type {
   AnalyticsAccounts,
   AnalyticsOverview,

@@ -73,6 +73,9 @@ export interface AccountBilling {
   balance?: number | null;
   plans: AccountBillingPlan[];
   creditPackages?: { id: string; price: number; credits: number; description: string }[];
+  /** A credit purchase must send acceptedTerms: true; termsUrl is the page the checkbox links to. */
+  termsConsentRequired?: boolean;
+  termsUrl?: string;
   /** Non-terminal subscriptions, active first. Any row blocks a new checkout. */
   subscriptions: AccountBillingSubscription[];
   error?: string;

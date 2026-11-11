@@ -26,8 +26,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { forfeitPaymentUnlock: mocks.forfeitPaymentUnlock } }));
 vi.mock('@bike4mind/server-utils/auth/signupProtection', () => ({ signupProtection: {} }));
-vi.mock('@server/billing/fraudBlockAlert', () => ({ alertFraudBlock: mocks.alertFraudBlock }));
-vi.mock('@server/security/riskReviewAutoApproval', () => ({
+vi.mock('@bike4mind/server-utils/billing/fraudBlockAlert', () => ({ alertFraudBlock: mocks.alertFraudBlock }));
+vi.mock('@bike4mind/server-utils/security/riskReviewAutoApproval', () => ({
   reopenSettledPaymentApproval: mocks.reopenSettledPaymentApproval,
 }));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({

@@ -44,7 +44,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     });
     clearStateNonce(res, NONCE_SLOT.githubLakeConnect);
     // A connection minted just now has ingested nothing: its first sync is only enqueued.
-    return res.status(201).json({ connection: toGitHubLakeConnectionResponse(conn, 0) });
+    return res.status(201).json({ connection: await toGitHubLakeConnectionResponse(conn, 0) });
   });
 
 export const config = {
