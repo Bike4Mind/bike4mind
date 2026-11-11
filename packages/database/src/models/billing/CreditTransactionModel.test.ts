@@ -3,7 +3,12 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { CreditTransaction, creditTransactionRepository } from './CreditTransactionModel';
-import { CreditHolderType, GenericCreditDeductTransaction, GenericDeductReasons } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  GenericCreditDeductTransaction,
+  GenericDeductReasons,
+  LEDGER_USAGE_TRANSACTION_TYPES,
+} from '@bike4mind/common';
 
 let mongod: MongoMemoryServer;
 
@@ -305,6 +310,61 @@ describe('CreditTransactionRepository.sourceUsageForOwner', () => {
     await CreditTransaction.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
     const windowed = await creditTransactionRepository.sourceUsageForOwner(ORG, CreditHolderType.Organization, 30);
     expect(windowed).toHaveLength(0);
+  });
+});
+
+describe('CreditTransactionRepository.usageTotalForOwner', () => {
+  const recent = () => new Date();
+
+  it('sums every usage type, including generic deducts, and leaves out transfers and credits added', async () => {
+    await seed([
+      { credits: -40, createdAt: recent() },
+      { type: 'tool_usage', credits: -5000, createdAt: recent() },
+      { type: 'generic_deduct', credits: -29, createdAt: recent() },
+      { type: 'transfer_credit', credits: -100, createdAt: recent() },
+      { type: 'purchase', credits: 500, createdAt: recent() },
+    ]);
+
+    const total = await creditTransactionRepository.usageTotalForOwner(ORG, CreditHolderType.Organization);
+
+    expect(total).toEqual({ creditsCharged: 5069, transactions: 3 });
+  });
+
+  it('agrees with the ledger section total (same type filter and abs) over one fixture set', async () => {
+    const ago = (days: number) => new Date(Date.now() - days * 86_400_000);
+    const rows = [
+      { type: 'text_generation_usage', credits: -40, createdAt: ago(1) },
+      { type: 'tool_usage', credits: -5000, createdAt: ago(2) },
+      { type: 'generic_deduct', credits: -29, createdAt: ago(3) },
+      { type: 'generic_deduct', credits: -11, createdAt: ago(20) },
+      { type: 'transfer_credit', credits: -100, createdAt: ago(1) },
+      { type: 'purchase', credits: 500, createdAt: ago(1) },
+      { type: 'generic_deduct', credits: -7, createdAt: ago(60) },
+    ];
+    await seed(rows);
+
+    for (const days of [7, 30]) {
+      const expected = rows
+        .filter(r => r.createdAt >= ago(days) && LEDGER_USAGE_TRANSACTION_TYPES.includes(r.type as never))
+        .reduce((sum, r) => sum + Math.abs(r.credits), 0);
+      const total = await creditTransactionRepository.usageTotalForOwner(ORG, CreditHolderType.Organization, days);
+      expect(total.creditsCharged).toBe(expected);
+    }
+  });
+
+  it('scopes to the owner and the trailing window, and is zero when nothing matches', async () => {
+    await seed([{ credits: -10, createdAt: recent() }]);
+    await seed([{ ownerId: 'org-2', credits: -999, createdAt: recent() }]);
+    await seed([{ credits: -7, createdAt: new Date('2020-01-01') }]);
+
+    expect(await creditTransactionRepository.usageTotalForOwner(ORG, CreditHolderType.Organization, 30)).toEqual({
+      creditsCharged: 10,
+      transactions: 1,
+    });
+    expect(await creditTransactionRepository.usageTotalForOwner('nobody', CreditHolderType.Organization)).toEqual({
+      creditsCharged: 0,
+      transactions: 0,
+    });
   });
 });
 

@@ -71,7 +71,13 @@ Other tabs require full admin access. Inside an open tab, an action the delegate
 
 ## Granting permissions
 
-There is no delegated-permission editor or grant endpoint in the admin panel. Delegated permissions are stored in the user's `adminPermissions` field and assigned directly in the database.
+To grant or revoke delegated permissions, open the user's profile. On **Overview**, the **Access** card lists the user's **Admin permissions**. Choose **Edit**, select the permissions the user should hold, enter a reason, and confirm. You may be asked to verify your identity again before the change is saved.
+
+- Only a full administrator can change delegated permissions. Holding `settings:manage` does not let a delegate grant permissions.
+- You cannot change your own permissions.
+- A Super Admin already holds every permission, so their permissions cannot be edited. Change their role to limit their access.
+- Every grant and revocation is recorded in the audit log with the reason, and the permissions before and after.
+- If someone else changed the user's permissions while your editor was open, saving fails and asks you to reload the profile. Reload, review the current permissions, and try again.
 
 To change full admin access, open the user's profile and choose **More > Change role** (also available from Overview). Select **Super Admin** to grant it, or another role to remove it, enter a reason, and confirm. Only a full administrator can make this change. You cannot change your own role or demote the last Super Admin.
 

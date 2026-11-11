@@ -14,6 +14,7 @@ import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { ReinstateDialog, SuspendDialog } from './actions/SuspendDialog';
 import { EditProfileDialog } from './actions/EditProfileDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
+import { AdminPermissionsDialog } from './actions/AdminPermissionsDialog';
 import {
   ApiKeyTrustDialog,
   CancelDeletionDialog,
@@ -71,6 +72,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <ShadowTierDialog {...props} />;
     case 'role':
       return <ChangeRoleDialog {...props} />;
+    case 'permissions':
+      return <AdminPermissionsDialog {...props} />;
     case 'productAccess':
       return <ProductAccessDialog {...props} />;
     case 'tags':

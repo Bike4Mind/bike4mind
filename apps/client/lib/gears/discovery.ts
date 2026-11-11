@@ -55,7 +55,7 @@ export const DISCOVERY_PRIORITY: readonly GearKey[] = [
  * Routes the modal never opens over: pages that own their first screen, and the gears page itself.
  * Leaving one of them keeps the decision open, so the modal can still show on the next page.
  */
-export const DISCOVERY_SKIPPED_PATHS: readonly string[] = ['/admin', '/gears', '/bob'];
+export const DISCOVERY_SKIPPED_PATHS: readonly string[] = ['/admin', '/gears', '/bob', '/profile'];
 
 export function isDiscoverySkippedPath(pathname: string): boolean {
   // The router matches paths case-insensitively, so /Bob renders the Bob screen too.
