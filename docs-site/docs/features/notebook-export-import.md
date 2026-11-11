@@ -49,7 +49,7 @@ Export and import your notebooks for backup, migration, and data portability.
 5. File downloaded as `notebooks-[user]-[date].json`
 
 ### Export Format
-The export creates a JSON file with this structure:
+The web notebook export currently creates a v1 JSON file with this structure:
 ```json
 {
   "exportVersion": "1.0.0",
@@ -68,6 +68,54 @@ The export creates a JSON file with this structure:
   ]
 }
 ```
+
+### Directory bundle format (v2)
+
+The versioned v2 format is a directory. A bundle writer stores one JSON object per line in
+`collections/<name>.jsonl`, writes external bytes under `files/`, then writes `manifest.json`
+last. Consumers should ignore a directory without a complete manifest. The web notebook
+download and upload endpoints above still use the single-file v1 JSON format; they do not
+accept a v2 directory as an uploaded JSON file.
+
+```text
+manifest.json
+collections/notebooks.jsonl
+collections/chat-messages.jsonl
+collections/knowledge.jsonl
+collections/artifacts.jsonl
+collections/tools.jsonl
+collections/agents.jsonl
+files/<sha256>
+```
+
+The manifest's `exportVersion` is `2.0.0`, `platform` is `bike4mind`, and `exportedAt` is
+an ISO timestamp. Its `collections` map is extensible: each name records a relative `path`,
+`count` of JSONL rows, byte length (`bytes`), and lowercase SHA-256 of the exact UTF-8 bytes
+(including the final newline). `files` lists external file paths with byte length and SHA-256;
+JSONL files appear only under `collections`. All paths are relative to the bundle root.
+The manifest has no checksum of itself. A reader checks every listed byte length, checksum,
+and collection count before importing; do not follow paths outside the bundle root.
+
+Notebook records contain metadata rather than nested arrays. Each chat message, knowledge
+file, artifact, tool, and agent record carries a `notebookId` matching a notebook record's
+`id`. A knowledge record with local bytes uses `contentPath` (rather than inline base64)
+to refer to an entry under `files/`; missing source bytes may leave a `contentUrl` reference
+that cannot be restored without access to the original source. Other collection names may
+be added by producers without changing the manifest format.
+Message `images` may contain `{ "contentPath": "files/<sha256>" }` for embedded image bytes,
+or a string storage reference if the producer exported images as keys. Consumers need
+access to the original storage system for a string reference.
+
+The published [manifest JSON Schema](https://docs.bike4mind.com/schemas/export-v2/manifest.schema.json)
+and [notebook](https://docs.bike4mind.com/schemas/export-v2/notebook.schema.json),
+[chat message](https://docs.bike4mind.com/schemas/export-v2/chat-message.schema.json),
+[knowledge](https://docs.bike4mind.com/schemas/export-v2/knowledge.schema.json),
+[artifact](https://docs.bike4mind.com/schemas/export-v2/artifact.schema.json),
+[tool](https://docs.bike4mind.com/schemas/export-v2/tool.schema.json), and
+[agent](https://docs.bike4mind.com/schemas/export-v2/agent.schema.json) record schemas
+describe the notebook collections. A complete [sample bundle manifest](https://docs.bike4mind.com/schemas/export-v2/sample/manifest.json)
+links to the example JSONL and file entries in the same directory. Importers should validate
+schemas and verify manifest checksums; JSON Schema alone does not check cross-file references.
 
 ## Import Features
 
@@ -161,7 +209,7 @@ curl -X POST /api/notebooks/import \
 - Asynchronous processing prevents timeouts
 
 ### Compatibility
-- **Format Version**: Current version 1.0.0
+- **Web JSON Format Version**: 1.0.0; directory bundles use 2.0.0
 - **Backward Compatibility**: Newer versions support older formats
 - **Cross-Platform**: Works between different platform instances
 - **Future-Proof**: Extensible format for new features

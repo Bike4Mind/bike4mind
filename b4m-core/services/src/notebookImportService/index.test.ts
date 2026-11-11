@@ -3,6 +3,8 @@ import { DefaultLLMParams } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { NotebookImportService } from './index';
 import type { NotebookImportAdapters } from './index';
+import { createNotebookBundle } from '../notebookExportService/bundle';
+import type { ExportedNotebook } from '../notebookExportService/types';
 
 /**
  * Imported messages are keyed by the presence or absence of `id`. Getting it wrong either failed
@@ -100,6 +102,51 @@ const OPTIONS = {
   importTools: false,
   importAgents: false,
 } as unknown as Parameters<NotebookImportService['importNotebooks']>[2];
+
+describe('v1 and v2 notebook re-import', () => {
+  it.each(['1.0.0', '2.0.0'])('imports %s with message and external knowledge bytes', async version => {
+    const { adapters, bulkCreate } = makeAdapters();
+    const data = new Map<string, Uint8Array>();
+    const source: ExportedNotebook = {
+      ...NOTEBOOK,
+      tags: [],
+      isAutoNamed: false,
+      knowledge: [{ ...KNOWLEDGE_FILE, uploadedAt: '2026-01-01T00:00:00.000Z' }],
+    } as ExportedNotebook;
+    const service = new NotebookImportService(adapters);
+    const options = { ...OPTIONS, importKnowledge: true };
+    const result =
+      version === '1.0.0'
+        ? await service.importNotebooks(
+            'user-1',
+            {
+              exportVersion: version,
+              exportedAt: '2026-01-01T00:00:00.000Z',
+              platform: 'lumina5',
+              notebooks: [source],
+            },
+            options
+          )
+        : await (async () => {
+            await createNotebookBundle([source], async (path, bytes) => {
+              data.set(path, Buffer.from(bytes));
+            });
+            return service.importBundle(
+              'user-1',
+              async path => {
+                const bytes = data.get(path);
+                if (!bytes) throw new Error(`Missing ${path}`);
+                return bytes;
+              },
+              options
+            );
+          })();
+    expect(result.success).toBe(true);
+    expect(result.importedNotebooks).toBe(1);
+    expect(bulkCreate.mock.calls[0][0][0].prompt).toBe('hello');
+    expect(adapters.fileStorageService.uploadFile).toHaveBeenCalledWith(expect.any(String), Buffer.from('hello'));
+  });
+});
 
 /** Runs an import and returns the first message handed to the store. */
 async function runImport(opts: Record<string, unknown>, { existing = [] as unknown[], payload = PAYLOAD } = {}) {

@@ -24,6 +24,7 @@ import { MAX_FILE_SIZE_DEFAULT_MB } from '../fabFileService/create';
 import { checkStorageLimit, getSettingsMap, getSettingsValue, normalizeId } from '@bike4mind/utils';
 import type { IAdminSettingsRepository, IChatHistoryItem, IUserDocument } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
+import { readNotebookBundle, type BundleRead } from '../notebookExportService/bundle';
 
 /** A notebook the import can address: found by name, or just created. */
 interface NotebookRef {
@@ -221,6 +222,10 @@ export type NotebookImportAdminSettingsStayRequired = Expect<
  */
 export class NotebookImportService {
   constructor(private adapters: NotebookImportAdapters) {}
+
+  async importBundle(targetUserId: string, read: BundleRead, options: NotebookImportOptions): Promise<ImportResult> {
+    return this.importNotebooks(targetUserId, await readNotebookBundle(read), options);
+  }
 
   /**
    * Import issues surfaced to the caller: per-attachment failures, plus notebook-level notices like
