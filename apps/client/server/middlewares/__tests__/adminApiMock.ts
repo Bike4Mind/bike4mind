@@ -7,7 +7,7 @@ type Handler = (req: unknown, res: unknown) => unknown;
 type Middleware = (req: unknown, res: unknown, next: () => void) => unknown;
 
 export const adminApiMock = async () => {
-  const { ForbiddenError, meetsAdminPermissionRequirement, missingAdminPermissionMessage } =
+  const { ForbiddenError, MethodNotAllowedError, meetsAdminPermissionRequirement, missingAdminPermissionMessage } =
     await import('@bike4mind/common');
   type Requirement = Parameters<typeof meetsAdminPermissionRequirement>[1];
   type Req = { method?: string; user?: Parameters<typeof meetsAdminPermissionRequirement>[0] };
@@ -33,7 +33,8 @@ export const adminApiMock = async () => {
         async (req: Req, res: unknown) => {
           const method = req.method ?? 'GET';
           const requirement = config.adminPermissions[method];
-          if (requirement) requireAdminPermission(req, requirement);
+          if (!requirement) throw new MethodNotAllowedError('Admin route has no permission declared for this method');
+          requireAdminPermission(req, requirement);
           for (const middleware of middlewares) await middleware(req, res, () => undefined);
           return handlers[method]?.(req, res);
         },

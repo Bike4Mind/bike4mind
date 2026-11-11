@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError, ConflictError, missingAdminPermissionMessage } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
+  csrfMiddleware: vi.fn(),
   findById: vi.fn(),
   existsOtherUserWithEmail: vi.fn(),
   validateUsernameChange: vi.fn(),
@@ -17,7 +18,7 @@ vi.mock('@server/middlewares/adminApi', async () =>
   (await import('@server/middlewares/__tests__/adminApiMock')).adminApiMock()
 );
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
+vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => h.csrfMiddleware }));
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: h.requireStepUp }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: h.findById, existsOtherUserWithEmail: h.existsOtherUserWithEmail },
@@ -99,6 +100,10 @@ describe('PATCH /api/admin/users/[userId]/profile', () => {
         params.username && (params.username = params.username.trim())
     );
     h.buildEmailChangeMailer.mockReturnValue({ mailer: true });
+  });
+
+  it('passes the csrf middleware to the chain', () => {
+    expect((handler as unknown as { _middlewares: unknown[] })._middlewares).toContain(h.csrfMiddleware);
   });
 
   it('declares users:moderate for PATCH', () => {
