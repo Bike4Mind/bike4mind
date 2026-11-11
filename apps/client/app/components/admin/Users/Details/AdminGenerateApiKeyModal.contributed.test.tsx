@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import AdminGenerateApiKeyModal from './AdminGenerateApiKeyModal';
+import { useUser } from '@client/app/contexts/UserContext';
 
 const h = vi.hoisted(() => ({ mutate: vi.fn().mockResolvedValue({ key: 'secret' }) }));
 
@@ -51,6 +52,11 @@ const submitScopes = async () => {
 };
 
 describe('AdminGenerateApiKeyModal - contributed scopes', () => {
+  beforeEach(() => {
+    useUser.setState({ currentUser: { id: 'admin1', isAdmin: true } as never });
+    h.mutate.mockClear();
+  });
+
   it('marks an entitlement-gated contributed scope and keeps it out of Select All', async () => {
     renderModal();
     expect(screen.getByTestId('admin-generate-key-scope-acme:write-entitlement').textContent).toContain('acme:pro');
