@@ -75,8 +75,11 @@ const makeDeps = (
   return deps satisfies StaleDetectionGradeDeps;
 };
 
-const run = (deps: StaleDetectionGradeDeps, afterDays = 7, limits: { limit?: number; scanLimit?: number } = {}) =>
-  gradeStaleSignupBursts({ afterDays, now: NOW, deps, ...limits });
+const run = (
+  deps: StaleDetectionGradeDeps,
+  afterDays = 7,
+  limits: { limit?: number; scanLimit?: number; gradeLimit?: number } = {}
+) => gradeStaleSignupBursts({ afterDays, now: NOW, deps, ...limits });
 
 describe('gradeStaleSignupBursts', () => {
   it('grades an uncorroborated stale burst insufficient evidence as automation and audits it', async () => {
@@ -123,6 +126,16 @@ describe('gradeStaleSignupBursts', () => {
 
     expect(deps.listStale).toHaveBeenNthCalledWith(2, expect.any(Date), 1, { detectedAt: DETECTED_AT, id: 'd2' });
     expect(report).toMatchObject({ considered: 3, graded: 0, scanLimitReached: true });
+  });
+
+  it('stops at the grade limit and reports it', async () => {
+    const deps = makeDeps([detection('d1', ['u1']), detection('d2', ['u2']), detection('d3', ['u3'])]);
+
+    const report = await run(deps, 7, { limit: 2, gradeLimit: 1 });
+
+    expect(deps.grade).toHaveBeenCalledTimes(1);
+    expect(deps.listStale).toHaveBeenCalledTimes(1);
+    expect(report).toMatchObject({ considered: 2, graded: 1, gradeLimitReached: true, scanLimitReached: false });
   });
 
   it('grades when the latest assessment is insufficient evidence', async () => {

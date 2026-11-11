@@ -24,6 +24,8 @@ export const AUTO_GRADE_BATCH_LIMIT = 500;
  * re-reading the same oldest page; the hourly run drains a larger backlog over several runs.
  */
 export const AUTO_GRADE_SCAN_LIMIT = 5_000;
+/** Detections graded per run; each grade is two sequential writes inside the campaign sweep's Lambda. */
+export const AUTO_GRADE_GRADE_LIMIT = 500;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_TIME_MS = 20_000;
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
@@ -56,6 +58,8 @@ export type StaleDetectionGradeReport = {
   failed: number;
   /** True when the run stopped at the scan limit with more ungraded detections possibly left. */
   scanLimitReached: boolean;
+  /** True when the run stopped at the grade limit with more ungraded detections possibly left. */
+  gradeLimitReached: boolean;
 };
 
 export const autoGradeReason = (afterDays: number) =>
@@ -89,12 +93,14 @@ export async function gradeStaleSignupBursts({
   deps,
   limit = AUTO_GRADE_BATCH_LIMIT,
   scanLimit = AUTO_GRADE_SCAN_LIMIT,
+  gradeLimit = AUTO_GRADE_GRADE_LIMIT,
 }: {
   afterDays: number;
   now: Date;
   deps: StaleDetectionGradeDeps;
   limit?: number;
   scanLimit?: number;
+  gradeLimit?: number;
 }): Promise<StaleDetectionGradeReport> {
   const report: StaleDetectionGradeReport = {
     considered: 0,
@@ -102,6 +108,7 @@ export async function gradeStaleSignupBursts({
     skipped: { accountActioned: 0, otherDetector: 0, assessment: 0, changedMeanwhile: 0 },
     failed: 0,
     scanLimitReached: false,
+    gradeLimitReached: false,
   };
   if (!Number.isInteger(afterDays) || afterDays <= 0) return report;
 
@@ -114,7 +121,11 @@ export async function gradeStaleSignupBursts({
     report.considered += page.length;
     const last = page[page.length - 1];
     after = { detectedAt: last.detectedAt, id: last.id };
-    await gradePage(page, reason, deps, report);
+    await gradePage(page, reason, deps, report, gradeLimit);
+    if (report.graded >= gradeLimit) {
+      report.gradeLimitReached = true;
+      return report;
+    }
   }
   report.scanLimitReached = true;
   return report;
@@ -124,7 +135,8 @@ async function gradePage(
   stale: ShadowDetectionItem[],
   reason: string,
   deps: StaleDetectionGradeDeps,
-  report: StaleDetectionGradeReport
+  report: StaleDetectionGradeReport,
+  gradeLimit: number
 ): Promise<void> {
   const userIds = [...new Set(stale.flatMap(detection => detection.userIds))];
   const earliest = new Date(Math.min(...stale.map(detection => detection.detectedAt.getTime())));
@@ -136,6 +148,7 @@ async function gradePage(
   ]);
 
   for (const detection of stale) {
+    if (report.graded >= gradeLimit) return;
     const skip = skipReason(detection, { suspended, statusChanges, flagged, assessments });
     if (skip) {
       report.skipped[skip] += 1;
