@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -53,9 +54,17 @@ const collectedFiles = (clientTestLane: string | undefined): string[] => {
   return entries.map(entry => path.relative(PACKAGE_ROOT, (entry as { file: string }).file)).sort();
 };
 
-const trackedFiles = (pattern: RegExp): string[] =>
-  execFileSync('git', ['ls-files'], { cwd: PACKAGE_ROOT, encoding: 'utf8' })
-    .split('\n')
+// An fs walk rather than `git ls-files`: this file runs in the cached unit lane, where the guard in
+// scripts/__tests__/turbo-test-cache.test.mjs forbids git scans. Skips the dirs vitest never collects.
+const packageFiles = (directory: string = PACKAGE_ROOT): string[] =>
+  readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    if (entry.name === 'node_modules' || entry.name.startsWith('.')) return [];
+    const fullPath = path.join(directory, entry.name);
+    return entry.isDirectory() ? packageFiles(fullPath) : [path.relative(PACKAGE_ROOT, fullPath)];
+  });
+
+const packageFilesMatching = (pattern: RegExp): string[] =>
+  packageFiles()
     .filter(file => pattern.test(file))
     .sort();
 
@@ -63,8 +72,8 @@ const trackedFiles = (pattern: RegExp): string[] =>
 // as uncached must never be collected by a cached lane, and each lane must keep its own files.
 describe('the client test lanes', () => {
   it('collects every *.repo.test.* file in the repo lane and nowhere else', { timeout: 60_000 }, () => {
-    const repoFiles = trackedFiles(/\.repo\.test\.[cm]?[jt]sx?$/);
-    const e2eFiles = trackedFiles(/\.e2e\.test\.ts$/);
+    const repoFiles = packageFilesMatching(/\.repo\.test\.[cm]?[jt]sx?$/);
+    const e2eFiles = packageFilesMatching(/\.e2e\.test\.ts$/);
     expect(repoFiles.length).toBeGreaterThan(0);
     expect(collectedFiles('repo')).toEqual(repoFiles);
     expect(collectedFiles('integration')).toEqual(e2eFiles);
