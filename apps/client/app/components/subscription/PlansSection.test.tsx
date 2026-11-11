@@ -25,6 +25,7 @@ const cancelMutate = vi.fn();
 const subscribeMutate = vi.fn();
 const changeMutate = vi.fn();
 const portalMutate = vi.fn();
+const trackUpsell = vi.fn();
 const USER_ID = 'user_1';
 
 let subscriptions: IUserSubscription[] = [];
@@ -42,6 +43,8 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useCancelSubscription: () => ({ mutate: (...args: unknown[]) => cancelMutate(...args), isPending: false }),
   useChangeSubscription: () => ({ mutate: (...args: unknown[]) => changeMutate(...args), isPending: false }),
 }));
+
+vi.mock('@client/app/utils/funnelEvents', () => ({ trackUpsell: (...args: unknown[]) => trackUpsell(...args) }));
 
 vi.mock('@client/app/hooks/data/stripe', () => ({
   useGetSubscriptionPlans: () => ({
@@ -259,6 +262,7 @@ describe('PlansSection', () => {
     changeMutate.mockReset();
     portalMutate.mockReset();
     payInvoice.mockReset();
+    trackUpsell.mockReset();
     sessionStorage.clear();
   });
 
@@ -357,6 +361,26 @@ describe('PlansSection', () => {
       .click(screen.getByRole('button', { name: 'Cancel Professional subscription' }));
 
     expect(cancelMutate).toHaveBeenCalledWith(PRICE_ID);
+  });
+
+  it('reports the click and tags the checkout when Subscribe is pressed', async () => {
+    renderSection();
+
+    await userEvent.setup({ delay: null }).click(screen.getByRole('button', { name: 'Subscribe to Professional' }));
+
+    expect(trackUpsell).toHaveBeenCalledWith('click', { surface: 'billing_plans', plan: 'Professional' });
+    expect(subscribeMutate.mock.calls[0][0]).toMatchObject({ priceId: PRICE_ID, surface: 'billing_plans' });
+  });
+
+  it('does not report a click for Cancel', async () => {
+    subscriptions = [subRow()];
+    renderSection();
+
+    await userEvent
+      .setup({ delay: null })
+      .click(screen.getByRole('button', { name: 'Cancel Professional subscription' }));
+
+    expect(trackUpsell).not.toHaveBeenCalled();
   });
 
   it('offers Subscribe, not Change, when the only plan the user holds is delinquent', () => {

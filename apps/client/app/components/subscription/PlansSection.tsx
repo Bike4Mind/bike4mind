@@ -245,6 +245,7 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
                     <SubscribeButton
                       priceId={plan.priceId}
                       planName={plan.name}
+                      surface="billing_plans"
                       onSubscriptionChanged={onSubscriptionChanged}
                       cancellableSubscriptions={cancellableSubscriptions}
                     />

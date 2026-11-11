@@ -22,6 +22,7 @@ import CreditsExplanation from './CreditsExplanation';
 import { PlansSection, PlansSectionSkeleton } from './PlansSection';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
+import { trackUpsell } from '@client/app/utils/funnelEvents';
 import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
 
 export type BillingEntry = 'credits_chip' | 'credits_cta' | 'deep_link' | 'profile_menu' | 'unknown';
@@ -136,6 +137,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   const purchasedRef = useRef(false);
   const paymentPendingRef = useRef(false);
   const leftForUsageRef = useRef(false);
+  const impressionShownRef = useRef(false);
 
   // Abandonment is logged on the open -> closed transition, not in a close handler, so closes made
   // outside the modal (the `?billing=` host's Back/URL change) count too. The metadata is the one
@@ -145,11 +147,13 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
       const opened = openedMetadataRef.current;
       if (opened && !purchasedRef.current && !paymentPendingRef.current && !leftForUsageRef.current) {
         logEvent({ type: FirstRunEvents.BILLING_CLOSED_WITHOUT_PURCHASE, metadata: opened });
+        if (impressionShownRef.current) trackUpsell('dismiss', { surface: 'billing_plans', trigger: opened.entry });
       }
       openedMetadataRef.current = null;
       purchasedRef.current = false;
       paymentPendingRef.current = false;
       leftForUsageRef.current = false;
+      impressionShownRef.current = false;
       return;
     }
     if (openedMetadataRef.current) return;
@@ -177,7 +181,14 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   // useGetSubscriptionPlans only fetches with enforceCredits on; a disabled query is pending forever, so
   // PlansSection would hold its skeleton for good. Without plans, Billing is the credit packs alone.
   const plansOffered = !(plans.isPending && plans.fetchStatus === 'idle');
+  const plansLead = ready && plansOffered && plansFirst;
   const nudgeToCredits = !!currentSubscription || planUnknown || !plansOffered;
+
+  useEffect(() => {
+    if (!open || !plansLead || impressionShownRef.current) return;
+    impressionShownRef.current = true;
+    trackUpsell('impression', { surface: 'billing_plans', trigger: entry });
+  }, [open, plansLead, entry]);
 
   const plansHeadingRef = useRef<HTMLHeadingElement>(null);
   const creditsHeadingRef = useRef<HTMLHeadingElement>(null);
