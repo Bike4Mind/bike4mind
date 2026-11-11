@@ -64,6 +64,8 @@ import handler from '../share-token';
 const LIVE_MATCH = { revokedAt: null, __notExpired: true };
 const IS_LIVE_EXPR = {
   $and: [
+    { $eq: [{ $type: '$$entry.token' }, 'string'] },
+    { $ne: ['$$entry.token', ''] },
     { $eq: [{ $ifNull: ['$$entry.revokedAt', null] }, null] },
     {
       $or: [

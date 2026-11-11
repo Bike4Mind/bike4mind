@@ -130,11 +130,13 @@ function newestLive(links: ShareLinkView[]): ShareLinkView | undefined {
   return links[links.length - 1];
 }
 
-/** Matches an entry that is live (not revoked, not expired), tolerating absent fields.
- *  Must stay in sync with `liveShareTokens` / `liveShareTokenMatch` in `@bike4mind/database`. */
+/** Matches an entry that is live (has a token, not revoked, not expired), tolerating absent
+ *  fields. Must stay in sync with `liveShareTokens` / `liveShareTokenMatch` in `@bike4mind/database`. */
 function isLive(now: Date): Record<string, unknown> {
   return {
     $and: [
+      { $eq: [{ $type: '$$entry.token' }, 'string'] },
+      { $ne: ['$$entry.token', ''] },
       { $eq: [{ $ifNull: ['$$entry.revokedAt', null] }, null] },
       {
         $or: [{ $eq: [{ $ifNull: ['$$entry.expiresAt', null] }, null] }, { $gt: ['$$entry.expiresAt', now] }],
@@ -143,15 +145,9 @@ function isLive(now: Date): Record<string, unknown> {
   };
 }
 
-/** Live-entry count of `shareTokens`, as an aggregation expression. Also requires a token, as
- *  `liveShareTokens()` does, so this precondition and the snapshot's 400 count the same set. */
+/** Live-entry count of `shareTokens`, as an aggregation expression. */
 function liveCount(now: Date): Record<string, unknown> {
-  const hasToken = { $gt: [{ $strLenCP: { $ifNull: ['$$entry.token', ''] } }, 0] };
-  return {
-    $size: {
-      $filter: { input: { $ifNull: ['$shareTokens', []] }, as: 'entry', cond: { $and: [isLive(now), hasToken] } },
-    },
-  };
+  return { $size: { $filter: { input: { $ifNull: ['$shareTokens', []] }, as: 'entry', cond: isLive(now) } } };
 }
 
 /**
