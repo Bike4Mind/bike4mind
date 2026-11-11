@@ -198,6 +198,17 @@ describe('sanitizeFeedbackPagePath', () => {
     expect(sanitizeFeedbackPagePath('/notebooks/507f1f77bcf86cd799439011')).toBe('/notebooks/507f1f77bcf86cd799439011');
   });
 
+  it('masks the whole /share/ param whatever its shape', () => {
+    expect(sanitizeFeedbackPagePath('/share/507f1f77bcf86cd799439011,507f191e810c19729de860ea')).toBe(
+      '/share/:redacted'
+    );
+    expect(sanitizeFeedbackPagePath(`/share/${'Ab-_'.repeat(11).slice(0, 43)}`)).toBe('/share/:redacted');
+    expect(sanitizeFeedbackPagePath('/share/507f1f77bcf86cd799439011')).toBe('/share/:redacted');
+    expect(sanitizeFeedbackPagePath('/share/abc/accept')).toBe('/share/:redacted/accept');
+    expect(sanitizeFeedbackPagePath('/share')).toBe('/share');
+    expect(sanitizeFeedbackPagePath('/shared/abc')).toBe('/shared/abc');
+  });
+
   it('keeps a long kebab-case slug that has no digit', () => {
     const slug = '/help/getting-started-with-notebooks-and-sessions';
     expect(sanitizeFeedbackPagePath(slug)).toBe(slug);
