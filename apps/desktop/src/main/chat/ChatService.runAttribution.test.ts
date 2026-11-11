@@ -106,14 +106,15 @@ describe('orchestration run attribution', () => {
     return (await store.get(id))?.orchestrationPolicy?.serverRunId;
   }
 
-  it('mints a run when Orchestrate turns on and sends the root turn under it', async () => {
+  it('mints a run on the first orchestrated turn and sends the root turn under it', async () => {
     const parent = await created();
     await service.setSessionOrchestrate(parent.id, true);
-    await vi.waitUntil(async () => (await storedRunId(parent.id)) === RUN_A, { timeout: 5000 });
-    expect(mint).toHaveBeenCalledWith(expect.any(String), expect.anything(), parent.id);
+    expect(mint).not.toHaveBeenCalled();
 
     await service.send(parent.id, 'Plan the work');
     await waitStream(0);
+    expect(mint).toHaveBeenCalledWith(expect.any(String), expect.anything(), parent.id);
+    expect(await storedRunId(parent.id)).toBe(RUN_A);
     expect(call(0)[1].run).toEqual({ runId: RUN_A, role: 'root', purpose: 'turn' });
     expect(call(0)[2].headers?.['X-Request-ID']).toBeTruthy();
     finish(0);
@@ -132,10 +133,9 @@ describe('orchestration run attribution', () => {
   });
 
   it('sends the turn unattributed when no run can be minted, and a worker that mints later shares it with the root', async () => {
-    mint.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
+    mint.mockResolvedValueOnce(undefined);
     const parent = await created();
     await service.setSessionOrchestrate(parent.id, true);
-    await vi.waitUntil(() => mint.mock.calls.length === 1, { timeout: 5000 });
 
     await service.send(parent.id, 'Delegate the bounded task');
     await waitStream(0);
@@ -175,7 +175,6 @@ describe('orchestration run attribution', () => {
   it('drops a run the server refuses and resends the request once without it', async () => {
     const parent = await created();
     await service.setSessionOrchestrate(parent.id, true);
-    await vi.waitUntil(async () => (await storedRunId(parent.id)) === RUN_A, { timeout: 5000 });
     // A streamed request's error body is a stream too, not a string.
     const envelope = JSON.stringify({ error: 'Run not found', errorCode: 'run_not_found' });
     post.mockImplementationOnce(() =>
@@ -311,8 +310,6 @@ describe('orchestration run attribution', () => {
   });
 
   it('spawns a worker with the run id the root stored after its turn began', async () => {
-    let resolveToggleMint!: (value: CompletionRun) => void;
-    mint.mockImplementationOnce(() => new Promise<CompletionRun>(done => (resolveToggleMint = done)));
     const create = vi.spyOn(store, 'create');
     const parent = await created();
     await service.setSessionOrchestrate(parent.id, true);
@@ -335,13 +332,11 @@ describe('orchestration run attribution', () => {
     await vi.waitUntil(() => create.mock.calls.some(([, init]) => init?.orchestrationPolicy), { timeout: 5000 });
     const spawned = create.mock.calls.find(([, init]) => init?.orchestrationPolicy)?.[1];
     expect(spawned?.orchestrationPolicy?.serverRunId).toBe(RUN_A);
-    resolveToggleMint(run(RUN_A));
   });
 
   it("copies the root's run id onto a worker, which keeps it after a restart without minting", async () => {
     const parent = await created();
     await service.setSessionOrchestrate(parent.id, true);
-    await vi.waitUntil(async () => (await storedRunId(parent.id)) === RUN_A, { timeout: 5000 });
     const rootPolicy = (await store.get(parent.id))?.orchestrationPolicy;
     if (!rootPolicy) throw new Error('No root policy');
     const { serverRunId: _id, ...beforeMint } = rootPolicy;
@@ -379,7 +374,6 @@ describe('orchestration run attribution', () => {
   it('keeps a newer run id when a refusal of an older one lands late', async () => {
     const parent = await created();
     await service.setSessionOrchestrate(parent.id, true);
-    await vi.waitUntil(async () => (await storedRunId(parent.id)) === RUN_A, { timeout: 5000 });
     const policy = (await store.get(parent.id))?.orchestrationPolicy;
     if (!policy) throw new Error('No root policy');
     const NEWER = '0f1e2d3c-4b5a-4968-8776-655443322110';

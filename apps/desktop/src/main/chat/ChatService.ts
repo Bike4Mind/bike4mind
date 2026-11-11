@@ -1831,10 +1831,10 @@ export class ChatService {
         rootRunId: randomUUID(),
         policy: await this.deps.store.getRolePolicy(),
       };
+      // No server run is minted here: the first orchestrated turn mints one, so a toggle that never
+      // sends a turn leaves no server row behind.
       const saved = await this.deps.store.setOrchestrationPolicy(sessionId, rootPolicy, scope);
       if (!saved) return null;
-      // Not awaited: the toggle must not wait on the network. A turn that finds no id yet mints again.
-      void this.mintServerRun(sessionId, rootPolicy, scope);
     }
     if (!orchestrate && !session.origin) await this.deps.store.setOrchestrationPolicy(sessionId, undefined, scope);
     if (this.deps.store.scopeKey() !== scope) return null;
