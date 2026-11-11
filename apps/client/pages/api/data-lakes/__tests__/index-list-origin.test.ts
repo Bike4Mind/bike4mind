@@ -26,6 +26,8 @@ const { captured, mockToAccessContext, mockFindBoundDataLakeIds, LAKE } = vi.hoi
   },
 }));
 
+// The plan gate has its own tests (server/entitlements/lakePlanGate.test.ts).
+vi.mock('@server/entitlements/lakePlanGate', () => ({ assertLakePlanAllowed: vi.fn(async () => undefined) }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};

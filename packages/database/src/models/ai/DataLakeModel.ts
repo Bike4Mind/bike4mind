@@ -35,6 +35,7 @@ import {
   DATA_LAKE_STABLE_STATUSES,
   DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES,
   LAKE_ATTACHABLE_STATUSES,
+  LAKE_UNCOUNTED_STATUSES,
   DATA_LAKE_ORIGINS,
   DATA_LAKE_PENDING_CONNECTORS,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
@@ -909,6 +910,15 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       ],
     };
     return this.dataLakeModel.countDocuments(filter);
+  }
+
+  /** Served by the { createdByUserId: 1 } index; see IDataLakeRepository for the contract. */
+  async countCountedCreatedBy(userId: string): Promise<number> {
+    if (!userId) return 0;
+    return this.dataLakeModel.countDocuments({
+      createdByUserId: userId,
+      status: { $nin: [...LAKE_UNCOUNTED_STATUSES] },
+    });
   }
 
   /**
