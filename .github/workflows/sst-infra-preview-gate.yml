@@ -6,15 +6,21 @@ name: SST / infra preview gate
 # and it ran for the first time on staging. This gate reuses the deployer's
 # `preview-deployed` label as the "a real hydrate+deploy has happened" signal.
 #
-# The job ALWAYS runs (no path filter) and decides applicability internally, so
+# The trusted trigger has no path filter and decides applicability internally, so
 # that as a required check it reports success on unrelated PRs instead of
 # hanging pending. The `labeled`/`unlabeled` triggers re-evaluate the moment the
 # deployer adds/removes the label. It also fires on `merge_group` (main uses a
 # merge queue): the job is skipped there, which reports the required check as
 # passing without taking a runner slot.
 
+# Label cleanup needs a write token on fork PRs. This workflow reads metadata only;
+# never check out or execute the PR head here.
 on:
+  # Validate edits to this workflow before its trusted trigger is present on the base branch.
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths: ['.github/workflows/sst-infra-preview-gate.yml']
+  pull_request_target:
     types: [opened, synchronize, reopened, labeled, unlabeled]
   merge_group:
     branches: [main]
@@ -34,15 +40,35 @@ concurrency:
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   preview-gate:
     name: preview gate
     # merge_group has no pull_request context to check.
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request'
     runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
+      - name: Expire preview waiver on push
+        uses: actions/github-script@v8
+        with:
+          script: |
+            if (context.payload.action !== 'synchronize') return;
+            const pullRequest = context.payload.pull_request;
+            if (!pullRequest.labels.some(label => label.name === 'skip-preview')) return;
+
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                name: 'skip-preview',
+              });
+              core.notice('Cleared skip-preview for new commits; a maintainer must reapply it for this head.');
+            } catch (error) {
+              if (error?.status !== 404) throw error;
+            }
+
       - name: Require a preview for sst / infra changes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -133,9 +159,8 @@ jobs:
           # The deployer adds `preview-deployed` on a successful preview deploy.
           preview_labels=$(gh api "repos/$REPO/issues/$PR/labels" -q '.[].name')
 
-          # A maintainer adds `skip-preview` to an infra change with nothing a preview would
-          # exercise (an alarm threshold, a dashboard). Labels need triage access, so a PR
-          # author outside the org cannot set it; the labeled trigger re-runs this gate.
+          # Maintainers use skip-preview for non-deployment changes. A fresh waiver
+          # is required after every push; labeled events re-evaluate the gate.
           if grep -qx 'skip-preview' <<< "$preview_labels"; then
             echo "::notice title=Preview skipped::'skip-preview' label is set. Gate satisfied without a preview deploy."
             exit 0
