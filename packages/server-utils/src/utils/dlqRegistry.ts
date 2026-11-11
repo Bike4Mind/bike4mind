@@ -180,9 +180,9 @@ const DLQ_REGISTRY = [
     application: 'GitHubWebhooks',
     sourceQueue: 'githubWebhookQueue',
     description: 'Processes a GitHub webhook event and notifies the subscribed users.',
-    replay: 'side-effects',
+    replay: 'unsafe',
     replayNote:
-      'Subscribers already recorded for this GitHub delivery id are skipped; any without a record are notified again.',
+      'Subscribers already recorded for this GitHub delivery id are skipped, but those records expire after 7 days, so a later replay notifies every subscriber again.',
     owner: 'Integrations',
   },
   {

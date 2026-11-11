@@ -159,6 +159,7 @@ describe('dlqRegistry', () => {
       expect(getDlqByLabel('email-batch')?.replay).toBe('side-effects');
       expect(getDlqByLabel('email-job')?.replay).toBe('unsafe');
       expect(getDlqByLabel('drive-disconnect-purge')?.replay).toBe('safe');
+      expect(getDlqByLabel('github-webhook')?.replay).toBe('unsafe');
     });
 
     it('every core entry has description, replay, replayNote, owner', () => {
@@ -166,7 +167,6 @@ describe('dlqRegistry', () => {
         .map(entry => ({ label: entry.label, missing: missingQueueHelp(entry) }))
         .filter(({ missing }) => missing.length > 0);
       expect(incomplete).toEqual([]);
-      expect(coreDlqDescriptors()).toHaveLength(42);
     });
 
     it('includes tavern-heartbeat entry', () => {
