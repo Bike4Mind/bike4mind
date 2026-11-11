@@ -134,7 +134,7 @@ type BulkBatch = {
  */
 type PendingRetry = { request: ModelBulkRequest; batch: BulkBatch | null; retries: number };
 /** A write an undo did not revert, because its undo expired or the undo stopped first, and the models it changed. */
-type UndoLeftover = { label: string; ids: string[]; expired: boolean };
+type UndoLeftover = { label: string; ids: string[]; expired: boolean; uncertain: boolean };
 /**
  * A bulk apply that left models unwritten, with the request that retries them inside the same batch; or what an undo
  * could not do: the models it left as they are, and the writes it did not revert. A model left as it is gets no retry:
@@ -163,13 +163,20 @@ const EMPTY_CELL = (
   </Box>
 );
 
+/** An undo POST that got no response or a 5xx may have committed before it failed; a 4xx was refused. */
+const mayHaveCommitted = (error: unknown) => {
+  const { status } = apiErrorOf(error);
+  return status === undefined || status >= 500;
+};
+
 const asSentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
-const leftoverSentence = ({ label, ids, expired }: UndoLeftover, resumable: boolean) =>
-  `${capitalize(label)} (${countOf(ids.length, 'model')}) was not undone${
-    expired ? ': its undo had expired.' : resumable ? ' yet. Undo again to send it.' : '.'
-  }`;
+const leftoverSentence = ({ label, ids, expired, uncertain }: UndoLeftover, resumable: boolean) => {
+  const subject = `${capitalize(label)} (${countOf(ids.length, 'model')})`;
+  if (uncertain) return `${subject} may not have been undone; check each model's page.`;
+  return `${subject} was not undone${expired ? ': its undo had expired.' : resumable ? ' yet.' : '.'}`;
+};
 
 /** What an undo left behind, each model linked to its page: the ones it left as they are, then each unreverted write. */
 function UndoLeftovers({
@@ -188,6 +195,7 @@ function UndoLeftovers({
       {id}
     </Link>
   );
+  const canResume = resumable && leftovers.some(leftover => !leftover.expired);
   return (
     <>
       {failed.map(entry => (
@@ -217,8 +225,11 @@ function UndoLeftovers({
           ))}
         </Typography>
       ))}
-      {(failed.length > 0 || leftovers.some(leftover => leftover.expired || !resumable)) && (
-        <Typography level="body-xs">Change these back from each model&apos;s page.</Typography>
+      {canResume && <Typography level="body-xs">Undo again from the undo toast while it is open.</Typography>}
+      {(failed.length > 0 || leftovers.length > 0) && (
+        <Typography level="body-xs">
+          {canResume ? 'Once it has closed, change' : 'Change'} these back from each model&apos;s page.
+        </Typography>
       )}
     </>
   );
@@ -344,7 +355,7 @@ export function ModelListSection() {
             );
           } catch (error) {
             if (!isExpiredUndo(error)) throw error;
-            expired.push({ label, ids, expired: true });
+            expired.push({ label, ids, expired: true, uncertain: false });
           }
           batch.undo.shift();
         }
@@ -357,7 +368,14 @@ export function ModelListSection() {
       const resumable = failure !== null && ownToast;
       const leftovers = [
         ...expired,
-        ...(failure !== null ? batch.undo.map(({ label, ids }) => ({ label, ids, expired: false })) : []),
+        ...(failure !== null
+          ? batch.undo.map(({ label, ids }, index) => ({
+              label,
+              ids,
+              expired: false,
+              uncertain: index === 0 && mayHaveCommitted(failure),
+            }))
+          : []),
       ];
       const reverted = results.reduce((sum, result) => sum + result.counts.updated, 0);
       const notReverted = results.flatMap(failedResults);

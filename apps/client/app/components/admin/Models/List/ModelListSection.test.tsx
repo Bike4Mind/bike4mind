@@ -636,7 +636,7 @@ describe('ModelListSection bulk access', () => {
     let secondUndoTries = 0;
     serveBulk(async token => {
       if (token === 'undo-1') return undoneOne('example-text-1');
-      if ((secondUndoTries += 1) === 1) throw apiFailure(500, { error: 'Access store unavailable' });
+      if ((secondUndoTries += 1) === 1) throw apiFailure(422, { error: 'Access store unavailable' });
       return undoneOne('example-text-2');
     });
     await applyThenRetry();
@@ -646,9 +646,10 @@ describe('ModelListSection bulk access', () => {
     const stopped = 'Undo: 1 model reverted; the rest failed: Access store unavailable';
     expect(await screen.findByTestId('undo-toast-error')).toHaveTextContent(stopped);
     const report = screen.getByTestId('models-bulk-failed');
-    expect(report).toHaveTextContent(`${stopped}. Retry 1 (1 model) was not undone yet. Undo again to send it.`);
+    expect(report).toHaveTextContent(`${stopped}. Retry 1 (1 model) was not undone yet.`);
     expect(screen.getByTestId('models-bulk-not-undone-item')).toHaveTextContent('Retry 1: example-text-2');
-    expect(report).not.toHaveTextContent("Change these back from each model's page.");
+    expect(report).toHaveTextContent('Undo again from the undo toast while it is open.');
+    expect(report).toHaveTextContent("Once it has closed, change these back from each model's page.");
     expect(screen.queryByTestId('models-bulk-retry-btn')).not.toBeInTheDocument();
     await waitFor(() => expect(listCalls().length).toBeGreaterThan(listReads));
 
@@ -656,6 +657,33 @@ describe('ModelListSection bulk access', () => {
     await waitFor(() => expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Undo: 2 models reverted.'));
     expect(undoTokensSent()).toEqual(['undo-1', 'undo-2', 'undo-2']);
     expect(screen.queryByTestId('models-bulk-failed')).not.toBeInTheDocument();
+  });
+
+  const stopUndoWith = async (failure: Error) => {
+    serveList(twoRows);
+    serveBulk(async token => {
+      if (token === 'undo-1') return undoneOne('example-text-1');
+      throw failure;
+    });
+    await applyThenRetry();
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await screen.findByTestId('undo-toast-error');
+    return screen.getByTestId('models-bulk-failed');
+  };
+
+  it.each([
+    ['a 5xx', apiFailure(503, { error: 'Access store unavailable' })],
+    ['a network error', Object.assign(new Error('Network Error'), { isAxiosError: true })],
+  ])('says a write may not have been undone when its undo POST failed with %s', async (_name, failure) => {
+    const report = await stopUndoWith(failure);
+    expect(report).toHaveTextContent("Retry 1 (1 model) may not have been undone; check each model's page.");
+    expect(report).not.toHaveTextContent('was not undone');
+  });
+
+  it('says a write was not undone when its undo POST was refused with a 4xx', async () => {
+    const report = await stopUndoWith(apiFailure(403, { error: 'Not allowed' }));
+    expect(report).toHaveTextContent('Retry 1 (1 model) was not undone yet.');
+    expect(report).not.toHaveTextContent('may not have been undone');
   });
 
   it('skips an expired undo, still sends the later one, and names the write that expired with its models', async () => {
@@ -799,7 +827,7 @@ describe('ModelListSection bulk access', () => {
         await undoGate.promise;
         return undoneOne('example-text-1');
       }
-      if (body.undoToken === 'undo-2') throw apiFailure(500, { error: 'Access store unavailable' });
+      if (body.undoToken === 'undo-2') throw apiFailure(422, { error: 'Access store unavailable' });
       if (body.undoToken) return undoneOne('example-text-3');
       if (body.dryRunToken) {
         applies += 1;
