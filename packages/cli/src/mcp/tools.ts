@@ -639,13 +639,18 @@ export async function uploadFile(
   } else if (Math.floor((args.base64!.replace(/\s/g, '').length * 3) / 4) > UPLOAD_FILE_MAX_BYTES) {
     throw tooLarge();
   }
-  const bytes = args.path ? await readFile(args.path) : Buffer.from(args.base64!, 'base64');
-  if (
-    !bytes.length ||
-    (args.base64 && !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(args.base64))
-  ) {
-    throw new Error('File bytes must be nonempty and valid base64');
+  let bytes: Buffer;
+  if (args.path) {
+    bytes = await readFile(args.path);
+  } else {
+    let b64 = args.base64!.replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    if (b64.length % 4 === 2 || b64.length % 4 === 3) b64 += '='.repeat(4 - (b64.length % 4));
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(b64)) {
+      throw new Error('File bytes must be nonempty and valid base64');
+    }
+    bytes = Buffer.from(b64, 'base64');
   }
+  if (!bytes.length) throw new Error('File bytes must be nonempty and valid base64');
   const mimeType = args.contentType ?? (mime.lookup(fileName) || 'application/octet-stream');
   const response = await client.requestFileUpload({ fileName, fileSize: bytes.length, mimeType });
   const upload = response.files[0];
