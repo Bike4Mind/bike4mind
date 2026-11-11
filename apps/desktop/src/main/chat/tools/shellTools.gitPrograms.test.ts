@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -195,6 +195,43 @@ const ROWS: [string, string, string][] = [
   ['git -C lrepo st', '', 'rrrr'],
   ['git -C src st', '', 'rrrr'],
   ['for d in src lrepo; do git -C "$d" st; done', '', 'arrr'],
+  ['git init np2 && cd np2 && touch a && git st', '', 'rrrr'],
+  ['git init np2 && cd np2 && echo x > README.md && git st', '', 'arrr'],
+  ['git clone origin.git cl8 && cd cl8 && echo x > notes.md && git st', '', 'arrr'],
+  ['mkdir np3 && cd np3 && git init && touch a && git st', '', 'rrrr'],
+  ['git worktree add wt6 -b w6 && cd wt6 && touch a && git st', '', 'rrrr'],
+  ['git init np2 && cd np2 && touch a && git add a && git commit -m x && git lg', '', 'rrrr'],
+  ['pnpm build && cp -r out pub && git st', '', 'rrrr'],
+  ['mkdir -p out && cp -r out pub && git st', '', 'rrrr'],
+  ['npm run build && cp -r out/ ../deploy/ && git st', '', 'rrrr'],
+  ['cp -r evil/.git out/ && cp -r out pub && git -C pub st', '', 'aaaa'],
+  ['cp -r vend dist6 && git -C dist6/lib st', '', 'aaaa'],
+  ['cp -r vend dist6 && cd dist6/lib && git st', '', 'aaaa'],
+  ['cp -r vend dist && git -C dist/vend/lib st', '', 'aaaa'],
+  ['rsync -a vend/ dist6/ && git -C dist6/lib st', '', 'aaaa'],
+  ['cp -r evil/.git sub/ && git -C sublink st', '', 'aaaa'],
+  ['cp -r evil/.git sub/ && git -C sublink/deep st', '', 'aaaa'],
+  ['cp -r tpl/. sub && git -C sublink st', '', 'aaaa'],
+  ['ln -s ../evil/.git sub/.git && git -C sublink st', '', 'aaaa'],
+  ['cp evil/.git/config .git/config; cd nosuchdir; git st', '', 'aaaa'],
+  ['cp -r evil/.git sub/; cd nosuchdir; git -C ~/proj/sub st', '', 'aaaa'],
+  ['cp evil/.git/config .git/config && source ./env1.sh && git st', '', 'aaaa'],
+  ['rsync -aR --exclude .git evil/./.git/config evil/./.git/HEAD evil/./.git/refs d7/ && git -C d7 st', '', 'aaaa'],
+  ['rsync -a --exclude .git -f "+ .git" lrepo/ d8/ && git -C d8 st', '', 'aaaa'],
+  ['rsync -a --exclude .git --filter="+ .git" lrepo/ d8/ && git -C d8 st', '', 'aaaa'],
+  ['rsync -a --exclude .git -F lrepo/ d8/ && git -C d8 st', '', 'aaaa'],
+  ['rsync -a --exclude .git --exclude-from=ex.txt lrepo/ d8/ && git -C d8 st', '', 'aaaa'],
+  ['rsync -a --exclude .git --include-from=in.txt lrepo/ d8/ && git -C d8 st', '', 'aaaa'],
+  ['rsync -a --exclude .git --relative lrepo d8/ && git -C d8 st', '', 'aaaa'],
+  ['rsync -a --exclude .git --files-from=list.txt lrepo d8/ && git -C d8 st', '', 'aaaa'],
+  ['unset GIT_CONFIG_COUNT; git log', '', 'aaaa'],
+  ['unset GIT_CONFIG_COUNT; cp -r evil/.git/. bare/ && git -C bare log', '', 'aaaa'],
+  ['export -n GIT_CONFIG_COUNT; git log', '', 'aaaa'],
+  ['env --unset=GIT_CONFIG_COUNT git log', '', 'aaaa'],
+  ['env -uGIT_CONFIG_COUNT git log', '', 'aaaa'],
+  ['pnpm exec env -i git log', '', 'aaaa'],
+  ['find . -maxdepth 0 -exec env -i git log \\;', '', 'aaaa'],
+  ['pnpm exec env -i node x.js', '', 'rrrr'],
 ];
 
 describe('shell approval of git programs, sourced files and fresh folders', () => {
@@ -252,7 +289,11 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     repository(join(proj, 'tpl'), { 'x.ts': 'x' });
     repository(join(proj, 'evil'), { 'x.ts': 'x' });
     repository(join(proj, 'srcrepo'), { 'git-st': '#!/bin/sh\n', 'git-hello': '#!/bin/sh\n' });
-    mkdirSync(join(proj, 'sub'), { recursive: true });
+    repository(join(proj, 'srcrepo2'), { 'git-st': '#!/bin/sh\n', 'git-hello': '#!/bin/sh\n' });
+    repository(join(proj, 'vend', 'lib'), { 'x.ts': 'x' });
+    git(join(proj, 'vend', 'lib'), 'config', 'alias.st', '!touch MARK');
+    mkdirSync(join(proj, 'sub', 'deep'), { recursive: true });
+    symlinkSync('sub', join(proj, 'sublink'));
     file(join(proj, 'env1.sh'), 'export FOO=1\n');
     file(join(proj, 'env3.sh'), 'X=1\nY=2\n');
     file(join(proj, 'env5.sh'), 'X=1\n\\cd ..\n');
@@ -363,8 +404,85 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     });
   });
 
+  describe.each([
+    ['ntools2/bin', ['git clone srcrepo2 ntools2 && git hello', 'git worktree add ntools2 -b q2 && git hello']],
+    ['ntools2/bin', ['cp -r srcrepo2 ntools2 && git hello']],
+    ['ntools3/', ['git clone srcrepo ntools3 && git hello', 'cp -r srcrepo ntools3 && git hello']],
+  ])('with PATH holding %s', (entry, commands) => {
+    let before: string | undefined;
+    beforeAll(() => {
+      before = process.env.PATH;
+      vi.stubEnv('PATH', `${join(proj, entry)}:${before}`);
+    });
+    afterAll(() => {
+      vi.stubEnv('PATH', before);
+    });
+
+    it.each(commands)('asks in every mode for %s', async command => {
+      expect(await cells(command, '')).toBe('aaaa');
+    });
+  });
+
   describe('with a global init.templateDir', () => {
     const globalConfig = (): string => join(dirname(proj), '.gitconfig');
+
+    const withTemplate = async (
+      setting: string,
+      files: Record<string, string>,
+      command: string,
+      folder = ''
+    ): Promise<string> => {
+      const template = join(base, 'template-files');
+      rmSync(template, { recursive: true, force: true });
+      for (const [name, text] of Object.entries(files)) file(join(template, name), text);
+      file(globalConfig(), `[init]\n\ttemplateDir = ${setting.replaceAll('TEMPLATE', template)}\n`);
+      try {
+        return await cells(command, folder);
+      } finally {
+        rmSync(globalConfig(), { force: true });
+        rmSync(template, { recursive: true, force: true });
+      }
+    };
+
+    it.each([
+      ['an included file holding a ! alias', '[include]\n\tpath = TEMPLATE/inc\n', 'aaaa'],
+      ['an included file holding a plain alias', '[include]\n\tpath = TEMPLATE/inc2\n', 'rrrr'],
+      ['a relative include', '[include]\n\tpath = inc\n', 'aaaa'],
+    ])('decides a clone then git st with a template config with %s as %s', async (_name, config, expected) => {
+      const text = config.replaceAll('TEMPLATE', join(base, 'template-files'));
+      const files = { config: text, inc: '[alias]\n\tst = !touch MARK\n', inc2: '[alias]\n\tst = status\n' };
+      expect(await withTemplate('TEMPLATE', files, 'git clone origin.git clt && git -C clt st')).toBe(expected);
+    });
+
+    it.each([
+      ['~/ with a ! alias', '~/tplhome', '[alias]\n\tst = !touch MARK\n', 'aaaa'],
+      ['~/ with a plain alias', '~/tplhome', '[alias]\n\tst = status\n', 'rrrr'],
+      ['~user/', '~someone/tplhome', '[alias]\n\tst = status\n', 'aaaa'],
+    ])('decides a clone then git st with a templateDir of %s as %s', async (_name, setting, config, expected) => {
+      const home = dirname(proj);
+      rmSync(join(home, 'tplhome'), { recursive: true, force: true });
+      file(join(home, 'tplhome', 'config'), config);
+      try {
+        expect(await withTemplate(setting, {}, 'git clone origin.git clt && git -C clt st')).toBe(expected);
+      } finally {
+        rmSync(join(home, 'tplhome'), { recursive: true, force: true });
+      }
+    });
+
+    it('reads a relative templateDir from the folder git runs in', async () => {
+      const inProj = join(proj, 'rel-template');
+      file(join(inProj, 'config'), '[alias]\n\tst = !touch MARK\n');
+      try {
+        expect(await withTemplate('rel-template', {}, 'git clone origin.git sub/clt2 && git -C sub/clt2 st')).toBe(
+          'aaaa'
+        );
+        expect(await withTemplate('rel-template', {}, 'git clone ../origin.git clt3 && git -C clt3 st', 'src')).toBe(
+          'rrrr'
+        );
+      } finally {
+        rmSync(inProj, { recursive: true, force: true });
+      }
+    });
 
     it.each([
       ['a template config holding a ! alias', '[alias]\n\tst = !touch MARK\n', 'aaaa'],

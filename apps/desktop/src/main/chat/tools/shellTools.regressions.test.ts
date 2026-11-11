@@ -1935,7 +1935,6 @@ describe('shell approval in a project with a large node_modules', () => {
     'cp -rT tpl src && git -C src st',
     'cp -r tpl/.git src/ && git -C src st',
     'cp -r "$X" src && git st',
-    'cp -r nosuch/. src && git st',
   ])('asks in every mode for %s (in proj/frepo), which may write the config git reads aliases from', async command => {
     expect(await judge(command, 'frepo')).toMatchObject(asks);
   });

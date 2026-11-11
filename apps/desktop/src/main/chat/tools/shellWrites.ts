@@ -935,11 +935,10 @@ export interface GitAliases {
 const SHOWS_GUESS = /^(0|false|off|no|show|never)$/i;
 
 /**
- * What git reads of aliases, help.autocorrect and includes in `directory`, or with `user` only the system and global
- * config plus the `config` of the init.templateDir they name (for a repository not yet made); null when git could not
- * tell.
+ * What git reads of aliases and includes in `directory`; with `user`, the global config and its init.templateDir one
+ * (a relative one taken from `from`, where git runs) for a repository not yet made. Null when git could not tell.
  */
-export async function gitAliases(directory: string, user = false): Promise<GitAliases | null> {
+export async function gitAliases(directory: string, user = false, from = directory): Promise<GitAliases | null> {
   const keys = String.raw`^alias\.|^help\.autocorrect$|^include\.path$|^includeif\..*\.path$|^init\.templatedir$`;
   const lists = await Promise.all(
     (user
@@ -960,7 +959,9 @@ export async function gitAliases(directory: string, user = false): Promise<GitAl
   let autocorrect = false;
   let templateDir = null as string | null;
   const included: { origin: string; path: string }[] = [];
-  const absorb = (text: string): void => {
+  let relativeInclude = false;
+  let templateFile = '';
+  const absorb = (text: string, fromTemplate = false): void => {
     // `-z --show-origin` prints `origin\0key\nvalue\0` per entry.
     const fields = text.split('\0');
     for (let at = 0; at + 1 < fields.length; at += 2) {
@@ -972,14 +973,21 @@ export async function gitAliases(directory: string, user = false): Promise<GitAl
       if (key === 'help.autocorrect') autocorrect = value === null || !SHOWS_GUESS.test(value.trim());
       else if (key === 'init.templatedir') templateDir = value || null;
       else if (key.startsWith('alias.')) aliases.set(key.slice('alias.'.length), value);
-      else if (value) included.push({ origin, path: value });
+      else if (value) {
+        if (fromTemplate && origin === `file:${templateFile}` && !isAbsolute(value) && !/^~(\/|$)/.test(value)) {
+          relativeInclude = true;
+        }
+        included.push({ origin, path: value });
+      }
     }
   };
   absorb(stdout);
   if (user && templateDir !== null) {
     // git copies the template's config into the repository it makes, where its aliases apply.
     const home = templateDir === '~' || templateDir.startsWith('~/');
-    const file = join(home ? join(homedir(), templateDir.slice(1)) : resolve(directory, templateDir), 'config');
+    if (templateDir.startsWith('~') && !home) return null;
+    const file = join(home ? join(homedir(), templateDir.slice(1)) : resolve(from, templateDir), 'config');
+    templateFile = file;
     // git only warns about a config file it cannot read, so readability is checked here.
     const present = await access(file, constants.R_OK).then(
       () => true,
@@ -987,9 +995,21 @@ export async function gitAliases(directory: string, user = false): Promise<GitAl
     );
     if (present === null) return null;
     if (present) {
-      const listed = await gitRun(directory, ['config', '--file', file, '-z', '--show-origin', '--get-regexp', keys]);
+      const listed = await gitRun(directory, [
+        'config',
+        '--file',
+        file,
+        '--includes',
+        '-z',
+        '--show-origin',
+        '--get-regexp',
+        keys,
+      ]);
       if (listed === null || (listed.code !== 0 && (listed.code !== 1 || listed.stdout !== ''))) return null;
-      absorb(listed.stdout);
+      // git resolves a relative include from the new `.git`, which this read cannot place.
+      relativeInclude = false;
+      absorb(listed.stdout, true);
+      if (relativeInclude) return null;
     }
   }
   return { aliases, autocorrect, includes: await includeTargets(directory, included) };
