@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError, ConflictError } from '@bike4mind/common';
+import { BadRequestError, ConflictError, missingAdminPermissionMessage } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
-  handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   findById: vi.fn(),
   existsOtherUserWithEmail: vi.fn(),
   validateUsernameChange: vi.fn(),
@@ -14,16 +13,9 @@ const h = vi.hoisted(() => ({
   record: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => {
-  const chain = {
-    use: () => chain,
-    patch: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
-      h.handler = fn;
-      return chain;
-    },
-  };
-  return { baseApi: () => chain };
-});
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/middlewares/__tests__/adminApiMock')).adminApiMock()
+);
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: h.requireStepUp }));
@@ -51,7 +43,9 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: h.record,
 }));
 
-await import('../profile');
+const { default: handler } = (await import('../profile')) as unknown as {
+  default: ((req: unknown, res: unknown) => Promise<unknown>) & { _config: unknown };
+};
 
 const REASON = 'Customer request';
 
@@ -64,17 +58,25 @@ const storedUser = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const makeReq = (body: unknown, { isAdmin = true, userId = 'user-1' as unknown } = {}) => ({
+const FULL_ADMIN = { id: 'admin-1', isAdmin: true };
+const moderator = (adminPermissions: string[] = ['users:moderate']) => ({
+  id: 'mod-1',
+  isAdmin: false,
+  adminPermissions,
+});
+
+const makeReq = (body: unknown, { user = FULL_ADMIN as unknown, userId = 'user-1' as unknown } = {}) => ({
+  method: 'PATCH',
   query: { userId },
   body,
-  user: { id: 'admin-1', isAdmin },
+  user,
   logger: { error: vi.fn() },
 });
 
 const run = async (body: unknown, options?: Parameters<typeof makeReq>[1]) => {
   const json = vi.fn();
   const req = makeReq(body, options);
-  await h.handler!(req, { json });
+  await handler(req, { json });
   return { json, req };
 };
 
@@ -99,11 +101,52 @@ describe('PATCH /api/admin/users/[userId]/profile', () => {
     h.buildEmailChangeMailer.mockReturnValue({ mailer: true });
   });
 
-  it('refuses a non-admin before reading the user', async () => {
-    const error = await rejection({ name: 'X', reason: REASON }, { isAdmin: false });
+  it('declares users:moderate for PATCH', () => {
+    expect(handler._config).toEqual(expect.objectContaining({ adminPermissions: { PATCH: 'users:moderate' } }));
+  });
 
-    expect(error.message).toMatch(/admin access required/i);
+  it.each([
+    ['no permission', { id: 'u2', isAdmin: false }],
+    ['an unrelated permission', moderator(['credits:adjust'])],
+    ['support:read only', moderator(['support:read'])],
+  ])('refuses a delegate with %s with the users:moderate message before reading the user', async (_, user) => {
+    const error = await rejection({ name: 'X', reason: REASON }, { user });
+
+    expect(error.statusCode).toBe(403);
+    expect(error.message).toBe(missingAdminPermissionMessage('users:moderate'));
     expect(h.findById).not.toHaveBeenCalled();
+    expect(h.writeUserUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a full admin', { isAdmin: true }],
+    ['a delegate with admin permissions', { isAdmin: false, adminPermissions: ['support:read'] }],
+  ])('refuses a users:moderate delegate editing %s and writes nothing', async (_, target) => {
+    h.findById.mockResolvedValue(storedUser(target));
+
+    const error = await rejection({ name: 'Ada King', reason: REASON }, { user: moderator() });
+
+    expect(error.statusCode).toBe(403);
+    expect(error.message).toBe('Only full administrators can edit the profile of users with admin access');
+    expect(h.writeUserUpdate).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('lets a users:moderate delegate edit an ordinary user', async () => {
+    h.writeUserUpdate.mockResolvedValue(storedUser({ name: 'Ada King' }));
+
+    await run({ name: 'Ada King', reason: REASON }, { user: moderator() });
+
+    expect(h.writeUserUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a full admin edit a user with admin access', async () => {
+    h.findById.mockResolvedValue(storedUser({ isAdmin: true }));
+    h.writeUserUpdate.mockResolvedValue(storedUser({ name: 'Ada King', isAdmin: true }));
+
+    await run({ name: 'Ada King', reason: REASON });
+
+    expect(h.writeUserUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a missing user id', async () => {
