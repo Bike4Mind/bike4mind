@@ -107,7 +107,7 @@ Settings (environment, or `apps/client/.env.e2e`):
 | Variable | Meaning |
 |---|---|
 | `API_URL` | Browser-facing app origin, e.g. `http://localhost:3000`. |
-| `E2E_CLEANUP_SECRET` | The release's `E2E_CLEANUP_SECRET` runtime value. The check mints its own throwaway user through `/api/test/create-user`. |
+| `E2E_CLEANUP_SECRET` | The release's `E2E_CLEANUP_SECRET` runtime value. The check mints its own throwaway user through `/api/test/create-user`, which is off by default: the release must run with `E2E_ENDPOINTS_ENABLED` set to `true` (chart `config`) and `E2E_CLEANUP_SECRET` in the runtime Secret. Enable it on an evaluation release only. |
 | `SELFHOST_ROLL_APP_CMD` | Shell command that replaces the app pod and returns only when the replacement serves requests at `API_URL`. |
 | `SELFHOST_ROLL_WS_CMD` | The same for the gateway pod and the browser-facing WebSocket URL. |
 | `SELFHOST_ROLL_TIMEOUT_MS` | Optional budget for one roll command. Default 300000. |

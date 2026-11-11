@@ -32,7 +32,11 @@ async function fetchHistory(request: APIRequestContext, token: string, sessionId
   const response = await request.get(`/api/sessions/${sessionId}/chat`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!response.ok()) throw new Error(`Reading the chat history failed: ${response.status()}`);
+  if (!response.ok()) {
+    // The access token minted at the start lives 30 minutes; a run slower than that ends here.
+    const hint = response.status() === 401 ? ' (the access token may have expired during a slow run)' : '';
+    throw new Error(`Reading the chat history failed: ${response.status()}${hint}`);
+  }
   const body: { data?: ChatHistoryItem[] } = await response.json();
   return body.data ?? [];
 }
