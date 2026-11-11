@@ -24,6 +24,7 @@ const state = vi.hoisted(() => ({
   teamQueryOwner: undefined as { ownerId: string; enabled?: boolean } | undefined,
 }));
 const logEvent = vi.hoisted(() => vi.fn());
+const trackUpsell = vi.hoisted(() => vi.fn());
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -64,6 +65,7 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
   useSelectedAccount: () => ({ selectedAccount: state.account }),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
+vi.mock('@client/app/utils/funnelEvents', () => ({ trackUpsell }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 vi.mock('./CreditsExplanation', () => ({
   default: () => <div data-testid="credits-explanation" />,
@@ -152,6 +154,7 @@ describe('BillingModal', () => {
     state.teamRefetch.mockClear();
     state.teamQueryOwner = undefined;
     logEvent.mockClear();
+    trackUpsell.mockClear();
   });
 
   it('logs the open context and a close without purchase', () => {
@@ -175,6 +178,52 @@ describe('BillingModal', () => {
     expect(logEvent).toHaveBeenCalledWith({
       type: 'billing_closed_without_purchase',
       metadata: { entry: 'credits_chip', focus: 'credits', account: 'personal' },
+    });
+  });
+
+  describe('upsell reporting', () => {
+    const content = (open: boolean) => (
+      <TestWrapper>
+        <BillingModal open={open} entry="credits_chip" onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    it('reports one impression for a free user, then a dismiss on close without purchase', () => {
+      const { rerender } = render(content(true));
+      rerender(content(true));
+      expect(trackUpsell).toHaveBeenCalledTimes(1);
+      expect(trackUpsell).toHaveBeenCalledWith('impression', { surface: 'billing_plans', trigger: 'credits_chip' });
+      rerender(content(false));
+      expect(trackUpsell).toHaveBeenCalledWith('dismiss', { surface: 'billing_plans', trigger: 'credits_chip' });
+    });
+
+    it('reports nothing for a user with an active plan', () => {
+      state.subscriptions = [subRow()];
+      const { rerender } = render(content(true));
+      rerender(content(false));
+      expect(trackUpsell).not.toHaveBeenCalled();
+    });
+
+    it('reports an impression when plans become the lead section while open', () => {
+      state.subscriptions = [subRow()];
+      const { rerender } = render(content(true));
+      expect(trackUpsell).not.toHaveBeenCalled();
+
+      state.subscriptions = [subRow({ status: 'past_due' })];
+      rerender(content(true));
+      rerender(content(true));
+
+      expect(trackUpsell).toHaveBeenCalledTimes(1);
+      expect(trackUpsell).toHaveBeenCalledWith('impression', { surface: 'billing_plans', trigger: 'credits_chip' });
+      rerender(content(false));
+      expect(trackUpsell).toHaveBeenCalledWith('dismiss', { surface: 'billing_plans', trigger: 'credits_chip' });
+    });
+
+    it('does not report a dismiss after a purchase', () => {
+      const { rerender } = render(content(true));
+      fireEvent.click(screen.getByTestId('subscription-changed'));
+      rerender(content(false));
+      expect(trackUpsell).not.toHaveBeenCalledWith('dismiss', expect.anything());
     });
   });
 
