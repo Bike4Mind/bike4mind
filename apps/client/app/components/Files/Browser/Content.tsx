@@ -43,6 +43,8 @@ import { useFileBrowserInstance } from './instanceContext';
 import FileBrowserActions from './Actions';
 import FileBrowserFilter from './Filter';
 import { withGeneratedFilter } from './GeneratedFilterToggle';
+import { hasUserFilters, isFilterLocked, toSearchFilters, withLockedFilters } from './browserFilters';
+import LibraryFilterBar from './LibraryFilterBar';
 import FileBrowserList, { type FileBrowserListProps } from './List';
 import ResearchEngineModal from '../../ResarchEngine/Modal';
 import FileBrowserViewActions, { ViewMode } from './ViewActions';
@@ -101,7 +103,13 @@ const FileBrowserContent = () => {
   const { currentSessionId, currentSession } = useSessions();
   const workBenchFiles = useWorkBenchFiles(currentSessionId);
   const updateSession = useUpdateSession();
-  const [filter, setFilter] = useState<ISearchFabFilesParams>({});
+  const [filter, setFilter] = useState<ISearchFabFilesParams>(() =>
+    config.initialFilters ? { filters: toSearchFilters(config.initialFilters) } : {}
+  );
+  const { lockedFilters } = config;
+  const isTypeLocked = isFilterLocked(lockedFilters, 'type');
+  const isSourceLocked = isFilterLocked(lockedFilters, 'source');
+  const showLibraryFilters = Boolean(lockedFilters || config.enableStar || config.enableModelFilter);
 
   const [tagViewInitialNamespace, setTagViewInitialNamespace] = useState<string | undefined>();
   const [navigatedFromTags, setNavigatedFromTags] = useState(false);
@@ -114,7 +122,7 @@ const FileBrowserContent = () => {
       by: 'fileName',
       direction: 'asc',
     },
-    viewMode: 'home',
+    viewMode: config.initialViewMode ?? 'home',
   });
   const [sortField, setSortField] = useState<'fileName' | 'fileSize' | 'createdAt'>('createdAt');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
@@ -133,7 +141,7 @@ const FileBrowserContent = () => {
     isLoading: isLoadingAllFiles,
     isPlaceholderData,
   } = usePaginatedSearchFabFiles({
-    ...filter,
+    ...withLockedFilters(filter, lockedFilters),
     order: { by: sortField, direction: sortDirection },
     page: currentPage,
   });
@@ -141,7 +149,10 @@ const FileBrowserContent = () => {
   // Overview tab renders its own "Recent" list (separate from the paginated allFiles
   // list below), so it's only fetched while that tab is active.
   const { data: recentData, isLoading: isLoadingRecent } = useSearchFabFiles(
-    { order: { by: 'createdAt', direction: 'desc' }, pagination: { page: 1, limit: 8 } },
+    withLockedFilters(
+      { order: { by: 'createdAt', direction: 'desc' }, pagination: { page: 1, limit: 8 } },
+      lockedFilters
+    ),
     { enabled: viewAction.viewMode === 'home' }
   );
   const recentFiles = recentData?.data?.slice(0, 8) || [];
@@ -164,9 +175,7 @@ const FileBrowserContent = () => {
 
   const availableOptions = fileTags?.filter(tag => !filter.filters?.tags?.includes(tag.name)) || [];
 
-  const hasFilters = Boolean(
-    filter.search || filter.filters?.tags?.length || filter.filters?.type || filter.filters?.generated
-  );
+  const hasFilters = hasUserFilters(filter);
 
   const allFiles = data?.data || [];
   const totalFiles = data?.total || 0;
@@ -421,9 +430,7 @@ const FileBrowserContent = () => {
     setSelectedIds(new Set<string>());
 
     // Auto-switch to list view when filters are applied from Home or Tags
-    const hasActiveFilters =
-      filter.search || filter.filters?.tags?.length || filter.filters?.type || filter.filters?.generated;
-    if (hasActiveFilters && (viewAction.viewMode === 'home' || viewAction.viewMode === 'tags')) {
+    if (hasUserFilters(filter) && (viewAction.viewMode === 'home' || viewAction.viewMode === 'tags')) {
       setViewActions({ ...viewAction, viewMode: 'list' });
     }
   }
@@ -619,17 +626,23 @@ const FileBrowserContent = () => {
             }
             onFileFilterChange={handleFileFilterChange}
             generatedOnly={filter.filters?.generated === true}
-            onGeneratedChange={generated => handleFilterChange(withGeneratedFilter(filter, generated))}
+            onGeneratedChange={
+              isSourceLocked ? undefined : generated => handleFilterChange(withGeneratedFilter(filter, generated))
+            }
             fileTypeValue={filter.filters?.type || 'all'}
-            onFileTypeChange={type => {
-              handleFilterChange({
-                ...filter,
-                filters: {
-                  ...filter.filters,
-                  type: isFabFileTypeFilter(type) ? type : undefined,
-                },
-              });
-            }}
+            onFileTypeChange={
+              isTypeLocked
+                ? undefined
+                : type => {
+                    handleFilterChange({
+                      ...filter,
+                      filters: {
+                        ...filter.filters,
+                        type: isFabFileTypeFilter(type) ? type : undefined,
+                      },
+                    });
+                  }
+            }
             onUploadFiles={handleUploadFiles}
             onAddFromUrl={handleAddFromUrl}
             onCreateKnowledge={handleCreateKnowledge}
@@ -755,7 +768,12 @@ const FileBrowserContent = () => {
                 />
               </Box>
               <Box data-testid="file-browser-toolbar-filters" sx={{ gridArea: 'filters', display: 'flex' }}>
-                <FileBrowserFilter value={filter} onChange={handleFilterChange} />
+                <FileBrowserFilter
+                  value={filter}
+                  onChange={handleFilterChange}
+                  hideType={isTypeLocked}
+                  hideSource={isSourceLocked}
+                />
               </Box>
               <Stack
                 direction="row"
@@ -776,6 +794,16 @@ const FileBrowserContent = () => {
               </Stack>
             </Box>
           </Box>
+
+          {showLibraryFilters && (
+            <LibraryFilterBar
+              value={filter}
+              onChange={handleFilterChange}
+              lockedFilters={lockedFilters}
+              showModelFilter={config.enableModelFilter}
+              showStarredFilter={config.enableStar}
+            />
+          )}
 
           {viewAction.viewMode === 'home' && (
             <HomeViewPanel

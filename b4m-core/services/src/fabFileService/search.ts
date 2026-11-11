@@ -1,6 +1,8 @@
 import {
   FAB_FILE_TYPE_FILTERS,
+  FavoriteDocumentType,
   IFabFileRepository,
+  IFavoriteRepository,
   IProjectRepository,
   type DataLakeMembershipScope,
 } from '@bike4mind/common';
@@ -21,6 +23,12 @@ const searchFabFilesSchema = z.object({
       curated: z.coerce.boolean().optional(), // Indicates if the user is searching for curated notebook files
       // Strict, unlike the two above: z.coerce.boolean() reads the query string 'false' as true.
       generated: z.union([z.boolean(), z.enum(['true', 'false']).transform(value => value === 'true')]).optional(),
+      // The complement of `generated`: only files no generation tool saved. Strict for the same reason.
+      uploaded: z.union([z.boolean(), z.enum(['true', 'false']).transform(value => value === 'true')]).optional(),
+      // Exact `sourceMetadata.generation.modelId` of a generated file.
+      model: z.string().min(1).optional(),
+      // Only files the caller starred (a Favorite of documentType files). Strict for the same reason.
+      starred: z.union([z.boolean(), z.enum(['true', 'false']).transform(value => value === 'true')]).optional(),
       // Owner-only: the route drops the shared/data-lake scope for it (apps/client/pages/api/files/search.ts),
       // so the query takes its owner-only branch. Strict for the same reason as `generated`.
       owned: z.union([z.boolean(), z.enum(['true', 'false']).transform(value => value === 'true')]).optional(),
@@ -56,6 +64,7 @@ type SearchFabFilesAdapters = GetFabFileAdapter & {
   db: GetFabFileAdapter['db'] & {
     fabFiles: IFabFileRepository;
     projects: IProjectRepository;
+    favorites: Pick<IFavoriteRepository, 'find'>;
   };
 };
 
@@ -96,7 +105,7 @@ export const search = async (
   serverOptions?: SearchFabFilesServerOptions
 ) => {
   const { search = '', filters, pagination, order, options } = searchFabFilesSchema.parse(params);
-  const { tags = [], type, shared, curated, generated } = filters || {};
+  const { tags = [], type, shared, curated, generated, uploaded, model } = filters || {};
   const { page = 1, limit = DEFAULT_PAGE_LIMIT } = pagination || {};
   const { by = 'fileName', direction = 'asc' } = order || {};
   // Anything a client sent under a scope key was dropped by the parse above (the schema no longer
@@ -117,10 +126,18 @@ export const search = async (
     restrictToFileIds = project ? project.fileIds : [];
   }
 
+  // Starred narrows whatever restriction is already in force, never widens it: it only ever
+  // intersects with an allow-list, and ownership/visibility still applies in the query itself.
+  if (filters?.starred === true) {
+    const favorites = await db.favorites.find({ userId, documentType: FavoriteDocumentType.Files });
+    const starredIds = favorites.map(favorite => favorite.documentId);
+    restrictToFileIds = restrictToFileIds ? restrictToFileIds.filter(id => starredIds.includes(id)) : starredIds;
+  }
+
   const fabFiles = await db.fabFiles.search(
     userId,
     search,
-    { tags, type, shared, curated, generated, restrictToFileIds },
+    { tags, type, shared, curated, generated, uploaded, generationModelId: model, restrictToFileIds },
     { page, limit },
     {
       by,
