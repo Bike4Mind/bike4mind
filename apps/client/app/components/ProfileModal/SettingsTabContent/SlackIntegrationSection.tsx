@@ -189,15 +189,21 @@ const SlackIntegrationSection = () => {
   const updateSlackSettings = useMutation({
     mutationFn: async (settings: SlackSettings) => {
       const response = await api.patch(`/api/users/${currentUser?.id}/slack-settings`, settings);
-      return response.data;
+      return response.data as { removed?: Array<{ field: string; id: string }> };
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['user'] });
       // Update savedSlackUserId to reflect the saved value (for manual entry)
       if (variables.slackUserId !== undefined) {
         setSavedSlackUserId(variables.slackUserId);
       }
-      toast.success('Slack settings updated successfully!');
+      if (data?.removed?.length) {
+        toast.warning(
+          `Slack settings saved. Removed ${data.removed.length} setting(s) that point to deleted or inaccessible items.`
+        );
+      } else {
+        toast.success('Slack settings updated successfully!');
+      }
     },
     onError: (error: any) => {
       console.error('Failed to update Slack settings:', error);
