@@ -112,7 +112,21 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
         </Typography>
       ),
     },
-    { id: 'scopes', label: 'Scopes', render: key => key.scopes.join(', ') },
+    {
+      id: 'scopes',
+      label: 'Scopes',
+      render: key => (
+        <Typography
+          level="body-sm"
+          noWrap
+          title={key.scopes.join(', ')}
+          sx={{ maxWidth: '12rem' }}
+          data-testid={`admin-api-key-scopes-${key.id}`}
+        >
+          {key.scopes.length > 1 ? `${key.scopes.length} scopes` : (key.scopes[0] ?? '-')}
+        </Typography>
+      ),
+    },
     {
       id: 'status',
       label: 'Status',

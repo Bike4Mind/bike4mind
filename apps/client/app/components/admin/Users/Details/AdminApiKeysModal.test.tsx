@@ -99,6 +99,18 @@ describe('AdminApiKeysModal', () => {
     expect(screen.getByTestId('admin-api-key-status-k2').textContent).toBe('Disabled');
   });
 
+  it('summarizes long scope lists without expanding the table row', () => {
+    h.keys = [{ ...KEY, scopes: ['notebooks:read', 'files:read', 'projects:write'] }];
+    renderModal();
+
+    expect(screen.getByTestId('admin-api-key-scopes-k1')).toHaveTextContent('3 scopes');
+    expect(screen.getByTestId('admin-api-key-scopes-k1')).toHaveAttribute(
+      'title',
+      'notebooks:read, files:read, projects:write'
+    );
+    expect(screen.getByTestId('admin-api-key-row-k1')).not.toHaveTextContent('projects:write');
+  });
+
   it('shows the reset time for each open window', () => {
     h.keys = [KEY];
     h.liveUsage = { k1: { minute: 3, day: 42, minuteResetAt: NOW_S + 42, dayResetAt: NOW_S + 3600 } };
