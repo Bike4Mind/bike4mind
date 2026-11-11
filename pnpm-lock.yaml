@@ -12090,7 +12090,7 @@ packages:
       react-dom: '>=16.6.0'
 
   react-use-websocket@https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684:
-    resolution: {gitHosted: true, tarball: https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684}
+    resolution: {gitHosted: true, integrity: sha512-coe6cEGS+ufx7gKtme40KQnbbue1ZM0S+AeL7tlIe4T7NqAXBBeY8EB+qatMSTn0Emsrt2N15xMzIKsiwy9pnw==, tarball: https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684}
     version: 4.8.2
     peerDependencies:
       react: '>= 18.0.0'
