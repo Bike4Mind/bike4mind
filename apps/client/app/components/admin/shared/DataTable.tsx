@@ -209,7 +209,7 @@ export function DataTable<Row>({
   };
   const rowKeyShortcuts = (row: Row): string | undefined => {
     const keys = [
-      ...(selectable ? ['x'] : []),
+      ...(selectable && !selectionDisabled ? ['x'] : []),
       ...Object.entries(rowShortcuts?.(row) ?? {}).flatMap(([key, run]) => (run !== undefined ? [key] : [])),
     ];
     return keys.length ? keys.join(' ') : undefined;
@@ -218,6 +218,8 @@ export function DataTable<Row>({
     const target = event.target as HTMLElement;
     // Portalled cell content (a menu, a popover) bubbles here through React but sits outside the row.
     if (!event.currentTarget.contains(target) || target.closest(CELL_CONTROLS)) return;
+    // A disabled checkbox input swallows the click, so it lands on the wrapper, which CELL_CONTROLS does not match.
+    if (target.closest('[data-selection-cell]')) return;
     onRowActivate?.(row);
   };
 
@@ -405,7 +407,7 @@ export function DataTable<Row>({
                           style={{ cursor: onRowActivate ? 'pointer' : undefined }}
                         >
                           {selectable && (
-                            <td>
+                            <td data-selection-cell>
                               <Checkbox
                                 size="sm"
                                 aria-label={`Select ${id}`}
