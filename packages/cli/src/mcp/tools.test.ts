@@ -1,3 +1,4 @@
+import { constants } from 'node:fs';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
@@ -204,7 +205,7 @@ describe('tool handlers', () => {
       const handle = fileHandle(true, 3);
       const client = uploadClient();
       await uploadFile(client, { path: '/some/dir/report.txt' });
-      expect(mockOpen).toHaveBeenCalledWith('/some/dir/report.txt', 'r');
+      expect(mockOpen).toHaveBeenCalledWith('/some/dir/report.txt', constants.O_RDONLY | constants.O_NONBLOCK);
       expect(handle.readFile).toHaveBeenCalledOnce();
       expect(handle.close).toHaveBeenCalledOnce();
       expect(client.requestFileUpload).toHaveBeenCalledWith({
@@ -328,6 +329,62 @@ describe('tool handlers', () => {
       );
       await expect(uploadFile(client, { base64: 'YWJjZ', name: 'a.txt' })).rejects.toThrow('valid base64');
     });
+
+    it('accepts a valid 10 MiB base64 upload without exhausting the regex stack', async () => {
+      const contents = Buffer.alloc(10 * 1024 * 1024, 97);
+      const client = uploadClient();
+      await uploadFile(client, { base64: contents.toString('base64'), name: 'large.txt' });
+      expect(client.requestFileUpload).toHaveBeenCalledWith({
+        fileName: 'large.txt',
+        fileSize: contents.length,
+        mimeType: 'text/plain',
+      });
+      const [uploadUrl, uploadedBytes, mimeType] = vi.mocked(client.uploadFileBytes).mock.calls[0];
+      expect(uploadUrl).toBe('https://s3.example/put');
+      expect(uploadedBytes.equals(contents)).toBe(true);
+      expect(mimeType).toBe('text/plain');
+    });
+
+    it('accepts exactly 100 MiB with padding and rejects one additional byte before presigning', async () => {
+      const limit = 100 * 1024 * 1024;
+      const client = uploadClient();
+      await uploadFile(client, { base64: Buffer.alloc(limit).toString('base64'), name: 'limit.txt' });
+      expect(client.requestFileUpload).toHaveBeenCalledWith({
+        fileName: 'limit.txt',
+        fileSize: limit,
+        mimeType: 'text/plain',
+      });
+      vi.mocked(client.requestFileUpload).mockClear();
+      await expect(
+        uploadFile(client, {
+          base64: Buffer.alloc(limit + 1).toString('base64'),
+          name: 'over-limit.txt',
+        })
+      ).rejects.toThrow('upload limit');
+      expect(client.requestFileUpload).not.toHaveBeenCalled();
+    });
+
+    it.each(['YQ==', 'YQ=', 'YQ', 'YWI=', 'YWI', 'YWJj', 'YR==', '-_8', 'Y W\nJj'])(
+      'retains accepted base64 normalization for %s',
+      async base64 => {
+        const client = uploadClient();
+        await uploadFile(client, { base64, name: 'note.txt' });
+        expect(client.uploadFileBytes).toHaveBeenCalledWith(
+          'https://s3.example/put',
+          Buffer.from(base64, 'base64'),
+          'text/plain'
+        );
+      }
+    );
+
+    it.each([' ', 'Y', 'YWJjZ', 'Y===', '====', 'Y=Q=', 'YQ===', 'Y!Q='])(
+      'rejects malformed or empty base64 %s before presigning',
+      async base64 => {
+        const client = uploadClient();
+        await expect(uploadFile(client, { base64, name: 'note.txt' })).rejects.toThrow('valid base64');
+        expect(client.requestFileUpload).not.toHaveBeenCalled();
+      }
+    );
 
     it('rejects projectId before presigning when the key lacks projects:write', async () => {
       const client = uploadClient({ getOwnKeyScopes: vi.fn().mockResolvedValue(['files:write']) });

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
 import { basename, resolve, sep } from 'node:path';
 import { z } from 'zod';
@@ -632,9 +633,6 @@ export async function uploadFile(
   const fileName = args.name ?? (args.path ? basename(args.path) : undefined);
   if (!fileName || fileName === '.' || fileName === '..') throw new Error('A file name is required');
   const tooLarge = () => new Error(`File exceeds the ${UPLOAD_FILE_MAX_BYTES / (1024 * 1024)} MB upload limit`);
-  if (!args.path && Math.floor((args.base64!.replace(/\s/g, '').length * 3) / 4) > UPLOAD_FILE_MAX_BYTES) {
-    throw tooLarge();
-  }
   let bytes: Buffer;
   if (args.path) {
     const target = await realpath(args.path);
@@ -643,7 +641,8 @@ export async function uploadFile(
     if (isHidden(resolve(args.path)) || isHidden(target)) {
       throw new Error(`${args.path} is a hidden file or inside a hidden directory; upload_file does not read those`);
     }
-    const file = await open(target, 'r');
+    // A FIFO must not block open before the same-handle regular-file check can reject it.
+    const file = await open(target, constants.O_RDONLY | constants.O_NONBLOCK);
     try {
       const info = await file.stat();
       if (!info.isFile()) throw new Error(`${args.path} is not a regular file`);
@@ -656,9 +655,11 @@ export async function uploadFile(
   } else {
     let b64 = args.base64!.replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/');
     if (b64.length % 4 === 2 || b64.length % 4 === 3) b64 += '='.repeat(4 - (b64.length % 4));
-    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(b64)) {
+    if (b64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) {
       throw new Error('File bytes must be nonempty and valid base64');
     }
+    const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+    if ((b64.length / 4) * 3 - padding > UPLOAD_FILE_MAX_BYTES) throw tooLarge();
     bytes = Buffer.from(b64, 'base64');
   }
   if (!bytes.length) throw new Error('File bytes must be nonempty and valid base64');
