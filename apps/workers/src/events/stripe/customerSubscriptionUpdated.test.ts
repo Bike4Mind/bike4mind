@@ -47,7 +47,9 @@ vi.mock('@bike4mind/server-utils/analytics/billingEventDetails', () => ({
 
 // Metadata parsing and the write are covered in applyPlanStorageLimit.test.ts; here only when it runs.
 const { mockApplyPlanStorageLimit } = vi.hoisted(() => ({ mockApplyPlanStorageLimit: vi.fn() }));
-vi.mock('./applyPlanStorageLimit', () => ({ applyPlanStorageLimit: mockApplyPlanStorageLimit }));
+vi.mock('@workers/lib/userSubscriptions/applyPlanStorageLimit', () => ({
+  applyPlanStorageLimit: mockApplyPlanStorageLimit,
+}));
 
 vi.mock('@bike4mind/server-utils/services/organizationService', () => ({
   setSeats: vi.fn(),
@@ -680,14 +682,15 @@ describe('customerSubscriptionUpdated - plan storage limit', () => {
   const run = () => handler({ properties: { subscriptionId: 'sub_stripe_u' } } as never, logger as never);
   const stripeReturns = (subscription: ReturnType<typeof buildUserSub>) =>
     vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(subscription as never);
+  const rowFound = (row: { ownerType: string; ownerId: string } | null) =>
+    vi.mocked(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).mockResolvedValue(row as never);
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // Earlier describes leave their own row on this mock; clearAllMocks keeps implementations.
-    vi.mocked(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).mockResolvedValue({} as never);
+    rowFound({ ownerType: 'User', ownerId: 'u1' });
   });
 
-  it('applies the price storage limit to the owner of a user subscription this stage owns', async () => {
+  it("applies the price storage limit to the stored row's owner", async () => {
     const subscription = buildUserSub();
     stripeReturns(subscription);
 
@@ -696,27 +699,28 @@ describe('customerSubscriptionUpdated - plan storage limit', () => {
     expect(mockApplyPlanStorageLimit).toHaveBeenCalledWith(subscription, 'u1', logger);
   });
 
+  it('takes the owner from the row, not from legacy metadata', async () => {
+    const subscription = buildUserSub({ metadata: { userId: 'someone-else', stage: 'test', ownerType: 'bogus' } });
+    stripeReturns(subscription);
+    rowFound({ ownerType: 'User', ownerId: 'row-owner' });
+
+    await run();
+
+    expect(mockApplyPlanStorageLimit).toHaveBeenCalledWith(subscription, 'row-owner', logger);
+  });
+
   it('skips a subscription this stage has no row for', async () => {
     stripeReturns(buildUserSub());
-    vi.mocked(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).mockResolvedValueOnce(null);
+    rowFound(null);
 
     await run();
 
     expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
   });
 
-  it('skips an organization-owned subscription', async () => {
-    stripeReturns(
-      buildUserSub({ metadata: { userId: 'u1', stage: 'test', ownerType: 'Organization', organizationId: 'org-a' } })
-    );
-
-    await run();
-
-    expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
-  });
-
-  it('skips legacy metadata without a user id', async () => {
-    stripeReturns(buildUserSub({ metadata: { stage: 'test', ownerType: 'User' } }));
+  it('skips an organization-owned row, even when metadata lost its ownerType', async () => {
+    stripeReturns(buildUserSub({ metadata: { userId: 'u1', stage: 'test', ownerType: 'bogus' } }));
+    rowFound({ ownerType: 'Organization', ownerId: 'org-a' });
 
     await run();
 

@@ -5,14 +5,20 @@ import { applyPlanStorageLimit, readPlanStorageLimit } from './applyPlanStorageL
 
 const { mockSetPlanStorageLimit } = vi.hoisted(() => ({ mockSetPlanStorageLimit: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ userRepository: { setPlanStorageLimit: mockSetPlanStorageLimit } }));
+const { mockEmitMetric } = vi.hoisted(() => ({ mockEmitMetric: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: mockEmitMetric }));
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
-const subscriptionWithPriceMetadata = (metadata: Record<string, string>) =>
-  ({ id: 'sub_1', items: { data: [{ price: { id: 'price_pro', metadata } }] } }) as unknown as Stripe.Subscription;
+const subscriptionWithPriceMetadata = (metadata: Record<string, string>, status: Stripe.Subscription.Status) =>
+  ({
+    id: 'sub_1',
+    status,
+    items: { data: [{ price: { id: 'price_pro', metadata } }] },
+  }) as unknown as Stripe.Subscription;
 
-const apply = (metadata: Record<string, string>) =>
-  applyPlanStorageLimit(subscriptionWithPriceMetadata(metadata), 'user-1', logger as never);
+const apply = (metadata: Record<string, string>, status: Stripe.Subscription.Status = 'active') =>
+  applyPlanStorageLimit(subscriptionWithPriceMetadata(metadata, status), 'user-1', logger as never);
 
 describe('readPlanStorageLimit', () => {
   it.each([
@@ -46,6 +52,21 @@ describe('applyPlanStorageLimit', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  it('writes on a trialing subscription', async () => {
+    await apply({ storageLimitMb: '5000' }, 'trialing');
+
+    expect(mockSetPlanStorageLimit).toHaveBeenCalledWith('user-1', 5000);
+  });
+
+  it.each(['incomplete', 'past_due', 'unpaid', 'canceled', 'incomplete_expired', 'paused'] as const)(
+    'does not grant the plan limit on a %s subscription',
+    async status => {
+      await apply({ storageLimitMb: '5000' }, status);
+
+      expect(mockSetPlanStorageLimit).not.toHaveBeenCalled();
+    }
+  );
+
   it('leaves the limit unchanged when the price has no storageLimitMb', async () => {
     await apply({});
 
@@ -60,7 +81,7 @@ describe('applyPlanStorageLimit', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('price_pro'), { raw: 'lots' });
   });
 
-  it('warns when no migrated user matched', async () => {
+  it('warns when the user does not exist', async () => {
     mockSetPlanStorageLimit.mockResolvedValue(false);
 
     await apply({ storageLimitMb: '5000' });
@@ -74,5 +95,8 @@ describe('applyPlanStorageLimit', () => {
 
     await expect(apply({ storageLimitMb: '5000' })).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalledWith(expect.any(String), { error });
+    expect(mockEmitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'PlanStorageLimitFailed', 1, {
+      reason: 'write_failed',
+    });
   });
 });
