@@ -176,6 +176,50 @@ describe('ResearchModeService reasoning effort', () => {
     vi.clearAllMocks();
   });
 
+  it.each(['none', 'high'] as const)(
+    'saved chat effort %s takes precedence in each research configuration',
+    async reasoningEffort => {
+      const complete = vi.fn().mockResolvedValue(undefined);
+      mockedGetLlmByModel.mockReturnValue({ complete } as never);
+      const models = [
+        {
+          id: ChatModels.CLAUDE_5_5_HAIKU,
+          backend: ModelBackend.Anthropic,
+          can_think: true,
+          thinkingStyle: 'adaptive',
+        },
+        {
+          id: ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
+          backend: ModelBackend.Bedrock,
+          can_think: true,
+          thinkingStyle: 'adaptive',
+        },
+        { id: ChatModels.GPT5, backend: ModelBackend.OpenAI },
+      ] as ModelInfo[];
+      const service = new ResearchModeService({}, models, logger);
+      const mode = {
+        enabled: true,
+        configurations: models.map(model => ({ id: model.id, model: model.id, enabled: true, parameters: {} })),
+      };
+      await service.processResearchMode(
+        mode,
+        [],
+        {
+          reasoningEffort,
+          thinking: { enabled: reasoningEffort === 'none', budget_tokens: 8000 },
+        } as ICompletionOptions,
+        onStream
+      );
+      const sent = Object.fromEntries(complete.mock.calls.map(call => [call[0], call[2]]));
+      for (const model of models.slice(0, 2)) {
+        expect(sent[model.id].reasoningEffort).toBe(reasoningEffort);
+        expect(sent[model.id].thinking.enabled).toBe(false);
+      }
+      expect(sent[ChatModels.GPT5].reasoningEffort).toBe(reasoningEffort === 'none' ? 'low' : 'high');
+      expect(sent[ChatModels.GPT5].thinking.enabled).toBe(reasoningEffort === 'none');
+    }
+  );
+
   it("narrows the user's reasoning effort to what each configuration's model takes", async () => {
     const complete = vi.fn().mockResolvedValue(undefined);
     mockedGetLlmByModel.mockReturnValue({ complete } as never);

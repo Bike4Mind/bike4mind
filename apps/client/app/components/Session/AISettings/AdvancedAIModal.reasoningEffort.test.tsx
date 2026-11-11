@@ -163,6 +163,14 @@ describe('AdvancedAIModal - Reasoning Effort selector', () => {
     expect(offeredLevels()).toEqual(['Auto', 'Low (Fast)', 'Medium', 'High', 'Extra High (Best)']);
   });
 
+  it('explains effort precedence over the separate Thinking control', () => {
+    useModel(ChatModels.CLAUDE_5_5_HAIKU, { thinkingStyle: 'adaptive' });
+    renderDetails(ChatModels.CLAUDE_5_5_HAIKU);
+    expect(screen.getByTestId('reasoning-effort-thinking-precedence')).toHaveTextContent(
+      'Explicit effort overrides Thinking. Auto follows Thinking and model defaults. None turns reasoning off.'
+    );
+  });
+
   it('offers None on an adaptive Claude model that can turn thinking off', () => {
     useModel(ChatModels.CLAUDE_5_5_HAIKU, { thinkingStyle: 'adaptive' });
     renderDetails(ChatModels.CLAUDE_5_5_HAIKU);

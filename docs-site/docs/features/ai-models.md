@@ -23,6 +23,8 @@ If your session or agent already uses an older model, its selected card stays vi
 
 Open a model's **Advanced AI settings** and choose **Reasoning Effort** on a supported OpenAI or adaptive Claude model. **Auto** lets the model's automatic settings decide; the other choices request a specific effort. **None** appears only on Claude models that can turn thinking off.
 
+On adaptive Claude models, an explicit effort overrides the separate **Thinking** setting. **None** turns reasoning off even when Thinking is on; another level enables reasoning even when Thinking is off. **Auto** follows Thinking and the model's defaults.
+
 Your preference is shared across models. Web chat adjusts it for each attempt, including a fallback: an unsupported **None** is raised to the model's lowest effort, and **Extra High** becomes **High** on OpenAI models where the app does not offer Extra High. GPT-5.2 keeps Extra High. Opening settings on a model that does not offer your saved level resets the preference to **Auto**; previewing a different model leaves it alone.
 
 If the selector is missing on an older Claude model, use its separate **Thinking** control instead. A model that does not support thinking has no reasoning-effort selector.

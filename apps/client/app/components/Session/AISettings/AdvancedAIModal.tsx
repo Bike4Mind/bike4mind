@@ -37,6 +37,7 @@ import {
   NO_TEMPERATURE_MODELS,
   IMAGE_SIZE_CONSTRAINTS,
   isBflImageModel,
+  isClaudeModelId,
   supportsPromptUpsampling,
   ModelBackend,
   ModelInfo,
@@ -358,22 +359,30 @@ const ReasoningEffortSelector: React.FC<{
   };
 
   return (
-    <SettingsRow label="Reasoning Effort" tooltip={FIELD_TOOLTIPS.reasoningEffort}>
-      <Select
-        data-testid="reasoning-effort-select"
-        value={currentValue}
-        onChange={handleChange}
-        indicator={<KeyboardArrowDownIcon />}
-        sx={settingsSelectSx(mode || 'light')}
-        slotProps={SETTINGS_SELECT_SLOT_PROPS}
-      >
-        {options.map(opt => (
-          <Option key={opt.value} value={opt.value}>
-            {opt.label}
-          </Option>
-        ))}
-      </Select>
-    </SettingsRow>
+    <Stack spacing={0.75}>
+      <SettingsRow label="Reasoning Effort" tooltip={FIELD_TOOLTIPS.reasoningEffort}>
+        <Select
+          data-testid="reasoning-effort-select"
+          value={currentValue}
+          onChange={handleChange}
+          indicator={<KeyboardArrowDownIcon />}
+          sx={settingsSelectSx(mode || 'light')}
+          slotProps={SETTINGS_SELECT_SLOT_PROPS}
+        >
+          {options.map(opt => (
+            <Option key={opt.value} value={opt.value}>
+              {opt.label}
+            </Option>
+          ))}
+        </Select>
+      </SettingsRow>
+      {isClaudeModelId(model) && (
+        <Typography level="body-xs" textColor="text.secondary" data-testid="reasoning-effort-thinking-precedence">
+          Explicit effort overrides Thinking. Auto follows Thinking and model defaults.
+          {options.some(option => option.value === 'none') ? ' None turns reasoning off.' : ''}
+        </Typography>
+      )}
+    </Stack>
   );
 };
 
