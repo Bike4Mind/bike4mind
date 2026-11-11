@@ -681,13 +681,13 @@ export async function uploadFile(
     await client.uploadFileBytes(upload.url, bytes, mimeType);
   } catch (err) {
     await client.deleteFile(fileId).catch(() => {});
-    throw new Error(`Upload for file ${fileId} failed: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`Upload for file ${fileId} failed: ${mapApiError(err, client.baseURL, 'files:write')}`);
   }
   try {
     if (args.projectId) await client.attachFileToProject(fileId, args.projectId);
   } catch (err) {
     throw new Error(
-      `File ${fileId} was uploaded but association failed: ${err instanceof Error ? err.message : String(err)}`
+      `File ${fileId} was uploaded but association failed: ${mapApiError(err, client.baseURL, 'projects:write')}`
     );
   }
   return { fileId, ingestionState: 'pending' as const };

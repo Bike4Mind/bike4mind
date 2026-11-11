@@ -252,6 +252,27 @@ describe('tool handlers', () => {
       expect(client.deleteFile).not.toHaveBeenCalled();
     });
 
+    it('keeps the scope hint when association is forbidden', async () => {
+      const forbidden = new B4mApiError(403, { error: 'forbidden' }, new Headers());
+      const client = uploadClient({ attachFileToProject: vi.fn().mockRejectedValue(forbidden) });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
+        'association failed: API key forbidden'
+      );
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
+        'recommended scope: projects:write'
+      );
+    });
+
+    it('still reports the upload failure when the cleanup delete fails', async () => {
+      const client = uploadClient({
+        uploadFileBytes: vi.fn().mockRejectedValue(new Error('boom')),
+        deleteFile: vi.fn().mockRejectedValue(new Error('gone')),
+      });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt' })).rejects.toThrow(
+        'Upload for file f1 failed: boom'
+      );
+    });
+
     it('refuses an unsupported type before presigning', async () => {
       const client = uploadClient();
       await expect(uploadFile(client, { base64: 'YWJj', name: 'blob.zzunknown' })).rejects.toThrow(
