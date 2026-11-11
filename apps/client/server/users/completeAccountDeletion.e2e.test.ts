@@ -121,10 +121,11 @@ describe('account deletion purge claims with Mongo', () => {
     expect(await Organization.exists({ _id: org.id }).setOptions({ includeDeleted: true } as never)).not.toBeNull();
     expect(await User.exists({ _id: userId })).toBeNull();
   });
-  it('cancels the admin grant of a sole-owner organization and leaves other organizations subscriptions alone', async () => {
+
+  it('cancels only the admin grant of a sole-owner organization and leaves its Stripe row and other organizations alone', async () => {
     const userId = await seedUser();
     const org = await Organization.create({ name: 'Granted', userId, personal: false });
-    const stripeSibling = await Organization.create({
+    const otherOrg = await Organization.create({
       name: 'Other',
       userId: new mongoose.Types.ObjectId().toString(),
     });
@@ -144,13 +145,20 @@ describe('account deletion purge claims with Mongo', () => {
     });
     await Subscription.create({
       ...base,
-      ownerId: String(stripeSibling.id),
+      ownerId: String(otherOrg.id),
       subscriptionId: 'admin_grant_other-org',
       source: SubscriptionSource.AdminGrant,
+    });
+    await Subscription.create({
+      ...base,
+      ownerId: String(org.id),
+      subscriptionId: 'sub_stripe_purge-test',
+      source: SubscriptionSource.Stripe,
     });
     await expect(complete(userId)).resolves.toEqual({ deleted: true });
     expect((await Subscription.findOne({ subscriptionId: 'admin_grant_purge-test' }).lean())!.status).toBe('canceled');
     expect((await Subscription.findOne({ subscriptionId: 'admin_grant_other-org' }).lean())!.status).toBe('active');
+    expect((await Subscription.findOne({ subscriptionId: 'sub_stripe_purge-test' }).lean())!.status).toBe('active');
   });
   it('deletes an organization whose only manager entry is the owner and clears partner rules pointing at it', async () => {
     const userId = await seedUser();
