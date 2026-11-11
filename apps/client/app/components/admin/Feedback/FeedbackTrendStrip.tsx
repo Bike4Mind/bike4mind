@@ -103,7 +103,16 @@ const TypeSparkline = ({ daily, total }: { daily: readonly FeedbackTypeCounts[];
   );
 };
 
-const TypeLegend = ({ total, showOnly }: { total: FeedbackTypeCounts; showOnly: ShowOnly }) => (
+const TypeLegend = ({
+  total,
+  untyped,
+  showOnly,
+}: {
+  total: FeedbackTypeCounts;
+  /** Reports in the 30-day total whose legacy type no legend entry counts. */
+  untyped: number;
+  showOnly: ShowOnly;
+}) => (
   <Stack direction="row" flexWrap="wrap" columnGap={1.25} rowGap={0.25} component="span">
     {FEEDBACK_TYPE_ORDER.map((type, typeIndex) => {
       const count = total[type];
@@ -113,7 +122,7 @@ const TypeLegend = ({ total, showOnly }: { total: FeedbackTypeCounts; showOnly: 
           component="button"
           type="button"
           onClick={() => showOnly({ statusFilters: ALL_STATUSES, types: [type], received: '30d' })}
-          aria-label={`Show ${FEEDBACK_TYPE_LABELS[type].toLowerCase()} reports from the last ${FEEDBACK_TREND_DAYS} days`}
+          aria-label={`Show ${FEEDBACK_TYPE_LABELS[type].toLowerCase()} reports from the last ${FEEDBACK_TREND_DAYS} days (${count.toLocaleString()})`}
           data-testid={`feedback-trends-type-${type}`}
           sx={{
             ...resetButton,
@@ -129,6 +138,15 @@ const TypeLegend = ({ total, showOnly }: { total: FeedbackTypeCounts; showOnly: 
         </Box>
       );
     })}
+    {untyped > 0 && (
+      <Box
+        component="span"
+        title="Reports with an older type that has no series"
+        data-testid="feedback-trends-type-other"
+      >
+        Other type {untyped.toLocaleString()}
+      </Box>
+    )}
   </Stack>
 );
 
@@ -158,6 +176,9 @@ export default function FeedbackTrendStrip({ showOnly }: { showOnly: ShowOnly })
   const daily = data?.daily ?? [];
   const typeTotals = emptyFeedbackTypeCounts();
   for (const day of daily) for (const type of FEEDBACK_TYPE_ORDER) typeTotals[type] += day[type];
+  const untyped = data ? Math.max(0, data.receivedLast30d - sumFeedbackTypeCounts(typeTotals)) : 0;
+  const withCount = (label: string, count: string | number | undefined) =>
+    count === undefined ? label : `${label} (${count.toLocaleString()})`;
 
   const queryClient = useQueryClient();
   // Refetched with the list, so the figure clicked and the rows it opens are counted moments apart.
@@ -170,14 +191,14 @@ export default function FeedbackTrendStrip({ showOnly }: { showOnly: ShowOnly })
     <Box data-testid="feedback-trends-strip">
       <StatStrip aria-label="Feedback volume">
         <FigureButton
-          label="Show open reports"
+          label={withCount('Show open reports', data?.open)}
           testId="feedback-trends-open"
           onClick={() => apply({ statusFilters: OPEN_STATUSES })}
         >
           <StatTile label="Open" value={data ? data.open : unavailable} comparison="New and in progress" />
         </FigureButton>
         <FigureButton
-          label="Show reports received in the last 24 hours"
+          label={withCount('Show reports received in the last 24 hours', data?.receivedLast24h)}
           testId="feedback-trends-received-24h"
           onClick={() => apply({ statusFilters: ALL_STATUSES, received: '24h' })}
         >
@@ -188,7 +209,10 @@ export default function FeedbackTrendStrip({ showOnly }: { showOnly: ShowOnly })
           />
         </FigureButton>
         <FigureButton
-          label="Show thumbs-down reports from the last 7 days"
+          label={withCount(
+            'Show thumbs-down reports from the last 7 days',
+            currentShare === undefined ? undefined : `${currentShare}%`
+          )}
           testId="feedback-trends-thumbs-down"
           onClick={() => apply({ statusFilters: ALL_STATUSES, types: [FeedbackType.THUMBS_DOWN], received: '7d' })}
         >
@@ -207,7 +231,10 @@ export default function FeedbackTrendStrip({ showOnly }: { showOnly: ShowOnly })
                   component="button"
                   type="button"
                   onClick={() => apply({ statusFilters: ALL_STATUSES, received: '30d' })}
-                  aria-label={`Show every report from the last ${FEEDBACK_TREND_DAYS} days`}
+                  aria-label={withCount(
+                    `Show every report from the last ${FEEDBACK_TREND_DAYS} days`,
+                    data.receivedLast30d
+                  )}
                   data-testid="feedback-trends-received-30d"
                   sx={{ ...resetButton, borderRadius: 'xs', '&:hover': { textDecoration: 'underline' } }}
                 >
@@ -218,7 +245,7 @@ export default function FeedbackTrendStrip({ showOnly }: { showOnly: ShowOnly })
               )
             }
             sparkline={data ? <TypeSparkline daily={daily} total={typeTotals} /> : undefined}
-            comparison={data ? <TypeLegend total={typeTotals} showOnly={apply} /> : undefined}
+            comparison={data ? <TypeLegend total={typeTotals} untyped={untyped} showOnly={apply} /> : undefined}
           />
         </Box>
       </StatStrip>

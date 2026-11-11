@@ -76,6 +76,19 @@ describe('FeedbackTrendStrip', () => {
       'aria-label',
       expect.stringContaining('Thumbs down 3')
     );
+    expect(screen.getByTestId('feedback-trends-open-btn')).toHaveAttribute('aria-label', 'Show open reports (12)');
+    expect(screen.getByTestId('feedback-trends-thumbs-down-btn')).toHaveAttribute(
+      'aria-label',
+      'Show thumbs-down reports from the last 7 days (30%)'
+    );
+    expect(screen.queryByTestId('feedback-trends-type-other')).not.toBeInTheDocument();
+  });
+
+  it('names the reports with an unknown legacy type that no legend entry counts', async () => {
+    mocks.getFeedbackTrendsFromServer.mockResolvedValue({ ...trends, receivedLast30d: 8 });
+    renderStrip();
+
+    expect(await screen.findByTestId('feedback-trends-type-other')).toHaveTextContent('Other type 2');
   });
 
   it('Open shows New and In progress at any age, other filters cleared', async () => {
