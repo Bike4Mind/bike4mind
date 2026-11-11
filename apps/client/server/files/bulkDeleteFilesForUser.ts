@@ -26,6 +26,14 @@ export interface BulkDeleteFilesResult {
   deleted: string[];
   unshared: string[];
   notFound: string[];
+  /**
+   * Files that exist but whose access is only through a group, data lake, or other non-direct
+   * share: the caller can see them in the browser but cannot delete or unshare them individually.
+   * Kept separate from `notFound` on the internal endpoint so the SPA can surface a specific
+   * message rather than silently leaving these files stuck in the user's browser.
+   * The public v1 API collapses `denied` into `not_found` (via `toPublicDeleteAction`).
+   */
+  denied: string[];
   failed: { id: string; error: string }[];
 }
 
@@ -46,7 +54,7 @@ export async function bulkDeleteFilesForUser(req: Request, fileIds: string[]): P
     fileIds,
   });
 
-  const results: BulkDeleteFilesResult = { deleted: [], unshared: [], notFound: [], failed: [] };
+  const results: BulkDeleteFilesResult = { deleted: [], unshared: [], notFound: [], denied: [], failed: [] };
 
   // Per owner: a batch can span personal files and files owned by an org.
   const refunds: Array<{ owner: StorageOwner; bytes: number }> = [];
@@ -127,7 +135,11 @@ export async function bulkDeleteFilesForUser(req: Request, fileIds: string[]): P
             { ability: req.ability, session }
           );
           results.unshared.push(fileId);
-        } else if (fabFilesService.toPublicDeleteAction(result.action) === 'not_found') {
+        } else if (result.action === 'denied') {
+          // File exists but user's access is only via group/data-lake, not a direct share.
+          // Keep separate from genuine not-found so the SPA can warn the user specifically.
+          results.denied.push(fileId);
+        } else if (result.action === 'not_found') {
           results.notFound.push(fileId);
         }
         return result.references;
