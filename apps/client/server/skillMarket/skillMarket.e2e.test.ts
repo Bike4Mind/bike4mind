@@ -111,6 +111,7 @@ import reviewHandler from '@pages/api/skills/market/versions/[vid]/review';
 import updateSkillHandler from '@pages/api/skills/[id]/index';
 import reviewQueueHandler from '@pages/api/skills/market/review-queue';
 import byTokenHandler from '@pages/api/skills/market/by-token/[token]';
+import byTokenHeaderHandler from '@pages/api/skills/market/by-token/index';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -204,9 +205,10 @@ async function call(
   query: Record<string, string>,
   body: Record<string, unknown> = {},
   isAdmin = false,
-  createdAt = new Date(0)
+  createdAt = new Date(0),
+  headers: Record<string, string> = {}
 ) {
-  const { req, res } = createMocks({ method: method as never, query, body });
+  const { req, res } = createMocks({ method: method as never, query, body, headers });
   Object.assign(req, { user: { id: userId, isAdmin, createdAt }, logger: { info: vi.fn() } });
   await handler(req, res);
   return res;
@@ -1175,6 +1177,27 @@ describe('Skill Market (real mongod)', () => {
     await expect(call(byTokenHandler, 'GET', OTHER, { token: 'x'.repeat(31) })).rejects.toMatchObject({
       statusCode: 404,
     });
+  });
+
+  it('by-token: opens an unlisted listing from the x-share-token header and 404s without one', async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'unlisted');
+    const open = (headers: Record<string, string>) =>
+      call(byTokenHeaderHandler, 'GET', OTHER, {}, {}, false, new Date(0), headers);
+    const res = await open({ 'x-share-token': listing.shareToken });
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().listing).toMatchObject({ id: listing.id, visibility: 'unlisted' });
+    await expect(open({})).rejects.toMatchObject({ statusCode: 404 });
+    await expect(open({ 'x-share-token': 'x'.repeat(32) })).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('detail: the x-share-token header unlocks an unlisted listing for a non-author', async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'unlisted');
+    const detail = (headers: Record<string, string>) =>
+      call(detailHandler, 'GET', OTHER, { id: listing.id }, {}, false, new Date(0), headers);
+    await expect(detail({})).rejects.toMatchObject({ statusCode: 404 });
+    const res = await detail({ 'x-share-token': listing.shareToken });
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().listing).toMatchObject({ id: listing.id });
   });
 
   it('search: filters and sorts all run behind the visibility gate', async () => {

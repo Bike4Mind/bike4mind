@@ -80,6 +80,7 @@ export {
   signDraftUploadToken,
   verifyDraftUploadToken,
   mintDraftUploadUrl,
+  DRAFT_UPLOAD_TOKEN_HEADER,
   DRAFT_UPLOAD_EXPIRY_SECONDS,
   type DraftUploadClaims,
   type DraftUploadStorage,

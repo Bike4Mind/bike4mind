@@ -6,6 +6,7 @@ import {
   verifyDraftUploadToken,
   mintDraftUploadUrl,
   DRAFT_UPLOAD_EXPIRY_SECONDS,
+  DRAFT_UPLOAD_TOKEN_HEADER,
   type DraftUploadStorage,
 } from './draftUploadUrl';
 
@@ -75,7 +76,7 @@ describe('mintDraftUploadUrl', () => {
   it('hosted: returns the presigned S3 PUT URL from storage', async () => {
     vi.stubEnv('B4M_SELF_HOST', '');
     const storage = makeStorage('https://s3.example/presigned-put');
-    const url = await mintDraftUploadUrl({
+    const target = await mintDraftUploadUrl({
       storage,
       key: 'drafts/d1/index.html',
       draftId: 'd1',
@@ -84,7 +85,8 @@ describe('mintDraftUploadUrl', () => {
       size: 2048,
       expiresIn: DRAFT_UPLOAD_EXPIRY_SECONDS,
     });
-    expect(url).toBe('https://s3.example/presigned-put');
+    // A presigned URL carries its own signature, so no headers ride along.
+    expect(target).toEqual({ url: 'https://s3.example/presigned-put' });
     expect(storage.getSignedUrl).toHaveBeenCalledWith('drafts/d1/index.html', 'put', {
       expiresIn: DRAFT_UPLOAD_EXPIRY_SECONDS,
       ContentType: 'text/html',
@@ -92,10 +94,10 @@ describe('mintDraftUploadUrl', () => {
     });
   });
 
-  it('self-host: returns a same-origin proxy URL carrying a valid token, without touching storage', async () => {
+  it('self-host: returns a same-origin proxy URL and the token as a header, without touching storage', async () => {
     vi.stubEnv('B4M_SELF_HOST', 'true');
     const storage = makeStorage('https://should-not-be-used');
-    const url = await mintDraftUploadUrl({
+    const { url, headers } = await mintDraftUploadUrl({
       storage,
       key: 'drafts/d1/assets/app.js',
       draftId: 'd1',
@@ -111,8 +113,9 @@ describe('mintDraftUploadUrl', () => {
     const params = new URLSearchParams(url.split('?')[1]);
     expect(params.get('draftId')).toBe('d1');
     expect(params.get('path')).toBe('assets/app.js');
+    expect(params.has('token')).toBe(false);
     // The declared size rides in the signed claims, so the proxy can hold the body to it.
-    expect(verifyDraftUploadToken(params.get('token') ?? '')).toEqual({
+    expect(verifyDraftUploadToken(headers?.[DRAFT_UPLOAD_TOKEN_HEADER] ?? '')).toEqual({
       draftId: 'd1',
       path: 'assets/app.js',
       size: 12,
@@ -121,7 +124,7 @@ describe('mintDraftUploadUrl', () => {
 
   it('self-host: the proxy token TTL matches the expiresIn threaded through mint', async () => {
     vi.stubEnv('B4M_SELF_HOST', 'true');
-    const url = await mintDraftUploadUrl({
+    const { headers } = await mintDraftUploadUrl({
       storage: makeStorage('unused'),
       key: 'drafts/d1/index.html',
       draftId: 'd1',
@@ -130,7 +133,7 @@ describe('mintDraftUploadUrl', () => {
       size: 12,
       expiresIn: 300,
     });
-    const token = new URLSearchParams(url.split('?')[1]).get('token') ?? '';
+    const token = headers?.[DRAFT_UPLOAD_TOKEN_HEADER] ?? '';
     const decoded = jwt.decode(token) as { iat: number; exp: number };
     expect(decoded.exp - decoded.iat).toBe(300);
   });
