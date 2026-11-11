@@ -25,6 +25,9 @@ import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { escapeRegex, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import type { RequestHandler } from 'express';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { postFeedbackToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -219,7 +222,35 @@ export function resolveFeedbackEmailRoute(
     : { kind: 'skip', stageClass, reason: 'nonprod_unconfigured' };
 }
 
+const FEEDBACK_SUBMISSIONS_PER_HOUR = 10;
+const HOUR_MS = 60 * 60 * 1000;
+
+const onlyPost =
+  (limiter: RequestHandler): RequestHandler =>
+  (req, res, next) =>
+    req.method === 'POST' ? limiter(req, res, next) : next();
+
+// Submissions are capped per source IP and per signed-in user; listing is not limited here.
 const handler = baseApi()
+  .use(
+    onlyPost(
+      rateLimit({
+        bucket: 'feedback-create-ip',
+        subject: req => `ip:${getClientIp(req)}`,
+        limit: FEEDBACK_SUBMISSIONS_PER_HOUR,
+        windowMs: HOUR_MS,
+      })
+    )
+  )
+  .use(
+    onlyPost(
+      rateLimit({
+        bucket: 'feedback-create-user',
+        limit: FEEDBACK_SUBMISSIONS_PER_HOUR,
+        windowMs: HOUR_MS,
+      })
+    )
+  )
   .get(async (req, res) => {
     // Invariant check, not a reachable auth path - the auth middleware attaches an ability
     // unconditionally. Typed so errorHandler does not default it to a 500 that pages an operator

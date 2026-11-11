@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   logAuthAudit: vi.fn(),
   users: { findById: vi.fn(), existsOtherUserWithEmail: vi.fn(), update: vi.fn() },
   withTransaction: vi.fn(),
+  reserveRecipientSendBudget: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -36,6 +37,7 @@ vi.mock('@bike4mind/services', () => ({ userService: { requestEmailChange: h.req
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 // logAuditEvent writes a CounterLog row; an own email change must never reach it.
 vi.mock('@bike4mind/server-utils/utils/auditLog', () => ({ logAuditEvent: h.logAuditEvent }));
+vi.mock('@server/utils/recipientSendLimits', () => ({ reserveRecipientSendBudget: h.reserveRecipientSendBudget }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
 
 process.env.APP_URL = 'https://app.test';
@@ -61,6 +63,7 @@ const run = async () => {
 describe('POST /api/email/change templates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.reserveRecipientSendBudget.mockResolvedValue(undefined);
     h.withTransaction.mockImplementation(async (fn: () => Promise<unknown>) => fn());
     h.requestEmailChange.mockImplementation(async (_params: unknown, { mailer }: { mailer: Mailer }) => {
       await mailer.sendEmailChangeNotification(user, newEmail);
@@ -157,5 +160,20 @@ describe('POST /api/email/change templates', () => {
     expect(messages).toHaveLength(2);
     expect(messages[1].body).toContain('committed-token');
     expect(messages.some(message => message.body.includes('rolled-back-token'))).toBe(false);
+  });
+
+  it('answers 429 with Retry-After and sends nothing when the new address is over its limit', async () => {
+    h.reserveRecipientSendBudget.mockResolvedValue({ retryAfter: 120 });
+    const res = { json: vi.fn(), setHeader: vi.fn() };
+
+    await expect(
+      h.handler!({ body: { newEmail }, user, headers: {}, logger: { error: vi.fn() } }, res)
+    ).rejects.toMatchObject({
+      statusCode: 429,
+    });
+
+    expect(h.reserveRecipientSendBudget).toHaveBeenCalledWith([newEmail]);
+    expect(res.setHeader).toHaveBeenCalledWith('Retry-After', 120);
+    expect(h.requestEmailChange).not.toHaveBeenCalled();
   });
 });

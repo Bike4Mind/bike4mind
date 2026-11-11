@@ -1,6 +1,7 @@
 import { cacheRepository, User } from '@bike4mind/database';
 import { TooManyRequestsError } from '@bike4mind/utils';
 import { sendInviteNotificationEmails } from '@server/utils/mailer/inviteNotificationEmail';
+import { reserveRecipientSendBudget } from './recipientSendLimits';
 import { MAX_INVITE_MESSAGE_LENGTH, MAX_INVITE_RECIPIENTS } from '@client/types/api';
 
 export { MAX_INVITE_MESSAGE_LENGTH, MAX_INVITE_RECIPIENTS };
@@ -80,11 +81,15 @@ export async function reserveInviteSendBudget(
     await recipientReservation.release();
     throw new TooManyRequestsError('Too many email invitations. Try again later.');
   }
-  return {
-    release: async () => {
-      await Promise.all([recipientReservation.release(), typedReservation.release()]);
-    },
+  const release = async () => {
+    await Promise.all([recipientReservation.release(), typedReservation.release()]);
   };
+  const perRecipient = await reserveRecipientSendBudget(recipientList.filter(recipient => recipient.includes('@')));
+  if (perRecipient) {
+    await release();
+    throw new TooManyRequestsError('Too many email invitations to this address. Try again later.');
+  }
+  return { release };
 }
 
 /**

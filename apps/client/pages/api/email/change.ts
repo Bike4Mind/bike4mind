@@ -12,6 +12,8 @@ import {
 import { logAuthAudit } from '@server/utils/authAudit';
 import { z } from 'zod';
 import { stepUpGate } from '@server/auth/stepUp';
+import { reserveRecipientSendBudget } from '@server/utils/recipientSendLimits';
+import { TooManyRequestsError } from '@bike4mind/utils';
 
 const ChangeEmailRequestSchema = z.object({
   // Normalized before the format check so a padded address is not rejected for its whitespace.
@@ -28,9 +30,22 @@ const handler = baseApi({ auth: 'jwtOnly' })
       windowMs: 15 * 60 * 1000, // 15 minutes
     })
   )
+  .use(
+    rateLimit({
+      limit: 10, // 10 attempts
+      windowMs: 24 * 60 * 60 * 1000, // 1 day
+      bucket: 'POST /api/email/change-daily',
+    })
+  )
   .post(
     asyncHandler(async (req, res) => {
       const { newEmail } = ChangeEmailRequestSchema.parse(req.body);
+
+      const refused = await reserveRecipientSendBudget([newEmail]);
+      if (refused) {
+        res.setHeader('Retry-After', refused.retryAfter);
+        throw new TooManyRequestsError(`Rate limit exceeded. Try again in ${refused.retryAfter} seconds.`);
+      }
 
       // Buffer emails so they are published AFTER the transaction commits.
       // Publishing to SQS inside a transaction would mean a rollback can't

@@ -6,6 +6,8 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { tryAddWithinLimitFixedWindow, decrementCounter },
   User: {},
 }));
+const reserveRecipientSendBudget = vi.hoisted(() => vi.fn());
+vi.mock('./recipientSendLimits', () => ({ reserveRecipientSendBudget }));
 vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({ sendInviteNotificationEmails: vi.fn() }));
 
 import { reserveInviteSendBudget } from './inviteSendLimits';
@@ -20,6 +22,7 @@ const inWindow = () => ({ success: true, count: 1, expiresAt: new Date(Date.now(
 describe('reserveInviteSendBudget', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    reserveRecipientSendBudget.mockResolvedValue(undefined);
     tryAddWithinLimitFixedWindow.mockResolvedValue(inWindow());
   });
 
@@ -83,5 +86,20 @@ describe('reserveInviteSendBudget', () => {
     await reservation.release();
 
     expect(decrementCounter).not.toHaveBeenCalled();
+  });
+
+  it('applies the per-recipient limit to typed addresses only, and gives the charges back when refused', async () => {
+    reserveRecipientSendBudget.mockResolvedValueOnce({ retryAfter: 60 });
+
+    await expect(reserveInviteSendBudget('u1', MIXED_RECIPIENTS, { chargeTypedAddresses: true })).rejects.toThrow(
+      /Too many email invitations/
+    );
+    expect(reserveRecipientSendBudget).toHaveBeenCalledWith(['a@example.com', 'b@example.com']);
+    expect(decrementCounter).toHaveBeenCalledTimes(3 + 2);
+  });
+
+  it('does not apply the per-recipient limit to types that mail no typed address', async () => {
+    await reserveInviteSendBudget('u1', MIXED_RECIPIENTS, { chargeTypedAddresses: false });
+    expect(reserveRecipientSendBudget).not.toHaveBeenCalled();
   });
 });

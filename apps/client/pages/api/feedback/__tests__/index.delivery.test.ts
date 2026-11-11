@@ -19,6 +19,7 @@ const mockRefs = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
+    use: () => chain,
     get: (fn: unknown) => chain,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     post: (fn: any) => {
