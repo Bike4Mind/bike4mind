@@ -231,9 +231,36 @@ export interface IFeedback {
   /** True iff the sibling `IFeedbackText` document was successfully written - lets a reader tell
    * "text expired under the 90-day TTL" apart from "this report never had text". */
   contentStored: boolean;
+  /** The admin who last set `status`, and when. Admin-only: written by the status route alone. */
+  handledBy?: string;
+  handledAt?: Date;
 }
 
 export interface IFeedbackDocument extends IFeedback, IMongoDocument {}
+
+/**
+ * Body of the admin status route (`/api/admin/feedback/[id]/status`). `expectedStatus` is the
+ * status the admin saw: a report changed since then is a 409 rather than a silent overwrite, which
+ * also keeps an Undo from reverting someone else's later change. `undoOf` names the audit entry an
+ * Undo reverses.
+ */
+export const UpdateFeedbackStatusRequestSchema = z
+  .object({
+    status: z.nativeEnum(FeedbackStatus),
+    expectedStatus: z.nativeEnum(FeedbackStatus).optional(),
+    undoOf: z.string().min(1).max(64).optional(),
+  })
+  .strict();
+export type UpdateFeedbackStatusRequest = z.infer<typeof UpdateFeedbackStatusRequestSchema>;
+
+export type UpdateFeedbackStatusResponse = {
+  status: FeedbackStatus;
+  previousStatus: FeedbackStatus;
+  handledBy: string | null;
+  handledAt: string | null;
+  /** Null when the status was already the requested one, so nothing changed and nothing was logged. */
+  auditEntryId: string | null;
+};
 
 /**
  * The free-text half of a Feedback report, split into its own TTL'd collection because Mongo's

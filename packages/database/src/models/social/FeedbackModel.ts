@@ -70,6 +70,8 @@ const feedbackSchema = new Schema<IFeedbackDocument>(
       required: false,
     },
     contentStored: { type: Boolean, required: true, default: false },
+    handledBy: { type: String, required: false },
+    handledAt: { type: Date, required: false },
   },
   {
     timestamps: true,

@@ -1,4 +1,4 @@
-import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
+import { FeedbackModel, FeedbackTextModel, withTransaction } from '@bike4mind/database';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -6,6 +6,12 @@ import { FeedbackEvents } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import {
+  isSameUserId,
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+  userAuditTarget,
+} from '@bike4mind/server-utils/utils/adminAudit';
 
 const handler = baseApi().delete(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -33,7 +39,28 @@ const handler = baseApi().delete(
       throw new NotFoundError('Feedback not found');
     }
 
-    await FeedbackModel.deleteOne({ _id: id });
+    // A reporter retracting their own report is not an admin action. Anyone else's report (or any
+    // report while impersonating) is deleted by an admin, which takes a reason and is audited in the
+    // same transaction as the delete, matching feedbackReadAudit.ts's notion of an own report. An
+    // own report deleted with a reason came through the admin dialog, so it is audited too.
+    const isOwnReport = !req.user.impersonatedBy && !!feedback.userId && isSameUserId(feedback.userId, userId);
+    const reasonValue = (req.body as { reason?: unknown } | undefined)?.reason;
+    if (isOwnReport && reasonValue === undefined) {
+      await FeedbackModel.deleteOne({ _id: id });
+    } else {
+      const reason = parseAdminActionReason(reasonValue);
+      const target = await userAuditTarget(feedback.userId);
+      await withTransaction(async () => {
+        await FeedbackModel.deleteOne({ _id: id });
+        await recordAdminActionFromRequest(req, {
+          action: 'feedback.deleted',
+          target,
+          summary: `deleted a ${feedback.type ?? 'feedback'} report (${feedback.status})`,
+          reason,
+          details: { feedbackId: id, status: feedback.status, type: feedback.type ?? null },
+        });
+      });
+    }
 
     // Mongo has no cascade: without this, a deleted report's free text survives up to 90 days,
     // inverting the retention promise. Best-effort - the report is already gone either way.
