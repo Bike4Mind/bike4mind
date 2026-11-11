@@ -2,9 +2,8 @@ import { Box, Tooltip } from '@mui/joy';
 import type { AiAbuseAdvisoryRow } from '@client/app/hooks/data/aiAdvisory';
 import { adminFocus } from '../../shared/adminStyles';
 import { StatusChip } from '../../shared/StatusChip';
+import { AI_ADVISORY_MARK } from '../../shared/AiSuggestion';
 import { DETECTOR_LABELS } from '../../shadowDetectorLabels';
-
-export const AI_ADVISORY_MARK = '\u2726';
 
 /** Hover text for an advisory: what the AI said, on which detection, and that no admin has reviewed it. */
 export function aiAdvisoryTitle(advisory: AiAbuseAdvisoryRow): string {
