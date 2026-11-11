@@ -30,7 +30,9 @@ const message = { MessageId: 'm1', Body: '{}', ReceiptHandle: 'handle-1', Attrib
 const peek = async (adminPermissions: string[]) => {
   const res = { json: vi.fn() };
   await h.handler!({ query: { queue: 'q1' }, user: { id: 'u1', isAdmin: false, adminPermissions } }, res);
-  return res.json.mock.calls[0][0] as { messages: Array<{ receiptHandle?: string }> };
+  return res.json.mock.calls[0][0] as {
+    messages: Array<{ messageId?: string; body?: string; receiptHandle?: string; approximateReceiveCount?: string }>;
+  };
 };
 
 describe('GET /api/admin/dlq/messages', () => {
@@ -50,5 +52,21 @@ describe('GET /api/admin/dlq/messages', () => {
 
     expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, 0);
     expect(body.messages[0].receiptHandle).toBeUndefined();
+  });
+
+  it('returns one row per message id, keeping the copy with the highest receive count', async () => {
+    h.receiveFromQueue.mockResolvedValue([
+      { MessageId: 'dup', Body: 'older', ReceiptHandle: 'h-old', Attributes: { ApproximateReceiveCount: '2' } },
+      { MessageId: 'other', Body: 'x', ReceiptHandle: 'h-other', Attributes: { ApproximateReceiveCount: '1' } },
+      { MessageId: 'dup', Body: 'newer', ReceiptHandle: 'h-new', Attributes: { ApproximateReceiveCount: '3' } },
+    ]);
+
+    const body = await peek(['support:read']);
+
+    expect(body.messages).toHaveLength(2);
+    expect(body.messages.find(m => m.messageId === 'dup')).toMatchObject({
+      body: 'newer',
+      approximateReceiveCount: '3',
+    });
   });
 });

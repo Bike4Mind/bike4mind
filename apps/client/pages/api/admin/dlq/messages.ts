@@ -48,7 +48,17 @@ const handler = adminApi({
   Logger.info(`[DLQ Messages] Peeking at ${queueLabel}`, { adminUserId, maxMessages });
 
   const canReplay = meetsAdminPermissionRequirement(req.user, 'settings:manage');
-  const messages = await receiveFromQueue(dlqUrl, maxMessages, canReplay ? 120 : 0);
+  const received = await receiveFromQueue(dlqUrl, maxMessages, canReplay ? 120 : 0);
+  // A visibility-0 receive can return the same message more than once; keep the latest copy.
+  const receiveCount = (msg: (typeof received)[number]) =>
+    parseInt(msg.Attributes?.ApproximateReceiveCount ?? '0', 10) || 0;
+  const byId = new Map<string, (typeof received)[number]>();
+  for (const msg of received) {
+    if (!msg.MessageId) continue;
+    const existing = byId.get(msg.MessageId);
+    if (!existing || receiveCount(msg) > receiveCount(existing)) byId.set(msg.MessageId, msg);
+  }
+  const messages = [...byId.values()];
 
   const formatted = messages.map(msg => ({
     messageId: msg.MessageId,
