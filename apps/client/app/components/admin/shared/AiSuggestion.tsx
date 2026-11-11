@@ -80,7 +80,10 @@ export type AiSuggestionProps = {
   onDecision?: (decision: AiSuggestionDecision) => void;
   /** Reverts an `auto_applied` suggestion. */
   onUndo?: () => void;
-  /** Detail only: open with the why-wrong picker showing, for a host reached through its Override key. */
+  /**
+   * Detail only: open with the why-wrong picker showing, for a host reached through its Override key.
+   * Read once at mount, so mount this only once the suggestion is loaded.
+   */
   initialOverriding?: boolean;
   /**
    * Derived ids: `<id>-chip`, `<id>-proposal`, `<id>-confidence`, `<id>-reason-<i>`, `<id>-meta`,
