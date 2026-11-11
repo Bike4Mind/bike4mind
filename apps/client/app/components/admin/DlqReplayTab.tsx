@@ -34,6 +34,8 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import QueueIcon from '@mui/icons-material/Queue';
 import SearchIcon from '@mui/icons-material/Search';
 import { toast } from 'sonner';
+import { useNavigate, useSearch } from '@tanstack/react-router';
+import { DLQ_QUEUE_PARAM } from '@bike4mind/common';
 import {
   useDlqQueues,
   useDlqMessages,
@@ -82,6 +84,23 @@ const StatsCard: React.FC<{
     </Card>
   );
 };
+
+/** Shown in place of the counts when every queue reports zero messages, visible or in flight. */
+const AllClear: React.FC<{ checkedAt: number }> = ({ checkedAt }) => (
+  <Card
+    variant="soft"
+    color="success"
+    sx={{ mb: 3, p: 3, alignItems: 'center', textAlign: 'center' }}
+    data-testid="dlq-all-clear"
+  >
+    <CheckCircleIcon sx={{ fontSize: 40, color: 'var(--joy-palette-success-500)' }} />
+    <Typography level="title-lg">No dead letters</Typography>
+    <Typography level="body-sm">Every background job queue is empty, so there is nothing to replay.</Typography>
+    <Typography level="body-xs" data-testid="dlq-all-clear-checked">
+      Last checked {new Date(checkedAt).toLocaleTimeString()}
+    </Typography>
+  </Card>
+);
 
 const MessageDrawer: React.FC<{
   message: DlqMessage | null;
@@ -175,7 +194,27 @@ const MessageDrawer: React.FC<{
 };
 
 const DlqReplayTab: React.FC = () => {
-  const [selectedQueue, setSelectedQueue] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as Record<string, unknown>;
+  const queueParam = typeof search[DLQ_QUEUE_PARAM] === 'string' ? search[DLQ_QUEUE_PARAM] : null;
+  const {
+    data: queues,
+    isLoading: queuesLoading,
+    isError: queuesError,
+    dataUpdatedAt: queuesCheckedAt,
+    refetch: refetchQueues,
+  } = useDlqQueues();
+
+  // The selection lives in the URL so an alarm can deep-link to one queue. A label the registry
+  // does not list (an alarm-only DLQ) selects nothing rather than querying an unknown queue.
+  const selectedQueue = queueParam && queues?.some(q => q.label === queueParam) ? queueParam : null;
+  const unknownQueue = queueParam && queues && !selectedQueue ? queueParam : null;
+  const setSelectedQueue = (label: string | null) =>
+    void navigate({
+      to: '/admin',
+      search: previous => ({ ...previous, [DLQ_QUEUE_PARAM]: label ?? undefined }),
+      replace: true,
+    });
   const [selectedMessage, setSelectedMessage] = useState<DlqMessage | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -207,7 +246,6 @@ const DlqReplayTab: React.FC = () => {
     return filters;
   }, [showHistory, selectedQueue, historyStatus, historyDateRange, debouncedSearch]);
 
-  const { data: queues, isLoading: queuesLoading, isError: queuesError, refetch: refetchQueues } = useDlqQueues();
   const {
     data: messages,
     isLoading: messagesLoading,
@@ -230,6 +268,14 @@ const DlqReplayTab: React.FC = () => {
     if (!queues) return 0;
     return queues.filter(q => q.approximateMessageCount > 0).length;
   }, [queues]);
+
+  const allClear = useMemo(
+    () =>
+      !!queues &&
+      queues.length > 0 &&
+      queues.every(q => q.approximateMessageCount === 0 && q.approximateNotVisibleCount <= 0),
+    [queues]
+  );
 
   const selectedQueueInfo = useMemo(() => {
     if (!queues || !selectedQueue) return null;
@@ -325,32 +371,42 @@ const DlqReplayTab: React.FC = () => {
         </Stack>
       </Stack>
 
-      {/* Stats */}
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid xs={4}>
-          <StatsCard title="Total DLQs" value={queues?.length ?? 0} data-testid="dlq-stats-total" />
+      {allClear ? (
+        <AllClear checkedAt={queuesCheckedAt} />
+      ) : (
+        <Grid container spacing={2} sx={{ mb: 3 }}>
+          <Grid xs={4}>
+            <StatsCard title="Total DLQs" value={queues?.length ?? 0} data-testid="dlq-stats-total" />
+          </Grid>
+          <Grid xs={4}>
+            <StatsCard
+              title="DLQs with Messages"
+              value={queuesWithMessages}
+              color={queuesWithMessages > 0 ? 'warning' : 'success'}
+              data-testid="dlq-stats-with-messages"
+            />
+          </Grid>
+          <Grid xs={4}>
+            <StatsCard
+              title="Total Failed Messages"
+              value={totalMessages}
+              color={totalMessages > 0 ? 'danger' : 'success'}
+              data-testid="dlq-stats-failed"
+            />
+          </Grid>
         </Grid>
-        <Grid xs={4}>
-          <StatsCard
-            title="DLQs with Messages"
-            value={queuesWithMessages}
-            color={queuesWithMessages > 0 ? 'warning' : 'success'}
-            data-testid="dlq-stats-with-messages"
-          />
-        </Grid>
-        <Grid xs={4}>
-          <StatsCard
-            title="Total Failed Messages"
-            value={totalMessages}
-            color={totalMessages > 0 ? 'danger' : 'success'}
-            data-testid="dlq-stats-failed"
-          />
-        </Grid>
-      </Grid>
+      )}
 
       {queuesError && (
         <Alert color="danger" sx={{ mb: 2 }}>
           Failed to load DLQ list. Try refreshing.
+        </Alert>
+      )}
+
+      {unknownQueue && (
+        <Alert color="neutral" variant="soft" sx={{ mb: 2 }} data-testid="dlq-unknown-queue">
+          The {unknownQueue} queue is not listed on this page yet, so it cannot be viewed or replayed here. Check it in
+          the AWS console.
         </Alert>
       )}
 
