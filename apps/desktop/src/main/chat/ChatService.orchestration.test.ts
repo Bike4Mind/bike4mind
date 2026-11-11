@@ -284,6 +284,21 @@ describe('role routing and task runtime compatibility', () => {
     await expect(service.actOnTask(parent.id, child.id, { kind: 'accept', assessment: 'Turn ended' })).rejects.toThrow(
       /Acceptance/
     );
+    await expect(
+      service.actOnTask(child.id, child.id, {
+        kind: 'report',
+        report: {
+          status: 'completed',
+          changedPaths: ['src/feature.ts'],
+          verification: [
+            { criterion: 'Targeted tests', command: 'pnpm test feature', outcome: 'passed', evidence: '1 test passed' },
+          ],
+          unmetCriteria: [],
+          handoff: 'Labelled by command',
+        },
+      })
+    ).rejects.toThrow(/Not covered:\n- "Focused test passes"/);
+    expect((await store.get(child.id))?.workerTask?.state).toMatchObject({ status: 'blocked' });
     await service.actOnTask(child.id, child.id, {
       kind: 'report',
       report: {

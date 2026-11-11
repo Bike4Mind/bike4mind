@@ -25,7 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: mocks.csrf }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: mocks.rate }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: mocks.rate }));
 vi.mock('@server/credits/recordActiveSession', () => ({ recordHeartbeat: mocks.heartbeat }));
 await import('../active-session');
 

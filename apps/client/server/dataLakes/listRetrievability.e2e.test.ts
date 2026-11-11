@@ -4,7 +4,7 @@ import mongoose from 'mongoose';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { DataLakeAccessGrantModel, DataLakeModel, Organization, Session } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { resolveRetrievalLakeScopeForUser } from './resolveRetrievalLakeScope';
+import { resolveRetrievalLakeScopeForUser } from '@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope';
 import { labelLakeRetrievability } from './labelLakeRetrievability';
 import { findOwnSession, resolveLakeListRetrievalScope } from './resolveLakeListRetrievalScope';
 

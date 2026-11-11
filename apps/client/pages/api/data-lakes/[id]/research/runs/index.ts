@@ -17,7 +17,7 @@ import { Resource } from 'sst';
 import { z } from 'zod';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { queueResearchRun } from '@bike4mind/server-utils/dataLakes/queueResearchRun';
 import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 import { respond } from '@server/utils/respond';

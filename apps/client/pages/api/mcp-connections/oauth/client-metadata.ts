@@ -5,7 +5,7 @@
  * `client_id`. Mapped from /.well-known/oauth-client/mcp-client.json via next.config.mjs rewrites.
  */
 import { baseApi } from '@server/middlewares/baseApi';
-import { clientMetadataUrl, redirectUri } from '@server/mcpConnections/oauth/redirectUri';
+import { clientMetadataUrl, redirectUri } from '@bike4mind/server-utils/mcpConnections/oauth/redirectUri';
 
 const handler = baseApi({ auth: false }).get((_req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=3600');

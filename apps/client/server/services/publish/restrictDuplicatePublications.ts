@@ -5,8 +5,8 @@ import {
   type PublishSourceKind,
   type PublishVisibility,
 } from '@bike4mind/common';
-import { invalidatePublishCdn, toCacheTarget } from './invalidatePublishCdn';
-import type { MinimalLogger } from './minimalLogger';
+import { invalidatePublishCdn, toCacheTarget } from '@bike4mind/server-utils/services/publish/invalidatePublishCdn';
+import type { MinimalLogger } from '@bike4mind/server-utils/services/publish/minimalLogger';
 
 export interface DuplicateKeeper {
   _id: unknown;

@@ -9,7 +9,7 @@ import { ADMIN_REGION_GAP } from '@client/app/components/admin/shared/adminStyle
 import { DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
 import { EmptyState } from '@client/app/components/admin/shared/EmptyState';
 import { StatusChip } from '@client/app/components/admin/shared/StatusChip';
-import { AdminUsersBulkResultSchema } from '@client/app/utils/adminUsersBulk';
+import { AdminUsersBulkResultSchema } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { useUsersBulkResult } from '../Users/List/useUsersBulkResult';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { useUser } from '@client/app/contexts/UserContext';

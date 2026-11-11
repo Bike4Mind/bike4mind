@@ -19,7 +19,7 @@ import {
   API_KEY_ACCESS_DENIED_MESSAGE,
   assertCliSessionAllowed,
   isApiKeyAccessAllowed,
-} from '@server/utils/apiKeyAccessGate';
+} from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';

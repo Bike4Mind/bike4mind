@@ -14,7 +14,10 @@ export type EmailDomainGroup = {
   firstCreatedAt: string;
   lastCreatedAt: string;
   apiKeyCount: number;
-  /** Domain-cohort signals from server/users/signupClassifier.ts that any account in the group triggered. */
+  /**
+   * Domain-cohort signals from packages/server-utils/src/users/signupClassifier.ts that any account in the group
+   * triggered.
+   */
   signals: DomainSignupSignal[];
 };
 

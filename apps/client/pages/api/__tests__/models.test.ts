@@ -41,7 +41,7 @@ vi.mock('@bike4mind/services/llm/modelAdmission', async importOriginal => ({
   loadFreeTierAllowedModels: (...a: unknown[]) => mockLoadFreeTierAllowedModels(...a),
 }));
 
-vi.mock('@server/entitlements', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
   getUserEntitlements: vi.fn(async () => []),
   toEntitlementUser: (user: unknown) => user,
 }));

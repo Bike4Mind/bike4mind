@@ -30,7 +30,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => 
 
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 // Only reached for a contributed scope, which this suite never requests.
-vi.mock('@server/entitlements', () => ({ toEntitlementUser: vi.fn() }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ toEntitlementUser: vi.fn() }));
 vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({ resolveApiKeyScopeAccessForUser: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   agentRepository: {},

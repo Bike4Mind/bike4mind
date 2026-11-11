@@ -57,7 +57,7 @@ const mockWithTransaction = vi.fn(async (work: () => Promise<unknown>) => {
     transactionState.active = false;
   }
 });
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/database', () => ({

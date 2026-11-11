@@ -9,7 +9,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockComputeRevenueSnapshot = vi.hoisted(() => vi.fn());
-vi.mock('@server/admin/revenue/revenueSnapshot', () => ({ computeRevenueSnapshot: mockComputeRevenueSnapshot }));
+vi.mock('@bike4mind/server-utils/admin/revenue/revenueSnapshot', () => ({
+  computeRevenueSnapshot: mockComputeRevenueSnapshot,
+}));
 
 const mockIsStripeConfigured = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({ isStripeConfigured: mockIsStripeConfigured }));

@@ -70,8 +70,8 @@ vi.mock('@server/admin/usersBulk/adapters', async importOriginal => {
   };
 });
 
-vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/cancelAccountSubscriptions')>()),
   cancelAccountSubscriptions,
 }));
 

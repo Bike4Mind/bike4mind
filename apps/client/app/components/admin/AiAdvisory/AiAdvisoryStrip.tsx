@@ -4,7 +4,7 @@ import { Button, Stack, Typography } from '@mui/joy';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import type { ShadowDetector } from '@bike4mind/common';
 import { useAiAdvisory, type AiAbuseAdvisoryRow } from '@client/app/hooks/data/aiAdvisory';
-import { AI_ADVISORY_WINDOW_HOURS, type AiAdvisoryNetwork } from '@client/app/utils/aiAdvisory';
+import { AI_ADVISORY_WINDOW_HOURS, type AiAdvisoryNetwork } from '@bike4mind/server-utils/app/utils/aiAdvisory';
 import { BlockIpDialog } from '../BlockedIPs/IpBlockDialogs';
 import { AI_ADVISORY_MARK } from '../Users/List/AiAdvisoryBadge';
 import { usersTabLinkSearch } from '../Users/usersTabSearch';

@@ -22,10 +22,10 @@ import { createStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { issueStateNonce, setPkceVerifierCookie } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { OKTA_STATE_AUDIENCE, LOG_URL_TRUNCATE_LENGTH, OktaStateInput } from '@server/auth/oktaConstants';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { validateAppUrl } from '@server/utils/validators';
+import { validateAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { Logger } from '@bike4mind/observability';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { isLocalAppUrl } from '@server/utils/validators';
+import { isLocalAppUrl } from '@bike4mind/server-utils/utils/validators';
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())

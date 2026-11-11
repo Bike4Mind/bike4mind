@@ -53,7 +53,7 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `signupGrantDailyCredits` | Invite Center > Schedule | The per-day drip amount (`resolveSignupGrantSchedule`, read by `resolveDripLimits` in `stagedSignupGrant.ts`). Unset reads as 0. | no. A free grant. | Signup and starter credits |
 | `signupGrantDripCap` | Invite Center > Schedule | The per-account drip total and the unlock pool snapshotted at enrollment (`resolveSignupGrantSchedule`). Unset reads as the registry default, 0: nothing drips and an invite pays its initial share at signup, the rest on unlock. A stored cap of 0 also drips nothing but pays an invite in full at signup. | no. Caps free credits. | Signup and starter credits |
 | `signupGrantInviteBonusCredits` | Invite Center > Schedule | The extra grant for an invited account (`payInviteBonus` in `b4m-core/services/src/userService/inviteBonus.ts`, read through `resolveSignupGrantSchedule`), paid from the staged signup grant (`stagedSignupGrant.ts`) and for organization invites (`apps/client/server/credits/orgInviteBonus.ts`). Default 0 (off). | no. A free grant. | Signup and starter credits |
-| `freeTierDailySpendCapCredits` | Invite Center > Schedule | The free-tier daily spend gate (`checkFreeTierDailySpendCap` in `apps/client/server/billing/freeTierDailyCapGate.ts`) for accounts older than 7 days. Default 200; 0 disables the cap for every free-tier account, including the day-1 and days 2-7 tiers. | no. A limit. | Usage limits |
+| `freeTierDailySpendCapCredits` | Invite Center > Schedule | The free-tier daily spend gate (`checkFreeTierDailySpendCap` in `packages/server-utils/src/billing/freeTierDailyCapGate.ts`) for accounts older than 7 days. Default 200; 0 disables the cap for every free-tier account, including the day-1 and days 2-7 tiers. | no. A limit. | Usage limits |
 | `freeTierDay1SpendCapCredits` | Invite Center > Schedule | The same gate during an account's first 24 hours. Default 500; 0 falls back to the steady-state cap. | no. A limit. | Usage limits |
 | `freeTierDays2To7SpendCapCredits` | Invite Center > Schedule | The same gate for accounts aged 24 hours to 7 days. Default 300; 0 falls back to the steady-state cap. | no. A limit. | Usage limits |
 | `gearRewardMinAccountAgeDays` | Invite Center > Rewards | The account age a verified account needs before Gears credit rewards pay (`apps/client/server/services/gears/catalog.ts`), quoted by the Gears page through `apps/client/pages/api/gears/status.ts`. Default 7. | no. A wait before a free grant. | Signup and starter credits |
@@ -80,7 +80,7 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `teamPlanMaxSeats` | Growth and Pricing > Team plan | The same resolver and helpers as `teamPlanMinSeats`, plus admin seat changes (`apps/client/pages/api/admin/organizations/[id]/seats.ts`), the partner-signup auto-raise (`applyPartnerRuleMembership.ts`, `OrganizationModel.ts`) and the admin Organizations tab. | no. A cap on seats. | Plans, seats and packs |
 | `teamPlanCreditsPerSeat` | Growth and Pricing > Team plan | The invoice credit grant (`getTeamPlanSettings` in `apps/workers/src/lib/userSubscriptions/serverUtils.ts`), admin team grants, and the Team plan card and grant modal through `useTeamCreditsPerSeat`. | yes. Sets how many credits each paid seat buys. | Plans, seats and packs |
 | `lowCreditsThreshold` | Growth and Pricing > Credits and pricing | `resolveLowCreditsThreshold` (`b4m-core/common/src/utils/teamPlanSettings.ts`) through `useLowCreditsThreshold`: the credit chip, composer, billing modal and agent views. | no. A warning threshold. | Usage limits |
-| `apiRateLimitFreePerMin` | Admin Settings > Security > API Rate Limiting (linked from Growth and Pricing) | `apps/client/server/utils/userRateTier.ts`, applied by the per-user rate limiter (`apps/client/server/middlewares/perUserRateLimit.ts`) on every per-user rate-limited API route (`/api/chat`, `/api/opti`, and the other routes that opt in). A Free value of 0 blocks all free-tier requests on those routes. | no. A request rate limit. | Usage limits |
+| `apiRateLimitFreePerMin` | Admin Settings > Security > API Rate Limiting (linked from Growth and Pricing) | `packages/server-utils/src/utils/userRateTier.ts`, applied by the per-user rate limiter (`apps/client/server/middlewares/perUserRateLimit.ts`) on every per-user rate-limited API route (`/api/chat`, `/api/opti`, and the other routes that opt in). A Free value of 0 blocks all free-tier requests on those routes. | no. A request rate limit. | Usage limits |
 | `apiRateLimitBasicPerMin` | Admin Settings > Security > API Rate Limiting (linked from Growth and Pricing) | Same as `apiRateLimitFreePerMin`. | no. A request rate limit. | Usage limits |
 | `apiRateLimitProPerMin` | Admin Settings > Security > API Rate Limiting (linked from Growth and Pricing) | Same as `apiRateLimitFreePerMin`. | no. A request rate limit. | Usage limits |
 | `apiRateLimitDefaultWritePerMin` | Admin Settings > Security > API Rate Limiting | The default per-user write limit (`apps/client/server/middlewares/defaultWriteRateLimit.ts`), mounted by `baseApi` on every authenticated route: one counter per signed-in user across all POST, PUT, PATCH and DELETE requests. API-key requests, admins, developer-tagged users and routes that opt out are not counted. | no. A request rate limit. | Usage limits |
@@ -88,7 +88,7 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `fileUploadLimitFreePerHour` | Admin Settings > Security > API Rate Limiting | The per-user hourly file-upload allowance (`apps/client/server/files/fileUploadBudget.ts`), spent per file by these upload routes: single and batch presign, direct upload, URL import, generated-image copy, re-chunk, reprocess and the public API. Applies to Free and admin-restricted users; a value of 0 blocks their uploads. Default 300 files per hour. | no. An upload rate limit. | Usage limits |
 | `fileUploadLimitPaidPerHour` | Admin Settings > Security > API Rate Limiting | Same as `fileUploadLimitFreePerHour`, for Basic and Pro subscribers. Admins and developer-tagged users are not limited. Default 3000 files per hour. | no. An upload rate limit. | Usage limits |
 | `pendingUploadLimit` | Admin Settings > Security > API Rate Limiting | The per-user cap on presigned client uploads whose bytes have not landed (`apps/client/server/files/pendingUploads.ts`), checked by single and batch presign, the public API and direct upload without content. An upload stops counting when its bytes land or 30 minutes after it was requested. Recent client-upload bytes remain reserved against storage quota until their charge is recorded. Admission checks a snapshot; overlapping requests can each pass the same count and byte reading, so this is not an atomic reservation or a strict concurrent maximum. One value for every tier; admins and developer-tagged users are not limited; a value of 0 blocks presigned uploads. Default 250 uploads. | no. An upload limit. | Usage limits |
-| `imageModerationLimitFreePerDay` | Admin Settings > Security > API Rate Limiting | The per-user daily allowance of moderation scans for uploaded images (`apps/client/server/s3/imageModerationBudget.ts`), spent by the upload-landing scan, the on-demand moderate route and the daily moderation rescue sweep: one per still image, one per sampled frame (at most 10) for an animated image. An image over the allowance stays pending (not served). Applies to Free and admin-restricted users; a value of 0 holds all their uploaded images. Default 200 per day. | no. A moderation usage limit. | Usage limits |
+| `imageModerationLimitFreePerDay` | Admin Settings > Security > API Rate Limiting | The per-user daily allowance of moderation scans for uploaded images (`packages/server-utils/src/s3/imageModerationBudget.ts`), spent by the upload-landing scan, the on-demand moderate route and the daily moderation rescue sweep: one per still image, one per sampled frame (at most 10) for an animated image. An image over the allowance stays pending (not served). Applies to Free and admin-restricted users; a value of 0 holds all their uploaded images. Default 200 per day. | no. A moderation usage limit. | Usage limits |
 | `imageModerationLimitPaidPerDay` | Admin Settings > Security > API Rate Limiting | Same as `imageModerationLimitFreePerDay`, for Basic and Pro subscribers. Admins and developer-tagged users are not limited. Default 2000 per day. | no. A moderation usage limit. | Usage limits |
 
 ## Pricing that is not an admin setting
@@ -216,7 +216,7 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`, `settingHomes.ts`) a
 <details><summary><code>syntheticUserEmailDomains</code> (6 files)</summary>
 
 - `apps/client/server/analytics/funnel.ts`
-- `apps/client/server/analytics/signupCohort.ts`
+- `packages/server-utils/src/analytics/signupCohort.ts`
 - `b4m-core/common/src/utils/syntheticIdentity.ts`
 - `b4m-core/services/src/userService/reservedUsername.ts`
 - `b4m-core/services/src/userService/signupProtection.ts`
@@ -275,7 +275,7 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`, `settingHomes.ts`) a
 - `apps/client/server/adminAssistant/tools/getSetting.ts`
 - `apps/client/server/agents/authoring/generateAgentAvatar.ts`
 - `apps/client/server/billing/billedWebTools.ts`
-- `apps/client/server/billing/freeTierDailyCapGate.ts`
+- `packages/server-utils/src/billing/freeTierDailyCapGate.ts`
 - `apps/client/server/billing/meterPlatformCompletion.ts`
 - `apps/client/server/billing/reserveRequestCredits.ts`
 - `apps/client/server/chatCompletion/external/embedRoute.ts`
@@ -283,7 +283,7 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`, `settingHomes.ts`) a
 - `apps/client/server/generationJobs/wiring.ts`
 - `apps/client/server/utils/callerModelList.ts`
 - `apps/client/server/utils/creditPreflight.ts`
-- `apps/client/server/utils/userRateTier.ts`
+- `packages/server-utils/src/utils/userRateTier.ts`
 - `apps/client/server/websocket/voiceSessionEnded.ts`
 - `apps/workers/src/queueHandlers/agentExecutor.billing.ts`
 - `apps/workers/src/queueHandlers/agentExecutor.iterationCreditGate.ts`
@@ -405,19 +405,19 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`, `settingHomes.ts`) a
 
 <details><summary><code>apiRateLimitFreePerMin</code> (1 file)</summary>
 
-- `apps/client/server/utils/userRateTier.ts`
+- `packages/server-utils/src/utils/userRateTier.ts`
 
 </details>
 
 <details><summary><code>apiRateLimitBasicPerMin</code> (1 file)</summary>
 
-- `apps/client/server/utils/userRateTier.ts`
+- `packages/server-utils/src/utils/userRateTier.ts`
 
 </details>
 
 <details><summary><code>apiRateLimitProPerMin</code> (1 file)</summary>
 
-- `apps/client/server/utils/userRateTier.ts`
+- `packages/server-utils/src/utils/userRateTier.ts`
 
 </details>
 
@@ -453,12 +453,12 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`, `settingHomes.ts`) a
 
 <details><summary><code>imageModerationLimitFreePerDay</code> (1 file)</summary>
 
-- `apps/client/server/s3/imageModerationBudget.ts`
+- `packages/server-utils/src/s3/imageModerationBudget.ts`
 
 </details>
 
 <details><summary><code>imageModerationLimitPaidPerDay</code> (1 file)</summary>
 
-- `apps/client/server/s3/imageModerationBudget.ts`
+- `packages/server-utils/src/s3/imageModerationBudget.ts`
 
 </details>

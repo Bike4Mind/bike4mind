@@ -293,6 +293,47 @@ describe('credit checkout', () => {
     expect(openCreditPayment).not.toHaveBeenCalled();
   });
 
+  it('requires accepted terms when the server asks for them and forwards the acceptance', async () => {
+    const { billing, get, post } = buildCredits();
+    get.mockImplementation(async path =>
+      path.includes('catalog=desktop')
+        ? {
+            billingEnabled: true,
+            plans: [plan],
+            creditPackages: [pack],
+            termsConsentRequired: true,
+            termsUrl: 'https://site.example/terms-of-service',
+          }
+        : []
+    );
+    await expect(billing.billing()).resolves.toMatchObject({
+      termsConsentRequired: true,
+      termsUrl: 'https://site.example/terms-of-service',
+    });
+
+    for (const accepted of [undefined, false, 'true', 1])
+      await expect(billing.purchaseCredits(pack.id, accepted)).resolves.toEqual({
+        ok: false,
+        error: 'Accept the Terms of Service to buy credits.',
+      });
+    expect(post).not.toHaveBeenCalled();
+
+    await expect(billing.purchaseCredits(pack.id, true)).resolves.toEqual({ ok: true });
+    expect(post).toHaveBeenCalledExactlyOnceWith('/api/stripe/start-payment', {
+      transactionType: 'package',
+      packageId: pack.id,
+      allowRedirects: false,
+      acceptedTerms: true,
+    });
+  });
+
+  it('sends no acceptance and reports no terms requirement when the server does not ask', async () => {
+    const { billing, post } = buildCredits();
+    expect(await billing.billing()).not.toHaveProperty('termsConsentRequired');
+    await expect(billing.purchaseCredits(pack.id, false)).resolves.toEqual({ ok: true });
+    expect(post.mock.calls[0][1]).not.toHaveProperty('acceptedTerms');
+  });
+
   it('holds the checkout lock until the payment window closes', async () => {
     const { billing, openCreditPayment } = buildCredits();
     let close!: () => void;

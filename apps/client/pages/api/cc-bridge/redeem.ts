@@ -16,7 +16,7 @@ import { resolveApiKeyTrust } from '@bike4mind/server-utils/utils/apiKeyTrust';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
-import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
+import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 
 const RedeemRequestSchema = z.object({
   pairingToken: z.string().min(16).max(200),

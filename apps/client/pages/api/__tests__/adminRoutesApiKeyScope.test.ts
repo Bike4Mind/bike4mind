@@ -103,7 +103,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: () => ({ can: () => true }) }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn().mockResolvedValue({ administeredOrgIds: [] }),
 }));
 vi.mock('@bike4mind/server-utils/utils/generatedImageAccess', () => ({

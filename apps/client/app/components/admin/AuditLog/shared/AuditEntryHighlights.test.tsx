@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
-import { findApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
+import { findApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { AuditEventTable } from './AuditEventTable';
 import { makeAuditEntry } from './auditTestFixtures';
 

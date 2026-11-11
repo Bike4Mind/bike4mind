@@ -6,7 +6,7 @@ import { AdminSettings } from '@bike4mind/database';
 import { z } from 'zod';
 import { validateHighlightsTemplate } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.prompt';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { diffSettingChanges } from '@server/utils/adminSettingsAudit';
+import { diffSettingChanges } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 
 // Rate limiting constants
 const ADMIN_CONFIG_RATE_LIMIT = 10; // requests per minute
