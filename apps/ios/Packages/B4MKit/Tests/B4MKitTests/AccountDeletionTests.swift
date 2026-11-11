@@ -224,6 +224,10 @@ private actor ScriptedAccountAPI: AccountAPI {
     restoreCalls += 1
     try restoration.get()
   }
+
+  func profile(userID: String) async throws -> AccountProfile {
+    AccountProfile(firstName: nil, displayName: nil, email: nil)
+  }
 }
 
 @MainActor

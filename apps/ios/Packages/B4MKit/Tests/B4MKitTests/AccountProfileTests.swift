@@ -2,66 +2,110 @@ import XCTest
 
 @testable import B4MKit
 
+private func user(_ fields: [String: Any]) -> Data {
+  try! JSONSerialization.data(withJSONObject: fields)
+}
+
 final class AccountProfileTests: XCTestCase {
-  private func jwt(_ claims: [String: Any]) -> String {
+  private func token(_ claims: [String: Any]) -> String {
     let payload = Base64URL.encode(try! JSONSerialization.data(withJSONObject: claims))
     return "e30.\(payload).sig"
   }
 
-  func testProfileReadsNameAndEmailClaims() {
-    let profile = AccountProfile(jwt: jwt(["given_name": "Sam", "name": "Samantha Doe", "email": "sam@example.com"]))
-    XCTAssertEqual(profile, AccountProfile(firstName: "Sam", displayName: "Samantha Doe", email: "sam@example.com"))
+  // Fixtures mirror the self view of apps/client/pages/api/users/[id]/index.ts.
+
+  func testProfileReadsNameAndEmail() {
+    let profile = AccountProfile(
+      userJSON: user(["id": "u1", "username": "sam-d", "name": "Samantha Doe", "email": "sam@example.com"]))
+    XCTAssertEqual(profile?.firstName, "Samantha")
+    XCTAssertEqual(profile?.displayName, "Samantha Doe")
+    XCTAssertEqual(profile?.email, "sam@example.com")
     XCTAssertEqual(profile?.initial, "S")
   }
 
-  func testDisplayNameFallsBackToGivenAndFamilyName() {
-    let profile = AccountProfile(jwt: jwt(["given_name": "Pat", "family_name": "Lee"]))
-    XCTAssertEqual(profile?.displayName, "Pat Lee")
-    XCTAssertEqual(profile?.firstName, "Pat")
+  func testUsernameStandsInForTheDisplayNameButNotTheFirstName() {
+    let profile = AccountProfile(userJSON: user(["username": "pat-l", "name": "  ", "email": " pat@example.com "]))
+    XCTAssertNil(profile?.firstName)
+    XCTAssertEqual(profile?.displayName, "pat-l")
+    XCTAssertEqual(profile?.email, "pat@example.com")
+    XCTAssertEqual(profile?.initial, "P")
   }
 
-  func testInitialIsUppercasedAndFallsBackToTheDisplayName() {
-    XCTAssertEqual(AccountProfile(firstName: "alex", displayName: nil, email: nil).initial, "A")
-    XCTAssertEqual(AccountProfile(firstName: nil, displayName: "zoe q", email: nil).initial, "Z")
-  }
-
-  func testNoNameMeansNoInitialEvenWithAnEmail() {
-    let profile = AccountProfile(jwt: jwt(["sub": "user-1", "email": " a@example.com "]))
+  func testEmptyAndWrongTypedFieldsReadAsMissing() {
+    let profile = AccountProfile(userJSON: user(["name": 5, "username": ["x"], "email": true]))
+    XCTAssertEqual(profile, AccountProfile(firstName: nil, displayName: nil, email: nil))
     XCTAssertNil(profile?.initial)
-    XCTAssertNil(profile?.displayName)
-    XCTAssertEqual(profile?.email, "a@example.com")
   }
 
-  func testBlankClaimsAreTreatedAsMissing() {
-    let profile = AccountProfile(jwt: jwt(["given_name": "  ", "name": "", "email": " "]))
-    XCTAssertEqual(profile, AccountProfile(firstName: nil, displayName: nil, email: nil))
+  func testNonObjectBodyIsNoProfile() {
+    XCTAssertNil(AccountProfile(userJSON: Data("[1]".utf8)))
+    XCTAssertNil(AccountProfile(userJSON: Data("not json".utf8)))
   }
 
-  func testFirstNameIsTheFirstWordOfNameWithoutAGivenName() {
-    XCTAssertEqual(AccountProfile(jwt: jwt(["name": "Pat Doe"]))?.firstName, "Pat")
-    XCTAssertNil(AccountProfile(jwt: jwt(["sub": "user-1"]))?.firstName)
+  func testUserIDComesFromTheAccessTokensIDClaim() {
+    XCTAssertEqual(
+      AccountProfile.userID(fromAccessToken: token(["id": "6a561067a8b145dc4d616cd4", "sid": "s1", "typ": "access"])),
+      "6a561067a8b145dc4d616cd4")
   }
 
-  func testUnreadableTokenHasNoProfile() {
-    XCTAssertNil(AccountProfile(jwt: "not-a-jwt"))
+  func testUserIDRejectsMissingOrUnsafeIDs() {
+    XCTAssertNil(AccountProfile.userID(fromAccessToken: token(["sub": "u1"])))
+    XCTAssertNil(AccountProfile.userID(fromAccessToken: token(["id": 42])))
+    XCTAssertNil(AccountProfile.userID(fromAccessToken: token(["id": "../account/deletion"])))
+    XCTAssertNil(AccountProfile.userID(fromAccessToken: "not-a-jwt"))
+  }
+}
+
+final class AccountProfileClientTests: XCTestCase {
+  private let base = URL(string: "https://app.example.test")!
+
+  func testProfileIsABearerGetOfTheUsersOwnRecord() async throws {
+    let body = Data(#"{"id":"u1","username":"alex-r","name":"Alex Rivera","email":"alex@example.com"}"#.utf8)
+    let transport = FakeTransport { _ in (200, body) }
+    let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+
+    let profile = try await client.profile(userID: "u1")
+
+    let requests = await transport.requests
+    let request = try XCTUnwrap(requests.first)
+    XCTAssertEqual(request.httpMethod, "GET")
+    XCTAssertEqual(request.url?.path(), "/api/users/u1")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
+    XCTAssertEqual(profile, AccountProfile(firstName: "Alex", displayName: "Alex Rivera", email: "alex@example.com"))
   }
 
-  func testPayloadThatIsNotAJSONObjectHasNoProfile() {
-    let array = Base64URL.encode(Data("[1,2]".utf8))
-    XCTAssertNil(AccountProfile(jwt: "e30.\(array).sig"))
-    let text = Base64URL.encode(Data("hello".utf8))
-    XCTAssertNil(AccountProfile(jwt: "e30.\(text).sig"))
+  func testNotFoundSurfacesAsAPIError() async {
+    let transport = FakeTransport { _ in (404, Data(#"{"error":"User not found"}"#.utf8)) }
+    let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+    do {
+      _ = try await client.profile(userID: "u1")
+      XCTFail("expected an error")
+    } catch {
+      XCTAssertEqual(error as? APIError, .notFound)
+    }
   }
 
-  func testNonStringClaimsAreTreatedAsMissing() {
-    let profile = AccountProfile(jwt: jwt(["name": 5, "given_name": ["Sam"], "email": true]))
-    XCTAssertEqual(profile, AccountProfile(firstName: nil, displayName: nil, email: nil))
+  func testUnreadableBodyIsMalformed() async {
+    let transport = FakeTransport { _ in (200, Data("[]".utf8)) }
+    let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+    do {
+      _ = try await client.profile(userID: "u1")
+      XCTFail("expected an error")
+    } catch {
+      XCTAssertEqual(error as? APIError, .malformedResponse)
+    }
   }
 
-  func testInitialKeepsTheWholeFirstCharacter() {
-    // A flag is two scalars and an accented letter may be two; the avatar must not split either.
-    let flag = "\u{1F1EF}\u{1F1F5}"
-    XCTAssertEqual(AccountProfile(firstName: flag + "ko", displayName: nil, email: nil).initial, flag)
-    XCTAssertEqual(AccountProfile(firstName: "e\u{301}lodie", displayName: nil, email: nil).initial, "E\u{301}")
+  func testUnsafeIDNeverReachesTheNetwork() async {
+    let transport = FakeTransport { _ in (200, Data()) }
+    let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+    do {
+      _ = try await client.profile(userID: "../account/deletion")
+      XCTFail("expected an error")
+    } catch {
+      XCTAssertEqual(error as? APIError, .notFound)
+    }
+    let requests = await transport.requests
+    XCTAssertTrue(requests.isEmpty)
   }
 }

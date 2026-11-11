@@ -39,6 +39,10 @@
       }
 
       func restoreDeletion() async throws {}
+
+      func profile(userID: String) async throws -> AccountProfile {
+        AccountProfile(firstName: "Alex", displayName: "Alex Rivera", email: "alex@example.com")
+      }
     }
 
     private struct FixtureStepUpAPI: StepUpAPI {

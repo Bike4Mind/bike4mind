@@ -1,7 +1,8 @@
 import Foundation
 
-/// Who is signed in, as far as the access token's profile claims say. Display only (the greeting, the avatar
-/// and the Settings header); never trusted for authorization, and every field may be missing.
+/// Who is signed in, from the self view of `GET /api/users/{id}`. Display only (the greeting, the avatar and the
+/// Settings header); never trusted for authorization, and every field may be missing. The access token carries no
+/// profile claims (only the user id), so the profile always comes from the server.
 public struct AccountProfile: Equatable, Sendable {
   public let firstName: String?
   public let displayName: String?
@@ -18,22 +19,28 @@ public struct AccountProfile: Equatable, Sendable {
     (firstName ?? displayName)?.first.map { String($0).uppercased() }
   }
 
-  /// `given_name` wins for the first name, otherwise the first word of `name`. The display name is `name`,
-  /// otherwise `given_name` and `family_name` joined.
-  init?(jwt: String) {
-    let segments = jwt.split(separator: ".")
+  /// `name` is the display name and its first word the first name. Without a `name`, the `username` stands in as
+  /// the display name only: a handle reads wrong in "Good morning, <first name>".
+  init?(userJSON: Data) {
+    guard let user = try? JSONSerialization.jsonObject(with: userJSON) as? [String: Any] else { return nil }
+    let name = Self.clean(user["name"] as? String)
+    self.init(
+      firstName: name?.split(separator: " ").first.map(String.init),
+      displayName: name ?? (user["username"] as? String),
+      email: user["email"] as? String)
+  }
+
+  /// The user id in a Bike4Mind access token (its `id` claim). Unverified on purpose: it only picks which profile
+  /// to ask for, and the server still authorizes that request against the bearer.
+  static func userID(fromAccessToken token: String) -> String? {
+    let segments = token.split(separator: ".")
     guard segments.count == 3,
       let payload = Base64URL.decode(String(segments[1])),
-      let claims = try? JSONSerialization.jsonObject(with: payload) as? [String: Any]
+      let claims = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+      let id = claims["id"] as? String,
+      DeepLinkRouter.isValidIdentifier(id)
     else { return nil }
-    let given = Self.clean(claims["given_name"] as? String)
-    let family = Self.clean(claims["family_name"] as? String)
-    let name = Self.clean(claims["name"] as? String)
-    let joined = [given, family].compactMap { $0 }.joined(separator: " ")
-    self.init(
-      firstName: given ?? name?.split(separator: " ").first.map(String.init),
-      displayName: name ?? (joined.isEmpty ? nil : joined),
-      email: claims["email"] as? String)
+    return id
   }
 
   private static func clean(_ value: String?) -> String? {
@@ -43,9 +50,9 @@ public struct AccountProfile: Equatable, Sendable {
 }
 
 extension AuthController {
-  /// The signed-in account's profile from its access token, or `nil` when there is no readable token.
-  public func profile() async -> AccountProfile? {
+  /// The signed-in user's id from the access token, or `nil` when there is no readable session.
+  public func userID() async -> String? {
     guard let token = try? await accessToken() else { return nil }
-    return AccountProfile(jwt: token)
+    return AccountProfile.userID(fromAccessToken: token)
   }
 }

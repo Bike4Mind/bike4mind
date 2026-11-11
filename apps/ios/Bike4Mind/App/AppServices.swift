@@ -115,15 +115,16 @@ final class AppServices {
     return current.account
   }
 
-  /// The signed-in account's profile claims for the greeting, avatar and Settings header; fixture runs have no
-  /// session, so they get a stand-in.
+  /// The signed-in account's profile for the greeting, avatar and Settings header, fetched from the server; `nil`
+  /// when it cannot be loaded. Fixture runs have no session, so they get a stand-in.
   func accountProfile() async -> AccountProfile? {
     #if DEBUG
       if FixtureServices.isEnabled {
         return AccountProfile(firstName: "Alex", displayName: "Alex Rivera", email: "alex@example.com")
       }
     #endif
-    return await auth.profile()
+    guard let userID = await auth.userID() else { return nil }
+    return try? await account.profile(userID: userID)
   }
 
   var stepUp: any StepUpAPI {

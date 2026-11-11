@@ -30,6 +30,8 @@ public protocol AccountAPI: Sendable {
   func requestDeletion() async throws -> AccountDeletionReceipt
   /// Cancels a pending deletion. Canceled subscriptions are not reinstated.
   func restoreDeletion() async throws
+  /// The signed-in user's own profile (`GET /api/users/{userID}`, self view).
+  func profile(userID: String) async throws -> AccountProfile
 }
 
 /// Hand-written client for the account deletion routes (see `AccountDeletionWire`). Same bearer and
@@ -54,5 +56,13 @@ public struct AccountClient: AccountAPI {
   public func restoreDeletion() async throws {
     let response = try await requester.send(method: "DELETE", path: AccountDeletionWire.path)
     try AccountDeletionWire.restoreResult(status: response.status)
+  }
+
+  public func profile(userID: String) async throws -> AccountProfile {
+    guard DeepLinkRouter.isValidIdentifier(userID) else { throw APIError.notFound }
+    let response = try await requester.send(method: "GET", path: "api/users/\(userID)")
+    guard (200..<300).contains(response.status) else { throw APIError(status: response.status) }
+    guard let profile = AccountProfile(userJSON: response.body) else { throw APIError.malformedResponse }
+    return profile
   }
 }
