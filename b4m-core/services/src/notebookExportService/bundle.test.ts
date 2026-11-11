@@ -79,6 +79,26 @@ describe('v2 bundle', () => {
     await expect(readExportBundle(read)).rejects.toThrow('checksum mismatch');
   });
 
+  it('streams each JSONL row through an append sink without accumulating the collection', async () => {
+    const { data, write, read } = memoryBundle();
+    const appended: string[] = [];
+    async function* rows() {
+      yield { id: 1 };
+      yield { id: 2 };
+    }
+    const manifest = await createExportBundle(
+      { collections: { custom: rows(), empty: [] } },
+      write,
+      async (path, bytes) => {
+        appended.push(path);
+        data.set(path, Buffer.concat([Buffer.from(data.get(path) ?? []), Buffer.from(bytes)]));
+      }
+    );
+    expect(appended).toEqual(['collections/custom.jsonl', 'collections/custom.jsonl']);
+    expect(manifest.collections.empty).toMatchObject({ count: 0, bytes: 0 });
+    expect((await readExportBundle(read)).collections.custom).toEqual([{ id: 1 }, { id: 2 }]);
+  });
+
   it('externalizes knowledge bytes and reconstructs the import-compatible notebook', async () => {
     const { data, write, read } = memoryBundle();
     const manifest = await createNotebookBundle([notebook], write);
