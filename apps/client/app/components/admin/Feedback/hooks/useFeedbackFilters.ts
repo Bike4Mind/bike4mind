@@ -23,7 +23,12 @@ import { useFeedbackView } from './useFeedbackView';
  * that nothing read. The dropdown's selection now reaches the query.
  */
 export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
-  const { value: searchTerm, debouncedValue: debouncedSearchTerm, setValue: setSearchTermValue } = useDebounceValue('');
+  const {
+    value: searchTerm,
+    debouncedValue: debouncedSearchTerm,
+    setValue: setSearchTermValue,
+    setValueImmediately: clearSearchTerm,
+  } = useDebounceValue('');
   const [view, updateView] = useFeedbackView();
   const { statusFilters, organizations: selectedOrganizations, subject, types, received, sortAscending, page } = view;
 
@@ -64,7 +69,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
 
   const showOnly = useCallback<UseFeedbackFiltersReturn['showOnly']>(
     next => {
-      setSearchTermValue('');
+      clearSearchTerm('');
       updateView({
         statusFilters: DEFAULT_FEEDBACK_VIEW.statusFilters,
         subject: DEFAULT_FEEDBACK_VIEW.subject,
@@ -75,7 +80,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
         page: 1,
       });
     },
-    [setSearchTermValue, updateView]
+    [clearSearchTerm, updateView]
   );
 
   const toggleSortDirection = useCallback(
