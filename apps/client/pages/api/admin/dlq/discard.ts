@@ -24,6 +24,7 @@ const BodySchema = z.object({
 });
 
 const handler = adminApi({
+  auth: 'jwtOnly',
   adminPermissions: { POST: 'settings:manage' },
   requiredScopes: [ApiKeyScope.ADMIN],
 }).post(async (req, res) => {

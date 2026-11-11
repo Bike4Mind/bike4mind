@@ -4,6 +4,7 @@ import { createMocks } from 'node-mocks-http';
 
 const h = vi.hoisted(() => ({
   post: undefined as ((req: unknown, res: unknown) => Promise<void>) | undefined,
+  routeOptions: undefined as unknown,
   logReplay: vi.fn(),
   markDiscardFailed: vi.fn(),
   deleteFromQueue: vi.fn(),
@@ -11,11 +12,14 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/adminApi', () => ({
-  adminApi: () => ({
-    post: (fn: typeof h.post) => {
-      h.post = fn;
-    },
-  }),
+  adminApi: (options: unknown) => {
+    h.routeOptions = options;
+    return {
+      post: (fn: typeof h.post) => {
+        h.post = fn;
+      },
+    };
+  },
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getDlqByLabel: (label: string) => (label === 'quest' ? { label, displayName: 'Quest queue' } : undefined),
@@ -51,6 +55,10 @@ beforeEach(() => {
 });
 
 describe('POST /api/admin/dlq/discard', () => {
+  it('requires a JWT and replay-equivalent permission', () => {
+    expect(h.routeOptions).toMatchObject({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:manage' } });
+  });
+
   it('rejects a missing reason before writing or deleting', async () => {
     const { req, res } = request({ queueLabel: 'quest', messages: [message] });
     await expect(h.post!(req, res)).rejects.toThrow('Reason required');
