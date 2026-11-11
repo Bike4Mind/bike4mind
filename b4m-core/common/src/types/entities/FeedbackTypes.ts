@@ -234,6 +234,8 @@ export interface IFeedback {
   /** The admin who last set `status`, and when. Admin-only: written by the status route alone. */
   handledBy?: string;
   handledAt?: Date;
+  /** Identifies the latest status transition so an old Undo cannot overwrite a later change. */
+  handledAuditEntryId?: string;
 }
 
 export interface IFeedbackDocument extends IFeedback, IMongoDocument {}

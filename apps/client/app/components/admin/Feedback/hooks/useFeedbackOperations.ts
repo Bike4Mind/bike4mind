@@ -94,6 +94,7 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: FEEDBACK_LIST_QUERY_KEY }),
       queryClient.invalidateQueries({ queryKey: FEEDBACK_ORGANIZATIONS_QUERY_KEY }),
+      queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
       // The detail drawer reads its record from its own query, so a delete that refreshed only
       // the list would leave the drawer showing a report that no longer exists.
       queryClient.invalidateQueries({ queryKey: FEEDBACK_RECORD_QUERY_KEY }),

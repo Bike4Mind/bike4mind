@@ -40,10 +40,13 @@ const renderOperations = (initialParams: FeedbackListParams) => {
       <UndoToastProvider>{children}</UndoToastProvider>
     </QueryClientProvider>
   );
-  return renderHook(({ params }) => useFeedbackOperations(params), {
-    wrapper,
-    initialProps: { params: initialParams },
-  });
+  return {
+    ...renderHook(({ params }) => useFeedbackOperations(params), {
+      wrapper,
+      initialProps: { params: initialParams },
+    }),
+    queryClient,
+  };
 };
 
 /** `totalSettled` gates FeedbackTab's out-of-range page clamp; a wrong `true` clamps a URL page early. */
@@ -208,7 +211,8 @@ describe('useFeedbackOperations confirmDeleteFeedback', () => {
   it('sends the reason and rejects on failure so the dialog stays open', async () => {
     mocks.deleteFeedbackFromServer.mockRejectedValueOnce(new Error('A reason is required')).mockResolvedValue({});
 
-    const { result } = renderOperations(listParams(1));
+    const { result, queryClient } = renderOperations(listParams(1));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     await waitFor(() => expect(result.current.feedback).toHaveLength(1));
     act(() => result.current.handleDeleteFeedbackClick(reportItem));
 
@@ -218,5 +222,6 @@ describe('useFeedbackOperations confirmDeleteFeedback', () => {
     await act(() => result.current.confirmDeleteFeedback('Duplicate report'));
     expect(mocks.deleteFeedbackFromServer).toHaveBeenLastCalledWith('fb-1', 'Duplicate report');
     expect(result.current.openDeleteFeedbackModal).toBe(false);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'action-counts'] });
   });
 });

@@ -37,7 +37,9 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:mo
     const adminId = req.user!.impersonatedBy ?? req.user!.id;
 
     const result = await withTransaction(async () => {
-      const current = await FeedbackModel.findById(id).select('userId status handledBy handledAt').lean();
+      const current = await FeedbackModel.findById(id)
+        .select('userId status handledBy handledAt handledAuditEntryId')
+        .lean();
       if (!current) throw new NotFoundError('Feedback not found');
       const previousStatus = current.status as FeedbackStatus;
       if (expectedStatus && previousStatus !== expectedStatus) {
@@ -48,17 +50,14 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:mo
       }
       // An undo only reverses the change it names, and only while the report still sits where that change left it.
       const reversed = undone?.changes?.[0];
-      if (undone && (reversed?.after !== previousStatus || reversed?.before !== status)) {
+      if (
+        undone &&
+        (current.handledAuditEntryId !== undoOf || reversed?.after !== previousStatus || reversed?.before !== status)
+      ) {
         throw new ConflictError('This status change is no longer the latest one. Refresh and try again.');
       }
 
       const handledAt = new Date();
-      const { matchedCount } = await FeedbackModel.updateOne(
-        { _id: id, status: previousStatus },
-        { $set: { status, handledBy: adminId, handledAt } }
-      );
-      if (matchedCount === 0) throw new ConflictError('This report changed while saving. Refresh and try again.');
-
       const entry = await recordAdminActionFromRequest(req, {
         action: 'feedback.status_changed',
         target: await userAuditTarget(current.userId),
@@ -68,7 +67,14 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:mo
         changes: [{ field: 'status', before: previousStatus, after: status }],
         details: { feedbackId: id, ...(undoOf ? { undoOf } : {}) },
       });
-      return { previousStatus, handledBy: adminId, handledAt, auditEntryId: entry?.id ?? null };
+      if (!entry) throw new Error('Feedback status change requires an audit entry');
+      const { matchedCount } = await FeedbackModel.updateOne(
+        { _id: id, status: previousStatus },
+        { $set: { status, handledBy: adminId, handledAt, handledAuditEntryId: entry.id } }
+      );
+      if (matchedCount === 0) throw new ConflictError('This report changed while saving. Refresh and try again.');
+
+      return { previousStatus, handledBy: adminId, handledAt, auditEntryId: entry.id };
     });
 
     const response: UpdateFeedbackStatusResponse = {

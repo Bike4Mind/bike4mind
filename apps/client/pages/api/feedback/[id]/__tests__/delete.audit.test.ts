@@ -9,8 +9,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const chain: any = {
+  const chain = {
     delete: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
       mocks.deleteHandler = fn;
       return chain;
@@ -84,6 +83,14 @@ describe('DELETE /api/feedback/[id] - admin deletes are reasoned and audited', (
         details: { feedbackId: FEEDBACK_ID, status: 'New', type: 'Bug' },
       })
     );
+  });
+
+  it('does not audit a deletion when the report has already disappeared', async () => {
+    mocks.deleteOne.mockResolvedValue({ deletedCount: 0 });
+    await expect(call({ id: 'admin1', isAdmin: true }, { reason: 'Duplicate report' })).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect(mocks.audit).not.toHaveBeenCalled();
   });
 
   it('treats an admin impersonating the reporter as an admin delete', async () => {

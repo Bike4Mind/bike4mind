@@ -55,7 +55,9 @@ const call = async (
 };
 
 const stored = (status: string) =>
-  mocks.findById.mockReturnValue({ select: () => ({ lean: async () => ({ userId: 'reporter1', status }) }) });
+  mocks.findById.mockReturnValue({
+    select: () => ({ lean: async () => ({ userId: 'reporter1', handledAuditEntryId: 'audit1', status }) }),
+  });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -91,7 +93,7 @@ describe('PATCH /api/admin/feedback/[id]/status', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.updateOne).toHaveBeenCalledWith(
       { _id: FEEDBACK_ID, status: 'New' },
-      { $set: { status: 'Closed', handledBy: 'admin1', handledAt: expect.any(Date) } }
+      { $set: { status: 'Closed', handledBy: 'admin1', handledAt: expect.any(Date), handledAuditEntryId: 'audit1' } }
     );
     expect(mocks.audit).toHaveBeenCalledWith(
       expect.anything(),
@@ -165,10 +167,29 @@ describe('PATCH /api/admin/feedback/[id]/status', () => {
     expect(mocks.audit).not.toHaveBeenCalled();
   });
 
+  it('refuses an older undo after later transitions return to the same status', async () => {
+    mocks.findById.mockReturnValue({
+      select: () => ({
+        lean: async () => ({ userId: 'reporter1', status: 'Closed', handledAuditEntryId: 'audit3' }),
+      }),
+    });
+    await expect(call({ status: 'New', expectedStatus: 'Closed', undoOf: 'audit1' })).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(mocks.updateOne).not.toHaveBeenCalled();
+    expect(mocks.audit).not.toHaveBeenCalled();
+  });
+
+  it('refuses a status change when its required audit entry was not written', async () => {
+    mocks.audit.mockResolvedValue(null);
+    await expect(call({ status: 'Closed' })).rejects.toThrow('requires an audit entry');
+    expect(mocks.updateOne).not.toHaveBeenCalled();
+  });
+
   it('refuses with 409 when the report changes between the read and the write', async () => {
     mocks.updateOne.mockResolvedValue({ matchedCount: 0 });
     await expect(call({ status: 'Closed' })).rejects.toMatchObject({ statusCode: 409 });
-    expect(mocks.audit).not.toHaveBeenCalled();
+    expect(mocks.audit).toHaveBeenCalled();
   });
 
   it('writes and logs nothing when the status is already the requested one', async () => {
