@@ -1,18 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, MODERATION_PAGE_READ, missingAdminPermissionMessage } from '@bike4mind/common';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
-    const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign((req: { method?: string }, res: unknown) => handlers[req.method ?? 'GET']?.(req, res), {
-      use: () => chain,
-      get: (fn: (req: unknown, res: unknown) => unknown) => ((handlers.GET = fn), chain),
-      _config: config,
-    });
-    return chain;
-  },
-}));
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/middlewares/__tests__/adminApiMock')).adminApiMock()
+);
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
@@ -29,6 +21,8 @@ import handler from '../index';
 import summaryHandler from '../summary';
 
 const ADMIN = { id: 'a'.repeat(24), isAdmin: true };
+const DELEGATE = { id: 'd'.repeat(24), isAdmin: false, adminPermissions: ['support:read'] };
+const UNRELATED_DELEGATE = { id: 'e'.repeat(24), isAdmin: false, adminPermissions: ['credits:adjust'] };
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
 async function call(target: unknown, query: Record<string, string>, user: Record<string, unknown> = ADMIN) {
@@ -49,12 +43,30 @@ describe('GET /api/admin/users', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: MODERATION_PAGE_READ },
     });
   });
 
-  it('refuses a non-admin before reading anything', async () => {
-    await expect(call(handler, {}, { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
+  it('refuses a delegate without a moderation read permission before reading anything', async () => {
+    await expect(call(handler, {}, UNRELATED_DELEGATE)).rejects.toThrow(
+      missingAdminPermissionMessage(MODERATION_PAGE_READ)
+    );
     expect(mockList).not.toHaveBeenCalled();
+  });
+
+  it.each(['support:read', 'users:moderate'])('admits a delegate holding %s', async permission => {
+    const res = await call(handler, {}, { ...DELEGATE, adminPermissions: [permission] });
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockList).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists with a non-admin viewer for a delegate and an admin viewer for a full admin', async () => {
+    await call(handler, {}, DELEGATE);
+    await call(handler, {}, ADMIN);
+    expect(mockList.mock.calls.map(([, viewer]) => viewer)).toEqual([
+      { userId: DELEGATE.id, isAdmin: false },
+      { userId: ADMIN.id, isAdmin: true },
+    ]);
   });
 
   it('passes the parsed filter, page and sort to the list', async () => {
@@ -170,10 +182,34 @@ describe('GET /api/admin/users', () => {
 });
 
 describe('GET /api/admin/users/summary', () => {
-  it('returns the counts to an admin only', async () => {
-    const summary = { total: 3, activeThisWeek: 1, views: { newThisWeek: 2, highRisk: 1, suspended: 0 } };
+  const summary = { total: 3, activeThisWeek: 1, views: { newThisWeek: 2, highRisk: 1, suspended: 0 } };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
     mockSummary.mockResolvedValue(summary);
+  });
+
+  it('declares MODERATION_PAGE_READ for GET', () => {
+    expect((summaryHandler as unknown as { _config: unknown })._config).toEqual({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: MODERATION_PAGE_READ },
+    });
+  });
+
+  it('returns the counts to a full admin', async () => {
     expect((await call(summaryHandler, {}))._getJSONData()).toEqual(summary);
-    await expect(call(summaryHandler, {}, { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
+  });
+
+  it('refuses a delegate without a moderation read permission before reading anything', async () => {
+    await expect(call(summaryHandler, {}, UNRELATED_DELEGATE)).rejects.toThrow(
+      missingAdminPermissionMessage(MODERATION_PAGE_READ)
+    );
+    expect(mockSummary).not.toHaveBeenCalled();
+  });
+
+  it.each(['support:read', 'users:moderate'])('admits a delegate holding %s', async permission => {
+    const res = await call(summaryHandler, {}, { ...DELEGATE, adminPermissions: [permission] });
+    expect(res._getJSONData()).toEqual(summary);
   });
 });
