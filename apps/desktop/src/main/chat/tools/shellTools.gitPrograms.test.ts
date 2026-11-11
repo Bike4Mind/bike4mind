@@ -348,6 +348,11 @@ const ROWS: [string, string, string][] = [
   ['command -p unset GIT_CONFIG_COUNT; git log', '', 'aaaa'],
   ['source env1.sh && git ext', '', 'raar'],
   ['cd nosuchdir; git ext', '', 'raar'],
+  ['source env2.sh && git subtree', '', 'raar'],
+  ['source env2.sh && git quiltimport', '', 'raar'],
+  ['source env2.sh && git merge-octopus', '', 'raar'],
+  ['cd nosuchdir; git subtree', '', 'raar'],
+  ['cd nosuchdir; git quiltimport', '', 'raar'],
   ['source env1.sh && git lfs version', '', 'raar'],
   ['cd nosuchdir; git lfs version', '', 'raar'],
   ['pnpm --workspace-packages install exec git bang', '', 'aaaa'],
@@ -458,6 +463,7 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     mkdirSync(join(proj, 'sub', 'deep'), { recursive: true });
     symlinkSync('sub', join(proj, 'sublink'));
     file(join(proj, 'env1.sh'), 'export FOO=1\n');
+    file(join(proj, 'env2.sh'), 'export GIT_EXEC_PATH="$PWD/xbin"\n');
     file(join(proj, 'env3.sh'), 'X=1\nY=2\n');
     file(join(proj, 'env5.sh'), 'X=1\n\\cd ..\n');
     file(join(proj, 'env6.sh'), "X=1\nc''d ..\n");

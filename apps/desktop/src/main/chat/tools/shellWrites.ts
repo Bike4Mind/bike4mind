@@ -842,9 +842,9 @@ async function shellGitVersion(directory: string): Promise<GitResult | null> {
   return listed;
 }
 
-/** Whether `name` is one of git's own builtins or exec-path commands, which no PATH entry can supply or replace. */
+/** Whether git lists `name` as a builtin, which runs in-process; false when the listing cannot be read. */
 export async function gitListsBuiltin(directory: string, name: string): Promise<boolean> {
-  return (await gitCommandListing(directory, 'builtins,main'))?.has(name) === true;
+  return (await gitCommandListing(directory, 'builtins'))?.has(name) === true;
 }
 
 /**
