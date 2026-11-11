@@ -140,6 +140,22 @@ describe('FeedbackDetailDrawer', () => {
     expect(screen.getByTestId('feedback-detail-turn-loading')).toBeInTheDocument();
   });
 
+  it('does not hold a turn section open for a placeholder report that has no turn', () => {
+    mocks.getFeedbackByIdFromServer.mockReturnValue(new Promise(() => {}));
+
+    renderDrawer({
+      listRow: makeRecord({
+        subject: 'product',
+        type: FeedbackType.FEEDBACK,
+        sessionId: undefined,
+        questId: undefined,
+      }),
+    });
+
+    expect(screen.getByTestId('feedback-detail-content')).toBeInTheDocument();
+    expect(screen.queryByTestId('feedback-detail-turn')).not.toBeInTheDocument();
+  });
+
   it('says so when the report is gone or not readable', async () => {
     mocks.getFeedbackByIdFromServer.mockRejectedValue(new Error('Not found'));
 

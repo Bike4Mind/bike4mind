@@ -322,9 +322,10 @@ const FeedbackTab: React.FC = () => {
     previousOpenId.current = openFeedbackId;
     if (!closedId || openFeedbackId) return;
     const rows = tableRegionRef.current?.querySelectorAll<HTMLElement>('[data-row-id]') ?? [];
-    Array.from(rows)
-      .find(row => row.dataset.rowId === closedId)
-      ?.focus();
+    const row = Array.from(rows).find(row => row.dataset.rowId === closedId);
+    // The row can be gone (status change under a filter, deep link): the drawer skips its own
+    // focus restore, so without this focus would fall to <body>.
+    (row ?? tableRegionRef.current)?.focus();
   }, [openFeedbackId]);
 
   // Pages through every match server-side. Exporting `currentFeedback` would silently emit one
@@ -531,7 +532,13 @@ const FeedbackTab: React.FC = () => {
         )}
       </Stack>
 
-      <Stack ref={tableRegionRef} gap={1} sx={{ minWidth: 0 }}>
+      <Stack
+        ref={tableRegionRef}
+        tabIndex={-1}
+        data-testid="feedback-table-region"
+        gap={1}
+        sx={{ minWidth: 0, outline: 'none' }}
+      >
         <UpdatingBar active={loading && !firstLoad} testId="feedback-updating-bar" />
         <DataTable
           label="Feedback"

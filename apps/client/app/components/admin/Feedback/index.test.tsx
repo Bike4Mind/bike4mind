@@ -687,5 +687,19 @@ describe('FeedbackTab', () => {
 
       expect(screen.getByTestId('feedback-row-fb-1')).toHaveFocus();
     });
+
+    it('returns focus to the table region when the closed report has no row', async () => {
+      const navigate = vi.fn();
+      mocks.useNavigate.mockReturnValue(navigate);
+      mocks.useSearch.mockReturnValue({ feedbackId: 'not-in-the-list' });
+
+      const { rerender } = renderFeedbackTab();
+      await userEvent.click(screen.getByText('close drawer'));
+
+      mocks.useSearch.mockReturnValue({});
+      rerender(<FeedbackTab />);
+
+      expect(screen.getByTestId('feedback-table-region')).toHaveFocus();
+    });
   });
 });

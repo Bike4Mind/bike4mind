@@ -127,6 +127,11 @@ describe('useFeedbackOperations handleStatusChange', () => {
     await act(() => result.current.handleStatusChange(item, FeedbackStatus.InProgress));
 
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Feedback from reporter set to In progress', expect.anything());
+    expect(mocks.updateFeedbackOnServer).toHaveBeenCalledTimes(1);
+    const [id, payload] = mocks.updateFeedbackOnServer.mock.calls[0];
+    expect(id).toBe('fb-1');
+    expect(payload).toMatchObject({ status: FeedbackStatus.InProgress });
+    expect(payload).not.toHaveProperty('promptMeta');
   });
 
   it('names the report by its type rather than quoting its text, which may be empty', async () => {
