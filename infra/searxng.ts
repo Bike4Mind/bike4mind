@@ -1,4 +1,5 @@
 import { PRODUCTION_STAGES } from './constants';
+import { ecsEnvSecret, ecsSecretsVersion } from './ecsSecrets';
 import { cluster, resolvedVpcId } from './vpc';
 
 /**
@@ -79,14 +80,21 @@ function createSearxng() {
     egress: [{ protocol: '-1', fromPort: 0, toPort: 0, cidrBlocks: ['0.0.0.0/0'] }],
   });
 
+  // SearXNG maps this onto server.secret_key at load (see compose.selfhost.yaml).
+  const secretKey = ecsEnvSecret(
+    'Searxng',
+    'SEARXNG_SECRET',
+    new random.RandomPassword('SearxngSecret', { length: 48, special: false }).result
+  );
+
   new sst.aws.Service('Searxng', {
     cluster,
     image: searxngImage!,
     cpu: '0.25 vCPU',
     memory: '0.5 GB',
+    ssm: secretKey.ssm,
     environment: {
-      // SearXNG maps this onto server.secret_key at load (see compose.selfhost.yaml).
-      SEARXNG_SECRET: new random.RandomPassword('SearxngSecret', { length: 48, special: false }).result,
+      ECS_SECRETS_VERSION: ecsSecretsVersion(secretKey),
     },
     health: {
       command: ['CMD-SHELL', `wget -q --spider http://localhost:${SEARXNG_PORT}/healthz || exit 1`],
