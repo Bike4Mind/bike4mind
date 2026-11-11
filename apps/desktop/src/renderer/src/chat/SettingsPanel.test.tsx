@@ -29,6 +29,8 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-entry="updates"');
     expect(html).toContain('data-entry="worktree-default"');
     expect(html).toContain('data-entry="local-history"');
+    expect(html).toContain('data-entry="local-data-export"');
+    expect(html).toContain('settings-export-local-btn');
     expect(html).toContain('data-entry="local-context"');
     expect(html).toContain('settings-local-context-select');
     expect(html).toContain('settings-clear-history-btn');
