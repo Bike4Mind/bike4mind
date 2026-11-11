@@ -491,11 +491,11 @@ const DlqReplayTab: React.FC = () => {
           <Table stickyHeader hoverRow data-testid="dlq-messages-table">
             <thead>
               <tr>
-                <th style={{ width: 250 }}>Message ID</th>
-                <th>Body Preview</th>
+                <th style={{ width: 200 }}>Message ID</th>
+                <th style={{ minWidth: 160 }}>Body Preview</th>
                 <th style={{ width: 160 }}>Sent At</th>
-                <th style={{ width: 90 }}>Age</th>
-                <th style={{ width: 110 }}>Expires in</th>
+                <th style={{ width: 80 }}>Age</th>
+                <th style={{ width: 100 }}>Expires in</th>
                 <th style={{ width: 100 }}>Receives</th>
                 <th style={{ width: 80 }}>Actions</th>
               </tr>
