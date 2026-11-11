@@ -76,8 +76,8 @@ export type AdminUserListItem = Omit<Pick<IUserDocument, (typeof ADMIN_USER_LIST
   // Rows are returned through User.hydrate(), so JSON carries the `id` virtual.
   id: string;
   // The endpoint populates organizationId and serializes it, so it arrives as the safe org shape
-  // (null when unset).
-  organizationId: SafeOrganization | null;
+  // (null when unset). A non-admin viewer gets only id and name, since the list spans tenants.
+  organizationId: SafeOrganization | Pick<SafeOrganization, 'id' | 'name'> | null;
   mfa?: Pick<IMFAConfig, 'totpEnabled' | 'setupAt' | 'lastUsedAt'> | null;
 };
 

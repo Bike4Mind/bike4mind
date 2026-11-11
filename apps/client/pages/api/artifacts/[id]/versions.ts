@@ -48,7 +48,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
         throw new NotFoundError('Artifact not found');
       }
 
-      const versions = await artifactVersionRepository.findByArtifactId(artifactId);
+      const found = await artifactVersionRepository.findByArtifactId(artifactId);
+      // A reader with no grant (public only) must not see who authored each version
+      const versions = artifact.access === 'public' ? found.map(artifactService.toArtifactViewerVersion) : found;
 
       res.setHeader('Cache-Control', 'private, no-store');
       return res.json({

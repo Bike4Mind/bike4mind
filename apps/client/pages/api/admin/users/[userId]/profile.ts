@@ -2,15 +2,16 @@ import { z } from 'zod';
 import {
   BadRequestError,
   ConflictError,
-  ForbiddenError,
   HTTPError,
   NotFoundError,
+  assertCanActOnAdminTarget,
+  isFullAdmin,
   type AuditChange,
 } from '@bike4mind/common';
 import { userRepository, withTransaction } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireStepUp } from '@server/auth/stepUp';
 import {
@@ -44,12 +45,10 @@ const onField = async <T>(field: AdminProfileField, run: () => Promise<T>): Prom
  * never written directly: it starts the same verification flow as a self-service change, so the
  * address only switches once the new owner clicks the link. Errors carry `field` when they belong to one.
  */
-const handler = baseApi({ auth: 'jwtOnly' })
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:moderate' } })
   .use(csrfProtection())
   .patch(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
-
       const { userId } = req.query as { userId?: unknown };
       if (typeof userId !== 'string' || !userId) throw new BadRequestError('Invalid user ID');
 
@@ -67,10 +66,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
         outbox.length = 0;
         const user = await userRepository.findById(userId);
         if (!user) throw new NotFoundError('User not found');
+        assertCanActOnAdminTarget(req.user, user, 'edit the profile of');
 
         const params = { username: parsed.data.username };
         await onField('username', () =>
-          userService.validateUsernameChange(user, params, userRepository, { allowReservedUsername: true })
+          userService.validateUsernameChange(user, params, userRepository, {
+            allowReservedUsername: isFullAdmin(req.user),
+          })
         );
 
         const changes: AuditChange[] = [];

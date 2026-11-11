@@ -881,14 +881,16 @@ export async function publishArtifact(
   const artifactType = ArtifactTypeSchema.safeParse(artifact.type);
   if (!artifactType.success)
     throw new Error(`artifact ${artifact.id} has an unsupported type (${String(artifact.type)})`);
-  if (typeof artifact.userId !== 'string') throw new Error(`artifact ${artifact.id} has no owner to publish under`);
 
   const storedTitle = typeof artifact.title === 'string' ? artifact.title : '';
   const title = (args.title ?? storedTitle).trim().slice(0, PUBLISH_TITLE_MAX) || PUBLISH_FALLBACK_TITLE;
   const existing = await client.findPublishedArtifact(artifact.id);
+  // A reader without a grant gets no userId; they can only republish a page they already own.
+  const ownerScope = existing?.scopeId ?? artifact.userId;
+  if (typeof ownerScope !== 'string') throw new Error(`artifact ${artifact.id} can only be published by its owner`);
   const request: UploadUrlRequest = {
     tier: existing?.tier ?? 'user',
-    scopeId: existing?.scopeId ?? artifact.userId,
+    scopeId: ownerScope,
     slug: existing?.slug ?? artifactSlug(title, artifact.id),
     title,
     visibility: args.visibility ?? existing?.visibility ?? PUBLISH_DEFAULT_VISIBILITY,
