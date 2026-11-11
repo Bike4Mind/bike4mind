@@ -81,7 +81,7 @@ async function setup() {
     get: vi.fn(async () => session),
     scopeKey: vi.fn((): string | null => 'account'),
   };
-  return { base, userData, destination, memoryRoot, sessions, attachments, media };
+  return { base, userData, destination, memoryRoot, sessions, attachments, media, image };
 }
 
 describe('writeLocalDataExport', () => {
@@ -105,6 +105,8 @@ describe('writeLocalDataExport', () => {
       expect(createHash('sha256').update(bytes).digest('hex')).toBe(entry.sha256);
       expect(bytes.toString('utf8').trim().split('\n').filter(Boolean)).toHaveLength(entry.count);
     }
+    const mediaRow = JSON.parse((await readFile(join(path, 'collections/media.jsonl'), 'utf8')).trim());
+    expect(mediaRow.url).toBe(deps.image.url);
     const entries = await readdir(path);
     expect(entries).toEqual(['collections', 'files', 'manifest.json']);
     const sessionRow = JSON.parse((await readFile(join(path, 'collections/desktop-sessions.jsonl'), 'utf8')).trim());

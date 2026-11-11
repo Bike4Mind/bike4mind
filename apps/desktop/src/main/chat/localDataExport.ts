@@ -7,7 +7,7 @@ import { isValidSessionId } from './SessionStore';
 import { defaultUserInstructionsRoot } from './project/instructions';
 import { memoryStoreFor } from './project/memory';
 import type { AttachmentStore } from './AttachmentStore';
-import type { MediaStore } from './media/MediaStore';
+import { mediaUrl, type MediaStore } from './media/MediaStore';
 
 export interface LocalDataExportDeps {
   sessions: {
@@ -265,6 +265,7 @@ export async function writeLocalDataExport(
         await emit('media', {
           notebookId: session.id,
           name: entry.name,
+          url: mediaUrl(session.id, entry.name),
           mimeType: source.mimeType,
           path: await addBlob(await readFile(source.path)),
         });
