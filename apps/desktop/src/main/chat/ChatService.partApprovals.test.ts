@@ -46,9 +46,10 @@ describe('ChatService approvals decided per part', () => {
   const awaitCall = (name: string, status: ChatToolCall['status']) =>
     vi.waitUntil(() => calls(name, status)[0], { timeout: 5000, interval: 10 });
 
+  // A real shell runs here; a loaded macOS runner has taken over 5s for the first spawn.
   const settled = () =>
     vi.waitUntil(() => calls('bash_execute', 'done')[0] ?? calls('bash_execute', 'error')[0], {
-      timeout: 5000,
+      timeout: 10_000,
       interval: 10,
     });
 
@@ -296,7 +297,10 @@ describe('ChatService approvals decided per part', () => {
     const card = await awaitCall('bash_execute', 'awaiting-approval');
     expect(card.approvalParts?.map(part => part.text)).toEqual(['git status', 'printf ok']);
 
-    await permissions.setRules({ kind: 'user' }, { allow: ['Bash(git status:*)', 'Bash(printf:*)'], ask: [], deny: [] });
+    await permissions.setRules(
+      { kind: 'user' },
+      { allow: ['Bash(git status:*)', 'Bash(printf:*)'], ask: [], deny: [] }
+    );
     await approvals.settleCovered();
     expect((await settled()).approval?.decidedBy).toMatchObject({ kind: 'rule' });
     await finishReply(first);
