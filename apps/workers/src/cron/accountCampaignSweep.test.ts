@@ -31,7 +31,7 @@ vi.mock('@server/security/shadowDetectionAutoGrade', () => ({
   gradeStaleSignupBursts,
   liveStaleDetectionGradeDeps: (deps: unknown) => deps,
 }));
-vi.mock('@server/utils/systemAuditWriter', () => ({ systemAuditWriter: () => vi.fn() }));
+vi.mock('@workers/utils/systemAuditWriter', () => ({ systemAuditWriter: () => vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%' } }));
 
 import type { Context } from 'aws-lambda';

@@ -20,7 +20,7 @@ import {
   dataLakeResponseSchema,
 } from '@bike4mind/common';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { respond } from '@server/utils/respond';
 import { resolveLakeListRetrievalScope } from '@server/dataLakes/resolveLakeListRetrievalScope';
 import { labelLakeRetrievability } from '@server/dataLakes/labelLakeRetrievability';

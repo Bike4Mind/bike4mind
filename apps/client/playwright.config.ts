@@ -221,7 +221,7 @@ export default defineConfig({
     },
     // Referral invites: kept out of `unauthenticated` (the core deploy-gate run) because each run
     // creates a real signup and the per-IP/ASN signup caps are not skipped under E2E
-    // (server/auth/signupNetworkLimits.ts). Full suite + manual run.
+    // (packages/server-utils/src/auth/signupNetworkLimits.ts). Full suite + manual run.
     {
       name: 'referrals',
       use: { ...devices['Desktop Chrome'] },

@@ -24,7 +24,7 @@ import {
   startRemoteFixtureServer,
   type RemoteFixtureServer,
 } from '../../../../b4m-core/mcp/src/remote/__fixtures__/remoteFixtureServer';
-import type { CustomMcpContext } from './customMcpAccess';
+import type { CustomMcpContext } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 
 const state = vi.hoisted(() => ({
   connections: new Map<string, Record<string, unknown>>(),
@@ -131,8 +131,8 @@ vi.mock('./oauth/tokenManager', async importOriginal => {
   tokenManager.OAuthGrantSupersededError = actual.OAuthGrantSupersededError;
   return { ...actual, getOAuthAccessToken: tokenManager.getOAuthAccessToken };
 });
-vi.mock('./customMcpAccess', async importOriginal => ({
-  ...(await importOriginal<typeof import('./customMcpAccess')>()),
+vi.mock('@bike4mind/server-utils/mcpConnections/customMcpAccess', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/mcpConnections/customMcpAccess')>()),
   resolveCustomMcpContext: vi.fn(async () => {
     throw new Error('tests pass the context explicitly');
   }),

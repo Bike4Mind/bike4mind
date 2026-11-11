@@ -1,5 +1,5 @@
 import type { DataLakeRetrievabilityLabel } from '@bike4mind/common';
-import type { RetrievalLakeScope } from './resolveRetrievalLakeScope';
+import type { RetrievalLakeScope } from '@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope';
 
 /**
  * Label each listed lake with whether `scope` reaches it (see DataLakeRetrievabilityLabel).

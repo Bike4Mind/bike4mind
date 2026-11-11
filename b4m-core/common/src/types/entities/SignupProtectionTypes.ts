@@ -33,7 +33,7 @@ export const SIGNUP_DOMAIN_HOLD_REASON_FILTER_KEYS = Object.keys(SIGNUP_DOMAIN_H
  * The automated policies that may decide a hold. The disposable-list rule only confirms; the advisory
  * assessment confirms, and releases only when an operator turns auto-release on and its code guards
  * pass. See apps/workers/src/cron/signupDomainHoldTriage.ts and
- * apps/client/server/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts.
+ * apps/workers/src/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts.
  */
 export const SIGNUP_DOMAIN_HOLD_AUTO_POLICIES = ['disposable-aggregate-rule', 'advisory-decision'] as const;
 export type SignupDomainHoldAutoPolicy = (typeof SIGNUP_DOMAIN_HOLD_AUTO_POLICIES)[number];

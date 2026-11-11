@@ -52,7 +52,7 @@ export const signupRiskReviewItemSchema = z.object({
 export type SignupRiskReviewItem = z.infer<typeof signupRiskReviewItemSchema>;
 
 /**
- * Evidence a pending review was approved on without an admin (apps/client/server/security/riskReviewAutoApproval.ts).
+ * Evidence a pending review was approved on without an admin (packages/server-utils/src/security/riskReviewAutoApproval.ts).
  * Only ever moves pending to approved; a model verdict is never one of these.
  */
 export const SIGNUP_RISK_AUTO_APPROVAL_POLICIES = ['settled_payment', 'quiet_account'] as const;

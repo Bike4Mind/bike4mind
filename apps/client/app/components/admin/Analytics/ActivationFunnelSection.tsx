@@ -1,5 +1,5 @@
 import { Box, Button, Stack, Typography } from '@mui/joy';
-import type { UserFunnelStep } from '@client/app/utils/adminUsersFilter';
+import type { UserFunnelStep } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import type { ActivationFunnel } from '@client/app/utils/activationFunnel';
 import { DataTable, EmptyState, SectionCard, StatusChip, type DataColumn } from '../shared';
 import { AnalyticsSection } from './AnalyticsSection';

@@ -63,7 +63,7 @@ vi.mock('@bike4mind/database', () => ({
 // The endpoint resolves its actor via toAccessContext (#1668); stub it so the real one's
 // entitlements + org-admin DB reads don't get pulled into this unit test. The actor identity still
 // comes from req.user (never the body), preserving the security property the route depends on.
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
     userId: req.user.id,
     isAdmin: !!req.user.isAdmin,
@@ -87,7 +87,7 @@ vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-fab-bucket' } }
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
 
 import handler from '../createFabFile';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 const LAKE = {

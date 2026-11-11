@@ -2,7 +2,7 @@ import { CreditHolderType, ORG_MEMBERSHIP_ACL_PERMISSIONS, orgAclRowConfersMembe
 import { Organization } from '@bike4mind/database';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
-import { hasPaidSubscription } from '@server/entitlements/paidStanding';
+import { hasPaidSubscription } from '@bike4mind/server-utils/entitlements/paidStanding';
 import { scopeMapKey, type ResolveScopeDeps, type ScopeKey } from './resolveScope';
 
 type PlanHolderOrganization = {

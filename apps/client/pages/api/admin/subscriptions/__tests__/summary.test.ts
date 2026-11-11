@@ -15,7 +15,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockSummary = vi.fn();
 vi.mock('@server/admin/subscriptionsList/listAdminSubscriptions', () => ({

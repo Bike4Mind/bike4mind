@@ -12,7 +12,7 @@ import { lakeProposalApproveResponseSchema, lakeProposalReviewResponseSchema } f
 import { NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { admitProposedSource } from '@server/dataLakes/proposalAdmissionDeps';
 import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';

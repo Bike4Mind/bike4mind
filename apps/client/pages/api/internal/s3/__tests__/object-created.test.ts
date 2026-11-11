@@ -83,7 +83,7 @@ vi.mock('@server/s3/notebookImportComplete', () => ({ dispatch: notebookDispatch
 vi.mock('@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles', () => ({
   moderateImportedKnowledgeFiles: moderateFilesMock,
 }));
-vi.mock('@server/s3/knowledgeModerationDeps', () => ({ buildKnowledgeModerationDeps: buildDepsMock }));
+vi.mock('@bike4mind/server-utils/s3/knowledgeModerationDeps', () => ({ buildKnowledgeModerationDeps: buildDepsMock }));
 
 const handler = (await import('../object-created')).default as (req: Request, res: Response) => Promise<unknown>;
 

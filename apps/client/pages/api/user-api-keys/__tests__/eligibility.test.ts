@@ -27,7 +27,7 @@ const findIdsAdministeredBy = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({ organizationRepository: { findIdsAdministeredBy } }));
 
 const isApiKeyAccessAllowed = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/apiKeyAccessGate', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
   API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
   isApiKeyAccessAllowed,
 }));

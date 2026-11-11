@@ -294,6 +294,8 @@ describe('public settings projection (M2.5 security boundary)', () => {
         // The Desktop app follows these rather than deciding deferral itself.
         'EnableDeferredToolLoading',
         'DeferredToolStartSetMaxTokens',
+        // The credit purchase button gates on it.
+        'requireCheckoutTermsConsent',
       ]) {
         expect(keys.has(k)).toBe(true);
       }

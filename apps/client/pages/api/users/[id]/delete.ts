@@ -7,7 +7,7 @@ import {
   isSelfOrImpersonator,
   parseAdminActionReason,
 } from '@bike4mind/server-utils/utils/adminAudit';
-import { subscriptionCancellationResponse } from '@server/billing/cancelAccountSubscriptions';
+import { subscriptionCancellationResponse } from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 import { getApprovalPolicy, requestApproval } from '@server/admin/approvals/service';
 import { deleteUserAsAdmin, deletedUserTarget } from '@server/admin/deleteUserAsAdmin';
 

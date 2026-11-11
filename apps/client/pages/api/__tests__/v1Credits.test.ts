@@ -34,7 +34,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 // The dedicated limiter is covered by v1/__tests__/credits.rateLimit.test.ts.
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 

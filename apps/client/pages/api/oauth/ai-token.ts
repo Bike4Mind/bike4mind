@@ -44,7 +44,7 @@ import {
   API_KEY_ACCESS_DENIED_MESSAGE,
   SUBSCRIPTION_REQUIRED_ERROR,
   isApiKeyAccessAllowed,
-} from '@server/utils/apiKeyAccessGate';
+} from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 
 /** Minted key lifetime. The app caches the key per-user and re-exchanges only when it expires. */
 const AI_TOKEN_TTL_SECONDS = userApiKeyService.MAX_EXCHANGE_KEY_TTL_MS / 1000;

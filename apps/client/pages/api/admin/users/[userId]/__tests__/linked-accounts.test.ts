@@ -8,7 +8,7 @@ vi.mock('@server/middlewares/adminApi', async () =>
   (await import('@server/middlewares/__tests__/adminApiMock')).adminApiMock()
 );
 vi.mock('@bike4mind/database', () => ({ userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) } }));
-vi.mock('@server/billing/linkedAccounts', () => ({
+vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({
   findLinkedAccounts: (...a: unknown[]) => mocks.findLinkedAccounts(...a),
 }));
 

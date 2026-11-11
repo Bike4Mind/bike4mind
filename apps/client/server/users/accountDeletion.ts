@@ -22,13 +22,13 @@ import { commitWithSessionEnd } from '@server/auth/endUserSessions';
 import {
   cancelAccountSubscriptions,
   type AccountSubscriptionCancellation,
-} from '@server/billing/cancelAccountSubscriptions';
+} from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 import {
   readUserIntegrationGrants,
   revokeIntegrationGrants,
   type UserIntegrationGrants,
 } from '@server/services/purgeDeletedUserData';
-import { purgeUserPublishedArtifacts } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { classifyOwnedOrganizations, type OwnedOrganization } from './ownedOrganizations';
 import { sendAccountDeletionCancelledEmail, sendAccountDeletionScheduledEmail } from './accountDeletionEmail';

@@ -22,7 +22,7 @@ vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   LLMEvents: { CompletionCompleted: { publish: (...args: unknown[]) => publishMock(...args) } },
 }));
 
-const { resolveAndPublishMementoCompletion } = await import('./publishMementoCompletion');
+const { resolveAndPublishMementoCompletion } = await import('@bike4mind/server-utils/utils/publishMementoCompletion');
 
 const makeLogger = () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn(), log: vi.fn(), debug: vi.fn() }) as never;
 

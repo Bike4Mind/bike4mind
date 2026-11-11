@@ -23,7 +23,9 @@ vi.mock('@server/middlewares/adminApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
-vi.mock('@server/admin/aiAdvisory/aiAbuseAdvisories', () => ({ listAiAbuseAdvisories: h.listAiAbuseAdvisories }));
+vi.mock('@bike4mind/server-utils/admin/aiAdvisory/aiAbuseAdvisories', () => ({
+  listAiAbuseAdvisories: h.listAiAbuseAdvisories,
+}));
 
 const SINCE = new Date('2026-11-04T12:00:00.000Z');
 

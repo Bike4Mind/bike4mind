@@ -2,7 +2,7 @@ import {
   USER_FUNNEL_STEP_FILTERS,
   COHORT_WINDOW_MAX_DAYS,
   type UserFunnelStep,
-} from '@client/app/utils/adminUsersFilter';
+} from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import type { ActivationFunnel, ActivationFunnelStep } from '@client/app/utils/activationFunnel';
 import type { AnalyticsOverviewQuery } from '@client/app/utils/analyticsOverview';
 import { GatewayTimeoutError } from '@bike4mind/common';

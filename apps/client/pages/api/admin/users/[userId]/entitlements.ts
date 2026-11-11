@@ -16,7 +16,7 @@ import {
   normalizeTag,
 } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { partnerEntitlementsForEmail } from '@bike4mind/server-utils/entitlements/partnerRules';
-import { entitlementsForPaidSubscription } from '@server/entitlements/paidStanding';
+import { entitlementsForPaidSubscription } from '@bike4mind/server-utils/entitlements/paidStanding';
 import { ApiKeyScope, hasDeveloperUserTag, CREDITS_PAGE_READ } from '@bike4mind/common';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 

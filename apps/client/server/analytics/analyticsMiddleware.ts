@@ -10,7 +10,7 @@ import { readUtmCookie } from '@bike4mind/server-utils/analytics/cookies';
 import { readVisitId } from './visitSession';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { isLaneMarked } from '@bike4mind/server-utils/analytics/lane';
-import { resolveUserType } from './resolveUserType';
+import { resolveUserType } from '@bike4mind/server-utils/analytics/resolveUserType';
 
 function utcDate(): string {
   return new Date().toISOString().substring(0, 10);

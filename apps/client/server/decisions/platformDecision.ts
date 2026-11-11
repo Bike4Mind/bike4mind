@@ -3,7 +3,7 @@
  * failure mapping shared by every internal consumer. Each consumer passes its own cache-key prefix
  * and limits, so budgets, call caps and concurrency never pool across features. Consumers:
  * - apps/client/server/security/abuseAssessment/abuseAssessment.ts (prefix 'abuseAssessment')
- * - apps/client/server/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts
+ * - apps/workers/src/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts
  */
 
 import { randomUUID } from 'node:crypto';

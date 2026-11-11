@@ -12,13 +12,13 @@ import {
 import { fabFilesService } from '@bike4mind/services';
 import { accessibleBy } from '@casl/mongoose';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
-import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { baseApi } from '@server/middlewares/baseApi';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { fileContentUrl } from '@server/files/browserFileSigner';
-import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
-import { createCdnInvalidationBatch } from '@server/services/cdn/invalidateRouterCdn';
+import { getGeneratedCopyStore } from '@bike4mind/server-utils/files/generatedCopyStore';
+import { createCdnInvalidationBatch } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 import {
   assertFilesReadScope,
   assertFilesWriteScope,

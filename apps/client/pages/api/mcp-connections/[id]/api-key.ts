@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { rotateUserConnectionApiKey } from '@server/mcpConnections/connectionService';
-import { assertCustomMcpEnabled } from '@server/mcpConnections/customMcpAccess';
+import { assertCustomMcpEnabled } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { mcpConnectionApiKeyBodySchema, parseMcpConnectionBody } from '@server/validators/mcpConnectionValidators';
 
 const handler = baseApi({ auth: 'jwtOnly' }).post(
