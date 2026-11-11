@@ -111,6 +111,7 @@ import {
   OrchestrationDefaultsSchema,
   type IAgent,
   type IUserDocument,
+  isAgentUsableBy,
 } from '@bike4mind/common';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
@@ -1541,15 +1542,8 @@ async function runExecution(
           try {
             const stored = await agentRepository.findById(id);
             if (!stored) return null;
-            // Reject soft-deleted records - `IAgent.deletedAt` is the soft-delete
-            // marker; the persisted-agent path should not resurrect them.
-            if (stored.deletedAt) return null;
-            // Authz: user-scoped records require an owner match; org-scoped records
-            // require an org match. System agents (`isSystem: true`) have neither
-            // `userId` nor `organizationId` set and are intentionally accessible
-            // to any caller - both guards short-circuit on the falsy side.
-            if (stored.userId && stored.userId !== execution.userId) return null;
-            if (stored.organizationId && stored.organizationId !== execution.organizationId) return null;
+            // Authz + soft-delete: the same rule the loop routes check at write time.
+            if (!isAgentUsableBy(stored, execution)) return null;
             return stored;
           } catch (err) {
             logger.warn('[Orchestration] Failed to load IAgent; falling back to synthetic profile', {

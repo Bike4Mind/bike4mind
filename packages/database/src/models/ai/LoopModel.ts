@@ -453,6 +453,8 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
             model: { type: String },
             escalationModel: { type: String },
             tools: { type: [String], default: undefined },
+            agentId: { type: String },
+            skills: { type: [String], default: undefined },
             runner: { type: String, enum: LOOP_STAGE_RUNNERS },
             repoHint: { type: String },
             mergePolicy: { type: String, enum: LOOP_MERGE_POLICIES },

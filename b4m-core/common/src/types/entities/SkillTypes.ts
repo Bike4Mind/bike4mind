@@ -95,6 +95,8 @@ export interface ISkillRepository extends IBaseRepository<ISkillDocument> {
    * `findByNamesForUser` for the chat mention resolver.
    */
   findAccessibleByNamesForUser(userId: string, names: string[]): Promise<ISkill[]>;
+  /** Accessible-scope (owned + shared + global-read) by-id resolver, in `ids` order; missing ids are left out. */
+  findAccessibleByIdsForUser(userId: string, ids: string[]): Promise<ISkill[]>;
   /**
    * Last-writer-wins `update` that only lands while the skill is still not global (neither
    * `isGlobalRead` nor `isGlobalWrite`). For a write that skipped the global-skill content scan: a

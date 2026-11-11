@@ -65,6 +65,8 @@ export function buildLoopQuery(
     answers?: { question: string; note: string }[];
     /** The owner's instructions for the ticket's stage; trusted, so they sit with the goal, above `---`. */
     instructions?: string;
+    /** The stage's skills, pre-rendered by `renderInvokedSkill` (which frames non-owner bodies as untrusted). */
+    skills?: string;
   },
   oversight?: LoopOversight,
   /** Set on a cloud run only: its loop's desktop stages, whose tickets it must leave alone. */
@@ -151,6 +153,7 @@ export function buildLoopQuery(
   return [
     goal,
     ...(ticket?.instructions ? ['', `Instructions for the "${ticket.item.stage}" stage:`, ticket.instructions] : []),
+    ...(ticket?.skills ? ['', ticket.skills] : []),
     '',
     '---',
     'You are running as one scheduled run of a recurring loop. Nobody is watching this run live.',

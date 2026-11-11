@@ -41,6 +41,8 @@ const SMOKE_URL_MAX = 2000;
 
 const SMOKE_COMMAND_MAX = 1000;
 
+export const STAGE_SKILLS_MAX = 10;
+
 const HOLD_LABELS_MAX = 20;
 
 const HOLD_LABEL_MAX = 100;
@@ -129,11 +131,21 @@ export function validateLoopStageConfig(value: unknown, stages: readonly string[
       const tools = validateStringList('tools', entry.tools, TOOLS_MAX, TOOL_NAME_MAX);
       if (tools.length) config.tools = tools;
     }
+    const agentId = text('agentId', ID_MAX);
+    if (agentId) config.agentId = agentId;
+    if (entry.skills !== undefined && entry.skills !== null) {
+      const skills = validateStringList('skills', entry.skills, STAGE_SKILLS_MAX, ID_MAX);
+      if (skills.length) config.skills = skills;
+    }
     if (entry.runner !== undefined && entry.runner !== null) {
       if (!LOOP_STAGE_RUNNERS.includes(entry.runner as ILoopStageConfig['runner'] & string)) {
         throw new BadRequestError(`stageConfig runner must be one of: ${LOOP_STAGE_RUNNERS.join(', ')}`);
       }
       config.runner = entry.runner as ILoopStageConfig['runner'];
+    }
+    // A desktop runner has no B4M agent profile to apply.
+    if (config.agentId && config.runner === 'desktop') {
+      throw new BadRequestError('stageConfig agentId only applies to cloud stages');
     }
     const guards = validateStageGuards(entry, text);
     if (Object.keys(guards).length > 0) {

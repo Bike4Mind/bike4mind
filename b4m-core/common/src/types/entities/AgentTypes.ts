@@ -337,6 +337,18 @@ export type ResponseStyle = 'formal' | 'casual' | 'technical' | 'friendly' | 'pl
 
 export interface IAgentDocument extends IAgent, IShareableDocument {}
 
+/**
+ * Whether a run for `who` may use `agent`: not soft-deleted, and owner/org match when set. System agents set
+ * neither, so any caller may use them. Shared by the agent executor (run time) and the loop routes (write time).
+ */
+export const isAgentUsableBy = (
+  agent: Pick<IAgent, 'userId' | 'organizationId' | 'deletedAt'>,
+  who: { userId: string; organizationId?: string | null }
+): boolean =>
+  !agent.deletedAt &&
+  (!agent.userId || agent.userId === who.userId) &&
+  (!agent.organizationId || agent.organizationId === who.organizationId);
+
 // Helper interface for capabilities data structure (for typing before stringifying)
 export interface IAgentCapabilities {
   triggerWords: string[];

@@ -82,6 +82,20 @@ describe('buildLoopQuery', () => {
     );
   });
 
+  it("puts the stage's rendered skills after its instructions, above the separator", () => {
+    const memory = { notes: '', nextAction: '' };
+    const item = { id: 't1', title: 'Fix it', description: '', stage: 'review' };
+    const query = buildLoopQuery('Ship', memory, {
+      item,
+      stages: ['todo', 'review', 'done'],
+      instructions: 'Review only',
+      skills: 'SKILL BODY',
+    });
+    expect(query.startsWith('Ship\n\nInstructions for the "review" stage:\nReview only\n\nSKILL BODY\n\n---\n')).toBe(
+      true
+    );
+  });
+
   it("quotes the owner's answers to the ticket's earlier questions as data", () => {
     const query = buildLoopQuery(
       'Watch the inbox',

@@ -59,6 +59,12 @@ describe('LoopRepository', () => {
     await expect(create({ stageConfig: [{ stage: 'doing', runner: 'laptop' }] })).rejects.toThrow(/runner/);
   });
 
+  it('keeps a stage agentId and skills', async () => {
+    const stageConfig = [{ stage: 'doing', agentId: 'a1', skills: ['s1', 's2'] }];
+    const created = await create({ stageConfig });
+    expect((await Loop.findById(created.id))?.toJSON().stageConfig).toEqual(stageConfig);
+  });
+
   it('rejects an interval under 5 minutes or a fractional one', async () => {
     await expect(create({ intervalMinutes: 4 })).rejects.toThrow(/intervalMinutes/);
     await expect(create({ intervalMinutes: 5.5 })).rejects.toThrow(/intervalMinutes/);

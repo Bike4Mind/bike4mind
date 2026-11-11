@@ -180,6 +180,10 @@ export interface ILoopStageConfig {
   escalationModel?: string;
   /** Replaces the loop's `tools`; empty or absent inherits them. */
   tools?: string[];
+  /** Cloud stages only: replaces the loop's `agentId`. */
+  agentId?: string;
+  /** Skill ids, rendered into the prompt of runs working a ticket in this stage. */
+  skills?: string[];
   /**
    * Absent means `cloud`. The cloud scheduler never claims a ticket in a `desktop` stage; a desktop runner
    * does.
