@@ -45,7 +45,8 @@ extension APIError {
     case .rateLimited: self = .rateLimited
     case .server(let status): self = .server(status: status)
     case .invalidResponse: self = .malformedResponse
-    case .signedOut, .refreshRejected, .cancelled, .authorizationDenied, .authorizationFailed, .stateMismatch,
+    case .signedOut, .refreshRejected, .cancelled, .webSessionFailedToStart, .authorizationDenied, .authorizationFailed,
+      .stateMismatch,
       .invalidCallback, .tokenExchangeFailed:
       self = .signedOut
     }

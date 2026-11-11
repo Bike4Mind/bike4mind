@@ -6,6 +6,8 @@ extension AuthError {
     switch self {
     case .cancelled:
       nil
+    case .webSessionFailedToStart:
+      "Sign-in could not start on this device. Please try again."
     case .authorizationDenied:
       "Access was not granted. Try signing in again."
     case .stateMismatch, .invalidCallback:

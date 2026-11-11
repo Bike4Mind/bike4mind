@@ -100,7 +100,8 @@ struct SignInView: View {
     Task {
       defer { isSigningIn = false }
       do {
-        try await auth.signIn(using: SystemWebAuthenticator(session: webAuthenticationSession))
+        try await auth.signIn(
+          using: StartFailureDetectingAuthenticator(SystemWebAuthenticator(session: webAuthenticationSession)))
       } catch let error as AuthError {
         errorMessage = error.userMessage
       } catch {

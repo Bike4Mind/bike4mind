@@ -5,6 +5,8 @@ public enum AuthError: Error, Equatable, Sendable {
   case signedOut
   /// The user dismissed the sign-in sheet.
   case cancelled
+  /// The system web-auth sheet ended before anyone could use it (see `StartFailureDetectingAuthenticator`).
+  case webSessionFailedToStart
   case authorizationDenied
   case authorizationFailed(code: String)
   /// The callback's `state` did not match the request: possible injection, never accept the code.

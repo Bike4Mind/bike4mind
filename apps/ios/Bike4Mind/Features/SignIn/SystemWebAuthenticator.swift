@@ -19,6 +19,9 @@ struct SystemWebAuthenticator: WebAuthenticating {
       )
     } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
       throw AuthError.cancelled
+    } catch is ASWebAuthenticationSessionError {
+      // presentationContextNotProvided / presentationContextInvalid: the sheet never appeared.
+      throw AuthError.webSessionFailedToStart
     }
   }
 }
