@@ -36,13 +36,60 @@ const RESOURCE_NAMES = [
   'STRIPE_SECRET_KEY',
   'STRIPE_WEBHOOK_SECRET',
   'CHAT_COMPLETION_INTERNAL_SECRET',
+  'GOOGLE_CLIENT_SECRET',
+  'GITHUB_CLIENT_SECRET',
+  'APPLE_PRIVATE_KEY',
+  'GITHUB_LAKE_APP_CLIENT_SECRET',
+  'GITHUB_LAKE_APP_PRIVATE_KEY',
+  'GITHUB_LAKE_APP_WEBHOOK_SECRET',
+  'MAIL_PASSWORD',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_ADMIN_API_KEY',
+  'TURNSTILE_SECRET_KEY',
+  'GEMINI_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENAI_ADMIN_API_KEY',
+  'XAI_API_KEY',
+  'MOONSHOT_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'OKTA_CLIENT_SECRET',
+  'NPM_TOKEN',
+  'SLACK_SIGNING_SECRET',
+  'SLACK_CLIENT_SECRET',
+  'SECOPS_ZAP_DISPATCH_TOKEN',
+  'SECOPS_ZAP_INGEST_TOKEN',
+  'SECOPS_PROWLER_INGEST_TOKEN',
+  'SECOPS_PROWLER_WORKFLOW_TOKEN',
+  'SECOPS_ATTACK_SIMULATION_INGEST_TOKEN',
+  'RATE_LIMIT_INGEST_TOKEN',
+  'NCMEC_API_KEY',
+  'E2E_CLEANUP_SECRET',
+  'GA_SERVICE_ACCOUNT_KEY',
+  'YOUTUBE_API_KEY',
+  'LINKEDIN_CLIENT_SECRET',
+  'OPTIHASHI_API_TOKEN',
+  'OPTIHASHI_WEBHOOK_SECRET',
+  'OPTIHASHI_WEBHOOK_SECRET_PREVIOUS',
+  'OPTIHASHI_INSTANCE_SERVICE_TOKEN_PREVIOUS',
+  'OVERWATCH_INGEST_KEY',
+  'OVERWATCH_PRODUCT_INGEST_KEYS',
+];
+const ADVANCED_NAMES = [
+  'OAUTH_RSA_PRIVATE_KEY',
+  'APPLE_PRIVATE_KEY',
+  'GITHUB_LAKE_APP_PRIVATE_KEY',
+  'GA_SERVICE_ACCOUNT_KEY',
 ];
 const ENV_NAME = 'OPTIHASHI_INSTANCE_SERVICE_TOKEN';
+const ORIGIN_ENV_NAME = 'ORIGIN_VERIFY_SECRET';
+const SEARXNG_ENV_NAME = 'SEARXNG_SECRET';
 
 const chatCompletion = readInfra('chatCompletion.ts');
 const service = cut(chatCompletion, "new sst.aws.Service('ChatCompletion'", '\n});');
 const fanout = cut(readInfra('subscriberFanout.ts'), "new sst.aws.Service('subscriberFanoutV2'", '\n});');
 const helper = readInfra('ecsSecrets.ts');
+const searxng = readInfra('searxng.ts');
+const searxngService = cut(searxng, "new sst.aws.Service('Searxng'", '\n  });');
 
 describe('ChatCompletion ECS secrets', () => {
   const nameList = cut(chatCompletion, 'const ecsSecretNames = [', '] as const;');
@@ -60,7 +107,9 @@ describe('ChatCompletion ECS secrets', () => {
     expect(chatCompletion).toContain(
       "ecsResourceSecrets('ChatCompletion', Object.fromEntries(ecsSecretNames.map(n => [n, secrets[n]])), {"
     );
-    expect(chatCompletion).toMatch(/advanced: \['OAUTH_RSA_PRIVATE_KEY'\]/);
+    expect(chatCompletion).toContain('advanced: ecsAdvancedSecretNames,');
+    const advanced = cut(chatCompletion, 'const ecsAdvancedSecretNames = [', '];');
+    expect([...advanced.matchAll(/'([A-Z0-9_]+)'/g)].map(m => m[1]).sort()).toEqual([...ADVANCED_NAMES].sort());
     expect(chatCompletion).toContain(
       'const ecsSecretParameters = ecsSecretGroups && Object.assign({}, ...ecsSecretGroups.map(g => g.ssm));'
     );
@@ -86,7 +135,9 @@ describe('ChatCompletion ECS secrets', () => {
     const lines = env.split('\n').filter(l => l.includes(ENV_NAME));
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/\$dev \?/);
-    expect(chatCompletion).toContain(`ecsEnvSecret('ChatCompletion', '${ENV_NAME}'`);
+    expect(chatCompletion).toMatch(
+      new RegExp(`ecsEnvSecret\\(\\s*'ChatCompletion',\\s*'${ENV_NAME}',\\s*secrets\\.${ENV_NAME}\\.value`)
+    );
   });
 
   it('does not set any moved resource name as plain environment', () => {
@@ -94,6 +145,36 @@ describe('ChatCompletion ECS secrets', () => {
     for (const name of RESOURCE_NAMES) {
       expect(env).not.toMatch(new RegExp(`\\b${name}\\b`));
     }
+  });
+
+  it('delivers the origin-verify secret as a raw env secret under the same gate as the frontend', () => {
+    const env = cut(service, '\n  environment: {', '\n  },');
+    expect(env).not.toMatch(new RegExp(`\\b${ORIGIN_ENV_NAME}\\b`));
+    expect(chatCompletion).toContain(
+      "const originVerifyEnabled = !$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true';"
+    );
+    expect(chatCompletion).toMatch(
+      new RegExp(
+        `\\.\\.\\.\\(originVerifyEnabled\\s*\\?\\s*\\[ecsEnvSecret\\('ChatCompletion', '${ORIGIN_ENV_NAME}', originVerifySecret\\.result\\)\\]\\s*:\\s*\\[\\]\\)`
+      )
+    );
+  });
+});
+
+describe('Searxng ECS secrets', () => {
+  it('delivers the generated secret as a raw env secret instead of plain environment', () => {
+    const env = cut(searxngService, '\n    environment: {', '\n    },');
+    expect(env).not.toMatch(new RegExp(`\\b${SEARXNG_ENV_NAME}\\b`));
+    expect(searxng).toMatch(
+      new RegExp(
+        `ecsEnvSecret\\(\\s*'Searxng',\\s*'${SEARXNG_ENV_NAME}',\\s*new random\\.RandomPassword\\('SearxngSecret'`
+      )
+    );
+    expect(searxngService).toMatch(/^\s+ssm: secretKey\.ssm,$/m);
+  });
+
+  it('sets the parameter version fingerprint as plain environment', () => {
+    expect(searxngService).toContain('ECS_SECRETS_VERSION: ecsSecretsVersion(secretKey),');
   });
 });
 
@@ -128,7 +209,8 @@ describe('ecsSecrets helper', () => {
 
   it('stores the direct-read env secret raw under its exact env name', () => {
     const fn = cut(helper, 'export function ecsEnvSecret', '\n}');
-    expect(fn).toContain('value: secret.value,');
+    expect(fn).toMatch(/^\s+value,$/m);
+    expect(fn).not.toContain('sst.Secret');
     expect(fn).toContain('{ [envName]: parameter.arn }');
   });
 });
