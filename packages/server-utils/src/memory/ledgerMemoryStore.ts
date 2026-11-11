@@ -4,6 +4,7 @@ import {
   foldEvents,
   activationConfigForKind,
   sealEvent,
+  verifyChain,
   type Belief,
   type EvidenceTier,
   type MemoryEvent,
@@ -162,9 +163,9 @@ export async function appendMemoryEvent(
  * or the ciphertext was altered - folds as shredded, so lost content redacts rather than leaks.
  */
 function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
-  let fact = d.fact; // legacy plaintext, for events written before at-rest encryption
+  let fact = d.shredded ? undefined : d.fact; // legacy plaintext, for events written before at-rest encryption
   let shredded = d.shredded;
-  if (d.factCipher && d.factIv && d.factTag) {
+  if (!shredded && d.factCipher && d.factIv && d.factTag) {
     const plain = dek ? decryptFact(dek, { cipher: d.factCipher, iv: d.factIv, tag: d.factTag }) : null;
     if (plain === null) {
       fact = undefined;
@@ -184,7 +185,12 @@ function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
   // Permanent, not a migration shim: the ledger backfill (migrateLedgerVectorsForPrincipal) only
   // repairs what an operator has run it over.
   const embedding =
-    dek && d.embeddingCipher && d.embeddingIv && d.embeddingTag && d.embeddingModel === MEMENTO_EMBEDDING_ID
+    !shredded &&
+    dek &&
+    d.embeddingCipher &&
+    d.embeddingIv &&
+    d.embeddingTag &&
+    d.embeddingModel === MEMENTO_EMBEDDING_ID
       ? (decryptVector(dek, { cipher: d.embeddingCipher, iv: d.embeddingIv, tag: d.embeddingTag }) ?? undefined)
       : undefined;
 
@@ -192,7 +198,7 @@ function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
     principal: { kind: d.principalKind, id: d.principalId },
     kind: d.kind,
     subject: d.subject,
-    fact,
+    ...(!shredded && fact !== undefined ? { fact } : {}),
     ...(embedding?.length ? { embedding } : {}),
     evidenceTier: d.evidenceTier as EvidenceTier | undefined,
     salience: d.salience,
@@ -200,10 +206,45 @@ function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
     sources: d.sources,
     hash: d.hash,
     prevHash: d.prevHash,
-    salt: d.salt ?? '',
+    ...(!shredded && d.salt !== undefined ? { salt: d.salt } : {}),
     commitment: d.commitment ?? '',
     shredded,
   };
+}
+
+export async function listPrincipalLedger(deps: {
+  ledger: Pick<LedgerRepo, 'listChain'>;
+  keys: Pick<KeyProvider, 'getDek'>;
+  principal: Principal;
+  ownerUserId: string;
+}): Promise<MemoryEvent[]> {
+  if (!deps.principal.id || !deps.ownerUserId) throw new Error('Memory export requires a principal and owner');
+  const docs = await deps.ledger.listChain(deps.principal.kind, deps.principal.id, deps.ownerUserId, {
+    withEmbeddings: false,
+  });
+  if (docs.length === 0) return [];
+  const dek = await deps.keys.getDek(deps.principal);
+  if (docs.some(d => !d.shredded && d.factCipher && !dek)) {
+    throw new Error('Memory ledger contains live ciphertext without its decryption key');
+  }
+  const events = docs.map(d => toMemoryEvent(d, dek));
+  if (docs.some((d, i) => !d.shredded && events[i].shredded)) {
+    throw new Error('Memory ledger contains unreadable live ciphertext');
+  }
+  if (
+    docs.some(
+      (d, i) =>
+        d.seq !== i ||
+        d.principalKind !== deps.principal.kind ||
+        d.principalId !== deps.principal.id ||
+        d.ownerUserId !== deps.ownerUserId
+    )
+  ) {
+    throw new Error('Memory ledger contains an incomplete or mismatched chain');
+  }
+  const verification = verifyChain(events);
+  if (!verification.ok) throw new Error(`Memory ledger is invalid at event ${verification.brokenAt}`);
+  return events;
 }
 
 /**
