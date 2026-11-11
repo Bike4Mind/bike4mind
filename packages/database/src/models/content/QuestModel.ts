@@ -1487,12 +1487,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return origin;
   }
 
-  // findSessionIdsByMediaKeys over live quests only, minus `excludeQuestId`: when one message is
-  // deleted its notebook is still live, so only another live quest's reference may retain a key.
-  async findLiveSessionIdsByMediaKeys(
-    keys: string[],
-    { excludeQuestId }: { excludeQuestId?: string } = {}
-  ): Promise<Map<string, string[]>> {
+  // findSessionIdsByMediaKeys over live quests only: when one message is deleted its notebook is
+  // still live, so only another live quest's reference may retain a key.
+  async findLiveSessionIdsByMediaKeys(keys: string[]): Promise<Map<string, string[]>> {
     const wanted = new Set(keys.filter(Boolean));
     const byKey = new Map<string, Set<string>>();
     if (wanted.size === 0) return new Map();
@@ -1501,7 +1498,6 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       $or: [{ images: { $in: list } }, { videos: { $in: list } }],
       deletedAt: null,
     };
-    if (excludeQuestId) filter._id = { $ne: convertId(excludeQuestId) };
     const docs = await this.model.find(filter, { sessionId: 1, images: 1, videos: 1 }).lean();
     for (const doc of docs) {
       for (const key of [...(doc.images ?? []), ...(doc.videos ?? [])]) {

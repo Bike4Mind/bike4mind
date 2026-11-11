@@ -75,6 +75,7 @@ vi.mock('@server/sessions/purgeDeletedMessageMedia', () => ({
 }));
 
 import handler from '@pages/api/v1/sessions/[id]/messages/[messageId]';
+import spaHandler from '@pages/api/sessions/[id]/chat/[messageId]';
 
 // The URL id is matched case-insensitively upstream; the stored message carries the canonical one.
 function fireDelete() {
@@ -170,6 +171,17 @@ describe('DELETE /api/v1/sessions/[id]/messages/[messageId]', () => {
     expect(mockDeleteSessionMessage.mock.invocationCallOrder[0]).toBeLessThan(
       mockPurgeMedia.mock.invocationCallOrder[0]
     );
+  });
+
+  it("purges media on the SPA's message delete too, which is served by this handler", async () => {
+    const deleted = { id: 'quest-1', sessionId: 'sess-1', images: ['a.png'], videos: [] };
+    mockDeleteSessionMessage.mockResolvedValue(deleted);
+    const { req, res, logger } = fireDelete();
+
+    await spaHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPurgeMedia).toHaveBeenCalledWith(deleted, { logger });
   });
 
   it('does not purge media when the take-down fails before the delete', async () => {
