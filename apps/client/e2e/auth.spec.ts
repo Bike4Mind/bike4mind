@@ -305,11 +305,9 @@ test.describe('Authentication', () => {
     // Logout revoked this seeded session, so re-login for a fresh one before re-seeding -
     // otherwise /api/identify rejects the dead session's token with 401.
     const fresh = await apiLoginViaOtc(request, user.email);
+    // seedAuthOnPage loads '/', which fetches /api/identify. Read the body before any further
+    // navigation: a new document discards the old one's response bodies.
     await seedAuthOnPage(page, { accessToken: fresh.accessToken, refreshToken: fresh.refreshToken });
-    await basePage.dismissModals();
-
-    await page.goto('/');
-    await page.waitForLoadState('load');
 
     // The current user comes from the server, not a cache left over from before logout.
     const response = await identifyPromise;
