@@ -8,6 +8,9 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 
 import { filesArchiveStorage } from './legacyQuestPlanArchiveStorage';
 
+// One character that is two bytes in UTF-8, so a length in characters would be wrong.
+const twoByteChar = `h${String.fromCodePoint(0xe9)}llo`;
+
 describe('filesArchiveStorage', () => {
   beforeEach(() => {
     h.upload.mockReset().mockResolvedValue('stored/key');
@@ -15,8 +18,8 @@ describe('filesArchiveStorage', () => {
   });
 
   it('uploads content-first with a markdown type and the byte length by default', async () => {
-    await expect(filesArchiveStorage().upload('a/b.md', 'héllo')).resolves.toBe('stored/key');
-    expect(h.upload).toHaveBeenCalledWith('héllo', 'a/b.md', { ContentType: 'text/markdown', ContentLength: 6 });
+    await expect(filesArchiveStorage().upload('a/b.md', twoByteChar)).resolves.toBe('stored/key');
+    expect(h.upload).toHaveBeenCalledWith(twoByteChar, 'a/b.md', { ContentType: 'text/markdown', ContentLength: 6 });
   });
 
   it('keeps an explicit content type and length', async () => {
