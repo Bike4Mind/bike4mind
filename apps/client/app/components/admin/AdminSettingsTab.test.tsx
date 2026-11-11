@@ -235,6 +235,11 @@ describe('AdminSettingsTab model settings', () => {
     }
   });
 
+  it('shares no key with a setting home, so no setting gets two editors', () => {
+    const shared = moved.filter(key => HOME_BY_KEY.has(key));
+    expect(shared).toEqual([]);
+  });
+
   it.each([
     ['AI', aiTab],
     ['SecOps', findTab(settingsMap.freeTierModelGateEnabled.category)],
