@@ -59,10 +59,7 @@ function Group({
   );
 }
 
-/**
- * GET /api/settings/fetch returns the model keys only to a settings:manage holder; anyone else would see the compiled
- * defaults here as if they were the stored values, so the fields are not drawn for them.
- */
+/** GET /api/settings/fetch omits the model keys for anyone without settings:manage, so the fields would show defaults. */
 export function ModelSettingsSection() {
   const missing = useMissingAdminPermission('settings:manage');
   if (missing) return <MissingPermissionState requirement="settings:manage" />;

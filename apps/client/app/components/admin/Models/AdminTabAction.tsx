@@ -12,7 +12,8 @@ export function AdminTabAction({ tab, children }: { tab: AdminTab; children: (di
   if (canOpenAdminTab(currentUser, tab)) return children(false);
   return (
     <Tooltip title={TAB_NOT_OPEN_MESSAGE}>
-      <span tabIndex={0} data-testid="models-tab-blocked-action">
+      {/* In a table row, a click on the disabled control must not open the row. */}
+      <span tabIndex={0} onClick={event => event.stopPropagation()} data-testid="models-tab-blocked-action">
         {children(true)}
       </span>
     </Tooltip>

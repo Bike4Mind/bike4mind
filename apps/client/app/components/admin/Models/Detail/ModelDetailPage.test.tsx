@@ -5,7 +5,12 @@ import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { apiFailure, listResponse, modelRow, renderModelsRoute } from '../modelsTestUtils';
 import { isModelDetailTab, type ModelDetailTab } from '../modelDetailSearch';
 import { useModelsNavigation } from '../modelsNavigation';
-import { ADMIN_MODEL_LOGS_TAB_SLUG, ADMIN_MODEL_METRICS_TAB_SLUG } from '../../adminTabParams';
+import {
+  ADMIN_MODEL_LOGS_TAB_SLUG,
+  ADMIN_MODEL_METRICS_TAB_SLUG,
+  ADMIN_SETTINGS_SEARCH_PARAM,
+  ADMIN_SETTINGS_TAB_SLUG,
+} from '../../adminTabParams';
 import { MODEL_LOGS_MODEL_PARAM } from '../../modelLogsTabSearch';
 import { MODEL_METRICS_SEARCH_KEYS } from '../../ModelMetrics/modelMetricsSearch';
 
@@ -418,11 +423,23 @@ describe('links from a model page into full-admin tabs', () => {
   };
 
   it('keeps Open key settings, Usage and Logs working for a full administrator', async () => {
-    const fix = await open();
+    serve([keyRow]);
+    const { router } = await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+    const goBack = () => router.navigate({ to: '/admin/models/$', params: { _splat: BEDROCK_ID } });
 
-    expect(fix).toBeEnabled();
-    expect(screen.getByTestId('model-detail-usage-link')).toBeEnabled();
-    expect(screen.getByTestId('model-detail-logs-link')).toBeEnabled();
+    fireEvent.click(await screen.findByTestId('model-detail-fix-btn'));
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        tab: ADMIN_SETTINGS_TAB_SLUG,
+        [ADMIN_SETTINGS_SEARCH_PARAM]: keyRow.backend,
+      })
+    );
+    await goBack();
+    fireEvent.click(await screen.findByTestId('model-detail-usage-link'));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: ADMIN_MODEL_METRICS_TAB_SLUG }));
+    await goBack();
+    fireEvent.click(await screen.findByTestId('model-detail-logs-link'));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: ADMIN_MODEL_LOGS_TAB_SLUG }));
   });
 
   it('disables them, with the reason, for a delegate whose permissions do not open those tabs', async () => {

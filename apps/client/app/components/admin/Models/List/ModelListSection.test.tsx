@@ -366,6 +366,25 @@ describe('ModelListSection single-model access', () => {
     expect(screen.queryByTestId('model-access-dialog')).not.toBeInTheDocument();
   });
 
+  it('keeps a blocked Open key settings action in a row from opening the model', async () => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read'] };
+    const keyRow = modelRow({
+      status: 'hidden',
+      reasons: [{ code: 'no-credential', message: 'No API key', fixAction: 'open-key-settings' }],
+    });
+    serveList(() => listResponse([keyRow]));
+    const { router } = await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    const fix = within(await screen.findByTestId('models-row-example-text-1')).getByTestId('models-row-fix-btn');
+    expect(fix).toBeDisabled();
+    fireEvent.click(screen.getByTestId('models-tab-blocked-action'));
+    await act(() => new Promise(resolve => setTimeout(resolve, 50)));
+
+    expect(router.state.location.pathname).toBe('/admin');
+    expect(router.state.location.search).not.toMatchObject({ tab: 'admin-settings' });
+    expect(screen.queryByTestId('probe-detail')).not.toBeInTheDocument();
+  });
+
   it('starts a discovery run from the Run discovery fix action', async () => {
     const staleRow = modelRow({
       status: 'needs-review',
