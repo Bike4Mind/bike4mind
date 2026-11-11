@@ -23,7 +23,7 @@ The Models section is the model list. The section, view, search, filters, sort, 
 | All | Every model |
 | Listed | Models users can pick, including Limited ones |
 | Hidden | Models no user can pick, for a reason other than a pending review |
-| Retiring | Models deprecated, retired, or with a deprecation or retirement date within 90 days |
+| Retiring | Models deprecated, retired, or with a deprecation or retirement date that has passed or falls within 90 days |
 
 Each view shows its count. A model can be in more than one view, for example a hidden model that retires within 90 days is in both **Hidden** and **Retiring**, so the counts do not add up to **All**. The page opens on **Needs review** while it holds any model, and on **All** otherwise.
 
@@ -42,7 +42,7 @@ When nothing matches, the table says so and offers to clear the filters.
 | Model | Yes | Display name and model id, with a button to copy the id |
 | Type | Yes | Text, Image, Video, Music, Embedding, Speech to text, Text to speech, and others |
 | Status | Yes | The model's status and the reasons behind it, with a fix action when there is one |
-| Retires | Yes | The sooner of the model's deprecation and retirement dates, with the days left or how long ago it passed |
+| Retires | Yes | The sooner of the model's deprecation and retirement dates, with the days left or how long ago it passed, counted in UTC calendar days (**today** on the date itself). A dash when neither date is set |
 | Rank | Yes | Picker order, lower first. **Provisional** means no admin or catalog rank is set yet; **Unranked** means the picker does not offer it |
 | Price /1M in/out | No | Provider cost per 1M input and output tokens, or per image or minute for other units |
 | Access | No | Who can pick the model: **Everyone**, the entitlements and tag count that allow it, **Off**, or **Admins only** |
