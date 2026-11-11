@@ -534,6 +534,9 @@ export const SettingKeySchema = z.enum([
   'spendMonitorAccountSpikeRatio',
   'spendMonitorAccountSpikeFloorCredits',
   'spendMonitorAccountCeilingCredits',
+  'spendMonitorPaidAccountSpikeFloorCredits',
+  'spendMonitorPaidAccountCeilingCredits',
+  'spendMonitorPaidAccountMinAgeDays',
   'spendMonitorTrustedEmailDomains',
   'spendMonitorTrustedAccountIds',
   'spendMonitorTrustedAccountSpikeFloorCredits',
@@ -696,6 +699,7 @@ export const SettingKeySchema = z.enum([
 
   // HELP CENTER SETTINGS
   'EnableHelpChat',
+  'EnableCoreTutorials',
 
   // B4M PI SETTINGS
   'EnableBmPi',
@@ -2483,6 +2487,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableResearchEngineDefault', order: 111 },
       // Admin-only features
       { key: 'EnableHelpChat', order: 200 },
+      { key: 'EnableCoreTutorials', order: 205 },
       { key: 'EnableKnowledgeBaseSearch', order: 210 },
       { key: 'EnableMcpToolFiltering', order: 220 },
       { key: 'McpToolFilteringMaxTools', order: 221 },
@@ -2553,6 +2558,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorAccountSpikeRatio', order: 19.47 },
       { key: 'spendMonitorAccountSpikeFloorCredits', order: 19.48 },
       { key: 'spendMonitorAccountCeilingCredits', order: 19.49 },
+      { key: 'spendMonitorPaidAccountSpikeFloorCredits', order: 19.4901 },
+      { key: 'spendMonitorPaidAccountCeilingCredits', order: 19.4902 },
+      { key: 'spendMonitorPaidAccountMinAgeDays', order: 19.4903 },
       { key: 'spendMonitorTrustedEmailDomains', order: 19.491 },
       { key: 'spendMonitorTrustedAccountIds', order: 19.492 },
       { key: 'spendMonitorTrustedAccountSpikeFloorCredits', order: 19.493 },
@@ -4011,7 +4019,7 @@ export const settingsMap = {
     min: 1,
     int: true,
     description:
-      'Score at which an actor is reported. Each refused fetch scores 10, each failed webhook signature 5 and each invalid-id lookup 2. A 404, or a 401 or 403 from an API handler, scores 1, but only from an IP and account pair that also failed on 10 or more distinct paths in the window. Webhook failures carry no account, so 5 from one Stripe IP (for example after a signing-secret rotation) is enough at the default threshold.',
+      'Score at which an actor is reported, and at which each of its accounts, scored on its own, is recorded as an API probing detection. Each refused fetch scores 10, each failed webhook signature or refused ingest token 5 and each invalid-id lookup 2. Each distinct admin route answered 401 or 403 scores 3, once there are 5 or more. A 404, or a 401 or 403 from an API handler, scores 1, but only from an IP and account pair that also failed on 10 or more distinct paths in the window. Webhook failures carry no account, so 5 from one Stripe IP (for example after a signing-secret rotation) is enough at the default threshold, as are 5 calls with a stale ingest token after one is rotated.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.PROBE_DETECTION.id,
     order: 2,
@@ -5509,6 +5517,39 @@ export const settingsMap = {
     min: 1,
     description:
       'Credits per 15-minute window. Any single account spending this much in the window raises an alert regardless of its baseline. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorPaidAccountSpikeFloorCredits: makeNumberSetting({
+    key: 'spendMonitorPaidAccountSpikeFloorCredits',
+    name: 'Spend Monitor: Paid Account Spike Floor',
+    defaultValue: 20_000,
+    int: true,
+    min: 1,
+    description:
+      'Credits per 15-minute window. An established account with paid standing and an acceptable risk profile needs at least this much spend to qualify for a spike warning. Paid usage remains included in platform monitoring. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorPaidAccountCeilingCredits: makeNumberSetting({
+    key: 'spendMonitorPaidAccountCeilingCredits',
+    name: 'Spend Monitor: Paid Account Ceiling',
+    defaultValue: 40_000,
+    int: true,
+    min: 1,
+    description:
+      'Credits per 15-minute window. An established account with paid standing and an acceptable risk profile raises a critical alert at this spend regardless of its baseline. API keys and agents follow their payer. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorPaidAccountMinAgeDays: makeNumberSetting({
+    key: 'spendMonitorPaidAccountMinAgeDays',
+    name: 'Spend Monitor: Paid Account Minimum Age',
+    defaultValue: 7,
+    int: true,
+    min: 0,
+    description:
+      'Days. Minimum account age for automatic paid-account alert limits, alongside verified email, paid standing (active plan or unreversed credit purchase), and risk-profile checks. Organization payers and their responsible owners must both meet the age requirement. Independent young-account monitoring and spend caps are unchanged. Minimum 0.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
@@ -7544,6 +7585,16 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 200,
+  }),
+  EnableCoreTutorials: makeBooleanSetting({
+    key: 'EnableCoreTutorials',
+    name: 'Enable Core Tutorials',
+    defaultValue: false,
+    description: 'Serve the guided tutorials that ship with the app. Premium tutorials have their own switches.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 205,
+    userReadable: true,
   }),
   // B4M Pi (Project Intelligence) Settings
   EnableBmPi: makeBooleanSetting({

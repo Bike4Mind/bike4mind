@@ -40,7 +40,7 @@ function mockRes(): Res {
 
 async function post(body: unknown, token = INGEST_TOKEN): Promise<Res> {
   const res = mockRes();
-  const req = { headers: { 'x-rate-limit-ingest-token': token }, body };
+  const req = { headers: { 'x-rate-limit-ingest-token': token }, body, logger: { warn: vi.fn() } };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
   return res;
 }

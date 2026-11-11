@@ -306,3 +306,44 @@ describe('data holder registry', () => {
     expect(matches.trim()).not.toBe('');
   });
 });
+
+const SECONDS_PER_DAY = 24 * 60 * 60;
+
+function ttlIndexesOf(modelName: string): { field: string; days: number }[] {
+  return mongoose
+    .model(modelName)
+    .schema.indexes()
+    .filter(([, options]) => typeof options?.expireAfterSeconds === 'number')
+    .map(([fields, options]) => ({
+      field: Object.keys(fields).join(','),
+      days: Number(options.expireAfterSeconds) / SECONDS_PER_DAY,
+    }));
+}
+
+const retainedReferences = classifiedModels.flatMap(name =>
+  referencesOf(DATA_HOLDER_REGISTRY[name]).flatMap(reference =>
+    reference.action === 'retain' ? [{ modelName: name, reference }] : []
+  )
+);
+
+describe('retention periods', () => {
+  it.each(
+    retainedReferences.flatMap(({ modelName, reference }) =>
+      reference.retention.expiresBy === 'ttlIndex'
+        ? [[modelName, reference.path, reference.retention.field, reference.retention.days] as const]
+        : []
+    )
+  )('%s: retained %s expires through a TTL index on %s after %d days', (modelName, _path, field, days) => {
+    expect(ttlIndexesOf(modelName)).toContainEqual({ field, days });
+  });
+
+  // A model with a TTL index deletes its records on that timer whatever the registry says, so a
+  // policy or condition period would overstate how long the record is kept.
+  it.each(
+    retainedReferences.flatMap(({ modelName, reference }) =>
+      reference.retention.expiresBy === 'ttlIndex' ? [] : [[modelName, reference.path] as const]
+    )
+  )('%s: retained %s has no TTL index the registry does not declare', modelName => {
+    expect(ttlIndexesOf(modelName)).toEqual([]);
+  });
+});

@@ -19,7 +19,7 @@ import { SHADOW_DETECTION_VERDICTS, SHADOW_DETECTORS } from './shadowDetection';
  */
 
 /** Bump when the question, its choices or the summary's meaning changes; cached results key on it. */
-export const ABUSE_ASSESSMENT_POLICY_VERSION = 3;
+export const ABUSE_ASSESSMENT_POLICY_VERSION = 4;
 
 /** What the model may answer. */
 export const ABUSE_ASSESSMENT_JUDGMENTS = ['abuse', 'legitimate_automation', 'insufficient_evidence'] as const;

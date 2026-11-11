@@ -23,6 +23,7 @@ personal information or secrets in campaign URLs.
 | Resolved consent         | App cookie `b4m_consent`, republished on every load                                              | 90 days, cleared when consent resolves unset   | Let the server read the browser's decision     |
 | Purchase attribution     | Stripe subscription metadata `acq_first_*` / `acq_last_*` and MongoDB `Subscription.acquisition` | No automatic expiry configured by this feature | Record the consenting buyer's checkout touches |
 | Purchase visit           | Random server-minted 30-minute visit id in MongoDB `PaymentAttempt.visitId` (not sent to Stripe) | 90 days, the payment attempt's TTL             | Name the visit a purchase was started in       |
+| OAuth client credit      | MongoDB `User.acquisition.oauthTouch`, written by the server                                     | The account's lifetime                         | Credit an account to the OAuth client it was created to sign in to |
 
 The app's three campaign cookies and `b4m_consent` use `path=/` and
 `SameSite=Lax`. They are JavaScript-readable and scoped to the app host. Lax,
@@ -132,6 +133,16 @@ Account creation emits a `signup` event to each Overwatch product named by the
 consenting visitor's campaign touches, for products this deployment holds an
 ingest key for. The host product is excluded from `signup`, because it already
 receives `signup_completed` for every new account from the signup funnel.
+
+An OAuth client can be registered with an Overwatch product. When an account is
+created and its first authorization code goes to such a client within 30 minutes,
+the server that issued the code stores `User.acquisition.oauthTouch` (`source`: the
+client's product, `medium`: `oauth`, `content`: the `client_id`) and emits that
+product the same `signup`, marked `touch: 'oauth'`. It is written once per account,
+only with the same consent the campaign touches need, and never for a synthetic
+account. The browser does not supply it: the product comes from the client's
+registration. A product that a campaign touch already names keeps that touch, and
+is credited once.
 
 A later payment by that account emits a `purchase` event to the host product and
 to the same products:
@@ -443,6 +454,12 @@ Every authenticated request to a `baseApi` route records which client the accoun
 | -------------- | --------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------- |
 | Client seen    | `clientUsage.<web, desktop, cli or api>.firstSeenAt`, `lastSeenAt` | Account lifetime; deleted with the account | Usage statistics, hiding the desktop app prompt |
 | Client version | `clientUsage.<desktop or cli>.version`, at most 32 characters   | Account lifetime; deleted with the account | Usage statistics                                |
+
+## Manual campaign watches
+
+Admins can save a fixed group of accounts for manual follow-up independently of the rolling AI advisory. A watch contains its name, member user ids, an optional source detection id, owner id, status, revision and lifecycle timestamps. It also stores a hash of the originally selected ids to avoid duplicate open watches. It does not copy account names, emails, IPs, fingerprints or request histories. Account details are read from current user records when a watch is opened.
+
+Watch records have no automatic expiry; closing a watch retains it in the Closed list. Account purge removes that account's membership and clears its ownership without deleting a watch shared with other accounts. Lifecycle writes require an audit reason and use the admin audit log's retention policy. Watches enable no automated alerts or enforcement.
 
 ## Usage pattern signals
 

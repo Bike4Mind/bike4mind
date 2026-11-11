@@ -1309,7 +1309,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
         const bounds: KbPassageBounds = { rawMaxResults: params.max_results, defaultResults: budgets.kbDefaultResults };
         const maxResults = clampMaxResults(params.max_results, budgets.kbDefaultResults);
 
-        context.logger.log('📚 Knowledge Base Search: userId:', context.userId, 'query:', query, 'tags:', tags);
+        context.logger.log('Knowledge Base Search', { userId: context.userId, queryLength: query?.length ?? 0, tags });
 
         if (!context.db.fabfiles) {
           context.logger.error('❌ Knowledge Base Search: fabfiles repository not available');

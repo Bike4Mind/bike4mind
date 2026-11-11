@@ -46,5 +46,6 @@ describe('throttleSourceForSignal', () => {
     expect(throttleSourceForSignal('signup_token_missing')).toBe('signup_timing');
     expect(throttleSourceForSignal('signup_token_invalid')).toBe('signup_timing');
     expect(throttleSourceForSignal('signup_token_expired')).toBe('signup_timing');
+    expect(throttleSourceForSignal('signup_token_reused')).toBe('signup_timing');
   });
 });

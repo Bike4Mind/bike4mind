@@ -1,10 +1,9 @@
 import { Request } from 'express';
 import { z } from 'zod';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { deletePublishThumbnail, enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
-import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { PublishedArtifact, PublishedArtifactReport, withTransaction } from '@bike4mind/database';
+import { ApiKeyScope, assertCanActOnAdminTarget, isFullAdmin, NotFoundError } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
+import { PublishedArtifact, PublishedArtifactReport, User, withTransaction } from '@bike4mind/database';
 import { invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
 import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
 
@@ -35,11 +34,22 @@ const auditDetails = (artifact: { publicId: string; tier: string; scopeId: strin
 /** Strip CR/LF from admin-supplied free text before it reaches the log line. */
 const oneLine = (s: string) => s.replace(/[\r\n]+/g, ' ').trim();
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+/** Read the owner inside the lifecycle transaction and bind the write to that checked owner. */
+const checkedOwnerFilter = async (actor: Request['user'], publicId: string) => {
+  if (isFullAdmin(actor)) return {};
+  const artifact = await PublishedArtifact.findOne({ publicId }).select('ownerId').lean();
+  if (!artifact) throw new NotFoundError('Artifact not found');
+  const owner = await User.findById(artifact.ownerId).select('isAdmin adminPermissions').lean();
+  if (!owner) throw new NotFoundError('Artifact owner not found');
+  assertCanActOnAdminTarget(actor, owner, 'moderate published pages owned by');
+  return { ownerId: artifact.ownerId };
+};
+
+const handler = adminApi({
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: 'users:moderate', DELETE: 'users:moderate' },
+})
   .post(async (req: Request, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
     const publicId = String(req.query.id);
     const parsed = TakedownSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -48,10 +58,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     const adminId = String(req.user.id);
     const artifact = await withTransaction(async () => {
+      const ownerFilter = await checkedOwnerFilter(req.user, publicId);
       // Atomic take-down: soft-delete + moderation flags in one write so two
       // concurrent admins can't race load->mutate->save (last-writer-wins).
       const takenDown = await PublishedArtifact.findOneAndUpdate(
-        { publicId, deletedAt: null },
+        { publicId, deletedAt: null, ...ownerFilter },
         {
           $set: {
             moderationStatus: 'taken_down',
@@ -101,9 +112,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.status(200).json({ ok: true });
   })
   .delete(async (req: Request, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
     const publicId = String(req.query.id);
 
     // Restore only a previously taken-down page, atomically. Un-deleting clears
@@ -113,11 +121,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     let artifact;
     try {
       artifact = await withTransaction(async () => {
+        const ownerFilter = await checkedOwnerFilter(req.user, publicId);
         // reportCount is intentionally NOT reset - it's an audit trail. A restored
         // page therefore re-appears (briefly) near the top of the `status=reported`
         // sort until its reports resolve organically; preferred over erasing history.
         const restored = await PublishedArtifact.findOneAndUpdate(
-          { publicId, moderationStatus: 'taken_down' },
+          { publicId, moderationStatus: 'taken_down', ...ownerFilter },
           { $set: { moderationStatus: 'active', takedownReason: null, deletedAt: null, deletedBy: null } },
           { new: true }
         );

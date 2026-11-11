@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { dlqReplayLogRepository } from '@bike4mind/database';
+import { dlqReplayLogRepository, userRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 
@@ -53,11 +53,18 @@ const handler = adminApi({
     endDate: endDate ? new Date(endDate) : undefined,
     search,
     limit,
+    includeBody: false,
   });
 
   Logger.info(`[DLQ History] Returned ${history.length} entries`, { adminUserId, queue });
 
-  return res.json({ history });
+  // replayedBy stores the admin's user id; resolve it to something a person can read.
+  const admins = await userRepository.findByIds([...new Set(history.map(entry => entry.replayedBy))]);
+  const nameById = new Map(admins.map(user => [String(user.id), user.email ?? user.username]));
+
+  return res.json({
+    history: history.map(entry => ({ ...entry, replayedByName: nameById.get(entry.replayedBy) ?? entry.replayedBy })),
+  });
 });
 
 export const config = {

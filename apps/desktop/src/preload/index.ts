@@ -137,6 +137,7 @@ const api: DesktopApi = {
   account: {
     getCredits: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetCredits),
     getProfile: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetProfile),
+    sendFeedback: (content: string) => ipcRenderer.invoke(IPC_CHANNELS.accountSendFeedback, content),
   },
   usage: {
     getHistory: (window: UsageWindowId, force?: boolean) =>
@@ -484,6 +485,7 @@ const api: DesktopApi = {
     setWatchFolder: (clear: boolean) => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSetWatchFolder, clear),
     setWebSettings: patch => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSetWebSettings, patch),
     syncWeb: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSyncWeb),
+    dismissHint: id => ipcRenderer.invoke(IPC_CHANNELS.claudeImportDismissHint, id),
     remove: kind => ipcRenderer.invoke(IPC_CHANNELS.claudeImportRemove, kind),
     onStateChanged: listener => {
       const handler = (_event: unknown, state: ClaudeImportState) => listener(state);

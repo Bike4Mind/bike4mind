@@ -43,7 +43,7 @@ import {
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
-import { NotFoundError } from '@bike4mind/utils';
+import { emailTokenStoredValues, NotFoundError } from '@bike4mind/utils';
 import { decryptAtRest, encryptAtRest, isEncrypted } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
@@ -536,12 +536,45 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }
   }
 
-  async findByEmailVerificationToken(token: string) {
-    return this.model.findOne({ emailVerificationToken: token });
+  /** Rotate only the pending change that was read, preserving its original expiry. */
+  async rotatePendingEmailToken(
+    user: Pick<
+      IUserDocument,
+      'id' | 'pendingEmail' | 'pendingEmailToken' | 'pendingEmailSentAt' | 'pendingEmailExpires'
+    >,
+    tokenHash: string,
+    expiresAt: Date,
+    now: Date
+  ): Promise<boolean> {
+    if (expiresAt <= now) return false;
+    const query = this.model.updateOne(
+      {
+        _id: user.id,
+        pendingEmail: user.pendingEmail,
+        pendingEmailToken: user.pendingEmailToken,
+        pendingEmailSentAt: user.pendingEmailSentAt ?? null,
+        pendingEmailExpires: user.pendingEmailExpires ?? null,
+        pendingEmailUsed: { $ne: true },
+      },
+      { $set: { pendingEmailToken: tokenHash, pendingEmailSentAt: now, pendingEmailExpires: expiresAt } }
+    );
+    if (this._txn) query.session(this._txn);
+    const result = await query;
+    return result.modifiedCount === 1;
   }
 
+  /** Takes the raw token from the email link; the stored value is its hash. */
+  async findByEmailVerificationToken(token: string) {
+    const values = emailTokenStoredValues(token);
+    if (values.length === 0) return null;
+    return this.model.findOne({ emailVerificationToken: { $in: values } });
+  }
+
+  /** Takes the raw token from the email link; the stored value is its hash. */
   async findByPendingEmailToken(token: string) {
-    return this.model.findOne({ pendingEmailToken: token });
+    const values = emailTokenStoredValues(token);
+    if (values.length === 0) return null;
+    return this.model.findOne({ pendingEmailToken: { $in: values } });
   }
 
   async findByIdWithPassword(id: string): Promise<IUserDocument | null> {
@@ -1420,6 +1453,8 @@ const UserAcquisitionSchema = new Schema(
     lastTouch: { type: AcquisitionTouchSchema, required: false },
     // A verified hop the signup followed - see IUserAcquisition.verifiedTouch.
     verifiedTouch: { type: VerifiedTouchSchema, required: false },
+    // The OAuth client the account was created to sign in to - see IUserAcquisition.oauthTouch.
+    oauthTouch: { type: AcquisitionTouchSchema, required: false },
     signupMethod: { type: String, required: true },
     capturedAt: { type: Date, required: true },
   },

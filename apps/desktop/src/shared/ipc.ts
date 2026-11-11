@@ -4,6 +4,7 @@ import type { LoopResult, LoopState } from './loop';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent } from './attention';
 import type { AccountCredits, AccountProfile } from './account';
+import type { FeedbackSubmitResult } from './feedback';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
   ChromeHostsResult,
@@ -12,7 +13,13 @@ import type {
   CookieImportResult,
   CookieImportState,
 } from './browserCookies';
-import type { ClaudeImportKind, ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
+import type {
+  ClaudeImportKind,
+  ClaudeImportResult,
+  ClaudeImportState,
+  ClaudeRemoveResult,
+  SyncHintId,
+} from './claudeImport';
 import type { CapabilityLedgerState } from './capabilities';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
@@ -159,6 +166,7 @@ export const IPC_CHANNELS = {
   authStateChanged: 'auth:state-changed',
   accountGetCredits: 'account:get-credits',
   accountGetProfile: 'account:get-profile',
+  accountSendFeedback: 'account:send-feedback',
   usageGetHistory: 'usage:get-history',
   fleetGetState: 'fleet:get-state',
   fleetRefresh: 'fleet:refresh',
@@ -345,6 +353,7 @@ export const IPC_CHANNELS = {
   claudeImportRemove: 'claude:remove-imported',
   claudeImportSetWebSettings: 'claude:set-web-import',
   claudeImportSyncWeb: 'claude:sync-web',
+  claudeImportDismissHint: 'claude:dismiss-hint',
   /** main -> renderer push of the import state. */
   claudeImportStateChanged: 'claude:import-state-changed',
   /** main -> renderer push, batched: imported sessions were added or changed, so re-list. */
@@ -753,6 +762,7 @@ export interface DesktopApi {
      * round-trips taken at two different instants.
      */
     getProfile(): Promise<AccountProfile>;
+    sendFeedback(content: string): Promise<FeedbackSubmitResult>;
   };
   usage: {
     /**
@@ -1271,6 +1281,8 @@ export interface DesktopApi {
     setWatchFolder(clear: boolean): Promise<ClaudeImportState>;
     setWebSettings(patch: { enabled?: boolean }): Promise<ClaudeImportState>;
     syncWeb(): Promise<ClaudeImportState>;
+    /** Hides a sidebar sync hint for the signed-in account, for good. */
+    dismissHint(id: SyncHintId): Promise<ClaudeImportState>;
     remove(kind: ClaudeImportKind): Promise<ClaudeRemoveResult>;
     onStateChanged(listener: (state: ClaudeImportState) => void): () => void;
     onSessionsChanged(listener: () => void): () => void;

@@ -20,8 +20,16 @@ type ActionRequirement = AdminPermissionRequirement | AllOfAdminPermissions;
  */
 export function useMissingAdminPermission(requirement: ActionRequirement): string | null {
   const { currentUser } = useUser();
+  return missingAdminPermissionFor(currentUser, requirement);
+}
+
+/** useMissingAdminPermission for a given user, where a hook cannot be called (inside a list). */
+export function missingAdminPermissionFor(
+  user: Parameters<typeof meetsAdminPermissionRequirement>[0],
+  requirement: ActionRequirement
+): string | null {
   const all = typeof requirement === 'object' && 'allOf' in requirement ? requirement.allOf : [requirement];
-  const missing = all.filter(each => !meetsAdminPermissionRequirement(currentUser, each));
+  const missing = all.filter(each => !meetsAdminPermissionRequirement(user, each));
   if (missing.length === 0) return null;
   return missing.map(each => missingAdminPermissionMessage(each)).join('; ');
 }
@@ -68,17 +76,19 @@ export function AdminPermissionGate({
  */
 export function AdminPermissionAction({
   requirement,
+  blockedReason,
   children,
 }: {
   requirement: ActionRequirement;
+  blockedReason?: string | null;
   children: (disabled: boolean) => ReactElement;
 }) {
-  const missing = useMissingAdminPermission(requirement);
+  const missing = useMissingAdminPermission(requirement) ?? blockedReason;
   if (!missing) return children(false);
   return (
     <Tooltip title={missing}>
       {/* A disabled button fires no pointer events, so the tooltip needs a focusable wrapper. */}
-      <span tabIndex={0} data-testid="admin-missing-permission-action">
+      <span tabIndex={0} data-testid="admin-missing-permission-action" aria-label={missing}>
         {children(true)}
       </span>
     </Tooltip>

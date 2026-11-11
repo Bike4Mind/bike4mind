@@ -12,10 +12,11 @@ interface IntegrationCardProps {
   isUpdatingOverride: boolean;
 }
 
-const STATUS_CONFIG: Record<string, { color: 'success' | 'warning' | 'danger'; label: string }> = {
+const STATUS_CONFIG: Record<string, { color: 'success' | 'warning' | 'danger' | 'neutral'; label: string }> = {
   healthy: { color: 'success', label: 'Healthy' },
   degraded: { color: 'warning', label: 'Degraded' },
   unhealthy: { color: 'danger', label: 'Down' },
+  no_data: { color: 'neutral', label: 'No data' },
 };
 
 const STATUS_FALLBACK = { color: 'danger' as const, label: 'Unknown' };
@@ -36,6 +37,7 @@ export const IntegrationCard: React.FC<IntegrationCardProps> = ({
   isUpdatingOverride,
 }) => {
   const { color, label } = STATUS_CONFIG[entry.status] ?? STATUS_FALLBACK;
+  const neverChecked = !entry.lastCheckedAt;
   const timeSinceCheck = entry.lastCheckedAt ? formatTimeSince(new Date(entry.lastCheckedAt)) : 'never';
 
   return (
@@ -73,12 +75,16 @@ export const IntegrationCard: React.FC<IntegrationCardProps> = ({
           </Stack>
 
           <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
-            <Typography level="body-xs" color="neutral">
-              {entry.latencyMs}ms
-            </Typography>
-            <Typography level="body-xs" color="neutral">
-              {(entry.successRate * 100).toFixed(0)}% success
-            </Typography>
+            {!neverChecked && (
+              <>
+                <Typography level="body-xs" color="neutral">
+                  {entry.latencyMs}ms
+                </Typography>
+                <Typography level="body-xs" color="neutral">
+                  {(entry.successRate * 100).toFixed(0)}% success
+                </Typography>
+              </>
+            )}
             {entry.consecutiveFailures > 0 && (
               <Chip size="sm" color="danger" variant="soft">
                 {entry.consecutiveFailures} consecutive failures
@@ -94,7 +100,7 @@ export const IntegrationCard: React.FC<IntegrationCardProps> = ({
                 Throttled
               </Chip>
             )}
-            <Typography level="body-xs" color="neutral">
+            <Typography level="body-xs" color="neutral" data-testid={`integration-card-${entry.name}-checked`}>
               checked {timeSinceCheck}
             </Typography>
           </Stack>

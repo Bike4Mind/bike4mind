@@ -76,6 +76,8 @@ export interface ModelFit {
   basis: 'arch' | 'size';
   /** Tokens of context the estimate assumes: the num_ctx local chat sends for this model. */
   context: number;
+  /** A GPU limit the verdict does not count, flagged on the badge: Ollama in WSL holding the GPU to the VM's memory. */
+  warning?: string;
 }
 
 export interface MachineView {

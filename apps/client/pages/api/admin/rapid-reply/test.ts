@@ -339,8 +339,7 @@ const handler = adminApi({
       console.log('🧪 - Has reply:', !!completedQuest?.reply);
       console.log('🧪 - Reply length:', completedQuest?.reply?.length || 0);
       console.log('🧪 - Replies array length:', completedQuest?.replies?.length || 0);
-      console.log('🧪 - First reply:', completedQuest?.replies?.[0]?.substring(0, 100) || 'none');
-      console.log('🧪 - All replies:', completedQuest?.replies);
+      console.log('- First reply length:', completedQuest?.replies?.[0]?.length ?? 0);
       console.log('🧪 - Prompt meta:', JSON.stringify(completedQuest?.promptMeta, null, 2));
 
       // Check if there's any content in the quest at all

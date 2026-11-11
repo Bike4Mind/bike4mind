@@ -17,6 +17,8 @@ export const SHADOW_DETECTORS = [
   /** A new account that signed up from the same IP as a blocked account, close in time. */
   'signupIpLinkedToBlocked',
   'signupDomainHold',
+  /** An actor the API probe detector reported (apps/workers/src/cron/apiProbeDetector.ts). */
+  'apiProbe',
 ] as const;
 export type ShadowDetector = (typeof SHADOW_DETECTORS)[number];
 

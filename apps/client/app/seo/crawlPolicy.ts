@@ -50,7 +50,7 @@ export const CORE_DISALLOWED_PATHS: readonly string[] = [
   '/serwist/',
   // Account and session flows. `/verify-` covers both verify-email and verify-change;
   // `/admin` covers admin-emergency; `/agent` covers agents and agent-executions;
-  // `/quests` covers quests-v5. Matching is prefix-based, so one entry does for each.
+  // Matching is prefix-based, so one entry does for each.
   '/login',
   '/register',
   '/activate',
@@ -74,7 +74,6 @@ export const CORE_DISALLOWED_PATHS: readonly string[] = [
   '/organizations',
   '/profile',
   '/projects',
-  '/quests',
   '/skills',
   '/status',
   '/studio',

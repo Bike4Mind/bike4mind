@@ -143,9 +143,7 @@ const handler = baseApi({ auth: false })
         return res.status(409).json({ error: 'Pairing token already redeemed' });
       }
 
-      req.logger.info(
-        `[CC_BRIDGE] Redeemed token ${tokenPrefix} for user ${record.userId}, device ${device._id} ("${deviceLabel}")`
-      );
+      req.logger.info(`[CC_BRIDGE] Redeemed token ${tokenPrefix} for user ${record.userId}, device ${device._id}`);
 
       return res.status(201).json({
         deviceId: device._id,

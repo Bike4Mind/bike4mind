@@ -1,5 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useUser } from '@client/app/contexts/UserContext';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -78,6 +79,7 @@ const LIST_URL = '/api/admin/users/email-verification';
 
 describe('EmailVerificationTab', () => {
   beforeEach(() => {
+    useUser.setState({ currentUser: { id: 'admin-1', isAdmin: true } as never });
     vi.clearAllMocks();
     m.get.mockResolvedValue(listResponse());
     m.post.mockResolvedValue({ data: { success: true } });

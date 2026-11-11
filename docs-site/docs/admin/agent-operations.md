@@ -7,29 +7,30 @@ tags: [admin, agents, operations]
 
 # Agent Operations
 
-The Agent Operations tab (AgentOps) manages the automated system prompt generation pipeline for AI agents. Agents on the platform have rich personality metadata, and this system uses a "meta-prompt" to instruct an LLM to generate detailed system prompts from that metadata. The tab provides versioned meta-prompt management, LLM model selection, rate limiting, and database repair capabilities.
+The Agent Operations tab (AgentOps), listed as **Agents** in the AI section of the admin sidebar, manages the automated system prompt generation pipeline for AI agents. Agents on the platform have rich personality metadata, and this system uses a "meta-prompt" to instruct an LLM to generate detailed system prompts from that metadata. The tab provides versioned meta-prompt management, LLM model selection, rate limiting, and database repair capabilities.
 
 ## System Status Overview
 
-The status card at the top displays key operational metrics:
+The status strip under the page header displays key operational metrics:
 
 | Metric | Description |
 |--------|-------------|
-| Service Status | Enabled or Disabled -- controls whether system prompt generation is active |
-| Active Meta-prompt | The version number of the currently active meta-prompt template |
-| Total Generations | Cumulative count of system prompts generated |
-| Rate Limit | Minimum seconds between generations per agent |
-| LLM Model | The model used for generating system prompts |
+| Service | Enabled or Disabled -- controls whether system prompt generation is active |
+| Active meta-prompt | The version number of the currently active meta-prompt template |
+| Total generations | Cumulative count of system prompts generated |
+| Rate limit | Minimum seconds between generations per agent |
+| Model | The model used for generating system prompts |
 
-## Quick Actions
+## Page Actions
 
-Three action buttons are available:
+The page header has two actions next to the help button:
 
 | Action | Description |
 |--------|-------------|
-| Create Meta-prompt Version | Opens a modal to author a new version of the meta-prompt template |
-| Edit Settings | Opens a modal to configure the generation LLM model, rate limit, and enabled state |
-| Repair Database | Runs a database repair operation to fix inconsistencies in AgentOps settings |
+| Create version | Opens a dialog to author a new version of the meta-prompt template |
+| Repair database | Runs a database repair operation to fix inconsistencies in AgentOps settings |
+
+The generation model, rate limit and enabled state are edited in the [Generation Settings](#generation-settings) section further down the page.
 
 ## Meta-prompt Versions
 
@@ -39,19 +40,18 @@ The versions table tracks all meta-prompt versions:
 |--------|-------------|
 | Version | Version number (e.g., v1, v2, v3) |
 | Description | Brief description of the version's purpose or changes |
-| Status | "Active" badge for the currently active version, "Inactive" for others |
+| Status | "Active" for the currently active version, "Inactive" for others |
 | Created | Timestamp of when the version was created |
-| Actions | **Activate** button for inactive versions to make them the current version |
 
-Only one version can be active at a time. Activating a new version immediately changes which meta-prompt template is used for all subsequent agent system prompt generations.
+To make an inactive version the current one, open the **...** menu on its row and choose **Activate version**. Only one version can be active at a time. Activating a new version immediately changes which meta-prompt template is used for all subsequent agent system prompt generations.
 
 ### Creating a New Version
 
-The create version modal provides:
+The **Create version** dialog provides:
 
 - **Description** -- A text field for a brief description of this version
-- **Meta-prompt Content** -- A large textarea (monospace font) for the meta-prompt template
-- **Use Default Template** -- A button that populates the textarea with the built-in PromptCrafter template
+- **Meta-prompt content** -- A large textarea (monospace font) for the meta-prompt template
+- **Use default template** -- A button that populates the textarea with the built-in PromptCrafter template
 
 The default template instructs the LLM to:
 
@@ -61,21 +61,23 @@ The default template instructs the LLM to:
 4. Define interaction style and approach to problem-solving
 5. Include practical guidelines for distinctive behavior
 
-The meta-prompt content field is required; the create button is disabled until content is entered.
+The meta-prompt content field is required; the **Create version** button is disabled until content is entered.
 
-## Edit Settings
+## Generation Settings
 
-The settings modal allows configuration of:
+The **Generation settings** section at the bottom of the page holds these fields:
 
 | Setting | Description | Range |
 |---------|-------------|-------|
-| LLM Model for Generation | The AI model used to generate agent system prompts | Dropdown of supported models |
-| Rate Limit (seconds) | Minimum seconds between system prompt generations per agent | 0-3600 |
+| Model | The AI model used to generate agent system prompts | Dropdown of supported models |
+| Rate limit (seconds) | Minimum seconds between system prompt generations per agent | 1-3600 |
 | Enable system prompt generation | Master toggle for the generation service | On/Off |
+
+Changes are not saved as you type. A save bar appears at the bottom of the page with the number of unsaved changes, **Discard** and **Save**. If you leave the page with unsaved changes, you are asked to confirm before they are discarded.
 
 ### Available LLM Models
 
-For example, the dropdown may include:
+For example, the **Model** dropdown may include:
 
 | Model | Label |
 |-------|-------|
@@ -92,13 +94,13 @@ The dropdown lists the text models in the platform model catalog (the same list 
 
 ## Database Repair
 
-The **Repair Database** button triggers a server-side repair operation that checks for and fixes inconsistencies in the AgentOps settings data. This is useful if:
+The **Repair database** button triggers a server-side repair operation that checks for and fixes inconsistencies in the AgentOps settings data. This is useful if:
 
 - Meta-prompt versions are corrupted or missing
 - The active version pointer is invalid
 - Settings data has become inconsistent
 
-After repair, the page automatically reloads to display the corrected data. The repair result lists all repairs that were made.
+After repair, the page reloads its data to display the corrections. The repair result lists all repairs that were made.
 
 ## Best Practices
 

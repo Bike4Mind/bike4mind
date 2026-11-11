@@ -69,7 +69,7 @@ import { CacheExpiryNote } from './CacheExpiryNote';
 import { ContextRing } from './ContextRing';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { SESSION_PANEL_ID, SessionPanel } from './SessionPanel';
-import { panelFitsBesideThread, SESSION_PANEL_SPACE, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
+import { SESSION_PANEL_SPACE, sessionPanelLayout, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
 import { createPullRequestPrompt } from './changesBarModel';
 import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { openInSessionBrowser } from './prLinks';
@@ -145,6 +145,8 @@ import { prefersReducedMotion } from './orchestrator/motion';
 import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
+import { SidebarSyncHints } from './SyncHints';
+import type { ClaudeImportKind } from '@shared/claudeImport';
 
 /** How long the orchestrator's "Read the report" keeps the summary highlighted (ms). */
 const REPORT_HIGHLIGHT_MS = 2400;
@@ -269,10 +271,13 @@ export function ChatShell({
   auth,
   account,
   onOpenModelServers,
+  onOpenImportSettings,
 }: {
   auth?: AuthState | null;
   account?: AccountStrip;
   onOpenModelServers?: () => void;
+  /** Settings > Import, scrolled to one source; the sidebar's sync hints are shown only with it. */
+  onOpenImportSettings?: (focus: ClaudeImportKind) => void;
 }) {
   const {
     sessions,
@@ -914,16 +919,18 @@ export function ChatShell({
    * The session panel: a Code session with a folder after its first message. Until then the same
    * controls are centered in the empty transcript. A loop also makes the panel available in Chat.
    *
-   * Docked when it fits beside the reading column, and then its open flag is remembered; on a
-   * narrower pane it folds into the header button and opens as a popover, which is never left open
-   * across conversations or launches.
+   * Docked (`beside` or `push`, see sessionPanelLayout) while the region has room, and then its open
+   * flag is remembered; on a narrower region it folds into the header button and opens as an overlay,
+   * which is never left open across conversations, launches or a resize.
    */
   const panelProject =
     !opening && !initialCodeSetup && conversation.session?.mode === 'code' ? conversation.session.project : undefined;
   const panelAvailable = !!panelProject || (!opening && !!loop);
-  const panelDocked = threadRegionWidth === null || panelFitsBesideThread(threadRegionWidth);
+  const orchestratorShown = orchestrating && activeId !== null;
+  const panelLayout = sessionPanelLayout(threadRegionWidth, { centeredColumn: !orchestratorShown });
+  const panelDocked = panelLayout !== 'overlay';
   const panelShown = panelAvailable && (panelDocked ? panelPrefs.open : panelPopoverOpen);
-  const panelSpace = panelShown && panelDocked ? SESSION_PANEL_SPACE : 0;
+  const panelSpace = panelShown && panelLayout === 'push' ? SESSION_PANEL_SPACE : 0;
   const bindingErrorHidden =
     !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
   const { toggleOpen: togglePanelOpen } = panelPrefs;
@@ -1527,7 +1534,6 @@ export function ChatShell({
     </VideoJobsContext.Provider>
   );
 
-  const orchestratorShown = orchestrating && activeId !== null;
   const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
 
   return (
@@ -1592,6 +1598,13 @@ export function ChatShell({
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         onOpenModels={() => setScreen('models')}
+        syncHints={
+          onOpenImportSettings
+            ? (empty, fallback) => (
+                <SidebarSyncHints empty={empty} fallback={fallback} onOpenSettings={onOpenImportSettings} />
+              )
+            : undefined
+        }
         footer={account?.(
           <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
         )}
@@ -1809,7 +1822,7 @@ export function ChatShell({
                 // Keyed so an action error or an unfolded list does not follow the user to the next
                 // conversation.
                 key={`panel-${activeId ?? 'none'}`}
-                variant={panelDocked ? 'docked' : 'popover'}
+                variant={panelDocked ? 'docked' : 'overlay'}
                 collapsed={panelPrefs.collapsed}
                 onToggleSection={panelPrefs.toggleSection}
                 onDismiss={closePanelPopover}

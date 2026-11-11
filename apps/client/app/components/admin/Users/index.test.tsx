@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useUser } from '@client/app/contexts/UserContext';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAdminRouter')).fakeRouterModule);
@@ -84,6 +85,7 @@ const renderTab = (withPalette = false) => {
 };
 
 beforeEach(() => {
+  useUser.setState({ currentUser: { id: 'admin-1', isAdmin: true } as never });
   apiGet.mockReset();
   openProfile.mockReset();
   apiGet.mockImplementation(async (url: string) => ({ data: respond(url) }));

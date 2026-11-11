@@ -1,9 +1,9 @@
 import { z } from 'zod';
+import { assertCanActOnAdminTarget } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository, withTransaction } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
@@ -13,16 +13,12 @@ interface RequestQuery {
 
 const bodySchema = z.object({ lifted: z.boolean() });
 
-// Admin-only endpoint to exempt (or stop exempting) a young account from the new-account spend cap
+// Endpoint to exempt (or stop exempting) a young account from the new-account spend cap
 // (creditService/newAccountSpendCap.ts) before it ages out of it.
-const handler = baseApi({ auth: 'jwtOnly' })
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { userId } = req.query as RequestQuery;
 
       if (typeof userId !== 'string' || !userId) {
@@ -42,6 +38,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         if (!user) {
           throw new BadRequestError('User not found');
         }
+        assertCanActOnAdminTarget(req.user, user, 'change the new-account spend cap for');
 
         const before = user.newAccountSpendCapLifted === true;
         // Unchanged is a no-op: no write and no audit entry, like verify-email on an already-verified user.
