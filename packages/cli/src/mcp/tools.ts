@@ -25,6 +25,7 @@ import {
   type UploadUrlRequest,
   type UploadUrlResponse,
 } from '@bike4mind/common';
+import { resolveSupportedMimeType } from '@bike4mind/utils';
 import {
   apiErrorCode,
   apiErrorRetryAfterSeconds,
@@ -652,7 +653,10 @@ export async function uploadFile(
     bytes = Buffer.from(b64, 'base64');
   }
   if (!bytes.length) throw new Error('File bytes must be nonempty and valid base64');
-  const mimeType = args.contentType ?? (mime.lookup(fileName) || 'application/octet-stream');
+  // The presign route stores the type resolved this way, so the PUT must send the same one.
+  const claimed = args.contentType ?? (mime.lookup(fileName) || undefined);
+  const resolved = resolveSupportedMimeType(fileName, claimed);
+  const mimeType = resolved.supported ? resolved.mimeType : (claimed ?? 'application/octet-stream');
   if (args.projectId) {
     // A failed lookup must not block the upload; the project route still enforces the scope.
     const scopes = await client.getOwnKeyScopes().catch(() => undefined);
