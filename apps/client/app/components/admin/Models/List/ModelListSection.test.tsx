@@ -686,6 +686,62 @@ describe('ModelListSection bulk access', () => {
     expect(report).not.toHaveTextContent('may not have been undone');
   });
 
+  const stampMoved = (id: string): { data: ModelAccessBulkResult } => ({
+    data: {
+      batchId: `undo-${id}`,
+      results: [{ id, outcome: 'failed', reason: 'stamp-moved' }],
+      counts: { selected: 1, updated: 0, unchanged: 0, failed: 1 },
+      summary: 'Updated 0 of 1. 1 failed',
+      undoToken: null,
+      revision: 'r4',
+    },
+  });
+
+  it('calls a resend after an unconfirmed failure unconfirmed, not changed since the batch', async () => {
+    serveList(twoRows);
+    let firstTries = 0;
+    serveBulk(async token => {
+      if (token === 'undo-1') {
+        if ((firstTries += 1) === 1) throw apiFailure(503, { error: 'Access store unavailable' });
+        return stampMoved('example-text-1');
+      }
+      return undoneOne('example-text-2');
+    });
+    await applyThenRetry();
+
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await screen.findByTestId('undo-toast-error');
+    expect(screen.getByTestId('models-bulk-failed')).toHaveTextContent('may not have been undone');
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await waitFor(() => expect(undoTokensSent()).toEqual(['undo-1', 'undo-1', 'undo-2']));
+    const report = await screen.findByTestId('models-bulk-failed');
+    expect(report).toHaveTextContent('Undo: 1 model reverted, 1 unconfirmed.');
+    expect(screen.getByTestId('models-bulk-unconfirmed-item')).toHaveTextContent(
+      "example-text-1: may already be undone; check each model's page."
+    );
+    expect(report).not.toHaveTextContent('changed since the batch');
+    expect(report).not.toHaveTextContent('not reverted');
+  });
+
+  it('gives a model already sent and a write still unsent their own guidance', async () => {
+    serveList(twoRows);
+    serveBulk(async token => {
+      if (token === 'undo-1') return stampMoved('example-text-1');
+      throw apiFailure(422, { error: 'Access store unavailable' });
+    });
+    await applyThenRetry();
+
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await screen.findByTestId('undo-toast-error');
+    const report = screen.getByTestId('models-bulk-failed');
+    expect(report).toHaveTextContent('example-text-1: changed since the batch');
+    expect(within(report).getAllByText("Change these back from each model's page.")).toHaveLength(1);
+    expect(
+      within(report).getByText("Once it has closed, change these back from each model's page.")
+    ).toBeInTheDocument();
+    expect(report).toHaveTextContent('Undo again from the undo toast while it is open.');
+  });
+
   it('skips an expired undo, still sends the later one, and names the write that expired with its models', async () => {
     serveList(twoRows);
     serveBulk(async token => {

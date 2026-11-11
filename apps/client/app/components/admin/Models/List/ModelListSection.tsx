@@ -121,10 +121,11 @@ type FailedEntry = ReturnType<typeof failedResults>[number];
 /**
  * One bulk write and its retries: each unsent undo token with the reason its write was made under, a label naming the
  * write, and the models it updated; how many retries the batch has had, and the toast offering its undo. Shared, never
- * copied: an undo shifts each token off as it goes, so none is sent twice.
+ * copied: an undo shifts each token off as it goes, so none is sent twice. `uncertain`: a send of it failed in transit
+ * and may have committed.
  */
 type BulkBatch = {
-  undo: { token: string; reason: string; label: string; ids: string[] }[];
+  undo: { token: string; reason: string; label: string; ids: string[]; uncertain?: boolean }[];
   retries: number;
   toastId: number | null;
 };
@@ -147,6 +148,7 @@ type BulkOutcome =
       kind: 'not-reverted';
       summary: string;
       failed: FailedEntry[];
+      unconfirmed: FailedEntry[];
       leftovers: UndoLeftover[];
       resumable: boolean;
       batch: BulkBatch;
@@ -181,11 +183,13 @@ const leftoverSentence = ({ label, ids, expired, uncertain }: UndoLeftover, resu
 /** What an undo left behind, each model linked to its page: the ones it left as they are, then each unreverted write. */
 function UndoLeftovers({
   failed,
+  unconfirmed,
   leftovers,
   resumable,
   onOpen,
 }: {
   failed: FailedEntry[];
+  unconfirmed: FailedEntry[];
   leftovers: UndoLeftover[];
   resumable: boolean;
   onOpen: (id: string) => void;
@@ -209,6 +213,17 @@ function UndoLeftovers({
           {entry.reason ? UNDO_FAILURE_LABEL[entry.reason] : 'not reverted'}
         </Typography>
       ))}
+      {failed.length > 0 && <Typography level="body-xs">Change these back from each model&apos;s page.</Typography>}
+      {unconfirmed.map(entry => (
+        <Typography
+          key={entry.id}
+          level="body-xs"
+          sx={{ overflowWrap: 'anywhere' }}
+          data-testid="models-bulk-unconfirmed-item"
+        >
+          {modelLink(entry.id, 'models-bulk-unconfirmed-link')}: may already be undone; check each model&apos;s page.
+        </Typography>
+      ))}
       {leftovers.map(leftover => (
         <Typography
           key={leftover.label}
@@ -226,7 +241,7 @@ function UndoLeftovers({
         </Typography>
       ))}
       {canResume && <Typography level="body-xs">Undo again from the undo toast while it is open.</Typography>}
-      {(failed.length > 0 || leftovers.length > 0) && (
+      {leftovers.length > 0 && (
         <Typography level="body-xs">
           {canResume ? 'Once it has closed, change' : 'Change'} these back from each model&apos;s page.
         </Typography>
@@ -337,6 +352,8 @@ export function ModelListSection() {
    */
   const undoBatch = (batch: BulkBatch) => {
     const results: ModelAccessBulkResult[] = [];
+    const notReverted: FailedEntry[] = [];
+    const unconfirmed: FailedEntry[] = [];
     const expired: UndoLeftover[] = [];
     return async () => {
       setUndoingBatch(batch);
@@ -348,19 +365,26 @@ export function ModelListSection() {
       let failure: unknown = null;
       try {
         while (batch.undo.length > 0) {
-          const { token, reason, label, ids } = batch.undo[0];
+          const { token, reason, label, ids, uncertain } = batch.undo[0];
           try {
-            results.push(
-              await postModelAccessBulk<ModelAccessBulkResult>({ undoToken: token, reason: undoAdminReason(reason) })
-            );
+            const result = await postModelAccessBulk<ModelAccessBulkResult>({
+              undoToken: token,
+              reason: undoAdminReason(reason),
+            });
+            results.push(result);
+            // A resend after an unconfirmed failure: entries the first send moved read as stamp-moved on the resend.
+            for (const entry of failedResults(result)) {
+              (uncertain && entry.reason === 'stamp-moved' ? unconfirmed : notReverted).push(entry);
+            }
           } catch (error) {
             if (!isExpiredUndo(error)) throw error;
-            expired.push({ label, ids, expired: true, uncertain: false });
+            expired.push({ label, ids, expired: true, uncertain: uncertain === true });
           }
           batch.undo.shift();
         }
       } catch (error) {
         failure = error;
+        if (batch.undo.length > 0 && mayHaveCommitted(error)) batch.undo[0].uncertain = true;
       }
       await invalidate();
       setUndoingBatch(current => (current === batch ? null : current));
@@ -369,33 +393,32 @@ export function ModelListSection() {
       const leftovers = [
         ...expired,
         ...(failure !== null
-          ? batch.undo.map(({ label, ids }, index) => ({
+          ? batch.undo.map(({ label, ids, uncertain }) => ({
               label,
               ids,
               expired: false,
-              uncertain: index === 0 && mayHaveCommitted(failure),
+              uncertain: uncertain === true,
             }))
           : []),
       ];
       const reverted = results.reduce((sum, result) => sum + result.counts.updated, 0);
-      const notReverted = results.flatMap(failedResults);
       const nothingWent = failure !== null && results.length === 0 && expired.length === 0;
       const head = nothingWent
         ? asSentence(`Undo failed: ${getErrorMessage(failure)}`)
         : asSentence(
             `Undo: ${countOf(reverted, 'model')} reverted${
               notReverted.length > 0 ? `, ${notReverted.length.toLocaleString()} not reverted` : ''
-            }${failure !== null ? `; the rest failed: ${getErrorMessage(failure)}` : ''}`
+            }${unconfirmed.length > 0 ? `, ${unconfirmed.length.toLocaleString()} unconfirmed` : ''}${failure !== null ? `; the rest failed: ${getErrorMessage(failure)}` : ''}`
           );
       const summary = [head, ...leftovers.map(leftover => leftoverSentence(leftover, resumable))].join(' ');
 
       const current = outcomeRef.current;
-      const named = notReverted.length > 0 || leftovers.length > 0;
+      const named = notReverted.length > 0 || unconfirmed.length > 0 || leftovers.length > 0;
       let noticed = false;
       if (current === null || current.batch === batch) {
         setOutcome(
           failure !== null || named
-            ? { kind: 'not-reverted', summary, failed: notReverted, leftovers, resumable, batch }
+            ? { kind: 'not-reverted', summary, failed: notReverted, unconfirmed, leftovers, resumable, batch }
             : null
         );
       } else if (named) {
@@ -407,6 +430,7 @@ export function ModelListSection() {
             </Typography>
             <UndoLeftovers
               failed={notReverted}
+              unconfirmed={unconfirmed}
               leftovers={leftovers}
               resumable={resumable}
               onOpen={id => void openModel(id)}
@@ -725,6 +749,7 @@ export function ModelListSection() {
             ) : (
               <UndoLeftovers
                 failed={outcome.failed}
+                unconfirmed={outcome.unconfirmed}
                 leftovers={outcome.leftovers}
                 resumable={outcome.resumable}
                 onOpen={id => void openModel(id)}
