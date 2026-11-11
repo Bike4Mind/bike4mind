@@ -208,7 +208,7 @@ const FeedbackDetailDrawer = ({
           {record && !missing && (
             <FeedbackDetailBody
               record={record}
-              promptMetaLoading={recordQuery.isPlaceholderData}
+              promptMetaLoading={recordQuery.isPlaceholderData && Boolean(record.questId || record.sessionId)}
               onStatusChange={onStatusChange}
             />
           )}

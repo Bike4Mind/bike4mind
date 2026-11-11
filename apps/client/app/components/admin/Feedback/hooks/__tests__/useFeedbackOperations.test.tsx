@@ -130,5 +130,10 @@ describe('useFeedbackOperations handleStatusChange', () => {
       '"Short report" feedback from reporter updated to: In progress',
       expect.anything()
     );
+    expect(mocks.updateFeedbackOnServer).toHaveBeenCalledTimes(1);
+    const [id, payload] = mocks.updateFeedbackOnServer.mock.calls[0];
+    expect(id).toBe('fb-1');
+    expect(payload).toMatchObject({ status: FeedbackStatus.InProgress });
+    expect(payload).not.toHaveProperty('promptMeta');
   });
 });
