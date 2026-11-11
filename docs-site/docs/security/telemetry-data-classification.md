@@ -552,7 +552,7 @@ Each feedback report stores where it was written as `clientContext` on the repor
 | ----------- | ----------------------------------------------------------------- | ----------------------------- | ------------------------------------- |
 | Page        | `clientContext.path`, route only, first 200 characters            | Lives with the report; no TTL | Reproduce the report on the same page |
 | App version | `clientContext.appVersion`                                        | Lives with the report; no TTL | Tie the report to a release           |
-| Platform    | `clientContext.platform`: `web`, `desktop` or `ios`               | Lives with the report; no TTL | Triage by app surface                 |
+| Platform    | `clientContext.platform`: `web` (also accepts `desktop`, `ios`)   | Lives with the report; no TTL | Triage by app surface                 |
 | Window size | `clientContext.viewport`: width and height in pixels              | Lives with the report; no TTL | Reproduce layout issues               |
 | Model       | `clientContext.model`: the model selected in the client           | Lives with the report; no TTL | Reproduce model-specific issues       |
 | User agent  | `clientContext.userAgent`, read server-side, first 300 characters | Lives with the report; no TTL | Identify the browser and OS           |
