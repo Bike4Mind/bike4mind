@@ -335,7 +335,7 @@ async function walkLegacySources<C extends SourceCounts>(opts: {
       if (Date.now() > deadline) {
         stoppedEarly = true;
         const remaining = await db.collection(collection).countDocuments({ deletedAt: null, _id: { $gt: lastId } });
-        logger.warn(`Quest plan conversion ran out of time in ${collection}; ${remaining} sources left unvisited`);
+        logger.warn(`Legacy quest plan walk ran out of time in ${collection}; ${remaining} sources left unvisited`);
         return;
       }
     }

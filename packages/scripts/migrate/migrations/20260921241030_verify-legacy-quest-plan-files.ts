@@ -34,7 +34,9 @@ const migration: MigrationFile = {
     const { plans, graphs, stoppedEarly, covered } = await verifyLegacyQuestPlanCoverage({ logger: console, deadline });
     if (stoppedEarly) return { incomplete: true, reason: 'ran out of time before verifying every source' };
     console.info(
-      `Legacy quest plan coverage: plans=${plans.expected} planFiles=${plans.files} graphs=${graphs.expected} graphFiles=${graphs.files}`
+      `Legacy quest plan coverage: plans=${plans.expected} planFiles=${plans.files} graphs=${graphs.expected} graphFiles=${graphs.files}` +
+        // Sources with no live owner cannot have a file; surfaced so they are not dropped unseen.
+        ` plansWithoutOwner=${plans.skippedNoOwner} graphsWithoutOwner=${graphs.skippedNoOwner}`
     );
     // A clean conversion pass that still leaves a source without a current file will not fix itself
     // on a retry, so this fails the run instead of staying pending.

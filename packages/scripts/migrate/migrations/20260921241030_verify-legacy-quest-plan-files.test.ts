@@ -20,6 +20,7 @@ const converted = (over: { planFailed?: number; graphFailed?: number; stoppedEar
 const coverage = (expected: number, files: number, over: Record<string, unknown> = {}) => ({
   expected,
   files,
+  skippedNoOwner: 0,
   missing: 0,
   stale: 0,
   uncoveredSamples: [],
@@ -47,7 +48,22 @@ describe('verify-legacy-quest-plan-files migration', () => {
   it('completes and reports matching plan, graph and file counts', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     await expect(migration.up()).resolves.toBeUndefined();
-    expect(info).toHaveBeenCalledWith('Legacy quest plan coverage: plans=3 planFiles=3 graphs=2 graphFiles=2');
+    expect(info).toHaveBeenCalledWith(
+      'Legacy quest plan coverage: plans=3 planFiles=3 graphs=2 graphFiles=2 plansWithoutOwner=0 graphsWithoutOwner=0'
+    );
+    info.mockRestore();
+  });
+
+  it('reports sources that have no live owner', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    h.verify.mockResolvedValue({
+      plans: coverage(3, 3, { skippedNoOwner: 4 }),
+      graphs: coverage(2, 2, { skippedNoOwner: 1 }),
+      stoppedEarly: false,
+      covered: true,
+    });
+    await migration.up();
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('plansWithoutOwner=4 graphsWithoutOwner=1'));
     info.mockRestore();
   });
 
