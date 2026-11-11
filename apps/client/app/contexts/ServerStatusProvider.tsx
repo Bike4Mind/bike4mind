@@ -22,8 +22,10 @@ export const ServerStatusProvider: React.FC<{ children: ReactNode }> = ({ childr
   if (isEmergencyRoute) {
     console.log('🚨 Emergency route detected - bypassing maintenance mode check');
     content = children;
-  } else if (serverStatus === ServerStatusEnum.Maintenance && !isAdmin) {
-    // Show maintenance page for non-admin users when server is not live (except emergency route)
+  } else if ((serverStatus === ServerStatusEnum.Maintenance || serverStatus === ServerStatusEnum.Offline) && !isAdmin) {
+    // Non-admins get the maintenance screen for `maintenance` and the coming-soon waitlist page for
+    // `offline`: MaintenanceComingSoonPage falls through to customComingSoonContent for any status but
+    // maintenance.
     const comingSoonContent = <B4MComingSoonPage />;
     content = <MaintenanceComingSoonPage customComingSoonContent={comingSoonContent} serverStatus={serverStatus} />;
   } else {
