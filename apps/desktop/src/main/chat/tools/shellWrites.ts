@@ -1002,6 +1002,8 @@ export interface GitScript {
   unknownIndex: boolean;
   /** Something earlier may have moved HEAD, a ref, an upstream or config, so a later target is not what git reads now. */
   refsMoved?: boolean;
+  /** Branch and tag names an earlier `git branch <new>` or `git tag <new>` added, lowercased; see `createdRef`. */
+  createdRefs?: Set<string>;
 }
 
 /** git subcommands that leave HEAD, every ref and config as they are. */
@@ -1084,6 +1086,44 @@ function movesRefs(sub: string, args: readonly string[], restores: boolean): boo
     default:
       return true;
   }
+}
+
+const REF_NAME = /^[\w.+-]+(\/[\w.+-]+)*$/;
+const BRANCH_CREATE_OPTIONS = new Set(['-q', '--quiet', '--no-track']);
+
+/**
+ * The name a `git branch <new> [<start>]` or `git tag <new> [<commit>]` adds, or null for any other call. Adding a
+ * name moves no existing ref, but it can shadow one (`refs/tags/x` and `refs/heads/origin/main` win over the ref a
+ * later word meant), so a later call naming it still counts as moved; see `namesCreatedRef`.
+ */
+function createdRef(sub: string, args: readonly string[]): string | null {
+  if (sub !== 'branch' && sub !== 'tag') return null;
+  const positionals = args.filter(arg => !(sub === 'branch' && BRANCH_CREATE_OPTIONS.has(arg)));
+  const [name, start] = positionals;
+  if (positionals.length > 2 || name === undefined || name.startsWith('-') || !REF_NAME.test(name)) return null;
+  if (start !== undefined && (start.startsWith('-') || !REVISION.test(start))) return null;
+  return name.toLowerCase();
+}
+
+/**
+ * Whether a word may resolve to a created name: git tries it as `<w>`, `refs/<w>`, `refs/tags/<w>` and
+ * `refs/heads/<w>`, and loose refs on a case-insensitive disk match either case, so any `/`-bounded suffix counts.
+ */
+function namesCreatedRef(args: readonly string[], created: ReadonlySet<string> | undefined): boolean {
+  if (created === undefined || created.size === 0) return false;
+  return args.some(arg =>
+    arg.split(/\.{2,3}|=/).some(part => {
+      const ref =
+        part
+          .replace(/^\^/, '')
+          .split(/[\^~@:]/)[0]
+          ?.toLowerCase() ?? '';
+      for (let at = 0; at !== -1; at = ref.indexOf('/', at) + 1 || -1) {
+        if (created.has(ref.slice(at))) return true;
+      }
+      return false;
+    })
+  );
 }
 
 /** What a git call that writes the work tree writes: `.claude` files and symlinks; unread when the scan cannot tell. */
@@ -1942,9 +1982,12 @@ async function writesOf(
     if (!git) return none;
     if (git.unread) return { files: [], trees: [], unread: true };
     const script = context.script;
-    const moved = git.moved || context.env || script.refsMoved === true;
+    const moved =
+      git.moved || context.env || script.refsMoved === true || namesCreatedRef(git.rest, script.createdRefs);
     const { writes, restores } = await gitWrites(git, node, moved, script);
-    script.refsMoved ||= movesRefs(git.sub, git.rest, restores);
+    const created = git.moved || context.env ? null : createdRef(git.sub, git.rest);
+    if (created !== null) (script.createdRefs ??= new Set()).add(created);
+    else script.refsMoved ||= movesRefs(git.sub, git.rest, restores);
     return writes;
   }
   return { files: inPlaceEdit(program, args), trees: [] };
