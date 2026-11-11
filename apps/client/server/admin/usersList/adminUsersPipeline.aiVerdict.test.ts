@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ listAiAbuseAdvisories: vi.fn() }));
-vi.mock('@server/admin/aiAdvisory/aiAbuseAdvisories', () => ({ listAiAbuseAdvisories: h.listAiAbuseAdvisories }));
+vi.mock('@bike4mind/server-utils/admin/aiAdvisory/aiAbuseAdvisories', () => ({
+  listAiAbuseAdvisories: h.listAiAbuseAdvisories,
+}));
 
 import { adminUsersPipeline } from './listAdminUsers';
 

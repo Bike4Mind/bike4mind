@@ -71,11 +71,11 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
     return null;
   }),
 }));
-vi.mock('@server/entitlements/paidStanding', () => ({ priceAffectsEntitlements: vi.fn(() => true) }));
+vi.mock('@bike4mind/server-utils/entitlements/paidStanding', () => ({ priceAffectsEntitlements: vi.fn(() => true) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
+import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 const approvalMocks = vi.hoisted(() => ({
   policy: vi.fn(async (_credits: number): Promise<unknown> => null),

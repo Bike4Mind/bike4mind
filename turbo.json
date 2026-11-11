@@ -23,7 +23,8 @@
         "server/premium-generated/**",
         "../../infra/premium-generated/**",
         "../../packages/server-utils/src/premium-generated/**",
-        "../../packages/scripts/migrate/migrations/premium.generated.ts"
+        "../../packages/scripts/migrate/migrations/premium.generated.ts",
+        "../../packages/scripts/migrate/migrations/core.generated.ts"
       ]
     },
     "build": {

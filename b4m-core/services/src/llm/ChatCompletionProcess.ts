@@ -73,6 +73,7 @@ import {
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
   respondFromWorkspace,
+  respondFromCoreTutorial,
   createReasoningWithholder,
   reasoningChannelOf,
   withholdsReasoning,
@@ -1294,6 +1295,7 @@ export class ChatCompletionProcess {
   private abilityGetter: IChatCompletionServiceOptions['abilityGetter'];
   private workspaceDeniedTools: IChatCompletionServiceOptions['workspaceDeniedTools'];
   private workspaceSessionSettings: IChatCompletionServiceOptions['workspaceSessionSettings'];
+  private coreTutorialTurns: IChatCompletionServiceOptions['coreTutorialTurns'];
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   private customMcp: IChatCompletionServiceOptions['customMcp'];
@@ -1311,6 +1313,7 @@ export class ChatCompletionProcess {
   private _bedrockSvc: Map<string, BedrockGuardrailsService> = new Map();
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
+  private onStatusUpdate?: IChatCompletionServiceOptions['onStatusUpdate'];
   private decide?: IChatCompletionServiceOptions['decide'];
   private verbose: boolean = false;
   // Per-name queue of each tool call's reserved credits, in call order (see
@@ -1375,6 +1378,7 @@ export class ChatCompletionProcess {
     this.abilityGetter = options.abilityGetter;
     this.workspaceDeniedTools = options.workspaceDeniedTools;
     this.workspaceSessionSettings = options.workspaceSessionSettings;
+    this.coreTutorialTurns = options.coreTutorialTurns;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
     this.getThinkingVisibility = options.getThinkingVisibility;
@@ -1391,6 +1395,7 @@ export class ChatCompletionProcess {
     this.gpcSignalDetected = options.gpcSignalDetected ?? false;
     this.onReplyStream = options.onReplyStream;
     this.onToolPreamble = options.onToolPreamble;
+    this.onStatusUpdate = options.onStatusUpdate;
     this.decide = options.decide;
     this.statusManager = null;
     this.userAbility = null;
@@ -2505,15 +2510,17 @@ export class ChatCompletionProcess {
         return;
       }
 
-      const workspaceReply = await respondFromWorkspace(
-        {
-          user: this.user,
-          logger,
-          session,
-          quest: { id: questId, prompt: quest.prompt, fabFileIds: quest.fabFileIds },
-        },
-        this.workspaceSessionSettings
-      );
+      const turnQuest = { id: questId, prompt: quest.prompt, fabFileIds: quest.fabFileIds };
+      // Ahead of the workspace hook: a core marker sits only on main-surface sessions, so the two never both answer.
+      const workspaceReply =
+        (await respondFromCoreTutorial(
+          { user: this.user, logger, session: { id: sessionId, tutorial: session.tutorial }, quest: turnQuest },
+          this.coreTutorialTurns
+        )) ??
+        (await respondFromWorkspace(
+          { user: this.user, logger, session, quest: turnQuest },
+          this.workspaceSessionSettings
+        ));
       if (workspaceReply) {
         quest.replies = workspaceReply.replies;
         quest.reply = workspaceReply.replies.join('');
@@ -7962,6 +7969,15 @@ export class ChatCompletionProcess {
     }
   }
 
+  private notifyStatusObserver(q: IChatHistoryItemDocument, status: string | null, silent?: boolean) {
+    if (!this.onStatusUpdate || !status || silent) return;
+    try {
+      this.onStatusUpdate(String(q.id), status);
+    } catch (error) {
+      this.logger.warn('[onStatusUpdate] observer failed', { error });
+    }
+  }
+
   public async sendStatusUpdate(
     q: IChatHistoryItemDocument,
     status: string | null,
@@ -7974,6 +7990,7 @@ export class ChatCompletionProcess {
       skipPayloadOptimization?: boolean;
     } = {}
   ) {
+    this.notifyStatusObserver(q, status, options.silent);
     if (!this.statusManager) {
       // IF NOT INITIALIZED, INITIALIZE IT
       this.statusManager = new StatusManager(
@@ -8002,6 +8019,7 @@ export class ChatCompletionProcess {
       skipPayloadOptimization?: boolean;
     } = {}
   ) {
+    this.notifyStatusObserver(q, status, options.silent);
     if (!this.statusManager) {
       // IF NOT INITIALIZED, INITIALIZE IT
       this.statusManager = new StatusManager(

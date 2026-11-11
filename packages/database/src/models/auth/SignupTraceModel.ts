@@ -2,7 +2,7 @@ import mongoose, { Document, Model, model, Schema } from 'mongoose';
 
 /**
  * A deleted account's recent signup, kept so the per-network signup counts (apps/client
- * server/auth/signupNetworkLimits.ts) still see it once purgeDeletedUserData has removed the
+ * packages/server-utils/src/auth/signupNetworkLimits.ts) still see it once purgeDeletedUserData has removed the
  * account's AuthEvent rows. Holds no raw IP: the IP and IPv4 /24 are keyed HMACs, and the account
  * id is hashed too, so a trace only says "some account signed up from this network then".
  */

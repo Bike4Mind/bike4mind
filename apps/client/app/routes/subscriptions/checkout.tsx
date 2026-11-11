@@ -2,12 +2,25 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useGetSettingsValue, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { useSubscribePlan } from '@client/app/hooks/data/subscriptions';
 import { billingLandingHref } from '@client/app/utils/billingDeepLink';
+import { allowedCheckoutReturn, checkoutCallbackUrl } from '@client/app/utils/checkoutReturn';
 import { getErrorMessage } from '@client/app/utils/error';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
-import { SUBSCRIPTION_PLANS_MAP } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
+import { PROFESSIONAL_PRICE_ID, SUBSCRIPTION_PLANS_MAP } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { Button, Card, LinearProgress, Stack, Typography } from '@mui/joy';
 import { useNavigate, useRouter, useSearch } from '@tanstack/react-router';
 import { useEffect } from 'react';
+
+/** Plan names a link may use instead of a Stripe price id, so an app outside this repo never carries one. */
+export const CHECKOUT_PLAN_ALIASES: Readonly<Record<string, () => string>> = {
+  professional: () => PROFESSIONAL_PRICE_ID,
+};
+
+/** Returns the price id `plan` names: an alias resolved, anything else as given. */
+export function resolveCheckoutPlan(plan: string | undefined): string | undefined {
+  if (!plan) return undefined;
+  const alias = Object.prototype.hasOwnProperty.call(CHECKOUT_PLAN_ALIASES, plan) ? CHECKOUT_PLAN_ALIASES[plan] : null;
+  return alias ? alias() || undefined : plan;
+}
 
 type CheckoutProblem = 'unavailable' | 'invalid-plan' | 'failed';
 
@@ -81,8 +94,10 @@ const CheckoutProblemCard = ({ problem, detail }: { problem: CheckoutProblem; de
 const SubscriptionsCheckoutPage = () => {
   const { currentUser } = useUser();
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { plan?: string };
-  const plan = search.plan;
+  const search = useSearch({ strict: false }) as { plan?: string; return_to?: string };
+  const plan = resolveCheckoutPlan(search.plan);
+  // Another Bike4Mind app's page to come back to (utils/checkoutReturn.ts); null unless allowed.
+  const returnTo = allowedCheckoutReturn(search.return_to);
   const subscribe = useSubscribePlan();
   const settings = useSettingsFromServer();
   const enforceCredits = useGetSettingsValue('enforceCredits');
@@ -105,14 +120,20 @@ const SubscriptionsCheckoutPage = () => {
     }
 
     if (!currentUser) {
-      navigate({ to: `/register?redirectTo=/subscriptions/checkout?plan=${plan}` });
+      if (!returnTo) {
+        navigate({ to: `/register?redirectTo=/subscriptions/checkout?plan=${plan}` });
+        return;
+      }
+      // Encoded, so the return target survives the sign-up as part of the one redirectTo value.
+      const resume = `/subscriptions/checkout?${new URLSearchParams({ plan: search.plan ?? '', return_to: returnTo })}`;
+      navigate({ to: `/register?redirectTo=${encodeURIComponent(resume)}` });
       return;
     }
 
     subscribe.mutate(
       {
         priceId: plan as string,
-        callbackUrl: `${window.location.origin}`,
+        callbackUrl: checkoutCallbackUrl(window.location.origin, returnTo),
       },
       {
         onSuccess: data => {
@@ -120,7 +141,7 @@ const SubscriptionsCheckoutPage = () => {
         },
       }
     );
-  }, [problem, currentUser, navigate, subscribe, settings, plan]);
+  }, [problem, currentUser, navigate, subscribe, settings, plan, returnTo, search.plan]);
 
   if (problem) {
     return (

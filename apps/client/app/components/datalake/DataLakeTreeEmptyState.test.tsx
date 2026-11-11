@@ -58,6 +58,7 @@ const gitHubConnection = (over: Partial<LakeGitHubConnection> = {}): LakeGitHubC
   skippedCount: null,
   syncStale: false,
   fileCount: 4,
+  isLastInstallationBinding: true,
   disconnecting: false,
   disconnectStalled: false,
   ...over,

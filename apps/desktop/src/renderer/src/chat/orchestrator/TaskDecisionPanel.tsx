@@ -65,7 +65,7 @@ export function TaskDecisionPanel({ agent }: { agent: AgentView }) {
         {agent.workerSelection ? ` (${agent.workerSelection.source})` : ''}
       </Typography>
       {error && (
-        <Typography role="alert" color="danger">
+        <Typography role="alert" color="danger" sx={{ whiteSpace: 'pre-line' }}>
           {error}
         </Typography>
       )}

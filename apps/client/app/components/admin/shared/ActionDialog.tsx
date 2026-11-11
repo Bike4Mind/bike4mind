@@ -57,6 +57,10 @@ export type ActionDialogProps = {
    * `onClose` (a run of writes that checks between them and leaves the rest unsent).
    */
   cancelStopsWrite?: boolean;
+  /** Seeds the reason when the dialog opens, still editable: an accepted AI suggestion prefills one. */
+  initialReason?: AdminReasonDraft;
+  /** Changing it remounts the form, re-seeding `initialReason` and clearing typed input in an open dialog. */
+  formKey?: string | number;
   /** Derived ids: `<id>-reason-input`, `<id>-confirm-btn`, `<id>-cancel-btn`, `<id>-hint`, `<id>-typed-input`. */
   'data-testid': string;
   /** Overrides individual derived ids where an existing test or page object depends on them. */
@@ -75,7 +79,7 @@ export const ActionDialog: React.FC<ActionDialogProps> = props => (
     width={560}
     data-testid={props['data-testid']}
   >
-    <ActionDialogForm {...props} />
+    <ActionDialogForm key={props.formKey} {...props} />
   </AdminDialog>
 );
 
@@ -94,12 +98,13 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   pending = false,
   secondaryAction,
   cancelStopsWrite = false,
+  initialReason = EMPTY_ADMIN_REASON,
   'data-testid': testId,
   testIds = {},
 }) => {
   const hintId = useId();
   const typedInputId = useId();
-  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
+  const [reason, setReason] = useState<AdminReasonDraft>(initialReason);
   const [typedValue, setTypedValue] = useState('');
   const [submitting, setSubmitting] = useState(false);
 

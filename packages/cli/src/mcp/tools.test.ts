@@ -1,3 +1,4 @@
+import { constants } from 'node:fs';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
@@ -26,7 +27,16 @@ import {
   generateImage,
   textToSpeech,
   publishArtifact,
+  uploadFile,
 } from './tools';
+
+const mockOpen = vi.fn();
+vi.mock('node:fs/promises', async importOriginal => ({
+  ...(await importOriginal<typeof import('node:fs/promises')>()),
+  open: (...a: unknown[]) => mockOpen(...a),
+  realpath: (p: string) => mockRealpath(p),
+}));
+const mockRealpath = vi.fn(async (p: string) => p);
 
 const mockClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>>): B4mApiClient =>
   ({ baseURL: 'http://localhost:3000', ...overrides }) as unknown as B4mApiClient;
@@ -48,6 +58,7 @@ describe('TOOL_NAMES', () => {
       'list_lakes',
       'list_files',
       'get_file',
+      'upload_file',
       'generate_sound_effect',
       'text_to_speech',
       'generate_image',
@@ -129,6 +140,276 @@ describe('tool handlers', () => {
     await listFiles(client, { limit: 25, page: 3 });
 
     expect(list).toHaveBeenCalledWith({ limit: 25, page: 3 });
+  });
+
+  it('upload_file sends bytes to the presign and returns pending ingestion', async () => {
+    const requestFileUpload = vi.fn().mockResolvedValue({ files: [{ fileId: 'f1', url: 'https://s3.example/put' }] });
+    const uploadFileBytes = vi.fn().mockResolvedValue(undefined);
+    const attachFileToProject = vi.fn().mockResolvedValue(undefined);
+    const result = await uploadFile(
+      mockClient({
+        requestFileUpload,
+        uploadFileBytes,
+        attachFileToProject,
+        getOwnKeyScopes: vi.fn().mockResolvedValue(undefined),
+      }),
+      { base64: 'YWJj', name: 'note.txt', projectId: 'p1' }
+    );
+    expect(requestFileUpload).toHaveBeenCalledWith({ fileName: 'note.txt', fileSize: 3, mimeType: 'text/plain' });
+    expect(uploadFileBytes).toHaveBeenCalledWith('https://s3.example/put', Buffer.from('abc'), 'text/plain');
+    expect(attachFileToProject).toHaveBeenCalledWith('f1', 'p1');
+    expect(result).toEqual({ fileId: 'f1', ingestionState: 'pending' });
+  });
+
+  it('upload_file rejects ambiguous or empty bytes before presigning', async () => {
+    const requestFileUpload = vi.fn();
+    const client = mockClient({ requestFileUpload });
+    await expect(uploadFile(client, { path: 'a.txt', base64: 'YWJj' })).rejects.toThrow('exactly one');
+    await expect(uploadFile(client, { base64: '!!!', name: 'a.txt' })).rejects.toThrow('valid base64');
+    expect(requestFileUpload).not.toHaveBeenCalled();
+  });
+
+  it('upload_file reports the file id when an association fails after upload', async () => {
+    const client = mockClient({
+      requestFileUpload: vi.fn().mockResolvedValue({ files: [{ fileId: 'f1', url: 'https://s3.example/put' }] }),
+      uploadFileBytes: vi.fn().mockResolvedValue(undefined),
+      attachFileToProject: vi.fn().mockRejectedValue(new Error('not permitted')),
+      getOwnKeyScopes: vi.fn().mockResolvedValue(undefined),
+    });
+    await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
+      'File f1 was uploaded but association failed: not permitted'
+    );
+  });
+
+  describe('upload_file edge cases', () => {
+    const fileHandle = (isFile: boolean, size: number, contents = Buffer.from('abc')) => {
+      const handle = {
+        stat: vi.fn().mockResolvedValue({ isFile: () => isFile, size }),
+        readFile: vi.fn().mockResolvedValue(contents),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      mockOpen.mockResolvedValue(handle);
+      return handle;
+    };
+    const presign = () => vi.fn().mockResolvedValue({ files: [{ fileId: 'f1', url: 'https://s3.example/put' }] });
+    const uploadClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>> = {}) =>
+      mockClient({
+        requestFileUpload: presign(),
+        uploadFileBytes: vi.fn().mockResolvedValue(undefined),
+        deleteFile: vi.fn().mockResolvedValue(undefined),
+        getOwnKeyScopes: vi.fn().mockResolvedValue(undefined),
+        ...overrides,
+      });
+
+    it('reads a local path and infers the name from its basename', async () => {
+      const handle = fileHandle(true, 3);
+      const client = uploadClient();
+      await uploadFile(client, { path: '/some/dir/report.txt' });
+      expect(mockOpen).toHaveBeenCalledWith('/some/dir/report.txt', constants.O_RDONLY | constants.O_NONBLOCK);
+      expect(handle.readFile).toHaveBeenCalledOnce();
+      expect(handle.close).toHaveBeenCalledOnce();
+      expect(client.requestFileUpload).toHaveBeenCalledWith({
+        fileName: 'report.txt',
+        fileSize: 3,
+        mimeType: 'text/plain',
+      });
+    });
+
+    it('refuses hidden files, hidden directories and links into them without opening them', async () => {
+      mockOpen.mockClear();
+      const client = uploadClient();
+      await expect(uploadFile(client, { path: '/home/u/.env' })).rejects.toThrow('hidden');
+      await expect(uploadFile(client, { path: '/home/u/.ssh/id_rsa' })).rejects.toThrow('hidden');
+      mockRealpath.mockResolvedValueOnce('/home/u/.ssh/id_rsa');
+      await expect(uploadFile(client, { path: '/home/u/key.txt' })).rejects.toThrow('hidden');
+      expect(mockOpen).not.toHaveBeenCalled();
+    });
+
+    it('rejects a path that is not a regular file without reading it', async () => {
+      const handle = fileHandle(false, 0);
+      const client = uploadClient();
+      await expect(uploadFile(client, { path: '/some/dir' })).rejects.toThrow('not a regular file');
+      expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.close).toHaveBeenCalledOnce();
+      expect(client.requestFileUpload).not.toHaveBeenCalled();
+    });
+
+    it('rejects an oversize file without reading it', async () => {
+      const handle = fileHandle(true, 100 * 1024 * 1024 + 1);
+      await expect(uploadFile(uploadClient(), { path: '/big.bin' })).rejects.toThrow('upload limit');
+      expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.close).toHaveBeenCalledOnce();
+    });
+
+    it('rejects bytes that grew past the cap after stat and closes the handle', async () => {
+      const handle = fileHandle(true, 3, Buffer.alloc(100 * 1024 * 1024 + 1));
+      const client = uploadClient();
+      await expect(uploadFile(client, { path: '/growing.txt' })).rejects.toThrow('upload limit');
+      expect(handle.close).toHaveBeenCalledOnce();
+      expect(client.requestFileUpload).not.toHaveBeenCalled();
+    });
+
+    it('deletes the pending file and names its id when the byte upload fails', async () => {
+      const client = uploadClient({ uploadFileBytes: vi.fn().mockRejectedValue(new Error('boom')) });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt' })).rejects.toThrow(
+        'Upload for file f1 failed: boom'
+      );
+      expect(client.deleteFile).toHaveBeenCalledWith('f1');
+    });
+
+    it('does not delete the file when association fails', async () => {
+      const client = uploadClient({ attachFileToProject: vi.fn().mockRejectedValue(new Error('nope')) });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
+        'association failed'
+      );
+      expect(client.deleteFile).not.toHaveBeenCalled();
+    });
+
+    it('keeps the scope hint when association is forbidden', async () => {
+      const forbidden = new B4mApiError(403, { error: 'forbidden' }, new Headers());
+      const client = uploadClient({ attachFileToProject: vi.fn().mockRejectedValue(forbidden) });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
+        'association failed: API key forbidden'
+      );
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
+        'recommended scope: projects:write'
+      );
+    });
+
+    it('still reports the upload failure when the cleanup delete fails', async () => {
+      const client = uploadClient({
+        uploadFileBytes: vi.fn().mockRejectedValue(new Error('boom')),
+        deleteFile: vi.fn().mockRejectedValue(new Error('gone')),
+      });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt' })).rejects.toThrow(
+        'Upload for file f1 failed: boom'
+      );
+    });
+
+    it('refuses an unsupported type before presigning', async () => {
+      const client = uploadClient();
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'blob.zzunknown' })).rejects.toThrow(
+        'Unsupported file type for blob.zzunknown'
+      );
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'README' })).rejects.toThrow('pass contentType');
+      expect(client.requestFileUpload).not.toHaveBeenCalled();
+    });
+
+    it('uses contentType for an extensionless name and ignores it when the extension is known', async () => {
+      const client = uploadClient();
+      await uploadFile(client, { base64: 'YWJj', name: 'README', contentType: 'text/plain' });
+      await uploadFile(client, { base64: 'YWJj', name: 'a.txt', contentType: 'image/png' });
+      expect(client.requestFileUpload).toHaveBeenNthCalledWith(1, {
+        fileName: 'README',
+        fileSize: 3,
+        mimeType: 'text/plain',
+      });
+      expect(client.requestFileUpload).toHaveBeenNthCalledWith(2, {
+        fileName: 'a.txt',
+        fileSize: 3,
+        mimeType: 'text/plain',
+      });
+    });
+
+    it('accepts wrapped, unpadded and url-safe base64', async () => {
+      const client = uploadClient();
+      await uploadFile(client, { base64: 'YW\nJj', name: 'a.txt' });
+      await uploadFile(client, { base64: '-_8', name: 'a.png' });
+      expect(client.uploadFileBytes).toHaveBeenNthCalledWith(
+        1,
+        'https://s3.example/put',
+        Buffer.from('abc'),
+        'text/plain'
+      );
+      expect(client.uploadFileBytes).toHaveBeenNthCalledWith(
+        2,
+        'https://s3.example/put',
+        Buffer.from([0xfb, 0xff]),
+        'image/png'
+      );
+      await expect(uploadFile(client, { base64: 'YWJjZ', name: 'a.txt' })).rejects.toThrow('valid base64');
+    });
+
+    it('accepts a valid 10 MiB base64 upload without exhausting the regex stack', async () => {
+      const contents = Buffer.alloc(10 * 1024 * 1024, 97);
+      const client = uploadClient();
+      await uploadFile(client, { base64: contents.toString('base64'), name: 'large.txt' });
+      expect(client.requestFileUpload).toHaveBeenCalledWith({
+        fileName: 'large.txt',
+        fileSize: contents.length,
+        mimeType: 'text/plain',
+      });
+      const [uploadUrl, uploadedBytes, mimeType] = vi.mocked(client.uploadFileBytes).mock.calls[0];
+      expect(uploadUrl).toBe('https://s3.example/put');
+      expect(uploadedBytes.equals(contents)).toBe(true);
+      expect(mimeType).toBe('text/plain');
+    });
+
+    it('accepts exactly 100 MiB with padding and rejects one additional byte before presigning', async () => {
+      const limit = 100 * 1024 * 1024;
+      const client = uploadClient();
+      await uploadFile(client, { base64: Buffer.alloc(limit).toString('base64'), name: 'limit.txt' });
+      expect(client.requestFileUpload).toHaveBeenCalledWith({
+        fileName: 'limit.txt',
+        fileSize: limit,
+        mimeType: 'text/plain',
+      });
+      vi.mocked(client.requestFileUpload).mockClear();
+      await expect(
+        uploadFile(client, {
+          base64: Buffer.alloc(limit + 1).toString('base64'),
+          name: 'over-limit.txt',
+        })
+      ).rejects.toThrow('upload limit');
+      expect(client.requestFileUpload).not.toHaveBeenCalled();
+    });
+
+    it.each(['YQ==', 'YQ=', 'YQ', 'YWI=', 'YWI', 'YWJj', 'YR==', '-_8', 'Y W\nJj'])(
+      'retains accepted base64 normalization for %s',
+      async base64 => {
+        const client = uploadClient();
+        await uploadFile(client, { base64, name: 'note.txt' });
+        expect(client.uploadFileBytes).toHaveBeenCalledWith(
+          'https://s3.example/put',
+          Buffer.from(base64, 'base64'),
+          'text/plain'
+        );
+      }
+    );
+
+    it.each([' ', 'Y', 'YWJjZ', 'Y===', '====', 'Y=Q=', 'YQ===', 'Y!Q='])(
+      'rejects malformed or empty base64 %s before presigning',
+      async base64 => {
+        const client = uploadClient();
+        await expect(uploadFile(client, { base64, name: 'note.txt' })).rejects.toThrow('valid base64');
+        expect(client.requestFileUpload).not.toHaveBeenCalled();
+      }
+    );
+
+    it('rejects projectId before presigning when the key lacks projects:write', async () => {
+      const client = uploadClient({ getOwnKeyScopes: vi.fn().mockResolvedValue(['files:write']) });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
+        'projects:write'
+      );
+      expect(client.requestFileUpload).not.toHaveBeenCalled();
+    });
+
+    it('proceeds when the scope lookup fails', async () => {
+      const client = uploadClient({
+        getOwnKeyScopes: vi.fn().mockRejectedValue(new Error('network')),
+        attachFileToProject: vi.fn().mockResolvedValue(undefined),
+      });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).resolves.toEqual({
+        fileId: 'f1',
+        ingestionState: 'pending',
+      });
+    });
+
+    it('fails when the presign returns no upload URL', async () => {
+      const client = uploadClient({ requestFileUpload: vi.fn().mockResolvedValue({ files: [{ fileId: 'f1' }] }) });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt' })).rejects.toThrow('no upload URL');
+      expect(client.uploadFileBytes).not.toHaveBeenCalled();
+    });
   });
 
   it('create_notebook defaults the name to "New Notebook" when omitted', async () => {
@@ -1104,6 +1385,29 @@ describe('registerTools', () => {
     expect(schema.safeParse({ text: 'x'.repeat(451) }).success).toBe(false);
   });
 
+  it('upload_file registers inputs and maps scope errors', async () => {
+    const requestFileUpload = vi.fn().mockRejectedValue(
+      new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
+        status: 403,
+        statusText: '',
+        data: {},
+        headers: {},
+        config: {} as InternalAxiosRequestConfig,
+      } as AxiosResponse)
+    );
+    const tools = collectTools(mockClient({ requestFileUpload }));
+    const schema = z.object(tools.schemas.get('upload_file')!);
+    expect(Object.keys(schema.shape)).not.toContain('notebookId');
+    expect(schema.parse({ base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).toEqual({
+      base64: 'YWJj',
+      name: 'a.txt',
+      projectId: 'p1',
+    });
+    const result = await tools.get('upload_file')!({ base64: 'YWJj', name: 'a.txt' });
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain('recommended scope: files:write');
+  });
+
   // An empty or dot-segment id collapses the URL onto /api/sessions, whose DELETE wipes every notebook.
   it.each([
     ['get_notebook', {}],
@@ -1797,6 +2101,30 @@ describe('publishArtifact', () => {
 
     await expect(publishArtifact(client, { artifactId: ARTIFACT_ID, visibility: 'public' })).rejects.toThrow(
       'has no content to publish'
+    );
+    expect(fns.requestPublishUpload).not.toHaveBeenCalled();
+  });
+
+  it('republishes at the existing scope when the reader has no owner id', async () => {
+    const { userId: _omit, ...viewerShaped } = record.artifact;
+    const { client, fns } = publishClient({
+      getArtifact: vi.fn().mockResolvedValue({ ...record, artifact: viewerShaped }),
+      findPublishedArtifact: vi.fn().mockResolvedValue(existingPage),
+    });
+
+    await publishArtifact(client, { artifactId: ARTIFACT_ID });
+
+    expect(fns.requestPublishUpload).toHaveBeenCalledWith(expect.objectContaining({ scopeId: 'org1' }));
+  });
+
+  it('refuses to publish for the first time when the reader has no owner id', async () => {
+    const { userId: _omit, ...viewerShaped } = record.artifact;
+    const { client, fns } = publishClient({
+      getArtifact: vi.fn().mockResolvedValue({ ...record, artifact: viewerShaped }),
+    });
+
+    await expect(publishArtifact(client, { artifactId: ARTIFACT_ID })).rejects.toThrow(
+      'only be published by its owner'
     );
     expect(fns.requestPublishUpload).not.toHaveBeenCalled();
   });

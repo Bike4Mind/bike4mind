@@ -60,7 +60,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn() },
   lakeAccessEventRepository: { record: h.record },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: browserSigner }),
 }));
@@ -400,9 +400,8 @@ it.each([undefined, '', '   ', 'https://objects.example.invalid'])(
     const { res } = makeRes();
     await handler(makeReq() as never, res);
     const adapter = h.search.mock.calls[0][2] as {
-      storage: { signedUrlCache?: string; generateSignedUrl: (path: string, expiry: number) => Promise<string | null> };
+      storage: { generateSignedUrl: (path: string, expiry: number) => Promise<string | null> };
     };
-    expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
     await adapter.storage.generateSignedUrl('owned/report.txt', 600);
     expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', { expiresIn: 600, audience: 'browser' });
   }

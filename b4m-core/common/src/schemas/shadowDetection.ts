@@ -32,7 +32,7 @@ export type ShadowDetector = (typeof SHADOW_DETECTORS)[number];
 
 /**
  * Detectors whose detections already carry their own Decisions verdict
- * (apps/client/server/security/signupDomainHoldAssessment), so the abuse assessment sweep and the
+ * (apps/workers/src/security/signupDomainHoldAssessment), so the abuse assessment sweep and the
  * Detections assessment panel leave them alone.
  */
 export const SELF_ASSESSED_SHADOW_DETECTORS: readonly ShadowDetector[] = ['signupDomainHold'];
@@ -40,10 +40,18 @@ export const SELF_ASSESSED_SHADOW_DETECTORS: readonly ShadowDetector[] = ['signu
 /**
  * The action the detector's policy maps the detection to. contain/suspend/restrict match the admin
  * bulk user actions; blockIp is for actors with no signed-in account, where containing a user is not
- * possible. confirmHold/none are the signup domain hold assessment's outcomes (confirm the hold, or
- * leave it for an admin).
+ * possible. confirmHold/releaseHold/none are the signup domain hold assessment's outcomes (confirm the
+ * hold, release it, or leave it for an admin).
  */
-export const SHADOW_DETECTION_ACTIONS = ['contain', 'suspend', 'restrict', 'blockIp', 'confirmHold', 'none'] as const;
+export const SHADOW_DETECTION_ACTIONS = [
+  'contain',
+  'suspend',
+  'restrict',
+  'blockIp',
+  'confirmHold',
+  'releaseHold',
+  'none',
+] as const;
 export type ShadowDetectionAction = (typeof SHADOW_DETECTION_ACTIONS)[number];
 
 export const SHADOW_DETECTION_VERDICTS = [

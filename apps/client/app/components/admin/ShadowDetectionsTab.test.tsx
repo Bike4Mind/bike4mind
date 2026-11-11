@@ -20,17 +20,21 @@ const m = vi.hoisted(() => ({
   verdictError: null as Error | null,
   currentUser: { isAdmin: true } as { isAdmin: boolean; adminPermissions?: string[] },
   realWatch: false,
+  advisory: { data: undefined } as { data?: { advisories: Record<string, unknown>[] } },
+  assessments: [] as Record<string, unknown>[],
 }));
+vi.mock('@client/app/hooks/data/aiAdvisory', () => ({ useAiAdvisory: () => m.advisory }));
 vi.mock('@client/app/hooks/data/shadowDetections', () => ({
   useShadowDetections: m.useShadowDetections,
   useShadowDetectionVerdict: () => ({ mutateAsync: m.mutateAsync, isPending: false, error: m.verdictError }),
   useShadowDetectionBulkVerdict: () => ({ mutateAsync: m.bulkMutateAsync, isPending: false, error: null }),
-  useAbuseAssessments: () => ({ data: [], isPending: false, error: null }),
+  useAbuseAssessments: () => ({ data: m.assessments, isPending: false, error: null }),
   useRequestAbuseAssessment: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
   useVerdictEval: () => ({ data: undefined, isPending: true, error: null, refetch: vi.fn() }),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: m.currentUser }) }));
 vi.mock('@tanstack/react-router', () => ({
+  useRouter: () => undefined,
   useSearch: () => m.search,
   useNavigate: () => m.navigate,
   Link: ({
@@ -145,7 +149,130 @@ describe('ShadowDetectionsTab', () => {
     m.verdictError = null;
     m.currentUser = { isAdmin: true };
     m.realWatch = false;
+    m.advisory = { data: undefined };
+    m.assessments = [];
     m.useShadowDetections.mockReturnValue(queryResult(list()));
+  });
+
+  describe('AI advisory suggestion', () => {
+    const advise = (detectionId = DETECTION_ID) => {
+      m.advisory = {
+        data: {
+          advisories: [
+            {
+              userId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+              detectionId,
+              detector: 'signupNetworkBurst',
+              abuseProbability: 0.9,
+              assessedAt: '2026-10-30T11:00:00.000Z',
+            },
+          ],
+        },
+      };
+    };
+    const row = () => screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`);
+
+    it('shows a neutral chip on an unreviewed row the advisory flags', () => {
+      advise();
+      renderTab();
+      expect(screen.getByTestId(`shadow-detection-ai-${DETECTION_ID}-chip`)).toHaveTextContent(
+        '\u2726 Confirmed abuse, High'
+      );
+    });
+
+    it('opens the dialog prefilled with the proposed verdict and reason on A', async () => {
+      advise();
+      m.mutateAsync.mockResolvedValue({ status: 'recorded', item: detection({ verdict: 'confirmed_abuse' }) });
+      renderTab();
+      fireEvent.keyDown(row(), { key: 'a' });
+      const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      expect(within(dialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse')).toBeChecked();
+      expect(within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input')).toHaveValue(
+        'Accepted AI suggestion'
+      );
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn'));
+      await waitFor(() =>
+        expect(m.mutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ verdict: 'confirmed_abuse', reason: 'Accepted AI suggestion' })
+        )
+      );
+    });
+
+    it('opens the dialog with nothing preselected on O', async () => {
+      advise();
+      renderTab();
+      fireEvent.keyDown(row(), { key: 'o' });
+      const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      expect(within(dialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse')).not.toBeChecked();
+      expect(within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input')).toHaveValue('');
+    });
+
+    const assessed = () => {
+      m.assessments = [
+        {
+          id: 'assessment-1',
+          detectionId: DETECTION_ID,
+          result: 'abuse',
+          probabilities: [{ value: 'abuse', probability: 0.9 }],
+          confidence: 0.9,
+          model: 'example-model',
+          modelVersion: null,
+          policyVersion: 1,
+          evidenceVersion: 1,
+          featureSummary: {},
+          failure: null,
+          trigger: 'sweep',
+          assessedAt: '2026-10-30T11:00:00.000Z',
+        },
+      ];
+    };
+
+    it('fills the verdict and the reason when the dialog suggestion is accepted', async () => {
+      assessed();
+      renderTab();
+      fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+      const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      const reason = within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input');
+      expect(reason).toHaveValue('');
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-assessment-suggestion-accept-btn'));
+      expect(within(dialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse')).toBeChecked();
+      expect(within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input')).toHaveValue(
+        'Accepted AI suggestion'
+      );
+    });
+
+    it('opens the why-wrong picker in the dialog on O', async () => {
+      advise();
+      assessed();
+      renderTab();
+      fireEvent.keyDown(row(), { key: 'o' });
+      const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      expect(within(dialog).getByTestId('shadow-detection-assessment-suggestion-why-0')).toBeTruthy();
+      expect(within(dialog).queryByTestId('shadow-detection-assessment-suggestion-override-btn')).toBeNull();
+    });
+
+    it('shows no chip and leaves A inert when the advisory is unavailable', () => {
+      renderTab();
+      expect(screen.queryByTestId(`shadow-detection-ai-${DETECTION_ID}`)).toBeNull();
+      fireEvent.keyDown(row(), { key: 'a' });
+      expect(screen.queryByTestId('shadow-detection-verdict-dialog')).toBeNull();
+    });
+
+    it('shows no chip on a reviewed row', () => {
+      advise();
+      m.useShadowDetections.mockReturnValue(queryResult(list({ data: [detection({ verdict: 'confirmed_abuse' })] })));
+      renderTab();
+      expect(screen.queryByTestId(`shadow-detection-ai-${DETECTION_ID}`)).toBeNull();
+    });
+
+    it('keeps A inert for a support reader', () => {
+      advise();
+      m.currentUser = { isAdmin: false, adminPermissions: ['support:read'] };
+      renderTab();
+      expect(screen.getByTestId(`shadow-detection-ai-${DETECTION_ID}-chip`)).toBeTruthy();
+      fireEvent.keyDown(row(), { key: 'a' });
+      expect(screen.queryByTestId('shadow-detection-verdict-dialog')).toBeNull();
+    });
   });
 
   it('leaves the outer padding to the admin page frame', () => {

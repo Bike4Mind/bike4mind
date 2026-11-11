@@ -5,6 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ActionDialog, type ActionDialogProps } from './ActionDialog';
+import { ACCEPTED_AI_REASON, isAdminReasonComplete } from './adminReason';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -47,6 +48,52 @@ const openDialog = (props: HarnessProps = {}) => {
 };
 
 describe('ActionDialog', () => {
+  it('seeds a complete, editable reason from initialReason', async () => {
+    const onConfirm = vi.fn();
+    expect(isAdminReasonComplete(ACCEPTED_AI_REASON)).toBe(true);
+    const confirm = openDialog({ onConfirm, initialReason: ACCEPTED_AI_REASON });
+
+    expect(screen.getByTestId('adjust-dialog-reason-input')).toHaveValue('Accepted AI suggestion');
+    expect(confirm).toBeEnabled();
+    fireEvent.change(screen.getByTestId('adjust-dialog-reason-input'), {
+      target: { value: 'Accepted AI suggestion, checked the logs' },
+    });
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('Accepted AI suggestion, checked the logs'));
+  });
+
+  it('re-seeds the reason when formKey changes while open', () => {
+    const { rerender } = render(
+      <ActionDialog
+        open
+        onClose={vi.fn()}
+        title="Grade"
+        reasonPresets={PRESETS}
+        confirmLabel="Record"
+        onConfirm={vi.fn()}
+        data-testid="grade-dialog"
+        formKey={0}
+      />,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.getByTestId('grade-dialog-reason-input')).toHaveValue('');
+    rerender(
+      <ActionDialog
+        open
+        onClose={vi.fn()}
+        title="Grade"
+        reasonPresets={PRESETS}
+        confirmLabel="Record"
+        onConfirm={vi.fn()}
+        data-testid="grade-dialog"
+        formKey={1}
+        initialReason={ACCEPTED_AI_REASON}
+      />
+    );
+    expect(screen.getByTestId('grade-dialog-reason-input')).toHaveValue('Accepted AI suggestion');
+  });
+
   it('names the command, repeats the consequence on the commit button and labels the dialog', () => {
     const confirm = openDialog({ description: 'Credits drop to zero immediately.' });
 

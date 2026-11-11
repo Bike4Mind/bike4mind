@@ -12,7 +12,7 @@
  * - A provider failure is stored as `unknown` with a diagnostic code, never as a judgment.
  * - Advisory only: nothing here writes to a user, an API key, credits, riskScore or reviewState. The
  *   sweep hands each judgment to an injected `afterAssessment` hook; automated containment
- *   (../autoContainment) is the one that may act on it.
+ *   (apps/workers/src/security/autoContainment) is the one that may act on it.
  */
 
 import {
@@ -67,8 +67,8 @@ import {
   evidenceHash,
   rolloutBucket,
   type AssessedAccountSource,
-} from './featureSummary';
-import { collectRequestActivity } from './requestActivity';
+} from '@bike4mind/server-utils/security/abuseAssessment/featureSummary';
+import { collectRequestActivity } from '@bike4mind/server-utils/security/abuseAssessment/requestActivity';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Namespaces this feature's budget, call cap and concurrency in the shared platform policy.

@@ -37,7 +37,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
     return h.rateLimiter;
   },
 }));
-vi.mock('@server/entitlements', () => ({ getRequestEntitlements: h.getRequestEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getRequestEntitlements: h.getRequestEntitlements }));
 // The build's copy grant table, stood in for so the test can see whether the route hands it on.
 vi.mock('@client/app/premium-generated/premiumWorkspaceCopyEntitlements.generated', () => ({
   get premiumWorkspaceCopyEntitlements() {

@@ -2,7 +2,11 @@ import { z } from 'zod';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { getGenerationJobEngine } from '@server/generationJobs/wiring';
 import { generationJobRepository } from '@bike4mind/database';
-import { appRootDeepLink, publishPushNotification, sessionDeepLink } from '@server/utils/pushNotifications';
+import {
+  appRootDeepLink,
+  publishPushNotification,
+  sessionDeepLink,
+} from '@bike4mind/server-utils/utils/pushNotifications';
 import { publishGenerationJobReadyPush } from './generationPush';
 
 const GenerationJobMessageSchema = z.object({ jobId: z.string().min(1) });

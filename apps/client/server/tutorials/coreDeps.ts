@@ -12,6 +12,7 @@ import {
 } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
 import { getOrCreateSession } from '@server/managers/sessionCrud';
+import { setCoreSessionMarker } from './sessionMarker';
 import { tutorialSheets } from './sheet';
 import type { TutorialServiceDeps } from './service';
 
@@ -39,7 +40,11 @@ export function coreTutorialDepsFor(req: Request): TutorialServiceDeps {
       Promise.all(asyncPromises).catch(error => req.logger.warn('tutorial: session side effects failed', error));
       return { id: sessionId };
     },
-    ownsSession: async (sessionId, userId) => !!(await sessionRepository.findByIdAndUserId(sessionId, userId)),
+    // A session moved into a workspace has left the main surface, so the walk no longer owns it.
+    ownsSession: async (sessionId, userId) => {
+      const session = await sessionRepository.findByIdAndUserId(sessionId, userId);
+      return !!session && !session.surface;
+    },
     // Only a notebook still carrying the tutorial's name, owned by the user, with nothing attached to it.
     deleteSession: async (sessionId, userId) => {
       const session = await sessionRepository.findByIdAndUserId(sessionId, userId);
@@ -64,6 +69,7 @@ export function coreTutorialDepsFor(req: Request): TutorialServiceDeps {
       );
       return true;
     },
+    setSessionMarker: setCoreSessionMarker,
     warn: message => req.logger.warn(message),
   };
 }

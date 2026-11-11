@@ -183,6 +183,8 @@ export const authHolders = {
       'conversationContext.github.repos.owner',
       'conversationContext.github.prs.owner',
       'conversationContext.github.issues.owner',
+      // Which code owns a tutorial walk ('core'), not a person.
+      'tutorial.owner',
     ],
   },
   SignupDomainReview: {

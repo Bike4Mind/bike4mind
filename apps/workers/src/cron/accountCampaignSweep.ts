@@ -33,9 +33,9 @@ import {
   DeviceLinkAssessError,
   liveDeviceLinkDeps,
   sweepDeviceLinks,
-} from '@server/security/autoContainment/deviceLink';
+} from '@workers/security/autoContainment/deviceLink';
 import { gradeStaleSignupBursts, liveStaleDetectionGradeDeps } from '@server/security/shadowDetectionAutoGrade';
-import { systemAuditWriter } from '@server/utils/systemAuditWriter';
+import { systemAuditWriter } from '@workers/utils/systemAuditWriter';
 
 const AUTO_GRADE_ACTOR = 'shadow-detection-auto-grade';
 const AUTO_GRADE_DEFAULT_DAYS = 7;

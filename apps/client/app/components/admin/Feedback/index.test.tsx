@@ -56,6 +56,15 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 vi.mock('papaparse', () => ({ default: { unparse: mocks.papaUnparse } }));
+// The drawer reads its record through React Query and has its own test; here only the wiring counts.
+vi.mock('./FeedbackDetailDrawer', () => ({
+  default: (props: { feedbackId?: string; onClose: () => void }) =>
+    props.feedbackId ? (
+      <div data-testid="feedback-detail-drawer-stub" data-feedback-id={props.feedbackId}>
+        <button onClick={props.onClose}>close drawer</button>
+      </div>
+    ) : null,
+}));
 
 import FeedbackTab from './index';
 
@@ -182,6 +191,46 @@ describe('FeedbackTab', () => {
       UserId: 'user-1',
       Username: 'reporter',
       UserEmail: 'reporter@example.com',
+    });
+  });
+
+  it('exports the captured client context as CSV columns, blank for older reports', async () => {
+    const withContext = {
+      ...helpFeedbackItem,
+      clientContext: {
+        platform: 'web' as const,
+        appVersion: '1.2.3',
+        path: '/notebooks',
+        viewport: { width: 1280, height: 720 },
+        model: 'some-model',
+        userAgent: 'agent/1.0',
+      },
+    };
+    const legacy = { ...helpFeedbackItem, clientContext: undefined };
+    mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([withContext]));
+    mocks.getAllFeedbackForExport.mockResolvedValue({ items: [withContext, legacy], truncated: false });
+
+    renderFeedbackTab();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+    await waitFor(() => expect(mocks.papaUnparse).toHaveBeenCalledTimes(1));
+
+    const [csvRows] = mocks.papaUnparse.mock.calls[0] as [Array<Record<string, unknown>>];
+    expect(csvRows[0]).toMatchObject({
+      Platform: 'web',
+      AppVersion: '1.2.3',
+      Page: '/notebooks',
+      Viewport: '1280x720',
+      Model: 'some-model',
+      UserAgent: 'agent/1.0',
+    });
+    expect(csvRows[1]).toMatchObject({
+      Platform: '',
+      AppVersion: '',
+      Page: '',
+      Viewport: '',
+      Model: '',
+      UserAgent: '',
     });
   });
 
@@ -564,6 +613,93 @@ describe('FeedbackTab', () => {
       renderFeedbackTab();
 
       expect(handlePageChange).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('detail drawer', () => {
+    const item = makeFeedbackItem();
+    const lastSearch = (navigate: ReturnType<typeof vi.fn>) => {
+      const [{ search, replace }] = navigate.mock.calls.at(-1) as [
+        { search: (previous: Record<string, unknown>) => Record<string, unknown>; replace: boolean },
+      ];
+      return { search: search({ tab: 'feedback', feedbackStatus: 'New' }), replace };
+    };
+
+    beforeEach(() => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([item]));
+    });
+
+    it('opens the report a row click names, keeping the rest of the URL', async () => {
+      const navigate = vi.fn();
+      mocks.useNavigate.mockReturnValue(navigate);
+
+      renderFeedbackTab();
+      await userEvent.click(screen.getByText('Some feedback content'));
+
+      expect(lastSearch(navigate)).toEqual({
+        search: { tab: 'feedback', feedbackStatus: 'New', feedbackId: 'fb-1' },
+        replace: true,
+      });
+    });
+
+    it('opens the report from the keyboard with Enter', async () => {
+      const navigate = vi.fn();
+      mocks.useNavigate.mockReturnValue(navigate);
+
+      renderFeedbackTab();
+      screen.getByTestId('feedback-row-fb-1').focus();
+      await userEvent.keyboard('{Enter}');
+
+      expect(lastSearch(navigate).search).toMatchObject({ feedbackId: 'fb-1' });
+    });
+
+    it('does not open the drawer from the status select or the row menu', async () => {
+      const navigate = vi.fn();
+      mocks.useNavigate.mockReturnValue(navigate);
+
+      renderFeedbackTab();
+      await userEvent.click(screen.getByTestId('feedback-row-status-select-fb-1'));
+      fireEvent.click(screen.getByTestId('feedback-row-actions-fb-1'));
+
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('opens from ?feedbackId= and marks the row as the open one', () => {
+      mocks.useSearch.mockReturnValue({ feedbackId: 'fb-1' });
+
+      renderFeedbackTab();
+
+      expect(screen.getByTestId('feedback-detail-drawer-stub')).toHaveAttribute('data-feedback-id', 'fb-1');
+      expect(screen.getByTestId('feedback-row-fb-1')).toHaveAttribute('aria-selected', 'true');
+    });
+
+    it('clears ?feedbackId= on close and returns focus to the row', async () => {
+      const navigate = vi.fn();
+      mocks.useNavigate.mockReturnValue(navigate);
+      mocks.useSearch.mockReturnValue({ feedbackId: 'fb-1' });
+
+      const { rerender } = renderFeedbackTab();
+      await userEvent.click(screen.getByText('close drawer'));
+      expect(lastSearch(navigate).search).toMatchObject({ feedbackId: undefined });
+
+      mocks.useSearch.mockReturnValue({});
+      rerender(<FeedbackTab />);
+
+      expect(screen.getByTestId('feedback-row-fb-1')).toHaveFocus();
+    });
+
+    it('returns focus to the table region when the closed report has no row', async () => {
+      const navigate = vi.fn();
+      mocks.useNavigate.mockReturnValue(navigate);
+      mocks.useSearch.mockReturnValue({ feedbackId: 'not-in-the-list' });
+
+      const { rerender } = renderFeedbackTab();
+      await userEvent.click(screen.getByText('close drawer'));
+
+      mocks.useSearch.mockReturnValue({});
+      rerender(<FeedbackTab />);
+
+      expect(screen.getByTestId('feedback-table-region')).toHaveFocus();
     });
   });
 });

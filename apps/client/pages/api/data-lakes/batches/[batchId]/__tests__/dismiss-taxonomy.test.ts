@@ -47,7 +47,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 // Real toAccessContext pulls in entitlements/subscription lookups that are out of scope here;
 // stub it to the caller identity, same shape the route previously built inline.
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../dismiss-taxonomy';
 

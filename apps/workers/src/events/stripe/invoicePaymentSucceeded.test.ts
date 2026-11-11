@@ -12,7 +12,7 @@ import { emitProductEvent } from '@bike4mind/server-utils/analytics/emitActiveEv
 import { stableEventId } from '@bike4mind/server-utils/analytics/signupEvents';
 import { paymentAttemptRepository, userRepository } from '@bike4mind/database';
 import { recordSubscriptionPaymentReward } from '@bike4mind/server-utils/referrals/subscriptionReward';
-import { postNewPaidSubscriptionToSlack } from '@server/integrations/slack/subscriptionLifecycle';
+import { postNewPaidSubscriptionToSlack } from '@bike4mind/server-utils/integrations/slack/subscriptionLifecycle';
 
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
@@ -47,7 +47,7 @@ vi.mock('@workers/utils/eventContext', () => ({
   withEventContext: (h: any) => h,
 }));
 
-vi.mock('@server/integrations/slack/subscriptionLifecycle', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/subscriptionLifecycle', () => ({
   postNewPaidSubscriptionToSlack: vi.fn().mockResolvedValue(undefined),
 }));
 

@@ -21,6 +21,7 @@ import {
   isAutomationVerdict,
   SELF_ASSESSED_SHADOW_DETECTORS,
   SHADOW_DETECTORS,
+  hasAdminPermission,
   shadowDetectionPrecision,
   shadowDetectionSignalTrip,
   type AccountCampaignIgnoredReason,
@@ -38,8 +39,12 @@ import {
   type ShadowDetectionVerdictSource,
 } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
+import { useUser } from '@client/app/contexts/UserContext';
+import { useAiAdvisory, type AiAbuseAdvisoryRow } from '@client/app/hooks/data/aiAdvisory';
 import {
+  ACCEPTED_AI_REASON,
   AdminPermissionAction,
+  AiSuggestion,
   ADMIN_REASON_PRESETS,
   ActionDialog,
   AdminPageHeader,
@@ -54,9 +59,12 @@ import {
   formatUtc,
   relativeTime,
   useAdminListUrlState,
+  type AdminReasonDraft,
   type AdminSelection,
+  type AiSuggestionData,
   type DataColumn,
   type DataTableGroup,
+  type DataTableRowShortcut,
   type DataTableSort,
 } from './shared';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
@@ -102,6 +110,7 @@ const ACTION_DISPLAY: Record<ShadowDetectionAction, { label: string; tone: Admin
   suspend: { label: 'Suspend', tone: 'warn' },
   blockIp: { label: 'Block IP', tone: 'warn' },
   confirmHold: { label: 'Confirm hold', tone: 'neutral' },
+  releaseHold: { label: 'Release hold', tone: 'neutral' },
   none: { label: 'None', tone: 'neutral' },
 };
 
@@ -923,6 +932,27 @@ type VerdictDialogProps = {
   /** Present while another unreviewed detection follows this one: opens it after a successful grade. */
   onNext?: (gradedIds: readonly string[]) => void;
   onBulkResult: (result: ShadowDetectionBulkVerdictResult) => void;
+  initialVerdict?: ShadowDetectionVerdict;
+  initialReason?: AdminReasonDraft;
+  /** Opens the AI suggestion's why-wrong picker, for a dialog reached through the row's O key. */
+  initialOverriding?: boolean;
+};
+
+type Grading = { row: ShadowDetectionRow; prefill?: 'accept' | 'override' };
+
+/** An unreviewed row's AI advisory as a suggestion to confirm abuse; null when there is none. */
+const advisorySuggestion = (
+  row: ShadowDetectionRow,
+  advisories: ReadonlyMap<string, AiAbuseAdvisoryRow>
+): AiSuggestionData | null => {
+  const advisory = row.verdict ? undefined : advisories.get(row.id);
+  if (!advisory) return null;
+  return {
+    id: advisory.detectionId,
+    proposal: VERDICT_DISPLAY.confirmed_abuse.label,
+    probability: advisory.abuseProbability,
+    createdAt: advisory.assessedAt,
+  };
 };
 
 const CAPPED_GROUP_HINT = 'This group was cut to its stored cap, so it cannot be saved as a watch.';
@@ -939,10 +969,18 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
   onRowChange,
   onNext,
   onBulkResult,
+  initialVerdict,
+  initialReason,
+  initialOverriding,
 }) => {
   const single = useShadowDetectionVerdict();
   const bulk = useShadowDetectionBulkVerdict();
-  const [verdictChoice, setVerdictChoice] = useState<RowChoice<ShadowDetectionVerdict>>(null);
+  const [verdictChoice, setVerdictChoice] = useState<RowChoice<ShadowDetectionVerdict>>(
+    initialVerdict ? { rowId: row.id, value: initialVerdict } : null
+  );
+  const [reasonSeed, setReasonSeed] = useState(initialReason);
+  // Bumped to re-seed the reason after an in-dialog Accept.
+  const [formKey, setFormKey] = useState(0);
   const [skipRelatedChoice, setSkipRelatedChoice] = useState<RowChoice<boolean>>(null);
   // The server's explanation of a stale verdict, or null when there is no conflict to show.
   const [conflictChoice, setConflictChoice] = useState<RowChoice<string>>(null);
@@ -1022,6 +1060,8 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
       title={title}
       description="Grading measures the detector; it changes nothing on the account. There is no undo: to correct a verdict, record another one. Every verdict stays in the history."
       reasonPresets={ADMIN_REASON_PRESETS.shadowDetectionVerdict}
+      initialReason={reasonSeed}
+      formKey={formKey}
       confirmLabel={verdict ? `Record ${VERDICT_DISPLAY[verdict].label.toLowerCase()}` : 'Record verdict'}
       blockedReason={verdict ? null : 'Pick a verdict (keys 1-4).'}
       pending={pending}
@@ -1142,7 +1182,18 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
       <AbuseNextStep userIds={row.userIds} />
       <SignalList row={row} />
       {!SELF_ASSESSED_SHADOW_DETECTORS.includes(row.detector) && (
-        <ShadowDetectionAssessmentPanel detectionId={row.id} enabled />
+        <ShadowDetectionAssessmentPanel
+          detectionId={row.id}
+          enabled
+          onAccept={proposed => {
+            pickVerdict(proposed);
+            setReasonSeed(ACCEPTED_AI_REASON);
+            setFormKey(key => key + 1);
+          }}
+          // The why-wrong pick is not recorded until suggestion decisions are stored.
+          onOverride={() => setVerdictChoice(null)}
+          initialOverriding={initialOverriding}
+        />
       )}
       <VerdictHistory row={row} now={now} reviewers={context.reviewers} />
     </ActionDialog>
@@ -1203,13 +1254,25 @@ export const ShadowDetectionsTab: React.FC = () => {
   const [view, updateView] = useAdminListUrlState(SHADOW_DETECTION_SEARCH_KEYS);
   const { detector, verdict } = readShadowDetectionFilters(view.filters);
   const detections = useShadowDetections(toListQuery(detector, verdict));
-  const [grading, setGrading] = useState<ShadowDetectionRow | null>(null);
+  const [grading, setGrading] = useState<Grading | null>(null);
   const [selection, setSelection] = useState<AdminSelection>(EMPTY_SELECTION);
   const [bulkGrading, setBulkGrading] = useState<readonly ShadowDetectionRow[] | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [groupAccounts, setGroupAccounts] = useState(false);
   const [sort, setSort] = useState<DataTableSort>();
   const [now] = useState(() => Date.now());
+  const { currentUser } = useUser();
+  const canGrade = hasAdminPermission(currentUser, 'users:moderate');
+  // A 403 or failed fetch leaves no data: no chips, and A/O stay inert.
+  const advisory = useAiAdvisory();
+  const advisories = new Map((advisory.data?.advisories ?? []).map(entry => [entry.detectionId, entry]));
+  const decisions = (row: ShadowDetectionRow): Partial<Record<DataTableRowShortcut, () => void>> =>
+    canGrade && advisorySuggestion(row, advisories)
+      ? {
+          a: () => setGrading({ row, prefill: 'accept' }),
+          o: () => setGrading({ row, prefill: 'override' }),
+        }
+      : {};
 
   // A selection and its open dialogs belong to the filters under which they were reviewed.
   const filterKey = JSON.stringify([detector ?? null, verdict]);
@@ -1306,7 +1369,7 @@ export const ShadowDetectionsTab: React.FC = () => {
       row => !row.verdict && !skip.has(row.id)
     );
   };
-  const nextAfterGrading = grading ? nextUnreviewed(grading, []) : undefined;
+  const nextAfterGrading = grading ? nextUnreviewed(grading.row, []) : undefined;
   const summary = (detections.data?.summary ?? [])
     .filter(row => !detector || row.detector === detector)
     .sort((a, b) => a.detector.localeCompare(b.detector) || b.policyVersion - a.policyVersion);
@@ -1362,16 +1425,26 @@ export const ShadowDetectionsTab: React.FC = () => {
     {
       id: 'verdict',
       label: 'Verdict',
-      render: row => (
-        <Stack gap={0.25} alignItems="flex-start" sx={{ minWidth: 0 }}>
-          <VerdictChip
-            verdict={row.verdict}
-            automated={isAutomationVerdict(row)}
-            testId={`shadow-detection-verdict-${row.id}`}
-          />
-          <RowVerdictAttribution row={row} reviewers={context.reviewers} />
-        </Stack>
-      ),
+      render: row => {
+        const { a, o } = decisions(row);
+        return (
+          <Stack gap={0.25} alignItems="flex-start" sx={{ minWidth: 0 }}>
+            <VerdictChip
+              verdict={row.verdict}
+              automated={isAutomationVerdict(row)}
+              testId={`shadow-detection-verdict-${row.id}`}
+            />
+            <RowVerdictAttribution row={row} reviewers={context.reviewers} />
+            <AiSuggestion
+              variant="row"
+              suggestion={advisorySuggestion(row, advisories)}
+              onAccept={a}
+              onOverride={o}
+              data-testid={`shadow-detection-ai-${row.id}`}
+            />
+          </Stack>
+        );
+      },
       sortable: true,
       width: '11rem',
     },
@@ -1387,7 +1460,7 @@ export const ShadowDetectionsTab: React.FC = () => {
             color="neutral"
             disabled={disabled}
             data-testid={`shadow-detection-grade-btn-${row.id}`}
-            onClick={() => setGrading(row)}
+            onClick={() => setGrading({ row })}
           >
             {row.verdict ? 'View review' : 'Review evidence'}
           </Button>
@@ -1524,10 +1597,12 @@ export const ShadowDetectionsTab: React.FC = () => {
         loading={detections.isPending}
         error={detections.error ? "Couldn't load detections." : undefined}
         onRetry={() => void detections.refetch()}
-        onRowActivate={setGrading}
+        onRowActivate={row => setGrading({ row })}
         rowActions={rowActions}
-        // Fixed-width columns (incl. selection and row actions) total 65.75rem, leaving Summary a 12rem
-        // floor; keep in sync with the column widths above. Narrower screens scroll sideways.
+        rowShortcuts={decisions}
+        // Fixed-width columns (incl. the 2.75rem selection and 3.5rem row-action columns) total 65.75rem,
+        // leaving Summary a 12rem floor; keep in sync with the column widths above and in DataTable.
+        // Narrower screens scroll sideways.
         minWidth="77.75rem"
         empty={
           <EmptyState
@@ -1577,16 +1652,26 @@ export const ShadowDetectionsTab: React.FC = () => {
       </BulkActionBar>
       {grading && (
         <VerdictDialog
-          row={grading}
+          row={grading.row}
           now={now}
           context={context}
           onClose={() => setGrading(null)}
-          onRowChange={setGrading}
-          onNext={nextAfterGrading ? graded => setGrading(nextUnreviewed(grading, graded) ?? null) : undefined}
+          onRowChange={row => setGrading({ row })}
+          onNext={
+            nextAfterGrading
+              ? graded => {
+                  const next = nextUnreviewed(grading.row, graded);
+                  setGrading(next ? { row: next } : null);
+                }
+              : undefined
+          }
           onBulkResult={result => {
             setNotice(bulkResultNotice(result));
             if (result.failed.length > 0) setSelection({ mode: 'explicit', ids: result.failed });
           }}
+          initialVerdict={grading.prefill === 'accept' ? 'confirmed_abuse' : undefined}
+          initialReason={grading.prefill === 'accept' ? ACCEPTED_AI_REASON : undefined}
+          initialOverriding={grading.prefill === 'override'}
         />
       )}
       {bulkGrading && (

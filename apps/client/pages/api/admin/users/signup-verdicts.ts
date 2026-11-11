@@ -1,14 +1,14 @@
 import { z } from 'zod';
 import { ApiKeyScope, MODERATION_PAGE_READ } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   SIGNUP_TIMESERIES_RANGES,
   SIGNUP_TZ_OFFSET_MESSAGE,
   SIGNUP_VERDICTS_MAX_IDS,
   signupTzOffsetSchema,
 } from '@bike4mind/server-utils/app/utils/signupSignals';
-import { getSignupVerdicts } from '@server/users/signupTimeseries';
+import { getSignupVerdicts } from '@bike4mind/server-utils/users/signupTimeseries';
 
 // ms. Room for clock skew between the server that answered the chart and this one.
 const AS_OF_FUTURE_SKEW_MS = 60_000;

@@ -31,7 +31,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap,
 }));
-vi.mock('@server/security/autoContainment/deviceLink', () => ({
+vi.mock('@workers/security/autoContainment/deviceLink', () => ({
   sweepDeviceLinks,
   liveDeviceLinkDeps: () => ({}),
   DeviceLinkAssessError: class DeviceLinkAssessError extends Error {},
@@ -40,7 +40,7 @@ vi.mock('@server/security/shadowDetectionAutoGrade', () => ({
   gradeStaleSignupBursts,
   liveStaleDetectionGradeDeps: (deps: unknown) => deps,
 }));
-vi.mock('@server/utils/systemAuditWriter', () => ({ systemAuditWriter: () => vi.fn() }));
+vi.mock('@workers/utils/systemAuditWriter', () => ({ systemAuditWriter: () => vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%' } }));
 
 import type { Context } from 'aws-lambda';

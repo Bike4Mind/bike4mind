@@ -125,6 +125,7 @@ export * from './schemas/completionSynchrony';
 export * from './schemas/shadowDetection';
 export * from './schemas/campaignWatch';
 export * from './schemas/abuseAssessment';
+export * from './schemas/adminAi';
 export * from './schemas/stripeDispute';
 export * from './schemas/autoContainment';
 export * from './utils/artifactHelpers';

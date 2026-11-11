@@ -60,6 +60,7 @@ import type {
   LifecycleDateChange,
   LifecycleSuggestion,
   LifecycleTransition,
+  LongContextGap,
   ModelDiscoveryAdapters,
   ModelDiscoveryMetrics,
   ModelDiscoveryRunResult,
@@ -549,6 +550,7 @@ async function executeRun(
     priceFlags: merged.priceFlags.slice(0, MAX_PERSISTED_RUN_DETAIL),
     priceRows: plannedPrices.slice(0, MAX_PERSISTED_RUN_DETAIL),
     priceOverrides: merged.priceOverrides.slice(0, MAX_PERSISTED_RUN_DETAIL),
+    longContextGaps: merged.longContextGaps.slice(0, MAX_PERSISTED_RUN_DETAIL),
     priceSkips: merged.priceSkips.slice(0, MAX_PERSISTED_RUN_DETAIL),
     lifecycleTransitions: merged.transitions.slice(0, MAX_PERSISTED_RUN_DETAIL),
     catalogDiff: merged.diff.slice(0, MAX_PERSISTED_RUN_DETAIL),
@@ -559,6 +561,7 @@ async function executeRun(
       priceFlags: merged.priceFlags.length,
       priceRows: plannedPrices.length,
       priceOverrides: merged.priceOverrides.length,
+      longContextGaps: merged.longContextGaps.length,
       priceSkips: merged.priceSkips.length,
       lifecycleTransitions: merged.transitions.length,
       catalogDiff: merged.diff.length,
@@ -570,7 +573,8 @@ async function executeRun(
       `skipped=${describeSkips(skippedSources)} ` +
       `passes=${passes.length} changes=${merged.diff.length} appended=${merged.appended} ` +
       `dropped=${merged.droppedRecords.length} prices=${merged.priceRows.length} priced=${merged.pricesAppended} ` +
-      `flagged=${merged.priceFlags.length} deprecated=${deprecated.length} suggested=${merged.suggestions.length}`
+      `flagged=${merged.priceFlags.length} longContextGaps=${merged.longContextGaps.length} ` +
+      `deprecated=${deprecated.length} suggested=${merged.suggestions.length}`
   );
 
   return {
@@ -583,7 +587,12 @@ async function executeRun(
     diff: merged.diff,
     droppedRecords: merged.droppedRecords,
     absence: passes[0].plan.absence,
-    prices: { rows: plannedPrices, flags: merged.priceFlags, overrides: merged.priceOverrides },
+    prices: {
+      rows: plannedPrices,
+      flags: merged.priceFlags,
+      overrides: merged.priceOverrides,
+      longContextGaps: merged.longContextGaps,
+    },
     lifecycle: {
       transitions: merged.transitions,
       dateChanges: merged.dateChanges,
@@ -972,6 +981,7 @@ interface RunAggregate {
   priceRows: IModelPriceInput[];
   priceFlags: PriceFlag[];
   priceOverrides: PriceOverride[];
+  longContextGaps: LongContextGap[];
   priceSkips: PriceSkip[];
   transitions: LifecycleTransition[];
   dateChanges: LifecycleDateChange[];
@@ -1021,6 +1031,11 @@ function aggregate(passes: readonly CompletedPass[]): RunAggregate {
     priceOverrides: lastPerKey(
       plans.flatMap(plan => plan.prices.overrides),
       override => override.modelId
+    ),
+    // Same reason: every pass re-plans a flat row and re-raises its gap.
+    longContextGaps: lastPerKey(
+      plans.flatMap(plan => plan.prices.longContextGaps),
+      gap => gap.modelId
     ),
     priceSkips: lastPerKey(
       plans.flatMap(plan => plan.prices.skipped),
@@ -1629,7 +1644,7 @@ function skippedResult(
     diff: [],
     droppedRecords: [],
     absence: { sighted: [], missed: [], frozenBackends: [], frozenProfileIds: [] },
-    prices: { rows: [], flags: [], overrides: [] },
+    prices: { rows: [], flags: [], overrides: [], longContextGaps: [] },
     lifecycle: { transitions: [], dateChanges: [], suggestions: [], wouldDeprecate: [] },
     metrics: emptyMetrics(),
     passes: 1,

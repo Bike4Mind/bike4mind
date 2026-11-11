@@ -14,7 +14,7 @@ import path from 'node:path';
  * Static because the two `agentExecutor.ts` sites live inside `processExecution` /
  * `dispatchSubagent`, which have no test harness; the filter's behavior is covered by
  * apps/workers/src/queueHandlers/agentExecutor.toolAvailability.test.ts and
- * apps/client/server/deepAgent/toolMaterializer.test.ts.
+ * packages/server-utils/src/deepAgent/toolMaterializer.test.ts.
  *
  * Scoped to the open-source tree on purpose: `packages/premium/*` is a set of hydrated private
  * overlays that exist only on a developer box, so including them would make this pass in CI and

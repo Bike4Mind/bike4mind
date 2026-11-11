@@ -1,5 +1,5 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
-import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
+import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
 import { actorScopeForKey } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express } from 'express';
 import {
@@ -44,7 +44,7 @@ import { cliCompletionErrorFields, sanitizeErrorMessage } from '@server/utils/er
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
-import { getUserEntitlements } from '@server/entitlements';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
 import { httpErrorToResponse } from '@server/middlewares/errorHandler';
 import {
   admitApiKeyCompletion,
@@ -53,7 +53,7 @@ import {
 } from '@server/utils/untrustedCompletionQuota';
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
-import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
+import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 
 /**
  * CLI completions with WebSocket response streaming (`/api/ai/v1/ws-completions`), served by

@@ -34,7 +34,7 @@ import {
   type RemoteMcpRunPayload,
   type RemoteMcpRunner,
 } from '@bike4mind/server-utils/mcpConnections/remoteMcpRunner';
-import { describeRemoteMcpError } from './describeRemoteMcpError';
+import { describeRemoteMcpError } from '@bike4mind/server-utils/mcpConnections/describeRemoteMcpError';
 
 export { describeRemoteMcpError };
 import { cleanMcpToolText } from '@bike4mind/server-utils/mcpConnections/toolDiscovery';
@@ -56,7 +56,7 @@ import {
   resolveCustomMcpContext,
   type CustomMcpContext,
   type RemoteMcpNetworkOptions,
-} from './customMcpAccess';
+} from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import {
   OAuthGrantSupersededError,
   OAuthReconnectRequiredError,

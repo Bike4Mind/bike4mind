@@ -27,7 +27,9 @@ const mocks = vi.hoisted(() => ({
   acquireLease: vi.fn(),
 }));
 
-vi.mock('./requestActivity', () => ({ collectRequestActivity: vi.fn() }));
+vi.mock('@bike4mind/server-utils/security/abuseAssessment/requestActivity', () => ({
+  collectRequestActivity: vi.fn(),
+}));
 
 vi.mock('@bike4mind/utils', async importActual => ({
   ...(await importActual<typeof import('@bike4mind/utils')>()),
@@ -68,7 +70,7 @@ vi.mock('@bike4mind/server-utils/decisions/providers', () => ({
 }));
 
 import { assessShadowDetection, replayAbuseAssessments, sweepAbuseAssessments } from './abuseAssessment';
-import { collectRequestActivity } from './requestActivity';
+import { collectRequestActivity } from '@bike4mind/server-utils/security/abuseAssessment/requestActivity';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
 const DETECTION_ID = '65f000000000000000000001';

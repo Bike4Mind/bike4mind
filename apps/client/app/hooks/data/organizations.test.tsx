@@ -10,12 +10,18 @@ import {
   useSearchUserOrganizations,
   useSetMemberCreditDefault,
   useSetMemberCreditOverride,
+  useSetOrganizationManager,
+  useTransferOrganizationOwnership,
 } from './organizations';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { put: vi.fn(), get: vi.fn() } }));
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: { put: vi.fn(), get: vi.fn(), delete: vi.fn(), post: vi.fn() },
+}));
 
 const put = api.put as unknown as Mock;
+const del = api.delete as unknown as Mock;
+const post = api.post as unknown as Mock;
 
 const renderWithClient = <T,>(useHook: () => T) => {
   const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
@@ -155,5 +161,45 @@ describe('cancelled organization refreshes', () => {
     expect(requestOptions).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
     view.unmount();
     queryClient.clear();
+  });
+});
+
+describe('manager and ownership mutations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    put.mockResolvedValue({ data: { id: 'org1' } });
+    del.mockResolvedValue({ data: { id: 'org1' } });
+    post.mockResolvedValue({ data: { organizationId: 'org1', ownerId: 'u1' } });
+  });
+
+  it('useSetOrganizationManager PUTs to appoint and never DELETEs', async () => {
+    const { result, invalidateSpy } = renderWithClient(useSetOrganizationManager);
+
+    await result.current.mutateAsync({ organizationId: 'org1', userId: 'u1', isManager: true });
+
+    expect(put).toHaveBeenCalledWith('/api/organizations/org1/members/u1/manager');
+    expect(del).not.toHaveBeenCalled();
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['organizations'] });
+    expect(toast.success).toHaveBeenCalledWith('Member is now a manager');
+  });
+
+  it('useSetOrganizationManager DELETEs to remove and never PUTs', async () => {
+    const { result } = renderWithClient(useSetOrganizationManager);
+
+    await result.current.mutateAsync({ organizationId: 'org1', userId: 'u1', isManager: false });
+
+    expect(del).toHaveBeenCalledWith('/api/organizations/org1/members/u1/manager');
+    expect(put).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('Manager removed');
+  });
+
+  it('useTransferOrganizationOwnership POSTs the new owner and refetches the org and its roster', async () => {
+    const { result, invalidateSpy } = renderWithClient(useTransferOrganizationOwnership);
+
+    await result.current.mutateAsync({ organizationId: 'org1', newOwnerId: 'u1' });
+
+    expect(post).toHaveBeenCalledWith('/api/organizations/org1/transfer-ownership', { newOwnerId: 'u1' });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['organizations'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['users', 'organization'] });
   });
 });

@@ -1,16 +1,30 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 
+// Must stay in sync with DLQ_REPLAY_SAFETY in packages/server-utils/src/utils/dlqRegistry.ts.
+export type DlqReplaySafety = 'safe' | 'side-effects' | 'unsafe';
+
 export interface DlqQueueInfo {
   label: string;
   displayName: string;
   application: string;
+  /** Absent on older servers, whose registered queues all have replay destinations. */
+  hasReplayDestination?: boolean;
+  // Help fields are absent for overlay-contributed queues.
+  description?: string;
+  replay?: DlqReplaySafety;
+  replayNote?: string;
+  owner?: string;
   approximateMessageCount: number;
   approximateNotVisibleCount: number;
+  /** Absent when the queue attributes could not be read. */
+  messageRetentionSeconds?: number;
 }
 
 export interface DlqMessage {
+  failureLookupFailed?: boolean;
   messageId: string;
+  failure?: { errorMessage: string; category: 'refused' | 'timeout' | 'invalid output' | 'bug' | 'unknown' };
   body: string;
   receiptHandle?: string;
   sentTimestamp?: string;

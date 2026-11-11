@@ -2,13 +2,13 @@ import { ABUSE_ASSESSMENT_MAX_ACCOUNTS, type AbuseAssessmentGroupEvidence } from
 import { loadDeviceLinkAccounts, usageEventRepository, userRepository } from '@bike4mind/database';
 import type { UserSignupLinkFacts } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { findLinkedAccounts, type LinkedAccount } from '@server/billing/linkedAccounts';
+import { findLinkedAccounts, type LinkedAccount } from '@bike4mind/server-utils/billing/linkedAccounts';
+import { loadAutoContainmentConfig } from '@server/security/autoContainment/config';
 import {
   DEFAULT_DEVICE_LINK_CONFIG,
   evaluateDeviceLinks,
   liveDeviceLinkReaders,
 } from '@server/security/autoContainment/deviceLinkEvaluation';
-import { loadAutoContainmentConfig } from '@server/security/autoContainment/executor';
 import type { AbuseAssessmentGroupEvidenceSource } from './abuseAssessment';
 
 /**

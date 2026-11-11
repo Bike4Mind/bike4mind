@@ -13,8 +13,9 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { fileContentUrl } from '@server/files/browserFileSigner';
 import { fabFilesService } from '@bike4mind/services';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import {
   dataLakeArticleListResponseSchema,
   getFileMembershipArm,
@@ -112,17 +113,18 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           adminSettings: adminSettingsRepository,
         },
         storage: {
-          ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
-          generateSignedUrl: async (path: string, expireInSeconds: number) => {
+          generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
             try {
               return await getFilesStorage().getSignedUrl(path, 'get', {
                 expiresIn: expireInSeconds,
+                signingDate: options?.signingDate,
                 audience: 'browser',
               });
             } catch {
               return null;
             }
           },
+          contentUrl: fileContentUrl,
         },
       },
       {

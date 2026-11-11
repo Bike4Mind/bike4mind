@@ -57,7 +57,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: {},
   dataLakeFindingRepository: { findById: h.findById },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/dataLakes/recordFindingResolutionBelief', () => ({
   recordFindingResolutionBelief: h.recordFindingResolutionBelief,
 }));
