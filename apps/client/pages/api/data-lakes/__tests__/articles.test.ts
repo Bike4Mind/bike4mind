@@ -187,6 +187,19 @@ describe('GET /api/data-lakes/articles access-event audit', () => {
     expect(mockRecord).not.toHaveBeenCalled();
   });
 
+  it('records and sends nothing when member-access classification is incomplete', async () => {
+    mockQueryDataLakeArticles.mockResolvedValue({
+      data: [{ id: 'f1', tags: [{ name: 'datalake:lake1' }] }],
+      total: 1,
+      hasMore: false,
+    });
+    mockAdminBypass.mockRejectedValue(new Error('classification unavailable'));
+    const { res, json } = makeRes();
+    await expect(route(makeReq(), res)).rejects.toThrow('classification unavailable');
+    expect(mockRecord).not.toHaveBeenCalled();
+    expect(json).not.toHaveBeenCalled();
+  });
+
   it('marks a bypass-only lake and fails the request when that audit write rejects', async () => {
     mockQueryDataLakeArticles.mockResolvedValue({
       data: [{ id: 'f1', tags: [{ name: 'datalake:lake1' }] }],

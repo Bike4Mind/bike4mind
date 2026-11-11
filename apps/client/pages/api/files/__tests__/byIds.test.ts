@@ -213,6 +213,15 @@ describe('GET /api/files/byIds', () => {
       expect(recordLakeAccessEvent.mock.calls[0][1]).toMatchObject({ adminBypassLakeIds: ['lake-1'] });
     });
 
+    it('returns no partial owned-file result when lake classification is incomplete', async () => {
+      arrangeLakeFile();
+      adminBypassLakeIds.mockRejectedValue(new Error('classification unavailable'));
+      const { res, getJson } = makeRes();
+      await expect(handler(makeReq([OWNED_ID, LAKE_ID]), res)).rejects.toThrow('classification unavailable');
+      expect(recordLakeAccessEvent).not.toHaveBeenCalled();
+      expect(getJson()).toBeUndefined();
+    });
+
     it('fails the request when the audit write rejects', async () => {
       arrangeLakeFile();
       adminBypassLakeIds.mockResolvedValue(['lake-1']);

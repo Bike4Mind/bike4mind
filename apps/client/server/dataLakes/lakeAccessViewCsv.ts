@@ -1,4 +1,4 @@
-import type { LakeAccessView } from '@bike4mind/common';
+import type { LakeAccessView, LakeAccessViewWithAdminBypass } from '@bike4mind/common';
 import { describeLakeAccessChannel, lakeAccessChannelsComposeConjunctively } from '@bike4mind/common';
 import { escapeCsvCell } from '@client/app/utils/csv';
 
@@ -25,7 +25,7 @@ const iso = (d: Date | null | undefined): string => (d ? new Date(d).toISOString
  * Pure and deterministic (input order is already stabilized by the assembler), so it is unit-tested
  * directly and the route just streams the string.
  */
-export function lakeAccessViewToCsv(view: LakeAccessView): string {
+export function lakeAccessViewToCsv(view: LakeAccessViewWithAdminBypass): string {
   const lines: string[] = [];
 
   lines.push('# Data lake access view');

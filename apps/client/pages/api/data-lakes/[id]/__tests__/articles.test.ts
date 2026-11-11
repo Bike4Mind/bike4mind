@@ -338,6 +338,17 @@ describe('GET /api/data-lakes/:id/articles access-event audit', () => {
     expect(h.record.mock.calls[0][0]).toMatchObject({ resolvedLakeIds: ['lake1'], adminBypassLakeIds: ['lake1'] });
   });
 
+  it('records and sends nothing when member-access classification is incomplete', async () => {
+    h.search.mockResolvedValue({ data: [{ id: 'f1' }], total: 1, hasMore: false });
+    h.adminBypassLakeIds.mockRejectedValue(new Error('classification unavailable'));
+    const { res, json } = makeRes();
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res)).rejects.toThrow(
+      'classification unavailable'
+    );
+    expect(h.record).not.toHaveBeenCalled();
+    expect(json).not.toHaveBeenCalled();
+  });
+
   it('fails the request, sending nothing, when an admin-bypass audit write rejects', async () => {
     h.search.mockResolvedValue({ data: [{ id: 'f1' }], total: 1, hasMore: false });
     h.adminBypassLakeIds.mockResolvedValue(['lake1']);

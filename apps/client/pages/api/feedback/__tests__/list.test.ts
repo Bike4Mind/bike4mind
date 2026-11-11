@@ -285,6 +285,19 @@ describe('GET /api/feedback', () => {
     expect(mockRecordFeedbackRead).not.toHaveBeenCalled();
   });
 
+  it('keeps the ownership filter on a nonadmin facets-only query', async () => {
+    mockDistinct.mockResolvedValue(['Own organization']);
+    const ability = ownAbility('user-1');
+    const { req, res } = buildRequest({ facetsOnly: 'true' }, ability);
+    await runHandler(req, res);
+    const readable = accessibleBy(ability, 'read').ofType(FeedbackModelMock);
+    expect(JSON.stringify(readable)).toContain('user-1');
+    expect(mockDistinct).toHaveBeenCalledWith('organization', readable);
+    expect(mockFind).not.toHaveBeenCalled();
+    expect(mockRecordFeedbackRead).not.toHaveBeenCalled();
+    expect(res._getJSONData().organizations).toEqual(['Own organization']);
+  });
+
   it('reads rows as usual when facetsOnly is false', async () => {
     const { req, res } = buildRequest({ facetsOnly: 'false' }, adminAbility());
     await runHandler(req, res);

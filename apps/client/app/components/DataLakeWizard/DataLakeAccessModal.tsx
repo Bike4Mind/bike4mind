@@ -27,8 +27,9 @@ import type {
   DataLakePrincipalType,
   LakeAccessChannel,
   LakeAccessGrantView,
-  LakeAccessHistoryEntry,
+  LakeAccessHistoryEntryWithAdminBypass,
   LakeAccessView,
+  LakeAccessViewWithAdminBypass,
   LakeOwnershipCandidateList,
 } from '@bike4mind/common';
 import { describeLakeAccessChannel, lakeAccessChannelsComposeConjunctively } from '@bike4mind/common';
@@ -182,7 +183,7 @@ function ChannelChip({ channel }: { channel: LakeAccessChannel }) {
   );
 }
 
-function HistoryRow({ entry }: { entry: LakeAccessHistoryEntry }) {
+function HistoryRow({ entry }: { entry: LakeAccessHistoryEntryWithAdminBypass }) {
   const reader = entry.principalName ?? entry.principalId;
   const readerKind = `${entry.principalKind}${entry.onBehalfOfUserId ? ` (for ${entry.onBehalfOfName ?? entry.onBehalfOfUserId})` : ''}`;
   return (
@@ -726,7 +727,7 @@ function AccessViewBody({
   canTransferOwnership,
   readerGrantsEnforced,
 }: {
-  view: LakeAccessView;
+  view: LakeAccessViewWithAdminBypass;
   canTransferOwnership: boolean;
   readerGrantsEnforced: boolean;
 }) {

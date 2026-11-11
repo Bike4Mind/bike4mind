@@ -145,6 +145,15 @@ describe('POST /api/data-lakes/compute-sync-delta access-event audit', () => {
     expect(h.record.mock.calls[0][0]).toMatchObject({ adminBypassLakeIds: ['lake1'] });
   });
 
+  it('records and sends nothing when member-access classification is incomplete', async () => {
+    h.findByContentHashesInDataLake.mockResolvedValue([{ id: 'f1', fileName: 'a.md', contentHash: HASH_A }]);
+    h.adminBypassLakeIds.mockRejectedValue(new Error('classification unavailable'));
+    const { res, json } = makeRes();
+    await expect(route(makeReq(REQ_BODY), res)).rejects.toThrow('classification unavailable');
+    expect(h.record).not.toHaveBeenCalled();
+    expect(json).not.toHaveBeenCalled();
+  });
+
   it('fails the request, sending nothing, when an admin-bypass audit write rejects', async () => {
     h.findByContentHashesInDataLake.mockResolvedValue([{ id: 'f1', fileName: 'a.md', contentHash: HASH_A }]);
     h.adminBypassLakeIds.mockResolvedValue(['lake1']);

@@ -4,9 +4,12 @@ import type {
   IDataLakeDocument,
   ILakeAccessEventDocument,
   LakeAccessSurface,
+  LakeAccessHistoryEntry,
+  LakeAccessView,
 } from '@bike4mind/common';
 import {
   aggregateAccessHistory,
+  aggregateLakeAccessHistory,
   aggregateCandidateCapPressure,
   aggregateSupersessionPressure,
   assembleLakeAccessView,
@@ -79,6 +82,42 @@ const event = (over: Partial<ILakeAccessEventDocument>): ILakeAccessEventDocumen
   }) as ILakeAccessEventDocument;
 
 describe('aggregateAccessHistory', () => {
+  it('preserves the legacy one-argument history contract without fabricating an uncomputed metric', () => {
+    const legacy: LakeAccessHistoryEntry = {
+      principalKind: 'user',
+      principalId: 'u1',
+      onBehalfOfUserId: undefined,
+      readCount: 1,
+      noResultCount: 0,
+      lastAccessedAt: NOW,
+      firstAccessedAt: NOW,
+      surfaces: ['data-lake-semantic-search'],
+    };
+    expect(aggregateAccessHistory([event({ adminBypassLakeIds: ['lake1'] })])).toStrictEqual([legacy]);
+    const legacyView: LakeAccessView = {
+      lakeId: 'lake1',
+      lakeName: 'Lake',
+      grants: [],
+      channels: [],
+      history: [legacy],
+      historyTruncated: false,
+      candidateCapPressure: { turnsWithSignal: 0, turnsAtCap: 0 },
+      supersessionPressure: { turnsWithSignal: 0, turnsWithSuppression: 0, filesSuppressed: 0 },
+      generatedAt: NOW,
+    };
+    const legacyAssembler: (...args: Parameters<typeof assembleLakeAccessView>) => Promise<LakeAccessView> =
+      assembleLakeAccessView;
+    expect(legacyView.history).toStrictEqual([legacy]);
+    expect(legacyAssembler).toBe(assembleLakeAccessView);
+  });
+
+  it('requires a lake scope and counts the same event differently for different lakes', () => {
+    const events = [event({ adminBypassLakeIds: ['lake1'] })];
+    expect(aggregateLakeAccessHistory(events, 'lake1')[0].adminBypassReadCount).toBe(1);
+    expect(aggregateLakeAccessHistory(events, 'lake2')[0].adminBypassReadCount).toBe(0);
+    expect(() => aggregateLakeAccessHistory(events, '')).toThrow('A lake id is required');
+  });
+
   it('collapses to one row per principal with counts, first/last, and distinct sorted surfaces', () => {
     const t0 = new Date('2026-08-10T00:00:00Z');
     const t1 = new Date('2026-08-11T00:00:00Z');
@@ -86,7 +125,7 @@ describe('aggregateAccessHistory', () => {
     // Insertion order is deliberately unsorted AND ends on the MIDDLE timestamp (t1), and the
     // surfaces are inserted in non-alphabetical order, so a dropped min/max guard or a dropped
     // surfaces .sort() changes the result rather than passing by fixture coincidence.
-    const rows = aggregateAccessHistory(
+    const rows = aggregateLakeAccessHistory(
       [
         event({ principalId: 'u1', createdAt: t0, surface: 'forced-retrieval' }),
         event({ principalId: 'u1', createdAt: t2, surface: 'data-lake-semantic-search' }),
@@ -104,7 +143,7 @@ describe('aggregateAccessHistory', () => {
   });
 
   it('groups by ACTING principal, not the on-behalf human, but retains the human', () => {
-    const rows = aggregateAccessHistory(
+    const rows = aggregateLakeAccessHistory(
       [
         event({ principalKind: 'agent', principalId: 'agentX', onBehalfOfUserId: 'human1' }),
         event({ principalKind: 'agent', principalId: 'agentX' }),
@@ -117,7 +156,7 @@ describe('aggregateAccessHistory', () => {
   });
 
   it('sorts most-recently-active first', () => {
-    const rows = aggregateAccessHistory(
+    const rows = aggregateLakeAccessHistory(
       [
         event({ principalId: 'old', createdAt: new Date('2026-01-01T00:00:00Z') }),
         event({ principalId: 'new', createdAt: new Date('2026-08-01T00:00:00Z') }),
@@ -128,7 +167,7 @@ describe('aggregateAccessHistory', () => {
   });
 
   it('counts per principal only the events marked admin-bypass for THIS lake', () => {
-    const rows = aggregateAccessHistory(
+    const rows = aggregateLakeAccessHistory(
       [
         event({ principalId: 'admin1', adminBypassLakeIds: ['lake1'] }),
         event({ principalId: 'admin1', adminBypassLakeIds: ['lake1', 'lake2'] }),
@@ -144,14 +183,14 @@ describe('aggregateAccessHistory', () => {
   });
 
   it('empty input yields no rows', () => {
-    expect(aggregateAccessHistory([], 'lake1')).toEqual([]);
+    expect(aggregateLakeAccessHistory([], 'lake1')).toEqual([]);
   });
 
   // The zero row (#2604): forced retrieval records a turn that searched the lake and had nothing
   // clear the similarity floor. It is a search, not a read, and the whole point of splitting the
   // counters is that it must not report content leaving the lake.
   it('counts a zero row toward noResultCount, never readCount', () => {
-    const rows = aggregateAccessHistory(
+    const rows = aggregateLakeAccessHistory(
       [
         event({ principalId: 'u1', surface: 'forced-retrieval' }),
         event({ principalId: 'u1', surface: 'forced-retrieval', servedNothing: true }),
@@ -166,7 +205,7 @@ describe('aggregateAccessHistory', () => {
   // The row shape a lake owner most needs to see: someone queried this lake repeatedly and it never
   // answered. A principal whose only rows are zero rows must still appear, at readCount 0.
   it('keeps a principal whose every search came back empty, at readCount 0', () => {
-    const rows = aggregateAccessHistory(
+    const rows = aggregateLakeAccessHistory(
       [event({ principalId: 'starved', surface: 'forced-retrieval', servedNothing: true })],
       'lake1'
     );
@@ -182,7 +221,7 @@ describe('aggregateAccessHistory', () => {
   it('lets a zero row move the activity window and the surfaces set', () => {
     const t0 = new Date('2026-08-10T00:00:00Z');
     const t1 = new Date('2026-08-12T00:00:00Z');
-    const rows = aggregateAccessHistory(
+    const rows = aggregateLakeAccessHistory(
       [
         event({ principalId: 'u1', surface: 'data-lake-semantic-search', createdAt: t0 }),
         event({ principalId: 'u1', surface: 'forced-retrieval', createdAt: t1, servedNothing: true }),
@@ -201,7 +240,7 @@ describe('aggregateAccessHistory', () => {
    * have misread. Every event in this file's fixture has that shape, which is the point.
    */
   it('does not mistake a content-less browse row for a zero row', () => {
-    const rows = aggregateAccessHistory(
+    const rows = aggregateLakeAccessHistory(
       [event({ principalId: 'u1', surface: 'data-lake-public-browse', returnedChunkCount: 0, returnedFileCount: 0 })],
       'lake1'
     );

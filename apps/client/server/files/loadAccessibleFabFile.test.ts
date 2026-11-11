@@ -88,6 +88,12 @@ describe('loadAccessibleFabFile data-lake fallback', () => {
     expect(recordLakeAccessEvent.mock.calls[0][1]).not.toHaveProperty('adminBypassLakeIds');
   });
 
+  it('returns no file and records nothing when member-access classification is incomplete', async () => {
+    adminBypassLakeIds.mockRejectedValue(new Error('classification unavailable'));
+    await expect(loadAccessibleFabFile(request(), 'file-1')).rejects.toThrow('classification unavailable');
+    expect(recordLakeAccessEvent).not.toHaveBeenCalled();
+  });
+
   it('rejects when the audit write rejects', async () => {
     adminBypassLakeIds.mockResolvedValue(['lake-1']);
     recordLakeAccessEvent.mockRejectedValue(new Error('mongo blip'));

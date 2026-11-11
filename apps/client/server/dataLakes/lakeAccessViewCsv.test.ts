@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import type { LakeAccessView } from '@bike4mind/common';
+import type { LakeAccessViewWithAdminBypass } from '@bike4mind/common';
 import { lakeAccessViewToCsv, lakeAccessViewCsvFilename } from './lakeAccessViewCsv';
 
-const baseView = (over: Partial<LakeAccessView> = {}): LakeAccessView => ({
+const baseView = (over: Partial<LakeAccessViewWithAdminBypass> = {}): LakeAccessViewWithAdminBypass => ({
   lakeId: 'lake1',
   lakeName: 'Sales Intelligence',
   grants: [],

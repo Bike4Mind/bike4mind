@@ -139,9 +139,6 @@ export interface LakeAccessHistoryEntry {
    * 0 therefore means "no recorded empty search", never "every search of this lake succeeded".
    */
   noResultCount: number;
-  /** Reads (and no-result searches) this principal could make only through the platform-admin
-   * bypass. A subset of the rows behind `readCount + noResultCount`, not an addition to them. */
-  adminBypassReadCount: number;
   /** Newest event of EITHER kind - a search that served nothing is still this principal touching
    * the lake, and a "last read" that ignored it would under-report recent activity. */
   lastAccessedAt: Date;
@@ -149,6 +146,12 @@ export interface LakeAccessHistoryEntry {
   /** The distinct surfaces this principal read through (semantic search, chat KB, forced, ...). */
   surfaces: LakeAccessSurface[];
 }
+
+/** Lake-scoped history with a computed admin-bypass count; legacy unscoped history omits it. */
+export type LakeAccessHistoryEntryWithAdminBypass = LakeAccessHistoryEntry & {
+  /** A subset of readCount + noResultCount, counted for this lake only. */
+  adminBypassReadCount: number;
+};
 
 /**
  * How much of this lake's ranking the supersession collapse reclaimed - projected from
@@ -230,8 +233,8 @@ export interface LakeAccessView {
    * Per-principal read aggregation from the access-audit events. Always a LOWER BOUND on reads, and
    * presentation surfaces must say so. Three reasons, all structural rather than temporary:
    * an event exists only for a retrieval surface instrumented to emit one; the write is
-   * deliberately best-effort (`recordLakeAccessEvent` swallows its own failures so no user response
-   * depends on the audit write, and several call sites do not await it); and events age out on
+   * best-effort on most surfaces (selected platform-admin content reads await strict persistence,
+   * while other callers may not await it); and events age out on
    * their own retention TTL. An empty `history` therefore means "no reads recorded", never "nobody
    * read this lake" - stating the stronger claim would be the false reassurance a compliance reader
    * has no way to detect.
@@ -257,3 +260,8 @@ export interface LakeAccessView {
   /** When the view was assembled - the instant grant expiry (`status`) was resolved against. */
   generatedAt: Date;
 }
+
+/** The enriched view returned by the lake-scoped audit assembler. */
+export type LakeAccessViewWithAdminBypass = Omit<LakeAccessView, 'history'> & {
+  history: LakeAccessHistoryEntryWithAdminBypass[];
+};

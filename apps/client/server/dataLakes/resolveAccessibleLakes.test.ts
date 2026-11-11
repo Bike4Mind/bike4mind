@@ -30,7 +30,10 @@ vi.mock('@bike4mind/database', () => ({
     findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
   },
 }));
-vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getRequestEntitlements: mockGetRequestEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
+  getRequestEntitlements: mockGetRequestEntitlements,
+  getCompleteRequestEntitlements: mockGetRequestEntitlements,
+}));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
 
 import { resolveAccessibleLakes, adminBypassLakeIds } from './index';

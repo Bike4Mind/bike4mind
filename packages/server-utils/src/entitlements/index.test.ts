@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { subscriptionRepository } from '../models/Subscription';
 import {
   getRequestEntitlements,
+  getCompleteRequestEntitlements,
   getUserEntitlements,
   requestHasEntitlement,
   toEntitlementUser,
@@ -467,5 +468,67 @@ describe('toEntitlementUser', () => {
     const user = { id: 'u1', tags: [], lastCreditsPurchasedAt: purchasedAt } as unknown as IUserDocument;
 
     expect(toEntitlementUser(user).lastCreditsPurchasedAt).toBe(purchasedAt);
+  });
+});
+
+describe('getCompleteRequestEntitlements for audit classification', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    findActive.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockResolvedValue([]);
+    findActiveByOwners.mockResolvedValue([]);
+    mockPartnerEntitlements.mockResolvedValue(new Set<string>());
+  });
+
+  it.each(['membership', 'org subscriptions'] as const)(
+    'rejects an unreadable %s leg despite a preloaded ordinary memo, then retries',
+    async source => {
+      const failure = new Error('Org access lookup unavailable');
+      if (source === 'membership') findPlanHolderOrgIds.mockRejectedValue(failure);
+      else {
+        findPlanHolderOrgIds.mockResolvedValue(['org1']);
+        findActiveByOwners.mockRejectedValue(failure);
+      }
+      const req = makeReq(user);
+      await expect(getRequestEntitlements(req)).resolves.not.toContain('someproduct:pro');
+      await expect(getCompleteRequestEntitlements(req)).rejects.toBe(failure);
+      findPlanHolderOrgIds.mockResolvedValue(['org1']);
+      findActiveByOwners.mockResolvedValue([{ priceId: 'price_pro' }]);
+      await expect(getCompleteRequestEntitlements(req)).resolves.toContain('someproduct:pro');
+      expect(findPlanHolderOrgIds).toHaveBeenCalledTimes(3);
+    }
+  );
+
+  it('requires a complete partner-rule result and evicts a failed strict memo', async () => {
+    const failure = new Error('Partner access lookup unavailable');
+    mockPartnerEntitlements.mockImplementation(
+      async (_email: unknown, _verified: unknown, options?: { strict?: boolean }) => {
+        if (options?.strict) throw failure;
+        return new Set<string>();
+      }
+    );
+    const req = makeReq({ ...user, email: 'member@example.test', emailVerified: true });
+    await getRequestEntitlements(req);
+    await expect(getCompleteRequestEntitlements(req)).rejects.toBe(failure);
+    mockPartnerEntitlements.mockResolvedValue(new Set(['someproduct:pro']));
+    await expect(getCompleteRequestEntitlements(req)).resolves.toContain('someproduct:pro');
+    expect(mockPartnerEntitlements).toHaveBeenLastCalledWith('member@example.test', true, { strict: true });
+  });
+
+  it('coalesces complete callers without trusting an ordinary entitlement array', async () => {
+    const req = Object.assign(makeReq(user), { entitlements: ['unproven-memo'] });
+    const [first, second] = await Promise.all([
+      getCompleteRequestEntitlements(req),
+      getCompleteRequestEntitlements(req),
+    ]);
+    expect(first).not.toContain('unproven-memo');
+    expect(second).toBe(first);
+    expect(findActive).toHaveBeenCalledTimes(1);
+    expect(mockPartnerEntitlements).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns no entitlements for an unauthenticated request without reads', async () => {
+    await expect(getCompleteRequestEntitlements({})).resolves.toEqual([]);
+    expect(findActive).not.toHaveBeenCalled();
   });
 });
