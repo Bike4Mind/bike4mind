@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createExportBundle,
   createNotebookBundle,
@@ -80,6 +80,25 @@ describe('v2 bundle', () => {
     await expect(readExportBundle(read)).rejects.toThrow('checksum mismatch');
   });
 
+  it.each([{ exportedAt: '2026' }, { platform: '' }])(
+    'rejects metadata its reader cannot accept before writing entries: %j',
+    async metadata => {
+      const write = vi.fn<BundleWrite>();
+      await expect(createExportBundle({ collections: { custom: [] }, ...metadata }, write)).rejects.toThrow();
+      expect(write).not.toHaveBeenCalled();
+    }
+  );
+
+  it('roundtrips a valid 10 MiB embedded image without exhausting the regex stack', async () => {
+    const { write, read } = memoryBundle();
+    const image = Buffer.alloc(10 * 1024 * 1024, 42).toString('base64');
+    const source = { ...notebook, knowledge: [], chatHistory: [{ ...notebook.chatHistory[0], images: [image] }] };
+    const manifest = await createNotebookBundle([source], write);
+    expect(manifest.files).toHaveLength(1);
+    expect(manifest.files[0].bytes).toBe(10 * 1024 * 1024);
+    expect((await readNotebookBundle(read)).notebooks[0].chatHistory[0].images[0]).toBe(image);
+  });
+
   it('streams each JSONL row through an append sink without accumulating the collection', async () => {
     const { data, write, read } = memoryBundle();
     const appended: string[] = [];
@@ -136,6 +155,27 @@ describe('v2 bundle', () => {
     await expect(readNotebookBundle(read, storedBytes - 1)).rejects.toThrow('Bundle byte budget exceeded');
     await expect(readNotebookBundle(read, twoImagesBudget)).rejects.toThrow('Bundle byte budget exceeded');
     expect((await readNotebookBundle(read, storedBytes + 10 * image.length)).notebooks[0].chatHistory).toHaveLength(10);
+  });
+
+  it.each([
+    ['YQ==', true],
+    ['YWI=', true],
+    ['YWJj', true],
+    ['YQ', false],
+    ['YQ=', false],
+    ['Y', false],
+    ['Y===', false],
+    ['Y=Q=', false],
+    ['images/key-1', false],
+    ['YW Jj', false],
+    ['', false],
+  ] as const)('preserves image byte/reference classification for %j', async (image, externalized) => {
+    const { write, read } = memoryBundle();
+    const source = { ...notebook, knowledge: [], chatHistory: [{ ...notebook.chatHistory[0], images: [image] }] };
+    const manifest = await createNotebookBundle([source], write);
+    expect(manifest.files).toHaveLength(externalized ? 1 : 0);
+    const restored = (await readNotebookBundle(read)).notebooks[0].chatHistory[0].images[0];
+    expect(restored).toBe(image);
   });
 
   it('keeps image storage keys when explicitly requested', async () => {

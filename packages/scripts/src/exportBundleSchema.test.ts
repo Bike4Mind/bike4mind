@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
+import { createExportBundle, readExportBundle } from '../../../b4m-core/services/src/notebookExportService/bundle';
 
 const root = resolve(import.meta.dirname, '../../../docs-site/static/schemas/export-v2');
 const sample = resolve(root, 'sample');
@@ -17,6 +18,43 @@ const names = {
 };
 
 describe('published v2 export schemas', () => {
+  it('keeps manifest timestamp validation consistent with the runtime reader and writer', async () => {
+    const validate = addFormats(new Ajv2020()).compile(
+      JSON.parse(await readFile(resolve(root, 'manifest.schema.json'), 'utf8'))
+    );
+    const cases = [
+      ['2026-01-01T12:00:00Z', true],
+      ['2024-02-29T12:00:00Z', true],
+      ['2026-01-01T12:00:00.123456Z', true],
+      ['2026-01-01T12:00:00+08:00', true],
+      ['2026-01-01t12:00:00z', true],
+      ['2026-02-30T12:00:00Z', false],
+      ['2026-02-29T12:00:00Z', false],
+      ['2026-01-01T24:00:00Z', false],
+      ['2016-12-31T23:59:60Z', false],
+      ['2026-01-01T12:00:00+24:00', false],
+      ['2026', false],
+    ] as const;
+    for (const [exportedAt, accepted] of cases) {
+      const manifest = { exportVersion: '2.0.0', exportedAt, platform: 'bike4mind', collections: {}, files: [] };
+      expect(validate(manifest), exportedAt).toBe(accepted);
+      const read = () => readExportBundle(async () => Buffer.from(JSON.stringify(manifest)));
+      const writes = new Map<string, Uint8Array>();
+      const write = () =>
+        createExportBundle({ exportedAt, collections: {} }, async (path, bytes) => {
+          writes.set(path, bytes);
+        });
+      if (accepted) {
+        await expect(read()).resolves.toMatchObject({ manifest });
+        await expect(write()).resolves.toMatchObject({ exportedAt });
+      } else {
+        await expect(read()).rejects.toThrow('Invalid bundle manifest');
+        await expect(write()).rejects.toThrow();
+        expect(writes.size).toBe(0);
+      }
+    }
+  });
+
   it('validates every sample row, collection count and byte checksum', async () => {
     const ajv = addFormats(new Ajv2020({ allErrors: true }));
     const manifest = JSON.parse(await readFile(resolve(sample, 'manifest.json'), 'utf8')) as {

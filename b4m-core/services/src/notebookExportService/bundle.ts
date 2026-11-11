@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { z } from 'zod';
 import type { ExportedNotebook, NotebookExportFormat } from './types';
 
 export const BUNDLE_EXPORT_VERSION = '2.0.0';
@@ -52,10 +53,18 @@ const validPath = (value: string) =>
   value.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..');
 
 const manifestKeys = new Set(['exportVersion', 'exportedAt', 'platform', 'exportedBy', 'collections', 'files']);
+const isoDateTimeSchema = z.iso.datetime({ offset: true });
 const isDateTime = (value: unknown) =>
   typeof value === 'string' &&
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value) &&
-  Number.isFinite(Date.parse(value));
+  Number.isFinite(Date.parse(value)) &&
+  isoDateTimeSchema.safeParse(value.toUpperCase()).success;
+
+const bundleMetadataSchema = z.object({
+  exportedAt: z.string().refine(isDateTime, 'Invalid bundle timestamp'),
+  platform: z.string().min(1),
+  exportedBy: z.string().optional(),
+});
 
 const parseJson = (text: string, where: string): unknown => {
   try {
@@ -74,11 +83,14 @@ export async function createExportBundle(
   write: BundleWrite,
   append?: BundleAppend
 ): Promise<ExportBundleManifest> {
-  const manifest: ExportBundleManifest = {
-    exportVersion: BUNDLE_EXPORT_VERSION,
+  const metadata = bundleMetadataSchema.parse({
     exportedAt: input.exportedAt ?? new Date().toISOString(),
     platform: input.platform ?? 'bike4mind',
     ...(input.exportedBy ? { exportedBy: input.exportedBy } : {}),
+  });
+  const manifest: ExportBundleManifest = {
+    exportVersion: BUNDLE_EXPORT_VERSION,
+    ...metadata,
     collections: {},
     files: [],
   };
@@ -157,14 +169,11 @@ export async function readExportBundle(
     typeof manifest !== 'object' ||
     manifest.exportVersion !== BUNDLE_EXPORT_VERSION ||
     Object.keys(manifest).some(key => !manifestKeys.has(key)) ||
-    !isDateTime(manifest.exportedAt) ||
-    typeof manifest.platform !== 'string' ||
-    !manifest.platform ||
+    !bundleMetadataSchema.safeParse(manifest).success ||
     !manifest.collections ||
     typeof manifest.collections !== 'object' ||
     Array.isArray(manifest.collections) ||
-    !Array.isArray(manifest.files) ||
-    (manifest.exportedBy !== undefined && typeof manifest.exportedBy !== 'string')
+    !Array.isArray(manifest.files)
   ) {
     throw new Error('Invalid bundle manifest');
   }
@@ -269,7 +278,8 @@ export async function createNotebookBundle(
             if (
               typeof image !== 'string' ||
               image === '' ||
-              !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(image)
+              image.length % 4 !== 0 ||
+              !/^[A-Za-z0-9+/]*={0,2}$/.test(image)
             ) {
               return image;
             }
