@@ -150,6 +150,19 @@ describe('purgeDeletedNotebookMedia', () => {
     expect([...deletedKeys(), ...handoff.keys].sort()).toEqual([...images].sort());
   });
 
+  it('keeps the per-run delete cap across notebook pages', async () => {
+    const perNotebook = MAX_DELETES_PER_RUN / SESSION_PAGE;
+    const ids: string[] = [];
+    for (let n = 0; n < SESSION_PAGE + 5; n++) {
+      ids.push(await notebook({ images: Array.from({ length: perNotebook }, (_, i) => gk(`n${n}k${i}.png`)) }));
+    }
+    await purgeDeletedNotebookMedia(ids, { logger });
+    expect(effects.deleteGenerated).toHaveBeenCalledTimes(MAX_DELETES_PER_RUN);
+    expect(invalidatedPaths().map(paths => paths.length)).toEqual([MAX_DELETES_PER_RUN]);
+    const [handoff] = effects.enqueue.mock.calls[0];
+    expect(handoff.sessionIds).toHaveLength(5);
+  });
+
   it('never purges a key another user produced, even when only a deleted copy shows it', async () => {
     const foreign = gk('theirs.png');
     await notebook({ images: [foreign] }, true, 'u2');
@@ -343,6 +356,17 @@ describe('runGeneratedMediaPurge', () => {
     expect([...deleted, ...leftovers.leftoverKeys].sort()).toEqual([...keys].sort());
     expect(leftovers.leftoverKeys.length).toBeGreaterThan(0);
     expect(invalidatedPaths()).toEqual([deleted.map(key => `/generated/${key}`).sort()]);
+  });
+
+  it('returns every direct key when the deadline passed before any was looked up', async () => {
+    const keys = [gk('a.png'), gk('b.png')];
+    await notebook({ images: keys });
+    const leftovers = await runGeneratedMediaPurge(
+      { keys, ownerIds: ['u1'] },
+      { deadline: Date.now() - 1, deletedSessionIds: new Set<string>(), logger }
+    );
+    expect(leftovers.leftoverKeys.sort()).toEqual([...keys].sort());
+    expect(effects.deleteGenerated).not.toHaveBeenCalled();
   });
 
   it('re-checks direct keys: skips one a live message shows again and one another user produced', async () => {

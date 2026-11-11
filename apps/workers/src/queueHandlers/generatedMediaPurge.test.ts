@@ -123,6 +123,16 @@ describe('generatedMediaPurge', () => {
     expect(h.enqueue).not.toHaveBeenCalled();
   });
 
+  it('throws for a keys message when no key was deleted, and re-enqueues once one was', async () => {
+    h.sessionResult = { leftoverSessionIds: [], leftoverKeys: [KEY_A, KEY_B], ownerIds: ['u1'] };
+    await expect(run({ kind: 'keys', keys: [KEY_A, KEY_B], ownerIds: ['u1'] })).rejects.toThrow(/no progress/);
+    expect(h.enqueue).not.toHaveBeenCalled();
+
+    h.sessionResult = { leftoverSessionIds: [], leftoverKeys: [KEY_B], ownerIds: ['u1'] };
+    await run({ kind: 'keys', keys: [KEY_A, KEY_B], ownerIds: ['u1'] });
+    expect(h.enqueue).toHaveBeenCalledWith({ sessionIds: [], keys: [KEY_B], ownerIds: ['u1'] }, logger);
+  });
+
   it('throws when the re-enqueue fails so SQS retries the message', async () => {
     h.deletedIds = [DEAD, DEAD2];
     h.sessionResult = { leftoverSessionIds: [DEAD2], leftoverKeys: [], ownerIds: [] };
