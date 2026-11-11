@@ -933,17 +933,32 @@ export interface GitAliases {
 /** help.autocorrect values under which git only names the command it guesses. */
 const SHOWS_GUESS = /^(0|false|off|no|show|never)$/i;
 
-/** What git reads of aliases, help.autocorrect and includes in `directory`; null when git could not tell. */
-export async function gitAliases(directory: string): Promise<GitAliases | null> {
+/**
+ * What git reads of aliases, help.autocorrect and includes in `directory`, or with `user` only the system and global
+ * config (for a repository not yet made); null when git could not tell.
+ */
+export async function gitAliases(directory: string, user = false): Promise<GitAliases | null> {
   const keys = String.raw`^alias\.|^help\.autocorrect$|^include\.path$|^includeif\..*\.path$`;
-  const listed = await gitRun(directory, ['config', '-z', '--show-origin', '--get-regexp', keys]);
-  // git config exits 1, printing nothing, when no key matches.
-  if (listed === null || (listed.code !== 0 && (listed.code !== 1 || listed.stdout !== ''))) return null;
+  const lists = await Promise.all(
+    (user
+      ? [
+          ['--system', '--includes'],
+          ['--global', '--includes'],
+        ]
+      : [[]]
+    ).map(scope => gitRun(directory, ['config', ...scope, '-z', '--show-origin', '--get-regexp', keys]))
+  );
+  let stdout = '';
+  for (const listed of lists) {
+    // git config exits 1, printing nothing, when no key matches.
+    if (listed === null || (listed.code !== 0 && (listed.code !== 1 || listed.stdout !== ''))) return null;
+    stdout += listed.stdout;
+  }
   const aliases = new Map<string, string | null>();
   let autocorrect = false;
   const included: { origin: string; path: string }[] = [];
   // `-z --show-origin` prints `origin\0key\nvalue\0` per entry.
-  const fields = listed.stdout.split('\0');
+  const fields = stdout.split('\0');
   for (let at = 0; at + 1 < fields.length; at += 2) {
     const origin = fields[at] as string;
     const entry = fields[at + 1] as string;
@@ -1504,7 +1519,11 @@ async function treeDiff(
  */
 async function treeListing(repository: string, target: string, destination: string): Promise<TreeWrite> {
   if (!REVISION.test(target) || target.startsWith('-')) return UNREAD_TREE;
-  const raw = await gitQuery(repository, ['ls-tree', '-r', '-z', '--full-tree', target]);
+  const list = ['ls-tree', '-r', '-z', '--full-tree', target];
+  // The shell's git refuses to discover a bare repository, so a bare clone source is named by --git-dir.
+  const raw =
+    (await gitQuery(repository, list)) ??
+    (await gitQuery(repository, [`--git-dir=${gitArgumentPath(repository, repository)}`, ...list]));
   if (raw === null) return UNREAD_TREE;
   const files: string[] = [];
   let links = false;

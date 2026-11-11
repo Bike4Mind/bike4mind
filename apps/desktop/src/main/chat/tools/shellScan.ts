@@ -1,5 +1,5 @@
 import { constants as fsConstants } from 'node:fs';
-import { lstat, open, readdir, readFile, readlink, realpath, stat } from 'node:fs/promises';
+import { lstat, open, readdir, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, posix, sep, win32 } from 'node:path';
 import type { Node } from 'web-tree-sitter';
@@ -1357,6 +1357,89 @@ interface CopyTarget {
   /** The folder as written, quotes kept unless the whole option word was quoted. */
   value: string;
   glued: boolean;
+}
+
+/** rsync options that take their value as the next word when not written `--name=value`. */
+const RSYNC_VALUED_LONG = new Set([
+  'exclude',
+  'include',
+  'filter',
+  'exclude-from',
+  'include-from',
+  'files-from',
+  'rsh',
+  'rsync-path',
+  'partial-dir',
+  'backup-dir',
+  'suffix',
+  'compare-dest',
+  'copy-dest',
+  'link-dest',
+  'temp-dir',
+  'chmod',
+  'chown',
+  'usermap',
+  'groupmap',
+  'log-file',
+  'out-format',
+  'port',
+  'address',
+  'timeout',
+  'contimeout',
+  'block-size',
+  'max-size',
+  'min-size',
+  'max-delete',
+  'modify-window',
+  'skip-compress',
+  'protocol',
+  'sockopts',
+  'info',
+  'debug',
+  'bwlimit',
+  'read-batch',
+  'write-batch',
+  'only-write-batch',
+  'password-file',
+  'checksum-choice',
+  'compress-choice',
+  'compress-level',
+  'iconv',
+  'stop-after',
+  'stop-at',
+  'max-alloc',
+  'early-input',
+  'outbuf',
+  'remote-option',
+]);
+
+/** The operands of a cp or rsync call, without the words that are an option's value. */
+function copyOperands(program: string, args: readonly string[]): string[] {
+  const operands: string[] = [];
+  const letters = program === 'rsync' ? 'efTBM' : 'St';
+  const valued = (name: string): boolean =>
+    program === 'rsync'
+      ? RSYNC_VALUED_LONG.has(name)
+      : name !== '' && ['target-directory', 'suffix'].some(long => long.startsWith(name));
+  for (let index = 0; index < args.length; index++) {
+    const raw = args[index] as string;
+    const arg = unquote(raw);
+    if (arg === '--') {
+      operands.push(...args.slice(index + 1));
+      break;
+    }
+    if (!arg.startsWith('-') || arg === '-') operands.push(raw);
+    else if (arg.startsWith('--')) {
+      if (!arg.includes('=') && valued(arg.slice(2))) index++;
+    } else {
+      for (let at = 1; at < arg.length; at++) {
+        if (!letters.includes(arg[at] as string)) continue;
+        if (at === arg.length - 1) index++;
+        break;
+      }
+    }
+  }
+  return operands;
 }
 
 /** The folder a `cp`, `mv`, `ln` or `install` copies into by `-t`, `-rtDIR`, `--target-directory=DIR` or `--target DIR`. */
@@ -5103,11 +5186,74 @@ const TOOL_LAUNCHERS = new Map<string, readonly string[]>([
   ['bun', ['x']],
 ]);
 
-const SOURCED_FILE_BYTES = 256 * 1024;
+/** `git clone`, `init` and `worktree add` options that take no value, and those that take one (as the next word or after `=`). */
+const FRESH_FLAGS: Readonly<Record<string, { flags: ReadonlySet<string>; valued: ReadonlySet<string> }>> = {
+  clone: {
+    flags: new Set(
+      '-q --quiet -v --verbose --progress -n --no-checkout --bare --mirror -l --local --no-local --no-hardlinks -s --shared --dissociate --single-branch --no-single-branch --no-tags --sparse --shallow-submodules --no-remote-submodules --remote-submodules -4 -6 --reject-shallow'.split(
+        ' '
+      )
+    ),
+    valued: new Set('-b --branch -o --origin --depth -j --jobs --filter --shallow-since --shallow-exclude'.split(' ')),
+  },
+  init: {
+    flags: new Set(['-q', '--quiet', '--bare']),
+    valued: new Set(['-b', '--initial-branch', '--object-format']),
+  },
+  worktree: {
+    flags: new Set(
+      '-f --force -d --detach --no-checkout --checkout --lock -q --quiet --track --no-track --guess-remote --no-guess-remote --orphan'.split(
+        ' '
+      )
+    ),
+    valued: new Set(['-b', '-B', '--reason']),
+  },
+};
 
-/** What a sourced file would use to move bash, change which repository or config git reads, or run what it is not read for. */
-const SOURCE_MOVES =
-  /(^|[\s;&|({])(cd|pushd|popd|chdir|eval|source|\.|exec|trap|alias|builtin|enable|shopt|command|coproc)(?=\s|$|;)|GIT_|\b(HOME|PWD|OLDPWD|CDPATH|XDG_\w+|BASH_ENV|PROMPT_COMMAND)\b/m;
+/**
+ * The folder, as written, that `git clone`, `git init` or `git worktree add` (with `sub` and `rest` as git reads them)
+ * makes, when its options are only ones that leave the new repository's config to the user's and its source's; null
+ * otherwise. `user` is true when it reads only the user's config (not the repository it was run in).
+ */
+function freshFolder(sub: string, rest: readonly string[]): { folder: string; user: boolean } | null {
+  const grammar = FRESH_FLAGS[sub];
+  if (grammar === undefined) return null;
+  const words = sub === 'worktree' ? rest.slice(1) : rest;
+  if (sub === 'worktree' && rest[0] !== 'add') return null;
+  const positionals: string[] = [];
+  for (let index = 0; index < words.length; index++) {
+    const word = unquote(words[index] as string);
+    if (word === '--') {
+      positionals.push(...words.slice(index + 1).map(unquote));
+      break;
+    }
+    if (!word.startsWith('-') || word === '-') {
+      positionals.push(word);
+      continue;
+    }
+    const [name = ''] = word.split('=');
+    if (grammar.flags.has(word)) continue;
+    if (grammar.valued.has(name)) {
+      if (!word.includes('=')) index++;
+      continue;
+    }
+    // Glued short values (`-bmain`) and anything else are options the scan does not read.
+    return null;
+  }
+  let folder: string | undefined;
+  if (sub === 'clone') {
+    const [source, named] = positionals;
+    if (source === undefined || positionals.length > 2) return null;
+    folder = named ?? posix.basename(source.replace(/[\\/]+$/, '')).replace(/\.git$/, '');
+  } else {
+    folder = positionals[0];
+    if (sub === 'init' && positionals.length > 1) return null;
+  }
+  return folder === undefined || folder === '' ? null : { folder, user: sub !== 'worktree' };
+}
+
+/** Subcommands taking `--strategy NAME`. */
+const STRATEGY_COMMANDS: ReadonlySet<string> = new Set(['merge', 'pull', 'rebase', 'cherry-pick', 'revert']);
 
 /** Merge strategies git builds in; any other name runs a git-merge-<name> program from PATH. */
 const MERGE_STRATEGIES: ReadonlySet<string> = new Set(['ort', 'recursive', 'resolve', 'octopus', 'ours', 'subtree']);
@@ -5743,8 +5889,8 @@ export async function scanShell(
     let gitProgram: string | null = null;
     // Set when git may run a git-<name> program from a PATH entry the scan cannot place; auto mode asks.
     let pathUnplaced = false;
-    // A sourced file may have changed PATH, which the scan does not read out of it.
-    let sourcedEnvironment = false;
+    // A sourced file may have changed PATH, the folder or the config git reads, which the scan does not read out of it.
+    let sourced = false;
     const mkdirIds = new Set<number>();
     const rebound = anyName || REBINDS_HOME.test(gateText);
     const user = loginName();
@@ -6511,6 +6657,35 @@ export async function scanShell(
     };
 
     /**
+     * Where git's aliases are read for a call in `cwd`: for a folder this script makes with git clone, init or
+     * worktree add, the user's config (or the repository the work tree is added to) unless a later command may write
+     * in or around it; otherwise as lookupFolder.
+     */
+    const aliasSource = async (cwd: string): Promise<{ folder: string; user: boolean }> => {
+      const target = guardForm(cwd);
+      for (const [id, made] of createdFolders) {
+        if (!guardFormWithin(guardForm(made.folder), target)) continue;
+        const touched = configWrites.some(
+          write =>
+            write.id !== id &&
+            !mkdirIds.has(write.id) &&
+            (write.path === undefined ||
+              guardFormWithin(guardForm(write.path), target) ||
+              guardFormWithin(target, guardForm(write.path)))
+        );
+        if (touched) break;
+        if (!made.user) return { folder: await lookupFolder(made.from), user: false };
+        let existing = dirname(made.folder);
+        while ((await stat(existing).catch(() => null))?.isDirectory() !== true) {
+          if (dirname(existing) === existing) return { folder: cwd, user: false };
+          existing = dirname(existing);
+        }
+        return { folder: existing, user: true };
+      }
+      return { folder: await lookupFolder(cwd), user: false };
+    };
+
+    /**
      * `written` with the git alias it names expanded as git in its folder would, or as written when it names none; null
      * for a shell alias, an autocorrect guess, or config the script may change or the scan's git may not read alike.
      */
@@ -6558,7 +6733,11 @@ export async function scanShell(
         const git = gitSubcommand(seen.slice(start + 1).map(unquote), state.cwd);
         if (git === null || git.unread || GIT_OWN_COMMANDS.has(git.sub) || SPELLED_PROGRAM.test(git.sub)) return tokens;
         if (depth === GIT_ALIAS_DEPTH) return null;
-        const folder = await lookupFolder(git.cwd);
+        if (sourced) {
+          pathUnplaced = true;
+          return tokens;
+        }
+        const { folder, user } = await aliasSource(git.cwd);
         const known = await gitCommandKind(folder, git.sub);
         if (known === null) return null;
         if (known === 'own') return tokens;
@@ -6574,10 +6753,11 @@ export async function scanShell(
           return null;
         }
         // A program named git-<alias> on a PATH entry the scan cannot place may run instead of the alias.
-        if (known === 'none' && (path.unplaced || sourcedEnvironment)) pathUnplaced = true;
+        if (known === 'none' && path.unplaced) pathUnplaced = true;
         if (known === 'none' && (await pathHolds(path.entries, `git-${git.sub}`))) return null;
-        let lists = gitAliasLists.get(folder);
-        if (lists === undefined) gitAliasLists.set(folder, (lists = gitAliases(folder)));
+        const listKey = user ? `user:${folder}` : folder;
+        let lists = gitAliasLists.get(listKey);
+        if (lists === undefined) gitAliasLists.set(listKey, (lists = gitAliases(folder, user)));
         const config = await lists;
         if (config === null) return null;
         if (!checked) {
@@ -6612,39 +6792,48 @@ export async function scanShell(
       return null;
     };
 
+    // Folders `git clone`, `git init` and `git worktree add` make, whose aliases are read from the config they start from.
+    const createdFolders = new Map<number, { folder: string; from: string; user: boolean }>();
+
     /**
-     * Whether `source FILE` names a file the scan can read that only sets variables and defines functions: no cd, eval,
-     * nested source, alias, trap, or setting of HOME, PWD or a GIT_ variable, so it leaves the folder where it was.
+     * For a git call that makes a folder that does not exist yet with only options that leave its config to the user's
+     * (and, for a work tree, the repository's): the write to report for it, noting where its aliases come from.
      */
-    const quietSource = async (rest: string[]): Promise<boolean> => {
-      const [operand] = rest;
-      if (operand === undefined || state.lost || sep !== '/' || wslLocation(state.cwd) !== null) return false;
-      const words = operandWords(operand, scope());
-      const word = words?.length === 1 ? (words[0] as OperandWord) : null;
-      if (word === null || word.expandAt !== null || word.glob.includes(true) || !word.text.includes('/')) return false;
-      const file = posix.isAbsolute(word.text) ? word.text : under(state.cwd, word.text);
-      const info = await stat(file).catch(() => null);
-      if (!info?.isFile() || info.size > SOURCED_FILE_BYTES) return false;
-      const text = await readFile(file, 'utf8').catch(() => null);
-      if (text === null) return false;
-      const code = text
-        .split('\n')
-        .filter(line => !line.trimStart().startsWith('#'))
-        .join('\n');
-      return !SOURCE_MOVES.test(code);
+    const noteFreshFolder = async (
+      node: Node,
+      words: readonly string[],
+      git: { sub: string; rest: readonly string[]; cwd: string }
+    ): Promise<{ id: number; path: string; tree: true } | null> => {
+      const fresh = freshFolder(git.sub, git.rest.map(unquote));
+      if (fresh === null || state.lost || sep !== '/' || wslLocation(state.cwd) !== null) return null;
+      const at = gitSubcommandAt(words.map(unquote));
+      const options = typeof at === 'number' ? words.slice(0, at) : words;
+      if (gitAliasMoved(options) || options.some(option => /^(-c|--config-env.*)$/.test(wordValue(option))))
+        return null;
+      if (/[$`*?[{]/.test(fresh.folder) || isDynamic(fresh.folder) || /\.git(\/|$)/.test(fresh.folder)) return null;
+      const [place, ...more] = operandTargets(git.cwd, expand(fresh.folder));
+      if (place === undefined || more.length > 0 || (await stat(place).catch(() => null)) !== null) return null;
+      createdFolders.set(node.id, { folder: place, from: git.cwd, user: fresh.user });
+      return { id: node.id, path: place, tree: true };
     };
 
     /**
-     * `git merge -s NAME` runs a `git-merge-NAME` program found on PATH for a strategy git has not built in: asks when
-     * a project PATH folder already holds one or a write earlier in the script may put one there.
+     * `git merge -s NAME` (also pull, rebase, cherry-pick and revert, whose `-s` is not a strategy there) runs a
+     * `git-merge-NAME` program found on PATH for a strategy git has not built in: asks when a project PATH folder
+     * already holds one or a write earlier in the script may put one there.
      */
-    const checkMergeStrategies = async (node: Node, rest: readonly string[], cwd: string): Promise<void> => {
+    const checkMergeStrategies = async (
+      node: Node,
+      rest: readonly string[],
+      cwd: string,
+      shortStrategy: boolean
+    ): Promise<void> => {
       const names: string[] = [];
       for (let index = 0; index < rest.length; index++) {
         const arg = rest[index] as string;
         if (arg === '--') break;
         const long = /^--strategy(=(.*))?$/.exec(arg);
-        const short = /^-[nqvfe]*s(.*)$/.exec(arg);
+        const short = shortStrategy ? /^-[nqvfe]*s(.*)$/.exec(arg) : null;
         if (long) names.push(long[1] === undefined ? (rest[++index] ?? '') : (long[2] ?? ''));
         else if (short) names.push(short[1] || (rest[++index] ?? ''));
       }
@@ -6773,8 +6962,12 @@ export async function scanShell(
       if (inner === 'git') {
         gitCommands.add(node.id);
         const git = gitSubcommand(wrappedRest.map(unquote), state.cwd);
-        if (git !== null && !git.unread && git.sub === 'merge') await checkMergeStrategies(node, git.rest, git.cwd);
-        if (git !== null && (git.unread || writesGitConfig(git.sub, git.rest))) configWrites.push({ id: node.id });
+        if (git !== null && !git.unread && STRATEGY_COMMANDS.has(git.sub)) {
+          await checkMergeStrategies(node, git.rest, git.cwd, !/^(cherry-pick|revert)$/.test(git.sub));
+        }
+        const fresh = git === null || git.unread ? null : await noteFreshFolder(node, wrappedRest, git);
+        if (fresh) configWrites.push(fresh);
+        else if (git !== null && (git.unread || writesGitConfig(git.sub, git.rest))) configWrites.push({ id: node.id });
         else if (git !== null && GIT_TREE_WRITERS.has(git.sub)) {
           configWrites.push({ id: node.id, path: (await findRepositoryRoot(git.cwd)) ?? git.cwd, tree: true });
         }
@@ -6841,12 +7034,11 @@ export async function scanShell(
       }
       // `command cd`, `builtin cd`, `eval` and `source` can move bash without the scan following, and `dirs` edits the stack.
       const builtin = program === 'builtin' ? programName(unquote(rest[0] ?? '')) : '';
-      const quiet = (inner === 'source' || inner === '.') && (await quietSource(wrappedRest));
-      if (quiet) sourcedEnvironment = true;
+      if (inner === 'source' || inner === '.' || builtin === 'source' || builtin === '.') sourced = true;
       if (
         CHANGES_DIRECTORY.has(inner) ||
         CHANGES_DIRECTORY.has(builtin) ||
-        (['eval', 'source', '.'].includes(inner) && !quiet) ||
+        ['eval', 'source', '.'].includes(inner) ||
         ['eval', 'source', '.'].includes(builtin)
       ) {
         directoryChanges++;
@@ -7479,26 +7671,41 @@ export async function scanShell(
         program === 'rsync' ||
         rest.some(arg => /^-[a-zA-Z]*[rRa]/.test(arg) || arg === '--recursive' || arg === '--archive');
       if (!recursive) return;
-      const operands = rest.filter(arg => !arg.startsWith('-'));
+      const operands = copyOperands(program, rest);
       const target = copyTarget(program, rest)?.value ?? operands.at(-1);
       if (target === undefined) return;
       let holdsGit = false;
+      // A folder a glob matched is copied into the target under its own name.
+      const nested: string[] = [];
+      const holds = async (place: string): Promise<boolean> =>
+        (await stat(join(place, '.git')).then(
+          () => true,
+          () => false
+        )) || posix.basename(place) === '.git';
       for (const source of operands.filter(operand => operand !== target)) {
         const path = expand(unquote(source));
-        if (isDynamic(path) || /[?*[{]/.test(path) || (state.lost && !isAbsolutePath(path))) {
+        const words = isDynamic(path) || (state.lost && !isAbsolutePath(path)) ? null : operandWords(source, scope());
+        const word = words?.length === 1 ? (words[0] as OperandWord) : null;
+        if (word === null || word.expandAt !== null) {
           holdsGit = true;
           break;
         }
-        for (const place of operandTargets(state.cwd, path)) {
-          const info = await stat(place).catch(() => null);
-          if (
-            info === null ||
-            (await stat(join(place, '.git')).then(
-              () => true,
-              () => false
-            ))
-          )
+        if (word.glob.includes(true)) {
+          const found = await globExpansion(word, state.cwd, dotGlob, stopped);
+          if (found === null) {
             holdsGit = true;
+            break;
+          }
+          for (const { path: match } of found) {
+            if (await holds(match)) {
+              holdsGit = true;
+              nested.push(posix.basename(match));
+            }
+          }
+          continue;
+        }
+        for (const place of operandTargets(state.cwd, path)) {
+          if ((await stat(place).catch(() => null)) === null || (await holds(place))) holdsGit = true;
         }
       }
       if (!holdsGit) return;
@@ -7507,8 +7714,10 @@ export async function scanShell(
         configWrites.push({ id });
         return;
       }
-      for (const place of operandTargets(state.cwd, text))
+      for (const place of operandTargets(state.cwd, text)) {
         configWrites.push({ id, path: join(place, '.git', 'config') });
+        for (const name of nested) configWrites.push({ id, path: join(place, name, '.git', 'config') });
+      }
     };
 
     const redirect = async (node: Node): Promise<void> => {
