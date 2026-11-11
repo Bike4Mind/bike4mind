@@ -36,6 +36,10 @@ curl https://app.bike4mind.com/api/agents \
 
 `GET /api/agents` accepts `page` (default 1) and `limit` (default 10) query parameters and returns `{ data, hasMore, total }`: the items for the page, whether more pages follow, and the total match count. The handler sets no maximum for `limit`.
 
+## Bulk notebook actions
+
+Each list of notebook ids sent to `/api/sessions/bulk` holds at most 100 ids, whether you call it with a JWT or an API key. `DELETE` reads the ids from `sessionIds` and returns `400` with `At most 100 sessions can be deleted per request` above that; `POST` also returns `400` for a longer list. To act on more notebooks, split the ids into batches of 100 and send one request per batch.
+
 ## Errors
 
 Errors use standard HTTP statuses. See [Error Handling](./errors.md). Running out of credits is a 422 with `errorCode: "insufficient_credits"` (never 402).
