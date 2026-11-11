@@ -13,7 +13,7 @@ import {
   USER_STATUS_FILTERS,
   USER_VERDICT_FILTERS,
   type UserFunnelStep,
-} from '@client/app/utils/adminUsersFilter';
+} from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { AdminSearchInput } from '../../shared/FilterBar';
 import { FilterChip, type FilterChipOption } from '../../shared/FilterChip';
 import { SegmentedControl } from '../../shared/SegmentedControl';

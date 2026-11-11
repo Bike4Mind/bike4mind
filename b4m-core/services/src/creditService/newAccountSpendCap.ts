@@ -32,7 +32,7 @@ export type NewAccountSpendCapAdapters = {
   /** Settled AI spend on the user's own credits since `since`, plus their holds not yet settled. */
   personalSpendSince(userId: string, since: Date): Promise<SpendSample[]>;
   /**
-   * Told about each refusal, e.g. to alert LiveOps (apps/client/server/billing/fraudBlockAlert.ts).
+   * Told about each refusal, e.g. to alert LiveOps (packages/server-utils/src/billing/fraudBlockAlert.ts).
    * Best-effort: a failure is logged and the refusal stands.
    */
   onRefused?(event: NewAccountSpendCapRefusalEvent): Promise<void>;

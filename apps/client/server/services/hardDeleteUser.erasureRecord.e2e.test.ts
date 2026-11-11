@@ -10,8 +10,8 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
-vi.mock('@server/analytics/signupEvents', () => ({ emitBillingEvent: vi.fn() }));
-vi.mock('@server/billing/cancelAccountSubscriptions', () => ({
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   cancelAccountSubscriptions: vi.fn(async () => ({ canceled: [], failed: [] })),
   readAccountSubscriptionCustomerIds: vi.fn(async () => []),
   SINGLE_USER_CANCEL_BUDGET_MS: 1000,

@@ -21,7 +21,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { getCallerModelList } from '@server/utils/callerModelList';
 import { CLIENT_CONFIG_FEATURE_SETTINGS } from '@server/utils/clientConfigFeatures';
 import { callablePublicModels, toPublicModelWithReasoning } from '@server/utils/publicModels';
-import { publicAppUrl } from '@server/utils/validators';
+import { publicAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { configuredSupportEmail } from '@server/auth/blockedSignIn';
 import { resolveRecommendedModelIds } from '@client/app/utils/recommendedModels';
 

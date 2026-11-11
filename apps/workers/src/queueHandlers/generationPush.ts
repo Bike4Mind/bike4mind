@@ -5,7 +5,7 @@ import {
   hasLiveConnection,
   isPushDeliveryConfigured,
   truncateForPush,
-} from '@server/utils/pushNotifications';
+} from '@bike4mind/server-utils/utils/pushNotifications';
 
 /**
  * `generation_ready` pushes from the generation queue handlers (generationJob.ts, imageGeneration.ts,

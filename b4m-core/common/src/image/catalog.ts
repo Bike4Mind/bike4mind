@@ -121,6 +121,7 @@ const flux2 = (model: ImageModels): ImageModelCatalogEntry =>
 
 // FLUX 3 sends the same input-image list as one `images` array, sized by width/height like FLUX.2. flux-3-image
 // takes neither seed nor output_format (BFL picks the format); Klein takes both.
+// Edit mode uses prompt-inline bounding-box layouts (no mask), matching the FLUX.2 edit pattern.
 const flux3 = (model: ImageModels): ImageModelCatalogEntry => ({
   ...bfl({
     modes: {
@@ -130,6 +131,11 @@ const flux3 = (model: ImageModels): ImageModelCatalogEntry => ({
         aspectRatios: null,
         outputFormats: supportsBflOutputFormat(model) ? PNG_JPEG : [],
       },
+      edit: editMode({
+        inputs: { edit_source: { max: 1 }, reference: { max: getMaxEditReferenceImages(model) } },
+        aspectRatios: null,
+        outputFormats: supportsBflOutputFormat(model) ? PNG_JPEG : [],
+      }),
     },
     sizing: BFL_SIZING,
   }),

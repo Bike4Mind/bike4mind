@@ -32,7 +32,7 @@ import {
   cancelCondition,
   viewConditions,
 } from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionViewConditions';
-import { computeRevenueTotals } from './revenueSnapshot';
+import { computeRevenueTotals } from '@bike4mind/server-utils/admin/revenue/revenueSnapshot';
 
 // ms
 const READ_MAX_TIME_MS = 20_000;

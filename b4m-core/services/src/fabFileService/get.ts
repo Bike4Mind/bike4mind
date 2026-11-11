@@ -6,10 +6,18 @@ import {
   IAdminSettingsRepository,
   isImageServeable,
 } from '@bike4mind/common';
-import { NotFoundError, secureParameters, getSettingByName, signedUrlExpiresAt } from '@bike4mind/utils';
+import {
+  NotFoundError,
+  secureParameters,
+  getSettingByName,
+  signedUrlExpiresAt,
+  fileUrlSigningDate,
+  fileContentExp,
+  FILE_URL_TTL_SECONDS,
+} from '@bike4mind/utils';
 import { z } from 'zod';
 
-// Re-exported for the FabFile cache writers that import it from here.
+// Re-exported for the services that stamp `fileUrlExpireAt` on a response.
 export { signedUrlExpiresAt };
 
 const getFabFileSchema = z.object({
@@ -17,17 +25,6 @@ const getFabFileSchema = z.object({
 });
 
 type GetFabFileParameters = z.infer<typeof getFabFileSchema>;
-
-const EXPIRE_IN_SECONDS = 3600;
-// Re-sign a little before expiry so a client is not handed a URL about to lapse mid-render.
-// Shared with projectService/listFiles so both cache readers apply the same rule.
-const REFRESH_MARGIN_MS = 5 * 60 * 1000;
-
-export const hasUsableCachedUrl = ({
-  fileUrl,
-  fileUrlExpireAt,
-}: Pick<IFabFileDocument, 'fileUrl' | 'fileUrlExpireAt'>) =>
-  Boolean(fileUrl && fileUrlExpireAt && new Date(fileUrlExpireAt).getTime() - REFRESH_MARGIN_MS > Date.now());
 
 /**
  * Check if a file ID is listed in the global SystemFiles admin setting
@@ -61,9 +58,17 @@ export interface GetFabFileAdapter {
     adminSettings: IAdminSettingsRepository;
   };
   storage: {
-    // Response-only signing must not reuse or overwrite the shared server URL cache.
-    signedUrlCache?: 'bypass';
-    generateSignedUrl: (path: string, expireInSeconds: number) => Promise<string | null>;
+    generateSignedUrl: (
+      path: string,
+      expireInSeconds: number,
+      options?: { signingDate?: Date }
+    ) => Promise<string | null>;
+    /**
+     * Browser-facing callers only: a stable app URL that redirects to a fresh S3 link, so every
+     * instance hands out the same URL within a signing window. Server consumers that download
+     * `fileUrl` themselves leave it unset and get a raw S3 link.
+     */
+    contentUrl?: (fabFile: { id: string; filePath: string }, exp: number) => string;
   };
 }
 
@@ -94,7 +99,10 @@ export const getFabFile = async (
   return generateSignedUrl(fabFile, { db, storage });
 };
 
-export const generateSignedUrl = async (fabFileIn: IFabFileDocument, { db, storage }: GetFabFileAdapter) => {
+export const generateSignedUrl = async (
+  fabFileIn: IFabFileDocument,
+  { storage }: Pick<GetFabFileAdapter, 'storage'> & Partial<GetFabFileAdapter>
+) => {
   // Curator ruling metadata (who ruled, when, which lake) is `select: false` on the schema (see
   // FabFileModel.ts), so it is normally already absent here. This strip is a second, defensive
   // layer for a caller that explicitly opted back in upstream (the curator-supersession collapse's
@@ -117,35 +125,31 @@ export const generateSignedUrl = async (fabFileIn: IFabFileDocument, { db, stora
   if (!isImageServeable(fabFile)) {
     fabFile.fileUrl = undefined;
     fabFile.fileUrlExpireAt = undefined;
+    fabFile.presignedUrl = undefined;
     return fabFile;
   }
 
-  const bypassCache = storage.signedUrlCache === 'bypass';
-  if (bypassCache) {
-    fabFile.fileUrl = undefined;
-    fabFile.fileUrlExpireAt = undefined;
-  }
-
-  // Trust the stored expiry rather than probing the URL: a GET probe downloaded the object on
-  // every read and leaked an unhandled `TypeError: terminated` when S3 closed the unread body.
-  if (hasUsableCachedUrl(fabFile)) return fabFile;
+  // Signed URLs are response-only: never trust a stored one, a legacy row may still carry it.
+  fabFile.fileUrl = undefined;
+  fabFile.fileUrlExpireAt = undefined;
+  fabFile.presignedUrl = undefined;
 
   if (!fabFile.filePath) return fabFile;
 
-  // Generate a new signed URL since existing one is invalid or expired
-  const fileUrl = await storage.generateSignedUrl(fabFile.filePath, EXPIRE_IN_SECONDS);
-  if (!fileUrl) return fabFile; // Avoid updating if URL generation fails
-
-  const fileUrlExpireAt = signedUrlExpiresAt(fileUrl, EXPIRE_IN_SECONDS);
-  fabFile.fileUrl = fileUrl;
-  fabFile.fileUrlExpireAt = fileUrlExpireAt;
-
-  // Read-triggered cache refresh: persist ONLY the regenerated URL fields. A
-  // whole-document write here (this GET is reachable by a sharee) would revert an
-  // owner's concurrent revocation, soft-delete or visibility change.
-  if (!bypassCache) {
-    await db.fabFiles.update({ id: fabFile.id, fileUrl, fileUrlExpireAt }, { timestamps: false });
+  if (storage.contentUrl && fabFile.id) {
+    const exp = fileContentExp();
+    fabFile.fileUrl = storage.contentUrl({ id: fabFile.id, filePath: fabFile.filePath }, exp);
+    fabFile.fileUrlExpireAt = new Date(exp * 1000);
+    return fabFile;
   }
+
+  const fileUrl = await storage.generateSignedUrl(fabFile.filePath, FILE_URL_TTL_SECONDS, {
+    signingDate: fileUrlSigningDate(),
+  });
+  if (!fileUrl) return fabFile;
+
+  fabFile.fileUrl = fileUrl;
+  fabFile.fileUrlExpireAt = signedUrlExpiresAt(fileUrl, FILE_URL_TTL_SECONDS);
 
   return fabFile;
 };

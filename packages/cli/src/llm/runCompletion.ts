@@ -1,3 +1,4 @@
+import { isProviderRefusalStopReason, MODEL_DECLINED_MESSAGE } from '@bike4mind/common';
 import { logger } from '../utils/Logger';
 import { StreamAccumulator } from './streamAccumulator';
 import { isConnectionDrop } from './modelCallError';
@@ -18,7 +19,9 @@ export class NoReplyCompletionError extends Error {
     super(
       stopReason === 'max_tokens'
         ? 'The model used its whole output limit on reasoning and produced no reply. Raise the max tokens setting or ask a narrower question.'
-        : `The model finished (stop reason: ${stopReason}) without producing a reply.`
+        : isProviderRefusalStopReason(stopReason)
+          ? `${MODEL_DECLINED_MESSAGE}.`
+          : `The model finished (stop reason: ${stopReason}) without producing a reply.`
     );
     this.name = 'NoReplyCompletionError';
   }
@@ -120,7 +123,7 @@ export async function runCompletion(
         return;
       }
 
-      if (!accumulator.isEmpty()) {
+      if (!accumulator.isEmpty() || isProviderRefusalStopReason(accumulator.finalStopReason)) {
         await accumulator.finalize(callback);
         return; // delivered exactly once
       }

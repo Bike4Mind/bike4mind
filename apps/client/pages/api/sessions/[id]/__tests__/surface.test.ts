@@ -26,7 +26,7 @@ vi.mock('@server/middlewares/baseApi', () => {
     },
   };
 });
-vi.mock('@server/entitlements', () => ({ getRequestEntitlements: h.getRequestEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getRequestEntitlements: h.getRequestEntitlements }));
 vi.mock('@bike4mind/services', () => ({ sessionService: { moveSession: h.moveSession } }));
 vi.mock('@bike4mind/database', () => ({ sessionRepository: {} }));
 

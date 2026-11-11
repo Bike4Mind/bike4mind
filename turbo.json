@@ -24,7 +24,8 @@
         "server/premium-generated/**",
         "../../infra/premium-generated/**",
         "../../packages/server-utils/src/premium-generated/**",
-        "../../packages/scripts/migrate/migrations/premium.generated.ts"
+        "../../packages/scripts/migrate/migrations/premium.generated.ts",
+        "../../packages/scripts/migrate/migrations/core.generated.ts"
       ]
     },
     "build": {
@@ -197,7 +198,7 @@
         "!../../packages/server-utils/.turbo/**"
       ]
     },
-    // Mirrors the entry above for the real-Mongo lane; turboTestCache.test.ts keeps them equal.
+    // Mirrors the entry above for the real-Mongo lane; turbo-test-cache.test.mjs keeps them equal.
     "@bike4mind/workers#test:integration": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
@@ -242,25 +243,54 @@
         "!../../packages/server-utils/.turbo/**"
       ]
     },
+    // Keyed on its own files plus the outside files its unit and integration suites read. Tests
+    // that scan the whole repo are `*.repo.test.ts`, run uncached by `test:repo` (see
+    // apps/client/vitest.config.mts), which is what keeps this package off WHOLE_REPO_TEST_PACKAGES.
     "@bike4mind/client#test": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["codegen", "^build"],
       "inputs": [
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
         "../../packages/server-utils/**",
         "!../../packages/server-utils/node_modules/**",
-        "!../../packages/server-utils/.turbo/**"
+        "!../../packages/server-utils/.turbo/**",
+        "$TURBO_ROOT$/sst.config.ts",
+        "$TURBO_ROOT$/infra/**",
+        "$TURBO_ROOT$/packages/premium/*/package.json",
+        "$TURBO_ROOT$/packages/premium/*/src/**",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrations/**",
+        "$TURBO_ROOT$/scripts/check-no-overlay-literals.sh",
+        "$TURBO_ROOT$/scripts/qa-backfill-slack.mjs",
+        "$TURBO_ROOT$/scripts/__tests__/fixtures/**",
+        "$TURBO_ROOT$/packages/scripts/help/**",
+        "$TURBO_ROOT$/packages/scripts/index.ts",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
+        "$TURBO_ROOT$/docs-site/docs/**",
+        "$TURBO_ROOT$/catalog/model-hub/**"
       ]
     },
-    // Mirrors the entry above for the real-Mongo lane; turboTestCache.test.ts keeps them equal.
+    // Mirrors the entry above for the real-Mongo lane; turbo-test-cache.test.mjs keeps them equal.
     "@bike4mind/client#test:integration": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["codegen", "^build"],
       "inputs": [
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
         "../../packages/server-utils/**",
         "!../../packages/server-utils/node_modules/**",
-        "!../../packages/server-utils/.turbo/**"
+        "!../../packages/server-utils/.turbo/**",
+        "$TURBO_ROOT$/sst.config.ts",
+        "$TURBO_ROOT$/infra/**",
+        "$TURBO_ROOT$/packages/premium/*/package.json",
+        "$TURBO_ROOT$/packages/premium/*/src/**",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrations/**",
+        "$TURBO_ROOT$/scripts/check-no-overlay-literals.sh",
+        "$TURBO_ROOT$/scripts/qa-backfill-slack.mjs",
+        "$TURBO_ROOT$/scripts/__tests__/fixtures/**",
+        "$TURBO_ROOT$/packages/scripts/help/**",
+        "$TURBO_ROOT$/packages/scripts/index.ts",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
+        "$TURBO_ROOT$/docs-site/docs/**",
+        "$TURBO_ROOT$/catalog/model-hub/**"
       ]
     },
     // server-utils reads src/premium-generated/ (written by @bike4mind/client's codegen and
@@ -293,7 +323,7 @@
         "$TURBO_ROOT$/scripts/smoke_selfhost_objectstore.py"
       ]
     },
-    // Mirrors the entry above for the real-Mongo lane; turboTestCache.test.ts keeps them equal.
+    // Mirrors the entry above for the real-Mongo lane; turbo-test-cache.test.mjs keeps them equal.
     "@bike4mind/server-utils#test:integration": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
@@ -328,7 +358,7 @@
     // CI runs test tasks with --only (no dependency builds), which also drops the dependencies from
     // the hash. .turbo/test-context, written by scripts/turbo-test-cache.mjs, carries their
     // full-graph hashes back in, so every test task - generic or package-specific - must list it.
-    // packages/scripts/src/turboTestCache.test.ts fails the build when one does not.
+    // scripts/__tests__/turbo-test-cache.test.mjs fails the build when one does not.
     "test": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context"]

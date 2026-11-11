@@ -1,8 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
+import { open, realpath } from 'node:fs/promises';
+import { basename, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
 import {
+  ApiKeyScope,
   ArtifactTypeSchema,
   CreateArtifactRequestSchema,
   DEFAULT_TTS_PROVIDER,
@@ -21,6 +25,7 @@ import {
   type UploadUrlRequest,
   type UploadUrlResponse,
 } from '@bike4mind/common';
+import { resolveSupportedMimeType } from '@bike4mind/utils';
 import {
   apiErrorCode,
   apiErrorRetryAfterSeconds,
@@ -134,6 +139,13 @@ export const TOOL_META: ToolMeta[] = [
     title: 'Get file',
     description: "Fetch a file's metadata and a signed download URL.",
     scope: 'files:read',
+  },
+  {
+    name: 'upload_file',
+    title: 'Upload file',
+    description:
+      'Upload a local file or base64 bytes to the file browser. path reads a file the MCP server process can access, except hidden files and anything under a hidden directory; files over 100 MB are refused. Returns its id and pending ingestion state; indexing runs asynchronously. Optional projectId adds it to a project (also requires projects:write).',
+    scope: 'files:write',
   },
   {
     name: 'generate_sound_effect',
@@ -312,6 +324,14 @@ const listFilesShape = {
 
 const getFileShape = {
   fileId: z.string().describe('The file id'),
+};
+
+const uploadFileShape = {
+  path: z.string().min(1).optional().describe('Local path on the machine running the MCP server'),
+  base64: z.string().min(1).optional().describe('Base64-encoded file bytes; use instead of path'),
+  name: z.string().min(1).optional().describe('File name; defaults to the basename of path'),
+  contentType: z.string().min(1).optional().describe('MIME type; otherwise inferred from the file name'),
+  projectId: z.string().min(1).optional().describe('Project to add the uploaded file to; requires projects:write'),
 };
 
 // Bounds mirror `soundEffectsRequestSchema` (@bike4mind/common) and the ElevenLabs
@@ -602,6 +622,84 @@ export async function getFile(client: B4mApiClient, args: { fileId: string }) {
   return client.getFile(args.fileId);
 }
 
+// Local memory guard; the server still enforces its own admin MaxFileSize.
+const UPLOAD_FILE_MAX_BYTES = 100 * 1024 * 1024;
+
+export async function uploadFile(
+  client: B4mApiClient,
+  args: { path?: string; base64?: string; name?: string; contentType?: string; projectId?: string }
+) {
+  if (Boolean(args.path) === Boolean(args.base64)) throw new Error('Provide exactly one of path or base64');
+  const fileName = args.name ?? (args.path ? basename(args.path) : undefined);
+  if (!fileName || fileName === '.' || fileName === '..') throw new Error('A file name is required');
+  const tooLarge = () => new Error(`File exceeds the ${UPLOAD_FILE_MAX_BYTES / (1024 * 1024)} MB upload limit`);
+  let bytes: Buffer;
+  if (args.path) {
+    const target = await realpath(args.path);
+    const isHidden = (p: string) => p.split(sep).some(seg => seg.startsWith('.') && seg !== '.' && seg !== '..');
+    // Checked before and after symlinks so neither a dot-path nor a link into one is read.
+    if (isHidden(resolve(args.path)) || isHidden(target)) {
+      throw new Error(`${args.path} is a hidden file or inside a hidden directory; upload_file does not read those`);
+    }
+    // A FIFO must not block open before the same-handle regular-file check can reject it.
+    const file = await open(target, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const info = await file.stat();
+      if (!info.isFile()) throw new Error(`${args.path} is not a regular file`);
+      if (info.size > UPLOAD_FILE_MAX_BYTES) throw tooLarge();
+      bytes = await file.readFile();
+      if (bytes.length > UPLOAD_FILE_MAX_BYTES) throw tooLarge();
+    } finally {
+      await file.close();
+    }
+  } else {
+    let b64 = args.base64!.replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    if (b64.length % 4 === 2 || b64.length % 4 === 3) b64 += '='.repeat(4 - (b64.length % 4));
+    if (b64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) {
+      throw new Error('File bytes must be nonempty and valid base64');
+    }
+    const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+    if ((b64.length / 4) * 3 - padding > UPLOAD_FILE_MAX_BYTES) throw tooLarge();
+    bytes = Buffer.from(b64, 'base64');
+  }
+  if (!bytes.length) throw new Error('File bytes must be nonempty and valid base64');
+  // Same resolution as the presign route, which refuses an unsupported type; keeping the PUT's
+  // type equal to the stored record keeps the S3 object consistent with it.
+  const resolved = resolveSupportedMimeType(fileName, args.contentType);
+  if (!resolved.supported) {
+    throw new Error(
+      `Unsupported file type for ${fileName}` +
+        (fileName.includes('.') ? '' : '; pass contentType for a name without an extension')
+    );
+  }
+  const mimeType = resolved.mimeType;
+  if (args.projectId) {
+    // A failed lookup must not block the upload; the project route still enforces the scope.
+    const scopes = await client.getOwnKeyScopes().catch(() => undefined);
+    if (scopes && !scopes.includes(ApiKeyScope.WRITE_PROJECTS)) {
+      throw new Error('projectId requires an API key with the projects:write scope');
+    }
+  }
+  const response = await client.requestFileUpload({ fileName, fileSize: bytes.length, mimeType });
+  const upload = response.files[0];
+  if (!upload?.fileId || !upload.url) throw new Error('File upload request returned no upload URL');
+  const fileId = upload.fileId;
+  try {
+    await client.uploadFileBytes(upload.url, bytes, mimeType);
+  } catch (err) {
+    await client.deleteFile(fileId).catch(() => {});
+    throw new Error(`Upload for file ${fileId} failed: ${mapApiError(err, client.baseURL, 'files:write')}`);
+  }
+  try {
+    if (args.projectId) await client.attachFileToProject(fileId, args.projectId);
+  } catch (err) {
+    throw new Error(
+      `File ${fileId} was uploaded but association failed: ${mapApiError(err, client.baseURL, 'projects:write')}`
+    );
+  }
+  return { fileId, ingestionState: 'pending' as const };
+}
+
 export async function generateSoundEffect(
   client: B4mApiClient,
   args: { text: string; provider: string; durationSeconds?: number; promptInfluence?: number; format?: string }
@@ -881,14 +979,16 @@ export async function publishArtifact(
   const artifactType = ArtifactTypeSchema.safeParse(artifact.type);
   if (!artifactType.success)
     throw new Error(`artifact ${artifact.id} has an unsupported type (${String(artifact.type)})`);
-  if (typeof artifact.userId !== 'string') throw new Error(`artifact ${artifact.id} has no owner to publish under`);
 
   const storedTitle = typeof artifact.title === 'string' ? artifact.title : '';
   const title = (args.title ?? storedTitle).trim().slice(0, PUBLISH_TITLE_MAX) || PUBLISH_FALLBACK_TITLE;
   const existing = await client.findPublishedArtifact(artifact.id);
+  // A reader without a grant gets no userId; they can only republish a page they already own.
+  const ownerScope = existing?.scopeId ?? artifact.userId;
+  if (typeof ownerScope !== 'string') throw new Error(`artifact ${artifact.id} can only be published by its owner`);
   const request: UploadUrlRequest = {
     tier: existing?.tier ?? 'user',
-    scopeId: existing?.scopeId ?? artifact.userId,
+    scopeId: ownerScope,
     slug: existing?.slug ?? artifactSlug(title, artifact.id),
     title,
     visibility: args.visibility ?? existing?.visibility ?? PUBLISH_DEFAULT_VISIBILITY,
@@ -1373,6 +1473,12 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
     'get_file',
     { title: meta('get_file').title, description: meta('get_file').description, inputSchema: getFileShape },
     args => run('files:read', () => getFile(client, args))
+  );
+
+  server.registerTool(
+    'upload_file',
+    { title: meta('upload_file').title, description: meta('upload_file').description, inputSchema: uploadFileShape },
+    args => run('files:write', () => uploadFile(client, args))
   );
 
   server.registerTool(

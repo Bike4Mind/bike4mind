@@ -10,6 +10,8 @@ export interface ICacheDocument extends IMongoDocument {
 export interface ICacheRepository extends IBaseRepository<ICacheDocument> {
   findByKey(key: string): Promise<ICacheDocument | null>;
   deleteByKey(key: string): Promise<void>;
+  /** Atomically delete a key and return the document it held, or null when none existed. */
+  deleteByKeyAndReturn(key: string): Promise<ICacheDocument | null>;
   createOrUpdate(data: Omit<ICacheDocument, 'id' | 'updatedAt' | 'createdAt'>): Promise<ICacheDocument>;
   /**
    * Atomically increment a counter stored in cache
@@ -43,9 +45,17 @@ export interface ICacheRepository extends IBaseRepository<ICacheDocument> {
   ): Promise<{ success: boolean; count: number; expiresAt: Date }>;
   /**
    * Exact inverse of `tryAddWithinLimitFixedWindow` within the live window: subtracts `amount`,
-   * never below 0, and is a no-op when the window doc is absent or already expired.
+   * never below 0, and is a no-op when the window doc is absent or already expired. Pass the
+   * `expiresAt` the grant returned to pin the release to that window: one that has since rolled
+   * over (different expiry) is then left alone. `outsideTransaction` keeps the call out of any
+   * ambient transaction (see CacheModel).
    */
-  releaseFromFixedWindow(key: string, amount: number): Promise<void>;
+  releaseFromFixedWindow(
+    key: string,
+    amount: number,
+    expiresAt?: Date,
+    opts?: { outsideTransaction?: boolean }
+  ): Promise<void>;
   /**
    * `tryIncrementWithinLimitFixedWindow` generalized to add `amount` per call instead of 1.
    * Same FIXED-WINDOW semantics and expiry handling. The add is all-or-nothing: if
@@ -58,7 +68,8 @@ export interface ICacheRepository extends IBaseRepository<ICacheDocument> {
     key: string,
     amount: number,
     limit: number,
-    ttlMs: number
+    ttlMs: number,
+    opts?: { outsideTransaction?: boolean }
   ): Promise<{ success: boolean; count: number; expiresAt: Date }>;
   /**
    * Atomically decrement a counter (used for rollback)

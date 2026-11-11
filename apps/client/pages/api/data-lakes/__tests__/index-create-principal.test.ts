@@ -31,7 +31,7 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/dataLakes/dataLakeScopes', () => ({ DATA_LAKE_READ_SCOPES: [], assertDataLakeWriteScope: vi.fn() }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
 vi.mock('@server/dataLakes/resolveLakeListRetrievalScope', () => ({ resolveLakeListRetrievalScope: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({
   resolveActiveOrg: vi.fn().mockResolvedValue(undefined),

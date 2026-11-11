@@ -107,7 +107,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
 
 // Stubbed so the real one's entitlement + org-admin Mongo reads stay out of this spec; the actor
 // identity still comes from req.user, never the body.
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: async (req: { user: { id: string; isAdmin?: boolean } }) => ({
     userId: req.user.id,
     isAdmin: !!req.user.isAdmin,
@@ -438,7 +438,9 @@ describe('PUT /api/files/[id] - scope gate', () => {
   });
 });
 
-it('returns a browser URL after an authorized edit without updating the private cache', async () => {
+const CONTENT_URL = /\/api\/files\/[^/]+\/content\?exp=\d+&sig=[A-Za-z0-9_-]{43}$/;
+
+it('returns the stable content URL after an authorized edit without updating the private cache', async () => {
   vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://public.test');
   vi.clearAllMocks();
   const saved = fabFile({
@@ -452,11 +454,11 @@ it('returns a browser URL after an authorized edit without updating the private 
   h.signUrl.mockResolvedValue('https://public.test/notes');
   const { res, json } = makeRes();
   await run({ fileName: 'renamed.txt' }, res);
-  expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/notes');
+  expect(json.mock.calls[0][0].fileUrl).toMatch(CONTENT_URL);
   expect(saved.fileUrl).toBe('http://private.test/notes');
   expect(h.update).toHaveBeenCalledTimes(1);
   expect(h.update.mock.calls[0][0].fileUrl).toBeUndefined();
-  expect(h.signUrl).toHaveBeenCalledWith('owned/notes.txt', 'get', { expiresIn: 3600, audience: 'browser' });
+  expect(h.signUrl).not.toHaveBeenCalled();
 });
 
 afterEach(() => vi.unstubAllEnvs());
@@ -510,8 +512,8 @@ describe('PUT response file-read scope', () => {
       );
       expect(h.update).toHaveBeenCalled();
       expect(logEventSafe).toHaveBeenCalled();
-      expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/notes');
-      expect(h.signUrl).toHaveBeenCalledWith('owned/notes.txt', 'get', { expiresIn: 3600, audience: 'browser' });
+      expect(json.mock.calls[0][0].fileUrl).toMatch(CONTENT_URL);
+      expect(h.signUrl).not.toHaveBeenCalled();
     }
   );
 
@@ -540,8 +542,8 @@ describe('PUT response file-read scope', () => {
     );
     expect(h.update).toHaveBeenCalled();
     expect(logEventSafe).toHaveBeenCalled();
-    expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/notes');
-    expect(h.signUrl).toHaveBeenCalledWith('owned/notes.txt', 'get', { expiresIn: 3600, audience: 'browser' });
+    expect(json.mock.calls[0][0].fileUrl).toMatch(CONTENT_URL);
+    expect(h.signUrl).not.toHaveBeenCalled();
   });
 
   it('keeps the update-access gate ahead of signing for a read/write key', async () => {

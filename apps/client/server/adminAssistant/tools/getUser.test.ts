@@ -19,7 +19,7 @@ vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => ({
   SUBSCRIPTION_PLANS: [{ priceId: 'price_pro', name: 'Professional' }],
   TEAM_PLAN: { priceId: 'price_team', name: 'Team' },
 }));
-vi.mock('../../entitlements', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
   toEntitlementUser: (user: { id: string }) => ({ id: user.id }),
   getUserEntitlements: async () => ['base', 'plan:paid'],
 }));

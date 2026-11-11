@@ -828,6 +828,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     temperature: options?.temperature,
     maxTokens,
     stream: options?.stream ?? true,
+    // No fallback loop here, so a refusal reaches the caller as finish_reason 'refusal'.
+    settleRefusal: true,
     tools: requestTools,
     ...(cacheStrategy ? { cacheStrategy } : {}),
     ...(wireTools.providerTools.length > 0 ? { providerTools: wireTools.providerTools } : {}),

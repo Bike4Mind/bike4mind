@@ -1,6 +1,6 @@
 import { SupportAccess } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { customerSupportAccess } from '@bike4mind/server-utils/auth/impersonation';
 
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'users:impersonate' } }).get(async (req, res) => {

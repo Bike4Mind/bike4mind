@@ -55,7 +55,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   memoryLedgerRepository: {},
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../health';
 

@@ -14,7 +14,7 @@ import {
 import { adminAuditService, authSessionService, creditService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { adminUsersPipeline } from '@server/admin/usersList/listAdminUsers';
-import { LIVE_API_KEY_STATUS } from '@server/admin/usersList/adminUsersQuery';
+import { LIVE_API_KEY_STATUS } from '@bike4mind/server-utils/admin/usersList/adminUsersQuery';
 import {
   loadCreditGrantPolicy,
   requestAuditWriter,
@@ -26,8 +26,11 @@ import {
   addBlockedEmailDomains,
   readBlockedEmailDomains,
   removeBlockedEmailDomains,
-} from '@server/admin/blockedEmailDomains';
-import { cancelAccountSubscriptions, subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
+} from '@bike4mind/server-utils/admin/blockedEmailDomains';
+import {
+  cancelAccountSubscriptions,
+  subscriptionCancellationAudit,
+} from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 import type { ApplyDeps, ExecuteDeps } from './execute';
 import type { UsersBulkAuditEntry, UsersBulkDb } from './ports';
 import type { BulkUser, PreviewDeps, ResolveDeps } from './resolve';

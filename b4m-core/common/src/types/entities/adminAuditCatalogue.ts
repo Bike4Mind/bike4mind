@@ -64,6 +64,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.role.admin_revoked': { category: 'access', severity: 'critical', write: 'strict' },
   'user.throttle_tier.changed': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'user.permissions.updated': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.permissions.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'user.impersonation.started': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.escalated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.ended': { category: 'access', severity: 'info', write: 'bestEffort' },
@@ -133,6 +135,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.api_key_trust.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
   'user.new_account_spend_cap.lifted': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.new_account_spend_cap.restored': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  'user.file_embedding_window.reset': { category: 'credits', severity: 'notice', write: 'strict' },
   // Analytics classification (User.isInternal): grants nothing, but decides whether an account
   // counts as a customer, so both directions keep a record.
   'user.internal.marked': { category: 'account', severity: 'notice', write: 'strict' },
@@ -156,15 +159,16 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // written in that user's transaction. reopened is the undo of approved.
   'user.signup_risk.approved': { category: 'access', severity: 'notice', write: 'strict' },
   'user.signup_risk.reopened': { category: 'access', severity: 'notice', write: 'strict' },
-  // A system actor approving on payment or quiet-account evidence (apps/client/server/security/riskReviewAutoApproval.ts).
+  // A system actor approving on payment or quiet-account evidence (packages/server-utils/src/security/riskReviewAutoApproval.ts).
   'user.signup_risk.auto_approved': { category: 'access', severity: 'notice', write: 'strict' },
   'user.signup_risk.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   // Signup domain holds: one strict entry per decision, written in the same transaction as the status
   // change. confirmed/released come from admins (apps/client/pages/api/admin/signup-domain-holds.ts);
-  // auto_confirmed from the triage job (apps/workers/src/cron/signupDomainHoldTriage.ts).
+  // auto_confirmed and auto_released from the triage job (apps/workers/src/cron/signupDomainHoldTriage.ts).
   'signup_domain_hold.confirmed': { category: 'access', severity: 'notice', write: 'strict' },
   'signup_domain_hold.released': { category: 'credits', severity: 'notice', write: 'strict' },
   'signup_domain_hold.auto_confirmed': { category: 'access', severity: 'notice', write: 'strict' },
+  'signup_domain_hold.auto_released': { category: 'credits', severity: 'notice', write: 'strict' },
   // Users-list bulk actions (apps/client/pages/api/admin/users/bulk/*): one strict entry per changed
   // user, written in that user's transaction, plus a bestEffort summary per batch.
   'user.bulk.executed': { category: 'account', severity: 'notice', write: 'bestEffort' },

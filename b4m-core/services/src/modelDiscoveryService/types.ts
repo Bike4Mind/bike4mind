@@ -390,6 +390,27 @@ export interface PriceOverride {
   detail: string;
 }
 
+/**
+ * A trusted source publishes a long-context ladder that the flat row discovery
+ * plans (or already holds) cannot bill: prompts past a reachable bracket settle
+ * at the base rate. Not a PriceFlag, on purpose: the row IS written (or stands
+ * unchanged), and this recurs every run until an operator reprices the row as a
+ * ladder - a flag would keep the PriceFlagged alarm stuck in ALARM and drown out
+ * the band-exceeded notifications it exists for. Discovery never writes the
+ * upper tier itself: with no tiered row in force there is no baseline to band it
+ * against.
+ */
+export interface LongContextGap {
+  modelId: string;
+  /** The trusted source whose ladder the row does not carry. */
+  source: string;
+  /** The flat rate the row bills every prompt at, per MTok. */
+  base: { inputPerMTok: number; outputPerMTok: number };
+  /** The published brackets a prompt can reach under the flat row, per MTok. */
+  brackets: Array<{ aboveTokens: number; inputPerMTok: number; outputPerMTok: number }>;
+  detail: string;
+}
+
 /** Why a usable observation produced neither a row nor a flag. */
 export type PriceSkipReason = 'unknown-model' | 'operator-owned' | 'tiered-pricing' | 'untrusted' | 'unchanged';
 
@@ -509,6 +530,8 @@ export interface ModelDiscoveryRunResult {
     flags: PriceFlag[];
     /** Rows written over a source that disagreed; a subset of `rows` by model. */
     overrides: PriceOverride[];
+    /** Flat rows a trusted source publishes a reachable ladder for; written or not, never flagged. */
+    longContextGaps: LongContextGap[];
   };
   /** The lifecycle plan, likewise: report mode declines to persist it, nothing more. */
   lifecycle: {
@@ -566,6 +589,11 @@ export interface ModelDiscoveryAdapters {
    * same targets, which is what the multi-run convergence already did.
    */
   refreshCatalogView?: () => void;
+  /**
+   * Called once by a write-mode run whose writes can change what a model picker lists (see
+   * modelListImpact.ts), before the run document is finalized. A throw is logged, never fatal.
+   */
+  onModelListChanged?: () => Promise<void>;
   logger?: DiscoveryLogger;
   env?: DiscoveryEnv;
 }

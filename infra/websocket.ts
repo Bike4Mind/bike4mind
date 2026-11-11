@@ -50,12 +50,14 @@ const disconnectRoute = websocketApi.route('$disconnect', {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
 });
+// No VPC, unlike the other routes: the handler runs with skipDatabase and only posts `pong` back
+// through the API Gateway management endpoint. If it ever opens the database, restore `vpc`; see
+// docs/architecture/lambda-vpc-audit.md and infra/__tests__/lambdaVpcAudit.test.ts.
 const heartbeatRoute = websocketApi.route('heartbeat', {
   handler: 'apps/client/server/websocket/heartbeat.func',
   runtime: 'nodejs24.x',
   memory: DB_HANDLER_MEMORY,
   timeout: '30 seconds',
-  vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   permissions: [
     {

@@ -1,11 +1,16 @@
 import { connectDB as baseConnectDB } from '@bike4mind/db-core';
-import { setModelCatalogProvider, setModelPriceRowsProvider } from '@bike4mind/llm-adapters';
+import {
+  setModelCatalogProvider,
+  setModelListRevisionProvider,
+  setModelPriceRowsProvider,
+} from '@bike4mind/llm-adapters';
 import { configureSecretsAtRest } from '@bike4mind/utils/security';
 import { Resource } from 'sst';
 import { modelPriceRepository } from './models/billing/ModelPriceModel';
 import { ModelCatalog, modelCatalogRepository } from './models/ai/ModelCatalogModel';
 import { ModelDiscoveryState } from './models/ai/ModelDiscoveryStateModel';
 import { DataLakeModel } from './models/ai/DataLakeModel';
+import { readModelListRevision } from './modelListRevision';
 import { seedModelCatalog } from './seeds/seedModelCatalog';
 import { seedModelPrices } from './seeds/seedModelPrices';
 
@@ -151,6 +156,7 @@ export const connectDB: typeof baseConnectDB = async (url, logger) => {
     catalogWired = true;
     setModelCatalogProvider(() => modelCatalogRepository.rowsInForce());
     setModelPriceRowsProvider(() => modelPriceRepository.rowsInForce());
+    setModelListRevisionProvider(readModelListRevision);
     // seedCatalogs catches per collection; this catch only keeps the
     // fire-and-forget promise from ever rejecting, which whenCatalogSeeded's
     // callers rely on.

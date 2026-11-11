@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   invokeRemoteMcp: vi.fn(),
 }));
 
-vi.mock('./customMcpAccess', () => ({
+vi.mock('@bike4mind/server-utils/mcpConnections/customMcpAccess', () => ({
   resolveCustomMcpContext: mocks.resolveCustomMcpContext,
   evaluateConnectionPolicy: mocks.evaluateConnectionPolicy,
 }));

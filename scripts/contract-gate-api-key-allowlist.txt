@@ -412,6 +412,7 @@ apps/client/pages/api/feedback/[id]/read.ts
 apps/client/pages/api/feedback/[id]/update.ts
 apps/client/pages/api/feedback/index.ts
 apps/client/pages/api/file-links/[token].ts  # deliberately unauthenticated (auth: false): emailed and Slack links are opened signed out; the signed token is the credential, access is rechecked per click, rate limited
+apps/client/pages/api/files/[id]/content.ts  # deliberately unauthenticated (auth: false): <img>/<video> loads cannot send a bearer token; the HMAC sig bound to file id, storage path and expiry is the capability; rate limited, re-checks deletion and moderation, 302s to a short-lived S3 link
 apps/client/pages/api/files/[id]/index.ts
 apps/client/pages/api/files/[id]/moderate.ts
 apps/client/pages/api/files/[id]/upload.ts

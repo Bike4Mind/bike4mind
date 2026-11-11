@@ -9,6 +9,7 @@ import {
   ContextTelemetrySchema,
   ContextTelemetryAlertsSchema,
   PERSISTED_SESSION_SUMMARY_TRIGGERS,
+  LiveActivityPushEventSchema,
   PushNotificationEventSchema,
   SRE_ANALYSIS_COMPLETED_EVENT,
   type SreFixRequest,
@@ -133,11 +134,13 @@ export const EmailEvents = {
 
 /**
  * Push to a user's first-party native clients. Publish through publishPushNotification
- * (apps/client/server/utils/pushNotifications.ts), which never throws into the host path; the consumer is
+ * (./pushNotifications.ts), which never throws into the host path; the consumer is
  * apps/workers/src/events/sendPush.ts.
  */
 export const NotificationEvents = {
   Push: event('notification.push', PushNotificationEventSchema),
+  /** Live activity progress for a quest; publish via apps/client/server/utils/liveActivityPush.ts. */
+  LiveActivity: event('notification.liveActivity', LiveActivityPushEventSchema),
 };
 
 export const StripeEvents = {

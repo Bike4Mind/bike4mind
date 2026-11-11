@@ -43,7 +43,7 @@ import {
   isSafeSignedOrigin,
   isStreamedFile,
   signedResponseFor,
-} from '@server/services/publish/signedFiles';
+} from '@bike4mind/server-utils/services/publish/signedFiles';
 import { gateProofSecondsLeft, requestHasGateProof } from '@bike4mind/server-utils/services/publish/publishGateToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
 import { injectSignupGateBridge } from '@server/services/publish/signupGateBridge';
@@ -1593,7 +1593,7 @@ interface PublishedArtifactLean {
   source: { kind: 'bundle' | 'reply' | 'fabfile' };
   /** Legacy single share link; still the source of truth during the rollout. */
   shareToken?: string | null;
-  /** Every share link ever minted. Only the entry that served THIS request is counted. */
+  /** The stored share links (live plus retained revoked ones). Only the entry that served THIS request is counted. */
   shareTokens?: PublishedArtifactShareToken[];
   sha256Index?: string;
   versions?: Array<{ sha256Index: string }>;

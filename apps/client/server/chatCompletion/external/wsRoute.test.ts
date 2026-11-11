@@ -15,10 +15,10 @@ import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils
 
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
 const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
-vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', () => ({
   checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap,
 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {

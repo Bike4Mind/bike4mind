@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
 import type { Request } from 'express';
 import { TUTORIAL_MODULE_STATUSES } from '../models';
 import type { TutorialService } from '../service';

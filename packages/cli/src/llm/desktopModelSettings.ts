@@ -9,6 +9,8 @@ import {
   localModelId,
   MODEL_SETTINGS_FILE_NAME,
   parseModelSettingsFile,
+  parseModelSettingsJson,
+  modelSettingsJsonProblem,
   quotedForMessage,
   REASONING_EFFORT_SETTINGS,
   type GenerationField,
@@ -120,9 +122,9 @@ export async function readDesktopModelSettings(
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(text);
-  } catch {
-    throw fileProblem(file.path, 'is not valid JSON');
+    raw = parseModelSettingsJson(text);
+  } catch (error) {
+    throw fileProblem(file.path, modelSettingsJsonProblem(error));
   }
   const stored = parseModelSettingsFile(raw);
   if (!stored) throw fileProblem(file.path, 'does not hold model settings');

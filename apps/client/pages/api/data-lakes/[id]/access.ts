@@ -12,7 +12,7 @@ import {
 } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { lakeAccessViewToCsv, lakeAccessViewCsvFilename } from '@server/dataLakes/lakeAccessViewCsv';
 import { firstQueryValue } from '@bike4mind/server-utils/dataLakes/firstQueryValue';
 import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';

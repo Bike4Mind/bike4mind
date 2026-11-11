@@ -1,7 +1,10 @@
 import { getMcpPresetHost } from '@bike4mind/common';
 import { mcpConnectionRepository } from '@bike4mind/database';
 import { isCustomToolOffered, type CustomMcpToolHost } from '@bike4mind/services/llm';
-import { evaluateConnectionPolicy, resolveCustomMcpContext } from './customMcpAccess';
+import {
+  evaluateConnectionPolicy,
+  resolveCustomMcpContext,
+} from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { invokeRemoteMcp } from './invokeRemoteMcp';
 
 /**

@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
+  ADMIN_AI_FEATURES,
   AbuseAssessmentConfigSchema,
+  AdminAiConfigSchema,
   AutoContainmentConfigSchema,
   SignupDomainHoldAssessmentConfigSchema,
   UsagePatternSignalsConfigSchema,
@@ -31,6 +33,13 @@ export type StructuredSetting = {
   confirmations?(next: ConfigObject, stored: ConfigObject): string[];
 };
 
+const featureMode = (config: ConfigObject, feature: string): unknown => {
+  const features = config.features;
+  if (typeof features !== 'object' || features === null) return undefined;
+  const entry: unknown = (features as ConfigObject)[feature];
+  return typeof entry === 'object' && entry !== null ? (entry as ConfigObject).mode : undefined;
+};
+
 export const STRUCTURED_SETTINGS: Record<string, StructuredSetting> = {
   abuseAssessmentConfig: { schema: AbuseAssessmentConfigSchema },
   usagePatternSignalsConfig: { schema: UsagePatternSignalsConfigSchema },
@@ -46,6 +55,22 @@ export const STRUCTURED_SETTINGS: Record<string, StructuredSetting> = {
       ...(next.blockEmailDomains === true && stored.blockEmailDomains !== true
         ? [
             "Block email domains adds each contained account's own email domain to blockedEmailDomains, refusing every new signup on it. One false positive on a shared company or campus domain blocks the whole domain.",
+          ]
+        : []),
+    ],
+  },
+  adminAiConfig: {
+    schema: AdminAiConfigSchema,
+    confirmations: (next, stored) => [
+      ...ADMIN_AI_FEATURES.filter(
+        feature => featureMode(next, feature) === 'act' && featureMode(stored, feature) !== 'act'
+      ).map(
+        feature =>
+          `Mode act lets ${feature} apply its suggestions as the system, without an admin accepting each one. Only suggestions at or above its confidence threshold are applied.`
+      ),
+      ...(typeof next.monthlyCapUsd === 'number' && next.monthlyCapUsd > 0 && !(Number(stored.monthlyCapUsd) > 0)
+        ? [
+            `A monthly cap above $0 lets admin AI features spend platform credit on model calls, up to each feature's daily budget.`,
           ]
         : []),
     ],

@@ -6,7 +6,7 @@ import { TUTORIAL_CARD_SIDES } from './tutorial';
 export const COPY_FIELDS = ['title', 'body', 'doneBody'] as const;
 export type CopyField = (typeof COPY_FIELDS)[number];
 
-const TEXT_MAX = 4000;
+export const TEXT_MAX = 4000;
 const text = z.string().max(TEXT_MAX);
 
 const AnchorUnitSchema = z.object({

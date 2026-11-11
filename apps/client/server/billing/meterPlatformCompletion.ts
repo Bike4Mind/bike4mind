@@ -47,8 +47,8 @@ import {
 import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
 import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
 import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
-import { recordPaidPlanRefusal } from '@server/billing/userLimitEvents';
-import { getUserEntitlements } from '@server/entitlements';
+import { recordPaidPlanRefusal } from '@bike4mind/server-utils/billing/userLimitEvents';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
 import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import {
   reserveRequestCredits,
