@@ -297,9 +297,8 @@ test.describe('Authentication', () => {
     await navigationPage.logout();
     await expect(page).toHaveURL(/.*login.*/);
 
-    // Intercept the quest-plans API call to confirm it hits the server
-    const questPlansPromise = page.waitForResponse(
-      resp => resp.url().includes('/api/quest-plans') && resp.status() === 200,
+    const identifyPromise = page.waitForResponse(
+      resp => resp.url().includes('/api/identify') && resp.status() === 200,
       { timeout: TIMEOUTS.ACTION }
     );
 
@@ -309,12 +308,12 @@ test.describe('Authentication', () => {
     await seedAuthOnPage(page, { accessToken: fresh.accessToken, refreshToken: fresh.refreshToken });
     await basePage.dismissModals();
 
-    // Navigate to notebooks to trigger the quest-plans fetch
-    await page.goto('/quests');
+    await page.goto('/');
     await page.waitForLoadState('load');
 
-    // Verify the API was actually called (not served from stale cache)
-    const response = await questPlansPromise;
-    expect(response.status()).toBe(200);
+    // The current user comes from the server, not a cache left over from before logout.
+    const response = await identifyPromise;
+    const body = (await response.json()) as { user?: { email?: string } };
+    expect(body.user?.email?.toLowerCase()).toBe(user.email.toLowerCase());
   });
 });
