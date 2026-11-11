@@ -255,6 +255,25 @@ describe('LoopRepository', () => {
     expect(cleared?.coachDismissed).toBeUndefined();
   });
 
+  it('updateForUser with guard.noTrial only applies while no trial is running', async () => {
+    const loop = await create();
+    const trial = { stage: 'todo', model: 'cheap', baselineModel: 'big', tickets: 10, startedAt: new Date(1000) };
+    const started = await loopRepository.updateForUser(loop.id, USER, { coachTrial: trial }, undefined, {
+      noTrial: true,
+    });
+    expect(started?.coachTrial).toEqual(trial);
+    const second = await loopRepository.updateForUser(
+      loop.id,
+      USER,
+      { coachTrial: { ...trial, stage: 'b' } },
+      undefined,
+      {
+        noTrial: true,
+      }
+    );
+    expect(second).toBeNull();
+  });
+
   it('markErroredIfFailing only moves a live loop at the limit', async () => {
     const atLimit = await create({ status: 'live', consecutiveFailures: 3 });
     const below = await create({ status: 'live', consecutiveFailures: 2 });

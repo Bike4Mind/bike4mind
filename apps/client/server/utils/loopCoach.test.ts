@@ -295,6 +295,17 @@ describe('coachSuggestions rules', () => {
     expect(keys({ stats: statsOf([], days([100, 100, 100, 100])) })).not.toContain('raise_budget');
   });
 
+  it('raise_budget: a day with a budget-stopped run counts as run out even under the budget', () => {
+    const loop = loopOf({ budgetCreditsPerDay: 100 });
+    const stopped = (n: number) =>
+      Array.from({ length: n }, (_, i) =>
+        run({ loopOutcome: 'budget_stopped', createdAt: new Date(`2026-11-0${i + 1}T12:00:00Z`) })
+      );
+    const at = (n: number) => keys({ loop, stats: statsOf([], days([10, 10, 10, 10, 10, 10, 10])), runs: stopped(n) });
+    expect(at(4)).toContain('raise_budget');
+    expect(at(3)).not.toContain('raise_budget');
+  });
+
   it('lower_budget: fires when the peak day stayed at or under half the budget over 14 days with runs', () => {
     const loop = loopOf({ budgetCreditsPerDay: 200 });
     const at = (credits: number[]) =>

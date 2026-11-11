@@ -78,7 +78,8 @@ async function coachResponse(loop: ILoop, user: IUserDocument, logger: Logger, n
       event.config &&
       event.config.by !== 'undo' &&
       !event.config.undoneBy &&
-      Object.keys(event.config.after ?? {}).length > 0
+      Object.keys(event.config.after ?? {}).length > 0 &&
+      loopMatches(loop, event.config.after)
   )?.id;
   const trial = loop.coachTrial;
   return {
@@ -110,6 +111,12 @@ const stringField = (body: Record<string, unknown>, field: string, max: number):
   if (typeof value !== 'string' || !value.trim()) throw new BadRequestError(`${field} is required`);
   if (value.trim().length > max) throw new BadRequestError(`${field} must be ${max} characters or fewer`);
   return value.trim();
+};
+
+/** A loop deleted mid-request is a 404, not a 200 with null. */
+const found = (loop: ILoop | null): ILoop => {
+  if (!loop) throw new NotFoundError('Loop not found');
+  return loop;
 };
 
 /**
@@ -224,13 +231,15 @@ const handler = baseApi({ auth: 'jwtOnly' })
           ...(loop.coachDismissed ?? []).filter(entry => entry.key !== key),
           { key, reason, at: now },
         ].slice(-DISMISSED_MAX);
-        res.json(await loopRepository.updateForUser(loop.id, user.id, { coachDismissed }));
+        res.json(found(await loopRepository.updateForUser(loop.id, user.id, { coachDismissed })));
         return;
       }
       case 'restore': {
         const key = stringField(body, 'key', KEY_MAX);
         const rest = (loop.coachDismissed ?? []).filter(entry => entry.key !== key);
-        res.json(await loopRepository.updateForUser(loop.id, user.id, { coachDismissed: rest.length ? rest : null }));
+        res.json(
+          found(await loopRepository.updateForUser(loop.id, user.id, { coachDismissed: rest.length ? rest : null }))
+        );
         return;
       }
       default:

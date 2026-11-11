@@ -498,7 +498,8 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
   findByIdAndUserId(id: string, userId: string): Promise<ILoop | null>;
   /**
    * Scoped update - a `null` in `patch` unsets the field. With `expectedStatus` it only applies while
-   * the loop still has that status, and with `guard.stages` only while its stages are exactly those.
+   * the loop still has that status, with `guard.stages` only while its stages are exactly those, and with
+   * `guard.noTrial` only while no coach trial is running.
    * Returns null when nothing matched.
    */
   updateForUser(
@@ -506,7 +507,7 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
     userId: string,
     patch: Record<string, unknown>,
     expectedStatus?: LoopStatus,
-    guard?: { stages?: string[] }
+    guard?: { stages?: string[]; noTrial?: boolean }
   ): Promise<ILoop | null>;
   deleteForUser(id: string, userId: string): Promise<boolean>;
   /** Atomically leases one due `live` loop with a free lane and not in `skipIds`, or returns null. */

@@ -1524,6 +1524,43 @@ describe('PATCH /api/loops/:id config_changed events', () => {
     await call('item', 'patch', { query: { id: OID }, body: { name: 'Renamed', goal: 'Another goal' } }).result;
     expect(loopEvents.recordConfigChanged).not.toHaveBeenCalled();
   });
+
+  it('logs nothing when a save only reorders stageConfig or tools, or sets unset lanes to 1', async () => {
+    const existing = loop({
+      stages: ['todo', 'build', 'done'],
+      stageConfig: [
+        { stage: 'build', model: 'b' },
+        { stage: 'todo', model: 't' },
+      ],
+      tools: ['web_search', 'github'],
+    });
+    repo.findByIdAndUserId.mockResolvedValue(existing);
+    repo.updateForUser.mockImplementation(async (_id: string, _u: string, patch: Record<string, unknown>) => ({
+      ...existing,
+      ...patch,
+    }));
+    await call('item', 'patch', {
+      query: { id: OID },
+      body: {
+        stageConfig: [
+          { stage: 'todo', model: 't' },
+          { stage: 'build', model: 'b' },
+        ],
+        tools: ['github', 'web_search'],
+        maxConcurrent: 1,
+      },
+    }).result;
+    expect(loopEvents.recordConfigChanged).not.toHaveBeenCalled();
+  });
+
+  it('ends a coach trial when the owner removes the trial stage', async () => {
+    const coachTrial = { stage: 'build', model: 'cheap', baselineModel: 'm1', tickets: 10, startedAt: new Date() };
+    repo.findByIdAndUserId.mockResolvedValue(
+      loop({ stages: ['todo', 'build', 'done'], stageConfig: [{ stage: 'build', model: 'cheap' }], coachTrial })
+    );
+    await call('item', 'patch', { query: { id: OID }, body: { stages: ['todo', 'done'] } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).toMatchObject({ coachTrial: null });
+  });
 });
 
 describe('GET /api/loops/:id/stats', () => {
@@ -1673,6 +1710,7 @@ describe('/api/loops/:id/coach', () => {
     idleRuns();
     stored(
       coachLoop({
+        model: 'a',
         coachDismissed: [
           { key: 'old', reason: 'stale', at: new Date(Date.now() - 40 * 86_400_000) },
           { key: 'raise_budget', reason: 'not now', at: new Date() },
@@ -1686,6 +1724,7 @@ describe('/api/loops/:id/coach', () => {
       config,
     });
     loopEvents.listConfigChanges.mockResolvedValue([
+      change('e4', { by: 'owner', before: { budgetCreditsPerDay: 1 }, after: { budgetCreditsPerDay: 2 } }),
       change('e3', { by: 'undo', before: { model: 'b' }, after: { model: 'a' } }),
       change('e2', { by: 'coach', before: { model: 'a' }, after: { model: 'b' }, undoneBy: 'e3' }),
       change('e1', { by: 'owner', before: { model: 'z' }, after: { model: 'a' } }),
@@ -1705,6 +1744,8 @@ describe('/api/loops/:id/coach', () => {
         v.undoable,
       ])
     ).toEqual([
+      // e4 is no longer in force (budget moved on), so Undo would only 409.
+      ['e4', 'owner', false, false],
       ['e3', 'undo', false, false],
       ['e2', 'coach', true, false],
       ['e1', 'owner', false, true],
@@ -1732,6 +1773,33 @@ describe('/api/loops/:id/coach', () => {
     await call('item', 'patch', { query: { id: OID }, body: { intervalMinutes: 30 } }).result;
     expect(repo.updateForUser.mock.calls[1][2]).toEqual(applied);
     expect(lastEvent().config.by).toBe('owner');
+  });
+
+  it('apply is a 409 for a disabled suggestion, with its reason', async () => {
+    executions.listLoopRunsSince.mockResolvedValue({
+      runs: runs(20, { loopStage: 'todo', loopOutcome: 'done' }),
+      truncated: false,
+    });
+    tickets.listForLoopStats.mockResolvedValue({
+      items: [{ id: 't1', status: 'open', stage: 'todo', createdAt: new Date() }],
+      truncated: false,
+    });
+    stored(coachLoop());
+    await expect(coach('post', { action: 'apply', key: 'remove_stage:todo' }).result).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('dismiss and restore are a 404 when the loop is deleted mid-request', async () => {
+    stored(coachLoop());
+    repo.updateForUser.mockResolvedValue(null);
+    await expect(coach('post', { action: 'dismiss', key: 'raise_budget', reason: 'no' }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await expect(coach('post', { action: 'restore', key: 'raise_budget' }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
   });
 
   it('apply is a 404 for a key that no longer fires', async () => {
@@ -1796,6 +1864,8 @@ describe('/api/loops/:id/coach', () => {
       coachTrial: { stage: 'build', model: 'huge', baselineModel: 'm1', tickets: 12, startedAt: expect.any(Date) },
     });
     expect(lastEvent().config).toMatchObject({ by: 'trial', suggestionKey: 'stronger_model:build' });
+    // Conditional on no trial running, so a concurrent start loses with a 409.
+    expect(repo.updateForUser.mock.calls[0][4]).toMatchObject({ noTrial: true });
 
     stored(
       coachLoop({ coachTrial: { stage: 'todo', model: 'a', baselineModel: 'm1', tickets: 5, startedAt: new Date() } })

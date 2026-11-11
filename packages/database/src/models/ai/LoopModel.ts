@@ -91,7 +91,7 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     userId: string,
     patch: Record<string, unknown>,
     expectedStatus?: LoopStatus,
-    guard?: { stages?: string[] }
+    guard?: { stages?: string[]; noTrial?: boolean }
   ): Promise<ILoop | null> {
     if (!mongoose.isValidObjectId(id)) return null;
     const set: Record<string, unknown> = {};
@@ -106,6 +106,7 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
         userId,
         ...(expectedStatus && { status: expectedStatus }),
         ...(guard?.stages && { stages: guard.stages }),
+        ...(guard?.noTrial && { coachTrial: null }),
       },
       {
         ...(Object.keys(set).length > 0 && { $set: set }),

@@ -51,9 +51,18 @@ export type LoopConfigBody = Partial<
   wakeMode?: string | null;
 };
 
-const versioned = (loop: Partial<ILoop>, field: LoopVersionedField): unknown =>
-  // A JSON copy: the event stores plain values, and undefined and null both mean unset.
-  JSON.parse(JSON.stringify(loop[field] ?? null));
+// A JSON copy: the event stores plain values, and undefined and null both mean unset. Order-only differences
+// (the edit form rebuilds stageConfig in stage order; the coach appends) and unset lanes (= 1, as the summary
+// reads them) are not changes, so a no-op save neither logs a version nor trips the undo guard.
+const versioned = (loop: Partial<ILoop>, field: LoopVersionedField): unknown => {
+  const value = JSON.parse(JSON.stringify(loop[field] ?? null));
+  if (field === 'maxConcurrent') return value ?? 1;
+  if (field === 'tools' && value) return [...value].sort();
+  if (field === 'stageConfig' && value) {
+    return [...value].sort((a: { stage: string }, b: { stage: string }) => a.stage.localeCompare(b.stage));
+  }
+  return value;
+};
 
 /** The versioned fields whose values differ between two reads of a loop. */
 export function changedVersionedFields(before: Partial<ILoop>, after: Partial<ILoop>): LoopVersionedField[] {
@@ -190,8 +199,19 @@ export async function applyLoopConfigPatch({
 
   // Conditional on the status the patch was computed from, so a scheduler write in between is not lost, and
   // on the stages stageConfig was checked against, so a concurrent stage edit can't leave orphan config.
-  const guard = patch.stageConfig !== undefined ? { stages: existing.stages } : undefined;
-  const updated = await loopRepository.updateForUser(id, userId, patch, existing.status, guard);
+  // A trial start is also conditional on no trial running, so two starts can't leave a stage on a trial model
+  // with no trial record to revert it.
+  const guard = {
+    ...(patch.stageConfig !== undefined && { stages: existing.stages }),
+    ...(extraPatch?.coachTrial ? { noTrial: true } : {}),
+  };
+  const updated = await loopRepository.updateForUser(
+    id,
+    userId,
+    patch,
+    existing.status,
+    Object.keys(guard).length ? guard : undefined
+  );
   if (!updated) throw new ConflictError('Loop changed while saving; reload and try again');
   if (patch.stages) await loopRepository.pruneTriggersForStages(userId, id, updated.stages);
 
