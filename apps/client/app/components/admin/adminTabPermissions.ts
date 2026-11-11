@@ -35,6 +35,11 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   [AdminTab.StripeDisputes]: 'support:read',
   [AdminTab.ShadowDetections]: 'support:read',
 
+  // The model list, prices and discovery reads declare support:read. Every write needs a full admin, so a delegate
+  // sees the data with the writes disabled; the lifecycle queue (settings:manage) and the tag pickers (full admin)
+  // are gated inside the page.
+  [AdminTab.Models]: 'support:read',
+
   // View-only for support:read; replay actions gate on settings:manage inside the tab.
   [AdminTab.DlqReplay]: 'support:read',
 

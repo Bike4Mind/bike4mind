@@ -772,7 +772,7 @@ export function ModelListSection() {
         rowTestId={row => `models-row-${row.id}`}
         selection={selection}
         onSelectionChange={setSelection}
-        selectionDisabled={stale}
+        selectionDisabled={stale || !!writeBlock}
         sort={tableSort}
         onSortChange={next => {
           const nextSort = SORT_BY_COLUMN[next.columnId];

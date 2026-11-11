@@ -34,6 +34,15 @@ describe('canOpenAdminTab', () => {
     expect(canOpenAdminTab(delegate('users:moderate'), AdminTab.ToolDefinitions)).toBe(false);
   });
 
+  it('opens Models to a support reader, whose list, price and discovery reads it makes, and to no one else', () => {
+    expect(canOpenAdminTab(delegate('support:read'), AdminTab.Models)).toBe(true);
+    expect(canOpenAdminTab(delegate('support:read', 'settings:manage'), AdminTab.Models)).toBe(true);
+    // GET /api/admin/models declares support:read alone, so settings:manage would only reach a 403.
+    expect(canOpenAdminTab(delegate('settings:manage'), AdminTab.Models)).toBe(false);
+    expect(canOpenAdminTab(delegate('users:moderate', 'credits:adjust'), AdminTab.Models)).toBe(false);
+    expect(DELEGATED_ADMIN_TAB_PERMISSIONS[AdminTab.Models]).toBe('support:read');
+  });
+
   it('refuses everything to a user with no admin role', () => {
     expect(canOpenAdminTab({ isAdmin: false }, AdminTab.Modals)).toBe(false);
     expect(canOpenAdminTab(null, AdminTab.Modals)).toBe(false);

@@ -169,6 +169,17 @@ describe('ModelSettingsSection', () => {
     expect(screen.queryByTestId('admin-save-bar')).toBeNull();
   });
 
+  it('blocks a settings:manage delegate who is not a full administrator, whose save would reach PUT /api/settings/update', async () => {
+    state.user = { isAdmin: false, adminPermissions: ['support:read', 'settings:manage'] };
+    renderSection();
+
+    expect(screen.getByTestId('models-settings-blocked')).toHaveTextContent('Only full administrators');
+    expect(screen.getByTestId('models-settings-modelDiscoveryMode-write')).toBeDisabled();
+    await userEvent.click(screen.getByTestId('models-settings-modelDiscoveryMode-write'));
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(state.mutateAsync).not.toHaveBeenCalled();
+  });
+
   it('hides the gate scope and allowed models while the gate is off, and shows them when on', () => {
     state.rows = [{ settingName: 'freeTierModelGateEnabled', settingValue: false }];
     const { unmount } = renderSection();

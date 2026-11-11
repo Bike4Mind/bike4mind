@@ -401,6 +401,19 @@ describe('ModelListSection single-model access', () => {
   });
 });
 
+describe('ModelListSection for a delegate', () => {
+  it('reads only the model list and leaves row selection and bulk writes disabled', async () => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read'] };
+    serveList(() => listResponse([listedRow]));
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    const checkbox = within(await screen.findByTestId('admin-table-select-example-text-1')).getByRole('checkbox');
+    expect(checkbox).toBeDisabled();
+    expect(within(screen.getByTestId('admin-table-select-page')).getByRole('checkbox')).toBeDisabled();
+    expect([...new Set(get.mock.calls.map(([url]) => url))]).toEqual(['/api/admin/models']);
+  });
+});
+
 describe('ModelListSection bulk access', () => {
   const twoRows = () => listResponse([listedRow, reviewRow], { total: 129 });
 

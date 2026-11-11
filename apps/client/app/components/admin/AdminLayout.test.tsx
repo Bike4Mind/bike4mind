@@ -180,16 +180,29 @@ describe('AdminLayoutRoute', () => {
       expect(profileRendered).not.toHaveBeenCalled();
     });
 
-    it('cannot open a model page, whose Models tab is for full admins only', async () => {
+    it('cannot open a model page without support:read, which the Models tab needs', async () => {
       mockUseUser.mockReturnValue(delegate(['settings:manage']));
 
       await renderAt('/admin/models/example-text-1');
 
       expect(await screen.findByTestId('admin-missing-permission-state')).toHaveTextContent(
-        'Full admin access required'
+        'Missing permission: support:read'
       );
       expect(modelRendered).not.toHaveBeenCalled();
     });
+
+    it.each([['support:read'], ['support:read', 'settings:manage']])(
+      'opens a model page for a delegate holding %s',
+      async (...permissions) => {
+        mockUseUser.mockReturnValue(delegate(permissions));
+
+        await renderAt('/admin/models/example-text-1');
+
+        expect(await screen.findByTestId('model-page')).toBeInTheDocument();
+        expect(screen.queryByTestId('admin-missing-permission-state')).toBeNull();
+        expect(within(desktopSidebar()).getByTestId('admin-models-tab-btn')).toBeInTheDocument();
+      }
+    );
   });
 
   it('keeps the sidebar on a model page, with Models active', async () => {

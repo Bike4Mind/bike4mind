@@ -404,3 +404,30 @@ describe('ModelDetailPage', () => {
     expect(rows[1]).toHaveTextContent('Turned off');
   });
 });
+
+describe('ModelDetailPage for a delegate with support:read', () => {
+  const requested = () => [...new Set(get.mock.calls.map(([url]) => url as string))];
+
+  it.each(['access', 'admin'])('reads the %s tab with no request a delegate would be refused', async tab => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read'] };
+    serve([offRow]);
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=${tab}`, () => null, { Detail: DetailRoute });
+
+    await screen.findByTestId(`model-detail-panel-${tab}`);
+    await waitFor(() => expect(requested()).toContain(tab === 'admin' ? '/api/admin/audit-log' : '/api/admin/models'));
+    expect(requested().every(url => ['/api/admin/models', '/api/admin/audit-log'].includes(url))).toBe(true);
+  });
+
+  it('shows every Access tab write disabled and fetches no tag choices until a full admin opens the editor', async () => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read', 'settings:manage'] };
+    serve([offRow]);
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+
+    for (const id of ['model-access-toggle-btn', 'model-access-audience-btn', 'model-access-ranking-btn']) {
+      expect(await screen.findByTestId(id)).toBeDisabled();
+    }
+    expect(screen.getByTestId('model-detail-fix-btn')).toBeDisabled();
+    expect(requested()).not.toContain('/api/admin/users/tags');
+    expect(requested()).not.toContain('/api/admin/llm-models/configurations');
+  });
+});
