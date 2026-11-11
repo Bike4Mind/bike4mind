@@ -723,6 +723,52 @@ describe('ModelListSection bulk access', () => {
     expect(report).not.toHaveTextContent('not reverted');
   });
 
+  it('calls a write error on a resend after an unconfirmed failure unconfirmed', async () => {
+    serveList(twoRows);
+    let firstTries = 0;
+    serveBulk(async token => {
+      if (token === 'undo-1') {
+        if ((firstTries += 1) === 1) throw apiFailure(503, { error: 'Access store unavailable' });
+        const { data } = stampMoved('example-text-1');
+        return { data: { ...data, results: [{ id: 'example-text-1', outcome: 'failed', reason: 'write-error' }] } };
+      }
+      return undoneOne('example-text-2');
+    });
+    await applyThenRetry();
+
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await screen.findByTestId('undo-toast-error');
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await waitFor(() => expect(undoTokensSent()).toEqual(['undo-1', 'undo-1', 'undo-2']));
+    const report = await screen.findByTestId('models-bulk-failed');
+    expect(report).toHaveTextContent('Undo: 1 model reverted, 1 unconfirmed.');
+    expect(screen.getByTestId('models-bulk-unconfirmed-item')).toHaveTextContent('may already be undone');
+    expect(report).not.toHaveTextContent('the write failed');
+  });
+
+  it('keeps may not have been undone for an uncertain entry whose resend comes back expired', async () => {
+    serveList(twoRows);
+    let firstTries = 0;
+    serveBulk(async token => {
+      if (token === 'undo-1') {
+        if ((firstTries += 1) === 1) throw apiFailure(503, { error: 'Access store unavailable' });
+        throw apiFailure(409, { error: 'This undo has expired.' });
+      }
+      return undoneOne('example-text-2');
+    });
+    await applyThenRetry();
+
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await screen.findByTestId('undo-toast-error');
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await waitFor(() => expect(undoTokensSent()).toEqual(['undo-1', 'undo-1', 'undo-2']));
+    const report = await screen.findByTestId('models-bulk-failed');
+    expect(report).toHaveTextContent(
+      "The original change (1 model) may not have been undone; check each model's page."
+    );
+    expect(report).not.toHaveTextContent('was not undone');
+  });
+
   it('gives a model already sent and a write still unsent their own guidance', async () => {
     serveList(twoRows);
     serveBulk(async token => {

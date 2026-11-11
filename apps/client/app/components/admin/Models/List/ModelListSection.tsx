@@ -372,10 +372,9 @@ export function ModelListSection() {
               reason: undoAdminReason(reason),
             });
             results.push(result);
-            // A resend after an unconfirmed failure: entries the first send moved read as stamp-moved on the resend.
-            for (const entry of failedResults(result)) {
-              (uncertain && entry.reason === 'stamp-moved' ? unconfirmed : notReverted).push(entry);
-            }
+            // A resend after an unconfirmed failure: the first send may have reverted these, so a stamp-moved or a
+            // write error on the resend does not show they were left changed.
+            (uncertain ? unconfirmed : notReverted).push(...failedResults(result));
           } catch (error) {
             if (!isExpiredUndo(error)) throw error;
             expired.push({ label, ids, expired: true, uncertain: uncertain === true });
