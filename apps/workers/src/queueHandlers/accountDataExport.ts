@@ -761,7 +761,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     requestedBy,
     leaseWaits = 0,
   } = secureParameters(JSON.parse(event.Records[0].body), AccountDataExportPayload);
-  logger.updateMetadata({ exportJobId, userId, requestedBy, leaseWaits });
+  const receiveCount = Number(event.Records[0].attributes?.ApproximateReceiveCount ?? 1);
+  logger.updateMetadata({ exportJobId, userId, requestedBy, leaseWaits, receiveCount });
   const forAdmin = requestedBy !== undefined;
   const key = forAdmin ? adminDataExportKey(userId, exportJobId) : accountDataExportKey(userId, exportJobId);
   // The admin profile lists an export skipped here as failed, with the reason, instead of building
@@ -769,22 +770,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const skipExport = async (skipReason: AdminDataExportSkipReason, displayName = userId) => {
     await getFilesStorage().deletePermanently(key);
     if (!forAdmin) return;
-    try {
-      await adminAuditService.recordAdminAction(
-        {
-          action: ADMIN_DATA_EXPORT_FAILED_ACTION,
-          actor: systemAuditActor('account-data-export'),
-          target: { kind: 'user', id: userId, displayName },
-          summary: 'skipped a data subject export',
-          context: { source: 'worker', route: 'queueHandlers/accountDataExport' },
-          details: { exportJobId, requestedBy, skipReason },
-        },
-        { db: { adminAuditLog: adminAuditLogRepository }, logger }
-      );
-    } catch (error) {
-      // A throw would retry a skip that can only end the same way.
-      logger.error('Account data export: could not record the skipped admin export', { skipReason, error });
-    }
+    await adminAuditService.recordAdminAction(
+      {
+        action: ADMIN_DATA_EXPORT_FAILED_ACTION,
+        actor: systemAuditActor('account-data-export'),
+        target: { kind: 'user', id: userId, displayName },
+        summary: 'skipped a data subject export',
+        context: { source: 'worker', route: 'queueHandlers/accountDataExport' },
+        details: { exportJobId, requestedBy, skipReason },
+      },
+      { db: { adminAuditLog: adminAuditLogRepository }, logger }
+    );
   };
   const nameOf = (account: { email?: string | null; username?: string | null }) =>
     account.email ?? account.username ?? userId;
@@ -842,8 +838,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Admin and self-serve exports share this one lease. The overlapping job is re-sent with a delay and
     // this message is acked, so the wait does not use up its SQS retries (infra/queues.ts); past the cap,
     // or with no queue to re-send to, it falls back to SQS redelivery and then the DLQ.
+    // Only a first delivery is re-sent: on a redelivery the held lease may be this job's own, kept by an
+    // earlier failed attempt, and a re-send would reset the receive count that bounds its retries.
     const queueUrl = Resource.accountDataExportQueue?.url;
-    if (leaseWaits < MAX_LEASE_WAITS && queueUrl) {
+    if (receiveCount === 1 && leaseWaits < MAX_LEASE_WAITS && queueUrl) {
       await sendToQueue(
         queueUrl,
         { exportJobId, userId, ...(forAdmin && { requestedBy }), leaseWaits: leaseWaits + 1 },

@@ -140,9 +140,16 @@ const logger = { updateMetadata: vi.fn(), info: vi.fn(), warn: vi.fn(), error: v
 const FULL_BUDGET_MS = 15 * 60 * 1000;
 let remainingMs: () => number = () => FULL_BUDGET_MS;
 const context = { getRemainingTimeInMillis: () => remainingMs() } as Context;
-const run = (body: unknown = { exportJobId: JOB_ID, userId: USER_ID }) =>
+const run = (body: unknown = { exportJobId: JOB_ID, userId: USER_ID }, receiveCount?: number) =>
   (dispatch as unknown as (event: SQSEvent, context: Context, logger: unknown) => Promise<void>)(
-    { Records: [{ body: JSON.stringify(body) }] } as SQSEvent,
+    {
+      Records: [
+        {
+          body: JSON.stringify(body),
+          ...(receiveCount !== undefined && { attributes: { ApproximateReceiveCount: String(receiveCount) } }),
+        },
+      ],
+    } as SQSEvent,
     context,
     logger
   );
@@ -666,6 +673,20 @@ describe('account data export worker', () => {
       );
     });
 
+    it('re-sends a first delivery that reports its receive count', async () => {
+      await expect(run({ exportJobId: JOB_ID, userId: USER_ID }, 1)).resolves.toBeUndefined();
+      expect(h.sendToQueue).toHaveBeenCalledOnce();
+    });
+
+    it('does not re-send a redelivery, whose held lease may be its own from a failed attempt', async () => {
+      await expect(run({ exportJobId: JOB_ID, userId: USER_ID, leaseWaits: 2 }, 2)).rejects.toThrow(
+        'Another account data export'
+      );
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.leaseRelease).not.toHaveBeenCalled();
+      expect(h.uploadFile).not.toHaveBeenCalled();
+    });
+
     it('falls back to SQS retries at the wait cap', async () => {
       await expect(run({ exportJobId: JOB_ID, userId: USER_ID, leaseWaits: MAX_LEASE_WAITS })).rejects.toThrow(
         'Another account data export'
@@ -839,17 +860,6 @@ describe('account data export worker', () => {
         );
         expect(h.permanentDelete).toHaveBeenCalledWith(ADMIN_KEY);
       });
-
-      it('still acks the skip when the audit write throws', async () => {
-        h.userFindById.mockResolvedValue(null);
-        h.recordAdminAction.mockRejectedValueOnce(new Error('audit store down'));
-        await expect(runForAdmin()).resolves.toBeUndefined();
-        expect(logger.error).toHaveBeenCalledWith(
-          'Account data export: could not record the skipped admin export',
-          expect.objectContaining({ skipReason: 'account_gone' })
-        );
-        expect(h.permanentDelete).toHaveBeenCalledWith(ADMIN_KEY);
-      });
     });
 
     it('adds the registry records under its own key and emails no one', async () => {
@@ -978,8 +988,8 @@ describe('account data export worker', () => {
 });
 
 // The admin dialog shows an export as failed once ADMIN_DATA_EXPORT_GIVE_UP_MS passes, so that window must
-// outlast the slowest job that can still succeed: every lease-wait re-send, then every redelivery of the
-// last copy (which finds the lease still held and throws), then one full run.
+// outlast the slowest job that can still succeed. Only a first delivery is re-sent, so a job is at most
+// every lease-wait re-send, then every redelivery of one copy, then one full run.
 describe('admin export give-up window', () => {
   const MINUTE = 60 * 1000;
   const QUEUES = readFileSync(
@@ -1009,7 +1019,9 @@ describe('admin export give-up window', () => {
     expect(ADMIN_DATA_EXPORT_GIVE_UP_MS).toBeGreaterThanOrEqual(latest + SLACK_MS);
   });
 
-  it('outlasts the slowest successful job on the self-host runner', () => {
+  // Not an upper bound: self-host run budgets are cooperative and the runner extends visibility while a
+  // run is in flight, so a run past RUN_BUDGET_MS delays every later receive by its overrun.
+  it('outlasts the slowest successful job on the self-host runner while each run keeps to its budget', () => {
     const latest = latestSuccessMs(MAX_RECEIVE_COUNT, VISIBILITY_TIMEOUT_SECONDS * 1000, RUN_BUDGET_MS);
     expect(latest).toBe(70 * MINUTE);
     expect(ADMIN_DATA_EXPORT_GIVE_UP_MS).toBeGreaterThanOrEqual(latest + SLACK_MS);
