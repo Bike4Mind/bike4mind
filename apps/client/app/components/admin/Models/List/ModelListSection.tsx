@@ -30,7 +30,12 @@ import {
   type ModelAccessSelection,
 } from '@bike4mind/common';
 import { getErrorMessage } from '@client/app/utils/error';
-import { postModelAccessBulk, useAdminModelList, useInvalidateModelAccess } from '@client/app/hooks/data/adminModels';
+import {
+  apiErrorOf,
+  postModelAccessBulk,
+  useAdminModelList,
+  useInvalidateModelAccess,
+} from '@client/app/hooks/data/adminModels';
 import {
   AdminSearchInput,
   BulkActionBar,
@@ -103,16 +108,26 @@ const positiveInt = (value: string, fallback: number) => {
 
 type AccessEdit = { target: ModelAccessTarget; change: ModelAccessChange; title: string; confirmLabel: string };
 type FailedEntry = ReturnType<typeof failedResults>[number];
-/** One bulk write and its retries: each undo token with the reason its write was made under. */
-type BulkBatch = { undo: { token: string; reason: string }[] };
 /**
- * A bulk apply that left models unwritten, with the request that retries them inside the same batch; or an undo
- * that left models as they are. An undo is not retried: those models changed since the batch, so reversing the
- * batch's change on them could reach past what it did.
+ * One bulk write and its retries: each unsent undo token with the reason its write was made under and which write it
+ * was (1 is the original apply). Shared, never copied: an undo shifts each token off as it goes, so none is sent twice.
+ */
+type BulkBatch = { undo: { token: string; reason: string; write: number }[]; writes: number };
+/**
+ * A bulk apply that left models unwritten, with the request that retries them inside the same batch; or what an undo
+ * could not do: the models it left as they are, the writes whose undo expired, or where it stopped. A model left as it
+ * is gets no retry: it changed since the batch, so reversing the batch's change on it could reach past what it did.
  */
 type BulkOutcome =
   | { kind: 'failed'; summary: string; failed: FailedEntry[]; retry: ModelBulkRequest; batch: BulkBatch }
   | { kind: 'not-reverted'; summary: string; failed: FailedEntry[] };
+
+const isExpiredUndo = (error: unknown) => {
+  const { status, data } = apiErrorOf(error);
+  return status === 409 && /expired/i.test(String(data.error ?? data.message ?? ''));
+};
+
+const writeLabel = (write: number) => (write === 1 ? 'the original change' : `retry ${write - 1}`);
 
 const toggleEdit = (row: AdminModelRow): AccessEdit => {
   const on = effectiveAccess(row.access.entry).enabled;
@@ -200,27 +215,53 @@ export function ModelListSection() {
   const bulkSelection = (): ModelAccessSelection =>
     selection.mode === 'allMatching' ? { filter: { ...baseFilter, view } } : { ids: [...selection.ids] };
 
-  /** Reverts every write in the batch, oldest first; a retried undo resumes after the tokens that already went. */
+  /**
+   * Reverts every write in the batch, oldest first. An expired token is skipped and named, and the later ones still
+   * go; any other failure stops the undo with what went through, and Undo again resumes at the first unsent token.
+   */
   const undoBatch = (batch: BulkBatch) => {
-    const pending = [...batch.undo];
     const results: ModelAccessBulkResult[] = [];
-    return async () => {
-      while (pending.length > 0) {
-        const { token, reason } = pending[0];
-        results.push(
-          await postModelAccessBulk<ModelAccessBulkResult>({ undoToken: token, reason: undoAdminReason(reason) })
-        );
-        pending.shift();
-      }
-      await invalidate();
+    const expired: number[] = [];
+    const report = (ending: string, stopped = false) => {
       const reverted = results.reduce((sum, result) => sum + result.counts.updated, 0);
       const notReverted = results.flatMap(failedResults);
+      const expiredWrites = expired.map(writeLabel).join(' and ');
+      const expiredNote =
+        expired.length > 0 ? ` The undo for ${expiredWrites} had expired; change those models back from the list.` : '';
       const summary = `Undo: ${countOf(reverted, 'model')} reverted${
         notReverted.length > 0 ? `, ${notReverted.length.toLocaleString()} not reverted` : ''
-      }.`;
-      setOutcome(notReverted.length > 0 ? { kind: 'not-reverted', summary, failed: notReverted } : null);
+      }${ending}${expiredNote}`;
+      setOutcome(
+        stopped || notReverted.length > 0 || expired.length > 0
+          ? { kind: 'not-reverted', summary, failed: notReverted }
+          : null
+      );
+      return summary;
+    };
+    return async () => {
+      // A retry still open in the bulk dialog must not fold this batch's tokens into its own undo.
+      if (retryBatch.current === batch) retryBatch.current = null;
+      try {
+        while (batch.undo.length > 0) {
+          const { token, reason, write } = batch.undo[0];
+          try {
+            results.push(
+              await postModelAccessBulk<ModelAccessBulkResult>({ undoToken: token, reason: undoAdminReason(reason) })
+            );
+          } catch (error) {
+            if (!isExpiredUndo(error)) throw error;
+            expired.push(write);
+          }
+          batch.undo.shift();
+        }
+      } catch (error) {
+        if (results.length === 0 && expired.length === 0) throw error;
+        throw new Error(report(`; the rest failed: ${getErrorMessage(error)}`, true));
+      } finally {
+        await invalidate();
+      }
       // Replaces this toast, so its Undo cannot resend tokens that already went.
-      showUndo({ message: summary });
+      showUndo({ message: report('.') });
     };
   };
 
@@ -229,11 +270,10 @@ export function ModelListSection() {
     setBulk(null);
     setSelection(NO_SELECTION);
     void invalidate();
-    const prior = retryBatch.current;
+    const batch: BulkBatch = retryBatch.current ?? { undo: [], writes: 0 };
     retryBatch.current = null;
-    const batch: BulkBatch = {
-      undo: [...(prior?.undo ?? []), ...(result.undoToken ? [{ token: result.undoToken, reason }] : [])],
-    };
+    batch.writes += 1;
+    if (result.undoToken) batch.undo.push({ token: result.undoToken, reason, write: batch.writes });
     const failed = failedResults(result);
     setOutcome(
       failed.length > 0
@@ -509,7 +549,7 @@ export function ModelListSection() {
                     : {entry.reason ? UNDO_FAILURE_LABEL[entry.reason] : 'not reverted'}
                   </Typography>
                 ))}
-            {outcome.kind === 'not-reverted' && (
+            {outcome.kind === 'not-reverted' && outcome.failed.length > 0 && (
               <Typography level="body-xs">Change these back from each model&apos;s page.</Typography>
             )}
           </Stack>
