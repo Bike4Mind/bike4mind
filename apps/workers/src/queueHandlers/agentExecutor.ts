@@ -3800,7 +3800,7 @@ async function processExecution(
       // Don't leak internal error details to client. Recognized, non-sensitive failure
       // categories (billing/rate-limit/timeout/auth) get a specific message; everything else stays
       // generic. Full details remain in the logs above.
-      const userFacingMessage = toUserFacingFailureMessage(errorMessage);
+      const userFacingMessage = toUserFacingFailureMessage(errorMessage, err);
       await sendWs('failed', { executionId, reason: 'error', message: userFacingMessage });
       // Persist the failed run in chat history so the user still sees their
       // prompt after refresh, with the (sanitized) reason as the reply. Pre-existing 3-arg call

@@ -135,15 +135,18 @@ const servedNatively = (model: ClaudeToolCapabilityModel): boolean =>
 
 /**
  * The seed tables' verdict for a model they name, or undefined for one they do not. A model named by its
- * Claude version (or listed for refusal fallback) gets every flag, computed exactly as the tables were read
- * before the catalog carried them. One only the forced tool_choice deny-list matches (a patch version, a
- * gateway prefix) gets that one flag, so its other flags still come from the catalog or the default.
+ * Claude version gets every flag, computed exactly as the tables were read before the catalog carried them.
+ * One named only by the forced tool_choice deny-list (a patch version, a gateway prefix) or by
+ * REFUSAL_FALLBACK_MODELS gets just those flags, so its other flags still come from the catalog or the default.
  */
 export function seedApiSurface(
   model: Pick<ApiSurfaceModel, 'id' | 'backend' | 'adapterFamily'>
 ): Partial<ApiSurface> | undefined {
   if (!seedDescribes(model)) {
-    return NO_FORCED_TOOL_CHOICE_FAMILY.test(model.id) ? { forcedToolChoice: false } : undefined;
+    const partial: Partial<ApiSurface> = {};
+    if (NO_FORCED_TOOL_CHOICE_FAMILY.test(model.id)) partial.forcedToolChoice = false;
+    if (REFUSAL_FALLBACK_MODELS.has(model.id)) partial.refusalFallback = true;
+    return Object.keys(partial).length > 0 ? partial : undefined;
   }
   const version = claudeFamilyVersion(model.id);
   const listed = (versions: ReadonlySet<string>) => version !== null && versions.has(version);
@@ -162,7 +165,7 @@ export function seedApiSurface(
 /** Whether the seed tables give the model a full verdict, so nothing needs inheriting for it. */
 export function seedDescribes(model: Pick<ApiSurfaceModel, 'id'>): boolean {
   const version = claudeFamilyVersion(model.id);
-  return (version !== null && SEEDED_VERSIONS.has(version)) || REFUSAL_FALLBACK_MODELS.has(model.id);
+  return version !== null && SEEDED_VERSIONS.has(version);
 }
 
 /**

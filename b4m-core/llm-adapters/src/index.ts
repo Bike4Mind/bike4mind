@@ -775,6 +775,7 @@ export * from './wifTokenSource';
 // Implementations:
 export * from './anthropicBackend';
 export * from './llmTimeoutErrors';
+export * from './llmRefusalErrors';
 export * from './llmEmptyTurnErrors';
 export * from './anthropicBatchService';
 export * from './awsBackend';

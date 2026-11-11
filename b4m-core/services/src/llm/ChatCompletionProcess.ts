@@ -162,7 +162,7 @@ import {
   openAIEffortIncompatibleWithTools,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { timedOutAttemptUsageFields } from './timedOutAttemptUsage';
+import { refusedUsageOf, timedOutAttemptUsageFields } from './timedOutAttemptUsage';
 import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
@@ -6109,11 +6109,11 @@ export class ChatCompletionProcess {
             }
             const isRetryableError = shouldTriggerFallback(lastError);
             // A refused call throws rather than settles, so record it here, whether or not a
-            // fallback then answers. Same enforceCredits gate as the settlement row. Not billed:
-            // the user got no output, and the backend throws before reporting usage, so its
-            // tokens and COGS are unknown and left at 0.
+            // fallback then answers. Same enforceCredits gate as the settlement row. Not charged (the
+            // user got no answer); what the provider billed before the refusal, if any, is kept as COGS.
             if (adminSettingsEnforceCredits && isSafetyRefusalError(lastError)) {
               const refusalLedgerModel = this.ledgerModel(currentModel);
+              const refusedUsage = refusedUsageOf(lastError);
               this.db.usageEvents
                 ?.record({
                   requestId: quest.id,
@@ -6122,15 +6122,20 @@ export class ChatCompletionProcess {
                   ownerType: this.reservedCreditsOwnerType,
                   sessionId: quest.sessionId,
                   feature: 'chat',
+                  source: 'web',
+                  ...(refusedUsage
+                    ? timedOutAttemptUsageFields(currentModel, refusedUsage)
+                    : {
+                        inputTokens: 0,
+                        outputTokens: 0,
+                        cachedInputTokens: 0,
+                        cacheWriteTokens: 0,
+                        costUsd: 0,
+                        creditsCharged: 0,
+                      }),
                   provider: refusalLedgerModel.backend,
                   model: refusalLedgerModel.id,
-                  source: 'web',
-                  inputTokens: 0,
-                  outputTokens: 0,
-                  cachedInputTokens: 0,
-                  cacheWriteTokens: 0,
-                  costUsd: 0,
-                  creditsCharged: 0,
+                  ...executedModelFields(refusalLedgerModel, currentModel),
                   status: 'refusal',
                 })
                 .catch((usageEventError: unknown) => {
