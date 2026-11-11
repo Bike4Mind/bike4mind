@@ -102,6 +102,7 @@ file, artifact, tool, and agent record carries a `notebookId` matching a noteboo
 to refer to an entry under `files/`; missing source bytes may leave a `contentUrl` reference
 that cannot be restored without access to the original source. Other collection names may
 be added by producers without changing the manifest format.
+Only `notebooks` is required; a reader treats a missing child collection as empty.
 Message `images` may contain `{ "contentPath": "files/<sha256>" }` for embedded image bytes,
 or a string storage reference if the producer exported images as keys. Consumers need
 access to the original storage system for a string reference.

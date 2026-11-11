@@ -50,6 +50,12 @@ const validPath = (value: string) =>
   !value.includes('\\') &&
   value.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..');
 
+const manifestKeys = new Set(['exportVersion', 'exportedAt', 'platform', 'exportedBy', 'collections', 'files']);
+const isDateTime = (value: unknown) =>
+  typeof value === 'string' &&
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value) &&
+  Number.isFinite(Date.parse(value));
+
 const parseJson = (text: string, where: string): unknown => {
   try {
     return JSON.parse(text) as unknown;
@@ -146,7 +152,8 @@ export async function readExportBundle(read: BundleRead): Promise<{
     !manifest ||
     typeof manifest !== 'object' ||
     manifest.exportVersion !== BUNDLE_EXPORT_VERSION ||
-    !Number.isFinite(Date.parse(manifest.exportedAt)) ||
+    Object.keys(manifest).some(key => !manifestKeys.has(key)) ||
+    !isDateTime(manifest.exportedAt) ||
     typeof manifest.platform !== 'string' ||
     !manifest.platform ||
     !manifest.collections ||
@@ -262,9 +269,7 @@ export async function createNotebookBundle(
 
 export async function readNotebookBundle(read: BundleRead): Promise<NotebookExportFormat> {
   const { manifest, collections, files } = await readExportBundle(read);
-  if (!Array.isArray(collections.notebooks) || childCollections.some(name => !Array.isArray(collections[name]))) {
-    throw new Error('Missing notebook collection');
-  }
+  if (!Array.isArray(collections.notebooks)) throw new Error('Missing notebook collection');
   const notebooks = collections.notebooks.map(row => {
     if (!row || typeof row !== 'object' || typeof (row as ExportedNotebook).id !== 'string') {
       throw new Error('Invalid notebook record');
@@ -285,7 +290,7 @@ export async function readNotebookBundle(read: BundleRead): Promise<NotebookExpo
   }
   for (const [index, name] of childCollections.entries()) {
     const key = notebookKeys[index];
-    for (const value of collections[name]) {
+    for (const value of collections[name] ?? []) {
       if (!value || typeof value !== 'object') throw new Error(`Invalid ${name} record`);
       const { notebookId, ...record } = value as Record<string, unknown>;
       const notebook = typeof notebookId === 'string' ? byId.get(notebookId) : undefined;
@@ -301,7 +306,8 @@ export async function readNotebookBundle(read: BundleRead): Promise<NotebookExpo
       }
       if (name === 'chat-messages' && Array.isArray(record.images)) {
         record.images = record.images.map(image => {
-          if (!image || typeof image !== 'object' || !('contentPath' in image)) return image;
+          if (typeof image === 'string') return image;
+          if (!image || typeof image !== 'object' || !('contentPath' in image)) throw new Error('Invalid image entry');
           const path = (image as { contentPath: unknown }).contentPath;
           const bytes = typeof path === 'string' ? files.get(path) : undefined;
           if (!bytes) throw new Error('Missing image file');

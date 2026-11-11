@@ -232,4 +232,40 @@ describe('v2 bundle', () => {
     expect(manifest.files).toHaveLength(1);
     expect((await readNotebookBundle(read)).notebooks[0].chatHistory[0].images).toEqual(['', 'abcd1234']);
   });
+
+  it('treats a missing child collection as empty', async () => {
+    const { data, write, read } = memoryBundle();
+    await createNotebookBundle([{ ...notebook, knowledge: [] }], write);
+    const manifest = JSON.parse(Buffer.from(data.get('manifest.json')!).toString());
+    delete manifest.collections.tools;
+    delete manifest.collections.agents;
+    data.set('manifest.json', Buffer.from(JSON.stringify(manifest)));
+    const [restored] = (await readNotebookBundle(read)).notebooks;
+    expect(restored.tools).toEqual([]);
+    expect(restored.agents).toEqual([]);
+    expect(restored.chatHistory).toHaveLength(1);
+  });
+
+  it('rejects manifest keys and timestamps the published schema forbids', async () => {
+    const { data, write, read } = memoryBundle();
+    await createExportBundle({ collections: {} }, write);
+    const manifest = JSON.parse(Buffer.from(data.get('manifest.json')!).toString());
+    data.set('manifest.json', Buffer.from(JSON.stringify({ ...manifest, extra: true })));
+    await expect(readExportBundle(read)).rejects.toThrow('Invalid bundle manifest');
+    data.set('manifest.json', Buffer.from(JSON.stringify({ ...manifest, exportedAt: '2026' })));
+    await expect(readExportBundle(read)).rejects.toThrow('Invalid bundle manifest');
+  });
+
+  it('rejects image objects without a contentPath', async () => {
+    const { data, write, read } = memoryBundle();
+    await createNotebookBundle([{ ...notebook, knowledge: [] }], write);
+    const manifest = JSON.parse(Buffer.from(data.get('manifest.json')!).toString());
+    const row = JSON.parse(Buffer.from(data.get('collections/chat-messages.jsonl')!).toString());
+    const broken = Buffer.from(`${JSON.stringify({ ...row, images: [{ url: 'x' }] })}\n`);
+    data.set('collections/chat-messages.jsonl', broken);
+    manifest.collections['chat-messages'].bytes = broken.length;
+    manifest.collections['chat-messages'].sha256 = createHash('sha256').update(broken).digest('hex');
+    data.set('manifest.json', Buffer.from(JSON.stringify(manifest)));
+    await expect(readNotebookBundle(read)).rejects.toThrow('Invalid image entry');
+  });
 });
