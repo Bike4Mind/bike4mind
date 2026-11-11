@@ -1623,9 +1623,6 @@
   "apps/client/pages/api/artifacts/[id]/versions.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 10
-    },
-    "b4m/no-raw-entity-response": {
-      "count": 1
     }
   },
   "apps/client/pages/api/artifacts/[id]/versions/[version].ts": {
@@ -3546,11 +3543,6 @@
     }
   },
   "b4m-core/services/src/artifactService/delete.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "b4m-core/services/src/artifactService/get.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
