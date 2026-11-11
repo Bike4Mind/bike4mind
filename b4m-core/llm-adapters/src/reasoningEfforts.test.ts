@@ -3,6 +3,7 @@ import {
   isClaudeModelId,
   listModelsContract,
   ModelBackend,
+  OPENAI_XHIGH_REASONING_EFFORT_MODELS,
   REASONING_SUPPORTED_MODELS,
   toPublicModel,
   type ModelInfo,
@@ -150,6 +151,7 @@ const haiku55 = model(ChatModels.CLAUDE_5_5_HAIKU, ModelBackend.Anthropic, ADAPT
 const legacyClaude = model(ChatModels.CLAUDE_4_5_HAIKU, ModelBackend.Anthropic, { can_think: true });
 const nonThinkingClaude = model(ChatModels.CLAUDE_4_5_HAIKU, ModelBackend.Anthropic);
 const gpt5 = model(ChatModels.GPT5, ModelBackend.OpenAI, { can_think: true });
+const gpt52 = model(ChatModels.GPT5_2, ModelBackend.OpenAI, { can_think: true });
 
 describe('chatReasoningEffortsFor', () => {
   it('offers an adaptive Claude model every level but minimal, with none only where it has an off switch', () => {
@@ -163,7 +165,19 @@ describe('chatReasoningEffortsFor', () => {
     expect(chatReasoningEffortsFor(nonThinkingClaude)).toEqual([]);
   });
 
-  it('is reasoningEffortsFor on every non-Claude model', () => {
+  it('adds xhigh on exactly the OpenAI models known to take it', () => {
+    for (const id of REASONING_SUPPORTED_MODELS) {
+      const expected = OPENAI_XHIGH_REASONING_EFFORT_MODELS.has(id) ? [...OPENAI_LEVELS, 'xhigh'] : OPENAI_LEVELS;
+      expect(chatReasoningEffortsFor(model(id, ModelBackend.OpenAI, { can_think: true })), id).toEqual(expected);
+    }
+    expect(chatReasoningEffortsFor(gpt52)).toEqual([...OPENAI_LEVELS, 'xhigh']);
+  });
+
+  it('adds no xhigh on an xhigh model id that its backend never sends effort to', () => {
+    expect(chatReasoningEffortsFor(model(ChatModels.GPT5_2_CHAT_LATEST, ModelBackend.OpenAI))).toEqual([]);
+  });
+
+  it('is reasoningEffortsFor on every other non-Claude model', () => {
     expect(chatReasoningEffortsFor(gpt5)).toEqual(OPENAI_LEVELS);
     const gemini = model(ChatModels.GEMINI_3_1_PRO_PREVIEW, ModelBackend.Gemini, { can_think: true });
     expect(chatReasoningEffortsFor(gemini)).toEqual([]);
@@ -218,9 +232,31 @@ describe('chatReasoningEffortFor', () => {
     }
   });
 
-  it('passes a non-Claude model every level from its lowest listed one up, including xhigh', () => {
-    for (const effort of ['low', 'medium', 'high', 'xhigh'] as const) {
+  it('passes an OpenAI model every level it lists unchanged', () => {
+    for (const effort of OPENAI_LEVELS) {
       expect(chatReasoningEffortFor(gpt5, effort), effort).toBe(effort);
+    }
+  });
+
+  it('lowers xhigh to high on an OpenAI model that rejects it, so a stored Claude Extra High never reaches it', () => {
+    expect(chatReasoningEffortFor(gpt5, 'xhigh')).toBe('high');
+    for (const id of [ChatModels.GPT5_1, ChatModels.O3, ChatModels.O4_MINI]) {
+      expect(chatReasoningEffortFor(model(id, ModelBackend.OpenAI, { can_think: true }), 'xhigh'), id).toBe('high');
+    }
+    const catalogOnly = model('gpt-6-sol', ModelBackend.OpenAI, { can_think: true, openaiReasoningEffort: true });
+    expect(chatReasoningEffortFor(catalogOnly, 'xhigh')).toBe('high');
+  });
+
+  it('keeps xhigh on GPT-5.2, which takes it', () => {
+    expect(chatReasoningEffortFor(gpt52, 'xhigh')).toBe('xhigh');
+  });
+
+  it('keeps xhigh on Kimi K3 and DeepSeek, whose adapters map it to their top level', () => {
+    expect(chatReasoningEffortFor(model(ChatModels.KIMI_K3, ModelBackend.Kimi, { can_think: true }), 'xhigh')).toBe(
+      'xhigh'
+    );
+    for (const id of DEEPSEEK_MODELS) {
+      expect(chatReasoningEffortFor(model(id, ModelBackend.DeepSeek, { can_think: true }), 'xhigh'), id).toBe('xhigh');
     }
   });
 

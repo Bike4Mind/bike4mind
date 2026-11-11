@@ -1,6 +1,6 @@
 import {
-  ChatModels,
   isClaudeModelId,
+  OPENAI_XHIGH_REASONING_EFFORT_MODELS,
   REASONING_SUPPORTED_MODELS,
   type ModelInfo,
   type ReasoningEffort,
@@ -24,8 +24,6 @@ const BASE_REASONING_EFFORT_OPTIONS: ReasoningEffortOption[] = [
 
 const XHIGH_OPTION: ReasoningEffortOption = { value: 'xhigh', label: 'Extra High (Best)' };
 
-const GPT5_2_MODEL_IDS: ReadonlySet<string> = new Set([ChatModels.GPT5_2, ChatModels.GPT5_2_CHAT_LATEST]);
-
 const CLAUDE_EFFORT_LABELS: Record<ReasoningEffort, string> = {
   none: 'None',
   minimal: 'Minimal',
@@ -36,7 +34,8 @@ const CLAUDE_EFFORT_LABELS: Record<ReasoningEffort, string> = {
 };
 
 /**
- * What the Reasoning Effort dropdown offers for `model`; empty hides it. OpenAI keeps its fixed list.
+ * What the Reasoning Effort dropdown offers for `model`; empty hides it. OpenAI keeps its fixed list,
+ * with Extra High only on OPENAI_XHIGH_REASONING_EFFORT_MODELS, the same set the server clamps to.
  * Claude lists the levels chat actually sends it (chatReasoningEffortsFor, which the server's
  * chatReasoningEffortFor clamps to), so a legacy or non-thinking Claude model shows no dropdown.
  */
@@ -45,7 +44,7 @@ export function reasoningEffortOptionsFor(
   modelInfo: ModelInfo | null | undefined
 ): ReasoningEffortOption[] {
   if (REASONING_SUPPORTED_MODELS.has(model)) {
-    if (!GPT5_2_MODEL_IDS.has(model)) return BASE_REASONING_EFFORT_OPTIONS;
+    if (!OPENAI_XHIGH_REASONING_EFFORT_MODELS.has(model)) return BASE_REASONING_EFFORT_OPTIONS;
     return [
       ...BASE_REASONING_EFFORT_OPTIONS.map(o => (o.value === 'high' ? { ...o, label: 'High' } : o)),
       XHIGH_OPTION,

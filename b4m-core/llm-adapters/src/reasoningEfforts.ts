@@ -2,6 +2,7 @@ import {
   CompletionReasoningEffortSchema,
   isClaudeModelId,
   ModelBackend,
+  OPENAI_XHIGH_REASONING_EFFORT_MODELS,
   type ModelInfo,
   type ReasoningEffort,
 } from '@bike4mind/common';
@@ -63,14 +64,17 @@ function claudeHonours(modelInfo: ModelInfo, effort: ReasoningEffort): boolean {
 
 /**
  * The levels a chat user's stored Reasoning Effort preference can take on this model, lowest first;
- * empty when chat never sends the preference to it. Non-Claude models get reasoningEffortsFor
- * unchanged. Claude gets it only on adaptive models, where effort is `output_config.effort`: on a
- * legacy model any level would switch budgeted thinking on behind the chat's own Thinking toggle.
- * `minimal` is dropped there because Anthropic runs it as `low`.
+ * empty when chat never sends the preference to it. Non-Claude models get reasoningEffortsFor, plus
+ * `xhigh` on the OpenAI models known to take it (OPENAI_XHIGH_REASONING_EFFORT_MODELS, the list the
+ * chat selector offers it on). Claude gets it only on adaptive models, where effort is
+ * `output_config.effort`: on a legacy model any level would switch budgeted thinking on behind the
+ * chat's own Thinking toggle. `minimal` is dropped there because Anthropic runs it as `low`.
  */
 export function chatReasoningEffortsFor(modelInfo: ModelInfo): ReasoningEffort[] {
   const levels = reasoningEffortsFor(modelInfo);
-  if (!isClaudeModelId(modelInfo.id)) return levels;
+  if (!isClaudeModelId(modelInfo.id)) {
+    return levels.length > 0 && OPENAI_XHIGH_REASONING_EFFORT_MODELS.has(modelInfo.id) ? [...levels, 'xhigh'] : levels;
+  }
   if (modelInfo.thinkingStyle !== 'adaptive') return [];
   return levels.filter(effort => effort !== 'minimal');
 }
@@ -86,19 +90,18 @@ export function clampReasoningEffort(
 
 /**
  * The `reasoningEffort` one chat attempt sends for the user's explicit preference. Undefined leaves the
- * adapter on its own precedence (complexity classifier, then the model default). Claude is narrowed and
- * clamped to chatReasoningEffortsFor. Other models keep the preference, except that a level below their
- * lowest listed one is raised to it: the preference is shared across models, and the Claude selector can
- * store `none`, which OpenAI's o-series and GPT-5 reject. Levels above are kept, as GPT-5.2 takes `xhigh`.
+ * adapter on its own precedence (complexity classifier, then the model default). The preference is
+ * shared across models, so it is clamped to chatReasoningEffortsFor: a `none` stored from a Claude
+ * model is raised, and an `xhigh` lowered, before openaiBackend forwards it verbatim to a model that
+ * rejects it. Claude is withheld when nothing is listed; another model that lists nothing ignores the
+ * option, so it keeps the preference.
  */
 export function chatReasoningEffortFor(
   modelInfo: ModelInfo,
   explicit: ReasoningEffort | undefined
 ): ReasoningEffort | undefined {
   if (explicit === undefined) return undefined;
-  if (isClaudeModelId(modelInfo.id)) return clampReasoningEffort(explicit, chatReasoningEffortsFor(modelInfo));
-  const lowest = reasoningEffortsFor(modelInfo)[0];
-  return lowest !== undefined && REASONING_EFFORTS.indexOf(explicit) < REASONING_EFFORTS.indexOf(lowest)
-    ? lowest
-    : explicit;
+  const levels = chatReasoningEffortsFor(modelInfo);
+  if (levels.length === 0 && !isClaudeModelId(modelInfo.id)) return explicit;
+  return clampReasoningEffort(explicit, levels);
 }

@@ -9480,6 +9480,34 @@ describe('ChatCompletionProcess', () => {
       expect(complete.mock.calls[0][2].reasoningEffort).toBe('low');
     });
 
+    it('lowers a stored Extra High, which GPT-5 rejects, to high', async () => {
+      const complete = succeeds();
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT5,
+      });
+      const body = arrange(modelInfo(ChatModels.GPT5, ModelBackend.OpenAI), 'xhigh');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete.mock.calls[0][2].reasoningEffort).toBe('high');
+    });
+
+    it('keeps a stored Extra High on GPT-5.2, which takes it', async () => {
+      const complete = succeeds();
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT5_2,
+      });
+      const body = arrange(modelInfo(ChatModels.GPT5_2, ModelBackend.OpenAI), 'xhigh');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete.mock.calls[0][2].reasoningEffort).toBe('xhigh');
+    });
+
     // The usage-event row is written only under credit enforcement.
     const recordUsageEvents = () => {
       mockedCalculateTotalTokenLength.mockResolvedValue(80);

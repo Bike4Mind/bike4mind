@@ -7,7 +7,12 @@ import {
   withholdsReasoning,
   type ThinkingVisibility,
 } from '@bike4mind/common';
-import { type ICompletionOptions, getLlmByModel, resolveOutputMaxTokens } from '@bike4mind/llm-adapters';
+import {
+  type ICompletionOptions,
+  chatReasoningEffortFor,
+  getLlmByModel,
+  resolveOutputMaxTokens,
+} from '@bike4mind/llm-adapters';
 import { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import { Logger } from '@bike4mind/observability';
 import { DEFAULT_OUTPUT_MAX_TOKENS } from '@bike4mind/utils';
@@ -197,6 +202,8 @@ export class ResearchModeService {
         presencePenalty: config.parameters?.presencePenalty ?? baseOptions.presencePenalty,
         frequencyPenalty: config.parameters?.frequencyPenalty ?? baseOptions.frequencyPenalty,
         abortSignal: configAbort.signal,
+        // The preference is the user's, shared by every model; each configuration gets what its model takes.
+        reasoningEffort: chatReasoningEffortFor(modelInfo, baseOptions.reasoningEffort),
         ...(modelInfo.id !== requestedModelInfo.id
           ? { modelIdentityId: requestedModelInfo.id, modelDisplayName: requestedModelInfo.name }
           : {}),
