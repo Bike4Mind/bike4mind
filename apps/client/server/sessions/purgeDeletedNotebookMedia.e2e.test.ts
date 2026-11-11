@@ -112,6 +112,17 @@ describe('purgeDeletedNotebookMedia', () => {
     expect(invalidatedPaths()).toEqual([deleted.map(key => `/generated/${key}`).sort()]);
   });
 
+  it('invalidates a large purge as exact-path batches, never a /generated wildcard', async () => {
+    const images = Array.from({ length: 1500 }, (_, i) => `k${i}.png`);
+    const id = await notebook({ images });
+    await purgeDeletedNotebookMedia([id], { logger });
+    expect(effects.deleteGenerated).toHaveBeenCalledTimes(1500);
+    const sent = invalidatedPaths();
+    expect(sent.map(paths => paths.length)).toEqual([1000, 500]);
+    expect(sent.flat()).not.toContain('/generated/*');
+    expect(new Set(sent.flat()).size).toBe(1500);
+  });
+
   it('does nothing for notebooks without generated media', async () => {
     const id = await notebook({ images: null, videos: [] });
     await purgeDeletedNotebookMedia([id], { logger });

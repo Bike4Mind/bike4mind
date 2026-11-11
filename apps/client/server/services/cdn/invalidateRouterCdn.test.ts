@@ -19,6 +19,7 @@ vi.mock('@aws-sdk/client-cloudfront', () => ({
 vi.mock('@bike4mind/server-utils/security/wafSharedHelpers', () => ({ resolveRouterDistributionId: resolveIdMock }));
 
 import {
+  MAX_IN_PROGRESS_EXACT_PATHS,
   MAX_PATHS_PER_BATCH,
   appFileCdnPath,
   createCdnInvalidationBatch,
@@ -27,7 +28,10 @@ import {
 } from './invalidateRouterCdn';
 
 const DIST_ID = 'E1A2B3C4D5E6F';
-type SentInput = { DistributionId: string; InvalidationBatch: { CallerReference: string; Paths: { Items: string[] } } };
+type SentInput = {
+  DistributionId: string;
+  InvalidationBatch: { CallerReference: string; Paths: { Quantity: number; Items: string[] } };
+};
 const sentPaths = () =>
   sendMock.mock.calls.map(([cmd]) => (cmd as { input: SentInput }).input.InvalidationBatch.Paths.Items);
 const logger = () => ({ info: vi.fn(), warn: vi.fn() });
@@ -64,13 +68,44 @@ describe('invalidateRouterPaths', () => {
     expect(sentPaths()).toEqual([paths]);
   });
 
-  it('coalesces a larger set into one wildcard per top-level prefix', async () => {
+  it('splits a set past one batch into sequential exact-path requests', async () => {
+    const paths = Array.from({ length: MAX_PATHS_PER_BATCH + 1 }, (_, i) => `/generated/${i}.png`);
+    await invalidateRouterPaths(paths, { label: 't' });
+    expect(sentPaths()).toEqual([paths.slice(0, MAX_PATHS_PER_BATCH), paths.slice(MAX_PATHS_PER_BATCH)]);
+    const batches = sendMock.mock.calls.map(([cmd]) => (cmd as { input: SentInput }).input.InvalidationBatch);
+    expect(batches.map(b => b.Paths.Quantity)).toEqual([MAX_PATHS_PER_BATCH, 1]);
+    expect(batches.map(b => b.CallerReference.split('-').slice(1, 3).join('-'))).toEqual(['t-1of2', 't-2of2']);
+  });
+
+  it('keeps every path exact up to the in-flight quota, deduping across chunk boundaries', async () => {
+    const paths = Array.from({ length: MAX_IN_PROGRESS_EXACT_PATHS }, (_, i) => `/generated/${i}.png`);
+    await invalidateRouterPaths([...paths, paths[MAX_PATHS_PER_BATCH], paths[0]], { label: 't' });
+    const sent = sentPaths();
+    expect(sent).toHaveLength(3);
+    expect(sent.flat()).toEqual(paths);
+    expect(sent.flat().some(p => p.includes('*'))).toBe(false);
+  });
+
+  it('coalesces a set past the in-flight quota into one wildcard per prefix, with a warning', async () => {
     const paths = [
-      ...Array.from({ length: MAX_PATHS_PER_BATCH }, (_, i) => `/generated/${i}.png`),
+      ...Array.from({ length: MAX_IN_PROGRESS_EXACT_PATHS }, (_, i) => `/generated/${i}.png`),
       '/org-files/a/b.png',
     ];
-    await invalidateRouterPaths(paths, { label: 't' });
+    const log = logger();
+    await invalidateRouterPaths(paths, { label: 't', logger: log });
     expect(sentPaths()).toEqual([['/generated/*', '/org-files/*']]);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`${MAX_IN_PROGRESS_EXACT_PATHS + 1} paths`));
+  });
+
+  it('still sends later chunks when one request fails', async () => {
+    sendMock.mockRejectedValueOnce(new Error('throttled'));
+    const paths = Array.from({ length: MAX_PATHS_PER_BATCH * 2 + 5 }, (_, i) => `/generated/${i}.png`);
+    const log = logger();
+    await expect(invalidateRouterPaths(paths, { label: 't', logger: log })).resolves.toBeUndefined();
+    expect(sendMock).toHaveBeenCalledTimes(3);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('throttled'));
+    expect(log.info).toHaveBeenCalledTimes(2);
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining(`${MAX_PATHS_PER_BATCH} paths`));
   });
 
   it('makes no call for an empty list', async () => {
