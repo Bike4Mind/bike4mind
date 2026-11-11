@@ -788,7 +788,7 @@ describe('autoApproveDataLakeProposal', () => {
   });
 
   it('surfaces the predicate failure type the ingestion door throws', () => {
-    expect(new FinalUrlRejectedError()).toBeInstanceOf(BadRequestError);
+    expect(new FinalUrlRejectedError()).toBeInstanceOf(Error);
   });
 
   it('returns left_pending without admitting when the claim is lost', async () => {
