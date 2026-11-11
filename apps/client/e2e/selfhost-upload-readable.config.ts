@@ -19,7 +19,9 @@ export default defineConfig({
     {
       name: 'live',
       testMatch: 'selfhost-upload-readable.spec.ts',
-      use: { ...devices['Desktop Chrome'], baseURL: process.env.SELFHOST_URL, trace: 'retain-on-failure' },
+      // No trace or video: a trace records request headers, and a failed run (every mutation run
+      // fails by design) would leave the session token in an artifact that gets attached to issues.
+      use: { ...devices['Desktop Chrome'], baseURL: process.env.SELFHOST_URL, trace: 'off', video: 'off' },
     },
   ],
 });

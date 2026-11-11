@@ -164,16 +164,24 @@ const isAuthedApiRequest =
     request.url().startsWith(`${config.baseUrl}/api/`) && /^Bearer \S+/.test(request.headers()['authorization'] ?? '');
 
 /**
- * Reload and return the fresh token. Retried until the app answers, because after a pod
- * replacement the first reloads can hit a pod that is not serving yet.
+ * Reload and return the token the reloaded app obtained from its session cookie. Retried until
+ * the app answers, because after a pod replacement the first reloads can hit a pod that is not
+ * serving yet.
  */
-async function reloadSignedIn(page: Page, config: UploadReadableConfig, timeout: number): Promise<string> {
+async function reloadSignedIn(
+  page: Page,
+  config: UploadReadableConfig,
+  previous: string,
+  timeout: number
+): Promise<string> {
   let authorization = '';
   await expect(async () => {
     const authed = page.waitForRequest(isAuthedApiRequest(config), { timeout: 30_000 });
     authed.catch(() => {});
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 });
     authorization = (await authed).headers()['authorization'];
+    // A request the old page fired just before the reload committed would carry the old token.
+    expect(authorization, 'the request seen was from before the reload').not.toBe(previous);
   }, 'the reloaded app made no signed-in API request; the session did not survive').toPass({ timeout });
   return authorization;
 }
@@ -226,6 +234,7 @@ test('an uploaded file reads back byte-identical after reload and app pod replac
     podReplacement: config.kube ? 'pending' : 'SKIPPED (SELFHOST_SKIP_POD_REPLACE=true)',
   };
   const reads = receipt.reads as Record<string, unknown>[];
+  const expectedReads = config.kube ? 3 : 2;
 
   const readAndCompare = async (phase: string, authorization: string, fileId: string, timeout: number) => {
     let last: BrowserRead | undefined;
@@ -256,6 +265,7 @@ test('an uploaded file reads back byte-identical after reload and app pod replac
         res => res.url().includes('/api/files/createFabFile') && res.request().method() === 'POST',
         { timeout: TIMEOUTS.ACTION }
       );
+      created.catch(() => {});
       // Self-host sends the bytes to the same-origin upload proxy (pages/api/files/[id]/upload.ts).
       const stored = page.waitForResponse(
         res =>
@@ -276,6 +286,7 @@ test('an uploaded file reads back byte-identical after reload and app pod replac
       return { fileId: id!, authorization: token };
     });
     receipt.fileId = fileId;
+    let latest = authorization;
 
     // Longer wait here only: the file is withheld until the upload scan marks it clean.
     const first = await test.step('read 1: straight after the upload', () =>
@@ -298,8 +309,11 @@ test('an uploaded file reads back byte-identical after reload and app pod replac
         `/api/files/presigned-url?${new URLSearchParams({ 'filePaths[]': missingKey }).toString()}`,
         authorization
       );
-      const urls = signing.ok ? ((JSON.parse(signing.body ?? '{}') as { urls?: unknown[] }).urls ?? []) : [];
-      expect(urls.filter(Boolean), 'the app signed a URL for a key that has no object').toEqual([]);
+      // A 2xx with an explicit null is the app declining this key; an error status would pass for
+      // the wrong reason (an expired token, say), so it is not accepted.
+      expect(signing.ok, `presigned-url answered HTTP ${signing.status}`).toBe(true);
+      const { urls } = JSON.parse(('body' in signing && signing.body) || '{}') as { urls?: unknown[] };
+      expect(urls, 'the app signed a URL for a key that has no object').toEqual([null]);
 
       // And the store itself must not serve that key, asked for it directly.
       const direct = new URL(first.fileUrl);
@@ -311,25 +325,30 @@ test('an uploaded file reads back byte-identical after reload and app pod replac
     });
 
     await test.step('read 2: after a reload', async () => {
-      const reloaded = await reloadSignedIn(page, config, 2 * 60_000);
-      await readAndCompare('after reload', reloaded, fileId, 60_000);
+      latest = await reloadSignedIn(page, config, latest, 2 * 60_000);
+      await readAndCompare('after reload', latest, fileId, 60_000);
     });
 
     if (config.kube) {
       await test.step('read 3: after the app pod is replaced', async () => {
         const { before, after } = await replaceAppPod(config);
         receipt.podReplacement = { before, after };
-        const reloaded = await reloadSignedIn(page, config, config.readyTimeoutMs);
-        await readAndCompare('after pod replacement', reloaded, fileId, 2 * 60_000);
+        latest = await reloadSignedIn(page, config, latest, config.readyTimeoutMs);
+        await readAndCompare('after pod replacement', latest, fileId, 2 * 60_000);
       });
     }
   } finally {
     fs.rmSync(uploadDir, { recursive: true, force: true });
     receipt.finishedAt = new Date().toISOString();
+    if (config.mutateExpected) {
+      // A mutation run also fails when sign-in or the upload breaks; only this field says the
+      // comparison itself rejected every read.
+      receipt.mutationDetectedAtEveryRead = reads.length === expectedReads && reads.every(read => read.ok === false);
+    }
     const body = JSON.stringify(receipt, null, 2);
     await testInfo.attach('selfhost-upload-readable-receipt.json', { body, contentType: 'application/json' });
     console.log(body);
   }
 
-  expect(reads.length, 'not every read ran').toBe(config.kube ? 3 : 2);
+  expect(reads.length, 'not every read ran').toBe(expectedReads);
 });

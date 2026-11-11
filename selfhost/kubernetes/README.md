@@ -126,7 +126,7 @@ SELFHOST_URL=http://localhost:3000 SELFHOST_EMAIL=you@example.com \
 
 The run prints a JSON receipt: the revision you supplied, the uploaded size and sha256, the verdict and sha256 of each read, the status of the two reads that must fail, and the app pod names, UIDs and images before and after. It holds no credentials. Each run leaves one small file and one notebook in the account.
 
-For a mutation proof, repeat the command with `SELFHOST_MUTATE_EXPECTED=true`. It flips one bit of the reference bytes, so that run must fail at all three reads; keep its receipt next to the passing one. `--project=selftest` runs the comparison's own checks with no target.
+For a mutation proof, repeat the command with `SELFHOST_MUTATE_EXPECTED=true`. It flips one bit of the reference bytes, so that run must fail at all three reads. A mutation run also fails if sign-in or the upload breaks, so read its receipt: only `"mutationDetectedAtEveryRead": true` is the proof. Keep it next to the passing receipt. `--project=selftest` runs the comparison's own checks with no target.
 
 ## Backup and restore
 
