@@ -511,6 +511,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:githubLakeRevokeQueueDLQ',
     '4491856037e8f9226cdeb137466706aa7bc84abb90e191d01aef7f42424825d1'
   ),
+  gapBecause(
+    'queue:infra/queues.ts:generatedMediaPurgeQueue',
+    'f0877af2f06e1496e13554dd084fd1b5dc2ecc5622828f03f1a373cdaa6e02d0',
+    'Optional. Notebook and message deletes hand it the generated media their request budget did not reach; with no URL set the leftovers are logged and dropped. The self-host templates declare it with a URL, as queue parity requires, but no self-host consumer is wired yet, so leftovers wait in the broker until one is.'
+  ),
+  broker(
+    'queue:infra/queues.ts:generatedMediaPurgeQueueDLQ',
+    'c2d58c32249e95e85b54c27855e71c6dc8512ff1fc4965a78013fd5eee539abc'
+  ),
   gap('queue:infra/queues.ts:githubWebhookQueue', '4192f10e03c4ac66965d6ddd93247bf86a87e99359dc4fcf2a55ec0379ec2e9a', [
     'import:@aws-sdk/client-cloudwatch',
   ]),

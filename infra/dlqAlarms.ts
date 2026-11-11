@@ -42,6 +42,7 @@ import {
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
   publishThumbnailQueueDLQ,
+  generatedMediaPurgeQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
@@ -440,6 +441,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'PublishedArtifacts',
     sourceQueue: 'publishThumbnailQueue',
     queue: publishThumbnailQueueDLQ,
+  },
+  {
+    label: 'generated-media-purge',
+    displayName: 'Generated Media Purge',
+    application: 'Notebooks',
+    sourceQueue: 'generatedMediaPurgeQueue',
+    queue: generatedMediaPurgeQueueDLQ,
   },
   {
     label: 'generation-job',

@@ -218,6 +218,18 @@ const MessageDrawer: React.FC<{
           </Box>
 
           <Box>
+            <Typography level="body-sm" fontWeight="bold">
+              Failure reason
+            </Typography>
+            <Typography level="body-sm" sx={{ wordBreak: 'break-word' }} data-testid="dlq-failure-reason">
+              {message.failure?.errorMessage ?? 'Unknown'}
+            </Typography>
+            <Chip size="sm" variant="soft" data-testid="dlq-failure-category">
+              {message.failure?.category ?? 'Unknown'}
+            </Chip>
+          </Box>
+
+          <Box>
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Typography level="body-sm" fontWeight="bold">
                 Message Body
@@ -515,6 +527,12 @@ const DlqReplayTab: React.FC = () => {
         </Alert>
       )}
 
+      {selectedQueue && !messagesError && messages?.some(message => message.failureLookupFailed) && (
+        <Alert color="warning" sx={{ mb: 2 }} data-testid="dlq-failure-lookup-warning">
+          Failure details are temporarily unavailable. Queue messages are still shown.
+        </Alert>
+      )}
+
       {/* Messages Table */}
       {selectedQueue && (
         <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto', mb: 3 }}>
@@ -524,6 +542,8 @@ const DlqReplayTab: React.FC = () => {
               <tr>
                 <th style={{ width: 200 }}>Message ID</th>
                 <th>Body Preview</th>
+                <th>Failure reason</th>
+                <th>Category</th>
                 <th style={{ width: 160 }}>Sent At</th>
                 <th style={{ width: 80 }}>Age</th>
                 <th style={{ width: 100 }}>Expires in</th>
@@ -534,14 +554,14 @@ const DlqReplayTab: React.FC = () => {
             <tbody>
               {messagesLoading && (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: 24 }}>
+                  <td colSpan={9} style={{ textAlign: 'center', padding: 24 }}>
                     <CircularProgress size="sm" />
                   </td>
                 </tr>
               )}
               {!messagesLoading && messagesError && (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: 24 }}>
+                  <td colSpan={9} style={{ textAlign: 'center', padding: 24 }}>
                     <Typography level="body-sm" color="danger">
                       Failed to load messages. Try refreshing.
                     </Typography>
@@ -550,7 +570,7 @@ const DlqReplayTab: React.FC = () => {
               )}
               {!messagesLoading && !messagesError && (!messages || messages.length === 0) && (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: 24 }}>
+                  <td colSpan={9} style={{ textAlign: 'center', padding: 24 }}>
                     <Typography level="body-sm" color="neutral">
                       No messages in this DLQ
                     </Typography>
@@ -576,6 +596,16 @@ const DlqReplayTab: React.FC = () => {
                     <Typography level="body-xs" noWrap sx={{ maxWidth: 300 }}>
                       {msg.body?.slice(0, 100)}
                     </Typography>
+                  </td>
+                  <td data-testid={`dlq-reason-${msg.messageId}`}>
+                    <Typography level="body-xs" noWrap sx={{ maxWidth: 300 }}>
+                      {msg.failure?.errorMessage ?? 'Unknown'}
+                    </Typography>
+                  </td>
+                  <td data-testid={`dlq-category-${msg.messageId}`}>
+                    <Chip size="sm" variant="soft">
+                      {msg.failure?.category ?? 'Unknown'}
+                    </Chip>
                   </td>
                   <td>
                     <Typography level="body-xs">

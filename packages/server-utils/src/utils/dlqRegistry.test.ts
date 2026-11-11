@@ -68,6 +68,7 @@ const mockDlqUrls = vi.hoisted(() => ({
       'alarm-handler',
     ].map(label => [label, `https://sqs.us-east-2.amazonaws.com/123456789/${label}`])
   ),
+  'generated-media-purge': 'https://sqs.us-east-2.amazonaws.com/123456789/generatedMediaPurgeQueueDLQ',
 }));
 
 const mockSourceQueueUrls = vi.hoisted(() => ({
@@ -113,6 +114,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   githubLakeIngestQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueue',
   githubLakeRevokeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueue',
   publishThumbnailQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/publishThumbnailQueue',
+  generatedMediaPurgeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generatedMediaPurgeQueue',
 }));
 
 // Mock SST Resource bindings: both DLQ and source queue URLs via Linkables
@@ -136,7 +138,7 @@ describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
     it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(60);
+      expect(registry).toHaveLength(61);
     });
 
     it('each entry has required fields', () => {

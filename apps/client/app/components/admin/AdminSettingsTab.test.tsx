@@ -14,6 +14,7 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('./EmbeddingProviderLimits', () => ({ EmbeddingProviderLimits: () => null }));
 vi.mock('./AdminOperationsModelSetting', () => ({ AdminOperationsModelSetting: () => null }));
+vi.mock('./AdminSchemaSettingField', () => ({ default: () => null }));
 vi.mock('./AdminTurnstileStatusNotice', () => ({
   AdminTurnstileStatusNotice: ({ enabled }: { enabled: boolean }) => (
     <div data-testid="admin-turnstile-notice" data-enabled={String(enabled)} />

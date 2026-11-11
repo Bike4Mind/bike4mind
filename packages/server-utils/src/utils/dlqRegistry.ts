@@ -685,6 +685,17 @@ const DLQ_REGISTRY = [
     replayNote: 'SNS delivers notifications directly; there is no SQS replay destination.',
     owner: 'Platform ops',
   },
+  {
+    label: 'generated-media-purge',
+    displayName: 'Generated Media Purge',
+    application: 'Notebooks',
+    sourceQueue: 'generatedMediaPurgeQueue',
+    description: 'Deletes generated images, audio and video left behind when a message or notebook is deleted.',
+    replay: 'safe',
+    replayNote:
+      'Each key is rechecked against live references and notebook ownership before it is deleted, and deleting a key that is already gone is a no-op.',
+    owner: 'Notebooks',
+  },
 ] as const satisfies readonly CoreDlqDescriptor[];
 
 type CoreDlqLabel = (typeof DLQ_REGISTRY)[number]['label'];
