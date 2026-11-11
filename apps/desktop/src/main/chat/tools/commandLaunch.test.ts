@@ -192,7 +192,7 @@ describe('a Windows git count under each WSLENV flag', () => {
     vi.stubEnv('GIT_CONFIG_PARAMETERS', "'a.b'='c'");
     try {
       vi.stubEnv('WSLENV', 'GIT_CONFIG_PARAMETERS/u');
-      expect((await commandEnv(launch)).GIT_CONFIG_PARAMETERS).toBe("'a.b'='c' 'safe.bareRepository'='explicit'");
+      expect((await commandEnv(launch)).GIT_CONFIG_PARAMETERS).toBe("'a.b'='c' 'safe.bareRepository=explicit'");
       vi.stubEnv('WSLENV', 'GIT_CONFIG_PARAMETERS/w');
       expect((await commandEnv(launch)).GIT_CONFIG_PARAMETERS).toBeUndefined();
     } finally {
@@ -205,10 +205,10 @@ describe('withExplicitBareRepositories', () => {
   it('appends to GIT_CONFIG_PARAMETERS only when it is set', () => {
     expect(withExplicitBareRepositories({}).env.GIT_CONFIG_PARAMETERS).toBeUndefined();
     expect(withExplicitBareRepositories({ GIT_CONFIG_PARAMETERS: '' }).env.GIT_CONFIG_PARAMETERS).toBe(
-      "'safe.bareRepository'='explicit'"
+      "'safe.bareRepository=explicit'"
     );
     const { env, names } = withExplicitBareRepositories({ GIT_CONFIG_PARAMETERS: "'a.b'='c'" });
-    expect(env.GIT_CONFIG_PARAMETERS).toBe("'a.b'='c' 'safe.bareRepository'='explicit'");
+    expect(env.GIT_CONFIG_PARAMETERS).toBe("'a.b'='c' 'safe.bareRepository=explicit'");
     expect(names).toContain('GIT_CONFIG_PARAMETERS');
   });
 

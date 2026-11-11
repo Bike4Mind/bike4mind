@@ -74,9 +74,7 @@ export function withExplicitBareRepositories(env: NodeJS.ProcessEnv): { env: Nod
     [names[2] as string]: 'explicit',
   };
   if (env.GIT_CONFIG_PARAMETERS !== undefined) {
-    out.GIT_CONFIG_PARAMETERS = [env.GIT_CONFIG_PARAMETERS, "'safe.bareRepository'='explicit'"]
-      .filter(Boolean)
-      .join(' ');
+    out.GIT_CONFIG_PARAMETERS = [env.GIT_CONFIG_PARAMETERS, "'safe.bareRepository=explicit'"].filter(Boolean).join(' ');
     names.push('GIT_CONFIG_PARAMETERS');
   }
   return { env: out, names };
