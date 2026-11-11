@@ -317,6 +317,8 @@ import EnsureUserLimitEventIndexes from './20260921240010_ensure-user-limit-even
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EncryptOAuthProviderTokens from './20260921240020_encrypt-oauth-provider-tokens';
 import ResealOAuthProviderTokens from './20260921241020_reseal-oauth-provider-tokens';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import BackfillProviderEndUserId from './20260921241030_backfill-provider-end-user-id';
 import EnsureBillingEventIndexes from './20260921240030_ensure-billing-event-indexes';
 import EnsureApiKeyUsageLogUserPagingIndexes from './20260921240040_ensure-apikeyusagelog-user-paging-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
@@ -560,6 +562,7 @@ const coreMigrations: MigrationFile[] = [
   ResealOAuthProviderTokens,
   ResearchConfigSourceTiers,
   ModalImageUrlToKey,
+  BackfillProviderEndUserId,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

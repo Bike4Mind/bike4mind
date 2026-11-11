@@ -51,6 +51,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { executeFacetCompatible } from '../../utils/documentdb-compat';
 import { buildCollectionSearchPipeline } from '../../queries/collectionSearchQuery';
 import { NETWORK_META_FIELDS } from './networkMetaFields';
+import { providerEndUserIdFor } from './providerEndUserId';
 
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1636,6 +1637,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     tshirtSize: { type: String, default: null },
     geoLocation: { type: String, default: null },
     stripeCustomerId: { type: String, default: null },
+    // Set by the save hook below; existing rows are backfilled by migration 20260921241030.
+    providerEndUserId: { type: String },
     securityQuestions: [SecurityQuestionSchema],
     userNotes: [UserNoteSchema],
     numReferralsAvailable: { type: Number, default: 0 },
@@ -1954,8 +1957,16 @@ UserSchema.pre('save', function (next) {
   next();
 });
 
+// Lets admins resolve a provider safety notice back to the account it names.
+UserSchema.pre('save', function (next) {
+  if (!this.providerEndUserId && this._id) this.providerEndUserId = providerEndUserIdFor(String(this._id));
+  next();
+});
+
 // Stripe-customer resolution for business metrics.
 UserSchema.index({ stripeCustomerId: 1 }, { name: 'user_stripeCustomerId' });
+// Explicit name must match migration 20260921241030 so autoIndex and the migrator agree.
+UserSchema.index({ providerEndUserId: 1 }, { name: 'user_providerEndUserId', sparse: true });
 
 // This will support the $or queries in findByUsernameOrEmail efficiently
 UserSchema.index({

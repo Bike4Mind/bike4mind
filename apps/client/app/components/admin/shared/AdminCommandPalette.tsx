@@ -244,7 +244,7 @@ function CommandPalette({
           </Typography>
           <Typography id="admin-command-description" level="body-sm">
             {entitySearch
-              ? 'Search by email, user or organization ID, key prefix, IP, billing customer ID or exact organization name.'
+              ? 'Search by email, user or organization ID, key prefix, IP, billing customer ID, LLM provider user identifier or exact organization name.'
               : 'Navigate or open a current-record action. Paste a user ID to open its profile.'}
           </Typography>
           <Input

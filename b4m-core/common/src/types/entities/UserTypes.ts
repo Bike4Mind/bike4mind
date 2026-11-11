@@ -523,6 +523,8 @@ export interface IUser extends ICreditHolder {
   tshirtSize: string | null;
   geoLocation: string | null;
   stripeCustomerId: string | null;
+  /** SHA-256 of the user id, as sent to LLM providers for abuse attribution. */
+  providerEndUserId?: string;
   securityQuestions: Array<ISecurityQuestion> | null;
   userNotes: Array<IUserNote> | null;
   loginRecords: Array<ILoginRecord> | null;

@@ -5,6 +5,7 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import { searchAdminEntities } from './searchEntities';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -124,5 +125,23 @@ describe('indexed entity lookup', () => {
   it('caps each result group', async () => {
     await Organization.collection.insertMany(Array.from({ length: 10 }, () => ({ name: 'Common org' })));
     expect(await searchAdminEntities('Common org')).toHaveLength(5);
+  });
+});
+
+describe('provider end-user identifier lookup', () => {
+  it('resolves the identifier sent to providers back to the saved account', async () => {
+    const user = await User.create({ name: 'Flagged user', username: 'flagged', email: 'flagged@example.com' });
+    const identifier = toProviderEndUserId(String(user._id))!;
+    expect(await searchAdminEntities(identifier)).toEqual([
+      { type: 'user', id: String(user._id), displayName: 'Flagged user', secondary: 'f***@example.com - active' },
+    ]);
+    await User.collection.updateOne({ _id: user._id }, { $set: { isBanned: true } });
+    expect((await searchAdminEntities(identifier.toUpperCase()))[0]).toMatchObject({
+      id: String(user._id),
+      secondary: 'f***@example.com - banned',
+    });
+  });
+  it('returns nothing for an unknown identifier', async () => {
+    expect(await searchAdminEntities('0'.repeat(64))).toEqual([]);
   });
 });
