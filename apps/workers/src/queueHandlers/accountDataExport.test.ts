@@ -40,7 +40,10 @@ const h = vi.hoisted(() => ({
   records: vi.fn(),
   sendToQueue: vi.fn(),
   recordAdminAction: vi.fn(),
-  resource: { accountDataExportQueue: { url: 'https://sqs.example/account-data-export' } as { url?: string } },
+  resource: {
+    accountDataExportQueue: { url: 'https://sqs.example/account-data-export' } as { url?: string },
+    websocket: { managementEndpoint: 'https://ws.example.com' },
+  },
   failedReferences: vi.fn(),
   notebooks: [] as Array<{ id: string; name: string; chatHistory?: Array<{ images?: string[] }> }>,
 }));
@@ -57,7 +60,10 @@ vi.mock('@bike4mind/utils', () => ({
   secureParameters: (obj: unknown, schema: { parse: (value: unknown) => unknown }) => schema.parse(obj),
 }));
 vi.mock('@bike4mind/database', () => ({
-  mongoose: { model: () => ({ find: () => ({ lean: h.personalOrganizations }) }) },
+  mongoose: {
+    model: () => ({ find: () => ({ lean: h.personalOrganizations }) }),
+    modelNames: () => ['User'],
+  },
   userRepository: { findById: h.userFindById },
   adminAuditLogRepository: { append: vi.fn() },
   User: {
@@ -77,7 +83,6 @@ vi.mock('@bike4mind/database', () => ({
   toolRepository: {},
   memoryLedgerRepository: {},
   memoryPrincipalKeyRepository: {},
-  mongoose: { modelNames: () => ['User'] },
 }));
 
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({}));
@@ -127,7 +132,6 @@ vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.sendToClient }));
-vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'https://ws.example.com' } } }));
 vi.mock('./accountDataExportCollections', () => ({
   accountArchiveAdapters: [
     {

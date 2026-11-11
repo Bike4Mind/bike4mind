@@ -18,7 +18,6 @@ import {
   mongoose,
   memoryLedgerRepository,
   memoryPrincipalKeyRepository,
-  mongoose,
   projectRepository,
   questRepository,
   sessionRepository,
@@ -53,7 +52,6 @@ import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { buildAccountDataExportReadyEmail } from '@workers/utils/mailer/accountDataExportEmail';
-import { Resource } from 'sst';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { accountArchiveAdapters, type AccountArchiveCollection } from './accountDataExportCollections';
 
