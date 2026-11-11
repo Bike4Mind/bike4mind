@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { FabFile, GenerationJobModel, Quest, Session } from '@bike4mind/database';
+import { FabFile, Quest, Session } from '@bike4mind/database';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -32,7 +32,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 let database: MongoMemoryReplSet;
 const collection = (name: string) => mongoose.connection.collection(mongoose.model(name).collection.name);
-const logger = { info: vi.fn(), warn: vi.fn() };
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const tombstone = { deletedAt: new Date() };
 
 // A key of the generated-content shape that sorts like `name`, so fixtures stay readable.
@@ -165,22 +165,27 @@ describe('purgeDeletedMessageMedia', () => {
 
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(gk('bad.png')));
     expect(invalidatedPaths()).toEqual([[`/generated/${gk('good.png')}`]]);
+    expect(effects.enqueue.mock.calls[0][0].keys).toEqual([gk('bad.png')]);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs an error naming the keys left in storage when the hand-off to the queue fails', async () => {
+    const sessionId = await notebook();
+    const deleted = await message(sessionId, { images: [gk('bad.png')] }, true);
+    effects.deleteGenerated.mockRejectedValue(new Error('S3 down'));
+    effects.enqueue.mockResolvedValue(false);
+
+    await expect(purgeDeletedMessageMedia(deleted, { logger })).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('1 keys left in storage'));
   });
 
   it('never purges an imported key another user produced, nor one outside the generated-content shape', async () => {
-    const [foreign, jobOutput, own] = [gk('theirs.png'), gk('job.png'), gk('own.png')];
+    const [foreign, own] = [gk('theirs.png'), gk('own.png')];
     const theirs = await notebook(true, 'u2');
     await message(theirs, { images: [foreign] }, true);
-    await collection(GenerationJobModel.modelName).insertOne({
-      requestedBy: 'u2',
-      payload: { output: { s3Key: jobOutput } },
-    });
     const sessionId = await notebook();
-    const deleted = await message(
-      sessionId,
-      { images: [foreign, jobOutput, own, '../other/object.png', 'avatars/u2.png'] },
-      true
-    );
+    const deleted = await message(sessionId, { images: [foreign, own, '../other/object.png', 'avatars/u2.png'] }, true);
 
     await purgeDeletedMessageMedia(deleted, { logger });
 

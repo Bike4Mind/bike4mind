@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { FabFile, GenerationJobModel, Quest, Session } from '@bike4mind/database';
+import { FabFile, Quest, Session } from '@bike4mind/database';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -39,7 +39,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 let database: MongoMemoryReplSet;
 const collection = (name: string) => mongoose.connection.collection(mongoose.model(name).collection.name);
-const logger = { info: vi.fn(), warn: vi.fn() };
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const tombstone = { deletedAt: new Date() };
 
 // A key of the generated-content shape that sorts like `name`, so fixtures stay readable.
@@ -152,13 +152,8 @@ describe('purgeDeletedNotebookMedia', () => {
 
   it('never purges a key another user produced, even when only a deleted copy shows it', async () => {
     const foreign = gk('theirs.png');
-    const jobOutput = gk('job.png');
     await notebook({ images: [foreign] }, true, 'u2');
-    await collection(GenerationJobModel.modelName).insertOne({
-      requestedBy: 'u2',
-      payload: { output: { s3Key: jobOutput } },
-    });
-    const copy = await notebook({ images: [foreign, jobOutput, gk('own.png')] });
+    const copy = await notebook({ images: [foreign, gk('own.png')] });
     await purgeDeletedNotebookMedia([copy], { logger });
     expect(deletedKeys()).toEqual([gk('own.png')]);
     expect(invalidatedPaths()).toEqual([[`/generated/${gk('own.png')}`]]);
@@ -196,6 +191,15 @@ describe('purgeDeletedNotebookMedia', () => {
     expect(invalidatedPaths()).toEqual([[`/generated/${gk('ok.png')}`]]);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('s3 down'));
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('throttled'));
+    expect(effects.enqueue.mock.calls[0][0].keys).toEqual([gk('fails.png')]);
+  });
+
+  it('logs an error naming what is left in storage when the hand-off to the queue fails', async () => {
+    const id = await notebook({ images: [gk('fails.png')] });
+    effects.deleteGenerated.mockRejectedValue(new Error('s3 down'));
+    effects.enqueue.mockResolvedValue(false);
+    await expect(purgeDeletedNotebookMedia([id], { logger })).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('1 keys and 0 notebooks left in storage'));
   });
 });
 
@@ -352,6 +356,21 @@ describe('runGeneratedMediaPurge', () => {
     );
     expect(deletedKeys()).toEqual([own]);
     expect(leftovers.leftoverKeys).toEqual([]);
+  });
+
+  it('returns a key whose storage delete failed as a leftover and does not invalidate it', async () => {
+    const [fails, ok] = [gk('fails.png'), gk('ok.png')];
+    await notebook({ images: [fails, ok] });
+    effects.deleteGenerated.mockImplementation(async (key: string) => {
+      if (key === fails) throw new Error('s3 down');
+    });
+    const leftovers = await runGeneratedMediaPurge(
+      { keys: [fails, ok], ownerIds: ['u1'] },
+      { deadline: Date.now() + PURGE_BUDGET_MS, deletedSessionIds: new Set<string>(), logger }
+    );
+    expect(leftovers.leftoverKeys).toEqual([fails]);
+    expect(invalidatedPaths()).toEqual([[`/generated/${ok}`]]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('1 storage deletes failed'));
   });
 
   it('deletes no direct key without an owner to check it against', async () => {

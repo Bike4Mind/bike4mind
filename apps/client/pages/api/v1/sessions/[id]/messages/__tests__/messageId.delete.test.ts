@@ -38,13 +38,21 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 
 const mockFindSession = vi.fn();
 const mockFindMessage = vi.fn();
+const txn = vi.hoisted(() => ({ active: false }));
 vi.mock('@bike4mind/database', () => ({
   sessionRepository: {
     findByIdAndUserId: (...a: unknown[]) => mockFindSession(...a),
     update: vi.fn().mockResolvedValue(undefined),
   },
   questRepository: { findBySessionIdAndId: (...a: unknown[]) => mockFindMessage(...a) },
-  withTransaction: <T>(fn: () => Promise<T>) => fn(),
+  withTransaction: async <T>(fn: () => Promise<T>) => {
+    txn.active = true;
+    try {
+      return await fn();
+    } finally {
+      txn.active = false;
+    }
+  },
 }));
 
 const mockDeleteSessionMessage = vi.fn();
@@ -58,8 +66,12 @@ vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
 }));
 
 const mockPurgeMedia = vi.fn();
+const purgeCalledInTxn = vi.hoisted(() => ({ value: false }));
 vi.mock('@server/sessions/purgeDeletedMessageMedia', () => ({
-  purgeDeletedMessageMedia: (...a: unknown[]) => mockPurgeMedia(...a),
+  purgeDeletedMessageMedia: (...a: unknown[]) => {
+    if (txn.active) purgeCalledInTxn.value = true;
+    return mockPurgeMedia(...a);
+  },
 }));
 
 import handler from '@pages/api/v1/sessions/[id]/messages/[messageId]';
@@ -83,6 +95,7 @@ describe('DELETE /api/v1/sessions/[id]/messages/[messageId]', () => {
     mockDeleteSessionMessage.mockResolvedValue({ id: 'quest-1', sessionId: 'sess-1' });
     mockUnpublish.mockResolvedValue({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
     mockPurgeMedia.mockResolvedValue(undefined);
+    purgeCalledInTxn.value = false;
   });
 
   it("takes down the caller's replies before the delete and sweeps again after it commits", async () => {
@@ -139,7 +152,11 @@ describe('DELETE /api/v1/sessions/[id]/messages/[messageId]', () => {
 
   it('purges the deleted message media once the delete has committed', async () => {
     const deleted = { id: 'quest-1', sessionId: 'sess-1', images: ['a.png'], videos: ['b.mp4'] };
-    mockDeleteSessionMessage.mockResolvedValue(deleted);
+    let deletedInTxn = false;
+    mockDeleteSessionMessage.mockImplementation(async () => {
+      deletedInTxn = txn.active;
+      return deleted;
+    });
     const { req, res, logger } = fireDelete();
 
     await handler(req, res);
@@ -148,6 +165,8 @@ describe('DELETE /api/v1/sessions/[id]/messages/[messageId]', () => {
     expect(res._getJSONData()).toEqual({ msg: 'Message deleted' });
     expect(mockPurgeMedia).toHaveBeenCalledTimes(1);
     expect(mockPurgeMedia).toHaveBeenCalledWith(deleted, { logger });
+    expect(deletedInTxn).toBe(true);
+    expect(purgeCalledInTxn.value).toBe(false);
     expect(mockDeleteSessionMessage.mock.invocationCallOrder[0]).toBeLessThan(
       mockPurgeMedia.mock.invocationCallOrder[0]
     );

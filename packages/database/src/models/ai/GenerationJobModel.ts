@@ -73,12 +73,6 @@ GenerationJobSchema.index({ state: 1, nextPollAt: 1 });
 GenerationJobSchema.index({ state: 1, terminalHandledAt: 1, updatedAt: 1 });
 // Serves the public list endpoint (newest first per requester); kind/state/source are residual filters.
 GenerationJobSchema.index({ requestedBy: 1, _id: -1 });
-// Generated-media purge (apps/client/server/sessions/purgeDeletedNotebookMedia.ts findOwnedKeys) runs in a
-// delete request and looks jobs up by output key.
-GenerationJobSchema.index(
-  { 'payload.output.s3Key': 1 },
-  { partialFilterExpression: { 'payload.output.s3Key': { $type: 'string' } } }
-);
 GenerationJobSchema.index(
   { ownerType: 1, ownerId: 1, idempotencyKey: 1 },
   { unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string' } } }

@@ -1,4 +1,4 @@
-import { FabFile, GenerationJobModel, Quest, Session, questRepository, sessionRepository } from '@bike4mind/database';
+import { FabFile, Quest, Session, questRepository, sessionRepository } from '@bike4mind/database';
 import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import {
   MAX_PATHS_PER_BATCH,
@@ -7,6 +7,8 @@ import {
 } from '@server/services/cdn/invalidateRouterCdn';
 import { enqueueGeneratedMediaPurge } from '@server/sessions/generatedMediaPurgeQueue';
 import type { MinimalLogger } from '@server/services/publish/minimalLogger';
+
+export type PurgeRequestLogger = MinimalLogger & { error: (msg: string) => void };
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -60,8 +62,8 @@ export async function findLiveRetainedKeys(keys: string[]): Promise<Set<string>>
 
 /**
  * The keys that are provably `ownerIds`' own: the earliest-created message holding the key is in a
- * notebook one of them owns, and no other user's generation job produced it. Import, fork and clone
- * only copy keys into newer messages, so a key copied in from someone else's notebook never qualifies.
+ * notebook one of them owns. Import, fork and clone only copy keys into newer messages, so a key copied
+ * in from someone else's notebook never qualifies.
  */
 export async function findOwnedKeys(keys: string[], ownerIds: Set<string>): Promise<Set<string>> {
   const owned = new Set<string>();
@@ -73,16 +75,7 @@ export async function findOwnedKeys(keys: string[], ownerIds: Set<string>): Prom
     .setOptions({ includeDeleted: true })
     .lean();
   const ownerBySession = new Map(sessions.map(s => [String(s._id), String(s.userId)]));
-  const candidates = [...originByKey]
-    .filter(([, id]) => ownerIds.has(ownerBySession.get(id) ?? ''))
-    .map(([key]) => key);
-  if (candidates.length === 0) return owned;
-  const foreignJobs = await GenerationJobModel.find(
-    { 'payload.output.s3Key': { $in: candidates }, requestedBy: { $nin: [...ownerIds] } },
-    { 'payload.output.s3Key': 1 }
-  ).lean();
-  const foreign = new Set(foreignJobs.map(job => (job.payload as { output?: { s3Key?: unknown } })?.output?.s3Key));
-  for (const key of candidates) if (!foreign.has(key)) owned.add(key);
+  for (const [key, id] of originByKey) if (ownerIds.has(ownerBySession.get(id) ?? '')) owned.add(key);
   return owned;
 }
 
@@ -159,7 +152,7 @@ async function resolveDirectDoomedKeys(
 export interface GeneratedMediaPurgeLeftovers {
   /** Notebooks not (fully) looked up; the whole page is forwarded, since a re-delete is idempotent. */
   leftoverSessionIds: string[];
-  /** Keys not deleted before the deadline or the per-run delete cap; re-checked when retried. */
+  /** Keys not deleted (a failed delete, the deadline or the per-run delete cap); re-checked when retried. */
   leftoverKeys: string[];
   /** Users whose ownership qualified the leftover keys. */
   ownerIds: string[];
@@ -172,8 +165,8 @@ export interface GeneratedMediaPurgeLeftovers {
  * `sessionIds` are deleted notebooks to look up, in pages of SESSION_PAGE, owned by their notebooks'
  * owners; `keys` are re-checked against live references and against `ownerIds`.
  * `deletedSessionIds` are notebooks whose references do not retain a key. A failed page lookup is
- * logged and the page forwarded; a missing storage binding throws before any delete. Per-key storage
- * and CDN failures are logged, not returned.
+ * logged and the page forwarded; a missing storage binding throws before any delete. A failed storage
+ * delete is logged and its key returned as a leftover; CDN failures are logged, not returned.
  */
 export async function runGeneratedMediaPurge(
   input: { sessionIds?: string[]; keys?: string[]; ownerIds?: string[] },
@@ -185,15 +178,17 @@ export async function runGeneratedMediaPurge(
   const owners = new Set((input.ownerIds ?? []).filter(Boolean));
   const seen = new Set<string>();
   let deletesLeft = MAX_DELETES_PER_RUN;
+  let failedDeletes = 0;
   const batch = createCdnInvalidationBatch('notebook-media', logger);
   let storage: ReturnType<typeof getGeneratedImageStorage> | undefined;
 
-  // Returns the keys no delete was started for before the deadline.
+  // Returns the keys not deleted: those whose delete failed and those no delete was started for.
   const deleteKeys = async (keys: string[]): Promise<string[]> => {
     if (keys.length === 0) return [];
     storage ??= getGeneratedImageStorage();
     const target = storage;
     const limit = Math.min(keys.length, deletesLeft);
+    const deleted = new Set<string>();
     let next = 0;
     const worker = async () => {
       while (next < limit && Date.now() < deadline) {
@@ -201,15 +196,17 @@ export async function runGeneratedMediaPurge(
         try {
           // A plain delete, not deletePermanently: the bucket is versioned, so ops keep a recovery window.
           await target.delete(key);
+          deleted.add(key);
           batch.add(generatedCdnPath(key));
         } catch (err) {
+          failedDeletes++;
           logger.warn(`[NOTEBOOK_MEDIA] Could not purge generated media ${key}: ${errorMessage(err)}`);
         }
       }
     };
     await Promise.all(Array.from({ length: Math.min(DELETE_CONCURRENCY, limit) }, worker));
     deletesLeft -= next;
-    return keys.slice(next);
+    return keys.filter(key => !deleted.has(key));
   };
 
   try {
@@ -240,7 +237,12 @@ export async function runGeneratedMediaPurge(
     await batch.flush();
   }
   if (leftoverKeys.length > 0 || leftoverSessionIds.length > 0) {
-    const reason = Date.now() >= deadline ? 'Time budget spent' : 'Per-run delete cap reached';
+    const reason =
+      Date.now() >= deadline
+        ? 'Time budget spent'
+        : failedDeletes > 0
+          ? `${failedDeletes} storage deletes failed`
+          : 'Per-run delete cap reached';
     logger.warn(
       `[NOTEBOOK_MEDIA] ${reason}; left ${leftoverKeys.length} generated media keys and ${leftoverSessionIds.length} notebooks unpurged`
     );
@@ -261,7 +263,7 @@ export async function runGeneratedMediaPurge(
  */
 export async function purgeDeletedNotebookMedia(
   sessionIds: string[],
-  { logger }: { logger: MinimalLogger }
+  { logger }: { logger: PurgeRequestLogger }
 ): Promise<void> {
   if (sessionIds.length === 0) return;
   try {
@@ -269,11 +271,17 @@ export async function purgeDeletedNotebookMedia(
       { sessionIds },
       { deadline: Date.now() + PURGE_BUDGET_MS, deletedSessionIds: new Set(sessionIds), logger }
     );
-    await enqueueGeneratedMediaPurge(
+    const sent = await enqueueGeneratedMediaPurge(
       { sessionIds: leftovers.leftoverSessionIds, keys: leftovers.leftoverKeys, ownerIds: leftovers.ownerIds },
       logger
     );
+    // A request cannot retry, so a failed hand-off leaves this media in storage until someone acts.
+    if (!sent) {
+      logger.error(
+        `[NOTEBOOK_MEDIA] Generated media purge not handed off: ${leftovers.leftoverKeys.length} keys and ${leftovers.leftoverSessionIds.length} notebooks left in storage`
+      );
+    }
   } catch (err) {
-    logger.warn(`[NOTEBOOK_MEDIA] Generated media storage unavailable: ${errorMessage(err)}`);
+    logger.error(`[NOTEBOOK_MEDIA] Generated media storage unavailable: ${errorMessage(err)}`);
   }
 }

@@ -1,8 +1,8 @@
 import { Session } from '@bike4mind/database';
-import type { MinimalLogger } from '@server/services/publish/minimalLogger';
 import { enqueueGeneratedMediaPurge } from '@server/sessions/generatedMediaPurgeQueue';
 import {
   PURGE_BUDGET_MS,
+  type PurgeRequestLogger,
   isGeneratedContentKey,
   runGeneratedMediaPurge,
 } from '@server/sessions/purgeDeletedNotebookMedia';
@@ -18,7 +18,7 @@ const errorMessage = (err: unknown) => (err instanceof Error ? err.message : Str
  */
 export async function purgeDeletedMessageMedia(
   message: { id: string; sessionId: string; images?: string[] | null; videos?: string[] | null },
-  { logger }: { logger: MinimalLogger }
+  { logger }: { logger: PurgeRequestLogger }
 ): Promise<void> {
   const keys = [...new Set([...(message.images ?? []), ...(message.videos ?? [])])].filter(isGeneratedContentKey);
   if (keys.length === 0) return;
@@ -31,8 +31,16 @@ export async function purgeDeletedMessageMedia(
       { keys, ownerIds: [String(session.userId)] },
       { deadline: Date.now() + PURGE_BUDGET_MS, deletedSessionIds: new Set(), logger }
     );
-    await enqueueGeneratedMediaPurge({ keys: leftovers.leftoverKeys, ownerIds: leftovers.ownerIds }, logger);
+    const sent = await enqueueGeneratedMediaPurge(
+      { keys: leftovers.leftoverKeys, ownerIds: leftovers.ownerIds },
+      logger
+    );
+    if (!sent) {
+      logger.error(
+        `[MESSAGE_MEDIA] Generated media purge not handed off: ${leftovers.leftoverKeys.length} keys left in storage`
+      );
+    }
   } catch (err) {
-    logger.warn(`[MESSAGE_MEDIA] Could not purge generated media of a deleted message: ${errorMessage(err)}`);
+    logger.error(`[MESSAGE_MEDIA] Could not purge generated media of a deleted message: ${errorMessage(err)}`);
   }
 }

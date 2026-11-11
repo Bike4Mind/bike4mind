@@ -51,7 +51,15 @@ describe('generatedMediaPurgeQueue', () => {
     expect(sub).toMatch(
       /link:\s*\[\.\.\.allSecrets,\s*generatedImagesBucket,\s*routerDistributionId,\s*generatedMediaPurgeQueue\]/
     );
-    expect(sub).toMatch(/SINGLE_RECORD_BATCH\s*$/);
+    expect(sub).toMatch(/\.\.\.SINGLE_RECORD_BATCH,/);
+  });
+
+  it('caps concurrent runs at the event source, not with reserved Lambda concurrency', () => {
+    const sub = subscription();
+    expect(sub).toMatch(
+      /transform:\s*\{\s*eventSourceMapping:\s*\{\s*scalingConfig:\s*\{\s*maximumConcurrency:\s*2\s*\}\s*\}\s*\}/
+    );
+    expect(sub).not.toMatch(/reserved/);
   });
 
   it('grants CreateInvalidation on the router distribution only', () => {

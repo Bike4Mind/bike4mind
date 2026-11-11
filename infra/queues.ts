@@ -1124,9 +1124,6 @@ const generatedMediaPurgeQueueSubscription = generatedMediaPurgeQueue.subscribe(
     vpc: lambdaVpc,
     // Links its own queue: a run that hits its deadline re-enqueues what it did not reach.
     link: [...allSecrets, generatedImagesBucket, routerDistributionId, generatedMediaPurgeQueue],
-    // One run at a time: each flushes up to 1,000 exact CDN paths, a third of the distribution's
-    // in-flight quota shared with publish takedowns (apps/client/server/services/cdn/invalidateRouterCdn.ts).
-    concurrency: ['production', 'dev'].includes($app.stage) ? { reserved: 1 } : undefined,
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1137,7 +1134,13 @@ const generatedMediaPurgeQueueSubscription = generatedMediaPurgeQueue.subscribe(
       },
     ],
   },
-  SINGLE_RECORD_BATCH
+  {
+    ...SINGLE_RECORD_BATCH,
+    // Each run flushes up to 1,000 exact CDN paths and the distribution's in-flight quota is shared with
+    // publish takedowns (apps/client/server/services/cdn/invalidateRouterCdn.ts); 2 is the SQS minimum.
+    // Capped at the event source, not reserved, so throttled polls never burn the DLQ retries.
+    transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 2 } } },
+  }
 );
 
 // Legacy What's New highlights queue, retained with its consumer until in-flight messages drain.
