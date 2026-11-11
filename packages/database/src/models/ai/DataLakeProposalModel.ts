@@ -15,6 +15,11 @@ const ModelName = 'DataLakeProposal';
 
 interface IDataLakeProposalModel extends Model<IDataLakeProposalDocument> {}
 
+const AutoAdmissionSchema = new Schema(
+  { configId: { type: String, required: true }, trustedDomain: { type: String } },
+  { _id: false }
+);
+
 /**
  * One row per candidate a producer wants admitted to a lake (#1671). The row is the whole safety
  * mechanism: content reaches a lake only by a human moving one of these to `approved`, and the
@@ -43,6 +48,7 @@ const DataLakeProposalSchema = new Schema<IDataLakeProposalDocument>(
     priorDisposition: { type: String, enum: DATA_LAKE_PROPOSAL_STATUSES, default: null },
     reviewedByUserId: { type: String, default: null },
     reviewedAt: { type: Date, default: null },
+    autoAdmission: { type: AutoAdmissionSchema, default: undefined },
     declineReason: { type: String, default: null },
     admittedFabFileId: { type: String, default: null },
   },
@@ -73,6 +79,8 @@ DataLakeProposalSchema.index(
 );
 // The review queue: one lake's pending proposals, newest first.
 DataLakeProposalSchema.index({ dataLakeId: 1, status: 1, createdAt: -1 });
+// The declined-text check a rule admission makes (hasDeclinedWithTextHash).
+DataLakeProposalSchema.index({ dataLakeId: 1, textHash: 1, status: 1 });
 
 export const DataLakeProposalModel: IDataLakeProposalModel =
   (mongoose.models[ModelName] as IDataLakeProposalModel) ||
@@ -135,7 +143,7 @@ class DataLakeProposalRepository
   }
 
   async claimForReview(id: string, input: ReviewDataLakeProposalInput): Promise<IDataLakeProposalDocument | null> {
-    const { status, reviewedByUserId, reviewedAt, declineReason } = input;
+    const { status, reviewedByUserId, reviewedAt, declineReason, autoAdmission } = input;
     // `status: 'pending'` in the FILTER is the double-review guard: the second writer of a race
     // matches nothing and gets null. Never split into a read then a write.
     const doc = await this.proposalModel.findOneAndUpdate(
@@ -146,6 +154,7 @@ class DataLakeProposalRepository
           reviewedByUserId,
           reviewedAt,
           declineReason: declineReason ?? null,
+          ...(autoAdmission ? { autoAdmission } : {}),
           // A decline keeps the source identity, the reason and the reviewer, and drops the
           // candidate material itself. `textHash` survives on purpose - it is the signal that
           // detects this source coming back materially changed, and a hash is not the material.
@@ -185,15 +194,39 @@ class DataLakeProposalRepository
     }
   }
 
-  async recordAdmission(id: string, fabFileId: string): Promise<void> {
-    await this.proposalModel.updateOne({ _id: id }, { $set: { admittedFabFileId: fabFileId } });
+  async recordAdmission(id: string, fabFileId: string, trustedDomain?: string): Promise<void> {
+    await this.proposalModel.updateOne(
+      { _id: id },
+      {
+        $set: {
+          admittedFabFileId: fabFileId,
+          ...(trustedDomain ? { 'autoAdmission.trustedDomain': trustedDomain } : {}),
+        },
+      }
+    );
+  }
+
+  async hasDeclinedWithTextHash(dataLakeId: string, textHash: string): Promise<boolean> {
+    return !!(await this.proposalModel.exists({ dataLakeId, textHash, status: 'declined' }));
+  }
+
+  async hasApprovedForSourceKey(dataLakeId: string, canonicalSourceKey: string, excludeId: string): Promise<boolean> {
+    return !!(await this.proposalModel.exists({
+      dataLakeId,
+      canonicalSourceKey,
+      status: 'approved',
+      _id: { $ne: excludeId },
+    }));
   }
 
   async releaseClaim(id: string): Promise<void> {
     try {
       await this.proposalModel.updateOne(
         { _id: id },
-        { $set: { status: 'pending', reviewedByUserId: null, reviewedAt: null, declineReason: null } }
+        {
+          $set: { status: 'pending', reviewedByUserId: null, reviewedAt: null, declineReason: null },
+          $unset: { autoAdmission: '' },
+        }
       );
     } catch (error) {
       // The pending-uniqueness index refused the reopen, which can only mean a fresh proposal for

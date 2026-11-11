@@ -94,6 +94,7 @@ export function admitProposedSource(
       administeredOrgIds: actor.administeredOrgIds,
       deleteCreatedFile: (id: string) => FabFile.findByIdAndDelete(id),
       nameFile: fabFilesService.urlFileName,
+      assertFinalUrl: params.assertFinalUrl,
     }
   );
 }

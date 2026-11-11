@@ -109,8 +109,14 @@ export interface IDataLakeProposal {
    * suppressed silently - the tombstone informs the human, it does not decide for them.
    */
   priorDisposition?: DataLakeProposalStatus | null;
+  /** Null on a row admitted by a source rule: no human reviewed it. See `autoAdmission`. */
   reviewedByUserId?: string | null;
   reviewedAt?: Date | null;
+  /**
+   * Set when a research config's trusted-site rule admitted this row without a reviewer. Cleared if
+   * the claim is released, so a released row reads as plain pending.
+   */
+  autoAdmission?: { configId: string; trustedDomain?: string } | null;
   /** The reviewer's reason for declining. Part of the tombstone. */
   declineReason?: string | null;
   /** The file an approval admitted. Absent while pending, and on every declined row. */
@@ -154,9 +160,11 @@ export type CreateDataLakeProposalResult =
 /** The compare-and-set a review performs. `pending -> approved | declined`, once. */
 export interface ReviewDataLakeProposalInput {
   status: Extract<DataLakeProposalStatus, 'approved' | 'declined'>;
-  reviewedByUserId: string;
+  /** Null for a rule admission: the config named in `autoAdmission` is the authority, not a person. */
+  reviewedByUserId: string | null;
   reviewedAt: Date;
   declineReason?: string;
+  autoAdmission?: { configId: string };
 }
 
 export interface IDataLakeProposalRepository extends IBaseRepository<IDataLakeProposalDocument> {
@@ -193,11 +201,19 @@ export interface IDataLakeProposalRepository extends IBaseRepository<IDataLakePr
    * rationale stay gone - a decline stripped them, and restoring does not re-fetch the source.
    */
   restoreDeclined(id: string): Promise<RestoreDataLakeProposalResult>;
-  /** Record the file an approval admitted, once the ingestion door has created it. */
-  recordAdmission(id: string, fabFileId: string): Promise<void>;
+  /**
+   * Record the file an approval admitted, once the ingestion door has created it. `trustedDomain`
+   * is the source-rule entry a rule admission matched on the final URL.
+   */
+  recordAdmission(id: string, fabFileId: string, trustedDomain?: string): Promise<void>;
+  /** True when a declined row in this lake carries the text fingerprint, whatever its URL. */
+  hasDeclinedWithTextHash(dataLakeId: string, textHash: string): Promise<boolean>;
+  /** True when an approved row other than `excludeId` already holds this source in the lake. */
+  hasApprovedForSourceKey(dataLakeId: string, canonicalSourceKey: string, excludeId: string): Promise<boolean>;
   /**
    * Return a claimed proposal to the queue, used only when admission FAILED after the claim. Clears
-   * the reviewer stamp so the row reads as untouched rather than as approved-but-empty.
+   * the reviewer stamp and any `autoAdmission` so the row reads as untouched rather than as
+   * approved-but-empty.
    */
   releaseClaim(id: string): Promise<void>;
   /**

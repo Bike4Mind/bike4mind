@@ -4,6 +4,9 @@ import type {
   IDataLakeProposalDocument,
   IDataLakeProposalRepository,
   IDataLakeRepository,
+  ILakeConfigFieldChange,
+  LakeConfigChangeAction,
+  ReviewDataLakeProposalInput,
 } from '@bike4mind/common';
 import {
   BadGatewayError,
@@ -14,10 +17,17 @@ import {
   isUrlBlockedError,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, HTTPError, NotFoundError } from '@bike4mind/utils';
+import { FinalUrlRejectedError } from '../fabFileService/FinalUrlRejectedError';
 import { assertLakeWritable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
-import { proposalReviewChange } from './diffLakeConfig';
-import { canManageLake, type LakeGrant, type ManageActor, type SerializeLakeClaim } from './manageRule';
+import { autoApprovalChange, proposalReviewChange } from './diffLakeConfig';
+import {
+  canManageLake,
+  isEffectiveOwner,
+  type LakeGrant,
+  type ManageActor,
+  type SerializeLakeClaim,
+} from './manageRule';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
 /**
@@ -39,9 +49,17 @@ export interface AdmitSourceParams {
   url: string;
   tags: Array<{ name: string; strength: number }>;
   provenance: { sourceType: FabFileSourceType; sourceMetadata: Record<string, unknown> };
+  /**
+   * Refuses, by throwing, a page the fetch landed on after redirects; returns what to stamp on the
+   * file. Forwarded to `createFabFileByUrl`. Absent on a human approval, so that path is unchanged.
+   */
+  assertFinalUrl?: (finalUrl: string) => { trustedDomain: string };
 }
 
 export type AdmittedFile = { id: string; fileName: string };
+
+/** The principal id a rule admission is audited under. */
+const AUTO_ADMIT_PRINCIPAL_ID = 'research-auto-admit';
 
 export interface ReviewAdapters extends LakeConfigAuditAdapters {
   db: LakeConfigAuditAdapters['db'] & {
@@ -201,17 +219,54 @@ export interface ApproveOptions {
   approverName?: string;
 }
 
-export async function approveDataLakeProposal(
+type LeftPendingReason =
+  | 'not_found'
+  | 'owner_check_failed'
+  | 'lake_not_writable'
+  | 'not_pending'
+  | 'declined_text_match'
+  | 'already_approved'
+  | 'claim_lost'
+  | 'final_url_untrusted'
+  | 'admit_failed';
+
+interface Reviewable {
+  proposal: IDataLakeProposalDocument;
+  lake: IDataLakeDocument;
+  grants: LakeGrant[];
+}
+
+/**
+ * What differs between a human approval and a rule admission. Everything else (serialize, claim,
+ * admit, release, record, audit) is one sequence in `runAdmission`, so the two paths cannot drift.
+ */
+interface AdmissionPlan {
+  /** The file's owner and the actor the admission door gates and audits. */
+  actor: ManageActor;
+  /** Runs inside the serialized claim, before the compare-and-set. A manual plan throws instead of returning a reason. */
+  resolve(): Promise<Reviewable | { leftPending: LeftPendingReason; lake: IDataLakeDocument }>;
+  claim: Pick<ReviewDataLakeProposalInput, 'reviewedByUserId' | 'autoAdmission'>;
+  sourceMetadata(proposal: IDataLakeProposalDocument, approvedAt: Date): Record<string, unknown>;
+  assertFinalUrl?: AdmitSourceParams['assertFinalUrl'];
+  audit(
+    proposal: IDataLakeProposalDocument,
+    trustedDomain?: string
+  ): { action: LakeConfigChangeAction; change: ILakeConfigFieldChange };
+}
+
+type AdmissionResult =
+  | { admitted: true; proposal: IDataLakeProposalDocument; fabFile: AdmittedFile }
+  | { admitted: false; reason: LeftPendingReason; error?: unknown };
+
+async function runAdmission(
   proposalId: string,
-  actor: ManageActor,
-  adapters: ReviewAdapters,
-  { approverName }: ApproveOptions = {}
-): Promise<ApprovedProposal> {
-  const { db, admitSource, serializeClaim, logger } = adapters;
+  plan: AdmissionPlan,
+  { db, admitSource, serializeClaim, logger }: ReviewAdapters
+): Promise<AdmissionResult> {
   const approvedAt = new Date();
-  const { proposal, lake, grants, claimed } = await serializeClaim(async () => {
-    const reviewable = await resolveReviewable(proposalId, actor, { db });
-    assertLakeTakesNewFiles(reviewable.lake);
+  const resolved = await serializeClaim(async () => {
+    const reviewable = await plan.resolve();
+    if ('leftPending' in reviewable) return reviewable;
 
     // Claim BEFORE admitting. The reverse order would let two reviewers (or one double-click) each
     // create a file before either wrote a status, admitting the same content twice - and a duplicate
@@ -219,13 +274,18 @@ export async function approveDataLakeProposal(
     // `status: 'pending'`, so the loser gets null here rather than a second admission.
     const claim = await db.dataLakeProposals.claimForReview(proposalId, {
       status: 'approved',
-      reviewedByUserId: actor.userId,
+      reviewedByUserId: plan.claim.reviewedByUserId,
       reviewedAt: approvedAt,
+      ...(plan.claim.autoAdmission && { autoAdmission: plan.claim.autoAdmission }),
     });
-    if (!claim) throw new BadRequestError('This proposal has already been reviewed');
+    if (!claim) return { lake: reviewable.lake, leftPending: 'claim_lost' as const };
     return { ...reviewable, claimed: claim };
   });
+  if ('leftPending' in resolved) return { admitted: false, reason: resolved.leftPending };
+  const { proposal, lake, grants, claimed } = resolved;
 
+  let trustedDomain: string | undefined;
+  const assertFinalUrl = plan.assertFinalUrl;
   const admitParams: AdmitSourceParams = {
     url: proposal.sourceUrl,
     // The lake's meta-tag ONLY. Producer-proposed tags are advisory metadata for the reviewer and
@@ -235,20 +295,17 @@ export async function approveDataLakeProposal(
     tags: [{ name: lake.datalakeTag, strength: DATALAKE_TAG_STRENGTH }],
     provenance: {
       sourceType: FabFileSourceType.PROPOSAL_APPROVAL,
-      // Which run, which source, when retrieved, who approved - the provenance every admitted
-      // document carries, readable by any lake editor auditing where content came from.
-      sourceMetadata: {
-        proposalId: proposal.id,
-        sourceUrl: proposal.sourceUrl,
-        producer: proposal.provenance.producer,
-        runId: proposal.provenance.runId,
-        query: proposal.provenance.query,
-        retrievedAt: proposal.provenance.retrievedAt,
-        approvedByUserId: actor.userId,
-        ...(approverName && { approvedByName: approverName }),
-        approvedAt,
-      },
+      // Which run, which source, when retrieved, who or which rule approved - the provenance every
+      // admitted document carries, readable by any lake editor auditing where content came from.
+      sourceMetadata: plan.sourceMetadata(proposal, approvedAt),
     },
+    ...(assertFinalUrl && {
+      assertFinalUrl: (finalUrl: string) => {
+        const stamp = assertFinalUrl(finalUrl);
+        trustedDomain = stamp.trustedDomain;
+        return stamp;
+      },
+    }),
   };
 
   let fabFile: AdmittedFile;
@@ -256,9 +313,9 @@ export async function approveDataLakeProposal(
     // One retry, on a timeout only: the fetch runs before any row is written, so a timed-out
     // attempt left nothing behind, and a source the research run fetched moments ago is far more
     // likely slow than gone. Any other failure is not something an immediate retry fixes.
-    fabFile = await admitSource(actor, admitParams).catch(err => {
+    fabFile = await admitSource(plan.actor, admitParams).catch(err => {
       if (!isSourceTimeout(err)) throw err;
-      return admitSource(actor, admitParams);
+      return admitSource(plan.actor, admitParams);
     });
   } catch (err) {
     // Admission failed after the claim, so the row would otherwise read as approved with nothing
@@ -270,7 +327,11 @@ export async function approveDataLakeProposal(
     // compensate for the admission failure, so letting its own rejection propagate would replace the
     // one error worth reporting with a storage error about the compensation.
     await db.dataLakeProposals.releaseClaim(proposalId).catch(() => {});
-    throw asReviewerFacingAdmissionError(err);
+    return {
+      admitted: false,
+      reason: err instanceof FinalUrlRejectedError ? 'final_url_untrusted' : 'admit_failed',
+      error: err,
+    };
   }
 
   // The file has landed and carries the lake tag, so the approval SUCCEEDED - only the row's pointer
@@ -278,22 +339,153 @@ export async function approveDataLakeProposal(
   // the already-reviewed guard) for work that is already done, so the pointer is best-effort: a row
   // left without `admittedFabFileId` reads as not-held and the source is simply re-proposed visibly
   // (see the held-source check in `proposeDataLakeContent`).
-  await db.dataLakeProposals.recordAdmission(proposalId, fabFile.id).catch(() => {});
+  await (
+    trustedDomain
+      ? db.dataLakeProposals.recordAdmission(proposalId, fabFile.id, trustedDomain)
+      : db.dataLakeProposals.recordAdmission(proposalId, fabFile.id)
+  ).catch(() => {});
 
   // Best-effort, same as recordAdmission above: the approval has already landed, so an audit-write
   // failure here must never turn into a reported failure for work that in fact succeeded.
-  await recordLakeConfigChange(
+  const { action, change } = plan.audit(proposal, trustedDomain);
+  await recordLakeConfigChange({ actor: plan.actor, lake, grants, action, changes: [change] }, { db, logger });
+
+  return { admitted: true, proposal: { ...claimed, admittedFabFileId: fabFile.id }, fabFile };
+}
+
+export async function approveDataLakeProposal(
+  proposalId: string,
+  actor: ManageActor,
+  adapters: ReviewAdapters,
+  { approverName }: ApproveOptions = {}
+): Promise<ApprovedProposal> {
+  const { db } = adapters;
+  const result = await runAdmission(
+    proposalId,
     {
       actor,
-      lake,
-      grants,
-      action: 'approve-proposal',
-      changes: [proposalReviewChange(proposal, 'approved')],
+      async resolve() {
+        const reviewable = await resolveReviewable(proposalId, actor, { db });
+        assertLakeTakesNewFiles(reviewable.lake);
+        return reviewable;
+      },
+      claim: { reviewedByUserId: actor.userId },
+      sourceMetadata: (proposal, approvedAt) => ({
+        proposalId: proposal.id,
+        sourceUrl: proposal.sourceUrl,
+        producer: proposal.provenance.producer,
+        runId: proposal.provenance.runId,
+        query: proposal.provenance.query,
+        retrievedAt: proposal.provenance.retrievedAt,
+        approvedByUserId: actor.userId,
+        ...(approverName && { approvedByName: approverName }),
+        approvedAt,
+      }),
+      audit: proposal => ({ action: 'approve-proposal', change: proposalReviewChange(proposal, 'approved') }),
     },
-    { db, logger }
+    adapters
   );
+  if (!result.admitted) {
+    if (result.reason === 'claim_lost') throw new BadRequestError('This proposal has already been reviewed');
+    throw asReviewerFacingAdmissionError(result.error);
+  }
+  return { proposal: result.proposal, fabFile: result.fabFile };
+}
 
-  return { proposal: { ...claimed, admittedFabFileId: fabFile.id }, fabFile };
+/** The standing rule a research config's trusted-site list gives a run. */
+export interface AutoApprovalRule {
+  configId: string;
+  configName: string;
+  /** The lake's current effective owner, with that user's real admin rights. File owner and gate actor. */
+  owner: ManageActor;
+  /** The trusted-list entry covering `finalUrl`, or null when none does. */
+  isTrusted(finalUrl: string): string | null;
+}
+
+export type AutoApprovalOutcome = { outcome: 'admitted' } | { outcome: 'left_pending'; reason: LeftPendingReason };
+
+export interface AutoApproveAdapters extends ReviewAdapters {
+  db: ReviewAdapters['db'] & {
+    dataLakeProposals: ReviewAdapters['db']['dataLakeProposals'] &
+      Pick<IDataLakeProposalRepository, 'hasDeclinedWithTextHash' | 'hasApprovedForSourceKey'>;
+  };
+}
+
+/**
+ * Admit a pending proposal on the authority of a source rule, with no reviewer. The ONLY entry point
+ * that admits without a person, and it never reads a score: the caller has already matched the hit to
+ * a trusted-site entry a lake manager set. Anything that stops it leaves the row pending for a human.
+ *
+ * Stricter than the manual path on purpose. The file owner is the lake's effective owner (a curator
+ * is not enough, and a transfer demotes the old owner), a source a human already declined stays out
+ * under any URL variant carrying the same text, and the final URL the fetch lands on must itself be
+ * trusted before anything is written.
+ */
+export async function autoApproveDataLakeProposal(
+  proposalId: string,
+  rule: AutoApprovalRule,
+  adapters: AutoApproveAdapters
+): Promise<AutoApprovalOutcome> {
+  const { db } = adapters;
+  const { owner } = rule;
+  const result = await runAdmission(
+    proposalId,
+    {
+      actor: { ...owner, auditPrincipal: { principalKind: 'system', principalId: AUTO_ADMIT_PRINCIPAL_ID } },
+      async resolve() {
+        const proposal = await db.dataLakeProposals.findById(proposalId);
+        if (!proposal) throw new NotFoundError('Proposal not found');
+        const lake = await db.dataLakes.findById(proposal.dataLakeId);
+        if (!lake) throw new NotFoundError('Proposal not found');
+        const grants = await loadActiveLakeGrants(lake, { db });
+        if (!isEffectiveOwner(lake, owner, grants)) return { leftPending: 'owner_check_failed', lake };
+        try {
+          assertLakeTakesNewFiles(lake);
+        } catch {
+          return { leftPending: 'lake_not_writable', lake };
+        }
+        if (proposal.status !== 'pending') return { leftPending: 'not_pending', lake };
+        if (proposal.textHash && (await db.dataLakeProposals.hasDeclinedWithTextHash(lake.id, proposal.textHash))) {
+          return { leftPending: 'declined_text_match', lake };
+        }
+        if (await db.dataLakeProposals.hasApprovedForSourceKey(lake.id, proposal.canonicalSourceKey, proposal.id)) {
+          return { leftPending: 'already_approved', lake };
+        }
+        return { proposal, lake, grants };
+      },
+      claim: { reviewedByUserId: null, autoAdmission: { configId: rule.configId } },
+      assertFinalUrl: finalUrl => {
+        const entry = rule.isTrusted(finalUrl);
+        if (!entry) throw new FinalUrlRejectedError();
+        return { trustedDomain: entry };
+      },
+      sourceMetadata: (proposal, approvedAt) => ({
+        proposalId: proposal.id,
+        sourceUrl: proposal.sourceUrl,
+        producer: proposal.provenance.producer,
+        runId: proposal.provenance.runId,
+        query: proposal.provenance.query,
+        retrievedAt: proposal.provenance.retrievedAt,
+        autoAdmittedByConfigId: rule.configId,
+        autoAdmittedByConfigName: rule.configName,
+        approvedAt,
+      }),
+      audit: (proposal, trustedDomain) => ({
+        action: 'auto-approve-proposal',
+        change: autoApprovalChange(proposal, {
+          configId: rule.configId,
+          configName: rule.configName,
+          trustedDomain,
+        }),
+      }),
+    },
+    adapters
+  ).catch(err => {
+    if (err instanceof NotFoundError) return { admitted: false, reason: 'not_found' } as const;
+    throw err;
+  });
+  if (result.admitted) return { outcome: 'admitted' };
+  return { outcome: 'left_pending', reason: result.reason };
 }
 
 export async function declineDataLakeProposal(

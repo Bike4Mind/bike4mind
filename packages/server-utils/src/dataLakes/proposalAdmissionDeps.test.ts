@@ -72,6 +72,17 @@ describe('admitProposedSource', () => {
     expect(dbHandedToDoor().scopedSettings).toBeDefined();
   });
 
+  // The door strips unknown request keys, so the final-URL predicate only works as an adapter.
+  it('forwards the final-URL predicate to the ingestion door, and nothing when absent', async () => {
+    const assertFinalUrl = vi.fn();
+    await admitProposedSource(actor, { ...(params as object), assertFinalUrl } as never);
+    expect(h.createFabFileByUrl.mock.calls[0][2].assertFinalUrl).toBe(assertFinalUrl);
+
+    h.createFabFileByUrl.mockClear();
+    await admitProposedSource(actor, params);
+    expect(h.createFabFileByUrl.mock.calls[0][2].assertFinalUrl).toBeUndefined();
+  });
+
   // Cannot be derived from a user document inside the door, so the two ORG manage rungs are lost
   // without it - an org admin clears the 403 and is then refused the write it entitles them to.
   it('forwards the actor administered orgs and the compensating delete', async () => {

@@ -211,6 +211,25 @@ export function proposalReviewChange(
 }
 
 /**
+ * A proposal admitted by a research config's trusted-site rule rather than a person. Names the
+ * config and the matched site in the value, since no actor field can: the recorded principal is the
+ * system. Same derived-field encoding as `proposalReviewChange`.
+ */
+export function autoApprovalChange(
+  proposal: { title?: string; sourceUrl: string },
+  rule: { configId: string; configName: string; trustedDomain?: string }
+): ILakeConfigLiteralChange {
+  const title = proposal.title?.trim();
+  const label = title ? `${title} (${proposal.sourceUrl})` : proposal.sourceUrl;
+  const site = rule.trustedDomain ? `, trusted site ${rule.trustedDomain}` : '';
+  return literalChange(
+    'proposalReview',
+    undefined,
+    `auto-approved: ${label} [config ${rule.configName} (${rule.configId})${site}]`
+  );
+}
+
+/**
  * A saved research configuration's create/update/delete, as a change entry - the same
  * derived-field, value-encoded pattern as `proposalReviewChange` above, since a config lives in its
  * own collection and never on the lake document. The NAME is what a curator recognizes a config by
