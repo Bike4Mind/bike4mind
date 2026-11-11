@@ -113,6 +113,9 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.member.added': { category: 'org', severity: 'notice', write: 'strict' },
   'org.member.removed': { category: 'org', severity: 'notice', write: 'strict' },
   'org.member.role_changed': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.api_key.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.rotated': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },

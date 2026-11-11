@@ -19,6 +19,11 @@ interface RevokeUserApiKeyAdapters {
     // ends the key's connections on its next run instead. In-repo callers always pass it.
     realtimeConnections?: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
+  /**
+   * Who to record as `revokedBy` when that is not `userId`: the org route resolves an org-owned key
+   * against the org's service account, but the person revoking it is the admin.
+   */
+  revokedBy?: string;
 }
 
 export interface RevokeUserApiKeyResult {
@@ -45,7 +50,7 @@ export const revokeUserApiKey = async (
     throw new NotFoundError('API key not found');
   }
 
-  await db.userApiKeys.revokeIfNotDisabled(apiKey.id, userId, params.reason);
+  await db.userApiKeys.revokeIfNotDisabled(apiKey.id, adapters.revokedBy ?? userId, params.reason);
   if (db.realtimeConnections) {
     await endRealtimeConnections({ apiKeyId: apiKey.id }, { db: { realtimeConnections: db.realtimeConnections } });
   }

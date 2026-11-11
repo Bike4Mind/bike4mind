@@ -61,6 +61,7 @@ export * from './constants/githubLakeFileRules';
 export * from './constants/dataLakeApiKeyScopes';
 export * from './constants/jupyter';
 export * from './constants/systemUsers';
+export * from './constants/orgServiceAccount';
 export * from './constants/searchResultCards';
 export * from './constants/locationMap';
 export * from './constants/agentExecutionStatus';
