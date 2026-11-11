@@ -7,8 +7,6 @@ import {
   creditTransactionRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
-  integrationRequestRepository,
-  partnerSignupRuleRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
@@ -16,7 +14,7 @@ import { groupRepository } from '@bike4mind/database/social';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
-import { invalidatePartnerRuleCache } from '@bike4mind/server-utils/entitlements/partnerRules';
+import { clearDeletedOrganizationReferences } from '@server/organizations/clearDeletedOrganizationReferences';
 import { creditService, organizationService } from '@bike4mind/services';
 import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -179,22 +177,7 @@ const handler = baseApi()
       )
     );
 
-    // Clear the dangling reference from any partner signup rule that pointed at this org, so
-    // no future signup resolves to a deleted org. The rule survives (its entitlements/credits
-    // still apply); only the org association is dropped. Cache invalidation makes it immediate.
-    await partnerSignupRuleRepository.updateMany({ organizationId: id }, { organizationId: null });
-    invalidatePartnerRuleCache();
-    // Same for roadmap integration requests: they are the members' own votes and stay. Best-effort:
-    // the org is already gone, so a failure here must not turn the committed delete into a 500 a
-    // retry cannot fix. The request keeps a dangling organizationId, which the admin demand list
-    // already shows as a deleted organization.
-    try {
-      await integrationRequestRepository.clearOrganization(id);
-    } catch (err) {
-      req.logger.warn(
-        `Failed to clear integration requests' organization for deleted organization ${id}: ${String(err)}`
-      );
-    }
+    await clearDeletedOrganizationReferences(id, req.logger);
 
     return res.json({ id });
   });
