@@ -308,6 +308,7 @@ const FeedbackTab: React.FC = () => {
     pageSize: itemsPerPage,
     total,
     settled: totalSettled,
+    failed: isError,
     onPageChange: handlePageChange,
     open: openFeedback,
   });

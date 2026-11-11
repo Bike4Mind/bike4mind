@@ -14,6 +14,7 @@ const setup = (overrides: Partial<Params> = {}) => {
     pageSize: 3,
     total: 3,
     settled: true,
+    failed: false,
     onPageChange,
     open,
     ...overrides,
@@ -162,5 +163,20 @@ describe('useFeedbackDetailNavigation', () => {
     rerender({ ...initial, openId: 'a', total: 6, page: 2, settled: true, rowIds: ['d', 'e', 'f'] });
 
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("goes back to the open report's page when the page turn fails", () => {
+    const { result, rerender, open, onPageChange, initial } = setup({ openId: 'c', total: 6 });
+
+    act(() => result.current.onNext?.());
+    expect(onPageChange).toHaveBeenLastCalledWith(2);
+
+    rerender({ ...initial, openId: 'c', total: 6, page: 2, settled: false, failed: true, rowIds: [] });
+    expect(onPageChange).toHaveBeenLastCalledWith(1);
+    expect(open).not.toHaveBeenCalled();
+
+    rerender({ ...initial, openId: 'c', total: 6, page: 1 });
+    expect(result.current.position).toEqual({ index: 3, total: 6 });
+    expect(result.current.onPrevious).toBeDefined();
   });
 });

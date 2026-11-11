@@ -10,6 +10,8 @@ interface UseFeedbackDetailNavigationParams {
   total: number;
   /** The list query has answered for the current page (not showing the previous page's rows). */
   settled: boolean;
+  /** The list query for the current page failed. */
+  failed: boolean;
   onPageChange: (page: number) => void;
   open: (id: string) => void;
 }
@@ -22,7 +24,7 @@ export interface FeedbackDetailNavigation {
 }
 
 /** A page turn waiting for its rows, from the report that was open when it started. */
-type PendingEdge = { page: number; edge: 'first' | 'last'; fromId: string };
+type PendingEdge = { page: number; edge: 'first' | 'last'; fromId: string; fromPage: number };
 
 /**
  * Previous/next for the feedback drawer, over the filtered and sorted list the table shows. The
@@ -40,10 +42,12 @@ export const useFeedbackDetailNavigation = ({
   pageSize,
   total,
   settled,
+  failed,
   onPageChange,
   open,
 }: UseFeedbackDetailNavigationParams): FeedbackDetailNavigation => {
   const [pending, setPending] = useState<PendingEdge>();
+  const [returnPage, setReturnPage] = useState<number>();
   const [lastPlace, setLastPlace] = useState<{ id: string; page: number; index: number }>();
 
   const index = openId ? rowIds.indexOf(openId) : -1;
@@ -64,12 +68,22 @@ export const useFeedbackDetailNavigation = ({
     if (pendingTargetId) open(pendingTargetId);
   }, [pendingTargetId, open]);
 
+  // A page turn that failed goes back to the page holding the open report, so previous/next work again.
+  if (pending && openId === pending.fromId && failed && page === pending.page) {
+    setPending(undefined);
+    setReturnPage(pending.fromPage);
+  }
+  if (returnPage !== undefined && page === returnPage) setReturnPage(undefined);
+  useEffect(() => {
+    if (returnPage !== undefined) onPageChange(returnPage);
+  }, [returnPage, onPageChange]);
+
   if (!openId || pending) return {};
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const fromId = openId;
   const turnPage = (target: number, edge: PendingEdge['edge']) => () => {
-    setPending({ page: target, edge, fromId });
+    setPending({ page: target, edge, fromId, fromPage: page });
     onPageChange(target);
   };
 
