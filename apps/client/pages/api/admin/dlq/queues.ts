@@ -5,11 +5,6 @@ import { getDlqRegistry, getDlqUrl, type RegisteredDlqDescriptor } from '@bike4m
 import { getQueueAttributes } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
 
-/**
- * GET /api/admin/dlq/queues
- *
- * Returns all DLQs with their approximate message counts and replay help.
- */
 // Overlay-contributed entries carry no help fields, so those keys are left undefined.
 function queueMeta(entry: RegisteredDlqDescriptor) {
   return {
@@ -23,6 +18,11 @@ function queueMeta(entry: RegisteredDlqDescriptor) {
   };
 }
 
+/**
+ * GET /api/admin/dlq/queues
+ *
+ * Returns all DLQs with their approximate message counts and replay help.
+ */
 const handler = adminApi({
   adminPermissions: { GET: 'support:read' },
   requiredScopes: [ApiKeyScope.ADMIN],

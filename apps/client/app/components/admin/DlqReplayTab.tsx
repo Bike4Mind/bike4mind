@@ -46,11 +46,13 @@ import {
   DlqReplaySafety,
 } from '@client/app/hooks/data/dlqManagement';
 import { AdminPermissionAction } from './shared/MissingPermission';
+import { StatusChip as AdminStatusChip } from './shared/StatusChip';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 
-const REPLAY_CHIP: Record<DlqReplaySafety, { color: 'success' | 'warning' | 'danger'; label: string }> = {
-  safe: { color: 'success', label: 'Safe to replay' },
-  'side-effects': { color: 'warning', label: 'Replay has side effects' },
-  unsafe: { color: 'danger', label: 'Unsafe to replay' },
+const REPLAY_CHIP: Record<DlqReplaySafety, { tone: AdminStatusTone; label: string }> = {
+  safe: { tone: 'good', label: 'Safe to replay' },
+  'side-effects': { tone: 'warn', label: 'Replay has side effects' },
+  unsafe: { tone: 'bad', label: 'Unsafe to replay' },
 };
 
 const QueueHint: React.FC<{ queue: DlqQueueInfo }> = ({ queue }) => (
@@ -58,9 +60,11 @@ const QueueHint: React.FC<{ queue: DlqQueueInfo }> = ({ queue }) => (
     <Typography level="body-sm">{queue.description}</Typography>
     {queue.replay && (
       <Stack direction="row" spacing={1} alignItems="center">
-        <Chip size="sm" variant="soft" color={REPLAY_CHIP[queue.replay].color} data-testid="dlq-queue-hint-replay">
-          {REPLAY_CHIP[queue.replay].label}
-        </Chip>
+        <AdminStatusChip
+          tone={REPLAY_CHIP[queue.replay].tone}
+          label={REPLAY_CHIP[queue.replay].label}
+          data-testid="dlq-queue-hint-replay"
+        />
         {queue.replayNote && <Typography level="body-sm">{queue.replayNote}</Typography>}
       </Stack>
     )}

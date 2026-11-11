@@ -149,8 +149,10 @@ describe('dlqRegistry', () => {
     });
 
     it('classifies replay safety from what the consumer does', () => {
-      expect(getDlqByLabel('fab-file-vectorize')?.replay).toBe('safe');
-      expect(getDlqByLabel('webhook-delivery')?.replay).not.toBe('safe');
+      expect(getDlqByLabel('fab-file-chunk')?.replay).toBe('safe');
+      expect(getDlqByLabel('fab-file-vectorize')?.replay).toBe('side-effects');
+      expect(getDlqByLabel('webhook-delivery')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('account-data-export')?.replay).toBe('unsafe');
       expect(getDlqByLabel('agent-proactive-message')?.replay).toBe('unsafe');
       expect(getDlqByLabel('email-batch')?.replay).toBe('side-effects');
       expect(getDlqByLabel('email-job')?.replay).toBe('unsafe');

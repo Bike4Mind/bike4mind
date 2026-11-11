@@ -9,11 +9,11 @@ import type { DlqDescriptor, DlqResolvers } from '@bike4mind/infra';
 import * as generatedInfraResources from '../premium-generated/infraResources.generated';
 import { Logger } from '@bike4mind/observability';
 
+// Mirrored by DlqReplaySafety in apps/client/app/hooks/data/dlqManagement.ts; keep both in sync.
 export const DLQ_REPLAY_SAFETY = ['safe', 'side-effects', 'unsafe'] as const;
 /**
- * safe: rerunning recomputes or upserts, with no external or billed effect.
- * side-effects: guarded, but a rerun can spend LLM/image credits or notify once more.
- * unsafe: the consumer sends something external with no dedup guard; a replay can repeat it.
+ * safe: recomputes or upserts, nothing billed or sent. side-effects: can spend credits or send a notice the failed attempt never sent.
+ * unsafe: can repeat a message already delivered to a person or outside system (Slack, email, webhook, chat), or the consumer is not in core.
  */
 export type DlqReplaySafety = (typeof DLQ_REPLAY_SAFETY)[number];
 
@@ -63,8 +63,9 @@ const DLQ_REGISTRY = [
     application: 'FabFileProcessing',
     sourceQueue: 'fabFileVectorizeQueue',
     description: "Embeds a file's chunks so it can be searched from chat and knowledge bases.",
-    replay: 'safe',
-    replayNote: 'A file that is already fully vectorized is skipped, so a replay only finishes the remaining work.',
+    replay: 'side-effects',
+    replayNote:
+      'A file that is already fully vectorized is skipped; an unfinished one embeds its remaining chunks, which reserves embedding credits.',
     owner: 'Knowledge files',
   },
   {
@@ -190,7 +191,7 @@ const DLQ_REGISTRY = [
     application: 'WebhookDelivery',
     sourceQueue: 'webhookDeliveryQueue',
     description: "Sends an event to a customer's webhook endpoint.",
-    replay: 'side-effects',
+    replay: 'unsafe',
     replayNote:
       'The 1-hour dedup cache has usually expired by replay time, so the POST is sent again; receivers can drop it by its stable eventId.',
     owner: 'Integrations',
@@ -223,7 +224,7 @@ const DLQ_REGISTRY = [
     application: 'AccountDataExport',
     sourceQueue: 'accountDataExportQueue',
     description: "Builds a user's account data export and emails them the download link.",
-    replay: 'side-effects',
+    replay: 'unsafe',
     replayNote: 'An export that was already built is not rebuilt, but the ready email is sent again.',
     owner: 'Accounts',
   },
@@ -235,7 +236,7 @@ const DLQ_REGISTRY = [
     description: 'Advances a long-running generation job by one step.',
     replay: 'side-effects',
     replayNote:
-      'Each step reads the stored job state, but a replay can call the model again and send the ready push once more.',
+      'Each step reads the stored job state, but a replay can call the model again. Only the step that claims the finished job sends the ready push.',
     owner: 'Generation jobs',
   },
   {
@@ -255,9 +256,9 @@ const DLQ_REGISTRY = [
     application: 'SreAgent',
     sourceQueue: 'sreFixQueue',
     description: 'Dispatches the SRE agent to open a fix for a tracked error.',
-    replay: 'safe',
+    replay: 'side-effects',
     replayNote:
-      'Dispatch is claimed on the error record before GitHub is called, so a replay after a dispatch is skipped.',
+      'Dispatch is claimed on the error record before GitHub is called, so a replay after a dispatch is skipped. If GitHub is unavailable at replay time, the fix is marked failed and a Slack failure notice is posted.',
     owner: 'Platform ops',
   },
   {
@@ -277,8 +278,9 @@ const DLQ_REGISTRY = [
     application: 'EmailIngestion',
     sourceQueue: 'emailIngestionQueue',
     description: 'Parses an inbound email from storage and files it for the user.',
-    replay: 'safe',
-    replayNote: 'Emails are looked up by Message-ID per user, so mail that was already ingested is not stored twice.',
+    replay: 'side-effects',
+    replayNote:
+      'Mail with a Message-ID that was already ingested for the user is not stored twice. Mail without one gets a new id, so a replay stores it again and queues another billed analysis.',
     owner: 'Email ingestion',
   },
   {
@@ -319,7 +321,7 @@ const DLQ_REGISTRY = [
     application: 'TavernHeartbeat',
     sourceQueue: 'tavernHeartbeatQueue',
     description: 'Processes queued Tavern Heartbeat messages.',
-    replay: 'side-effects',
+    replay: 'unsafe',
     replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
     owner: 'Premium integrations',
   },
@@ -340,7 +342,7 @@ const DLQ_REGISTRY = [
     application: 'SecOpsTriage',
     sourceQueue: 'secopsTriageQueue',
     description: 'Triages recent security alerts into issue tracker tickets.',
-    replay: 'side-effects',
+    replay: 'unsafe',
     replayNote:
       'Matching open issues are updated rather than duplicated, but a replay runs a fresh triage and can post the Slack summary again.',
     owner: 'Security ops',
@@ -351,7 +353,7 @@ const DLQ_REGISTRY = [
     application: 'OverwatchAnalytics',
     sourceQueue: 'overwatchAnalyticsQueue',
     description: 'Processes queued Overwatch Analytics messages.',
-    replay: 'side-effects',
+    replay: 'unsafe',
     replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
     owner: 'Premium integrations',
   },
@@ -372,7 +374,7 @@ const DLQ_REGISTRY = [
     application: 'OptiHashiIntegration',
     sourceQueue: 'optihashiRunCompletionQueue',
     description: 'Processes queued OptiHashi Run Completion messages.',
-    replay: 'side-effects',
+    replay: 'unsafe',
     replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
     owner: 'Premium integrations',
   },
@@ -382,7 +384,7 @@ const DLQ_REGISTRY = [
     application: 'BobIntegration',
     sourceQueue: 'bobRunQueue',
     description: 'Processes queued Bob Panel Run messages.',
-    replay: 'side-effects',
+    replay: 'unsafe',
     replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
     owner: 'Premium integrations',
   },
@@ -392,7 +394,7 @@ const DLQ_REGISTRY = [
     application: 'LibreOncologyIntegration',
     sourceQueue: 'libreoncologyAudioRenderQueue',
     description: 'Processes queued LibreOncology Audio Render messages.',
-    replay: 'side-effects',
+    replay: 'unsafe',
     replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
     owner: 'Premium integrations',
   },
@@ -434,8 +436,9 @@ const DLQ_REGISTRY = [
     application: 'Signup',
     sourceQueue: 'riskEvidenceQueue',
     description: "Rebuilds an account's activity evidence summary off the request path.",
-    replay: 'safe',
-    replayNote: 'The summary is recomputed from stored activity, so a replay only refreshes it.',
+    replay: 'side-effects',
+    replayNote:
+      'The summary is recomputed from stored activity. A signup replay also runs the linked-account check the failed attempt skipped, which can contain the account; an account the check already recorded is skipped.',
     owner: 'Account security',
   },
   {
