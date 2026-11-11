@@ -69,7 +69,20 @@ describe('sharedLinkKinds', () => {
     expect(sharedLinkKinds({ ...base, email: 'a@hotmail.co.uk' }, { ...base, email: 'b@hotmail.co.uk' })).toEqual([]);
   });
 
-  it('links a shared signup IP or JA4, and never on two unknowns', () => {
+  it('never links a shared privacy-relay domain', () => {
+    for (const domain of [
+      'privaterelay.appleid.com',
+      'mozmail.com',
+      'simplelogin.com',
+      'addy.io',
+      'protonmail.ch',
+      'fastmail.fm',
+    ]) {
+      expect(sharedLinkKinds({ ...base, email: `a@${domain}` }, { ...base, email: `b@${domain}` })).toEqual([]);
+    }
+  });
+
+  it('links a shared signup IP, with a shared JA4 beside it, and never on two unknowns', () => {
     expect(
       sharedLinkKinds(
         { ...base, signupIp: '198.51.100.4', signupJa4: 'ja4_a' },
@@ -77,6 +90,10 @@ describe('sharedLinkKinds', () => {
       )
     ).toEqual(['signupIp', 'ja4']);
     expect(sharedLinkKinds(base, base)).toEqual([]);
+  });
+
+  it('never links on a shared JA4 alone', () => {
+    expect(sharedLinkKinds({ ...base, signupJa4: 'ja4_a' }, { ...base, signupJa4: 'ja4_a' })).toEqual([]);
   });
 });
 
@@ -89,8 +106,9 @@ describe('groupLinkedAccounts', () => {
       { id: 'd', email: 'other@gmail.com', signupIp: null, signupJa4: 'ja4_z' },
     ]);
     expect(groups).toEqual([
-      { memberIds: ['a', 'c', 'd'], kinds: ['ja4', 'mailbox'] },
+      { memberIds: ['a', 'c'], kinds: ['mailbox'] },
       { memberIds: ['b'], kinds: [] },
+      { memberIds: ['d'], kinds: [] },
     ]);
   });
 });

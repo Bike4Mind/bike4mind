@@ -11,6 +11,8 @@ import {
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const SIGNUP = new Date('2026-11-01T10:00:00Z');
+// The start of the 30-day spend read, for a profile built a day after signup.
+const SPEND_SINCE = new Date('2026-10-03T00:00:00Z');
 
 // The shape of a confirmed signup-farm account: VPN egress, plus-addressed webmail with a random tag,
 // two-factor within minutes, the grant drained on one expensive model within the hour.
@@ -54,6 +56,7 @@ const spend = {
 describe('buildAccountProfile', () => {
   it('reduces a farm-shaped account to flags, minutes and counts', () => {
     const profile = buildAccountProfile({
+      spendSince: SPEND_SINCE,
       account: farmAccount(),
       spend,
       links: {
@@ -101,6 +104,7 @@ describe('buildAccountProfile', () => {
 
   it('carries no address, IP, fingerprint or account id', () => {
     const profile = buildAccountProfile({
+      spendSince: SPEND_SINCE,
       account: farmAccount({ signupJa4: 't13d1516h2_secret' }),
       spend,
       links: { windowHours: 72, truncated: false, isBlocked: () => false, candidates: [candidate({ id: 'b1' })] },
@@ -114,6 +118,7 @@ describe('buildAccountProfile', () => {
   it('leaves unknowns null: no two-factor, no spend, an unchecked network, unread links', () => {
     expect(
       buildAccountProfile({
+        spendSince: SPEND_SINCE,
         account: farmAccount({
           totpEnabled: false,
           signupMethod: 'google',
@@ -135,8 +140,37 @@ describe('buildAccountProfile', () => {
     });
   });
 
+  it('leaves the first spend unknown for an account older than the spend read', () => {
+    const profile = buildAccountProfile({
+      spendSince: SPEND_SINCE,
+      account: farmAccount({ createdAt: new Date('2026-09-01T00:00:00Z') }),
+      spend,
+      links: null,
+    });
+    expect(profile.minutesToFirstSpend).toBeNull();
+  });
+
+  it('does not link accounts that share only a JA4', () => {
+    const profile = buildAccountProfile({
+      spendSince: SPEND_SINCE,
+      account: farmAccount({ signupJa4: 't13d1516h2_a' }),
+      spend: null,
+      links: {
+        windowHours: 72,
+        truncated: false,
+        isBlocked: () => false,
+        candidates: [
+          candidate({ id: 'b1', signupJa4: 't13d1516h2_a' }),
+          candidate({ id: 'b2', signupJa4: 't13d1516h2_a', signupIp: '198.51.100.4' }),
+        ],
+      },
+    });
+    expect(profile.linkedAccounts).toMatchObject({ total: 1, sharedSignupIp: 1, sharedJa4: 1 });
+  });
+
   it('reads a residential signup as not hosting', () => {
     const profile = buildAccountProfile({
+      spendSince: SPEND_SINCE,
       account: farmAccount({ signupDatacenter: false, signupWafAnonIp: false }),
       spend: null,
       links: null,
@@ -171,6 +205,14 @@ describe('loadAccountProfiles', () => {
       limit: LINK_CANDIDATE_LIMIT,
     });
     expect(profiles.get('65f0000000000000000000a1')?.minutesToFirstSpend).toBe(12);
+  });
+
+  it('never searches by JA4 alone', async () => {
+    const d = deps({
+      findAccountRiskProfiles: vi.fn().mockResolvedValue([farmAccount({ signupJa4: 't13d1516h2_a' })]),
+    });
+    await loadAccountProfiles(['65f0000000000000000000a1'], d);
+    expect(d.findSignupLinkCandidates).toHaveBeenCalledWith(expect.objectContaining({ ja4: null }));
   });
 
   it('marks a full candidate page as truncated', async () => {

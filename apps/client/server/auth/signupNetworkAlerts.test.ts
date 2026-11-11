@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   findRecentSignupsOnIp: vi.fn(),
   findLinkStatesByIds: vi.fn(),
   spendProfileByUsers: vi.fn(),
+  deletedSignupCounts: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -28,6 +29,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   authEventRepository: { findRecentSignupsOnIp: mocks.findRecentSignupsOnIp },
   usageEventRepository: { spendProfileByUsers: mocks.spendProfileByUsers },
+  signupTraceRepository: { recentDistinctSignups: mocks.deletedSignupCounts },
   userApiKeyRepository: { update: mocks.userWrite, revokeAllForUser: mocks.userWrite },
   creditTransactionRepository: { create: mocks.userWrite },
 }));
@@ -238,6 +240,7 @@ describe('alertSignupNetworkBurst', () => {
     mocks.findRecentSignupsOnIp.mockReset().mockResolvedValue([]);
     mocks.findLinkStatesByIds.mockReset().mockResolvedValue([]);
     mocks.spendProfileByUsers.mockReset().mockResolvedValue({});
+    mocks.deletedSignupCounts.mockReset().mockResolvedValue({ ipSignups: 0, prefixSignups: null, asnSignups: null });
     vi.spyOn(Logger.globalInstance, 'error').mockImplementation(mocks.loggerError);
   });
 
@@ -457,6 +460,20 @@ describe('alertSignupNetworkBurst', () => {
     );
   });
 
+  it('fires when the other signup on the IP belongs to an account deleted since', async () => {
+    mocks.countRecentSignups.mockResolvedValue({ ipSignups: 2, prefixSignups: null, asnSignups: null });
+    mocks.deletedSignupCounts.mockResolvedValue({ ipSignups: 1, prefixSignups: null, asnSignups: null });
+    await alertSignupNetworkBurst({ network: CONSUMER, userId: 'u1', method: 'otc' });
+    expect(mocks.deletedSignupCounts).toHaveBeenCalledWith(
+      expect.objectContaining({ ipHash: 'hash:203.0.113.7', prefixHash: null, asn: null })
+    );
+    expect(mocks.recordShadowDetection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signals: expect.arrayContaining([expect.objectContaining({ key: 'siblingDeleted', observed: 1 })]),
+      })
+    );
+  });
+
   it('does not read corroboration when the count decides alone', async () => {
     mocks.countRecentSignups.mockResolvedValue({ ipSignups: 3, prefixSignups: null, asnSignups: null });
     await alertSignupNetworkBurst({ network: CONSUMER, userId: 'u1', method: 'otc' });
@@ -554,10 +571,12 @@ describe('readIpCorroboration', () => {
     siblings: { userId: string; ja4: string | null }[];
     emails?: { id: string; email: string | null }[];
     spend?: Record<string, { totalCredits: number }>;
+    deletedSignups?: number | null;
   }) => ({
     findRecentSignupsOnIp: vi.fn().mockResolvedValue(input.siblings),
     findEmails: vi.fn().mockResolvedValue(input.emails ?? []),
     spendSince: vi.fn().mockResolvedValue(input.spend ?? {}),
+    countDeletedSignupsOnIp: vi.fn().mockResolvedValue(input.deletedSignups === undefined ? 0 : input.deletedSignups),
   });
 
   it('finds nothing for unrelated household signups', async () => {
@@ -619,6 +638,40 @@ describe('readIpCorroboration', () => {
         { id: 'u0', email: 'b@gmail.com' },
       ])
     ).toEqual([]);
+  });
+
+  it('counts a deleted account that signed up on the IP, even with no live sibling left', async () => {
+    const network = { ip: '198.51.100.4', ja4: null };
+    const d = deps({ siblings: [], deletedSignups: 1 });
+    expect(await readIpCorroboration({ network, userId: 'u1', ...window, deps: d })).toEqual(['siblingDeleted']);
+    expect(d.countDeletedSignupsOnIp).toHaveBeenCalledWith({ ip: '198.51.100.4', ...window });
+    expect(
+      await readIpCorroboration({
+        network,
+        userId: 'u1',
+        ...window,
+        deps: deps({ siblings: [], deletedSignups: null }),
+      })
+    ).toEqual(['siblingDeleted']);
+    expect(
+      await readIpCorroboration({ network, userId: 'u1', ...window, deps: deps({ siblings: [], deletedSignups: 0 }) })
+    ).toEqual([]);
+  });
+
+  it('never counts a shared privacy-relay domain', async () => {
+    const result = await readIpCorroboration({
+      network: { ip: '198.51.100.4', ja4: null },
+      userId: 'u1',
+      ...window,
+      deps: deps({
+        siblings: [{ userId: 'u0', ja4: null }],
+        emails: [
+          { id: 'u1', email: 'a1b2@privaterelay.appleid.com' },
+          { id: 'u0', email: 'c3d4@privaterelay.appleid.com' },
+        ],
+      }),
+    });
+    expect(result).toEqual([]);
   });
 
   it('rejects when the account or spend read fails, so the caller can fall back', async () => {

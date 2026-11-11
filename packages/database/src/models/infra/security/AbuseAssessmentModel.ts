@@ -103,6 +103,20 @@ type LeanAbuseAssessment = Omit<IAbuseAssessmentDocument, keyof Document> & { _i
 
 export type LatestJudgedAssessment = Pick<AbuseAssessmentItem, 'detectionId' | 'result' | 'confidence' | 'assessedAt'>;
 
+/**
+ * Drops undefined-valued keys at any depth. The driver stores an undefined key as null, which the
+ * summary contract (optional, never nullable) rejects when the saved row is read back.
+ */
+function withoutUndefinedKeys<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(withoutUndefinedKeys) as T;
+  if (value === null || typeof value !== 'object' || value instanceof Date) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, entry]) => entry !== undefined)
+      .map(([key, entry]) => [key, withoutUndefinedKeys(entry)])
+  ) as T;
+}
+
 const toItem = (doc: LeanAbuseAssessment): AbuseAssessmentItem => ({
   id: doc._id.toString(),
   detectionId: doc.detectionId,
@@ -132,10 +146,13 @@ export class AbuseAssessmentRepository {
 
   /** Writes the latest result for a cache key and counts the attempt; a judgment replaces an unknown. */
   async save(input: SaveAbuseAssessmentInput): Promise<AbuseAssessmentItem> {
-    const { cacheKey, model: decisionModel, reasons = [], ...fields } = input;
+    const { cacheKey, model: decisionModel, reasons = [], featureSummary, ...fields } = input;
     const doc = await AbuseAssessmentModel.findOneAndUpdate(
       { cacheKey },
-      { $set: { ...fields, reasons, decisionModel }, $inc: { attempts: 1 } },
+      {
+        $set: { ...fields, featureSummary: withoutUndefinedKeys(featureSummary), reasons, decisionModel },
+        $inc: { attempts: 1 },
+      },
       { upsert: true, new: true, lean: true }
     );
     return toItem(doc as unknown as LeanAbuseAssessment);

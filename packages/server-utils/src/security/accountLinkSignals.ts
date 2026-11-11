@@ -37,6 +37,7 @@ export const CONSUMER_MAIL_DOMAINS: ReadonlySet<string> = new Set([
   'aol.com',
   'proton.me',
   'protonmail.com',
+  'protonmail.ch',
   'pm.me',
   'gmx.com',
   'gmx.de',
@@ -52,6 +53,7 @@ export const CONSUMER_MAIL_DOMAINS: ReadonlySet<string> = new Set([
   'naver.com',
   'zoho.com',
   'fastmail.com',
+  'fastmail.fm',
   'tutanota.com',
 ]);
 
@@ -100,7 +102,7 @@ export type AccountLinkKeys = {
   ja4: string | null;
   /** The delivering inbox (plus tags and Gmail dots folded), see canonicalizeEmail. */
   mailbox: string | null;
-  /** Only for a non-consumer domain; null otherwise. */
+  /** Only for a domain one organization owns: null for consumer mail and privacy relays. */
   mailDomain: string | null;
 };
 
@@ -110,18 +112,22 @@ export function accountLinkKeys(account: Omit<LinkableAccount, 'id'>): AccountLi
     signupIp: account.signupIp || null,
     ja4: account.signupJa4 || null,
     mailbox: account.email ? canonicalizeEmail(account.email) : null,
-    mailDomain: domain && !isConsumerMailDomain(domain) ? domain : null,
+    mailDomain: domain && !isConsumerMailDomain(domain) && !userService.isPrivacyRelayDomain(domain) ? domain : null,
   };
 }
 
-/** The traits two accounts share; empty when unrelated. */
+/**
+ * The traits two accounts share; empty when unrelated. A JA4 is shared by everyone on the same
+ * browser build, so it is reported only beside another shared trait and never links on its own.
+ */
 export function sharedLinkKinds(a: Omit<LinkableAccount, 'id'>, b: Omit<LinkableAccount, 'id'>): AccountLinkKind[] {
   const keysA = accountLinkKeys(a);
   const keysB = accountLinkKeys(b);
-  return ACCOUNT_LINK_KINDS.filter(kind => {
+  const shared = ACCOUNT_LINK_KINDS.filter(kind => {
     const value = keysA[kind];
     return value !== null && value === keysB[kind];
   });
+  return shared.some(kind => kind !== 'ja4') ? shared : [];
 }
 
 export type LinkedAccountGroup = { memberIds: string[]; kinds: AccountLinkKind[] };

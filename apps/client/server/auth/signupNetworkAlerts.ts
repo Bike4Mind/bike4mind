@@ -5,6 +5,7 @@ import {
   authEventRepository,
   cacheRepository,
   shadowDetectionRepository,
+  signupTraceRepository,
   usageEventRepository,
   userRepository,
   type RecordShadowDetectionInput,
@@ -74,6 +75,8 @@ export const SIGNUP_NETWORK_CORROBORATIONS = [
   'sharedMailDomain',
   /** An earlier signup on the IP already spent credits in the window. */
   'siblingSpent',
+  /** An account that signed up on the IP in the window has since been deleted (a SignupTrace). */
+  'siblingDeleted',
 ] as const;
 export type SignupNetworkCorroboration = (typeof SIGNUP_NETWORK_CORROBORATIONS)[number];
 
@@ -83,6 +86,7 @@ const CORROBORATION_LABELS: Record<SignupNetworkCorroboration, string> = {
   sharedMailbox: 'Shares a mailbox with an earlier signup on this IP',
   sharedMailDomain: 'Shares a mail domain with an earlier signup on this IP',
   siblingSpent: 'An earlier signup on this IP already spent credits',
+  siblingDeleted: 'An account that signed up on this IP was already deleted',
 };
 
 // Enterprise SSO (Okta, SAML) onboards whole teams from one office network by design.
@@ -306,12 +310,27 @@ export type SignupCorroborationDeps = {
   }) => Promise<{ userId: string; ja4: string | null }[]>;
   findEmails: (ids: string[]) => Promise<{ id: string; email: string | null }[]>;
   spendSince: (ids: string[], since: Date) => Promise<Record<string, { totalCredits: number }>>;
+  /** Deleted accounts that signed up on the IP in [since, until); null when the scan was truncated. */
+  countDeletedSignupsOnIp: (input: { ip: string; since: Date; until: Date }) => Promise<number | null>;
 };
 
 const liveCorroborationDeps: SignupCorroborationDeps = {
   findRecentSignupsOnIp: input => authEventRepository.findRecentSignupsOnIp(input),
   findEmails: ids => userRepository.findLinkStatesByIds(ids),
   spendSince: (ids, since) => usageEventRepository.spendProfileByUsers(ids, since, 1),
+  countDeletedSignupsOnIp: async ({ ip, since, until }) => {
+    const { ipHash } = hashSignupNetwork(ip);
+    if (!ipHash) return 0;
+    const counts = await signupTraceRepository.recentDistinctSignups({
+      since,
+      until,
+      ipHash,
+      prefixHash: null,
+      asn: null,
+      maxRows: MAX_COUNTED_ROWS,
+    });
+    return counts.ipSignups;
+  },
 };
 
 /**
@@ -327,14 +346,20 @@ export async function readIpCorroboration(input: {
 }): Promise<SignupNetworkCorroboration[]> {
   const { network, userId, since, until, deps = liveCorroborationDeps } = input;
   if (!network.ip) return [];
-  const siblings = await deps.findRecentSignupsOnIp({
-    ip: network.ip,
-    excludeUserId: userId,
-    since,
-    until,
-    limit: CORROBORATION_SIBLING_LIMIT,
-  });
-  if (siblings.length === 0) return [];
+  // Deleted accounts still count toward the IP's burst (SignupTrace) but have no AuthEvent rows left
+  // to compare, so their presence is the corroboration.
+  const [siblings, deletedSignups] = await Promise.all([
+    deps.findRecentSignupsOnIp({
+      ip: network.ip,
+      excludeUserId: userId,
+      since,
+      until,
+      limit: CORROBORATION_SIBLING_LIMIT,
+    }),
+    deps.countDeletedSignupsOnIp({ ip: network.ip, since, until }),
+  ]);
+  const siblingDeleted = deletedSignups === null || deletedSignups > 0;
+  if (siblings.length === 0) return siblingDeleted ? ['siblingDeleted'] : [];
   const siblingIds = [...new Set(siblings.map(sibling => sibling.userId))];
   const [accounts, spend] = await Promise.all([
     deps.findEmails([userId, ...siblingIds]),
@@ -353,6 +378,7 @@ export async function readIpCorroboration(input: {
   if (mailKinds.includes('mailbox')) found.add('sharedMailbox');
   if (mailKinds.includes('mailDomain')) found.add('sharedMailDomain');
   if (siblingIds.some(id => (spend[id]?.totalCredits ?? 0) > 0)) found.add('siblingSpent');
+  if (siblingDeleted) found.add('siblingDeleted');
   return SIGNUP_NETWORK_CORROBORATIONS.filter(signal => found.has(signal));
 }
 

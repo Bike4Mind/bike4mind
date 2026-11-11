@@ -98,9 +98,12 @@ function linkedAccountsOf(
 export function buildAccountProfile(input: {
   account: UserAccountRiskProfile;
   spend: IUserSpendProfile | null;
+  /** Where the spend read starts; its first spend is the account's first only if it signed up after. */
+  spendSince: Date;
   links: LinkedAccountsInput | null;
 }): AbuseAssessmentAccountProfile {
-  const { account, spend, links } = input;
+  const { account, spend, spendSince, links } = input;
+  const signedUpInSpendWindow = !!account.createdAt && account.createdAt >= spendSince;
   const hosting =
     account.signupDatacenter === true || account.signupWafAnonIp === true
       ? true
@@ -119,7 +122,7 @@ export function buildAccountProfile(input: {
     },
     email,
     minutesToTwoFactor: account.totpEnabled ? minutesBetween(account.createdAt, account.mfaSetupAt) : null,
-    minutesToFirstSpend: minutesBetween(account.createdAt, spend?.firstSpendAt ?? null),
+    minutesToFirstSpend: signedUpInSpendWindow ? minutesBetween(account.createdAt, spend?.firstSpendAt ?? null) : null,
     spend: spendOf(spend),
     linkedAccounts: links ? linkedAccountsOf(account, links) : null,
   };
@@ -162,7 +165,8 @@ async function linksFor(
     from: new Date(account.createdAt.getTime() - windowHours * HOUR_MS),
     to: new Date(account.createdAt.getTime() + windowHours * HOUR_MS),
     ip: keys.signupIp,
-    ja4: keys.ja4,
+    // A JA4 never links on its own (sharedLinkKinds), so JA4-only matches would just fill the limit.
+    ja4: null,
     mailbox: account.email ? mailboxAliasesOf(account.email) : null,
     mailDomain: keys.mailDomain,
     limit: LINK_CANDIDATE_LIMIT,
@@ -186,9 +190,10 @@ export async function loadAccountProfiles(
   logger?: Logger
 ): Promise<Map<string, AbuseAssessmentAccountProfile>> {
   if (ids.length === 0) return new Map();
+  const spendSince = new Date(deps.now().getTime() - SPEND_LOOKBACK_MS);
   const [accounts, spend, windowHours] = await Promise.all([
     deps.findAccountRiskProfiles([...ids]),
-    deps.spendProfileByUsers([...ids], new Date(deps.now().getTime() - SPEND_LOOKBACK_MS)),
+    deps.spendProfileByUsers([...ids], spendSince),
     deps.loadLinkWindowHours(),
   ]);
   const profiles = await Promise.all(
@@ -199,7 +204,10 @@ export async function loadAccountProfiles(
         });
         return null;
       });
-      return [account.id, buildAccountProfile({ account, spend: spend[account.id] ?? null, links })] as const;
+      return [
+        account.id,
+        buildAccountProfile({ account, spend: spend[account.id] ?? null, spendSince, links }),
+      ] as const;
     })
   );
   return new Map(profiles);
