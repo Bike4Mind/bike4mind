@@ -27,8 +27,9 @@ export const formatAiProbability = (probability: number): string => `${Math.roun
 
 export type AiSuggestionReason = { text: string; evidenceHref?: string };
 
-// Reasons may be model-written, so only an in-app path becomes a link.
-const isInAppPath = (href: string): boolean => /^\/(?![/\\])/.test(href);
+// Reasons may be model-written, so only an in-app path becomes a link. URL parsing drops tabs and
+// newlines anywhere, so "/<tab>/host" would resolve as the protocol-relative "//host".
+const isInAppPath = (href: string): boolean => /^\/(?![/\\])[^\t\n\r]*$/.test(href);
 
 export type AiSuggestionData = {
   id: string;

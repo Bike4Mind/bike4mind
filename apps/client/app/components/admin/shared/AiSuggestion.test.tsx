@@ -79,20 +79,25 @@ describe('AiSuggestion display', () => {
     expect(screen.getByTestId('sug-meta')).toHaveTextContent('5 minutes ago');
   });
 
-  it.each(['https://example.com/x', '//example.com/x', '/\\example.com/x', 'data:text/html,x', 'javascript:alert(1)'])(
-    'renders a reason with the non-app href %s as plain text',
-    evidenceHref => {
-      renderThemed(
-        <AiSuggestion
-          variant="detail"
-          suggestion={suggestion({ reasons: [{ text: 'Seen', evidenceHref }] })}
-          data-testid="sug"
-        />
-      );
-      expect(screen.getByTestId('sug-reason-0')).toHaveTextContent('Seen');
-      expect(screen.getByTestId('sug-reason-0').querySelector('a')).toBeNull();
-    }
-  );
+  it.each([
+    'https://example.com/x',
+    '//example.com/x',
+    '/\\example.com/x',
+    '/\t/example.com/x',
+    '/\n/example.com/x',
+    'data:text/html,x',
+    'javascript:alert(1)',
+  ])('renders a reason with the non-app href %s as plain text', evidenceHref => {
+    renderThemed(
+      <AiSuggestion
+        variant="detail"
+        suggestion={suggestion({ reasons: [{ text: 'Seen', evidenceHref }] })}
+        data-testid="sug"
+      />
+    );
+    expect(screen.getByTestId('sug-reason-0')).toHaveTextContent('Seen');
+    expect(screen.getByTestId('sug-reason-0').querySelector('a')).toBeNull();
+  });
 
   it('caps the reasons at three', () => {
     const reasons = ['a', 'b', 'c', 'd'].map(text => ({ text }));
