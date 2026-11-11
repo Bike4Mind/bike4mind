@@ -25,11 +25,20 @@ vi.mock('@client/app/hooks/data/mcpServers', () => ({
   useMcpServers: () => ({
     data: [
       { name: 'GitHub', enabled: true, tools: ['create_issue'] },
+      { name: 'Notion', enabled: true, tools: ['search', 'delete_page'] },
       { name: 'off', enabled: false, tools: ['hidden'] },
     ],
   }),
 }));
 vi.mock('@client/app/hooks/data/agents', () => ({ useGetAgents: () => ({ data: [{ id: 'a1', name: 'Alpha' }] }) }));
+vi.mock('@client/app/hooks/data/skills', () => ({
+  useGetSkills: () => ({
+    data: [
+      { id: 's1', name: 'review-checklist' },
+      { id: 's2', name: 'release-notes' },
+    ],
+  }),
+}));
 vi.mock('@client/app/components/Agent/OrchestrationSection', () => ({
   PICKABLE_TOOLS: ['web_search', 'weather_info'],
 }));
@@ -528,6 +537,70 @@ describe('LoopFormModal stage settings', () => {
           },
         ],
       }),
+      expect.anything()
+    );
+  });
+
+  it("groups MCP tools by server; All picks exactly that server's current tools", () => {
+    renderForm(saved as never);
+    fireEvent.click(screen.getByRole('combobox', { name: /tools/i }));
+    const all = within(screen.getByRole('listbox')).getByTestId('loop-form-tools-server-all-notion');
+    expect(all.parentElement).toHaveTextContent('Notion');
+    fireEvent.click(all);
+    expect(screen.queryByTestId('loop-form-tools-new-hint')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ tools: ['notion__search', 'notion__delete_page'] }),
+      expect.anything()
+    );
+  });
+
+  it('hints at unpicked tools on a picked server, on the loop and stage pickers', () => {
+    renderForm({
+      ...saved,
+      tools: ['notion__search'],
+      stageConfig: [{ stage: 'todo', tools: ['github__create_issue'] }],
+    } as never);
+    expect(screen.getByTestId('loop-form-tools-new-hint')).toHaveTextContent(
+      '1 new tool on Notion; not used until you pick them'
+    );
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    // The stage picked all of GitHub, so only the loop picker hints.
+    expect(screen.getAllByTestId('loop-form-tools-new-hint')).toHaveLength(1);
+    fireEvent.click(within(screen.getByTestId('loop-form-stage-tools-0')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'Notion: search' }));
+    expect(screen.getAllByTestId('loop-form-tools-new-hint')).toHaveLength(2);
+  });
+
+  it("defaults a stage's agent to the loop's and its skills to none, and sends picked ones", () => {
+    renderForm(saved as never);
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    expect(within(screen.getByTestId('loop-form-stage-agent-0')).getByRole('combobox')).toHaveTextContent(
+      'Same as loop'
+    );
+    expect(within(screen.getByTestId('loop-form-stage-skills-0')).getByRole('combobox')).toHaveTextContent('None');
+    pick('loop-form-stage-agent-0', 'Alpha');
+    pick('loop-form-stage-skills-1', 'release-notes');
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stageConfig: [
+          { stage: 'todo', agentId: 'a1' },
+          { stage: 'review', skills: ['s2'] },
+        ],
+      }),
+      expect.anything()
+    );
+  });
+
+  it('hides the agent picker on a desktop stage and drops a picked agent there', () => {
+    renderForm({ ...saved, stageConfig: [{ stage: 'todo', agentId: 'a1', skills: ['s1'] }] } as never);
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    pick('loop-form-stage-runner-0', 'Desktop');
+    expect(screen.queryByTestId('loop-form-stage-agent-0')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ stageConfig: [{ stage: 'todo', skills: ['s1'], runner: 'desktop' }] }),
       expect.anything()
     );
   });

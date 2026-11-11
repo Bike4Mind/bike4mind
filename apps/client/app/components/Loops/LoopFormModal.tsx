@@ -14,6 +14,7 @@ import {
   Input,
   List,
   ListItem,
+  ListSubheader,
   Modal,
   ModalDialog,
   Option,
@@ -41,6 +42,7 @@ import { PICKABLE_TOOLS } from '@client/app/components/Agent/OrchestrationSectio
 import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useGetAgents } from '@client/app/hooks/data/agents';
+import { useGetSkills } from '@client/app/hooks/data/skills';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { unavailableTools, unavailableToolsMessage } from '@client/app/components/Loops/loopUi';
@@ -61,6 +63,7 @@ const STAGE_NAME_MAX = 60;
 const OVERSEES_MAX = 5;
 const HANDOFF_TARGETS_MAX = 10;
 const STAGE_INSTRUCTIONS_MAX = 4000;
+const STAGE_SKILLS_MAX = 10;
 const INTERVAL_MIN = 5;
 const INTERVAL_MAX = 10_080;
 // Mirrors validateLoopStages (apps/client/server/utils/loopValidation.ts): the last stage means closed.
@@ -240,6 +243,8 @@ export function validateLoopForm(
       ...(settings.model && { model: settings.model }),
       ...(settings.escalationModel && { escalationModel: settings.escalationModel }),
       ...(settings.tools?.length && { tools: settings.tools }),
+      ...(settings.agentId && settings.runner !== 'desktop' && { agentId: settings.agentId }),
+      ...(settings.skills?.length && { skills: settings.skills }),
       ...(settings.runner && { runner: settings.runner }),
       ...(settings.runner === 'desktop' && desktopGuards(settings)),
     };
@@ -248,6 +253,8 @@ export function validateLoopForm(
       errors.stageConfig ??= `${stage}: instructions must be ${STAGE_INSTRUCTIONS_MAX} characters or fewer`;
     } else if ((settings.tools?.length ?? 0) > TOOLS_MAX) {
       errors.stageConfig ??= `${stage}: pick ${TOOLS_MAX} tools or fewer`;
+    } else if ((settings.skills?.length ?? 0) > STAGE_SKILLS_MAX) {
+      errors.stageConfig ??= `${stage}: pick ${STAGE_SKILLS_MAX} skills or fewer`;
     }
     stageConfig.push(entry);
   }
@@ -380,6 +387,7 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
   const [newStage, setNewStage] = useState('');
   const { data: mcpServers = [] } = useMcpServers();
   const { data: agents = [] } = useGetAgents();
+  const { data: skills = [] } = useGetSkills();
   const { accessibleTextModels } = useAccessibleModels();
   const { data: loops = [], isSuccess: loopsLoaded } = useLoops();
   const toolAvailability = useConfig().data?.toolAvailability;
@@ -411,25 +419,59 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
     }));
 
   // The executor names MCP tools `<lowercased server>__<tool>` (toolGenerators generateMcpToolsFromCache).
-  const mcpTools = mcpServers
+  const mcpGroups = mcpServers
     .filter(server => server.enabled)
-    .flatMap(server =>
-      server.tools.map(tool => ({ value: `${server.name.toLowerCase()}__${tool}`, label: `${server.name}: ${tool}` }))
-    );
-  // Shared by the loop and per-stage tools pickers so both always offer the same list.
-  const toolOptions = (selected: string[]) => [
+    .map(server => ({
+      name: server.name,
+      prefix: server.name.toLowerCase(),
+      tools: server.tools.map(tool => ({
+        value: `${server.name.toLowerCase()}__${tool}`,
+        label: `${server.name}: ${tool}`,
+      })),
+    }));
+  // Shared by the loop and per-stage tools pickers so both always offer the same list. "All" adds the server's
+  // tools as they are now, by name: a tool the server gains later stays off until picked (see newToolsHint).
+  const toolOptions = (selected: string[], onChange: (tools: string[]) => void) => [
     ...PICKABLE_TOOLS.filter(tool => !missingTools.includes(tool) || selected.includes(tool)).map(tool => (
       <Option key={tool} value={tool}>
         {getToolDisplayName(tool)}
         {missingTools.includes(tool) && ' (unavailable)'}
       </Option>
     )),
-    ...mcpTools.map(tool => (
-      <Option key={tool.value} value={tool.value}>
-        {tool.label}
-      </Option>
-    )),
+    ...mcpGroups.flatMap(server => [
+      <ListSubheader key={`server-${server.prefix}`} sx={{ justifyContent: 'space-between' }}>
+        {server.name}
+        <Button
+          size="sm"
+          variant="plain"
+          // Keeps the listbox open.
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => onChange([...new Set([...selected, ...server.tools.map(tool => tool.value)])])}
+          data-testid={`loop-form-tools-server-all-${server.prefix}`}
+        >
+          All
+        </Button>
+      </ListSubheader>,
+      ...server.tools.map(tool => (
+        <Option key={tool.value} value={tool.value}>
+          {tool.label}
+        </Option>
+      )),
+    ]),
   ];
+  // Servers with some tools picked and some not: usually tools added since the pick.
+  const newToolsHint = (selected: string[]) => {
+    const notes = mcpGroups.flatMap(server => {
+      const unpicked = server.tools.filter(tool => !selected.includes(tool.value)).length;
+      const picked = server.tools.length - unpicked;
+      return picked > 0 && unpicked > 0
+        ? [`${unpicked} new tool${unpicked === 1 ? '' : 's'} on ${server.name}; not used until you pick them`]
+        : [];
+    });
+    return notes.length > 0 ? (
+      <FormHelperText data-testid="loop-form-tools-new-hint">{notes.join('. ')}</FormHelperText>
+    ) : null;
+  };
   // Shared by every model picker. A saved model the picker no longer lists stays selectable, so an edit never drops it.
   const modelOptions = (selected: string | undefined, emptyLabel: string) => [
     <Option key="" value="">
@@ -550,8 +592,9 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
               slotProps={{ listbox: { sx: { maxHeight: 320, overflow: 'auto' } } }}
               data-testid="loop-form-tools-select"
             >
-              {toolOptions(values.tools)}
+              {toolOptions(values.tools, tools => set('tools', tools))}
             </Select>
+            {newToolsHint(values.tools)}
             {errors.tools || pickedMissing.length === 0 ? (
               <FormHelperText>
                 {errors.tools ?? 'Runs are unattended, so the tools picked here are pre-approved for every run.'}
@@ -733,8 +776,43 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
                           slotProps={{ listbox: { sx: { maxHeight: 320, overflow: 'auto' } } }}
                           data-testid={`loop-form-stage-tools-${i}`}
                         >
-                          {toolOptions(settings.tools ?? [])}
+                          {toolOptions(settings.tools ?? [], tools => setStage(stage, { tools }))}
                         </Select>
+                        {newToolsHint(settings.tools ?? [])}
+                      </FormControl>
+                      {settings.runner !== 'desktop' && (
+                        <FormControl>
+                          <FormLabel>Agent</FormLabel>
+                          <Select
+                            value={settings.agentId ?? ''}
+                            onChange={(_, agentId) => setStage(stage, { agentId: agentId || undefined })}
+                            data-testid={`loop-form-stage-agent-${i}`}
+                          >
+                            <Option value="">Same as loop</Option>
+                            {agents.map(agent => (
+                              <Option key={agent.id} value={agent.id}>
+                                {agent.name}
+                              </Option>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      )}
+                      <FormControl>
+                        <FormLabel>Skills</FormLabel>
+                        <Select
+                          multiple
+                          placeholder="None"
+                          value={settings.skills ?? []}
+                          onChange={(_, picked) => setStage(stage, { skills: picked })}
+                          data-testid={`loop-form-stage-skills-${i}`}
+                        >
+                          {skills.map(skill => (
+                            <Option key={skill.id} value={skill.id}>
+                              {skill.name}
+                            </Option>
+                          ))}
+                        </Select>
+                        <FormHelperText>Added to the prompt of runs working a ticket in this stage.</FormHelperText>
                       </FormControl>
                       <FormControl>
                         <FormLabel>Instructions</FormLabel>
