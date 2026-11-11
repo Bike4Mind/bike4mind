@@ -93,11 +93,12 @@ export class SkillMarket {
     return { listings: toListings(asRecord(read.data)?.data), hasMore: false };
   }
 
-  /** By id, or by an unlisted listing's share token (with or without the id), like the web. */
+  /** By an unlisted listing's share token when one is given, else by id; the id route ignores share tokens. */
   async listing(ref: SkillMarketListingRef): Promise<SkillMarketDetailResult> {
     if (typeof ref.id !== 'string' && typeof ref.token !== 'string') return { error: 'No listing to open.' };
-    const url = ref.id ? `${MARKET}/${encodeURIComponent(ref.id)}` : `${MARKET}/by-token`;
-    const read = await this.get(url, ref.token ? { headers: { [SKILL_SHARE_TOKEN_HEADER]: ref.token } } : undefined);
+    const read = ref.token
+      ? await this.get(`${MARKET}/by-token`, { headers: { [SKILL_SHARE_TOKEN_HEADER]: ref.token } })
+      : await this.get(`${MARKET}/${encodeURIComponent(ref.id ?? '')}`);
     if ('error' in read) return { error: read.error };
     const detail = toDetail(read.data);
     if (!detail) return { error: 'The server returned no listing.' };

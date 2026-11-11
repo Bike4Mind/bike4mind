@@ -1190,23 +1190,6 @@ describe('Skill Market (real mongod)', () => {
     await expect(open({ 'x-share-token': 'x'.repeat(32) })).rejects.toMatchObject({ statusCode: 404 });
   });
 
-  it('detail: the x-share-token header unlocks an unlisted listing for a non-author', async () => {
-    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'unlisted');
-    const detail = (headers: Record<string, string>) =>
-      call(detailHandler, 'GET', OTHER, { id: listing.id }, {}, false, new Date(0), headers);
-    await expect(detail({})).rejects.toMatchObject({ statusCode: 404 });
-    const res = await detail({ 'x-share-token': listing.shareToken });
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData().listing).toMatchObject({ id: listing.id });
-  });
-
-  it('detail (deprecated ?token=): the query token still unlocks an unlisted listing', async () => {
-    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'unlisted');
-    const res = await call(detailHandler, 'GET', OTHER, { id: listing.id, token: listing.shareToken });
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData().listing).toMatchObject({ id: listing.id });
-  });
-
   it('search: filters and sorts all run behind the visibility gate', async () => {
     orgs.members.set(AUTHOR, [ORG]);
     const a = (await publish(await makeSkill(AUTHOR, 'Alpha body.', { description: 'Alpha formatter' }), 'public'))

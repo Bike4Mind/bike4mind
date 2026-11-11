@@ -7,7 +7,7 @@ import { withdrawOwnListing } from '@server/skillMarket/author';
 import { buildListingDetail } from '@server/skillMarket/detail';
 
 const handler = baseApi({ auth: 'jwtOnly' })
-  /** GET /api/skills/market/[id] - listing detail. Unlisted share links open through `by-token/[token]`. */
+  /** GET /api/skills/market/[id] - listing detail. Unlisted share links open through `by-token` (`x-share-token`). */
   .get<Request<{}, {}, {}, { id: string }>>(async (req, res) => {
     const listing = await findListing(String(req.query.id));
     if (!listing) throw new NotFoundError('Listing not found');
