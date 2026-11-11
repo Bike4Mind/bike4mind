@@ -116,7 +116,7 @@ export interface ExportedKnowledgeFile {
   type?: KnowledgeType;
   uploadedAt: string; // ISO timestamp
   content?: string; // Base64 encoded content for small files
-  contentUrl?: string; // Reference URL for large files
+  contentUrl?: string; // Storage key (filePath) of the file when content is not inlined; not a URL
   metadata?: Record<string, unknown>;
 }
 

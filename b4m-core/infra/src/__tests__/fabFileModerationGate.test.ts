@@ -207,8 +207,8 @@ const ALLOWLIST: Record<string, string> = {
 
   'apps/client/pages/api/files/createFabFile.ts':
     'DI passthrough to the already-gated fabFileService.createFabFile; browser response signing delegates to signBrowserFileResponse',
-  'apps/client/server/files/signBrowserFileResponse.ts':
-    'DI passthrough to fabFilesService.generateSignedUrl, which applies the shared moderation gate before request-local browser signing',
+  'apps/client/server/files/browserFileSigner.ts':
+    'DI passthrough - storage adapter consumed by fabFilesService.generateSignedUrl and the services that call it, which apply the moderation gate before using either the S3 signer or the content URL builder; the content URL itself redirects only after pages/api/files/[id]/content.ts calls isImageServeable',
 
   // --- Upload-only / delete-only: no read path. ---
   'apps/client/server/slack/dataLakeIngestDeps.ts':

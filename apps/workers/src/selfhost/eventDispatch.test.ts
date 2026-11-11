@@ -47,6 +47,7 @@ describe('dispatchSelfHostEvent', () => {
     ['notification.push', 'sendPush'],
     ['stripe.invoice.payment_succeeded', 'invoicePaymentSucceeded'],
     ['stripe.cus.sub.updated', 'customerSubscriptionUpdated'],
+    ['notification.liveActivity', 'sendPush'],
   ] as const)('routes %s to the matching handler with an EventBridge-shaped event', async (detailType, key) => {
     const detail = { sessionId: 's1' };
     await dispatchSelfHostEvent(detailType, detail);

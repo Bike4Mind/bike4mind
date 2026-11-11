@@ -5,6 +5,7 @@ import {
   CancelDeletionDialog,
   DeleteUserDialog,
   EmailVerificationDialog,
+  FileEmbeddingWindowResetDialog,
   InternalAccountDialog,
   LoginAsDialog,
   ResetMfaDialog,
@@ -536,6 +537,36 @@ describe('account dialogs', () => {
 
       expect(screen.getByTestId('internal-account-dialog-preview-before')).toHaveTextContent('Internal');
       expect(screen.getByTestId('internal-account-dialog-preview-after')).toHaveTextContent('Internal (admin)');
+    });
+  });
+
+  describe('FileEmbeddingWindowResetDialog', () => {
+    it('posts the reason, toasts and closes without an undo', async () => {
+      const { onClose } = renderDialog((user, close) => <FileEmbeddingWindowResetDialog user={user} onClose={close} />);
+
+      expect(confirmButton('file-embedding-window-reset-dialog')).toBeDisabled();
+      pickReason('file-embedding-window-reset-dialog');
+      fireEvent.click(confirmButton('file-embedding-window-reset-dialog'));
+
+      await waitFor(() =>
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/file-embedding-window`, {
+          reason: 'Re-indexing after a support request',
+        })
+      );
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      expect(mocks.toastSuccess).toHaveBeenCalled();
+      expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
+    });
+
+    it('toasts the failure and stays open when the reset is rejected', async () => {
+      mocks.apiPost.mockRejectedValue(new Error('boom'));
+      const { onClose } = renderDialog((user, close) => <FileEmbeddingWindowResetDialog user={user} onClose={close} />);
+      pickReason('file-embedding-window-reset-dialog');
+
+      fireEvent.click(confirmButton('file-embedding-window-reset-dialog'));
+
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalled());
+      expect(onClose).not.toHaveBeenCalled();
     });
   });
 

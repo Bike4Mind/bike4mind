@@ -28,6 +28,14 @@ describe('toUserFacingFailureMessage', () => {
     expect(toUserFacingFailureMessage('Access denied to resource')).toMatch(/denied access \(auth error\)/);
   });
 
+  it('maps a safety-classifier refusal to a decline instead of a failure', () => {
+    const refusal = 'Anthropic safety classifier refusal for claude-fable-5-2 - falling back to an alternative model';
+    expect(toUserFacingFailureMessage(refusal)).toBe('The model declined this request');
+    const named = Object.assign(new Error('refused'), { name: 'SafetyRefusalError' });
+    expect(toUserFacingFailureMessage(named.message, named)).toBe('The model declined this request');
+    expect(toUserFacingFailureMessage('refused', new Error('refused'))).toBe('Agent execution failed');
+  });
+
   it('stays generic for unrecognized errors', () => {
     expect(toUserFacingFailureMessage('Something exploded in the tool loop')).toBe('Agent execution failed');
     expect(toUserFacingFailureMessage('')).toBe('Agent execution failed');
