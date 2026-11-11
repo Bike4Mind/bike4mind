@@ -16,6 +16,7 @@ import { grantIndividualAdminSubscription } from '@server/subscriptions/grantInd
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { assertDelegateCanCreditUser } from './delegateTargets';
 import { dayjs } from '@bike4mind/common';
 import { z } from 'zod';
 import { Resource } from 'sst';
@@ -88,6 +89,7 @@ export async function grantSubscription(req: Request, params: GrantSubscriptionP
   const selfGrant =
     isSelfOrImpersonator(req.user!, userId) || (approval?.requestedBy.selfIds.includes(userId) ?? false);
   const user = await validateGrantSubscription(params, teamPlan);
+  await assertDelegateCanCreditUser(req.user!, user.id, 'grant a subscription to');
 
   const now = dayjs();
   const periodStartsAt = now.toDate();

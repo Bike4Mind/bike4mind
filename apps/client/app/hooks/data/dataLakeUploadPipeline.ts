@@ -1,4 +1,5 @@
 import {
+  DATA_LAKE_ENTITLEMENT_REFUSAL_CODES,
   folderTagForFile,
   isSupportedFabFileMimeType,
   hasBlankTagPrefixSegment,
@@ -74,6 +75,18 @@ export const OFFLINE_MESSAGE = 'No internet connection. Check your network and t
 // problem (network, CSP blocking the presigned host), not the user's lake settings.
 export const UPLOAD_ALL_FAILED_MESSAGE =
   'None of the files could be uploaded. This is usually a network or connection issue, not your data lake settings. Please try again.';
+
+/**
+ * The server's message when a lake create or connector connect was refused for an entitlement
+ * reason a retry cannot clear (lake cap, plan gate: DATA_LAKE_ENTITLEMENT_REFUSAL_CODES), else
+ * undefined. Callers use it to drop their Retry affordance.
+ */
+export function lakeEntitlementRefusalMessage(error: unknown): string | undefined {
+  if (!axios.isAxiosError(error)) return undefined;
+  const data = error.response?.data as { code?: unknown; error?: unknown } | undefined;
+  if (typeof data?.code !== 'string' || !DATA_LAKE_ENTITLEMENT_REFUSAL_CODES.includes(data.code)) return undefined;
+  return typeof data.error === 'string' ? data.error : undefined;
+}
 
 /**
  * Translate an upload/create failure into a distinct kind + human message. The lake
@@ -161,6 +174,9 @@ export function classifyUploadError(
   if (status !== undefined && status >= 500) {
     return { kind: 'server', message: 'The server ran into a problem. Please try again in a moment.' };
   }
+
+  const entitlementRefusal = lakeEntitlementRefusalMessage(error);
+  if (entitlementRefusal) return { kind: 'entitlement', message: entitlementRefusal };
 
   // Other 4xx (403 feature gate, 404, 409, 429, ...) carry a curated server message worth
   // showing. Safe to surface: errorHandler maps every ZodError to a 422, handled above, so

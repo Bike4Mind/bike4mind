@@ -8,4 +8,5 @@ export const DETECTOR_LABELS: Record<ShadowDetector, string> = {
   paymentRisk: 'Payment risk',
   signupIpLinkedToBlocked: 'Signup IP linked to blocked',
   signupDomainHold: 'Signup domain hold assessment',
+  apiProbe: 'API probing',
 };

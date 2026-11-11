@@ -79,11 +79,6 @@
       "count": 4
     }
   },
-  "apps/client/__tests__/quest-plans.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 72
-    }
-  },
   "apps/client/__tests__/sessions.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 7
@@ -1461,7 +1456,7 @@
   },
   "apps/client/pages/api/admin/users/__tests__/email-verification.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 5
+      "count": 3
     }
   },
   "apps/client/pages/api/admin/users/email-verification.ts": {
@@ -1618,9 +1613,6 @@
   "apps/client/pages/api/artifacts/[id]/versions.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 10
-    },
-    "b4m/no-raw-entity-response": {
-      "count": 1
     }
   },
   "apps/client/pages/api/artifacts/[id]/versions/[version].ts": {
@@ -2407,11 +2399,6 @@
       "count": 6
     }
   },
-  "apps/client/pages/api/quest-plans/index.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/quests/[id]/__tests__/check-timeout.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 6
@@ -3180,11 +3167,6 @@
       "count": 5
     }
   },
-  "apps/client/server/utils/logCompletionAnalytics.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 14
-    }
-  },
   "apps/client/server/websocket/__tests__/dataSubscribeRequest.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 48
@@ -3541,11 +3523,6 @@
     }
   },
   "b4m-core/services/src/artifactService/delete.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "b4m-core/services/src/artifactService/get.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }

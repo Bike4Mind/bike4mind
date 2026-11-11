@@ -7,6 +7,7 @@ import type { WebNotebookCursor } from './ImportStateStore';
 import { mapQuests, readNotebook, sourceIdOf, type WebNotebook } from './webSessionMapper';
 
 const LIST_PATH = '/api/sessions';
+const COUNT_PATH = '/api/sessions/count';
 const LIST_PAGE_SIZE = 100;
 /** Past this the list is treated as partial, and nothing is pruned for having gone missing. */
 const MAX_LIST_PAGES = 50;
@@ -55,6 +56,11 @@ function pagedUrl(path: string, page: number, limit: number, extra: Record<strin
     'pagination[limit]': String(limit),
   });
   return `${path}?${query.toString()}`;
+}
+
+/** One request, for the sidebar hint: how many notebooks the account has on the web. */
+export async function countWebNotebooks(api: WebApi): Promise<number> {
+  return z.object({ count: z.number().int().nonnegative() }).parse(await api.get(COUNT_PATH)).count;
 }
 
 export function webSessionId(notebookId: string, scopeTag: string): string {

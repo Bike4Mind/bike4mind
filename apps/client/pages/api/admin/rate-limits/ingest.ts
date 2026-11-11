@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { persistRateLimitEvents } from '@bike4mind/server-utils/utils/mcpRateLimitSnapshots';
 import { Resource } from 'sst';
-import { safeCompareTokens } from '@bike4mind/auth/crypto';
+import { verifyIngestToken } from '@server/security/ingestToken';
 import type { Request } from 'express';
 import { z } from 'zod';
 
@@ -18,9 +18,7 @@ const handler = baseApi({ auth: false }).post(async (req: Request, res) => {
     return res.status(500).json({ error: 'Rate limit ingest token is not configured.' });
   }
 
-  const providedTokenHeader = req.headers['x-rate-limit-ingest-token'];
-  const providedToken = Array.isArray(providedTokenHeader) ? providedTokenHeader[0] : providedTokenHeader;
-  if (!providedToken || !safeCompareTokens(String(providedToken), ingestToken)) {
+  if (!verifyIngestToken(req, 'x-rate-limit-ingest-token', ingestToken)) {
     return res.status(403).json({ error: 'Invalid ingest token.' });
   }
 

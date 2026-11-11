@@ -54,7 +54,7 @@ export default {
   'SlackMetrics/SlackMetricsTab.tsx': [[2, 'e2ae0a0feb2b939a']],
   'SreAgentTab.tsx': [[11, '5feea0e0c55f7cf4']],
   'Team/index.tsx': [[1, '78a3901c08799aeb']],
-  'Users/BulkAbuseResponseModal.tsx': [[22, 'c70df252992eb367']],
+  'Users/BulkAbuseResponseModal.tsx': [[26, 'c70df252992eb367']],
   'Users/ComplianceModal.tsx': [[1, '8e6086deb2b73718']],
   'Users/CreateUserModal.tsx': [[2, '616ffa1b9b560954']],
   'Users/Details/AdminApiKeysModal.tsx': [[8, 'dcd0d06f9acad42f']],

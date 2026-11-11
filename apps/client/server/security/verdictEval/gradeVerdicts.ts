@@ -1,8 +1,10 @@
-import type {
-  AbuseAssessmentResult,
-  AutoContainmentOutcome,
-  ShadowDetectionVerdict,
-  SignupRiskReviewState,
+import {
+  type AbuseAssessmentResult,
+  type AutoContainmentOutcome,
+  isAutomationVerdict,
+  type ShadowDetectionVerdict,
+  type ShadowDetectionVerdictSource,
+  type SignupRiskReviewState,
 } from '@bike4mind/common';
 import {
   VERDICT_EVAL_LABEL_SOURCES,
@@ -29,6 +31,8 @@ export type EvalDetection = {
   userIds: readonly string[];
   detectedAt: Date;
   verdict: ShadowDetectionVerdict | null;
+  /** Only the latest entry is needed: it says whether `verdict` came from the automation grader. */
+  verdicts: readonly { source?: ShadowDetectionVerdictSource }[];
 };
 
 export type EvalAssessment = {
@@ -125,10 +129,10 @@ const strongest = (labels: Label[]): Label =>
 
 /**
  * The admin verdict when there is one (insufficient evidence leaves it unlabelled); otherwise the
- * members' labels when every labelled member agrees.
+ * members' labels when every labelled member agrees. An automation verdict is not an admin one.
  */
 export function detectionLabel(detection: EvalDetection, accountLabels: ReadonlyMap<string, Label>): Label | null {
-  if (detection.verdict) {
+  if (detection.verdict && !isAutomationVerdict(detection)) {
     const label = ADMIN_VERDICT_LABELS[detection.verdict];
     return label ? { label, source: 'adminVerdict' } : null;
   }

@@ -66,9 +66,11 @@ vi.mock('./tabs/OverviewTab', () => ({
     onViewCredits: () => void;
   }) => (
     <div data-testid="stub-overview">
-      {['tags', 'mfaReset', 'emailVerification', 'apiKeyTrust', 'internalAccount'].map(action => (
-        <button key={action} data-testid={`stub-overview-${action}-btn`} onClick={() => onAction(action)} />
-      ))}
+      {['tags', 'mfaReset', 'emailVerification', 'apiKeyTrust', 'internalAccount', 'fileEmbeddingWindowReset'].map(
+        action => (
+          <button key={action} data-testid={`stub-overview-${action}-btn`} onClick={() => onAction(action)} />
+        )
+      )}
       <button data-testid="stub-overview-activity-btn" onClick={onViewActivity} />
       <button data-testid="stub-overview-credits-btn" onClick={onViewCredits} />
     </div>
@@ -105,6 +107,7 @@ vi.mock('./actions/accountDialogs', () => {
     ApiKeyTrustDialog: stub('api-key-trust-dialog'),
     EmailVerificationDialog: stub('email-verification-dialog'),
     InternalAccountDialog: stub('internal-account-dialog'),
+    FileEmbeddingWindowResetDialog: stub('file-embedding-window-reset-dialog'),
     LoginAsDialog: stub('login-as-dialog'),
     ResetMfaDialog: stub('mfa-reset-dialog'),
     RestrictDialog: stub('restrict-dialog'),
@@ -137,7 +140,11 @@ describe('UserProfileView', () => {
     mocks.update.mockResolvedValue(undefined);
     // A delegate rather than a full admin keeps full-admin-only extras, like entity search, out of these tests.
     useUser.setState({
-      currentUser: { id: 'admin1', isAdmin: false, adminPermissions: ['users:delete', 'users:impersonate'] } as never,
+      currentUser: {
+        id: 'admin1',
+        isAdmin: false,
+        adminPermissions: ['users:delete', 'users:impersonate', 'users:moderate'],
+      } as never,
     });
   });
 
@@ -251,6 +258,29 @@ describe('UserProfileView', () => {
       expect(screen.queryByTestId('user-profile-suspend-btn')).not.toBeInTheDocument();
     });
 
+    it('disables Suspend, Restrict and the limited tier for a delegate without users:moderate', () => {
+      useUser.setState({ currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['support:read'] } as never });
+      setup();
+      expect(screen.getByTestId('user-profile-suspend-btn')).toBeDisabled();
+      fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+      expect(screen.getByTestId('user-profile-menu-restrict-hint')).toHaveTextContent(
+        'Missing permission: users:moderate'
+      );
+      expect(screen.getByTestId('user-profile-menu-shadowTier-hint')).toHaveTextContent(
+        'Missing permission: users:moderate'
+      );
+    });
+
+    it('keeps a users:moderate delegate from suspending or reinstating an account with admin access', () => {
+      const target = buildProfile({ adminPermissions: ['support:read'] });
+      const { unmount } = setup(target);
+      expect(screen.getByTestId('user-profile-suspend-btn')).toBeDisabled();
+      unmount();
+
+      setup({ ...target, isBanned: true });
+      expect(screen.getByTestId('user-profile-reinstate-btn')).toBeDisabled();
+    });
+
     it.each([
       ['editProfile', 'edit-profile-dialog'],
       ['loginAs', 'login-as-dialog'],
@@ -286,6 +316,7 @@ describe('UserProfileView', () => {
       ['emailVerification', 'email-verification-dialog'],
       ['apiKeyTrust', 'api-key-trust-dialog'],
       ['internalAccount', 'internal-account-dialog'],
+      ['fileEmbeddingWindowReset', 'file-embedding-window-reset-dialog'],
     ])('opens the %s dialog requested by the overview tab', (action, dialogId) => {
       setup();
 

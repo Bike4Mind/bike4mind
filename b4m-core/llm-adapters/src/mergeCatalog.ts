@@ -65,6 +65,13 @@ const PRESENTATION_PRECEDENCE: Record<string, number> = { operator: 3, seed: 2, 
 
 const MODEL_BACKENDS: readonly string[] = Object.values(ModelBackend);
 
+/**
+ * Groups whose precedence resolves per key: every row claiming the group contributes the keys it
+ * carries, highest precedence last. An operator row stating one apiSurface flag overrides that flag
+ * and leaves the inherited or seeded values of the others standing.
+ */
+const PER_KEY_GROUPS: ReadonlySet<FieldGroup> = new Set<FieldGroup>(['apiSurface']);
+
 const MODEL_INFO_GROUPS = Object.entries(MODEL_INFO_FIELD_GROUP_OF) as Array<
   [Exclude<keyof ModelInfo, 'pricing'>, FieldGroup]
 >;
@@ -280,6 +287,7 @@ function mergeRows(
   // a per-image adapter price can never satisfy the promotion clause that would clear the flag.
   const curated = base !== null;
   const winners = new Map<FieldGroup, IModelCatalogRow>();
+  const claimants = new Map<FieldGroup, IModelCatalogRow[]>();
   for (const row of bucket) {
     for (const group of row.ownedGroups) {
       // A group name from a newer schema version claims nothing here.
@@ -287,16 +295,22 @@ function mergeRows(
       if (curated && yieldsToCuration(row, group)) continue;
       const incumbent = winners.get(group);
       if (!incumbent || outranks(row, incumbent, group)) winners.set(group, row);
+      claimants.set(group, [...(claimants.get(group) ?? []), row]);
     }
   }
 
   const draft: Record<string, unknown> = base ? { ...base } : {};
-  for (const [group, row] of winners) {
-    for (const [key, value] of Object.entries(row.patch)) {
-      if (value === undefined) continue;
-      // Keys this build does not know map to no group and are discarded.
-      if (FIELD_GROUP_OF[key as keyof ModelRecord] !== group) continue;
-      draft[key] = value;
+  for (const [group, winner] of winners) {
+    const contributing = PER_KEY_GROUPS.has(group)
+      ? (claimants.get(group) ?? []).sort((a, b) => (outranks(a, b, group) ? 1 : outranks(b, a, group) ? -1 : 0))
+      : [winner];
+    for (const row of contributing) {
+      for (const [key, value] of Object.entries(row.patch)) {
+        if (value === undefined) continue;
+        // Keys this build does not know map to no group and are discarded.
+        if (FIELD_GROUP_OF[key as keyof ModelRecord] !== group) continue;
+        draft[key] = value;
+      }
     }
   }
   // An operator winner applies as-is (the deliberate un-retire / re-enable path); the folds below skip it.

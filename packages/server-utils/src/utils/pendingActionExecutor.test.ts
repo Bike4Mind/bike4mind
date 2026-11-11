@@ -20,6 +20,7 @@ vi.mock('./storage/index', () => {
   return { getFilesStorage: () => storage };
 });
 
+vi.mock('../files/fileLinkToken', () => ({ buildFileLinkUrl: vi.fn() }));
 vi.mock('./invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('./downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
 vi.mock('../middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
@@ -43,6 +44,7 @@ import { fabFileRepository, Quest, Session } from '@bike4mind/database';
 import { SlackDevWorkspace, OrgSlackWorkspace } from '@bike4mind/database/infra';
 import { getFilesStorage } from './storage/index';
 import { invokeMcpHandler } from './invokeMcpHandler';
+import { buildFileLinkUrl } from '../files/fileLinkToken';
 import { downloadAttachmentUrl } from './downloadAttachmentUrl';
 import { isFeatureEnabled } from '../middlewares/featureFlag';
 import { getSelectedRepositoriesForMcp } from '../integrations/github/github-repo-helper';
@@ -425,7 +427,7 @@ describe('confirmed curated-file sharing', () => {
       mimeType: 'application/pdf',
     } as never);
     vi.mocked(Quest.findOneAndUpdate).mockResolvedValue({} as never);
-    vi.mocked(getFilesStorage().getSignedUrl).mockResolvedValue('https://example.test/download');
+    vi.mocked(buildFileLinkUrl).mockReturnValue('https://app.example.test/api/file-links/token');
   });
 
   it('rechecks file ownership and claims the action before minting a link', async () => {
@@ -436,9 +438,11 @@ describe('confirmed curated-file sharing', () => {
       { _id: QUEST_ID, 'pendingAction.ts': ts },
       { $unset: { pendingAction: 1 } }
     );
-    expect(getFilesStorage().getSignedUrl).toHaveBeenCalledWith('private/report.pdf', 'get', { expiresIn: 604800 });
+    expect(buildFileLinkUrl).toHaveBeenCalledWith({ kind: 'fabFile', fileId }, dbUser.id, 604800);
+    expect(result.message).toContain('<https://app.example.test/api/file-links/token|');
+    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
     expect(vi.mocked(Quest.findOneAndUpdate).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(getFilesStorage().getSignedUrl).mock.invocationCallOrder[0]
+      vi.mocked(buildFileLinkUrl).mock.invocationCallOrder[0]
     );
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
@@ -447,7 +451,7 @@ describe('confirmed curated-file sharing', () => {
     const result = await executePendingAction(QUEST_ID, dbUser, logger, ts, { ...destination, channelId: 'COTHER' });
     expect(result.success).toBe(false);
     expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
-    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+    expect(buildFileLinkUrl).not.toHaveBeenCalled();
   });
 
   it('refuses a confirmation clicked in another Slack team', async () => {
@@ -456,12 +460,12 @@ describe('confirmed curated-file sharing', () => {
       slackTeamId: 'TOTHER',
     });
     expect(result.success).toBe(false);
-    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+    expect(buildFileLinkUrl).not.toHaveBeenCalled();
   });
 
   it('refuses a confirmation that names no destination', async () => {
     expect((await executePendingAction(QUEST_ID, dbUser, logger, ts)).success).toBe(false);
-    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+    expect(buildFileLinkUrl).not.toHaveBeenCalled();
   });
 
   it('refuses a confirmation from someone other than the turn requester', async () => {
@@ -475,7 +479,7 @@ describe('confirmed curated-file sharing', () => {
     } as never);
 
     expect((await executePendingAction(QUEST_ID, dbUser, logger, ts, destination)).success).toBe(false);
-    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+    expect(buildFileLinkUrl).not.toHaveBeenCalled();
   });
 
   it('accepts an org-install destination resolved from the org workspace', async () => {
@@ -485,7 +489,7 @@ describe('confirmed curated-file sharing', () => {
     );
 
     expect((await executePendingAction(QUEST_ID, dbUser, logger, ts, destination)).success).toBe(true);
-    expect(getFilesStorage().getSignedUrl).toHaveBeenCalled();
+    expect(buildFileLinkUrl).toHaveBeenCalled();
   });
 
   it('refuses an action whose file id is not an object id', async () => {
@@ -508,8 +512,10 @@ describe('confirmed curated-file sharing', () => {
     expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
-  it('consumes the action and reports failure when signing the link fails', async () => {
-    vi.mocked(getFilesStorage().getSignedUrl).mockRejectedValue(new Error('storage down'));
+  it('consumes the action and reports failure when building the link fails', async () => {
+    vi.mocked(buildFileLinkUrl).mockImplementation(() => {
+      throw new Error('APP_URL is not set');
+    });
 
     expect((await executePendingAction(QUEST_ID, dbUser, logger, ts, destination)).success).toBe(false);
     expect(Quest.findOneAndUpdate).toHaveBeenCalled();
@@ -517,13 +523,13 @@ describe('confirmed curated-file sharing', () => {
 
   it('refuses a stale confirmation', async () => {
     expect((await executePendingAction(QUEST_ID, dbUser, logger, ts - 1, destination)).success).toBe(false);
-    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+    expect(buildFileLinkUrl).not.toHaveBeenCalled();
   });
 
   it('refuses a duplicate click that lost the atomic claim', async () => {
     vi.mocked(Quest.findOneAndUpdate).mockResolvedValue(null);
     expect((await executePendingAction(QUEST_ID, dbUser, logger, ts, destination)).success).toBe(false);
-    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+    expect(buildFileLinkUrl).not.toHaveBeenCalled();
   });
 
   it.each([{ deletedAt: new Date() }, { moderationStatus: 'blocked' }, { moderationStatus: 'pending' }, { tags: [] }])(
@@ -539,13 +545,13 @@ describe('confirmed curated-file sharing', () => {
       } as never);
       expect((await executePendingAction(QUEST_ID, dbUser, logger, ts, destination)).success).toBe(false);
       expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
-      expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+      expect(buildFileLinkUrl).not.toHaveBeenCalled();
     }
   );
 
   it('refuses a file that is no longer owned by the requester', async () => {
     vi.mocked(fabFileRepository.findByIdAndUserId).mockResolvedValue(null);
     expect((await executePendingAction(QUEST_ID, dbUser, logger, ts, destination)).success).toBe(false);
-    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+    expect(buildFileLinkUrl).not.toHaveBeenCalled();
   });
 });

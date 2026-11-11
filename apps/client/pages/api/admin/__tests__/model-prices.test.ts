@@ -48,6 +48,10 @@ vi.mock('@bike4mind/database', () => ({
 }));
 const mockAudit = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+const mockBumpModelListRevision = vi.hoisted(() => vi.fn(async () => 'rev-1'));
+vi.mock('@bike4mind/server-utils/modelDiscovery/modelListRevision', () => ({
+  bumpModelListRevision: mockBumpModelListRevision,
+}));
 
 import handler, {
   MANUAL_REPRICE_BAND_ERROR_CODE,
@@ -689,5 +693,55 @@ describe('POST /api/admin/model-prices admin audit', () => {
 
     await expect(run()).rejects.toThrow('audit down');
     expect(res._isEndCalled()).toBe(false);
+  });
+});
+
+describe('POST /api/admin/model-prices model-list refresh', () => {
+  const REPRICE_BODY = { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'invoice A' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAudit.mockResolvedValue(null);
+    mockAppend.mockResolvedValue({ id: 'row1' });
+    mockGenerateSeed.mockResolvedValue([{ modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER } }]);
+    mockRowsInForce.mockResolvedValue([inForceRow]);
+  });
+
+  it('refreshes model lists once after a reprice lands', async () => {
+    await call({ method: 'POST', body: { ...REPRICE_BODY, pricing: { '0': { input: 5e-6, output: 20e-6 } } } }).run();
+
+    expect(mockBumpModelListRevision).toHaveBeenCalledTimes(1);
+    expect(mockAppend.mock.invocationCallOrder[0]).toBeLessThan(mockBumpModelListRevision.mock.invocationCallOrder[0]);
+  });
+
+  it('refreshes model lists after a revert-to-seed that appended', async () => {
+    await call({ method: 'POST', body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' } }).run();
+
+    expect(mockBumpModelListRevision).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves model lists alone when nothing was appended', async () => {
+    await call({ method: 'POST', body: REPRICE_BODY }).run();
+    mockRowsInForce.mockResolvedValue([
+      { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'adapter-seed' },
+    ]);
+    await call({ method: 'POST', body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' } }).run();
+
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockBumpModelListRevision).not.toHaveBeenCalled();
+  });
+
+  it('still returns the saved row when the refresh fails', async () => {
+    mockBumpModelListRevision.mockRejectedValueOnce(new Error('cache unreachable'));
+    const { req, res, run } = call({
+      method: 'POST',
+      body: { ...REPRICE_BODY, pricing: { '0': { input: 5e-6, output: 20e-6 } } },
+    });
+    const warn = vi.fn();
+    (req as unknown as { logger: { warn: typeof warn } }).logger = { warn };
+    await run();
+
+    expect(res._getJSONData().row).toEqual({ id: 'row1' });
+    expect(warn).toHaveBeenCalledWith('[model-prices] model-list refresh failed', { error: 'cache unreachable' });
   });
 });

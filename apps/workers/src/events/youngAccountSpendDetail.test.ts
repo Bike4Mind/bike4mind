@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import { GetQueryResultsCommand, StartQueryCommand, StopQueryCommand } from '@aws-sdk/client-cloudwatch-logs';
 
 import {
@@ -339,7 +340,7 @@ describe('youngAccountSpendSection', () => {
   });
 
   it('keeps the first read when the re-read fails', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     const fetch = vi
       .fn()
       .mockResolvedValueOnce({ spenders: aggregateSpenders(partialRows), truncated: false })
@@ -382,7 +383,7 @@ describe('youngAccountSpendSection', () => {
   });
 
   it('degrades to a note, and logs, when the query fails', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     const fetch = vi.fn(async () => {
       throw new Error('AccessDeniedException <denied>');
     });

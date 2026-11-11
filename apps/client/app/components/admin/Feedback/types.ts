@@ -1,4 +1,4 @@
-import { IFeedbackDocument, FeedbackStatus, FeedbackSubject } from '@bike4mind/common';
+import { IFeedbackDocument, FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
 
 // Extended feedback document with MongoDB _id field. `contentExpired` is added by the API's
 // hydrateFeedbackText join - true when content was submitted but has since aged out under the
@@ -29,6 +29,8 @@ export interface FeedbackFilters {
   selectedOrganizations: string[];
   /** Undefined is every subject: the server reads an absent `subject` as no filter at all. */
   subject?: FeedbackSubject;
+  /** Empty is every type. */
+  types: FeedbackType[];
   sortAscending: boolean;
 }
 
@@ -49,6 +51,8 @@ export interface FeedbackListFilterParams {
   organizationId?: string;
   subject?: FeedbackSubject;
   status?: FeedbackStatus[];
+  /** `Feedback` also matches reports with no type (help modal, older reports). */
+  type?: FeedbackType[];
   organization?: string[];
   search?: string;
   sort: 'asc' | 'desc';
@@ -86,6 +90,8 @@ export interface UseFeedbackFiltersReturn {
   setSelectedOrganizations: (orgs: string[]) => void;
   /** Undefined clears the filter back to every subject. */
   setSubject: (subject: FeedbackSubject | undefined) => void;
+  /** Empty clears the filter back to every type. */
+  setTypes: (types: FeedbackType[]) => void;
   toggleSortDirection: () => void;
   /** Debounced, server-ready filter query. Feeds both the list and the CSV export. */
   filterParams: FeedbackListFilterParams;

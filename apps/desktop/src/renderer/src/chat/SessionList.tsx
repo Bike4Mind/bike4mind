@@ -999,6 +999,7 @@ export function SessionList({
   sectionActions,
   customize,
   onOpenModels,
+  syncHints,
   footer,
 }: {
   sessions: ChatSessionSummary[];
@@ -1037,6 +1038,8 @@ export function SessionList({
   /** The Customize nav row, which carries its own attention badge. */
   customize?: ReactNode;
   onOpenModels?: () => void;
+  /** The sidebar's sync hint; `fallback` is the plain empty-list line, for it to replace or keep. */
+  syncHints?: (empty: boolean, fallback: ReactNode) => ReactNode;
   footer?: ReactNode;
 }) {
   const [query, setQuery] = useState('');
@@ -1132,6 +1135,11 @@ export function SessionList({
     sections.loose.length === 0 &&
     sections.archived.length === 0 &&
     sections.imported.length === 0;
+  const emptyLine = (
+    <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1 }} data-testid="chat-sessions-empty">
+      {mode === 'code' ? 'No Code sessions yet.' : 'No conversations yet.'}
+    </Typography>
+  );
 
   // Also open while it holds the open session, so clearing a search does not hide the selection.
   const importedShown = importedOpen || searching || sections.imported.some(session => session.id === activeId);
@@ -1634,11 +1642,14 @@ export function SessionList({
             Loading conversations...
           </Typography>
         ) : empty ? (
-          <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1 }} data-testid="chat-sessions-empty">
-            {mode === 'code' ? 'No Code sessions yet.' : 'No conversations yet.'}
-          </Typography>
+          searching || !syncHints ? (
+            emptyLine
+          ) : (
+            syncHints(true, emptyLine)
+          )
         ) : (
           <>
+            {!searching && syncHints?.(false, null)}
             {refHits.length > 0 && (
               <Box data-testid="sidebar-ref-matches">
                 <SectionLabel>Issues and pull requests</SectionLabel>

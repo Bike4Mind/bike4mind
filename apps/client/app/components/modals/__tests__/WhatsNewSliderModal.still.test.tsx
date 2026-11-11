@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   isMobile: false,
   reducedMotion: false,
   signature: 1,
+  legacySignRequests: vi.fn(),
   withhold: false,
   mutateAsync: null as unknown as (vars: { filePaths: string[] }) => Promise<(string | null)[]>,
 }));
@@ -39,8 +40,13 @@ vi.mock('@tanstack/react-query', () => ({
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: vi.fn() }) }));
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
   useGetPresignedUrl: () => ({
-    mutate: (vars: { filePaths: string[] }, opts?: { onSuccess?: (urls: string[]) => void }) =>
-      opts?.onSuccess?.(vars.filePaths.map(p => `https://signed.test/${p}?sig=1`)),
+    mutate: (vars: { filePaths: string[] }, opts?: { onSuccess?: (urls: (string | null)[]) => void }) => {
+      mocks.legacySignRequests(vars);
+      // The file endpoint refuses ownerless modal-images keys; /api/modals already signs them.
+      opts?.onSuccess?.(
+        vars.filePaths.map(p => (p.startsWith('modal-images/') ? null : `https://signed.test/${p}?sig=1`))
+      );
+    },
     mutateAsync: mocks.mutateAsync,
     isPending: false,
   }),
@@ -94,6 +100,7 @@ describe('WhatsNewSliderModal still slides', () => {
     mocks.isMobile = false;
     mocks.reducedMotion = false;
     mocks.signature = 1;
+    mocks.legacySignRequests.mockClear();
     mocks.withhold = false;
     mocks.mutateAsync = vi.fn(async ({ filePaths }: { filePaths: string[] }) =>
       filePaths.map(p => (mocks.withhold ? null : sign(p, mocks.signature)))
@@ -105,6 +112,15 @@ describe('WhatsNewSliderModal still slides', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  it.each([false, true])('renders the API-signed uploaded modal image (mobile: %s)', async isMobile => {
+    mocks.isMobile = isMobile;
+    const imageUrl = `${S3}/modal-images/uploaded.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=valid`;
+    renderSlider([slide('a', '2026-10-22T00:00:00Z', { imageUrl })]);
+
+    expect((await screen.findByRole('img', { name: 'Slide a' })).getAttribute('src')).toBe(imageUrl);
+    expect(mocks.legacySignRequests).not.toHaveBeenCalled();
   });
 
   it('shows the 16:9 still in the video slot on desktop', async () => {

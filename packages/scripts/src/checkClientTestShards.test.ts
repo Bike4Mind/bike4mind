@@ -163,14 +163,18 @@ describe('apps/client test-shard legs in ci.yml', () => {
 
   // `pnpm ... test -- --shard=1/3` forwards the literal `--` to vitest, which then reads the
   // rest as positional path filters: the shard is ignored and the leg runs the WHOLE suite, at
-  // 3x the total cost, without erroring. Measured, not hypothetical. Pin the bare form.
+  // 3x the total cost, without erroring. Measured, not hypothetical.
+  //
+  // The leg runs turbo, which needs its own `--` to tell its flags from the script's, and then
+  // runs `pnpm run test --shard=1/3` with no separator (checked against turbo 2.10). So the one
+  // allowed `--` is turbo's, directly before the args array, and no pnpm script call carries one.
   //
   // The matrix value no longer reaches the command by `${{ }}` interpolation; it goes through
   // an `env:` entry and a bash array. So walk that chain rather than assuming any link in it:
-  // matrix.shard.args -> SHARD_ARGS -> the array the step splits it into -> the pnpm argv. A
+  // matrix.shard.args -> SHARD_ARGS -> the array the step splits it into -> the turbo argv. A
   // guard that only matched a fixed name would pass vacuously the next time the shape moves,
   // which is exactly how this assertion went stale before.
-  it('appends the shard args with no `--` separator', () => {
+  it('appends the shard args through turbo, with no pnpm `--` separator', () => {
     expect(contents, 'SHARD_ARGS should carry matrix.shard.args into the step').toMatch(
       /^\s*SHARD_ARGS:\s*\$\{\{\s*matrix\.shard\.args\s*\}\}\s*$/m
     );
@@ -178,8 +182,14 @@ describe('apps/client test-shard legs in ci.yml', () => {
     expect(binding, 'the step should split SHARD_ARGS into an argv array').not.toBeNull();
     const argsArray = binding![1];
     const runLine = contents.split('\n').find(line => /\bpnpm\b/.test(line) && line.includes(`\${${argsArray}[@]}`));
-    expect(runLine, `the sharded test command should pass ${argsArray} to pnpm`).toBeDefined();
-    expect(runLine).not.toMatch(/\s--\s/);
+    expect(runLine, `the sharded test command should pass ${argsArray} to turbo`).toBeDefined();
+    expect(runLine).toMatch(/^\s*pnpm exec turbo run\s/);
+    expect(runLine!.match(/\s--\s/g), "exactly one `--`, turbo's own").toHaveLength(1);
+    expect(runLine).toContain(` -- "\${${argsArray}[@]}"`);
+    const pnpmScriptCalls = contents
+      .split('\n')
+      .filter(line => /^\s*pnpm (--recursive|--filter|run)\b.*"\$SHARD_SCRIPT"/.test(line));
+    for (const line of pnpmScriptCalls) expect(line).not.toMatch(/\s--\s/);
   });
 
   // The other half of the same env hop. Word splitting is what turns one env var back into

@@ -23,6 +23,7 @@ personal information or secrets in campaign URLs.
 | Resolved consent         | App cookie `b4m_consent`, republished on every load                                              | 90 days, cleared when consent resolves unset   | Let the server read the browser's decision     |
 | Purchase attribution     | Stripe subscription metadata `acq_first_*` / `acq_last_*` and MongoDB `Subscription.acquisition` | No automatic expiry configured by this feature | Record the consenting buyer's checkout touches |
 | Purchase visit           | Random server-minted 30-minute visit id in MongoDB `PaymentAttempt.visitId` (not sent to Stripe) | 90 days, the payment attempt's TTL             | Name the visit a purchase was started in       |
+| OAuth client credit      | MongoDB `User.acquisition.oauthTouch`, written by the server                                     | The account's lifetime                         | Credit an account to the OAuth client it was created to sign in to |
 
 The app's three campaign cookies and `b4m_consent` use `path=/` and
 `SameSite=Lax`. They are JavaScript-readable and scoped to the app host. Lax,
@@ -132,6 +133,16 @@ Account creation emits a `signup` event to each Overwatch product named by the
 consenting visitor's campaign touches, for products this deployment holds an
 ingest key for. The host product is excluded from `signup`, because it already
 receives `signup_completed` for every new account from the signup funnel.
+
+An OAuth client can be registered with an Overwatch product. When an account is
+created and its first authorization code goes to such a client within 30 minutes,
+the server that issued the code stores `User.acquisition.oauthTouch` (`source`: the
+client's product, `medium`: `oauth`, `content`: the `client_id`) and emits that
+product the same `signup`, marked `touch: 'oauth'`. It is written once per account,
+only with the same consent the campaign touches need, and never for a synthetic
+account. The browser does not supply it: the product comes from the client's
+registration. A product that a campaign touch already names keeps that touch, and
+is credited once.
 
 A later payment by that account emits a `purchase` event to the host product and
 to the same products:
@@ -478,7 +489,7 @@ Off by default behind the `abuseAssessmentEnabled` and `abuseAssessmentConfig` a
 
 ## Advisory signup domain hold assessments
 
-Off by default behind the `signupDomainHoldAssessmentEnabled` and `signupDomainHoldAssessmentConfig` admin settings, a scheduled job can ask a Decisions model to judge a signup domain hold placed on a recently registered domain as abuse, legitimate or insufficient evidence. The model receives only a summary computed by the platform: the domain's age in days, a mail-provider class, whether the domain's website answers and has content, signup counts and timing, and counts of distinct networks, network operators and countries across the held signups, with a hosting-network share. It never receives the domain name, an email, an IP, a network number, a user id or any text from the domain's website. Calls use the platform's provider key and a platform budget. A confident abuse judgment can only confirm the hold, which keeps the signups' free credits held; it never releases a hold, and an admin can still release it.
+Off by default behind the `signupDomainHoldAssessmentEnabled` and `signupDomainHoldAssessmentConfig` admin settings, a scheduled job can ask a Decisions model to judge a signup domain hold placed on a recently registered domain as abuse, legitimate or insufficient evidence. The model receives only a summary computed by the platform: the domain's age in days, a mail-provider class, whether the domain's website answers and has content and whether it describes a temporary or disposable mail service (both judged by the platform), signup counts and timing, and counts of distinct networks, network operators and countries across the held signups, with a hosting-network share. It never receives the domain name, an email, an IP, a network number, a user id or any text from the domain's website. Calls use the platform's provider key and a platform budget. A confident abuse judgment confirms the hold, which keeps the signups' free credits held, and an admin can still release it. A confident legitimate judgment releases the hold only when a separate auto-release setting is on and checks computed by the platform also pass; it then pays only the signups it judged, and the domain is re-held on a new risk signal.
 
 | Data       | Storage                                                                                       | Lifetime                  | Purpose                 |
 | ---------- | --------------------------------------------------------------------------------------------- | ------------------------- | ----------------------- |

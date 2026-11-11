@@ -23,6 +23,7 @@ import {
   FileText,
   Fingerprint,
   Gauge,
+  GraduationCap,
   Gavel,
   GitBranch,
   GitPullRequest,
@@ -147,6 +148,7 @@ export enum AdminTab {
   ModerationIncidents = 74,
   StripeDisputes = 75,
   Approvals = 76,
+  Tutorials = 77,
 }
 
 /**
@@ -375,6 +377,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Settings, tab: AdminTab.AdminSettings, label: 'General', testid: 'admin-settings-btn' },
       { Icon: AppWindow, tab: AdminTab.Modals, label: 'Modals', testid: 'admin-modals-tab-btn' },
       { Icon: Newspaper, tab: AdminTab.WhatsNewModals, label: "What's new" },
+      { Icon: GraduationCap, tab: AdminTab.Tutorials, label: 'Tutorials', testid: 'admin-tutorials-btn' },
       { Icon: NotebookText, tab: AdminTab.ReleaseNotes, label: 'Release notes', testid: 'admin-release-notes-btn' },
       { Icon: BookOpen, tab: AdminTab.Documentation, label: 'Docs' },
       { Icon: SquareTerminal, tab: AdminTab.ApiReference, label: 'API reference' },

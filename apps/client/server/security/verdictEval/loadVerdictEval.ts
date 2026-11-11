@@ -2,6 +2,7 @@ import type {
   AbuseAssessmentResult,
   AutoContainmentOutcome,
   ShadowDetectionVerdict,
+  ShadowDetectionVerdictSource,
   SignupRiskReviewState,
 } from '@bike4mind/common';
 import {
@@ -14,6 +15,11 @@ import {
 } from '@bike4mind/database';
 import type { SignupTimeseriesRange } from '@bike4mind/server-utils/app/utils/signupSignals';
 import type { VerdictEvalReport, VerdictEvalWindowDays } from '@client/app/utils/verdictEval';
+import {
+  ACCOUNT_STATUS_ACTIONS_FILTER,
+  REINSTATED_ENTRIES,
+  SUSPEND_ACTIONS,
+} from '@server/security/accountStatusAuditActions';
 import { signupVerdictOf } from '@server/users/signupClassifier';
 import { getSignupVerdicts } from '@server/users/signupTimeseries';
 import {
@@ -36,14 +42,6 @@ export const VERDICT_EVAL_DETECTION_LIMIT = 2_000;
 export const VERDICT_EVAL_ACCOUNT_LIMIT = 5_000;
 const IN_CHUNK = 500;
 
-const SUSPEND_ACTIONS = ['user.suspended', 'user.bulk.suspended', 'user.bulk.contained', 'abuse.bulk.ban'];
-const REINSTATE_ACTIONS = ['user.reinstated'];
-const REINSTATED_ENTRIES = [...REINSTATE_ACTIONS, 'user.bulk.undone'];
-// A bulk undo only reinstates when it reverted a suspend or contain; undoing a tag or credit change says nothing.
-const BULK_UNDONE_BAN = { action: 'user.bulk.undone', 'details.undoneAction': { $in: ['suspend', 'contain'] } };
-const LABEL_ACTIONS_FILTER = {
-  $or: [{ action: { $in: [...SUSPEND_ACTIONS, ...REINSTATE_ACTIONS] } }, BULK_UNDONE_BAN],
-};
 const LABEL_REVIEW_STATES: SignupRiskReviewState[] = ['approved', 'banned'];
 const OBJECT_ID = /^[0-9a-f]{24}$/;
 
@@ -84,6 +82,7 @@ type LeanDetection = {
   userIds: string[];
   detectedAt: Date;
   verdict: ShadowDetectionVerdict | null;
+  verdicts?: { source?: ShadowDetectionVerdictSource }[];
 };
 type LeanAssessment = {
   detectionId: string;
@@ -117,7 +116,7 @@ export async function loadVerdictEvalInput(
 
   const fetched = await ShadowDetectionModel.find(
     { detectedAt: { $gte: since } },
-    { userIds: 1, detectedAt: 1, verdict: 1 }
+    { userIds: 1, detectedAt: 1, verdict: 1, verdicts: { $slice: -1 } }
   )
     .sort({ detectedAt: -1 })
     .limit(VERDICT_EVAL_DETECTION_LIMIT + 1)
@@ -130,6 +129,7 @@ export async function loadVerdictEvalInput(
     userIds: row.userIds,
     detectedAt: row.detectedAt,
     verdict: row.verdict ?? null,
+    verdicts: row.verdicts ?? [],
   }));
   const detectionIds = detections.map(detection => detection.id);
 
@@ -155,7 +155,7 @@ export async function loadVerdictEvalInput(
     // Accounts an admin suspended, contained, reinstated or un-contained in the window, with or without a detection.
     AdminAuditLogModel.find(
       {
-        ...LABEL_ACTIONS_FILTER,
+        ...ACCOUNT_STATUS_ACTIONS_FILTER,
         occurredAt: { $gte: since },
         'target.kind': 'user',
       },
@@ -190,7 +190,7 @@ export async function loadVerdictEvalInput(
         {
           'target.kind': 'user',
           'target.id': { $in: chunk },
-          ...LABEL_ACTIONS_FILTER,
+          ...ACCOUNT_STATUS_ACTIONS_FILTER,
         },
         { action: 1, 'actor.kind': 1, 'target.id': 1, occurredAt: 1 }
       )

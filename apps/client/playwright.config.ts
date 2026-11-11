@@ -219,6 +219,15 @@ export default defineConfig({
       ],
       dependencies: ['setup-core', 'setup-projects'],
     },
+    // Referral invites: kept out of `unauthenticated` (the core deploy-gate run) because each run
+    // creates a real signup and the per-IP/ASN signup caps are not skipped under E2E
+    // (server/auth/signupNetworkLimits.ts). Full suite + manual run.
+    {
+      name: 'referrals',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: [/(?:^|\/)referrals\.spec\.ts$/],
+      dependencies: ['setup-core'],
+    },
     // WebSocket token enforcement: mints its own throwaway users (revoking a token kills every
     // token that user holds), so it needs no shared auth state - only core setup.
     {
@@ -239,6 +248,7 @@ export default defineConfig({
         /(?:^|\/)admin\.spec\.ts$/,
         /(?:^|\/)admin-settings-secrets\.spec\.ts$/,
         /(?:^|\/)admin-approvals\.spec\.ts$/,
+        /(?:^|\/)admin-tutorials\.spec\.ts$/,
       ],
     },
     // Per-spec test projects (each depends only on its own setup)

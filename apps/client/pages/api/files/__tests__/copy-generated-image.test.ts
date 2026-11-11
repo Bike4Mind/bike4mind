@@ -230,7 +230,11 @@ describe('copied file signing', () => {
     });
     const { res } = makeRes();
     await handler(req('me'), res);
-    expect(h.signUrl).toHaveBeenCalledWith('owned/image.png', 'get', { expiresIn: 3600, audience: 'browser' });
+    expect(h.signUrl).toHaveBeenCalledWith('owned/image.png', 'get', {
+      expiresIn: 3600,
+      audience: 'browser',
+      signingDate: expect.any(Date),
+    });
   });
 
   it('preserves real hydrated copied-image fields in the signed response', async () => {

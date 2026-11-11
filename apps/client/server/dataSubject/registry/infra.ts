@@ -1,7 +1,5 @@
 import type { DataHolderRegistry } from '../types';
-
-const AUDIT_LOG_REASON =
-  'Tamper-proof administrative audit record kept for security accountability (legitimate interest, GDPR Art. 6(1)(f))';
+import { AUDIT_LOG, EMAIL_SUPPRESSION, expiresAfterTtl } from './retention';
 
 export const infraHolders = {
   // Advisory model judgment of a shadow detection, kept for as long as the detection.
@@ -16,10 +14,10 @@ export const infraHolders = {
   AdminApproval: {
     kind: 'holder',
     references: [
-      { path: 'requestedBy.id', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
-      { path: 'requestedBy.selfIds', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
-      { path: 'requestedBy.email', matchBy: 'email', action: 'retain', reason: AUDIT_LOG_REASON },
-      { path: 'decidedBy.id', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
+      { path: 'requestedBy.id', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      { path: 'requestedBy.selfIds', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      { path: 'requestedBy.email', matchBy: 'email', action: 'retain', ...AUDIT_LOG },
+      { path: 'decidedBy.id', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
     ],
   },
   AdminAuditAlertState: {
@@ -31,13 +29,13 @@ export const infraHolders = {
   AdminAuditLog: {
     kind: 'holder',
     references: [
-      { path: 'actor.userId', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
-      { path: 'actor.impersonatedUserId', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
+      { path: 'actor.userId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      { path: 'actor.impersonatedUserId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
       {
         path: 'target.id',
         matchBy: 'userId',
         action: 'retain',
-        reason: AUDIT_LOG_REASON,
+        ...AUDIT_LOG,
         where: { 'target.kind': 'user' },
       },
     ],
@@ -85,6 +83,7 @@ export const infraHolders = {
         matchBy: 'userId',
         action: 'retain',
         reason: 'Fraud containment record kept to prevent repeat abuse (GDPR Art. 17(3)(e) / Art. 6(1)(f))',
+        retention: expiresAfterTtl('decidedAt', 365),
       },
     ],
   },
@@ -151,7 +150,7 @@ export const infraHolders = {
         path: 'email',
         matchBy: 'email',
         action: 'retain',
-        reason: 'Suppression record: keeps the address from being mailed again after an objection (Art. 21).',
+        ...EMAIL_SUPPRESSION,
       },
     ],
     secretPaths: ['unsubscribeToken'],
@@ -353,17 +352,13 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
   },
-  // A fraud-detection record naming several accounts and a network: kept to prevent repeat abuse, so the reviewer
-  // verdicts are anonymized but `userIds` and `network` are not removed.
+  // A fraud-detection record naming several accounts and a network. The person is pulled from
+  // `userIds` (`shadowDetectionRepository.removeUser`), which also deletes a record left naming no one
+  // and rebuilds or deletes a campaign group; reviewer verdicts are anonymized.
   ShadowDetection: {
     kind: 'holder',
     references: [
-      {
-        path: 'userIds',
-        matchBy: 'userId',
-        action: 'retain',
-        reason: 'Fraud signal kept for the legitimate interest in preventing repeat abuse (GDPR Art. 6(1)(f))',
-      },
+      { path: 'userIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'verdicts.reviewerId', matchBy: 'userId', action: 'anonymize' },
     ],
   },

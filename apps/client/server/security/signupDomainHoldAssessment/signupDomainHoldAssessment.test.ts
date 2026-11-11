@@ -1,12 +1,16 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import {
+  SIGNUP_DOMAIN_HOLD_ASSESSMENT_POLICY_VERSION,
   SignupDomainHoldAssessmentConfigSchema,
   type SignupDomainHoldAssessment,
   type SignupDomainReview,
 } from '@bike4mind/common';
 import { DecisionProviderError } from '@bike4mind/utils/decisionProviders';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const COHORT_ID_1 = '65f0000000000000000000a1';
+const COHORT_ID_2 = '65f0000000000000000000a2';
+/** Verified on the domain after the hold was created, so never in its judged cohort. */
+const JOINER_ID = '65f0000000000000000000b1';
 
 const mocks = vi.hoisted(() => ({
   providerDecide: vi.fn(),
@@ -56,7 +60,7 @@ const hold = (overrides: Partial<SignupDomainReview> = {}): SignupDomainReview =
   status: 'held_pending_review',
   reason: YOUNG,
   triggeredAt: new Date('2026-11-01T10:00:00Z'),
-  cohortUserIds: ['65f0000000000000000000a1', '65f0000000000000000000a2'],
+  cohortUserIds: [COHORT_ID_1, COHORT_ID_2],
   sampleEmails: [SECRET_EMAIL],
   signupCount: 4,
   ...overrides,
@@ -75,11 +79,14 @@ const answer = (choice: string, p: number) => {
   };
 };
 
+// `answer` takes the chosen option's probability; B4M's choice confidence over three options is (3p - 1) / 2.
+const answerAtConfidence = (choice: string, confidence: number) => answer(choice, (2 * confidence + 1) / 3);
+
 type Store = Map<string, SignupDomainReview>;
 
 /**
- * Only the three writes the feature is allowed; any other repository method (or a status other than
- * `blocked`) fails the test, so a release path cannot exist unnoticed.
+ * Only the writes the feature is allowed; any other repository method fails the test, so a new write
+ * path cannot exist unnoticed. autoRelease is reached only through the guarded release path.
  */
 type PendingQuery = Parameters<SignupDomainHoldAssessmentDeps['holds']['listPendingForAssessment']>;
 
@@ -112,6 +119,15 @@ const makeHolds = (store: Store): SignupDomainHoldAssessmentDeps['holds'] => {
       store.set(domain, { ...review, status: 'blocked', autoDecision: { policy, decidedAt } });
       return true;
     }),
+    autoRelease: vi.fn(
+      async (domain: string, reason: string, policy: 'advisory-decision', decidedAt: Date, paidUserIds: string[]) => {
+        const review = store.get(domain);
+        if (review?.status !== 'held_pending_review' || review.reason !== reason) return false;
+        const cohortUserIds = [...new Set([...review.cohortUserIds, ...paidUserIds])];
+        store.set(domain, { ...review, status: 'released', cohortUserIds, autoDecision: { policy, decidedAt } });
+        return true;
+      }
+    ),
   };
   return new Proxy(allowed, {
     get(target, key) {
@@ -144,7 +160,14 @@ const makeDeps = (store: Store, overrides: Partial<SignupDomainHoldAssessmentDep
       failed: [],
     })),
     // The real probe reads the body only to derive these flags; a stand-in body is checked below.
-    probeSite: vi.fn(async () => ({ resolves: true, hasContent: false })),
+    probeSite: vi.fn(async () => ({ resolves: true, hasContent: false, offersDisposableMail: false })),
+    reserveAutoRelease: vi.fn(async (maxPerDay: number) =>
+      (await countCalls('autoReleases', maxPerDay)).success
+        ? { refund: async () => void counters.set('autoReleases', (counters.get('autoReleases') ?? 1) - 1) }
+        : null
+    ),
+    listHeldSignupIds: vi.fn(async () => [COHORT_ID_1]),
+    releaseCredits: vi.fn(async () => ({ creditsReleased: 1000, remaining: 0, nextCursor: null })),
     inTransaction: async fn => {
       const snapshot = new Map(store);
       try {
@@ -203,7 +226,13 @@ describe('runSignupDomainHoldAssessments', () => {
     expect(stored).toMatchObject({
       status: 'blocked',
       autoDecision: { policy: 'advisory-decision', decidedAt: NOW },
-      assessment: { outcome: 'judged', judgment: 'abuse', policyVersion: 1, model: 'gpt-6-luna', assessedAt: NOW },
+      assessment: {
+        outcome: 'judged',
+        judgment: 'abuse',
+        policyVersion: SIGNUP_DOMAIN_HOLD_ASSESSMENT_POLICY_VERSION,
+        model: 'gpt-6-luna',
+        assessedAt: NOW,
+      },
     });
     expect(stored?.assessment).toMatchObject({ confidence: expect.closeTo(0.955, 5) });
     expect(deps.recordAudit).toHaveBeenCalledTimes(1);
@@ -292,7 +321,7 @@ describe('runSignupDomainHoldAssessments', () => {
     expect(stored?.status).toBe('held_pending_review');
     expect(stored?.assessment).toEqual({
       outcome: 'failed',
-      policyVersion: 1,
+      policyVersion: SIGNUP_DOMAIN_HOLD_ASSESSMENT_POLICY_VERSION,
       failure,
       attempts: 1,
       model: 'gpt-6-luna',
@@ -351,7 +380,9 @@ describe('runSignupDomainHoldAssessments', () => {
       );
       const deps = makeDeps(store, {
         probeSite: vi.fn(async (domain: string) =>
-          domain === 'fresh.example' ? new Promise<never>(() => {}) : { resolves: true, hasContent: false }
+          domain === 'fresh.example'
+            ? new Promise<never>(() => {})
+            : { resolves: true, hasContent: false, offersDisposableMail: false }
         ),
       });
 
@@ -398,7 +429,7 @@ describe('runSignupDomainHoldAssessments', () => {
     mocks.providerDecide.mockResolvedValue({ ...answer('abuse', 0.97), answers: [{ type: 'refusal' }] });
     const previous: SignupDomainHoldAssessment = {
       outcome: 'failed',
-      policyVersion: 1,
+      policyVersion: SIGNUP_DOMAIN_HOLD_ASSESSMENT_POLICY_VERSION,
       failure: 'provider_error',
       attempts: 2,
       model: 'gpt-6-luna',
@@ -487,7 +518,7 @@ describe('runSignupDomainHoldAssessments', () => {
         json: {
           domainAgeDays: 3,
           mxProvider: 'cloudflare_routing',
-          site: { resolves: true, hasContent: false },
+          site: { resolves: true, hasContent: false, offersDisposableMail: false },
           signups: { count: 4, accountsSummarized: 2, spanMinutes: 6, medianGapMinutes: 6 },
           network: {
             accountsWithNetworkData: 2,
@@ -510,7 +541,11 @@ describe('runSignupDomainHoldAssessments', () => {
     expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ status: 'ran', considered: 0 });
     expect(deps.holds.listPendingForAssessment).toHaveBeenCalledWith(
       'young-domain',
-      { policyVersion: 1, maxAttempts: 3, retryBefore: new Date(NOW.getTime() - 60 * 60 * 1000) },
+      {
+        policyVersion: SIGNUP_DOMAIN_HOLD_ASSESSMENT_POLICY_VERSION,
+        maxAttempts: 3,
+        retryBefore: new Date(NOW.getTime() - 60 * 60 * 1000),
+      },
       20
     );
     expect(mocks.providerDecide).not.toHaveBeenCalled();
@@ -528,26 +563,282 @@ describe('runSignupDomainHoldAssessments', () => {
     expect(deps.recordAudit).not.toHaveBeenCalled();
   });
 
-  describe('never releases', () => {
-    it.each([
-      ['abuse', 0.97],
-      ['abuse', 0.6],
-      ['legitimate', 0.99],
-      ['insufficient_evidence', 0.99],
-    ])('a %s verdict at p=%s only ever moves a hold to blocked or leaves it pending', async (choice, p) => {
-      mocks.providerDecide.mockResolvedValue(answer(choice, p));
-      const store = storeWith(hold(), hold({ domain: 'blocked.example', status: 'blocked' }));
-      await runSignupDomainHoldAssessments(makeDeps(store));
-      for (const review of store.values()) expect(review.status).not.toBe('released');
-      expect(store.get('blocked.example')?.status).toBe('blocked');
+  describe('auto-release', () => {
+    // A small real-looking project: one signup, a site with real text, a paid mailbox, a home network.
+    const legitimateDeps = (store: Store, overrides: Partial<SignupDomainHoldAssessmentDeps> = {}) =>
+      makeDeps(store, {
+        probeSite: vi.fn(async () => ({ resolves: true, hasContent: true, offersDisposableMail: false })),
+        domainIntel: vi.fn(async () => ({
+          registeredAt: new Date('2026-10-20T00:00:00Z'),
+          mxHosts: ['aspmx.l.google.com'],
+          mxFlags: ['google-workspace'],
+          failed: [],
+        })),
+        loadCohort: vi.fn(async () => [
+          {
+            createdAt: new Date('2026-11-01T10:00:00Z'),
+            signupMeta: { ip: '198.51.100.4', asn: 64501, country: 'ZZ', isDatacenter: false },
+          },
+        ]),
+        ...overrides,
+      });
+    const enableAutoRelease = (config: Record<string, unknown> = {}) => {
+      settings = {
+        enabled: true,
+        config: SignupDomainHoldAssessmentConfigSchema.parse({
+          model: 'gpt-6-luna',
+          dailyBudgetUsd: 1,
+          autoReleaseEnabled: true,
+          ...config,
+        }),
+      };
+    };
+
+    it('releases a confident legitimate verdict that passes every guard, with an audit entry and a payout', async () => {
+      enableAutoRelease();
+      mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
+      const store = storeWith(hold({ signupCount: 1 }));
+      const deps = legitimateDeps(store);
+
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 1, confirmed: 0 });
+      expect(store.get('fresh.example')).toMatchObject({
+        status: 'released',
+        autoDecision: { policy: 'advisory-decision', decidedAt: NOW },
+      });
+      expect(deps.recordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'signup_domain_hold.auto_released',
+          changes: [{ field: 'status', before: 'held_pending_review', after: 'released' }],
+        })
+      );
+      expect(deps.releaseCredits).toHaveBeenCalledWith('fresh.example', [COHORT_ID_1]);
+      expect(deps.recordShadowDetection).toHaveBeenCalledWith(expect.objectContaining({ wouldAction: 'releaseHold' }));
     });
 
-    it('has no release path in its source', () => {
-      for (const file of ['signupDomainHoldAssessment.ts', 'featureSummary.ts']) {
-        const source = readFileSync(path.join(__dirname, file), 'utf8');
-        expect(source).not.toMatch(/['"]released['"]/);
-        expect(source).not.toMatch(/SignupDomainReviewModel|releaseVerifiedPendingFreeCredits/);
-      }
+    it('releases at exactly the release confidence and leaves a hair below it pending', async () => {
+      enableAutoRelease();
+      mocks.providerDecide.mockResolvedValue(answerAtConfidence('legitimate', 0.95));
+      const atThreshold = storeWith(hold({ signupCount: 1 }));
+      expect(await runSignupDomainHoldAssessments(legitimateDeps(atThreshold))).toMatchObject({ released: 1 });
+      expect(atThreshold.get('fresh.example')).toMatchObject({ status: 'released', assessment: { confidence: 0.95 } });
+
+      counters.clear();
+      mocks.providerDecide.mockResolvedValue(answerAtConfidence('legitimate', 0.949));
+      const below = storeWith(hold({ signupCount: 1 }));
+      expect(await runSignupDomainHoldAssessments(legitimateDeps(below))).toMatchObject({ released: 0, recorded: 1 });
+      const pending = below.get('fresh.example');
+      expect(pending?.status).toBe('held_pending_review');
+      expect(pending?.assessment).toMatchObject({ confidence: expect.closeTo(0.949, 6) });
+    });
+
+    it.each<[string, Partial<SignupDomainReview>, string[]]>([
+      ['a hold of exactly the most accounts', { signupCount: 2 }, [COHORT_ID_1]],
+      ['a live count of exactly the most accounts', { signupCount: 1 }, [COHORT_ID_1, COHORT_ID_2]],
+      ['a live count of exactly 1', { signupCount: 1 }, [COHORT_ID_2]],
+    ])('releases %s and pays only the accounts it read', async (_case, holdOverrides, live) => {
+      enableAutoRelease({ maxAutoReleaseSignups: 2 });
+      mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
+      const store = storeWith(hold(holdOverrides));
+      const deps = legitimateDeps(store, { listHeldSignupIds: vi.fn(async () => live) });
+
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 1 });
+      expect(deps.listHeldSignupIds).toHaveBeenCalledWith('fresh.example', 3);
+      expect(deps.releaseCredits).toHaveBeenCalledWith('fresh.example', live);
+    });
+
+    it('judges accounts that joined the hold after it was created, and records the paid accounts on it', async () => {
+      enableAutoRelease({ maxAutoReleaseSignups: 2 });
+      mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
+      const store = storeWith(hold({ signupCount: 1, cohortUserIds: [COHORT_ID_1] }));
+      const deps = legitimateDeps(store, { listHeldSignupIds: vi.fn(async () => [COHORT_ID_1, JOINER_ID]) });
+
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 1 });
+      expect(deps.loadCohort).toHaveBeenCalledWith([COHORT_ID_1, JOINER_ID]);
+      expect(deps.releaseCredits).toHaveBeenCalledWith('fresh.example', [COHORT_ID_1, JOINER_ID]);
+      expect(store.get('fresh.example')?.cohortUserIds).toEqual([COHORT_ID_1, JOINER_ID]);
+    });
+
+    it('never releases while auto-release is off, whatever the verdict', async () => {
+      mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
+      const store = storeWith(hold({ signupCount: 1 }));
+      const deps = legitimateDeps(store);
+
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 0, recorded: 1 });
+      expect(store.get('fresh.example')?.status).toBe('held_pending_review');
+      expect(deps.releaseCredits).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['abuse', 0.99],
+      ['insufficient_evidence', 0.99],
+      ['legitimate', 0.9],
+    ])('leaves a %s verdict at p=%s unreleased', async (choice, p) => {
+      enableAutoRelease();
+      mocks.providerDecide.mockResolvedValue(answer(choice, p));
+      const store = storeWith(hold({ signupCount: 1 }));
+      await runSignupDomainHoldAssessments(legitimateDeps(store));
+      expect(store.get('fresh.example')?.status).not.toBe('released');
+    });
+
+    it.each<[string, Partial<SignupDomainHoldAssessmentDeps>, Partial<SignupDomainReview>]>([
+      [
+        'the site has no real content',
+        { probeSite: vi.fn(async () => ({ resolves: true, hasContent: false, offersDisposableMail: false })) },
+        {},
+      ],
+      [
+        'the site offers disposable mail',
+        { probeSite: vi.fn(async () => ({ resolves: true, hasContent: true, offersDisposableMail: true })) },
+        {},
+      ],
+      [
+        'mail is self-hosted',
+        {
+          domainIntel: vi.fn(async () => ({
+            registeredAt: new Date('2026-10-20T00:00:00Z'),
+            mxHosts: ['mx.fresh.example'],
+            mxFlags: ['self-hosted'],
+            failed: [],
+          })),
+        },
+        {},
+      ],
+      [
+        'a signup came from a datacenter',
+        {
+          loadCohort: vi.fn(async () => [
+            { createdAt: NOW, signupMeta: { ip: '198.51.100.4', asn: 64501, country: 'ZZ', isDatacenter: true } },
+          ]),
+        },
+        {},
+      ],
+      ['there are more signups than the cap', {}, { signupCount: 3 }],
+      [
+        'more accounts joined the hold than the cap',
+        { listHeldSignupIds: vi.fn(async () => [COHORT_ID_1, COHORT_ID_2, JOINER_ID]) },
+        {},
+      ],
+      // Read after the model call: the facts were gathered without this account.
+      [
+        'an account joined the hold after its facts were gathered',
+        {
+          listHeldSignupIds: vi
+            .fn()
+            .mockResolvedValueOnce([COHORT_ID_1])
+            .mockResolvedValueOnce([COHORT_ID_1, JOINER_ID]),
+        },
+        {},
+      ],
+      [
+        'an account that joined the hold before it was judged signed up from a datacenter',
+        {
+          listHeldSignupIds: vi.fn(async () => [COHORT_ID_1, JOINER_ID]),
+          loadCohort: vi.fn(async (ids: string[]) =>
+            ids.map(id => ({
+              createdAt: NOW,
+              signupMeta: { ip: '198.51.100.4', asn: 64501, country: 'ZZ', isDatacenter: id === JOINER_ID },
+            }))
+          ),
+        },
+        {},
+      ],
+      ['no account is waiting any more', { listHeldSignupIds: vi.fn(async () => []) }, {}],
+      [
+        'the mail host is an unclassified third party',
+        {
+          domainIntel: vi.fn(async () => ({
+            registeredAt: new Date('2026-10-20T00:00:00Z'),
+            mxHosts: ['mx.cheap-host.example'],
+            mxFlags: [],
+            failed: [],
+          })),
+        },
+        {},
+      ],
+      ['no signup has network data', { loadCohort: vi.fn(async () => [{ createdAt: NOW, signupMeta: null }]) }, {}],
+      [
+        'only some signups have network data',
+        {
+          loadCohort: vi.fn(async () => [
+            { createdAt: NOW, signupMeta: { ip: '198.51.100.4', asn: 64501, country: 'ZZ', isDatacenter: false } },
+            { createdAt: NOW, signupMeta: null },
+          ]),
+        },
+        {},
+      ],
+    ])('keeps a confident legitimate verdict pending when %s', async (_case, depOverrides, holdOverrides) => {
+      enableAutoRelease();
+      mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
+      const store = storeWith(hold({ signupCount: 1, ...holdOverrides }));
+      const deps = legitimateDeps(store, depOverrides);
+
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 0, recorded: 1 });
+      expect(store.get('fresh.example')?.status).toBe('held_pending_review');
+      expect(deps.releaseCredits).not.toHaveBeenCalled();
+    });
+
+    it('stops releasing once the daily cap is spent and leaves the rest for an admin', async () => {
+      enableAutoRelease({ maxAutoReleasesPerDay: 1 });
+      mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
+      const store = storeWith(hold({ signupCount: 1 }), hold({ domain: 'second.example', signupCount: 1 }));
+      const deps = legitimateDeps(store);
+
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 1, recorded: 1 });
+      expect([...store.values()].filter(review => review.status === 'released')).toHaveLength(1);
+      expect(deps.releaseCredits).toHaveBeenCalledTimes(1);
+    });
+
+    it('hands the cap slot back when an admin decided the hold before the release landed', async () => {
+      enableAutoRelease({ maxAutoReleasesPerDay: 1 });
+      mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
+      const store = storeWith(hold({ signupCount: 1 }), hold({ domain: 'second.example', signupCount: 1 }));
+      const deps = legitimateDeps(store);
+      // The first conditional transition loses to an admin; the slot it reserved must still serve the second.
+      vi.mocked(deps.holds.autoRelease).mockResolvedValueOnce(false);
+
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 1, recorded: 1 });
+      expect(deps.releaseCredits).toHaveBeenCalledTimes(1);
+      expect(counters.get('autoReleases')).toBe(1);
+    });
+
+    it('hands the cap slot back when the release transaction fails', async () => {
+      enableAutoRelease({ maxAutoReleasesPerDay: 1 });
+      mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
+      const store = storeWith(hold({ signupCount: 1 }));
+      const deps = legitimateDeps(store, {
+        recordAudit: vi.fn(async () => Promise.reject(new Error('audit down'))),
+      });
+
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 0 });
+      expect(store.get('fresh.example')?.status).toBe('held_pending_review');
+      expect(counters.get('autoReleases')).toBe(0);
+    });
+
+    it('keeps the release when the payout fails, so an admin can retry the grants', async () => {
+      enableAutoRelease();
+      mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
+      const store = storeWith(hold({ signupCount: 1 }));
+      const deps = legitimateDeps(store, {
+        releaseCredits: vi.fn(async () => Promise.reject(new Error('ledger down'))),
+      });
+
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 1, errors: 0 });
+      expect(store.get('fresh.example')?.status).toBe('released');
+      expect(deps.logger.error).toHaveBeenCalled();
+    });
+
+    it('does not release a hold an admin decided while the model was thinking', async () => {
+      enableAutoRelease();
+      const store = storeWith(hold({ signupCount: 1 }));
+      mocks.providerDecide.mockImplementation(async () => {
+        store.set('fresh.example', { ...hold({ signupCount: 1 }), status: 'blocked', reviewedBy: 'admin-1' });
+        return answer('legitimate', 0.99);
+      });
+      const deps = legitimateDeps(store);
+
+      await runSignupDomainHoldAssessments(deps);
+      expect(store.get('fresh.example')).toMatchObject({ status: 'blocked', reviewedBy: 'admin-1' });
+      expect(deps.releaseCredits).not.toHaveBeenCalled();
     });
   });
 });

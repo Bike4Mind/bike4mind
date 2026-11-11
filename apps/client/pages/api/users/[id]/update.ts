@@ -18,6 +18,9 @@ import {
   ApiKeyScope,
   BadRequestError,
   ForbiddenError,
+  assertCanActOnAdminTarget,
+  hasAdminPermission,
+  isFullAdmin,
   redactUserSecretsForSelf,
   selfUserProfileResponseSchema,
 } from '@bike4mind/common';
@@ -152,6 +155,8 @@ type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0]
 };
 
 type AuditTargetSnapshot = {
+  isAdmin?: boolean;
+  adminPermissions?: string[];
   isBanned?: boolean;
   isModerated?: boolean;
   currentCredits?: number;
@@ -218,8 +223,12 @@ const handler = baseApi().put(
     // An admin editing someone else, or any edit made while impersonating, is mirrored as user.profile.updated.
     const mirrorsProfileUpdate = !isSelf || !!currentUser.impersonatedBy;
 
+    const fullAdmin = isFullAdmin(currentUser);
+    // A delegate editing their own profile takes the self-service branch like any user.
+    const moderator = !fullAdmin && !isSelf && hasAdminPermission(currentUser, 'users:moderate');
+
     // Non-admin users can only update their own profile
-    if (!currentUser.isAdmin && !isSelf) {
+    if (!fullAdmin && !moderator && !isSelf) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
@@ -231,7 +240,7 @@ const handler = baseApi().put(
       await requireStepUp(req);
     }
 
-    if (currentUser.isAdmin) {
+    if (fullAdmin || moderator) {
       // The admin branch writes credits, roles and email, so it needs the ADMIN
       // scope - but this route cannot declare `requiredScopes`, because it is also
       // every ordinary user's own profile update. The gate therefore lives on the
@@ -259,19 +268,34 @@ const handler = baseApi().put(
       }
 
       // Parse with the admin schema -- includes email, tags, credits, etc.
+      // Request flags, not user fields: deferLinkPropagation (see linked-suspend-propagation.ts) and
+      // undoSuspension (an Undo of the admin's own suspend; see gradeDetectionsForStatusChange).
+      const { deferLinkPropagation, undoSuspension, ...adminBody } = rawBody;
       // Zod strips unknown keys, so a misnamed admin field (the `adminNote` vs
       // `creditReason` mix-up in useUpdateUserCredits was exactly this) parses away
       // and the 200 reads as "fully applied" when a credit grant, tag, or role
       // change never happened. Report them instead. Mirrors the self-service branch.
       const adminKeys = new Set(Object.keys(userService.adminUpdateUserSchema.shape));
-      const ignoredFields = Object.keys(rawBody).filter(key => !adminKeys.has(key));
+      const ignoredFields = Object.keys(adminBody).filter(key => !adminKeys.has(key));
+      if (moderator) {
+        const fullAdminFields = Object.keys(adminBody).filter(
+          key => adminKeys.has(key) && !userService.MODERATION_UPDATE_FIELDS.has(key)
+        );
+        if (fullAdminFields.length > 0) {
+          throw new ForbiddenError(`Only full administrators can change: ${fullAdminFields.join(', ')}`, {
+            full_admin_fields: fullAdminFields,
+          });
+        }
+      }
 
       // id comes from the route param; the spread ensures it wins over any id in the body.
-      const body = userService.adminUpdateUserSchema.parse({ ...rawBody, id: userId });
+      const body = userService.adminUpdateUserSchema.parse({ ...adminBody, id: userId });
 
       const targetBefore = (await User.findById(userId)
-        .select('isBanned isModerated currentCredits name username email')
+        .select('isAdmin adminPermissions isBanned isModerated currentCredits name username email')
         .lean()) as AuditTargetSnapshot | null;
+      if (!targetBefore) return res.status(404).json({ error: 'User not found' });
+      if (moderator) assertCanActOnAdminTarget(currentUser, targetBefore, 'suspend or restrict');
       const auditTarget = userAuditTarget(userId, targetBefore);
       const statusChanges = statusFlagChanges(body, targetBefore);
       const changesCredits = requestsCreditChange(body, targetBefore?.currentCredits);
@@ -392,7 +416,14 @@ const handler = baseApi().put(
 
       // A ban, suspension or dispute flag reaches accounts linked by card or network. After commit
       // and never throws, so it cannot undo the admin's change.
-      if (blockSnapshot && blockUpdated && userService.entersBlockedState(blockSnapshot, blockUpdated)) {
+      // A suspend that is one of several in an admin action defers this: the action propagates once for
+      // all of its accounts afterwards (pages/api/admin/users/linked-suspend-propagation.ts).
+      if (
+        !(deferLinkPropagation === true && !req.apiKeyInfo) &&
+        blockSnapshot &&
+        blockUpdated &&
+        userService.entersBlockedState(blockSnapshot, blockUpdated)
+      ) {
         await propagateAccountRisk(
           { sourceUserId: userId, trigger: 'blocked by an admin', key: `admin-block:${userId}:${Date.now()}` },
           req.logger
@@ -409,6 +440,7 @@ const handler = baseApi().put(
             wasSuspended: !!blockSnapshot.isBanned,
             isSuspended: !!blockUpdated.isBanned,
             reason: statusChangeReason,
+            undo: undoSuspension === true,
           },
           { writeAudit: requestAuditWriter(req), logger: req.logger }
         );

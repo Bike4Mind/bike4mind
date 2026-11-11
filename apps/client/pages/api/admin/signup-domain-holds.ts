@@ -2,7 +2,9 @@ import { respond } from '@server/utils/respond';
 import { z } from 'zod';
 import {
   ApiKeyScope,
-  PENDING_FREE_CREDITS_TAG,
+  MODERATION_PAGE_READ,
+  canAccessAdmin,
+  isFullAdmin,
   SIGNUP_DOMAIN_HOLD_REASON_FILTER_KEYS,
   SIGNUP_DOMAIN_HOLD_STATUS_FILTERS,
   signupDomainReviewSchema,
@@ -13,16 +15,14 @@ import {
   DomainIntelligenceModel,
   signupDomainHoldListRepository,
   SignupDomainReviewModel,
-  User,
   withTransaction,
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { baseApi } from '@server/middlewares/baseApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { isEligibleForFreeCredits, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
-import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { releaseHeldSignupCredits } from '@server/security/signupDomainHoldAssessment/releaseHeldSignupCredits';
+import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const decisionSchema = z.object({
   domain: z.string().min(1).max(253),
@@ -31,6 +31,9 @@ const decisionSchema = z.object({
     .string()
     .regex(/^[a-f0-9]{24}$/i)
     .optional(),
+  // Set only by an explicit admin Release, never by a payout retry or a continuation page: it lets the admin
+  // take over a hold the advisory assessment released, so the release becomes theirs and stays permanent.
+  overrideAutoDecision: z.boolean().optional(),
 });
 
 const PAGE_SIZE = 25;
@@ -59,10 +62,13 @@ const sourceStatusSchema = z.object({
   lastErrorAt: z.date().optional(),
 });
 
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: MODERATION_PAGE_READ, POST: 'users:moderate' },
+})
   .get(
     asyncHandler(async (req, res) => {
-      ensureAdmin(req.user?.isAdmin);
       const parsed = listQuerySchema.safeParse(req.query);
       if (!parsed.success) throw new BadRequestError('Invalid page, status, reason or includeOlder');
       const { page, status, reason, includeOlder } = parsed.data;
@@ -94,30 +100,35 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
   )
   .post(
     asyncHandler(async (req, res) => {
-      ensureAdmin(req.user?.isAdmin);
       const parsed = decisionSchema.safeParse(req.body);
       if (!parsed.success) throw new BadRequestError('Expected a domain and confirm/release action');
-      const { domain, action, afterUserId } = parsed.data;
+      const { domain, action, afterUserId, overrideAutoDecision } = parsed.data;
+      // Releasing pays out the pending free credits of every account on the domain.
+      if (action === 'release') requireAdminPermission(req, 'credits:adjust');
       const status = action === 'release' ? 'released' : 'blocked';
       // A strict audit entry rides in the same transaction, so an unrecorded decision rolls back.
       const review = await withTransaction(async () => {
+        // Release continuation pages and grant retries re-post an already released hold; that is not a new
+        // decision, so it must not rewrite who (or which policy) released it. Only an explicit admin Release
+        // of an automated release goes on to take it over.
+        if (action === 'release') {
+          const released = await SignupDomainReviewModel.findOne({ domain, status: 'released' });
+          if (released && !(overrideAutoDecision && released.autoDecision)) return released;
+        }
         const previous = await SignupDomainReviewModel.findOneAndUpdate(
           {
             domain,
-            status: {
-              $in:
-                action === 'release'
-                  ? ['held_pending_review', 'blocked', 'released']
-                  : ['held_pending_review', 'blocked'],
-            },
+            $or: [
+              { status: { $in: ['held_pending_review', 'blocked'] } },
+              // An automated release is open to an admin's Confirm or explicit Release; an admin's is final.
+              { status: 'released', autoDecision: { $exists: true } },
+            ],
           },
           // An admin decision supersedes an automated one (signupDomainHoldTriage), so its marker goes.
           { $set: { status, reviewedBy: req.user.id, reviewedAt: new Date() }, $unset: { autoDecision: 1 } },
           { new: false }
         );
         if (!previous) return null;
-        // Release continuation pages and grant retries re-post an already released hold; that is not a new decision.
-        if (previous.status === 'released') return previous;
         await recordAdminActionFromRequest(req, {
           action: action === 'release' ? 'signup_domain_hold.released' : 'signup_domain_hold.confirmed',
           target: { kind: 'system', id: `signup-domain-hold:${domain}`, displayName: domain },
@@ -131,41 +142,35 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
         return previous;
       });
       if (!review) throw new BadRequestError('Hold not found or already resolved with another decision');
-      let creditsReleased = 0;
-      let remaining = 0;
-      let nextCursor: string | null = null;
-      if (action === 'release') {
-        // Include accounts created after the hold as well as the original cohort. Never re-tag
-        // already credited users: only the existing pending breadcrumb is eligible for recovery.
-        const pendingQuery = {
-          emailVerified: true,
-          tags: PENDING_FREE_CREDITS_TAG,
-          email: { $regex: `@(?:[^@]+\\.)?${escapeRegex(domain)}\\.*$`, $options: 'i' },
-        };
-        const users = await User.find({ ...pendingQuery, ...(afterUserId ? { _id: { $gt: afterUserId } } : {}) })
-          .sort({ _id: 1 })
-          .limit(100);
-        if (users.length === 100) nextCursor = String(users[users.length - 1]._id);
-        let stillPending = 0;
-        for (const user of users) {
-          // Releasing a hold never overrides the disposable/blocked-domain gate; those users stay pending.
-          if (!user.email || !(await isEligibleForFreeCredits(user.email, req.logger))) {
-            stillPending++;
-            continue;
-          }
-          const result = await releaseVerifiedPendingFreeCredits(
-            { id: String(user._id), tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
-            'Signup domain hold released by admin',
-            req.logger,
-            undefined,
-            { bypassBudget: true }
-          );
-          creditsReleased += result.creditsGranted;
-          if (!result.tags) stillPending++;
-        }
-        // The regex cannot use an index, so recount only when this request did not see every candidate.
-        remaining = afterUserId || nextCursor ? await User.countDocuments(pendingQuery) : stillPending;
-      }
+      // A retry on an automated release keeps its decision, so it pays only the accounts that release judged,
+      // within the daily free-grant budget like the release itself; the rest of the domain stays watched.
+      // (A takeover also returns the pre-update automated row, so the override flag is what tells them apart.)
+      const retriesAutoRelease =
+        action === 'release' && !overrideAutoDecision && review.status === 'released' && !!review.autoDecision;
+      const fullAdmin = isFullAdmin(req.user);
+      // A delegate never pays out to itself or to an account with admin access; those stay pending.
+      const skipUser = fullAdmin
+        ? undefined
+        : (user: Parameters<typeof canAccessAdmin>[0] & { _id: unknown }) =>
+            isSelfOrImpersonator(req.user, String(user._id)) || canAccessAdmin(user);
+      const { creditsReleased, remaining, nextCursor } =
+        action !== 'release'
+          ? { creditsReleased: 0, remaining: 0, nextCursor: null }
+          : retriesAutoRelease
+            ? await releaseHeldSignupCredits(domain, {
+                onlyUserIds: review.cohortUserIds ?? [],
+                reason: 'Signup domain hold payout retried by admin',
+                bypassBudget: false,
+                logger: req.logger,
+                skipUser,
+              })
+            : await releaseHeldSignupCredits(domain, {
+                afterUserId,
+                reason: 'Signup domain hold released by admin',
+                bypassBudget: true,
+                logger: req.logger,
+                skipUser,
+              });
       res.status(200).json({ status, creditsReleased, remaining, nextCursor });
     })
   );

@@ -1,4 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CREDITS_PAGE_READ } from '@bike4mind/common';
 import { billingMismatchRepository, organizationRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
@@ -13,7 +13,7 @@ import {
   stripeSubscriptionRowFields,
 } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import { Subscription, subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
-import { ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import {
   AdminSubscriptionSyncSchema,
@@ -21,11 +21,12 @@ import {
   type AdminSubscriptionSyncPreview,
   type AdminSubscriptionSyncResponse,
 } from '@client/app/utils/adminSubscriptionDetail';
+import { assertDelegateCanChangeSubscription } from '@server/admin/creditGrants/delegateTargets';
 import { resolveSubscriptionOwner } from '@server/admin/subscriptionDetail/resolveSubscriptionOwner';
 import { subscriptionPlanCatalog } from '@server/admin/subscriptionsList/adminSubscriptionsQuery';
 import { toAdminSubscriptionRows, type SubscriptionDoc } from '@server/admin/subscriptionsList/listAdminSubscriptions';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { applyStripeSubscriptionState } from '@server/subscriptions/applyStripeSubscriptionState';
 import { stripeSyncChanges } from '@server/subscriptions/stripeSyncChanges';
@@ -105,11 +106,14 @@ const previewChanges = async (
  * GET previews Sync from Stripe (a live Stripe read, nothing written); POST applies it: the row and an
  * organization's seats take Stripe's values. Mongo-only, so Stripe is never written to.
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: CREDITS_PAGE_READ, POST: 'credits:adjust' },
+})
   .use(rateLimit({ limit: 10, windowMs: 60_000, bucket: 'admin-subscription-sync' }))
   .get(
     asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
-      if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
       const row = await loadStripeRow(req.query.id);
       const stripeSub = await retrieveStripe(row.subscriptionId as string);
       const body: AdminSubscriptionSyncPreview = {
@@ -124,8 +128,6 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
   )
   .post(
     asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
-      if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
-
       const parsed = AdminSubscriptionSyncSchema.safeParse(req.body);
       if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'Invalid request body');
       const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
@@ -142,6 +144,8 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           target: owner.target,
         });
       }
+
+      await assertDelegateCanChangeSubscription(req.user, row, 'sync the subscription of');
 
       if (!row.updatedAt || row.updatedAt.getTime() !== new Date(parsed.data.expectedUpdatedAt).getTime()) {
         throw new ConflictError('This subscription changed; reload and try again.');

@@ -47,6 +47,7 @@ export function Home() {
           key={chatScope.current}
           auth={state}
           onOpenModelServers={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
+          onOpenImportSettings={focus => void navigate({ to: '/settings', search: { section: 'import', focus } })}
           account={status =>
             state?.status === 'signed-in' || state?.reauthRequired ? (
               <SignedInPanel state={state} status={status} />

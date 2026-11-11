@@ -185,6 +185,8 @@ export interface ToolContext {
           | 'findBySlug'
           | 'findBySlugAmongIds'
           | 'create'
+          // The per-user lake cap create_data_lake checks before creating.
+          | 'countCountedCreatedBy'
           | 'setStats'
           | 'activateIfDraft'
           // The owner transfer a save's lake join triggers (reassignStorageOwner).

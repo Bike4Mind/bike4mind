@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ApiKeyScope, missingAdminPermissionMessage } from '@bike4mind/common';
 
-const { mockFindOneAndUpdate, mockReportUpdateMany, mockUserFindById } = vi.hoisted(() => ({
-  mockUserFindById: vi.fn(),
-  mockFindOneAndUpdate: vi.fn(),
-  mockReportUpdateMany: vi.fn(),
-}));
+const { mockFindOneAndUpdate, mockReportUpdateMany, mockUserFindById, mockFindArtifact, mockFindOwner } = vi.hoisted(
+  () => ({
+    mockUserFindById: vi.fn(),
+    mockFindArtifact: vi.fn(),
+    mockFindOwner: vi.fn(),
+    mockFindOneAndUpdate: vi.fn(),
+    mockReportUpdateMany: vi.fn(),
+  })
+);
 const audit = vi.hoisted(() => ({ record: vi.fn(), inTransaction: [] as boolean[], txActive: false }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: audit.record,
@@ -15,21 +20,9 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   },
 }));
 
-// baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is the handler.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
-    const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
-      {
-        use: () => chain,
-        post: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.POST = fns[fns.length - 1]), chain),
-        delete: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.DELETE = fns[fns.length - 1]), chain),
-      }
-    );
-    return chain;
-  },
-}));
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).adminApiMock()
+);
 
 // ForbiddenError: a throwable the handler propagates; we assert it's thrown (the real
 // baseApi error middleware maps it to 403, out of scope for a unit test).
@@ -38,7 +31,9 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  User: { findById: () => ({ select: () => ({ lean: mockFindOwner }) }) },
   PublishedArtifact: {
+    findOne: () => ({ select: () => ({ lean: mockFindArtifact }) }),
     findOneAndUpdate: (...a: unknown[]) => mockFindOneAndUpdate(...a),
   },
   PublishedArtifactReport: {
@@ -96,6 +91,8 @@ function updatedDoc(over: Record<string, unknown> = {}) {
 const ADMIN = { id: 'admin1', isAdmin: true };
 
 beforeEach(() => {
+  mockFindArtifact.mockReset().mockResolvedValue({ ownerId: 'u1' });
+  mockFindOwner.mockReset().mockResolvedValue({ isAdmin: false, adminPermissions: [] });
   mockFindOneAndUpdate.mockReset();
   mockReportUpdateMany.mockReset().mockResolvedValue({});
   mockUserFindById.mockReset().mockResolvedValue({ id: 'u1', email: 'owner@example.com', username: 'owner' });
@@ -202,10 +199,28 @@ describe('takedown and restore - owner-only thumbnails', () => {
 });
 
 describe('POST /api/admin/published-artifacts/:id/takedown', () => {
-  it('rejects non-admins', async () => {
-    const { promise } = run({ method: 'POST', user: { id: 'u1', isAdmin: false } });
-    await expect(promise).rejects.toThrow();
+  it('declares users:moderate for POST and DELETE', () => {
+    expect((handler as unknown as { _config: unknown })._config).toEqual({
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: 'users:moderate', DELETE: 'users:moderate' },
+    });
+  });
+
+  it('refuses a delegate without users:moderate', async () => {
+    const { promise } = run({ method: 'POST', user: { id: 'u1', isAdmin: false, adminPermissions: ['support:read'] } });
+    await expect(promise).rejects.toThrow(missingAdminPermissionMessage('users:moderate'));
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('admits a delegate holding users:moderate', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc());
+    const { res, promise } = run({
+      method: 'POST',
+      user: { id: 'u1', isAdmin: false, adminPermissions: ['users:moderate'] },
+      body: { reason: 'phishing host' },
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it('takes a page down atomically, resolves reports, and purges the CDN', async () => {
@@ -239,10 +254,23 @@ describe('POST /api/admin/published-artifacts/:id/takedown', () => {
 });
 
 describe('DELETE /api/admin/published-artifacts/:id/takedown — restore', () => {
-  it('rejects non-admins', async () => {
-    const { promise } = run({ method: 'DELETE', user: { id: 'u1', isAdmin: false } });
-    await expect(promise).rejects.toThrow();
+  it('refuses a delegate without users:moderate', async () => {
+    const { promise } = run({
+      method: 'DELETE',
+      user: { id: 'u1', isAdmin: false, adminPermissions: ['support:read'] },
+    });
+    await expect(promise).rejects.toThrow(missingAdminPermissionMessage('users:moderate'));
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('admits a delegate holding users:moderate', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc());
+    const { res, promise } = run({
+      method: 'DELETE',
+      user: { id: 'u1', isAdmin: false, adminPermissions: ['users:moderate'] },
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it('restores a taken-down page back to active and purges the cached 404', async () => {
@@ -332,5 +360,32 @@ describe('takedown admin audit', () => {
     await expect(promise).rejects.toThrow('audit down');
     expect(res._isEndCalled()).toBe(false);
     expect(invalidateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('delegate artifact owner protection', () => {
+  const moderator = { id: 'mod1', isAdmin: false, adminPermissions: ['users:moderate'] };
+  it.each(['POST', 'DELETE'] as const)('%s refuses both kinds of admin-access owner before any write', async method => {
+    for (const owner of [{ isAdmin: true }, { adminPermissions: ['support:read'] }]) {
+      mockFindOwner.mockResolvedValue(owner);
+      await expect(run({ method, user: moderator }).promise).rejects.toThrow(
+        'Only full administrators can moderate published pages owned by users with admin access'
+      );
+    }
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+    expect(mockReportUpdateMany).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it.each(['POST', 'DELETE'] as const)('%s fails closed if the owner is missing', async method => {
+    mockFindOwner.mockResolvedValue(null);
+    await expect(run({ method, user: moderator }).promise).rejects.toMatchObject({ statusCode: 404 });
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each(['POST', 'DELETE'] as const)('%s binds the lifecycle write to the checked owner', async method => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc());
+    await run({ method, user: moderator }).promise;
+    expect(mockFindOneAndUpdate.mock.calls[0][0]).toMatchObject({ publicId: 'pub1', ownerId: 'u1' });
   });
 });

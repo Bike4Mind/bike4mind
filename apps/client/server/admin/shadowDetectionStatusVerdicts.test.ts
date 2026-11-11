@@ -3,22 +3,24 @@ import type { Logger } from '@bike4mind/observability';
 import type { ShadowDetectionItem } from '@bike4mind/common';
 import { gradeDetectionsForStatusChange, type AccountStatusChange } from './shadowDetectionStatusVerdicts';
 
-const { mockGradeForSuspension, mockGradeForReinstatement } = vi.hoisted(() => ({
+const { mockGradeForSuspension, mockGradeForReinstatement, mockRevertSuspensionGrades } = vi.hoisted(() => ({
   mockGradeForSuspension: vi.fn(),
   mockGradeForReinstatement: vi.fn(),
+  mockRevertSuspensionGrades: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
   shadowDetectionRepository: {
     gradeForSuspension: mockGradeForSuspension,
     gradeForReinstatement: mockGradeForReinstatement,
+    revertSuspensionGrades: mockRevertSuspensionGrades,
   },
 }));
 
 const USER_ID = 'a'.repeat(24);
 const ADMIN_ID = 'b'.repeat(24);
 
-const gradedItem = (verdict: 'confirmed_abuse' | 'legitimate_human'): ShadowDetectionItem => ({
+const gradedItem = (verdict: 'confirmed_abuse' | 'legitimate_human' | null): ShadowDetectionItem => ({
   id: 'c'.repeat(24),
   detector: 'signupNetworkBurst',
   policyVersion: 1,
@@ -56,6 +58,7 @@ describe('gradeDetectionsForStatusChange', () => {
     vi.clearAllMocks();
     mockGradeForSuspension.mockResolvedValue([gradedItem('confirmed_abuse')]);
     mockGradeForReinstatement.mockResolvedValue([gradedItem('legitimate_human')]);
+    mockRevertSuspensionGrades.mockResolvedValue([gradedItem(null)]);
     writeAudit.mockResolvedValue(null);
   });
 
@@ -105,6 +108,32 @@ describe('gradeDetectionsForStatusChange', () => {
     expect(await run(overrides)).toEqual([]);
     expect(mockGradeForSuspension).not.toHaveBeenCalled();
     expect(mockGradeForReinstatement).not.toHaveBeenCalled();
+  });
+
+  it("removes the suspension's grades instead of grading legitimate when the reinstatement is an undo", async () => {
+    const graded = await run({ wasSuspended: true, isSuspended: false, reason: 'Undo: Abuse', undo: true });
+
+    expect(mockRevertSuspensionGrades).toHaveBeenCalledWith({
+      userId: USER_ID,
+      reviewerId: ADMIN_ID,
+      reason: 'Account reinstated: Undo: Abuse',
+    });
+    expect(mockGradeForReinstatement).not.toHaveBeenCalled();
+    expect(graded).toEqual([gradedItem(null)]);
+    expect(writeAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'security.detection.reviewed',
+        summary: expect.stringContaining("by undoing the account's suspension"),
+        details: expect.objectContaining({ source: 'suspension_undone', verdict: null }),
+      })
+    );
+  });
+
+  it('ignores the undo flag on a suspension', async () => {
+    await run({ undo: true });
+
+    expect(mockGradeForSuspension).toHaveBeenCalled();
+    expect(mockRevertSuspensionGrades).not.toHaveBeenCalled();
   });
 
   it('logs instead of throwing when grading or its audit entry fails', async () => {

@@ -63,6 +63,7 @@ export function exitAfterEachInvocation(
       };
     } catch (err) {
       // The runtime client logs a failed invocation; posting the error ourselves must not drop that line.
+      // eslint-disable-next-line no-console -- the renderer bundle imports no workspace packages, so no Logger (see publishThumbnailRenderer.isolation.test.ts)
       console.error('publish thumbnail renderer: the invocation failed', err);
       const errorType = err instanceof Error ? err.name.replace(/[^\w.]/g, '') || 'Error' : 'Error';
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -82,12 +83,14 @@ export function exitAfterEachInvocation(
         signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       });
       if (response.status !== 202) {
+        // eslint-disable-next-line no-console -- the renderer bundle imports no workspace packages, so no Logger (see publishThumbnailRenderer.isolation.test.ts)
         console.error(
           `publish thumbnail renderer: the Runtime API answered HTTP ${response.status} to the ${post.kind}`
         );
       }
     } catch (err) {
       // The caller then sees the exit as a failed invoke and the orchestrator retries.
+      // eslint-disable-next-line no-console -- the renderer bundle imports no workspace packages, so no Logger (see publishThumbnailRenderer.isolation.test.ts)
       console.error(`publish thumbnail renderer: could not post the ${post.kind} to the Runtime API`, err);
     }
     exit(0);
