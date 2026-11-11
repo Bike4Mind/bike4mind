@@ -42,8 +42,31 @@ import {
   DlqMessage,
   DlqReplayLogEntry,
   DlqHistoryFilters,
+  DlqQueueInfo,
+  DlqReplaySafety,
 } from '@client/app/hooks/data/dlqManagement';
 import { AdminPermissionAction } from './shared/MissingPermission';
+
+const REPLAY_CHIP: Record<DlqReplaySafety, { color: 'success' | 'warning' | 'danger'; label: string }> = {
+  safe: { color: 'success', label: 'Safe to replay' },
+  'side-effects': { color: 'warning', label: 'Replay has side effects' },
+  unsafe: { color: 'danger', label: 'Unsafe to replay' },
+};
+
+const QueueHint: React.FC<{ queue: DlqQueueInfo }> = ({ queue }) => (
+  <Stack spacing={0.5} sx={{ mt: 1.5 }} data-testid="dlq-queue-hint">
+    <Typography level="body-sm">{queue.description}</Typography>
+    {queue.replay && (
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Chip size="sm" variant="soft" color={REPLAY_CHIP[queue.replay].color} data-testid="dlq-queue-hint-replay">
+          {REPLAY_CHIP[queue.replay].label}
+        </Chip>
+        {queue.replayNote && <Typography level="body-sm">{queue.replayNote}</Typography>}
+      </Stack>
+    )}
+    {queue.owner && <Typography level="body-xs">Owner: {queue.owner}</Typography>}
+  </Stack>
+);
 
 const StatusChip: React.FC<{ status: 'success' | 'failed' | 'skipped' }> = ({ status }) => {
   const config = {
@@ -421,6 +444,7 @@ const DlqReplayTab: React.FC = () => {
               )}
             </AdminPermissionAction>
           </Stack>
+          {selectedQueueInfo.description !== undefined && <QueueHint queue={selectedQueueInfo} />}
         </Card>
       )}
 

@@ -1,10 +1,17 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 
+export type DlqReplaySafety = 'safe' | 'side-effects' | 'unsafe';
+
 export interface DlqQueueInfo {
   label: string;
   displayName: string;
   application: string;
+  // Help fields are absent for overlay-contributed queues.
+  description?: string;
+  replay?: DlqReplaySafety;
+  replayNote?: string;
+  owner?: string;
   approximateMessageCount: number;
   approximateNotVisibleCount: number;
 }

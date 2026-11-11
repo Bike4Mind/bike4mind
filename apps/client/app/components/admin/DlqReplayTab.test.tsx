@@ -17,7 +17,16 @@ const state = vi.hoisted(() => ({
     replayedByName: string;
     createdAt: string;
   }>,
+  queues: [] as Array<Record<string, unknown>>,
 }));
+
+const QUEUE_ONE = {
+  label: 'q1',
+  displayName: 'Queue One',
+  application: 'app',
+  approximateMessageCount: 1,
+  approximateNotVisibleCount: 0,
+};
 
 const h = vi.hoisted(() => ({ user: null as null | { isAdmin?: boolean; adminPermissions?: string[] } }));
 
@@ -25,15 +34,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUs
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({
-    data: [
-      {
-        label: 'q1',
-        displayName: 'Queue One',
-        application: 'app',
-        approximateMessageCount: 1,
-        approximateNotVisibleCount: 0,
-      },
-    ],
+    data: state.queues,
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -69,18 +70,23 @@ function renderTab() {
   return result;
 }
 
-const renderWithQueueSelected = async () => {
+const selectQueue = async (name: RegExp) => {
+  await userEvent.click(screen.getByRole('combobox'));
+  await userEvent.click(await screen.findByRole('option', { name }));
+};
+
+const renderWithQueueSelected = async (name = /Queue One/) => {
   render(
     <CssVarsProvider theme={theme}>
       <DlqReplayTab />
     </CssVarsProvider>
   );
-  await userEvent.click(screen.getByRole('combobox'));
-  await userEvent.click(await screen.findByRole('option', { name: /Queue One/ }));
+  await selectQueue(name);
 };
 
 beforeEach(() => {
   state.history = [];
+  state.queues = [QUEUE_ONE];
   h.user = null;
 });
 
@@ -167,5 +173,64 @@ describe('DlqReplayTab replay permission', () => {
 
     expect(screen.getByTestId('dlq-replay-all')).toBeEnabled();
     expect(screen.getByTestId('dlq-replay-single-m1')).toBeEnabled();
+  });
+});
+
+describe('DlqReplayTab queue hint', () => {
+  const webhooks = {
+    ...QUEUE_ONE,
+    label: 'webhook-delivery',
+    displayName: 'Webhook Delivery',
+    description: 'Delivers outbound webhooks.',
+    replay: 'unsafe',
+    replayNote: 'A replay posts the webhook again.',
+    owner: 'Integrations',
+  };
+  const vectorize = {
+    ...QUEUE_ONE,
+    label: 'fab-file-vectorize',
+    displayName: 'File Vectorize',
+    description: 'Builds search vectors for a file.',
+    replay: 'safe',
+    replayNote: 'Vectors are upserted.',
+    owner: 'Knowledge files',
+  };
+
+  it('shows the selected queue description, replay class, note and owner', async () => {
+    state.queues = [webhooks, vectorize];
+    await renderWithQueueSelected(/Webhook Delivery/);
+
+    const hint = screen.getByTestId('dlq-queue-hint');
+    expect(hint).toHaveTextContent('Delivers outbound webhooks.');
+    expect(hint).toHaveTextContent('A replay posts the webhook again.');
+    expect(hint).toHaveTextContent('Owner: Integrations');
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveTextContent('Unsafe to replay');
+  });
+
+  it('updates the hint when another queue is selected', async () => {
+    state.queues = [webhooks, vectorize];
+    await renderWithQueueSelected(/Webhook Delivery/);
+    await selectQueue(/File Vectorize/);
+
+    expect(screen.getByTestId('dlq-queue-hint')).toHaveTextContent('Builds search vectors for a file.');
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveTextContent('Safe to replay');
+  });
+
+  it('shows no hint when no queue is selected', () => {
+    state.queues = [webhooks];
+    render(
+      <CssVarsProvider theme={theme}>
+        <DlqReplayTab />
+      </CssVarsProvider>
+    );
+
+    expect(screen.queryByTestId('dlq-queue-hint')).not.toBeInTheDocument();
+  });
+
+  it('shows no hint for a queue without a description', async () => {
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-replay-all')).toBeInTheDocument();
+    expect(screen.queryByTestId('dlq-queue-hint')).not.toBeInTheDocument();
   });
 });
