@@ -32,7 +32,7 @@ export async function throttleToSlowLink(page: Page): Promise<void> {
 
 /**
  * Asserts a control can be used as-is on the current viewport: scrolled to, fully inside the
- * viewport, and the topmost element at its centre and both horizontal ends, so no dialog, toast,
+ * viewport, and the topmost element at the centre and both horizontal ends of each line box, so no dialog, toast,
  * banner or overlay sits over it. Call it only on an enabled control, since a disabled Joy button
  * drops pointer events and would never be hit.
  */
@@ -42,12 +42,17 @@ export async function expectReachable(control: Locator, name: string): Promise<v
   await expect(control, `${name} is fully on screen`).toBeInViewport({ ratio: 1 });
 
   const coveredBy = await control.evaluate(element => {
-    const box = element.getBoundingClientRect();
-    const centreY = box.top + box.height / 2;
-    // Stay clear of rounded corners, which hit-test as the element underneath.
-    const inset = Math.min(12, box.width / 4);
-    const probes = [box.left + inset, box.left + box.width / 2, box.right - inset];
-    return probes.flatMap(x => {
+    // One rect per line box: an inline link that wraps spans two lines, and its bounding box
+    // centre can land on the neighbouring text. A block control has a single rect.
+    const rects = Array.from(element.getClientRects()).filter(rect => rect.width > 0 && rect.height > 0);
+    if (rects.length === 0) return ['no rendered box'];
+    const probes = rects.flatMap(rect => {
+      const centreY = rect.top + rect.height / 2;
+      // Stay clear of rounded corners, which hit-test as the element underneath.
+      const inset = Math.min(12, rect.width / 4);
+      return [rect.left + inset, rect.left + rect.width / 2, rect.right - inset].map(x => ({ x, y: centreY }));
+    });
+    return probes.flatMap(({ x, y: centreY }) => {
       const hit = document.elementFromPoint(x, centreY);
       if (hit && (hit === element || element.contains(hit))) return [];
       if (!hit) return [`nothing at (${Math.round(x)}, ${Math.round(centreY)})`];
