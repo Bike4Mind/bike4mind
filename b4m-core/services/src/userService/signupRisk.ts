@@ -71,6 +71,17 @@ export function evaluateSignupRisk(
   return { band, credits, score, reasons, missing, policyVersion: policy.version, status: 'evaluated' };
 }
 
+/**
+ * Caps a tranche paid without assessment (policy off) at signupGrantUnprotectedMaxCredits. The save guard
+ * (checkSignupGrantSave in @bike4mind/common) covers the schedule keys; this holds whatever sized the
+ * tranche, such as a referral invite amount or a grant enrolled before the policy was turned off.
+ */
+export function capUnassessedSignupGrant(decision: SignupRiskDecision, unprotectedLimit: number): SignupRiskDecision {
+  if (!Number.isSafeInteger(unprotectedLimit) || unprotectedLimit < 0) throw new Error('Invalid unprotected limit');
+  if (decision.status !== 'disabled' || decision.credits <= unprotectedLimit) return decision;
+  return { ...decision, credits: unprotectedLimit };
+}
+
 export type SignupRiskCommitResult = {
   decision: SignupRiskDecision;
   applied: boolean;

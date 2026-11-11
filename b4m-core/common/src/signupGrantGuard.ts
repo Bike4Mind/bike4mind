@@ -104,7 +104,9 @@ function grantsAbove(settings: SignupGrantGuardSettings, limit: number): string[
  * replaces the stored one for `key`. Also refuses a signupGrantRiskPolicy the payout could not read, which
  * would hold every new signup grant. A grant can always be lowered to within the limit, so a configuration
  * that is already out of bounds can be brought back within it one key at a time; a lowering that still
- * leaves the grant above the limit is refused while the policy is off.
+ * leaves the grant above the limit is refused while the policy is off. Payout enforces the same limit on
+ * an unassessed tranche whatever sized it (capUnassessedSignupGrant in @bike4mind/services), so this check
+ * keeps the settings honest rather than being the only guard.
  */
 export function checkSignupGrantSave(
   key: string,
