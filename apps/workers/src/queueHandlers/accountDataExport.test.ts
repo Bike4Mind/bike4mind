@@ -133,7 +133,13 @@ vi.mock('./accountDataExportCollections', () => ({
 
 import { ACCOUNT_DATA_EXPORT_TTL_MS } from '@bike4mind/server-utils/utils/accountDataExport';
 import { ADMIN_DATA_EXPORT_GIVE_UP_MS } from '@server/dataSubject/adminDataExports';
-import { dispatch, LEASE_WAIT_DELAY_SECONDS, MAX_FILE_BYTES, MAX_LEASE_WAITS } from './accountDataExport';
+import {
+  dispatch,
+  LEASE_WAIT_DELAY_SECONDS,
+  LEASE_WAITS_PER_REDELIVERY,
+  MAX_FILE_BYTES,
+  MAX_LEASE_WAITS,
+} from './accountDataExport';
 import { MAX_RECEIVE_COUNT, RUN_BUDGET_MS, VISIBILITY_TIMEOUT_SECONDS } from '../selfhost/registerRedrivenQueue';
 
 const logger = { updateMetadata: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -618,6 +624,7 @@ describe('account data export worker', () => {
       },
     ]);
     expect(update.$set.accountDataExportLease.id).toEqual(expect.any(String));
+    expect(update.$set.accountDataExportLease.jobId).toBe(JOB_ID);
     expect(update.$set.accountDataExportLease.expiresAt.getTime()).toBeGreaterThan(Date.now() + 19 * 60 * 1000);
     expect(h.leaseRelease).toHaveBeenCalledWith(
       { _id: USER_ID, 'accountDataExportLease.id': update.$set.accountDataExportLease.id },
@@ -645,6 +652,7 @@ describe('account data export worker', () => {
   describe('when another export holds the account lease', () => {
     beforeEach(() => {
       h.leaseClaim.mockResolvedValue(null);
+      h.leaseExists.mockResolvedValue(null);
       h.sendToQueue.mockResolvedValue('message-id');
       h.resource.accountDataExportQueue = { url: 'https://sqs.example/account-data-export' };
     });
@@ -678,10 +686,28 @@ describe('account data export worker', () => {
       expect(h.sendToQueue).toHaveBeenCalledOnce();
     });
 
-    it('does not re-send a redelivery, whose held lease may be its own from a failed attempt', async () => {
-      await expect(run({ exportJobId: JOB_ID, userId: USER_ID, leaseWaits: 2 }, 2)).rejects.toThrow(
+    it('re-sends a redelivery that finds another job holding the lease, charging its failed delivery', async () => {
+      await expect(run({ exportJobId: JOB_ID, userId: USER_ID, leaseWaits: 2 }, 2)).resolves.toBeUndefined();
+      expect(h.leaseExists).toHaveBeenCalledWith({ _id: USER_ID, 'accountDataExportLease.jobId': JOB_ID });
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        expect.any(String),
+        { exportJobId: JOB_ID, userId: USER_ID, leaseWaits: 3 + LEASE_WAITS_PER_REDELIVERY },
+        LEASE_WAIT_DELAY_SECONDS
+      );
+    });
+
+    it('falls back to SQS retries when a redelivery would be charged past the wait cap', async () => {
+      const leaseWaits = MAX_LEASE_WAITS - LEASE_WAITS_PER_REDELIVERY;
+      await expect(run({ exportJobId: JOB_ID, userId: USER_ID, leaseWaits }, 2)).rejects.toThrow(
         'Another account data export'
       );
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
+
+    it('does not wait on a lease this job kept from an earlier failed attempt', async () => {
+      h.leaseExists.mockResolvedValue({ _id: USER_ID });
+      await expect(run({ exportJobId: JOB_ID, userId: USER_ID }, 2)).rejects.toThrow('An earlier attempt');
+      await expect(run()).rejects.toThrow('An earlier attempt');
       expect(h.sendToQueue).not.toHaveBeenCalled();
       expect(h.leaseRelease).not.toHaveBeenCalled();
       expect(h.uploadFile).not.toHaveBeenCalled();
@@ -988,8 +1014,8 @@ describe('account data export worker', () => {
 });
 
 // The admin dialog shows an export as failed once ADMIN_DATA_EXPORT_GIVE_UP_MS passes, so that window must
-// outlast the slowest job that can still succeed. Only a first delivery is re-sent, so a job is at most
-// every lease-wait re-send, then every redelivery of one copy, then one full run.
+// outlast the slowest job that can still succeed. A re-sent redelivery is charged its failed deliveries as
+// lease waits, so a job is at most every lease-wait re-send, then every redelivery of one copy, then one full run.
 describe('admin export give-up window', () => {
   const MINUTE = 60 * 1000;
   const QUEUES = readFileSync(
@@ -1016,6 +1042,9 @@ describe('admin export give-up window', () => {
 
     const latest = latestSuccessMs(receives, minutesIn(queue, 'visibilityTimeout'), minutesIn(subscription, 'timeout'));
     expect(latest).toBe(61 * MINUTE);
+    expect(LEASE_WAITS_PER_REDELIVERY * LEASE_WAIT_DELAY_SECONDS * 1000).toBeGreaterThanOrEqual(
+      minutesIn(queue, 'visibilityTimeout')
+    );
     expect(ADMIN_DATA_EXPORT_GIVE_UP_MS).toBeGreaterThanOrEqual(latest + SLACK_MS);
   });
 
@@ -1024,6 +1053,9 @@ describe('admin export give-up window', () => {
   it('outlasts the slowest successful job on the self-host runner while each run keeps to its budget', () => {
     const latest = latestSuccessMs(MAX_RECEIVE_COUNT, VISIBILITY_TIMEOUT_SECONDS * 1000, RUN_BUDGET_MS);
     expect(latest).toBe(70 * MINUTE);
+    expect(LEASE_WAITS_PER_REDELIVERY * LEASE_WAIT_DELAY_SECONDS * 1000).toBeGreaterThanOrEqual(
+      VISIBILITY_TIMEOUT_SECONDS * 1000
+    );
     expect(ADMIN_DATA_EXPORT_GIVE_UP_MS).toBeGreaterThanOrEqual(latest + SLACK_MS);
   });
 });

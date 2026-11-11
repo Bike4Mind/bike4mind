@@ -63,6 +63,9 @@ const { NotebookExportService } = notebookExportService;
 // (30 minutes, past a full 15-minute build), instead of spending its SQS retries on the wait.
 export const LEASE_WAIT_DELAY_SECONDS = 120;
 export const MAX_LEASE_WAITS = 15;
+// A redelivery re-sent for a held lease first waited out a visibility timeout (16 minutes on AWS,
+// infra/queues.ts; 15 on self-host), so it is charged that as waits and the 30 minutes still bound it.
+export const LEASE_WAITS_PER_REDELIVERY = 8;
 
 const AccountDataExportPayload = z.object({
   exportJobId: z.uuid(),
@@ -825,7 +828,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         { $or: [{ 'accountDataExportLease.expiresAt': null }, { 'accountDataExportLease.expiresAt': { $lte: now } }] },
       ],
     },
-    { $set: { accountDataExportLease: { id: leaseId, expiresAt: new Date(now.getTime() + EXPORT_LEASE_MS) } } },
+    {
+      $set: {
+        accountDataExportLease: {
+          id: leaseId,
+          jobId: exportJobId,
+          expiresAt: new Date(now.getTime() + EXPORT_LEASE_MS),
+        },
+      },
+    },
     { new: true, projection: { email: 1 } }
   ).lean<{ email?: string | null }>();
   if (!claimed) {
@@ -838,19 +849,25 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Admin and self-serve exports share this one lease. The overlapping job is re-sent with a delay and
     // this message is acked, so the wait does not use up its SQS retries (infra/queues.ts); past the cap,
     // or with no queue to re-send to, it falls back to SQS redelivery and then the DLQ.
-    // Only a first delivery is re-sent: on a redelivery the held lease may be this job's own, kept by an
-    // earlier failed attempt, and a re-send would reset the receive count that bounds its retries.
+    // A lease this job kept from an earlier failed attempt is never waited on: a re-send would reset the
+    // receive count that bounds its retries.
+    const ownLease = await User.exists({ _id: userId, 'accountDataExportLease.jobId': exportJobId });
+    const nextLeaseWaits = leaseWaits + 1 + (receiveCount - 1) * LEASE_WAITS_PER_REDELIVERY;
     const queueUrl = Resource.accountDataExportQueue?.url;
-    if (receiveCount === 1 && leaseWaits < MAX_LEASE_WAITS && queueUrl) {
+    if (!ownLease && nextLeaseWaits <= MAX_LEASE_WAITS && queueUrl) {
       await sendToQueue(
         queueUrl,
-        { exportJobId, userId, ...(forAdmin && { requestedBy }), leaseWaits: leaseWaits + 1 },
+        { exportJobId, userId, ...(forAdmin && { requestedBy }), leaseWaits: nextLeaseWaits },
         LEASE_WAIT_DELAY_SECONDS
       );
       logger.info('Account data export deferred: another export holds the account lease');
       return;
     }
-    throw new Error('Another account data export holds the account lease');
+    throw new Error(
+      ownLease
+        ? 'An earlier attempt of this account data export still holds the account lease'
+        : 'Another account data export holds the account lease'
+    );
   }
   const leaseFilter = () => ({
     ...admissionFilter,
