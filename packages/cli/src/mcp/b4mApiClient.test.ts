@@ -1056,10 +1056,8 @@ describe('B4mApiClient publish', () => {
     expect(mockDelete).toHaveBeenCalledWith('/api/files/f1');
   });
 
-  it('attaches an uploaded file through the notebook and project write routes', async () => {
-    await client.attachFileToNotebook('f1', '64b7f0c2a1e4d5f6a7b8c9d0');
+  it('attaches an uploaded file through the project write route', async () => {
     await client.attachFileToProject('f1', 'p1');
-    expect(mockPut).toHaveBeenCalledWith('/api/files/f1', { sessionId: '64b7f0c2a1e4d5f6a7b8c9d0' });
     expect(mockPost).toHaveBeenCalledWith('/api/projects/p1/files', { fileIds: ['f1'] });
   });
 

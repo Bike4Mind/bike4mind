@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import { basename } from 'node:path';
 import mime from 'mime-types';
 import { z } from 'zod';
@@ -144,7 +144,7 @@ export const TOOL_META: ToolMeta[] = [
     name: 'upload_file',
     title: 'Upload file',
     description:
-      'Upload a local file or base64 bytes to the file browser. path reads any file the MCP server process can access; files over 100 MB are refused. Returns its id and pending ingestion state; indexing runs asynchronously. Optional notebookId or projectId attaches it after upload (projectId also requires projects:write).',
+      'Upload a local file or base64 bytes to the file browser. path reads any file the MCP server process can access; files over 100 MB are refused. Returns its id and pending ingestion state; indexing runs asynchronously. Optional projectId adds it to a project (also requires projects:write).',
     scope: 'files:write',
   },
   {
@@ -331,7 +331,6 @@ const uploadFileShape = {
   base64: z.string().min(1).optional().describe('Base64-encoded file bytes; use instead of path'),
   name: z.string().min(1).optional().describe('File name; defaults to the basename of path'),
   contentType: z.string().min(1).optional().describe('MIME type; otherwise inferred from the file name'),
-  notebookId: notebookId('Notebook to associate with the uploaded file').optional(),
   projectId: z.string().min(1).optional().describe('Project to add the uploaded file to; requires projects:write'),
 };
 
@@ -628,22 +627,27 @@ const UPLOAD_FILE_MAX_BYTES = 100 * 1024 * 1024;
 
 export async function uploadFile(
   client: B4mApiClient,
-  args: { path?: string; base64?: string; name?: string; contentType?: string; notebookId?: string; projectId?: string }
+  args: { path?: string; base64?: string; name?: string; contentType?: string; projectId?: string }
 ) {
   if (Boolean(args.path) === Boolean(args.base64)) throw new Error('Provide exactly one of path or base64');
   const fileName = args.name ?? (args.path ? basename(args.path) : undefined);
   if (!fileName || fileName === '.' || fileName === '..') throw new Error('A file name is required');
   const tooLarge = () => new Error(`File exceeds the ${UPLOAD_FILE_MAX_BYTES / (1024 * 1024)} MB upload limit`);
-  if (args.path) {
-    const info = await stat(args.path);
-    if (!info.isFile()) throw new Error(`${args.path} is not a regular file`);
-    if (info.size > UPLOAD_FILE_MAX_BYTES) throw tooLarge();
-  } else if (Math.floor((args.base64!.replace(/\s/g, '').length * 3) / 4) > UPLOAD_FILE_MAX_BYTES) {
+  if (!args.path && Math.floor((args.base64!.replace(/\s/g, '').length * 3) / 4) > UPLOAD_FILE_MAX_BYTES) {
     throw tooLarge();
   }
   let bytes: Buffer;
   if (args.path) {
-    bytes = await readFile(args.path);
+    const file = await open(args.path, 'r');
+    try {
+      const info = await file.stat();
+      if (!info.isFile()) throw new Error(`${args.path} is not a regular file`);
+      if (info.size > UPLOAD_FILE_MAX_BYTES) throw tooLarge();
+      bytes = await file.readFile();
+      if (bytes.length > UPLOAD_FILE_MAX_BYTES) throw tooLarge();
+    } finally {
+      await file.close();
+    }
   } else {
     let b64 = args.base64!.replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/');
     if (b64.length % 4 === 2 || b64.length % 4 === 3) b64 += '='.repeat(4 - (b64.length % 4));
@@ -675,7 +679,6 @@ export async function uploadFile(
     throw new Error(`Upload for file ${fileId} failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
-    if (args.notebookId) await client.attachFileToNotebook(fileId, args.notebookId);
     if (args.projectId) await client.attachFileToProject(fileId, args.projectId);
   } catch (err) {
     throw new Error(

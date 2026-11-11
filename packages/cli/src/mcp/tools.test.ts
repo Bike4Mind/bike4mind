@@ -29,12 +29,10 @@ import {
   uploadFile,
 } from './tools';
 
-const mockStat = vi.fn();
-const mockReadFile = vi.fn();
+const mockOpen = vi.fn();
 vi.mock('node:fs/promises', async importOriginal => ({
   ...(await importOriginal<typeof import('node:fs/promises')>()),
-  stat: (...a: unknown[]) => mockStat(...a),
-  readFile: (...a: unknown[]) => mockReadFile(...a),
+  open: (...a: unknown[]) => mockOpen(...a),
 }));
 
 const mockClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>>): B4mApiClient =>
@@ -144,21 +142,18 @@ describe('tool handlers', () => {
   it('upload_file sends bytes to the presign and returns pending ingestion', async () => {
     const requestFileUpload = vi.fn().mockResolvedValue({ files: [{ fileId: 'f1', url: 'https://s3.example/put' }] });
     const uploadFileBytes = vi.fn().mockResolvedValue(undefined);
-    const attachFileToNotebook = vi.fn().mockResolvedValue(undefined);
     const attachFileToProject = vi.fn().mockResolvedValue(undefined);
     const result = await uploadFile(
       mockClient({
         requestFileUpload,
         uploadFileBytes,
-        attachFileToNotebook,
         attachFileToProject,
         getOwnKeyScopes: vi.fn().mockResolvedValue(undefined),
       }),
-      { base64: 'YWJj', name: 'note.txt', notebookId: '64b7f0c2a1e4d5f6a7b8c9d0', projectId: 'p1' }
+      { base64: 'YWJj', name: 'note.txt', projectId: 'p1' }
     );
     expect(requestFileUpload).toHaveBeenCalledWith({ fileName: 'note.txt', fileSize: 3, mimeType: 'text/plain' });
     expect(uploadFileBytes).toHaveBeenCalledWith('https://s3.example/put', Buffer.from('abc'), 'text/plain');
-    expect(attachFileToNotebook).toHaveBeenCalledWith('f1', '64b7f0c2a1e4d5f6a7b8c9d0');
     expect(attachFileToProject).toHaveBeenCalledWith('f1', 'p1');
     expect(result).toEqual({ fileId: 'f1', ingestionState: 'pending' });
   });
@@ -184,6 +179,15 @@ describe('tool handlers', () => {
   });
 
   describe('upload_file edge cases', () => {
+    const fileHandle = (isFile: boolean, size: number, contents = Buffer.from('abc')) => {
+      const handle = {
+        stat: vi.fn().mockResolvedValue({ isFile: () => isFile, size }),
+        readFile: vi.fn().mockResolvedValue(contents),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      mockOpen.mockResolvedValue(handle);
+      return handle;
+    };
     const presign = () => vi.fn().mockResolvedValue({ files: [{ fileId: 'f1', url: 'https://s3.example/put' }] });
     const uploadClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>> = {}) =>
       mockClient({
@@ -195,10 +199,12 @@ describe('tool handlers', () => {
       });
 
     it('reads a local path and infers the name from its basename', async () => {
-      mockStat.mockResolvedValue({ isFile: () => true, size: 3 });
-      mockReadFile.mockResolvedValue(Buffer.from('abc'));
+      const handle = fileHandle(true, 3);
       const client = uploadClient();
       await uploadFile(client, { path: '/some/dir/report.txt' });
+      expect(mockOpen).toHaveBeenCalledWith('/some/dir/report.txt', 'r');
+      expect(handle.readFile).toHaveBeenCalledOnce();
+      expect(handle.close).toHaveBeenCalledOnce();
       expect(client.requestFileUpload).toHaveBeenCalledWith({
         fileName: 'report.txt',
         fileSize: 3,
@@ -207,19 +213,27 @@ describe('tool handlers', () => {
     });
 
     it('rejects a path that is not a regular file without reading it', async () => {
-      mockStat.mockResolvedValue({ isFile: () => false, size: 0 });
-      mockReadFile.mockClear();
+      const handle = fileHandle(false, 0);
       const client = uploadClient();
       await expect(uploadFile(client, { path: '/some/dir' })).rejects.toThrow('not a regular file');
-      expect(mockReadFile).not.toHaveBeenCalled();
+      expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.close).toHaveBeenCalledOnce();
       expect(client.requestFileUpload).not.toHaveBeenCalled();
     });
 
     it('rejects an oversize file without reading it', async () => {
-      mockStat.mockResolvedValue({ isFile: () => true, size: 100 * 1024 * 1024 + 1 });
-      mockReadFile.mockClear();
+      const handle = fileHandle(true, 100 * 1024 * 1024 + 1);
       await expect(uploadFile(uploadClient(), { path: '/big.bin' })).rejects.toThrow('upload limit');
-      expect(mockReadFile).not.toHaveBeenCalled();
+      expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.close).toHaveBeenCalledOnce();
+    });
+
+    it('rejects bytes that grew past the cap after stat and closes the handle', async () => {
+      const handle = fileHandle(true, 3, Buffer.alloc(100 * 1024 * 1024 + 1));
+      const client = uploadClient();
+      await expect(uploadFile(client, { path: '/growing.txt' })).rejects.toThrow('upload limit');
+      expect(handle.close).toHaveBeenCalledOnce();
+      expect(client.requestFileUpload).not.toHaveBeenCalled();
     });
 
     it('deletes the pending file and names its id when the byte upload fails', async () => {
@@ -252,7 +266,12 @@ describe('tool handlers', () => {
       const client = uploadClient();
       await uploadFile(client, { base64: 'YW\nJj', name: 'a.txt' });
       await uploadFile(client, { base64: '-_8', name: 'a.bin' });
-      expect(client.uploadFileBytes).toHaveBeenNthCalledWith(1, 'https://s3.example/put', Buffer.from('abc'), 'text/plain');
+      expect(client.uploadFileBytes).toHaveBeenNthCalledWith(
+        1,
+        'https://s3.example/put',
+        Buffer.from('abc'),
+        'text/plain'
+      );
       expect(client.uploadFileBytes).toHaveBeenNthCalledWith(
         2,
         'https://s3.example/put',
@@ -1273,6 +1292,7 @@ describe('registerTools', () => {
     );
     const tools = collectTools(mockClient({ requestFileUpload }));
     const schema = z.object(tools.schemas.get('upload_file')!);
+    expect(Object.keys(schema.shape)).not.toContain('notebookId');
     expect(schema.parse({ base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).toEqual({
       base64: 'YWJj',
       name: 'a.txt',

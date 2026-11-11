@@ -489,10 +489,6 @@ export class B4mApiClient {
     await this.client.delete(`/api/files/${encodeURIComponent(fileId)}`);
   }
 
-  async attachFileToNotebook(fileId: string, notebookId: string): Promise<void> {
-    await this.client.put(`/api/files/${encodeURIComponent(fileId)}`, { sessionId: writableNotebookId(notebookId) });
-  }
-
   async attachFileToProject(fileId: string, projectId: string): Promise<void> {
     await this.client.post(`/api/projects/${encodeURIComponent(projectId)}/files`, { fileIds: [fileId] });
   }
