@@ -119,6 +119,10 @@ export const infraHolders = {
     ],
   },
   Counters: { kind: 'noUserData', note: 'Platform-wide named counters.' },
+  DlqFailure: {
+    kind: 'noUserData',
+    note: 'Queue failure metadata keyed by SQS message ID, not a user reference. Thrown error text may contain incidental identifiers and expires after 15 days.',
+  },
   // `messageBody` is the replayed queue message and may carry user content; it is not scanned.
   DlqReplayLog: {
     kind: 'holder',
