@@ -350,7 +350,7 @@ The export includes all matching users, not just the current page, up to 15,000 
 Requests to Anthropic and OpenAI carry an opaque per-user identifier: a 64-character hex SHA-256 of the user ID, sent as Anthropic `metadata.user_id` and OpenAI `safety_identifier`. When a provider sends a safety notice that quotes this identifier:
 
 1. Press Cmd/Ctrl+K on the admin page to open **Admin commands**. Full admins only.
-2. Paste the 64-character identifier. The matching account is listed with its masked email and account status, such as active, throttled, suspended, banned or deleted.
+2. Paste the 64-character identifier. The matching account is listed with its masked email and account status: `active`, `throttled`, `suspend_pending` (the suspension threshold was reached and is waiting for an admin to confirm), `suspended`, `banned` or `deleted`.
 3. Select it to open the user profile, where you see the full email and can act on the account.
 
 Each lookup is recorded in the admin audit log without the identifier itself. No result means the identifier does not belong to a user on this deployment: for example, a Decisions API caller can send its own `safety_identifier`.
