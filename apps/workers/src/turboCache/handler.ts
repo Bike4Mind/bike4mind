@@ -1,12 +1,13 @@
-import { S3Client, GetObjectCommand, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { timingSafeEqual } from 'node:crypto';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
-// The body is uploaded later by Turbo; do not sign a checksum of an empty body.
-const s3 = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
+// The body is uploaded later by Turbo; createS3Client keeps an empty-body checksum out of the signature.
+const s3 = createS3Client();
 const PRESIGNED_URL_EXPIRY = 900; // 15 minutes
 const TEAM_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
