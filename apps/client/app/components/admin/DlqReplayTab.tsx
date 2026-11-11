@@ -174,7 +174,9 @@ const MessageDrawer: React.FC<{
                 Age / Expires in
               </Typography>
               <Typography level="body-sm" color={expiry.warn ? 'warning' : undefined} data-testid="dlq-drawer-expiry">
-                {formatDuration(expiry.ageMs)} old, expires in {formatExpiresIn(expiry)}
+                {expiry.remainingMs === null
+                  ? `${formatDuration(expiry.ageMs)} old`
+                  : `${formatDuration(expiry.ageMs)} old, expires in ${formatExpiresIn(expiry)}`}
               </Typography>
             </Box>
           )}

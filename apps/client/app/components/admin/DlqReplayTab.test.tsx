@@ -224,4 +224,25 @@ describe('DlqReplayTab age and expiry', () => {
 
     expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('N/A');
   });
+
+  it('shows age and expiry in the message drawer', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+
+    expect(await screen.findByTestId('dlq-drawer-expiry')).toHaveTextContent('10h 30m old, expires in 3d 13h');
+  });
+
+  it('omits the expiry from the message drawer when retention is unknown', async () => {
+    state.sentTimestamp = String(Date.now() - HOUR);
+
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+
+    const drawerExpiry = await screen.findByTestId('dlq-drawer-expiry');
+    expect(drawerExpiry).toHaveTextContent('1h 0m old');
+    expect(drawerExpiry).not.toHaveTextContent('expires');
+  });
 });
