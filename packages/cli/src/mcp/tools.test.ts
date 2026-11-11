@@ -252,20 +252,35 @@ describe('tool handlers', () => {
       expect(client.deleteFile).not.toHaveBeenCalled();
     });
 
-    it('falls back to application/octet-stream for an unknown extension', async () => {
+    it('refuses an unsupported type before presigning', async () => {
       const client = uploadClient();
-      await uploadFile(client, { base64: 'YWJj', name: 'blob.zzunknown' });
-      expect(client.requestFileUpload).toHaveBeenCalledWith({
-        fileName: 'blob.zzunknown',
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'blob.zzunknown' })).rejects.toThrow(
+        'Unsupported file type for blob.zzunknown'
+      );
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'README' })).rejects.toThrow('pass contentType');
+      expect(client.requestFileUpload).not.toHaveBeenCalled();
+    });
+
+    it('uses contentType for an extensionless name and ignores it when the extension is known', async () => {
+      const client = uploadClient();
+      await uploadFile(client, { base64: 'YWJj', name: 'README', contentType: 'text/plain' });
+      await uploadFile(client, { base64: 'YWJj', name: 'a.txt', contentType: 'image/png' });
+      expect(client.requestFileUpload).toHaveBeenNthCalledWith(1, {
+        fileName: 'README',
         fileSize: 3,
-        mimeType: 'application/octet-stream',
+        mimeType: 'text/plain',
+      });
+      expect(client.requestFileUpload).toHaveBeenNthCalledWith(2, {
+        fileName: 'a.txt',
+        fileSize: 3,
+        mimeType: 'text/plain',
       });
     });
 
     it('accepts wrapped, unpadded and url-safe base64', async () => {
       const client = uploadClient();
       await uploadFile(client, { base64: 'YW\nJj', name: 'a.txt' });
-      await uploadFile(client, { base64: '-_8', name: 'a.bin' });
+      await uploadFile(client, { base64: '-_8', name: 'a.png' });
       expect(client.uploadFileBytes).toHaveBeenNthCalledWith(
         1,
         'https://s3.example/put',
@@ -276,7 +291,7 @@ describe('tool handlers', () => {
         2,
         'https://s3.example/put',
         Buffer.from([0xfb, 0xff]),
-        'application/octet-stream'
+        'image/png'
       );
       await expect(uploadFile(client, { base64: 'YWJjZ', name: 'a.txt' })).rejects.toThrow('valid base64');
     });

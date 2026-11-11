@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { basename } from 'node:path';
-import mime from 'mime-types';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
@@ -657,10 +656,16 @@ export async function uploadFile(
     bytes = Buffer.from(b64, 'base64');
   }
   if (!bytes.length) throw new Error('File bytes must be nonempty and valid base64');
-  // The presign route stores the type resolved this way, so the PUT must send the same one.
-  const claimed = args.contentType ?? (mime.lookup(fileName) || undefined);
-  const resolved = resolveSupportedMimeType(fileName, claimed);
-  const mimeType = resolved.supported ? resolved.mimeType : (claimed ?? 'application/octet-stream');
+  // Same resolution as the presign route, which refuses an unsupported type; keeping the PUT's
+  // type equal to the stored record keeps the S3 object consistent with it.
+  const resolved = resolveSupportedMimeType(fileName, args.contentType);
+  if (!resolved.supported) {
+    throw new Error(
+      `Unsupported file type for ${fileName}` +
+        (fileName.includes('.') ? '' : '; pass contentType for a name without an extension')
+    );
+  }
+  const mimeType = resolved.mimeType;
   if (args.projectId) {
     // A failed lookup must not block the upload; the project route still enforces the scope.
     const scopes = await client.getOwnKeyScopes().catch(() => undefined);
