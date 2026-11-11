@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, type AdminPermissionId } from '@bike4mind/common';
-import { ADMIN_USERS_BULK_ROUTE_PERMISSIONS } from '@client/app/utils/adminUsersBulk';
+import { ADMIN_USERS_BULK_ROUTE_PERMISSIONS } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 
 vi.mock('@server/middlewares/adminApi', async () =>
   (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).adminApiMock()

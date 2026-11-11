@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ADMIN_USERS_BULK_MAX, ADMIN_USERS_BULK_MAX_CREDIT_TOTAL } from '@client/app/utils/adminUsersBulk';
+import {
+  ADMIN_USERS_BULK_MAX,
+  ADMIN_USERS_BULK_MAX_CREDIT_TOTAL,
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import {
   RESOLVE_MAX_PAGES,
   RESOLVE_PAGE_SIZE,

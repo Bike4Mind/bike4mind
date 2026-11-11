@@ -22,7 +22,7 @@ import {
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeBatchRepository, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { assertRequestCanAfford } from '@server/billing/meterPlatformCompletion';
 import { respond } from '@server/utils/respond';
 

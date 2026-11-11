@@ -1,0 +1,183 @@
+import { Ability } from '../auth/ability';
+import { accessibleBy } from '@casl/mongoose';
+import { mongoose, Quest, Session } from '@bike4mind/database';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { NotFoundError } from '../utils/errors';
+import {
+  Permission,
+  IChatHistoryItem,
+  IUserDocument,
+  redactPromptMetaForViewer,
+  PersistedSessionSummaryTrigger,
+} from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
+import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
+import { publishSummarizeSession, publishContextSummarizeSession } from './sessionSideEffects';
+
+/**
+ * Message CRUD, generation control, sharing state, and summarization triggers.
+ *
+ * Depends on `sessionSideEffects` (for event publishing). Fork/snip live in
+ * `@bike4mind/services`' `sessionService`, not here.
+ */
+
+/**
+ * TODO: Move this inside the b4m-core/services
+ */
+export const getMessagesFromSession = async (
+  user: IUserDocument,
+  sessionId: string | mongoose.Types.ObjectId,
+  search?: string,
+  options?: {
+    pagination?: {
+      limit: number;
+      page: number;
+    };
+    all?: boolean;
+    sort?: 'asc' | 'desc';
+  }
+) => {
+  const session = await sessionRepository.shareable.findAccessibleById(user, sessionId.toString());
+
+  if (!session) throw new NotFoundError('Session not found');
+
+  const { pagination = { page: 1, limit: 10 }, all = false, sort } = options || {};
+  const q: mongoose.FilterQuery<IChatHistoryItem> = {
+    sessionId,
+  };
+  if (search) {
+    const escapedSearch = escapeRegex(search);
+    q['prompt'] = { $regex: escapedSearch, $options: 'si' };
+    q['replies'] = { $regex: escapedSearch, $options: 'si' };
+  }
+
+  const query = Quest.find(q);
+
+  if (!all) {
+    query.skip(pagination.limit * (pagination.page - 1)).limit(pagination.limit + 1);
+  }
+  query.sort({ timestamp: sort || 'asc' });
+
+  // No need for explicit select - ensure all fields are returned
+
+  const result = await query;
+
+  const hasMore = result.length === pagination.limit + 1;
+  if (hasMore) result.pop();
+
+  // A share grant authorizes reading the conversation, not re-reading whatever the owner's
+  // tools touched on the owner's behalf - see redactPromptMetaForViewer. Owner reads are
+  // untouched; only the returnValue/error fields are stripped, name/parameters/success survive.
+  // Both branches call .toJSON() (not just the non-owner one) so the return type doesn't
+  // diverge by viewer - this only goes straight to res.json, never back into the domain model.
+  const isOwner = session.userId === user.id;
+  const data = result.map(quest => {
+    const plain = quest.toJSON();
+    return { ...plain, promptMeta: redactPromptMetaForViewer(plain.promptMeta, isOwner) };
+  });
+
+  return {
+    data,
+    hasMore,
+  };
+};
+
+export const addMessageToSession = async (
+  // Authorization is enforced via `ability`/`accessibleBy`; the caller's userId is
+  // not needed here. Kept in the signature (prefixed `_`) for call-site compatibility.
+  _userId: string,
+  sessionId: string | mongoose.Types.ObjectId,
+  message: Omit<IChatHistoryItem, 'sessionId'>,
+  ability: Ability
+) => {
+  const session = await Session.findOne({
+    _id: sessionId,
+    ...accessibleBy(ability, Permission.update).ofType(SessionModel),
+  });
+  if (!session) throw new NotFoundError('Session not found');
+
+  const createdQuest = await Quest.create({ ...message, sessionId });
+
+  const messageTimestamp = message.timestamp ?? new Date();
+  const latestKnownTimestamp =
+    session.lastUpdated && session.lastUpdated > messageTimestamp ? new Date() : messageTimestamp;
+
+  await Session.updateOne(
+    { _id: sessionId },
+    {
+      $set: {
+        lastUpdated: latestKnownTimestamp,
+        updatedAt: new Date(),
+      },
+    }
+  );
+
+  return createdQuest;
+};
+
+export const deleteMessageFromSession = async (
+  // Authorization is enforced via `ability`/`accessibleBy`; the caller's userId is
+  // not needed here. Kept in the signature (prefixed `_`) for call-site compatibility.
+  _userId: string,
+  sessionId: string,
+  messageId: string,
+  ability: Ability
+) => {
+  // This has the effect of validating permissions for the update, even as it hits Quest.deleteOne
+  const session = await Session.findOne({
+    _id: sessionId,
+    ...accessibleBy(ability, Permission.update).ofType(SessionModel),
+  });
+  if (!session) throw new NotFoundError('Session not found');
+  return await Quest.findOneAndUpdate({ _id: messageId, sessionId }, { $set: { deletedAt: new Date() } });
+};
+
+// Without questId this stops the session's latest quest; a caller that knows its own turn passes
+// questId so a newer turn in the same session is not stopped instead.
+export const stopReply = async (sessionId: string, ability: Ability, questId?: string) => {
+  const quest = questId
+    ? await Quest.findOne({ _id: questId, sessionId })
+    : await Quest.findOne({ sessionId }).sort({ timestamp: -1 });
+  const session = await Session.findOne({
+    _id: sessionId,
+    ...accessibleBy(ability, Permission.update).ofType(SessionModel),
+  });
+  if (!session) throw new NotFoundError('Session not found');
+  if (!quest) throw new NotFoundError('No active quest found');
+
+  // Only a quest still generating can be stopped. A Stop that raced the final chunk would
+  // otherwise overwrite a finished answer and broadcast a late 'stopped' for it.
+  if (quest.status !== 'stopped' && quest.status !== 'done') {
+    // Emit a cancellation event through pub/sub if available
+    try {
+      Logger.info(`Stopping quest generation for questId: ${quest.id}`, {
+        questId: quest.id,
+        sessionId,
+        status: 'cancellation_requested',
+      });
+    } catch (error) {
+      Logger.error('Error emitting cancellation event:', error);
+    }
+
+    // The status filter closes the same race between the read above and this write.
+    const stopped = await Quest.findOneAndUpdate(
+      { _id: quest.id, status: { $nin: ['done', 'stopped'] } },
+      {
+        status: 'stopped',
+        statusMessage: 'Generation cancelled by user',
+      },
+      { new: true } // Return the updated document
+    );
+    return stopped ?? quest;
+  }
+
+  return quest;
+};
+
+export const summarizeSession = async (sessionId: string, trigger: PersistedSessionSummaryTrigger, payerId: string) => {
+  await publishSummarizeSession(sessionId, trigger, payerId);
+};
+
+export const contextSummarizeSession = async (sessionId: string, verbatimWindowStartQuestId: string) => {
+  await publishContextSummarizeSession(sessionId, verbatimWindowStartQuestId);
+};

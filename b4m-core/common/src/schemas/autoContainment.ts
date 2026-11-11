@@ -6,7 +6,7 @@ import { AUTO_CONTAINMENT_MODES } from './settings';
  * assessment, one record per (detection, revision): a campaign detection that gains members after a
  * decision gets a new one covering only the new members. Shadow-mode records are graded against the detection's admin
  * verdict (shadowDetection.ts), so the precision of automated containment is measured before it is
- * enforced. Produced by apps/client/server/security/autoContainment; stored in the
+ * enforced. Produced by apps/workers/src/security/autoContainment; stored in the
  * AutoContainmentDecision collection (packages/database).
  */
 

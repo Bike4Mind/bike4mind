@@ -10,11 +10,15 @@ import {
 import { decryptToken, encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { assertPolicyAllows, audit, userOwner, type ConnectionActor } from '../connectionService';
-import type { CustomMcpContext } from '../customMcpAccess';
+import type { CustomMcpContext } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { cleanScope } from '../invokeRemoteMcp';
-import { loadConnectionClient, resolveOAuthClient, type ManualOAuthClient } from './clientIdentity';
-import { withOAuthFetch } from './oauthFetch';
-import { redirectUri } from './redirectUri';
+import {
+  loadConnectionClient,
+  resolveOAuthClient,
+  type ManualOAuthClient,
+} from '@bike4mind/server-utils/mcpConnections/oauth/clientIdentity';
+import { withOAuthFetch } from '@bike4mind/server-utils/mcpConnections/oauth/oauthFetch';
+import { redirectUri } from '@bike4mind/server-utils/mcpConnections/oauth/redirectUri';
 import { revokeConnectionGrant } from './revoke';
 
 export const sha256Hex = (value: string): string => createHash('sha256').update(value, 'utf8').digest('hex');

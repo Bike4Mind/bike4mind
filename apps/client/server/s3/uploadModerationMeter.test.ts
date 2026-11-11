@@ -20,7 +20,7 @@ vi.mock('@bike4mind/utils/imageModeration', () => ({ REKOGNITION_MODERATION_USD_
 vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
   activePlanResolver: { name: 'activePlans' },
 }));
-vi.mock('@server/s3/imageModerationBudget', () => ({ reserveImageModerationCalls: h.reserve }));
+vi.mock('@bike4mind/server-utils/s3/imageModerationBudget', () => ({ reserveImageModerationCalls: h.reserve }));
 
 import { buildUploadModerationMeter } from './uploadModerationMeter';
 

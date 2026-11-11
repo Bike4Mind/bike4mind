@@ -36,7 +36,12 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: { prices: { list: mocks.list, retrieve: mocks.retrieve } },
 }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: { getSettingsValue: mocks.setting } }));
-vi.mock('@bike4mind/common', () => ({ isEnforceCreditsLocked: mocks.locked, MIN_PRICE_PER_CREDIT_USD: 0.0006 }));
+vi.mock('@bike4mind/common', () => ({
+  isEnforceCreditsLocked: mocks.locked,
+  MIN_PRICE_PER_CREDIT_USD: 0.0006,
+  WEBSITE_URL: 'https://site.example',
+  getWebsiteUrl: (path: string) => `https://site.example/${path}`,
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: mocks.config, isDevelopment: mocks.development }));
 vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => ({ SUBSCRIPTION_PLANS: mocks.plans }));
 
@@ -101,6 +106,20 @@ describe('subscription plan catalog', () => {
     }
   });
 
+  it('reports whether credit purchases need terms consent, and never while billing is off', async () => {
+    mocks.setting.mockImplementation(async (key: string) => key !== 'requireCheckoutTermsConsent');
+    expect(await request()).toMatchObject({ termsConsentRequired: false, termsUrl: null });
+
+    mocks.setting.mockResolvedValue(true);
+    expect(await request()).toMatchObject({
+      termsConsentRequired: true,
+      termsUrl: 'https://site.example/terms-of-service',
+    });
+
+    mocks.config.STRIPE_SECRET_KEY = '';
+    expect(await request()).toMatchObject({ billingEnabled: false, termsConsentRequired: false });
+  });
+
   it('retrieves configured plans independently of the first page of unrelated prices', async () => {
     mocks.list.mockResolvedValue({
       data: Array.from({ length: 100 }, (_, index) => ({ ...price, id: `price_other_${index}` })),
@@ -113,6 +132,8 @@ describe('subscription plan catalog', () => {
   it('joins only configured public personal plan metadata to live Stripe prices', async () => {
     expect(await request()).toEqual({
       billingEnabled: true,
+      termsConsentRequired: true,
+      termsUrl: 'https://site.example/terms-of-service',
       creditPackages: Object.values(CREDIT_PACKAGES),
       plans: [
         {

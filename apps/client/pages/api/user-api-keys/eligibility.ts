@@ -9,7 +9,7 @@ import {
   API_KEY_ACCESS_DENIED_MESSAGE,
   isApiKeyAccessAllowed,
   type ApiKeyAccessUser,
-} from '@server/utils/apiKeyAccessGate';
+} from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { resolveApiKeyTrust } from '@bike4mind/server-utils/utils/apiKeyTrust';
 
 export type ApiKeyEligibilityResponse = {

@@ -7,8 +7,8 @@ import {
   type AdminUsersBulkPreview,
   type AdminUsersBulkTarget,
   blocksEmailDomains,
-} from '@client/app/utils/adminUsersBulk';
-import type { AdminUsersFilter } from '@client/app/utils/adminUsersFilter';
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
+import type { AdminUsersFilter } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { planEmailDomains } from './emailDomains';
 
 /** The user fields a bulk action reads; resolve projects only these. */

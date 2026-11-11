@@ -5,7 +5,7 @@ import {
   signupTzOffsetSchema,
 } from '@bike4mind/server-utils/app/utils/signupSignals';
 import { adminApi } from '@server/middlewares/adminApi';
-import { getSignupTimeseries } from '@server/users/signupTimeseries';
+import { getSignupTimeseries } from '@bike4mind/server-utils/users/signupTimeseries';
 
 const querySchema = z.object({
   range: z.enum(SIGNUP_TIMESERIES_RANGES).default('30d'),

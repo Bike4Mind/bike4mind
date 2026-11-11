@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { disconnectUserConnectionOAuth } from '@server/mcpConnections/connectionService';
-import { assertCustomMcpEnabled } from '@server/mcpConnections/customMcpAccess';
+import { assertCustomMcpEnabled } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 
 const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const context = await assertCustomMcpEnabled(req.user);

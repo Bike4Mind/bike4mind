@@ -12,7 +12,7 @@ import { applySkillUpdate } from '@server/skills/skillWrite';
 import { toPublicSkill } from '@server/skills/publicView';
 import { ShareableSkill, canAccessSkill, canEditSkill } from '@server/utils/skillAccess';
 import { validateSkillName } from '@server/utils/skillValidation';
-import { publicAppUrl } from '@server/utils/validators';
+import { publicAppUrl } from '@bike4mind/server-utils/utils/validators';
 
 /** A skill the caller cannot see answers 404 exactly like one that does not exist. */
 async function loadVisibleSkill(id: string, actor: { id: string; isAdmin?: boolean }): Promise<ShareableSkill> {

@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { User } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { decryptStoredToken, revokeDriveGrant } from '@bike4mind/server-utils/integrations/google/drive/common';
-import { flagConnectionsStoppedByDisconnect } from '@server/integrations/google/drive/flagConnectionsStoppedByDisconnect';
+import { flagConnectionsStoppedByDisconnect } from '@bike4mind/server-utils/integrations/google/drive/flagConnectionsStoppedByDisconnect';
 
 /**
  * DELETE /api/google-drive/disconnect -> 200 { affectedOrgConnections, affectedPersonalConnections }

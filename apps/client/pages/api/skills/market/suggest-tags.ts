@@ -4,7 +4,7 @@ import { baseApi } from '@client/server/middlewares/baseApi';
 import { skillRepository } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
 import { toSnapshot } from '@bike4mind/server-utils/skillMarket/market';
 import { getOperationsClassifierLlm } from '@server/skillMarket/classifySkill';
 import { suggestListingTags } from '@server/skillMarket/suggestTags';

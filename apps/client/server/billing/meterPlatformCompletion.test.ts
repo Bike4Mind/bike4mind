@@ -58,7 +58,7 @@ vi.mock('@bike4mind/services/llm/modelAdmission', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/services/llm/modelAdmission')>()),
   loadFreeTierAllowedModels: m.loadFreeTierAllowedModels,
 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: m.getUserEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: m.getUserEntitlements }));
 
 import {
   completionCeilingUsd,

@@ -16,7 +16,7 @@ import {
   ADMIN_USERS_BULK_UNDO_WINDOW_MS,
   type AdminUsersBulkAction,
   type AdminUsersBulkExecuteRequest,
-} from '@client/app/utils/adminUsersBulk';
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { usersBulkExecuteDeps, usersBulkUndoDeps } from './adapters';
 import { executeAdminUsersBulk, type ExecuteDeps } from './execute';
 import { SUBSCRIPTION_CANCEL_GRACE_MS } from './ports';
@@ -32,8 +32,8 @@ const cancelAccountSubscriptions = vi.hoisted(() =>
     failed: [] as { customerId: string; subscriptionId: string | null; reason: string }[],
   }))
 );
-vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/cancelAccountSubscriptions')>()),
   cancelAccountSubscriptions,
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({

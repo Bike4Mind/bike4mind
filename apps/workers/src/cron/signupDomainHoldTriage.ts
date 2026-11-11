@@ -10,7 +10,7 @@
  * Advisory assessment: after the rule, pending young-domain holds get a Decisions verdict when
  * signupDomainHoldAssessmentEnabled is on; a confident abuse verdict confirms the same way, and a
  * confident legitimate verdict releases under the auto-release guards and daily cap (see
- * apps/client/server/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts).
+ * apps/workers/src/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts).
  * Young-domain recheck: last, runSignupDomainAgeRecheck (signupDomainAgeRecheck.ts) marks pending
  * young-domain holds whose domain has since aged, for an admin to release. It never releases.
  * Schedule: rate(10 minutes) (infra/cron.ts signupDomainHoldTriage), on stages that run scheduled
@@ -39,7 +39,7 @@ import type { Context } from 'aws-lambda';
 import {
   defaultSignupDomainHoldAssessmentDeps,
   runSignupDomainHoldAssessments,
-} from '@server/security/signupDomainHoldAssessment/signupDomainHoldAssessment';
+} from '@workers/security/signupDomainHoldAssessment/signupDomainHoldAssessment';
 import { runSignupDomainAgeRecheck } from './signupDomainAgeRecheck';
 
 const logger = new Logger({ metadata: { service: 'signupDomainHoldTriage' } });

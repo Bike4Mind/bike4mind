@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { AdminSettings, withTransaction } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
-import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
+import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { z } from 'zod';
 import { ApiKeyScope, SpeechToTextModels } from '@bike4mind/common';

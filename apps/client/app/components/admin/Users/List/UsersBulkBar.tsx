@@ -1,7 +1,10 @@
 import { Box, Button, Divider, Dropdown, ListDivider, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useUser } from '@client/app/contexts/UserContext';
-import { ADMIN_USERS_BULK_ACTION_PERMISSIONS, type AdminUsersBulkActionType } from '@client/app/utils/adminUsersBulk';
+import {
+  ADMIN_USERS_BULK_ACTION_PERMISSIONS,
+  type AdminUsersBulkActionType,
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { AdminPermissionAction, missingAdminPermissionFor } from '../../shared/MissingPermission';
 import { BulkActionBar, type AdminSelection } from '../../shared/BulkActionBar';
 import { adminFocus } from '../../shared/adminStyles';
