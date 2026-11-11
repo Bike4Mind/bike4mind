@@ -1,6 +1,4 @@
-import { Component, type ReactNode } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { isNotFound } from '@tanstack/react-router';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CreateMusicGenerationBody, CreateVideoGenerationBody } from '@bike4mind/common';
@@ -18,10 +16,8 @@ const h = vi.hoisted(() => ({
   featuresLoading: false,
 }));
 
-vi.mock('@tanstack/react-router', async importOriginal => ({
-  ...(await importOriginal<typeof import('@tanstack/react-router')>()),
-  useNavigate: () => h.navigate,
-}));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
+vi.mock('@client/app/components/NotFound', () => ({ default: () => <div data-testid="not-found-stub" /> }));
 vi.mock('@client/app/components/Studio/useStudioFeature', () => ({
   useStudioFeature: (feature: string) => h.studioFeatures[feature] ?? false,
   useStudioFeaturesLoading: () => h.featuresLoading,
@@ -78,17 +74,6 @@ import StudioPage from './$modality';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-// Stands in for the router's not-found boundary.
-class CatchThrown extends Component<{ children: ReactNode }, { thrown: unknown }> {
-  state = { thrown: undefined as unknown };
-  static getDerivedStateFromError(thrown: unknown) {
-    return { thrown };
-  }
-  render() {
-    if (this.state.thrown === undefined) return this.props.children;
-    return <div data-testid="caught" data-not-found={String(isNotFound(this.state.thrown))} />;
-  }
-}
 const renderPage = (modality: StudioMedium = 'video') =>
   render(
     <CssVarsProvider theme={appTheme}>
@@ -253,18 +238,10 @@ describe('StudioPage with Create v2 off', () => {
   });
 
   it('answers not found for the Image medium, as the param parser did before it existed', () => {
-    // React logs the caught throw.
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     h.studioFeatures = { createV2: true };
-    render(
-      <CssVarsProvider theme={appTheme}>
-        <CatchThrown>
-          <StudioPage modality="image" />
-        </CatchThrown>
-      </CssVarsProvider>
-    );
-    expect(screen.getByTestId('caught')).toHaveAttribute('data-not-found', 'true');
-    consoleError.mockRestore();
+    renderPage('image');
+    expect(screen.getByTestId('not-found-stub')).toBeInTheDocument();
+    expect(screen.queryByTestId('image-studio-page')).not.toBeInTheDocument();
   });
 });
 
