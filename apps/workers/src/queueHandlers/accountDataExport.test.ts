@@ -34,6 +34,7 @@ const h = vi.hoisted(() => ({
   recordModels: [] as string[],
   records: vi.fn(),
   sendToQueue: vi.fn(),
+  recordAdminAction: vi.fn(),
   resource: { accountDataExportQueue: { url: 'https://sqs.example/account-data-export' } as { url?: string } },
   notebooks: [] as Array<{ id: string; name: string; chatHistory?: Array<{ images?: string[] }> }>,
 }));
@@ -43,11 +44,15 @@ vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
 }));
 vi.mock('sst', () => ({ Resource: h.resource }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
+}));
 vi.mock('@bike4mind/utils', () => ({
   secureParameters: (obj: unknown, schema: { parse: (value: unknown) => unknown }) => schema.parse(obj),
 }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: h.userFindById },
+  adminAuditLogRepository: { append: vi.fn() },
   User: {
     findOneAndUpdate: (...args: unknown[]) => ({ lean: () => h.leaseClaim(...args) }),
     exists: h.leaseExists,
@@ -83,6 +88,7 @@ vi.mock('@server/dataSubject/subjectRecordExport', () => ({
   },
 }));
 vi.mock('@bike4mind/services', () => ({
+  adminAuditService: { recordAdminAction: h.recordAdminAction },
   notebookExportService: {
     NotebookExportService: class {
       async *buildNotebooks() {
@@ -515,6 +521,7 @@ describe('account data export worker', () => {
 
     expect(h.getMetadata).not.toHaveBeenCalled();
     expect(h.publish).not.toHaveBeenCalled();
+    expect(h.recordAdminAction).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed job id', async () => {
@@ -535,6 +542,7 @@ describe('account data export worker', () => {
     expect(h.leaseClaim).not.toHaveBeenCalled();
     expect(h.permanentDelete).toHaveBeenCalledTimes(2);
     expect(h.permanentDelete).toHaveBeenCalledWith(KEY);
+    expect(h.recordAdminAction).not.toHaveBeenCalled();
   });
 
   it('atomically excludes the purge and concurrent exports, then releases only its own lease', async () => {
@@ -732,6 +740,63 @@ describe('account data export worker', () => {
             ]
           : []
       );
+    });
+
+    describe('skipped by the worker', () => {
+      const skipEntry = (skipReason: string, displayName: string) => ({
+        action: 'user.data_export.failed',
+        actor: expect.objectContaining({ kind: 'system' }),
+        target: { kind: 'user', id: USER_ID, displayName },
+        summary: 'skipped a data subject export',
+        context: { source: 'worker', route: 'queueHandlers/accountDataExport' },
+        details: { exportJobId: JOB_ID, requestedBy: 'admin-1', skipReason },
+      });
+
+      it('records an account that is gone', async () => {
+        h.userFindById.mockResolvedValue(null);
+        await runForAdmin();
+        expect(h.recordAdminAction).toHaveBeenCalledExactlyOnceWith(
+          skipEntry('account_gone', USER_ID),
+          expect.anything()
+        );
+        expect(h.permanentDelete).toHaveBeenCalledWith(ADMIN_KEY);
+      });
+
+      it('records an account whose deletion is due', async () => {
+        h.userFindById.mockResolvedValue({ email: 'ada@example.com', deletion: { purgeStartedAt: new Date() } });
+        await runForAdmin();
+        expect(h.leaseClaim).not.toHaveBeenCalled();
+        expect(h.recordAdminAction).toHaveBeenCalledExactlyOnceWith(
+          skipEntry('deletion_due', 'ada@example.com'),
+          expect.anything()
+        );
+        expect(h.permanentDelete).toHaveBeenCalledWith(ADMIN_KEY);
+      });
+
+      it('records a deletion that won admission over the export lease', async () => {
+        h.leaseClaim.mockResolvedValue(null);
+        h.userFindById
+          .mockResolvedValueOnce({ email: 'ada@example.com' })
+          .mockResolvedValueOnce({ email: 'ada@example.com', deletion: { purgeStartedAt: new Date() } });
+        await runForAdmin();
+        expect(h.sendToQueue).not.toHaveBeenCalled();
+        expect(h.recordAdminAction).toHaveBeenCalledExactlyOnceWith(
+          skipEntry('deletion_won_admission', 'ada@example.com'),
+          expect.anything()
+        );
+        expect(h.permanentDelete).toHaveBeenCalledWith(ADMIN_KEY);
+      });
+
+      it('still acks the skip when the audit write throws', async () => {
+        h.userFindById.mockResolvedValue(null);
+        h.recordAdminAction.mockRejectedValueOnce(new Error('audit store down'));
+        await expect(runForAdmin()).resolves.toBeUndefined();
+        expect(logger.error).toHaveBeenCalledWith(
+          'Account data export: could not record the skipped admin export',
+          expect.objectContaining({ skipReason: 'account_gone' })
+        );
+        expect(h.permanentDelete).toHaveBeenCalledWith(ADMIN_KEY);
+      });
     });
 
     it('adds the registry records under its own key and emails no one', async () => {
