@@ -7,7 +7,14 @@ import DlqReplayTab from './DlqReplayTab';
 
 const state = vi.hoisted(() => ({
   retentionSeconds: undefined as number | undefined,
-  sentTimestamp: '1700000000000',
+  messages: [] as Array<{
+    messageId: string;
+    body: string;
+    sentTimestamp: string;
+    approximateReceiveCount: string;
+    failureLookupFailed?: boolean;
+    failure?: { errorMessage: string; category: 'timeout' };
+  }>,
   history: [] as Array<{
     id: string;
     queueLabel: string;
@@ -46,15 +53,7 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
     refetch: vi.fn(),
   }),
   useDlqMessages: () => ({
-    data: [
-      {
-        messageId: 'm1',
-        receiptHandle: 'receipt-1',
-        body: '{}',
-        sentTimestamp: state.sentTimestamp,
-        approximateReceiveCount: '1',
-      },
-    ],
+    data: state.messages,
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -100,12 +99,44 @@ const renderWithQueueSelected = async (name = /Queue One/) => {
 };
 
 beforeEach(() => {
+  state.messages = [{ messageId: 'm1', body: '{}', sentTimestamp: '1700000000000', approximateReceiveCount: '1' }];
   state.history = [];
   state.queues = [QUEUE_ONE];
   state.retentionSeconds = undefined;
-  state.sentTimestamp = '1700000000000';
   h.user = null;
   h.discard.mockReset();
+});
+
+describe('DlqReplayTab failure metadata', () => {
+  it('shows recorded reason and category in the row and drawer', async () => {
+    state.messages[0].failure = { errorMessage: 'worker timed out', category: 'timeout' };
+    await renderWithQueueSelected();
+    expect(screen.getByTestId('dlq-reason-m1')).toHaveTextContent('worker timed out');
+    expect(screen.getByTestId('dlq-category-m1')).toHaveTextContent('timeout');
+    expect(screen.queryByTestId('dlq-failure-lookup-warning')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+    expect(screen.getByTestId('dlq-failure-reason')).toHaveTextContent('worker timed out');
+    expect(screen.getByTestId('dlq-failure-category')).toHaveTextContent('timeout');
+  });
+
+  it('keeps messages and their drawer available when failure details cannot be loaded', async () => {
+    state.messages[0].failureLookupFailed = true;
+    await renderWithQueueSelected();
+    expect(screen.getByTestId('dlq-failure-lookup-warning')).toHaveTextContent(
+      'Failure details are temporarily unavailable. Queue messages are still shown.'
+    );
+    expect(screen.getByTestId('dlq-reason-m1')).toHaveTextContent('Unknown');
+    expect(screen.getByTestId('dlq-category-m1')).toHaveTextContent('Unknown');
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+    expect(screen.getByTestId('dlq-failure-reason')).toHaveTextContent('Unknown');
+  });
+
+  it('shows Unknown for an uninstrumented or historical message', async () => {
+    await renderWithQueueSelected();
+    expect(screen.getByTestId('dlq-reason-m1')).toHaveTextContent('Unknown');
+    expect(screen.getByTestId('dlq-category-m1')).toHaveTextContent('Unknown');
+    expect(screen.queryByTestId('dlq-failure-lookup-warning')).not.toBeInTheDocument();
+  });
 });
 
 describe('DlqReplayTab history table', () => {
@@ -307,7 +338,7 @@ describe('DlqReplayTab age and expiry', () => {
 
   it('shows age and time until expiry per message', async () => {
     state.retentionSeconds = 14 * 24 * 3600;
-    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+    state.messages[0].sentTimestamp = String(Date.now() - 10.5 * HOUR);
 
     await renderWithQueueSelected();
 
@@ -317,7 +348,7 @@ describe('DlqReplayTab age and expiry', () => {
 
   it('shows a different expiry for a shorter retention', async () => {
     state.retentionSeconds = 4 * 24 * 3600;
-    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+    state.messages[0].sentTimestamp = String(Date.now() - 10.5 * HOUR);
 
     await renderWithQueueSelected();
 
@@ -326,7 +357,7 @@ describe('DlqReplayTab age and expiry', () => {
 
   it('flags a message within 24 hours of expiry', async () => {
     state.retentionSeconds = 4 * 24 * 3600;
-    state.sentTimestamp = String(Date.now() - 80.5 * HOUR);
+    state.messages[0].sentTimestamp = String(Date.now() - 80.5 * HOUR);
 
     await renderWithQueueSelected();
 
@@ -337,7 +368,7 @@ describe('DlqReplayTab age and expiry', () => {
 
   it('does not flag a message with plenty of time left', async () => {
     state.retentionSeconds = 14 * 24 * 3600;
-    state.sentTimestamp = String(Date.now() - HOUR);
+    state.messages[0].sentTimestamp = String(Date.now() - HOUR);
 
     await renderWithQueueSelected();
 
@@ -345,7 +376,7 @@ describe('DlqReplayTab age and expiry', () => {
   });
 
   it('shows N/A for expiry when retention is unknown', async () => {
-    state.sentTimestamp = String(Date.now() - HOUR);
+    state.messages[0].sentTimestamp = String(Date.now() - HOUR);
 
     await renderWithQueueSelected();
 
@@ -354,7 +385,7 @@ describe('DlqReplayTab age and expiry', () => {
 
   it('shows age and expiry in the message drawer', async () => {
     state.retentionSeconds = 4 * 24 * 3600;
-    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+    state.messages[0].sentTimestamp = String(Date.now() - 10.5 * HOUR);
 
     await renderWithQueueSelected();
     await userEvent.click(screen.getByTestId('dlq-view-m1'));
@@ -363,7 +394,7 @@ describe('DlqReplayTab age and expiry', () => {
   });
 
   it('omits the expiry from the message drawer when retention is unknown', async () => {
-    state.sentTimestamp = String(Date.now() - HOUR);
+    state.messages[0].sentTimestamp = String(Date.now() - HOUR);
 
     await renderWithQueueSelected();
     await userEvent.click(screen.getByTestId('dlq-view-m1'));

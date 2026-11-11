@@ -58,6 +58,7 @@ const connected = (over: Partial<LakeGitHubConnection> = {}): LakeGitHubConnecti
   skippedCount: null,
   syncStale: false,
   fileCount: 3,
+  isLastInstallationBinding: false,
   disconnecting: false,
   disconnectStalled: false,
   fixAccessUrl: FIX_URL,
@@ -230,6 +231,25 @@ describe('GitHubConnectAction', () => {
 
     fireEvent.click(screen.getByTestId('github-disconnect-confirm-btn'));
     expect(h.disconnectMutate).toHaveBeenCalledWith('lake1', expect.any(Object));
+  });
+
+  it('warns that disconnecting the last binding uninstalls the App and needs an owner to reinstall', () => {
+    h.connection.current = connected({ isLastInstallationBinding: true });
+    wrap(<GitHubConnectAction lake={FED_LAKE} />);
+    fireEvent.click(screen.getByTestId('github-disconnect-btn'));
+    const warning = screen.getByTestId('github-disconnect-warning');
+    expect(warning).toHaveTextContent('last lake connected to the GitHub App on acme');
+    expect(warning).toHaveTextContent('also uninstalls the App');
+    expect(warning).toHaveTextContent('organization owner for an org');
+    expect(warning).toHaveTextContent('must reinstall it on GitHub');
+    expect(h.disconnectMutate).not.toHaveBeenCalled();
+  });
+
+  it('does not warn about uninstalling while another lake shares the installation', () => {
+    h.connection.current = connected({ isLastInstallationBinding: false });
+    wrap(<GitHubConnectAction lake={FED_LAKE} />);
+    fireEvent.click(screen.getByTestId('github-disconnect-btn'));
+    expect(screen.getByTestId('github-disconnect-warning')).not.toHaveTextContent(/uninstall|reinstall/);
   });
 
   it('uses singular wording for exactly one file', () => {

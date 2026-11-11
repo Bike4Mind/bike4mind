@@ -80,6 +80,50 @@ describe('DataTable', () => {
     expect(row).toHaveAttribute('aria-selected', 'false');
   });
 
+  it('runs a row shortcut on the focused row only for a plain, fresh key press', () => {
+    const accept = vi.fn();
+    const override = vi.fn();
+    renderTable({
+      rows: rows.slice(0, 2),
+      rowShortcuts: row => (row.id === '1' ? { a: accept, o: override } : {}),
+    });
+    const row = screen.getByTestId('admin-table-row-1');
+    expect(row).toHaveAttribute('tabindex', '0');
+    expect(row).toHaveAttribute('aria-keyshortcuts', 'a o');
+    expect(screen.getByTestId('admin-table-row-2')).not.toHaveAttribute('aria-keyshortcuts');
+    fireEvent.keyDown(row, { key: 'a', metaKey: true });
+    fireEvent.keyDown(row, { key: 'a', ctrlKey: true });
+    fireEvent.keyDown(row, { key: 'a', altKey: true });
+    fireEvent.keyDown(row, { key: 'a', repeat: true });
+    fireEvent.keyDown(row, { key: 'a', isComposing: true });
+    fireEvent.keyDown(row, { key: 'A', shiftKey: true });
+    expect(accept).not.toHaveBeenCalled();
+    fireEvent.keyDown(row, { key: 'A' });
+    expect(accept).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(row, { key: 'o' });
+    expect(override).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(screen.getByTestId('admin-table-row-2'), { key: 'a' });
+    expect(accept).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a row shortcut typed into an input inside the row', () => {
+    const accept = vi.fn();
+    renderTable({
+      rows: rows.slice(0, 1),
+      columns: [{ id: 'note', label: 'Note', render: () => <input data-testid="row-input" /> }],
+      rowShortcuts: () => ({ a: accept }),
+    });
+    fireEvent.keyDown(screen.getByTestId('row-input'), { key: 'a' });
+    expect(accept).not.toHaveBeenCalled();
+  });
+
+  it('leaves rows unfocusable and keys inert without rowShortcuts', () => {
+    renderTable({ rows: rows.slice(0, 1) });
+    const row = screen.getByTestId('admin-table-row-1');
+    expect(row).not.toHaveAttribute('tabindex');
+    expect(row).not.toHaveAttribute('aria-keyshortcuts');
+  });
+
   it('renders every supplied row without local pagination when the caller owns paging', () => {
     renderTable({ pagination: false });
     expect(tableRows()).toHaveLength(101);

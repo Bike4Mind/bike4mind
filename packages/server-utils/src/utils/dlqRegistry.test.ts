@@ -46,6 +46,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'github-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueueDLQ',
   'github-lake-revoke': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueueDLQ',
   'publish-thumbnail': 'https://sqs.us-east-2.amazonaws.com/123456789/publishThumbnailQueueDLQ',
+  'generated-media-purge': 'https://sqs.us-east-2.amazonaws.com/123456789/generatedMediaPurgeQueueDLQ',
 }));
 
 const mockSourceQueueUrls = vi.hoisted(() => ({
@@ -91,6 +92,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   githubLakeIngestQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueue',
   githubLakeRevokeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueue',
   publishThumbnailQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/publishThumbnailQueue',
+  generatedMediaPurgeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generatedMediaPurgeQueue',
 }));
 
 // Mock SST Resource bindings: both DLQ and source queue URLs via Linkables
@@ -114,7 +116,7 @@ describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
     it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(42);
+      expect(registry).toHaveLength(43);
     });
 
     it('each entry has required fields', () => {

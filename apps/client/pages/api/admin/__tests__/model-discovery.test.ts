@@ -287,6 +287,8 @@ describe('/api/admin/model-discovery', () => {
             detail: 'openai publishes in 2/out 12 $/MTok and litellm in 8/out 24 $/MTok disagree beyond 10%',
           },
         ],
+        // Absent on the document too: a run from before the field still reads as an array.
+        longContextGaps: [],
         priceSkips: [{ modelId: 'm1', reason: 'unchanged' }],
         lifecycleTransitions: [
           { modelId: 'm4', from: 'active', to: 'deprecated', signal: 'absence', autoApplied: false },

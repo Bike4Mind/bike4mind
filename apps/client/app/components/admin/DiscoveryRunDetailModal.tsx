@@ -70,6 +70,15 @@ interface PriceOverride {
   detail: string;
 }
 
+/** A flat row whose trusted source publishes a reachable long-context ladder; applied, never a flag. */
+interface LongContextGap {
+  modelId: string;
+  source: string;
+  base: PerMTokRates;
+  brackets: Array<PerMTokRates & { aboveTokens: number }>;
+  detail: string;
+}
+
 interface LifecycleTransition {
   modelId: string;
   from?: string;
@@ -102,6 +111,7 @@ interface DetailTotals {
   priceFlags?: number;
   priceRows?: number;
   priceOverrides?: number;
+  longContextGaps?: number;
   priceSkips?: number;
   lifecycleTransitions?: number;
   catalogDiff?: number;
@@ -143,6 +153,8 @@ interface RunDetail {
   priceRows: PlannedPriceRow[];
   /** Optional: runs written before provider prices could overrule a mirror carry none. */
   priceOverrides?: PriceOverride[];
+  /** Optional: runs written before long-context gaps were reported carry none. */
+  longContextGaps?: LongContextGap[];
   priceSkips: Array<{ modelId: string; reason: string }>;
   lifecycleTransitions: LifecycleTransition[];
   catalogDiff: CatalogDiffEntry[];
@@ -373,6 +385,7 @@ export const DiscoveryRunDetailModal: React.FC<{ runId: string | null; onClose: 
   const priceRowsRepriced = (run?.priceRows ?? []).filter(row => !isFromBuild(row));
 
   const overrideCount = countLabel(run?.priceOverrides?.length ?? 0, run?.detailTotals?.priceOverrides);
+  const longContextGapCount = countLabel(run?.longContextGaps?.length ?? 0, run?.detailTotals?.longContextGaps);
 
   return (
     <Modal open={!!runId} onClose={onClose}>
@@ -552,6 +565,41 @@ export const DiscoveryRunDetailModal: React.FC<{ runId: string | null; onClose: 
                           <td data-testid={`discovery-run-price-override-detail-${override.modelId}`}>
                             {override.detail}
                           </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Table>
+                </Section>
+              )}
+
+              {/* Not under the price flags: those are refusals and feed the
+                  PriceFlagged alarm, while these rows are written (or stand
+                  unchanged) and recur every run until an operator reprices them
+                  as a ladder in the model-prices reprice UI. */}
+              {(run.longContextGaps?.length ?? 0) > 0 && (
+                <Section
+                  title={`Long-context rates not stored (${longContextGapCount}) - flat rows that bill long prompts at the base rate`}
+                >
+                  <Table size="sm" data-testid="discovery-run-long-context-gaps-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: '18%' }}>Model</th>
+                        <th style={{ width: '13%' }}>Flat $/M</th>
+                        <th style={{ width: '20%' }}>Published above</th>
+                        <th style={{ width: '11%' }}>Source</th>
+                        <th>Why</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(run.longContextGaps ?? []).map(gap => (
+                        <tr key={gap.modelId} data-testid={`discovery-run-long-context-gap-row-${gap.modelId}`}>
+                          <td>{gap.modelId}</td>
+                          <td>{inOut(gap.base)}</td>
+                          <td>
+                            {gap.brackets.map(bracket => `>${bracket.aboveTokens}: ${inOut(bracket)}`).join('; ')}
+                          </td>
+                          <td>{gap.source}</td>
+                          <td data-testid={`discovery-run-long-context-gap-detail-${gap.modelId}`}>{gap.detail}</td>
                         </tr>
                       ))}
                     </tbody>
