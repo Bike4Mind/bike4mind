@@ -16,6 +16,7 @@ import {
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import MoreHorizRoundedIcon from '@mui/icons-material/MoreHorizRounded';
 import { useSearch } from '@tanstack/react-router';
+import { toast } from 'sonner';
 import {
   ADMIN_MODEL_SOURCES,
   ADMIN_MODEL_STATUSES,
@@ -51,6 +52,7 @@ import {
   undoAdminReason,
   useAdminListUrlState,
   useUndoToast,
+  useUndoToastIsCurrent,
   type AdminSelection,
   type DataColumn,
   type DataTableSort,
@@ -109,10 +111,20 @@ const positiveInt = (value: string, fallback: number) => {
 type AccessEdit = { target: ModelAccessTarget; change: ModelAccessChange; title: string; confirmLabel: string };
 type FailedEntry = ReturnType<typeof failedResults>[number];
 /**
- * One bulk write and its retries: each unsent undo token with the reason its write was made under and which write it
- * was (1 is the original apply). Shared, never copied: an undo shifts each token off as it goes, so none is sent twice.
+ * One bulk write and its retries: each unsent undo token with the reason its write was made under and a label for the
+ * expiry note, how many retries the batch has had, and the toast offering its undo. Shared, never copied: an undo
+ * shifts each token off as it goes, so none is sent twice.
  */
-type BulkBatch = { undo: { token: string; reason: string; write: number }[]; writes: number };
+type BulkBatch = {
+  undo: { token: string; reason: string; label: string }[];
+  retries: number;
+  toastId: number | null;
+};
+/**
+ * A retry open in the bulk dialog, by its request. `batch` is the batch its token joins, or null once an undo of that
+ * batch started: a retry already sent then lands in a batch of its own, still labelled as a retry.
+ */
+type PendingRetry = { request: ModelBulkRequest; batch: BulkBatch | null; retries: number };
 /**
  * A bulk apply that left models unwritten, with the request that retries them inside the same batch; or what an undo
  * could not do: the models it left as they are, the writes whose undo expired, or where it stopped. A model left as it
@@ -120,14 +132,12 @@ type BulkBatch = { undo: { token: string; reason: string; write: number }[]; wri
  */
 type BulkOutcome =
   | { kind: 'failed'; summary: string; failed: FailedEntry[]; retry: ModelBulkRequest; batch: BulkBatch }
-  | { kind: 'not-reverted'; summary: string; failed: FailedEntry[] };
+  | { kind: 'not-reverted'; summary: string; failed: FailedEntry[]; batch: BulkBatch };
 
 const isExpiredUndo = (error: unknown) => {
   const { status, data } = apiErrorOf(error);
   return status === 409 && /expired/i.test(String(data.error ?? data.message ?? ''));
 };
-
-const writeLabel = (write: number) => (write === 1 ? 'the original change' : `retry ${write - 1}`);
 
 const toggleEdit = (row: AdminModelRow): AccessEdit => {
   const on = effectiveAccess(row.access.entry).enabled;
@@ -145,6 +155,7 @@ export function ModelListSection() {
   const { openModel, openPrices } = useModelsNavigation();
   const invalidate = useInvalidateModelAccess();
   const showUndo = useUndoToast();
+  const isUndoToastCurrent = useUndoToastIsCurrent();
   const writeBlock = useModelWriteBlock();
 
   const providers = splitList(filters.providers);
@@ -190,8 +201,9 @@ export function ModelListSection() {
   const [accessEdit, setAccessEdit] = useState<AccessEdit | null>(null);
   const [bulk, setBulk] = useState<ModelBulkRequest | null>(null);
   const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
-  // The batch a retry in the bulk dialog belongs to, so its undo token joins the original apply's.
-  const retryBatch = useRef<BulkBatch | null>(null);
+  const pendingRetry = useRef<PendingRetry | null>(null);
+  // While a batch's undo runs, its failed-models Retry stays disabled so no retry can join what is being reverted.
+  const [undoingBatch, setUndoingBatch] = useState<BulkBatch | null>(null);
 
   // DataTable follows a sort change with onPageChange(1) in the same tick, before the URL comes back round; each
   // write builds on the last one so the second does not put the old sort back.
@@ -218,50 +230,70 @@ export function ModelListSection() {
   /**
    * Reverts every write in the batch, oldest first. An expired token is skipped and named, and the later ones still
    * go; any other failure stops the undo with what went through, and Undo again resumes at the first unsent token.
+   * A newer write's toast and outcome may take the screen meanwhile: they stay, and this undo reports in a notice.
    */
   const undoBatch = (batch: BulkBatch) => {
     const results: ModelAccessBulkResult[] = [];
-    const expired: number[] = [];
-    const report = (ending: string, stopped = false) => {
-      const reverted = results.reduce((sum, result) => sum + result.counts.updated, 0);
-      const notReverted = results.flatMap(failedResults);
-      const expiredWrites = expired.map(writeLabel).join(' and ');
-      const expiredNote =
-        expired.length > 0 ? ` The undo for ${expiredWrites} had expired; change those models back from the list.` : '';
-      const summary = `Undo: ${countOf(reverted, 'model')} reverted${
-        notReverted.length > 0 ? `, ${notReverted.length.toLocaleString()} not reverted` : ''
-      }${ending}${expiredNote}`;
-      setOutcome(
-        stopped || notReverted.length > 0 || expired.length > 0
-          ? { kind: 'not-reverted', summary, failed: notReverted }
-          : null
-      );
-      return summary;
-    };
+    const expired: string[] = [];
     return async () => {
-      // A retry still open in the bulk dialog must not fold this batch's tokens into its own undo.
-      if (retryBatch.current === batch) retryBatch.current = null;
+      setUndoingBatch(batch);
+      const retry = pendingRetry.current;
+      if (retry?.batch === batch) {
+        pendingRetry.current = { ...retry, batch: null };
+        setBulk(current => (current === retry.request ? null : current));
+      }
+      let failure: unknown = null;
       try {
         while (batch.undo.length > 0) {
-          const { token, reason, write } = batch.undo[0];
+          const { token, reason, label } = batch.undo[0];
           try {
             results.push(
               await postModelAccessBulk<ModelAccessBulkResult>({ undoToken: token, reason: undoAdminReason(reason) })
             );
           } catch (error) {
             if (!isExpiredUndo(error)) throw error;
-            expired.push(write);
+            expired.push(label);
           }
           batch.undo.shift();
         }
       } catch (error) {
-        if (results.length === 0 && expired.length === 0) throw error;
-        throw new Error(report(`; the rest failed: ${getErrorMessage(error)}`, true));
-      } finally {
-        await invalidate();
+        failure = error;
       }
-      // Replaces this toast, so its Undo cannot resend tokens that already went.
-      showUndo({ message: report('.') });
+      await invalidate();
+      setUndoingBatch(current => (current === batch ? null : current));
+      const ownToast = isUndoToastCurrent(batch.toastId);
+
+      if (failure !== null && results.length === 0 && expired.length === 0) {
+        if (ownToast) throw failure;
+        toast.error(`Undo failed: ${getErrorMessage(failure)}`);
+        return;
+      }
+      const reverted = results.reduce((sum, result) => sum + result.counts.updated, 0);
+      const notReverted = results.flatMap(failedResults);
+      const expiredNote =
+        expired.length > 0
+          ? ` The undo for ${expired.join(' and ')} had expired; change those models back from the list.`
+          : '';
+      const summary = `Undo: ${countOf(reverted, 'model')} reverted${
+        notReverted.length > 0 ? `, ${notReverted.length.toLocaleString()} not reverted` : ''
+      }${failure !== null ? `; the rest failed: ${getErrorMessage(failure)}` : '.'}${expiredNote}`;
+      const report = failure !== null || notReverted.length > 0 || expired.length > 0;
+      setOutcome(current =>
+        current === null || current.batch === batch
+          ? report
+            ? { kind: 'not-reverted', summary, failed: notReverted, batch }
+            : null
+          : current
+      );
+      if (failure !== null) {
+        if (ownToast) throw new Error(summary);
+        toast.error(summary);
+      } else if (ownToast) {
+        // Replaces this toast, so its Undo cannot resend tokens that already went.
+        batch.toastId = showUndo({ message: summary });
+      } else {
+        toast(summary);
+      }
     };
   };
 
@@ -270,10 +302,12 @@ export function ModelListSection() {
     setBulk(null);
     setSelection(NO_SELECTION);
     void invalidate();
-    const batch: BulkBatch = retryBatch.current ?? { undo: [], writes: 0 };
-    retryBatch.current = null;
-    batch.writes += 1;
-    if (result.undoToken) batch.undo.push({ token: result.undoToken, reason, write: batch.writes });
+    const retry = pendingRetry.current?.request === request ? pendingRetry.current : null;
+    pendingRetry.current = null;
+    const batch: BulkBatch = retry?.batch ?? { undo: [], retries: retry?.retries ?? 0, toastId: null };
+    if (retry) batch.retries += 1;
+    const label = retry ? `retry ${batch.retries}` : 'the original change';
+    if (result.undoToken) batch.undo.push({ token: result.undoToken, reason, label });
     const failed = failedResults(result);
     setOutcome(
       failed.length > 0
@@ -292,15 +326,15 @@ export function ModelListSection() {
           }
         : null
     );
-    showUndo({
+    batch.toastId = showUndo({
       message: `${result.summary} ${MODEL_PICKER_FRESHNESS}`,
       onUndo: batch.undo.length > 0 ? undoBatch(batch) : undefined,
     });
   };
 
   const retryFailed = () => {
-    if (outcome?.kind !== 'failed') return;
-    retryBatch.current = outcome.batch;
+    if (outcome?.kind !== 'failed' || outcome.batch === undoingBatch) return;
+    pendingRetry.current = { request: outcome.retry, batch: outcome.batch, retries: outcome.batch.retries };
     setOutcome(null);
     setBulk(outcome.retry);
   };
@@ -502,6 +536,7 @@ export function ModelListSection() {
                   variant="outlined"
                   color="neutral"
                   onClick={retryFailed}
+                  disabled={outcome.batch === undoingBatch}
                   data-testid="models-bulk-retry-btn"
                 >
                   Retry failed
@@ -688,7 +723,7 @@ export function ModelListSection() {
       <ModelBulkAccessDialog
         request={bulk}
         onClose={() => {
-          retryBatch.current = null;
+          pendingRetry.current = null;
           setBulk(null);
         }}
         onApplied={onBulkApplied}

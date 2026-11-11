@@ -15,6 +15,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get, post, patch } })
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 
+import { toast } from 'sonner';
 import { ModelListSection } from './ModelListSection';
 
 type Params = Record<string, string>;
@@ -94,7 +95,15 @@ const selectPage = async () => {
 
 const pickReason = (dialog: string) => fireEvent.click(screen.getByTestId(`${dialog}-reason-input-preset-0`));
 
+const deferred = () => {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>(done => (resolve = done));
+  return { promise, resolve };
+};
+
 beforeEach(() => {
+  vi.mocked(toast).mockClear();
+  vi.mocked(toast.error).mockClear();
   get.mockReset();
   post.mockReset();
   patch.mockReset();
@@ -595,7 +604,7 @@ describe('ModelListSection bulk access', () => {
     expect(screen.queryByTestId('undo-toast-error')).not.toBeInTheDocument();
   });
 
-  it('never resends an undone token through a retry that was open when Undo ran', async () => {
+  it('closes a retry that was open when Undo ran, so nothing can join the batch being reverted', async () => {
     serveList(twoRows);
     serveBulk(async token => undoneOne(token === 'undo-1' ? 'example-text-1' : 'example-text-2'));
     await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
@@ -606,13 +615,147 @@ describe('ModelListSection bulk access', () => {
     await screen.findByTestId('models-bulk-summary');
 
     fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await waitFor(() => expect(screen.queryByTestId('models-bulk-dialog')).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Undo: 1 model reverted.'));
+    expect(undoTokensSent()).toEqual(['undo-1']);
+  });
+
+  it('disables Retry for a batch while its undo runs', async () => {
+    serveList(twoRows);
+    const undoGate = deferred();
+    serveBulk(async token => {
+      await undoGate.promise;
+      return undoneOne(token === 'undo-1' ? 'example-text-1' : 'example-text-2');
+    });
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+    await selectPage();
+    fireEvent.click(screen.getByTestId('models-bulk-turn-off-btn'));
     await confirmBulk();
+    const retry = await screen.findByTestId('models-bulk-retry-btn');
+
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await waitFor(() => expect(retry).toBeDisabled());
+    fireEvent.click(retry);
+    expect(screen.queryByTestId('models-bulk-dialog')).not.toBeInTheDocument();
+
+    await act(async () => undoGate.resolve());
+    await waitFor(() => expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Undo: 1 model reverted.'));
+    expect(screen.queryByTestId('models-bulk-failed')).not.toBeInTheDocument();
+    expect(undoTokensSent()).toEqual(['undo-1']);
+  });
+
+  it('keeps a retry that lands mid-undo on screen with its own undo, and labels its expiry as a retry', async () => {
+    serveList(twoRows);
+    const undoGate = deferred();
+    const retryGate = deferred();
+    let applies = 0;
+    post.mockImplementation(async (_url: string, body: { dryRunToken?: string; undoToken?: string }) => {
+      if (body.undoToken === 'undo-1') {
+        await undoGate.promise;
+        return undoneOne('example-text-1');
+      }
+      if (body.undoToken) {
+        throw apiFailure(409, { error: 'This undo has expired. Change the models back from the list.' });
+      }
+      if (body.dryRunToken) {
+        if ((applies += 1) === 1) return { data: partlyApplied };
+        await retryGate.promise;
+        return { data: retryApplied };
+      }
+      return { data: dryRun() };
+    });
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+    await selectPage();
+    fireEvent.click(screen.getByTestId('models-bulk-turn-off-btn'));
+    await confirmBulk();
+    fireEvent.click(await screen.findByTestId('models-bulk-retry-btn'));
+    await confirmBulk();
+
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await act(async () => retryGate.resolve());
     await waitFor(() => expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Updated 1 of 1'));
+    await act(async () => undoGate.resolve());
+
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Undo: 1 model reverted.'));
+    expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Updated 1 of 1');
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await waitFor(() =>
+      expect(screen.getByTestId('undo-toast-message')).toHaveTextContent(
+        'Undo: 0 models reverted. The undo for retry 1 had expired; change those models back from the list.'
+      )
+    );
+    expect(undoTokensSent()).toEqual(['undo-1', 'undo-2']);
+  });
+
+  it('keeps an undo failure off the toast of a retry that landed mid-undo', async () => {
+    serveList(twoRows);
+    const threeWay = (
+      summary: string,
+      updated: string[],
+      failed: string[],
+      undoToken: string
+    ): ModelAccessBulkResult => ({
+      batchId: undoToken,
+      results: [
+        ...updated.map(id => ({ id, outcome: 'updated' as const })),
+        ...failed.map(id => ({ id, outcome: 'failed' as const, reason: 'write-error' as const })),
+      ],
+      counts: {
+        selected: updated.length + failed.length,
+        updated: updated.length,
+        unchanged: 0,
+        failed: failed.length,
+      },
+      summary,
+      undoToken,
+      revision: undoToken,
+    });
+    const applied = [
+      threeWay('Updated 1 of 3. 2 failed', ['example-text-1'], ['example-text-2', 'example-text-3'], 'undo-1'),
+      threeWay('Updated 1 of 2. 1 failed', ['example-text-2'], ['example-text-3'], 'undo-2'),
+      threeWay('Updated 1 of 1', ['example-text-3'], [], 'undo-3'),
+    ];
+    const undoGate = deferred();
+    const retryGate = deferred();
+    let applies = 0;
+    post.mockImplementation(async (_url: string, body: { dryRunToken?: string; undoToken?: string }) => {
+      if (body.undoToken === 'undo-1') {
+        await undoGate.promise;
+        return undoneOne('example-text-1');
+      }
+      if (body.undoToken === 'undo-2') throw apiFailure(500, { error: 'Access store unavailable' });
+      if (body.undoToken) return undoneOne('example-text-3');
+      if (body.dryRunToken) {
+        applies += 1;
+        if (applies === 3) await retryGate.promise;
+        return { data: applied[applies - 1] };
+      }
+      return { data: dryRun() };
+    });
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+    await selectPage();
+    fireEvent.click(screen.getByTestId('models-bulk-turn-off-btn'));
+    await confirmBulk();
+    fireEvent.click(await screen.findByTestId('models-bulk-retry-btn'));
+    await confirmBulk();
+    await waitFor(() => expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Updated 1 of 2'));
+    fireEvent.click(await screen.findByTestId('models-bulk-retry-btn'));
+    await confirmBulk();
+
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await act(async () => retryGate.resolve());
+    await waitFor(() => expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Updated 1 of 1'));
+    await act(async () => undoGate.resolve());
+
+    const stopped = 'Undo: 1 model reverted; the rest failed: Access store unavailable';
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(stopped));
+    expect(screen.getByTestId('models-bulk-failed')).toHaveTextContent(stopped);
+    expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Updated 1 of 1');
+    expect(screen.queryByTestId('undo-toast-error')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
     await waitFor(() => expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Undo: 1 model reverted.'));
-    expect(undoTokensSent()).toEqual(['undo-1', 'undo-2']);
+    expect(undoTokensSent()).toEqual(['undo-1', 'undo-2', 'undo-3']);
   });
 
   it('reports failed models and retries only those through a fresh dry run', async () => {

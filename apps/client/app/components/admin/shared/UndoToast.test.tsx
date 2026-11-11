@@ -3,7 +3,13 @@ import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-li
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { UNDO_TOAST_DURATION_MS, UndoToastProvider, type UndoToastOptions, useUndoToast } from './UndoToast';
+import {
+  UNDO_TOAST_DURATION_MS,
+  UndoToastProvider,
+  type UndoToastOptions,
+  useUndoToast,
+  useUndoToastIsCurrent,
+} from './UndoToast';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -94,6 +100,41 @@ describe('UndoToast', () => {
     fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
     expect(secondUndo).toHaveBeenCalledTimes(1);
     expect(firstUndo).not.toHaveBeenCalled();
+  });
+
+  it('keeps a failure off a newer toast that replaced the one being undone', async () => {
+    let failUndo: (error: Error) => void = () => undefined;
+    const firstUndo = vi.fn(() => new Promise<void>((_resolve, reject) => (failUndo = reject)));
+    render(
+      <>
+        <Trigger options={{ message: 'First write', onUndo: firstUndo }} testId="first-btn" />
+        <Trigger options={{ message: 'Second write', onUndo: vi.fn() }} testId="second-btn" />
+      </>,
+      { wrapper: TestWrapper }
+    );
+
+    fireEvent.click(screen.getByTestId('first-btn'));
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    fireEvent.click(screen.getByTestId('second-btn'));
+    await act(async () => failUndo(new Error('First write could not be reverted')));
+
+    expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Second write');
+    expect(screen.queryByTestId('undo-toast-error')).not.toBeInTheDocument();
+    expect(screen.getByTestId('undo-toast-undo-btn')).not.toBeDisabled();
+  });
+
+  it('says whether a toast is still the one on screen', () => {
+    const ids: number[] = [];
+    const { result } = renderHook(() => ({ show: useUndoToast(), isCurrent: useUndoToastIsCurrent() }), {
+      wrapper: TestWrapper,
+    });
+
+    act(() => void ids.push(result.current.show({ message: 'First write' })));
+    expect(result.current.isCurrent(ids[0])).toBe(true);
+    act(() => void ids.push(result.current.show({ message: 'Second write' })));
+    expect(result.current.isCurrent(ids[0])).toBe(false);
+    expect(result.current.isCurrent(ids[1])).toBe(true);
+    expect(result.current.isCurrent(null)).toBe(false);
   });
 
   it('dismisses itself after 30 seconds', () => {
