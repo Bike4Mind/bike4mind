@@ -559,7 +559,7 @@ describe('GET /api/transforms/batch/:id settlement', () => {
       expect(m.settle.mock.calls[0][1]).toBe(110);
       expect(m.record.mock.calls[0][0].costUsd).toBeCloseTo(0.11, 6);
       expect(m.record.mock.calls[0][0]).toMatchObject({ executedProvider: 'anthropic', executedModel: 'ghost' });
-      expect(m.warn).toHaveBeenCalledWith(expect.stringContaining('ghost'));
+      expect(m.warn).toHaveBeenCalledWith(expect.stringContaining('Cannot price executed model ghost'));
     });
 
     it('keeps canceled and expired errors on substituted failed items', async () => {
