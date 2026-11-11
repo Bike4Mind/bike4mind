@@ -4,6 +4,8 @@ import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import { AdminAuditLogModel, Invite, Organization, PartnerSignupRule, User } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { InviteType } from '@bike4mind/common';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { organizationService } from '@bike4mind/services';
 import {
   createMongoReplSet,
@@ -118,6 +120,37 @@ describe('account deletion purge claims with Mongo', () => {
     expect(await Organization.exists({ _id: org.id })).toBeNull();
     expect(await Organization.exists({ _id: org.id }).setOptions({ includeDeleted: true } as never)).not.toBeNull();
     expect(await User.exists({ _id: userId })).toBeNull();
+  });
+  it('cancels the admin grant of a sole-owner organization and leaves other organizations subscriptions alone', async () => {
+    const userId = await seedUser();
+    const org = await Organization.create({ name: 'Granted', userId, personal: false });
+    const stripeSibling = await Organization.create({
+      name: 'Other',
+      userId: new mongoose.Types.ObjectId().toString(),
+    });
+    const base = {
+      ownerType: SubscriptionOwnerType.Organization,
+      priceId: 'price_test',
+      status: 'active',
+      quantity: 1,
+      periodStartsAt: new Date(),
+      periodEndsAt: new Date(Date.now() + 86_400_000),
+    };
+    await Subscription.create({
+      ...base,
+      ownerId: String(org.id),
+      subscriptionId: 'admin_grant_purge-test',
+      source: SubscriptionSource.AdminGrant,
+    });
+    await Subscription.create({
+      ...base,
+      ownerId: String(stripeSibling.id),
+      subscriptionId: 'admin_grant_other-org',
+      source: SubscriptionSource.AdminGrant,
+    });
+    await expect(complete(userId)).resolves.toEqual({ deleted: true });
+    expect((await Subscription.findOne({ subscriptionId: 'admin_grant_purge-test' }).lean())!.status).toBe('canceled');
+    expect((await Subscription.findOne({ subscriptionId: 'admin_grant_other-org' }).lean())!.status).toBe('active');
   });
   it('deletes an organization whose only manager entry is the owner and clears partner rules pointing at it', async () => {
     const userId = await seedUser();
