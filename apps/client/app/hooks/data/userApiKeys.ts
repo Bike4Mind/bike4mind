@@ -304,9 +304,9 @@ export interface ApiKeyRateLimitResetResponse {
 export function useAdminResetApiKeyRateLimit({ onSuccess }: { onSuccess?: () => void } = {}) {
   const queryClient = useQueryClient();
 
-  return useMutation<ApiKeyRateLimitResetResponse, Error, string>({
-    mutationFn: async keyId => {
-      const response = await api.post(`/api/admin/user-api-keys/${keyId}/reset-rate-limit`);
+  return useMutation<ApiKeyRateLimitResetResponse, Error, { keyId: string; reason: string }>({
+    mutationFn: async ({ keyId, reason }) => {
+      const response = await api.post(`/api/admin/user-api-keys/${keyId}/reset-rate-limit`, { reason });
       return response.data;
     },
     onSuccess: () => {

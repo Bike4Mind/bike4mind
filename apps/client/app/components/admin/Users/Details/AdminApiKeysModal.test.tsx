@@ -168,19 +168,34 @@ describe('AdminApiKeysModal', () => {
     expect(screen.getByTestId('admin-api-key-status-k1').textContent).toBe('Rate limited');
   });
 
-  it('requires a reason in the shared dialog and discloses that reset does not store it', async () => {
+  it('requires an audited reason and sends it with the reset, without offering Undo', async () => {
     h.keys = [KEY];
     renderModal();
 
     fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
     expect(screen.getByTestId('admin-api-keys-reset-dialog-confirm-btn')).toBeDisabled();
-    expect(screen.getByTestId('admin-api-keys-reset-dialog')).toHaveTextContent('Not stored yet');
+    expect(screen.getByTestId('admin-api-keys-reset-dialog')).not.toHaveTextContent('Not stored yet');
     expect(screen.getByTestId('admin-api-keys-reset-dialog')).toHaveTextContent('cannot be undone');
     fireEvent.click(screen.getByTestId('admin-api-keys-reset-dialog-reason-input-preset-0'));
     await act(async () => fireEvent.click(screen.getByTestId('admin-api-keys-reset-dialog-confirm-btn')));
     expect(h.resetMutate).toHaveBeenCalledTimes(1);
-    expect(h.resetMutate).toHaveBeenCalledWith('k1');
+    expect(h.resetMutate).toHaveBeenCalledWith({ keyId: 'k1', reason: 'Support request' });
     expect(screen.queryByTestId('undo-toast-undo-btn')).toBeNull();
+  });
+
+  it('composes a note with the selected reason for the audit trail', async () => {
+    h.keys = [KEY];
+    renderModal();
+    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+    fireEvent.click(screen.getByTestId('admin-api-keys-reset-dialog-reason-input-preset-1'));
+    fireEvent.change(screen.getByTestId('admin-api-keys-reset-dialog-reason-input'), {
+      target: { value: 'owner confirmed the lockout' },
+    });
+    await act(async () => fireEvent.click(screen.getByTestId('admin-api-keys-reset-dialog-confirm-btn')));
+    expect(h.resetMutate).toHaveBeenCalledWith({
+      keyId: 'k1',
+      reason: 'Key locked out: owner confirmed the lockout',
+    });
   });
 
   it('shows a bare success toast when neither counter was at its ceiling', async () => {
@@ -300,6 +315,8 @@ describe('AdminApiKeysModal', () => {
     renderModal();
     await confirmReset();
     expect(screen.getByTestId('admin-api-keys-reset-dialog')).toBeTruthy();
+    expect(screen.getByTestId('admin-api-keys-reset-dialog-confirm-btn')).toBeEnabled();
+    expect(h.resetMutate).toHaveBeenCalledWith({ keyId: 'k1', reason: 'Support request' });
     expect(toast.success).not.toHaveBeenCalled();
   });
 
