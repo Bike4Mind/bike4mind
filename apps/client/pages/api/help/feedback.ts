@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { HelpEventModel } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { HELP_FEEDBACK_RATINGS, HELP_FEEDBACK_REPORT_TYPES } from '@bike4mind/common';
+import { HELP_FEEDBACK_RATINGS, HELP_FEEDBACK_REPORT_TYPES, parseFeedbackClientContext } from '@bike4mind/common';
 import { routeHelpCommentToFeedback, syncRoutedVerdict } from '@server/utils/helpFeedbackRouting';
 import { z } from 'zod';
 
@@ -11,6 +11,8 @@ const HelpFeedbackSchema = z.object({
   rating: z.enum(HELP_FEEDBACK_RATINGS).optional(),
   reportType: z.enum(HELP_FEEDBACK_REPORT_TYPES).optional(),
   comment: z.string().max(1000).optional(),
+  // Validated by parseFeedbackClientContext, which drops a malformed object instead of failing.
+  clientContext: z.unknown().optional(),
 });
 
 const handler = baseApi()
@@ -85,6 +87,7 @@ const handler = baseApi()
           surface: 'article',
           slug,
         },
+        clientContext: parseFeedbackClientContext(parsed.data.clientContext, req.headers['user-agent']),
         logger: req.logger,
       });
     } else if (rating || reportType) {

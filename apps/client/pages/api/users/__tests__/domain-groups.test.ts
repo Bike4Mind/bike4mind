@@ -11,7 +11,7 @@ vi.mock('@bike4mind/database', () => ({
   executeFacetCompatible: vi.fn(),
   convertPipelineForDocumentDB: vi.fn(),
 }));
-vi.mock('@server/users/signupAnomaly', () => ({ getDomainGroups: mocks.groups, SIGNUP_SCAN_LIMIT: 2 }));
+vi.mock('@bike4mind/server-utils/users/signupAnomaly', () => ({ getDomainGroups: mocks.groups, SIGNUP_SCAN_LIMIT: 2 }));
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 vi.mock('@server/users/sharedWorkspaceUserIds', () => ({ findSharedWorkspaceUserIds: vi.fn() }));
 vi.mock('@server/users/pendingProjectInviteeIds', () => ({ findPendingProjectInviteeIds: vi.fn() }));

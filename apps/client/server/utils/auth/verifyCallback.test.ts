@@ -122,7 +122,7 @@ vi.mock('./openRegistration', () => ({
 
 const mockIsSignupNetworkOverLimit = vi.fn();
 const mockCreateSignupRiskCollector = vi.fn();
-vi.mock('@server/auth/signupNetworkLimits', () => ({
+vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({
   isSignupNetworkOverLimit: (...args: unknown[]) => mockIsSignupNetworkOverLimit(...args),
   createSignupRiskCollector: (...args: unknown[]) => mockCreateSignupRiskCollector(...args),
 }));

@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ReactNode } from 'react';
 import { describe, expect, it } from 'vitest';
-import type { AdminUsersListRow } from '@client/app/utils/adminUsersFilter';
+import type { AdminUsersListRow } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { signupVerdictDisplay, usersColumns } from './usersColumns';
 

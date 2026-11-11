@@ -1,7 +1,7 @@
 import { FabFile, Quest, questRepository, sessionRepository } from '@bike4mind/database';
 import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { createCdnInvalidationBatch, generatedCdnPath } from '@server/services/cdn/invalidateRouterCdn';
-import type { MinimalLogger } from '@server/services/publish/minimalLogger';
+import { createCdnInvalidationBatch, generatedCdnPath } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
+import type { MinimalLogger } from '@bike4mind/server-utils/services/publish/minimalLogger';
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 

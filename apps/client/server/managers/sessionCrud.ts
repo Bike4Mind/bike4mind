@@ -34,7 +34,7 @@ import {
   logSessionCreatedEvent,
   logProjectSessionAddedEvent,
   recordNotebookAddedToProjectActivity,
-} from './sessionSideEffects';
+} from '@bike4mind/server-utils/managers/sessionSideEffects';
 import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
 
 /**
@@ -140,7 +140,10 @@ export interface GetOrCreateSessionResult {
  */
 const lakeAdaptersFor = (user: IUserDocument, logger: Logger) => ({
   resolveLakeAccess: async () =>
-    (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(user, { logger }),
+    (await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(
+      user,
+      { logger }
+    ),
   resolveAttachmentLakeAccess: async () =>
     (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(user, logger)(),
 });

@@ -62,6 +62,7 @@ describe('gitHubConnectionPollInterval', () => {
     skippedCount: null,
     syncStale: false,
     fileCount: 0,
+    isLastInstallationBinding: true,
     disconnecting: false,
     disconnectStalled: false,
     ...overrides,

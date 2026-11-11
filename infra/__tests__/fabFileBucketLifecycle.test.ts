@@ -20,7 +20,7 @@ import {
   NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS,
   notebookConvertedDownloadKey,
   notebookZipDownloadKey,
-} from '../../apps/client/server/notebooks/downloadCopyKeys';
+} from '../../packages/server-utils/src/notebooks/downloadCopyKeys';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file: string) => readFileSync(path.join(REPO_ROOT, file), 'utf8');

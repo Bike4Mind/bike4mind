@@ -56,7 +56,7 @@ vi.mock('@bike4mind/database', () => ({
 // The endpoint resolves its actor via toAccessContext (#1668); stub it so the real one's
 // entitlements + org-admin DB reads don't get pulled into this unit test. The actor identity still
 // comes from req.user (never the body), preserving the security property the route depends on.
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
     userId: req.user.id,
     isAdmin: !!req.user.isAdmin,

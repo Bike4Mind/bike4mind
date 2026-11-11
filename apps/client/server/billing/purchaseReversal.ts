@@ -4,7 +4,7 @@ import type { Logger } from '@bike4mind/observability';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { adminOwnerSlackRef } from '@server/integrations/slack/subscriptionLifecycle';
+import { adminOwnerSlackRef } from '@bike4mind/server-utils/integrations/slack/subscriptionLifecycle';
 import { Resource } from 'sst';
 
 export type PurchaseReversalOutcome = 'no_purchase' | 'not_user' | 'no_stamp' | 'kept' | 'revoked';

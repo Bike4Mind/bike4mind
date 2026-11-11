@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { EntitlementRequest } from '@server/entitlements';
+import type { EntitlementRequest } from '@bike4mind/server-utils/entitlements/index';
 
 const h = vi.hoisted(() => ({
   getRequestEntitlements: vi.fn(),
   copyEntitlements: { 'some-workspace': ['base:pro'] } as Record<string, string[]>,
 }));
 
-vi.mock('@server/entitlements', () => ({ getRequestEntitlements: h.getRequestEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getRequestEntitlements: h.getRequestEntitlements }));
 vi.mock('@client/app/premium-generated/premiumWorkspaceCopyEntitlements.generated', () => ({
   get premiumWorkspaceCopyEntitlements() {
     return h.copyEntitlements;

@@ -16,4 +16,4 @@
  * `./sessionSideEffects` directly.
  */
 export * from './sessionCrud';
-export * from './sessionOperations';
+export * from '@bike4mind/server-utils/managers/sessionOperations';

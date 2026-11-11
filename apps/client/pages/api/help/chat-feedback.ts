@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { HelpEventModel } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { HELP_FEEDBACK_RATINGS } from '@bike4mind/common';
+import { HELP_FEEDBACK_RATINGS, parseFeedbackClientContext } from '@bike4mind/common';
 import { routeHelpCommentToFeedback, syncRoutedVerdict } from '@server/utils/helpFeedbackRouting';
 import { z } from 'zod';
 
@@ -11,6 +11,8 @@ const ChatFeedbackSchema = z.object({
   chatAnswer: z.string().min(1).max(10000),
   rating: z.enum(HELP_FEEDBACK_RATINGS),
   comment: z.string().max(1000).optional(),
+  // Validated by parseFeedbackClientContext, which drops a malformed object instead of failing.
+  clientContext: z.unknown().optional(),
 });
 
 const handler = baseApi()
@@ -75,6 +77,7 @@ const handler = baseApi()
         // No verdict, for the same reason as the article route: the router reads it off the event
         // at write time rather than taking this request's older read.
         helpContext: { eventId: event.id, surface: 'chat' },
+        clientContext: parseFeedbackClientContext(parsed.data.clientContext, req.headers['user-agent']),
         logger: req.logger,
       });
     } else if (rating) {

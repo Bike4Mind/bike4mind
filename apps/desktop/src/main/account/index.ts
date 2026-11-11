@@ -34,8 +34,8 @@ export function registerAccount(auth: AuthService): AccountService {
   });
   ipcMain.handle(IPC_CHANNELS.accountGetBilling, () => billing.billing());
   ipcMain.handle(IPC_CHANNELS.accountSubscribePlan, (_event, priceId: unknown) => billing.subscribePlan(priceId));
-  ipcMain.handle(IPC_CHANNELS.accountPurchaseCredits, (_event, packageId: unknown) =>
-    billing.purchaseCredits(packageId)
+  ipcMain.handle(IPC_CHANNELS.accountPurchaseCredits, (_event, packageId: unknown, acceptedTerms: unknown) =>
+    billing.purchaseCredits(packageId, acceptedTerms)
   );
   ipcMain.handle(IPC_CHANNELS.accountSendFeedback, (_event, content: unknown) =>
     service.sendFeedback(content, auth.getState().user)

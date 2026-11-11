@@ -43,8 +43,38 @@ import {
   DlqMessage,
   DlqReplayLogEntry,
   DlqHistoryFilters,
+  DlqQueueInfo,
+  DlqReplaySafety,
 } from '@client/app/hooks/data/dlqManagement';
 import { AdminPermissionAction } from './shared/MissingPermission';
+import { formatDuration, formatExpiresIn, getDlqExpiry } from './dlqExpiry';
+import { StatusChip as AdminStatusChip } from './shared/StatusChip';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
+
+const REPLAY_CHIP: Record<DlqReplaySafety, { tone: AdminStatusTone; label: string }> = {
+  safe: { tone: 'good', label: 'Safe to replay' },
+  'side-effects': { tone: 'warn', label: 'Replay has side effects' },
+  unsafe: { tone: 'bad', label: 'Unsafe to replay' },
+};
+
+// A class the server knows but this bundle does not (e.g. deployed ahead of the client) reads as unsafe.
+const UNKNOWN_REPLAY_CHIP = { tone: 'bad', label: 'Replay safety unknown' } as const;
+
+const QueueHint: React.FC<{ queue: DlqQueueInfo }> = ({ queue }) => {
+  const chip = queue.replay ? (REPLAY_CHIP[queue.replay] ?? UNKNOWN_REPLAY_CHIP) : undefined;
+  return (
+    <Stack spacing={0.5} sx={{ mt: 1.5 }} data-testid="dlq-queue-hint">
+      <Typography level="body-sm">{queue.description}</Typography>
+      {chip && (
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          <AdminStatusChip tone={chip.tone} label={chip.label} data-testid="dlq-queue-hint-replay" />
+          {queue.replayNote && <Typography level="body-sm">{queue.replayNote}</Typography>}
+        </Stack>
+      )}
+      {queue.owner && <Typography level="body-xs">Owner: {queue.owner}</Typography>}
+    </Stack>
+  );
+};
 
 const StatusChip: React.FC<{ status: 'success' | 'failed' | 'skipped' }> = ({ status }) => {
   const config = {
@@ -84,12 +114,43 @@ const StatsCard: React.FC<{
   );
 };
 
+const AgeExpiryCells: React.FC<{
+  sentTimestamp?: string;
+  retentionSeconds?: number;
+  messageId: string;
+}> = ({ sentTimestamp, retentionSeconds, messageId }) => {
+  const expiry = getDlqExpiry(sentTimestamp, retentionSeconds);
+  return (
+    <>
+      <td>
+        <Typography level="body-xs" data-testid={`dlq-age-${messageId}`}>
+          {expiry ? formatDuration(expiry.ageMs) : 'N/A'}
+        </Typography>
+      </td>
+      <td>
+        <Typography
+          level="body-xs"
+          color={expiry?.warn ? 'warning' : undefined}
+          fontWeight={expiry?.warn ? 'lg' : undefined}
+          data-testid={`dlq-expires-${messageId}`}
+          data-warn={expiry?.warn ? 'true' : 'false'}
+        >
+          {expiry ? formatExpiresIn(expiry) : 'N/A'}
+        </Typography>
+      </td>
+    </>
+  );
+};
+
 const MessageDrawer: React.FC<{
   message: DlqMessage | null;
+  retentionSeconds?: number;
   open: boolean;
   onClose: () => void;
-}> = ({ message, open, onClose }) => {
+}> = ({ message, retentionSeconds, open, onClose }) => {
   if (!message) return null;
+
+  const expiry = getDlqExpiry(message.sentTimestamp, retentionSeconds);
 
   const formatBody = (body: string) => {
     try {
@@ -151,6 +212,18 @@ const MessageDrawer: React.FC<{
             >
               View consumer logs
             </Button>
+          )}
+          {expiry && (
+            <Box>
+              <Typography level="body-sm" fontWeight="bold">
+                Age / Expires in
+              </Typography>
+              <Typography level="body-sm" color={expiry.warn ? 'warning' : undefined} data-testid="dlq-drawer-expiry">
+                {expiry.remainingMs === null
+                  ? `${formatDuration(expiry.ageMs)} old`
+                  : `${formatDuration(expiry.ageMs)} old, expires in ${formatExpiresIn(expiry)}`}
+              </Typography>
+            </Box>
           )}
 
           <Box>
@@ -455,6 +528,7 @@ const DlqReplayTab: React.FC = () => {
               </AdminPermissionAction>
             </Stack>
           </Stack>
+          {selectedQueueInfo.description !== undefined && <QueueHint queue={selectedQueueInfo} />}
         </Card>
       )}
 
@@ -477,12 +551,15 @@ const DlqReplayTab: React.FC = () => {
       {/* Messages Table */}
       {selectedQueue && (
         <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto', mb: 3 }}>
-          <Table stickyHeader hoverRow data-testid="dlq-messages-table">
+          {/* fixed table layout ignores th min-width; the floor keeps Body Preview >= 160px */}
+          <Table stickyHeader hoverRow data-testid="dlq-messages-table" sx={{ minWidth: 880 }}>
             <thead>
               <tr>
-                <th style={{ width: 250 }}>Message ID</th>
+                <th style={{ width: 200 }}>Message ID</th>
                 <th>Body Preview</th>
                 <th style={{ width: 160 }}>Sent At</th>
+                <th style={{ width: 80 }}>Age</th>
+                <th style={{ width: 100 }}>Expires in</th>
                 <th style={{ width: 100 }}>Receives</th>
                 <th style={{ width: 80 }}>Actions</th>
               </tr>
@@ -490,14 +567,14 @@ const DlqReplayTab: React.FC = () => {
             <tbody>
               {messagesLoading && (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: 24 }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: 24 }}>
                     <CircularProgress size="sm" />
                   </td>
                 </tr>
               )}
               {!messagesLoading && messagesError && (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: 24 }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: 24 }}>
                     <Typography level="body-sm" color="danger">
                       Failed to load messages. Try refreshing.
                     </Typography>
@@ -506,7 +583,7 @@ const DlqReplayTab: React.FC = () => {
               )}
               {!messagesLoading && !messagesError && (!messages || messages.length === 0) && (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: 24 }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: 24 }}>
                     <Typography level="body-sm" color="neutral">
                       No messages in this DLQ
                     </Typography>
@@ -538,6 +615,11 @@ const DlqReplayTab: React.FC = () => {
                       {msg.sentTimestamp ? new Date(parseInt(msg.sentTimestamp, 10)).toLocaleString() : 'N/A'}
                     </Typography>
                   </td>
+                  <AgeExpiryCells
+                    sentTimestamp={msg.sentTimestamp}
+                    retentionSeconds={selectedQueueInfo?.messageRetentionSeconds}
+                    messageId={msg.messageId}
+                  />
                   <td>
                     <Typography level="body-xs">{msg.approximateReceiveCount ?? 'N/A'}</Typography>
                   </td>
@@ -738,7 +820,12 @@ const DlqReplayTab: React.FC = () => {
       )}
 
       {/* Message Detail Drawer */}
-      <MessageDrawer message={selectedMessage} open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+      <MessageDrawer
+        message={selectedMessage}
+        retentionSeconds={selectedQueueInfo?.messageRetentionSeconds}
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+      />
 
       {/* Confirmation Modal - Replay All */}
       <Modal open={confirmOpen} onClose={() => setConfirmOpen(false)}>

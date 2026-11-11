@@ -77,7 +77,9 @@ vi.mock('@bike4mind/services', () => ({
     updateDataLake: h.updateDataLake,
   },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: async () => ({ userId: 'u1' }) }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
+  toAccessContext: async () => ({ userId: 'u1' }),
+}));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: () => ({ kind: 'user' }) }));
 vi.mock('@bike4mind/database', async importOriginal => {

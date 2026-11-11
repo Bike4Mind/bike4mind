@@ -13,6 +13,8 @@ import { revokeAccess } from './revokeAccess';
 import { leave } from './leave';
 import { transferOwnership } from './transferOwnership';
 import type { TransferOwnershipResult } from './transferOwnership';
+import { setOrganizationManager } from './setOrganizationManager';
+import type { OrganizationManagerChange } from './setOrganizationManager';
 import { clearActiveOrganization } from './clearActiveOrganization';
 import { setOrganizationGroupTypes } from './setOrganizationGroupTypes';
 import {
@@ -56,6 +58,7 @@ export {
   revokeAccess,
   leave,
   transferOwnership,
+  setOrganizationManager,
   clearActiveOrganization,
   setOrganizationGroupTypes,
   assignUserToGroup,
@@ -73,6 +76,7 @@ export {
 
 export type { SearchParameters };
 export type { TransferOwnershipResult };
+export type { OrganizationManagerChange };
 export type { OrganizationStorageReconciliation, ReconcileOrganizationStorageAdapters };
 export type { GetOrganizationStorageUsageAdapters };
 export type { GroupTypeResolutionOverride };

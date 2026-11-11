@@ -58,6 +58,8 @@ export class MigrationManager {
     this.logger.log('');
 
     const startedAt = new Date();
+    const failClosedErrors: unknown[] = [];
+    const failClosedIds: number[] = [];
     for (const migration of migrations) {
       const logger = this.logger.withMetadata({
         migrationId: migration.id,
@@ -74,9 +76,26 @@ export class MigrationManager {
         await Migration.create({ id: migration.id, name: migration.name });
         logger.log(`Migration ${migration.id} ${migration.name} completed`);
       } catch (error: unknown) {
+        if (migration.failClosed) {
+          logger.error(
+            `Fail-closed migration ${migration.id} ${migration.name} refused to run; left pending, continuing with the rest`,
+            error
+          );
+          failClosedErrors.push(error);
+          failClosedIds.push(migration.id);
+          continue;
+        }
         logger.error(`Error running migration ${migration.id} ${migration.name}`);
         throw error;
       }
+    }
+
+    // Still fail the run so the deploy stays red until an operator resolves the held migration(s).
+    if (failClosedErrors.length > 0) {
+      throw new AggregateError(
+        failClosedErrors,
+        `Fail-closed migration(s) left pending: ${failClosedIds.join(', ')}. All other pending migrations ran.`
+      );
     }
 
     this.logger.log(`Migrations completed`);

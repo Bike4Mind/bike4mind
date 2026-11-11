@@ -10,7 +10,7 @@ import type {
   AdminUsersBulkResult,
   AdminUsersBulkTarget,
   AdminUsersBulkUndoResult,
-} from '@client/app/utils/adminUsersBulk';
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 
 const apiPost = vi.hoisted(() => vi.fn());
 const toastMock = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() }));

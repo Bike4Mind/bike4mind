@@ -10,7 +10,10 @@ import { z } from 'zod';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { refuseBlockedRotatedSession } from '@server/auth/refreshAccountGate';
-import { API_KEY_ACCESS_DENIED_MESSAGE, assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
+import {
+  API_KEY_ACCESS_DENIED_MESSAGE,
+  assertApiKeyAccessAllowed,
+} from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';
 

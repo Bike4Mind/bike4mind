@@ -65,8 +65,8 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
 
 vi.mock('sst', () => ({ Resource: { appFilesBucket: { name: 'bucket' } } }));
 const invalidate = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock('@server/services/cdn/invalidateRouterCdn', async importActual => ({
-  ...(await importActual<typeof import('@server/services/cdn/invalidateRouterCdn')>()),
+vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
   invalidateRouterPaths: invalidate,
 }));
 vi.mock('@server/utils/browserUploadUrl', () => ({

@@ -53,7 +53,7 @@ vi.mock('@server/utils/childExecutionSnapshot', () => ({
   buildChildExecutionSnapshots: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('@server/utils/liveActivityPush', () => ({ endAgentRunLiveActivity: vi.fn() }));
-vi.mock('@server/utils/persistRunAsQuest', () => ({
+vi.mock('@bike4mind/server-utils/utils/persistRunAsQuest', () => ({
   persistRunAsQuest: vi.fn(),
 }));
 vi.mock('@bike4mind/server-utils/utils/extractFinalAnswer', () => ({
@@ -62,7 +62,7 @@ vi.mock('@bike4mind/server-utils/utils/extractFinalAnswer', () => ({
 vi.mock('@server/utils/startAgentExecution', () => ({
   startAgentExecution: vi.fn(),
 }));
-vi.mock('@server/utils/publishMementoCompletion', () => ({
+vi.mock('@bike4mind/server-utils/utils/publishMementoCompletion', () => ({
   resolveAndPublishMementoCompletion: vi.fn(),
 }));
 vi.mock('@server/websocket/reconnectBudget', () => ({
@@ -107,7 +107,7 @@ import { ApiKeyScope, PROMPT_TEXT_MAX, TooManyRequestsError } from '@bike4mind/c
 import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { endAgentRunLiveActivity } from '@server/utils/liveActivityPush';
-import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';

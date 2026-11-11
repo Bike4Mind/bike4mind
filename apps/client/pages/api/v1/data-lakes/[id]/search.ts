@@ -18,8 +18,11 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { HTTPError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { toMemberAccessContext } from '@server/dataLakes/toAccessContext';
-import { resolveRetrievalLakeScope, type RetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
+import { toMemberAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import {
+  resolveRetrievalLakeScope,
+  type RetrievalLakeScope,
+} from '@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope';
 import { runLakeSemanticSearch } from '@server/dataLakes/runLakeSemanticSearch';
 import { SEMANTIC_SEARCH_RATE_LIMIT } from '@server/dataLakes/semanticSearchRateLimit';
 import { resolveDefaultEmbeddingModel } from '@server/utils/resolveDefaultEmbeddingModel';

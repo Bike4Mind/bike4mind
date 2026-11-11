@@ -15,6 +15,10 @@ import { type MigrationFile } from './index';
  * migration window.
  *
  * Idempotent: createIndexes is a no-op for indexes that already exist.
+ *
+ * Deploy note: renumbered from 20260922000000. An environment that applied it under that id will
+ * skip EnsureOAuthGrantClientUserIndex, which now owns it; delete that environment's stale
+ * `20260922000000` row from the migrations collection so it reruns as the OAuthGrant migration.
  */
 const migration: MigrationFile = {
   id: 20260921100000,

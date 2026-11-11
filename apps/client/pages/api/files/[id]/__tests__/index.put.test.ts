@@ -107,7 +107,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
 
 // Stubbed so the real one's entitlement + org-admin Mongo reads stay out of this spec; the actor
 // identity still comes from req.user, never the body.
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: async (req: { user: { id: string; isAdmin?: boolean } }) => ({
     userId: req.user.id,
     isAdmin: !!req.user.isAdmin,

@@ -1,4 +1,4 @@
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 import React from 'react';
 import { Alert, Button, Chip, CircularProgress, Stack, Tooltip, Typography } from '@mui/joy';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
