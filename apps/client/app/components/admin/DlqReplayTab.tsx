@@ -96,7 +96,7 @@ const AllClear: React.FC<{ checkedAt: number }> = ({ checkedAt }) => (
   >
     <CheckCircleIcon sx={{ fontSize: 40, color: 'var(--joy-palette-success-500)' }} />
     <Typography level="title-lg">No dead letters</Typography>
-    <Typography level="body-sm">Every background job queue is empty, so there is nothing to replay.</Typography>
+    <Typography level="body-sm">Every queue listed here is empty, so there is nothing to replay.</Typography>
     <Typography level="body-xs" data-testid="dlq-all-clear-checked">
       Last checked {new Date(checkedAt).toLocaleTimeString()}
     </Typography>
