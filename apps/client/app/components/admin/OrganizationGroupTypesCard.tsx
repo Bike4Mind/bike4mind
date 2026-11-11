@@ -1,22 +1,11 @@
 import { FC, useMemo, useState } from 'react';
-import {
-  Autocomplete,
-  Box,
-  Button,
-  Card,
-  Chip,
-  FormControl,
-  FormHelperText,
-  FormLabel,
-  Stack,
-  Typography,
-} from '@mui/joy';
-import GroupWorkOutlinedIcon from '@mui/icons-material/GroupWorkOutlined';
+import { Autocomplete, Box, Button, Chip, FormControl, FormHelperText, FormLabel, Stack, Typography } from '@mui/joy';
 import { GROUP_TYPE_CATALOG, getGroupType, IOrganizationDocument, WithId } from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { fetchOrganizationGroups, setOrganizationGroupTypes } from '@client/app/utils/groupsAPICalls';
 import { getErrorMessage, sanitizeErrorMessage } from '@client/app/utils/error';
+import { SettingsSection } from './shared';
 
 const GROUP_TYPE_KEYS = GROUP_TYPE_CATALOG.map(type => type.key);
 const labelFor = (key: string) => getGroupType(key)?.label ?? key;
@@ -83,27 +72,23 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
 
   if (org.personal) {
     return (
-      <Card variant="outlined" sx={{ p: 2, mt: 2 }} data-testid="org-group-types-card">
+      <SettingsSection data-testid="org-group-types-card">
         <Stack spacing={1}>
-          <Typography level="title-md" startDecorator={<GroupWorkOutlinedIcon fontSize="small" />}>
-            Group Types
-          </Typography>
+          <Typography level="title-md">Group types</Typography>
           <Typography level="body-sm" color="neutral">
             Personal organizations cannot be granted group types.
           </Typography>
         </Stack>
-      </Card>
+      </SettingsSection>
     );
   }
 
   const groups = groupsQuery.data ?? [];
 
   return (
-    <Card variant="outlined" sx={{ p: 2, mt: 2 }} data-testid="org-group-types-card">
+    <SettingsSection data-testid="org-group-types-card">
       <Stack spacing={1.5}>
-        <Typography level="title-md" startDecorator={<GroupWorkOutlinedIcon fontSize="small" />}>
-          Group Types
-        </Typography>
+        <Typography level="title-md">Group types</Typography>
 
         <FormControl>
           <FormLabel>Allowed group types</FormLabel>
@@ -169,7 +154,7 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
           )}
         </Stack>
       </Stack>
-    </Card>
+    </SettingsSection>
   );
 };
 

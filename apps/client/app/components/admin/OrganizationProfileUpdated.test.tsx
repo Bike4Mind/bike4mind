@@ -110,4 +110,32 @@ describe('OrganizationProfileUpdated - storage limit', () => {
 
     expect(screen.getByTestId('admin-org-update-btn')).toBeDisabled();
   });
+
+  it('keeps a changed credit balance out of the settings save', () => {
+    renderModal(makeOrg({ currentCredits: 100 }));
+    fireEvent.change(screen.getByTestId('org-profile-credits-input'), { target: { value: '200' } });
+    fireEvent.click(screen.getByTestId('admin-org-update-btn'));
+
+    expect(sentData()).not.toHaveProperty('currentCredits');
+    expect(sentData()).not.toHaveProperty('creditReason');
+  });
+
+  it('adjusts credits through the audited action dialog with a before/after preview', async () => {
+    renderModal(makeOrg({ currentCredits: 100 }));
+    fireEvent.change(screen.getByTestId('org-profile-credits-input'), { target: { value: '0' } });
+    fireEvent.click(screen.getByTestId('org-profile-adjust-credits-btn'));
+
+    expect(screen.getByTestId('org-profile-credit-preview-before')).toHaveTextContent('100');
+    expect(screen.getByTestId('org-profile-credit-preview-after')).toHaveTextContent('0');
+    expect(screen.getByTestId('org-profile-credit-dialog-confirm-btn')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('org-profile-credit-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('org-profile-credit-dialog-confirm-btn'));
+
+    await waitFor(() =>
+      expect(mutateAsync).toHaveBeenCalledWith({
+        orgId: 'org1',
+        data: { currentCredits: 0, creditReason: 'Goodwill credit' },
+      })
+    );
+  });
 });
