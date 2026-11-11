@@ -3,7 +3,9 @@ import { IPC_CHANNELS } from '@shared/ipc';
 import { registerLocalDataExportIpc } from './localDataExportIpc';
 import { writeLocalDataExport } from './localDataExport';
 
-vi.mock('./localDataExport', () => ({ writeLocalDataExport: vi.fn(async () => ({ path: '/tmp/export', warnings: [] as string[] })) }));
+vi.mock('./localDataExport', () => ({
+  writeLocalDataExport: vi.fn(async () => ({ path: '/tmp/export', warnings: [] as string[] })),
+}));
 
 describe('local data export IPC', () => {
   const setup = () => {

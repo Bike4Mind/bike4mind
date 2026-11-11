@@ -201,17 +201,30 @@ export async function writeLocalDataExport(
         lastUsedModel: session.model,
       });
       await emit('desktop-sessions', { id: session.id, session });
-      for (const message of session.messages) {
-        await emit('chat-messages', {
-          notebookId: session.id,
-          id: message.id,
-          timestamp: message.createdAt,
-          type: message.system ? 'system' : 'message',
-          prompt: message.role === 'user' ? message.content : '',
-          ...(message.role === 'assistant' ? { reply: message.content } : {}),
-          status: 'done',
-          pinned: false,
-        });
+      const messages = session.messages;
+      for (const [index, message] of messages.entries()) {
+        const previous = messages[index - 1];
+        const next = messages[index + 1];
+        const pairedWithPrevious =
+          message.role === 'assistant' && !message.system && previous?.role === 'user' && !previous.system;
+        if (!pairedWithPrevious) {
+          const reply =
+            message.role === 'user' && !message.system && next?.role === 'assistant' && !next.system
+              ? next
+              : message.role === 'assistant'
+                ? message
+                : null;
+          await emit('chat-messages', {
+            notebookId: session.id,
+            id: message.id,
+            timestamp: message.createdAt,
+            type: message.system ? 'system' : 'message',
+            prompt: message.role === 'user' ? message.content : '',
+            ...(reply ? { reply: reply.content } : {}),
+            status: 'done',
+            pinned: false,
+          });
+        }
         for (const attachment of message.attachments ?? []) {
           const source = await deps.attachments.locate(session.id, attachment.id);
           if (!source) throw new Error(`Missing attachment in ${session.id}.`);

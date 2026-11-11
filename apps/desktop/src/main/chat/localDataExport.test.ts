@@ -91,7 +91,9 @@ describe('writeLocalDataExport', () => {
     const manifest = JSON.parse(await readFile(join(path, 'manifest.json'), 'utf8'));
     expect(manifest).toMatchObject({ exportVersion: '2.0.0', platform: 'bike4mind' });
     expect(manifest.collections.notebooks.count).toBe(1);
-    expect(manifest.collections['chat-messages'].count).toBe(2);
+    expect(manifest.collections['chat-messages'].count).toBe(1);
+    const chatRow = JSON.parse((await readFile(join(path, 'collections/chat-messages.jsonl'), 'utf8')).trim());
+    expect(chatRow).toMatchObject({ id: 'user-1', prompt: 'hello', reply: 'reply' });
     expect(manifest.collections.knowledge.count).toBe(1);
     expect(manifest.collections.media.count).toBe(1);
     expect(manifest.collections.memory.count).toBe(2);
@@ -160,6 +162,7 @@ describe('writeLocalDataExport', () => {
     expect(warnings).toEqual(manifest.warnings);
     const names = [...(await readdir(join(path, 'collections'))).map(n => `collections/${n}`), 'manifest.json'];
     names.push(...(await readdir(join(path, 'files'))).map(n => `files/${n}`));
-    for (const name of names) expect((await readFile(join(path, name))).toString('latin1')).not.toContain('OUTSIDE_SECRET');
+    for (const name of names)
+      expect((await readFile(join(path, name))).toString('latin1')).not.toContain('OUTSIDE_SECRET');
   });
 });
