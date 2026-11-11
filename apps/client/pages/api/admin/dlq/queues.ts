@@ -8,7 +8,7 @@ import { Logger } from '@bike4mind/observability';
 /**
  * GET /api/admin/dlq/queues
  *
- * Returns all DLQs with their approximate message counts.
+ * Returns all DLQs with their approximate message counts and message retention.
  */
 const handler = adminApi({
   adminPermissions: { GET: 'support:read' },
@@ -32,6 +32,7 @@ const handler = adminApi({
         replay: entry.replay,
         approximateMessageCount: attrs.approximateMessageCount,
         approximateNotVisibleCount: attrs.approximateNotVisibleCount,
+        messageRetentionSeconds: attrs.messageRetentionSeconds,
       };
     })
   );
