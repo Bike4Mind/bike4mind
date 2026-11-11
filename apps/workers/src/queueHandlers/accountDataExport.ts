@@ -854,9 +854,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   ).lean<{ email?: string | null }>();
   if (!claimed) {
     const current = await userRepository.findById(userId);
-    if (!current || deletionDue(current)) {
+    if (!current) {
+      logger.warn('Account data export skipped: the account is gone');
+      await skipExport('account_gone', nameOf(user));
+      return;
+    }
+    if (deletionDue(current)) {
       logger.info('Account data export skipped: permanent deletion won admission');
-      await skipExport('deletion_won_admission', nameOf(current ?? user));
+      await skipExport('deletion_won_admission', nameOf(current));
       return;
     }
     // Admin and self-serve exports share this one lease. The overlapping job is re-sent with a delay and
