@@ -5,5 +5,3 @@ import { createHash } from 'crypto';
 export function providerEndUserIdFor(userId: string): string {
   return createHash('sha256').update(String(userId).trim()).digest('hex');
 }
-
-export const PROVIDER_END_USER_ID_PATTERN = /^[a-f0-9]{64}$/i;
