@@ -14,8 +14,9 @@ export const ownerEmbeddingSpendKey = (owner: LakeSpendOwner): string =>
 export type OwnerSpendReservation =
   | { granted: true }
   /**
-   * `stuck` marks a denial that cannot clear inside the current window (the budget is 0, or this
-   * one call alone exceeds it), so the caller must not promise automatic resumption.
+   * `stuck` marks a denial that cannot clear inside the current window (this one call alone
+   * exceeds the budget), so the caller must not promise automatic resumption. A 0 budget is
+   * marked stuck too, defensively: the gate skips the owner window then.
    */
   | { granted: false; stuck: boolean; windowEndsAt: Date };
 

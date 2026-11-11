@@ -532,6 +532,7 @@ describe('token-per-minute window over the real cache counter', () => {
     dataLakeEmbeddingBudgetPerRunUsd: '5',
     dataLakeEmbeddingBudgetPerLakeUsd: '100',
     dataLakeEmbeddingBudgetPerPeriodUsd: '50',
+    dataLakeEmbeddingBudgetPerOwnerPeriodUsd: '50',
     dataLakeEmbeddingBudgetPeriodHours: '24',
     dataLakeEmbeddingMaxCallsPerMinute: '120',
     dataLakeEmbeddingMaxTokensPerMinute: maxTokensPerMinute,

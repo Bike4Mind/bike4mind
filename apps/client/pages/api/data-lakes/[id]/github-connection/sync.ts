@@ -11,6 +11,7 @@ import {
   NotFoundError,
 } from '@bike4mind/server-utils/utils/errors';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { enableGitHubConnectionForLake } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 import { assertLakePlanAllowed } from '@server/entitlements/lakePlanGate';
 import { Request } from 'express';
 import { Resource } from 'sst';
@@ -36,10 +37,18 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     if (!conn || !isSameLakeConnectionOwner(lakeConnectionOwnerOf(conn), owner)) {
       throw new NotFoundError('GitHub connection not found');
     }
+    let liveConn = conn;
     if (conn.enabled === false) {
-      throw new ConflictError('This GitHub connection is disabled');
+      // A pending disconnect also disables the row; only the archive/delete pause is resumable here.
+      if (conn.disconnectRequestedAt) {
+        throw new ConflictError('This GitHub connection is disabled');
+      }
+      if (!(await enableGitHubConnectionForLake(lake.id))) {
+        throw new NotFoundError('GitHub connection not found');
+      }
+      liveConn = { ...conn, enabled: true };
     }
-    if (isGitHubLakeSyncClaimLive(conn)) {
+    if (isGitHubLakeSyncClaimLive(liveConn)) {
       throw new ConflictError('A sync is already running for this repository');
     }
     try {

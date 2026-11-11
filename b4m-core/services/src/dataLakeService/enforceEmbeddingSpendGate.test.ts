@@ -726,6 +726,13 @@ describe('enforceEmbeddingSpendGate per-owner window', () => {
     });
   });
 
+  it('returns no owner when the owner window is skipped for a 0 owner budget', async () => {
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 0 }));
+    const { db } = meteredDb();
+
+    await expect(gateFor(db, 'lakeOrg', 1_500)).resolves.toEqual({ owner: undefined });
+  });
+
   it('keeps the reservations when the owner window grants', async () => {
     mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 2_000 }));
     const { db } = meteredDb();

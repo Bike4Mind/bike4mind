@@ -101,7 +101,19 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     // paid-plan gate (lakePlanGate) admits the caller; otherwise the connectors stay paused until
     // they are reconnected through a gated connect door.
     const connectorEnablePorts = async () => {
-      if (!(await isLakePlanAllowed(req, lake.organizationId || undefined))) return {};
+      let allowed = false;
+      try {
+        allowed = await isLakePlanAllowed(req, lake.organizationId || undefined);
+      } catch (error) {
+        req.logger.warn('Data lake connector plan check failed; treating as not allowed', {
+          dataLakeId: lake.id,
+          error,
+        });
+      }
+      if (!allowed) {
+        req.logger.info('Data lake connectors stay paused', { dataLakeId: lake.id });
+        return {};
+      }
       return {
         enableDriveConnection: async ({ dataLakeId }: { dataLakeId: string }) => {
           await enableDriveConnectionForLake(dataLakeId);

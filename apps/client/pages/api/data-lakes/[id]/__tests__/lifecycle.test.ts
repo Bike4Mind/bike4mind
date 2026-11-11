@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
   sendToQueue: vi.fn(),
   loggerError: vi.fn(),
+  loggerWarn: vi.fn(),
+  loggerInfo: vi.fn(),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/data-lake-cleanup'),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
@@ -129,7 +131,12 @@ const makeRes = () => {
   return { res, json, statusJson: json };
 };
 const req = (body: unknown) =>
-  ({ method: 'POST', query: { id: 'lake1' }, body, logger: { error: h.loggerError } }) as never;
+  ({
+    method: 'POST',
+    query: { id: 'lake1' },
+    body,
+    logger: { error: h.loggerError, warn: h.loggerWarn, info: h.loggerInfo },
+  }) as never;
 
 // The route must release with the very claim id it handed the service, so the release can only
 // match a claim this request took.
@@ -538,6 +545,21 @@ describe('POST /api/data-lakes/[id]/lifecycle - paid-plan gate on connector re-e
       expect(call.enableGitHubConnection).toBeUndefined();
     }
   );
+
+  it.each([
+    ['unarchive', 'unarchiveDataLake'],
+    ['restore', 'restoreDeletedDataLake'],
+  ] as const)('%s still succeeds with connectors paused when the plan check throws', async (action, serviceName) => {
+    h.isLakePlanAllowed.mockRejectedValueOnce(new Error('settings read failed'));
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+    expect(h.loggerWarn).toHaveBeenCalled();
+    expect(h.loggerInfo).toHaveBeenCalled();
+    const call = h[serviceName].mock.calls[0][2] as Record<string, unknown>;
+    expect(call.enableDriveConnection).toBeUndefined();
+    expect(call.enableGitHubConnection).toBeUndefined();
+  });
 
   it.each([
     ['unarchive', 'unarchiveDataLake'],

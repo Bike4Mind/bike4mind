@@ -129,7 +129,8 @@ export interface SpendGateDb {
  *  5. per-lake budget     - reserve-first against the lake's meter
  *  6. per-owner budget    - reserve-first against the lake owner's share of the period window
  *                           (reserveOwnerEmbeddingSpend), so one owner cannot drain the platform
- *                           window for everyone else
+ *                           window for everyone else;
+ *                           skipped when the owner budget is 0
  *  7. per-period budget   - reserve-first against the platform-wide fixed window
  *
  * Reservations are made narrowest-first and NOT rolled back when a later check denies: a
@@ -153,7 +154,7 @@ export interface SpendGateDb {
  * is noise on the windowed meters and one more reason the lifetime meter needs the reset.
  *
  * Throws EmbeddingSpendDeniedError on any denial; when the call may proceed, returns the resolved
- * lake owner (undefined when none) so the caller can release the owner window on a later failure.
+ * lake owner (undefined when no owner reservation was taken) so the caller can release the owner window on a later failure.
  */
 export async function enforceEmbeddingSpendGate(params: {
   /** Estimated provider cost of the call about to be made, integer micro-USD (>= 0). */
@@ -485,7 +486,7 @@ export async function enforceEmbeddingSpendGate(params: {
   // every other affected lake hears nothing, and no platform admin (the only party who can
   // actually act on it) is reached at all. budget_exhausted/period does not have this problem -
   // it fires on every denial, so it correctly reaches every affected lake once per window.
-  return { owner };
+  return { owner: ownerReserved ? owner : undefined };
 }
 
 /**
