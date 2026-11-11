@@ -233,13 +233,13 @@ export const taskActionSchema = z.discriminatedUnion('kind', [
 export type TaskAction = z.infer<typeof taskActionSchema>;
 
 // Tolerates only case, whitespace and trailing punctuation drift; anything looser could let an
-// unrelated check stand in for a criterion.
-const criterionKey = (value: string): string =>
-  value
-    .replace(/[\s.!?;:,]+$/, '')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
+// unrelated check stand in for a criterion. Scans backwards because an anchored `[...]+$` regex is
+// quadratic on a long run of spaces.
+const criterionKey = (value: string): string => {
+  let end = value.length;
+  while (end > 0 && /[\s.!?;:,]/.test(value[end - 1])) end--;
+  return value.slice(0, end).trim().replace(/\s+/g, ' ').toLowerCase();
+};
 
 const quoteList = (items: readonly string[]): string => items.map(item => `\n- "${item}"`).join('');
 
