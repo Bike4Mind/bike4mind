@@ -231,6 +231,7 @@ export const SignInsTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
           onRetry={() => void signIns.refetch()}
           empty={<Muted>No sign-ins recorded in the last 12 months.</Muted>}
           testId="user-signins-table"
+          framed={false}
           rowTestId={() => 'user-signins-row'}
         />
         <Stack
