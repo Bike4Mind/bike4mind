@@ -523,6 +523,7 @@ export const SettingKeySchema = z.enum([
   'signupNetworkAlertMaxPerHostingAsn',
   'signupNetworkAlertMaxPerAsn',
   'shadowDetectionRecordingEnabled',
+  'shadowDetectionAutoGradeAfterDays',
   'paymentRiskAutoRefundEnabled',
   'paymentRiskAutoRefundMinUnspentPercent',
   'paymentRiskCheckoutMaxBlockedAttempts',
@@ -2667,6 +2668,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupNetworkAlertMaxPerHostingAsn', order: 43 },
       { key: 'signupNetworkAlertMaxPerAsn', order: 44 },
       { key: 'shadowDetectionRecordingEnabled', order: 44.5 },
+      { key: 'shadowDetectionAutoGradeAfterDays', order: 44.6 },
       { key: 'paymentRiskAutoRefundEnabled', order: 45 },
       { key: 'paymentRiskAutoRefundMinUnspentPercent', order: 46 },
       { key: 'paymentRiskCheckoutMaxBlockedAttempts', order: 47 },
@@ -6150,6 +6152,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Record what the abuse detectors (such as the signup network burst and payment risk alerts) would have done to an account, for admin review on the Detections page. Recording never acts: no access, credits or API keys change.',
+  }),
+  shadowDetectionAutoGradeAfterDays: makeNumberSetting({
+    key: 'shadowDetectionAutoGradeAfterDays',
+    name: 'Shadow Detections: Auto-grade Stale Signup Bursts After (days)',
+    defaultValue: 7,
+    int: true,
+    min: 0,
+    max: 365,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Ungraded signup network burst detections older than this are graded insufficient evidence by automation, unless an account in them was since suspended, reinstated or flagged by another detector, or the latest advisory assessment says anything but insufficient evidence. Automation verdicts are shown apart from admin verdicts. 0 turns it off.',
   }),
   paymentRiskAutoRefundEnabled: makeBooleanSetting({
     key: 'paymentRiskAutoRefundEnabled',

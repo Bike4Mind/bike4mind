@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { Alert, Box, Button, FormControl, FormLabel, Radio, RadioGroup, Stack, Tooltip, Typography } from '@mui/joy';
 import { Link } from '@tanstack/react-router';
 import {
+  SHADOW_DETECTION_BULK_VERDICT_LIMIT,
   SHADOW_DETECTION_LIST_LIMIT,
   SHADOW_DETECTION_VERDICTS,
+  isAutomationVerdict,
   SELF_ASSESSED_SHADOW_DETECTORS,
   SHADOW_DETECTORS,
   shadowDetectionPrecision,
@@ -21,6 +23,7 @@ import {
   ADMIN_REASON_PRESETS,
   ActionDialog,
   AdminPageHeader,
+  BulkActionBar,
   DataTable,
   EmptyState,
   FilterBar,
@@ -30,6 +33,7 @@ import {
   formatUtc,
   relativeTime,
   useAdminListUrlState,
+  type AdminSelection,
   type DataColumn,
 } from './shared';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
@@ -41,8 +45,10 @@ import {
   type VerdictFilter,
 } from './shadowDetectionSearch';
 import {
+  useShadowDetectionBulkVerdict,
   useShadowDetectionVerdict,
   useShadowDetections,
+  type ShadowDetectionBulkVerdictResult,
   type CampaignGroupRow,
   type ShadowDetectionRow,
 } from '@client/app/hooks/data/shadowDetections';
@@ -85,6 +91,7 @@ export const VERDICT_DISPLAY: Record<ShadowDetectionVerdict, { label: string; to
 const VERDICT_FILTER_LABELS: Record<VerdictFilter, string> = {
   [ALL_VERDICTS_FILTER]: 'All verdicts',
   unreviewed: 'Unreviewed',
+  automated: 'Graded by automation',
   confirmed_abuse: VERDICT_DISPLAY.confirmed_abuse.label,
   legitimate_human: VERDICT_DISPLAY.legitimate_human.label,
   legitimate_automation: VERDICT_DISPLAY.legitimate_automation.label,
@@ -203,9 +210,18 @@ const Actor: React.FC<{ row: ShadowDetectionRow }> = ({ row }) => {
   );
 };
 
-const VerdictChip: React.FC<{ verdict: ShadowDetectionVerdict | null; testId?: string }> = ({ verdict, testId }) =>
+/** An automation verdict reads as such, so it is never mistaken for an admin's judgment. */
+const VerdictChip: React.FC<{ verdict: ShadowDetectionVerdict | null; automated?: boolean; testId?: string }> = ({
+  verdict,
+  automated = false,
+  testId,
+}) =>
   verdict ? (
-    <StatusChip tone={VERDICT_DISPLAY[verdict].tone} label={VERDICT_DISPLAY[verdict].label} data-testid={testId} />
+    <StatusChip
+      tone={VERDICT_DISPLAY[verdict].tone}
+      label={automated ? `${VERDICT_DISPLAY[verdict].label} (automation)` : VERDICT_DISPLAY[verdict].label}
+      data-testid={testId}
+    />
   ) : (
     <StatusChip tone="neutral" label="Unreviewed" data-testid={testId} />
   );
@@ -260,15 +276,21 @@ const VerdictHistory: React.FC<{ row: ShadowDetectionRow; now: number }> = ({ ro
             sx={{ py: 0.75, borderTop: '1px solid', borderColor: 'admin.border' }}
           >
             <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-              <VerdictChip verdict={entry.verdict} />
+              <VerdictChip verdict={entry.verdict} automated={entry.source === 'automation'} />
               <Time iso={entry.reviewedAt} now={now} />
             </Stack>
             <Typography level="body-sm" sx={{ overflowWrap: 'anywhere' }}>
               {entry.reason}
             </Typography>
-            <Typography level="body-xs" fontFamily="code" sx={muted}>
-              Reviewer {entry.reviewerId}
-            </Typography>
+            {entry.source === 'automation' ? (
+              <Typography level="body-xs" sx={muted}>
+                Graded by automation
+              </Typography>
+            ) : (
+              <Typography level="body-xs" fontFamily="code" sx={muted}>
+                Reviewer {entry.reviewerId}
+              </Typography>
+            )}
           </Stack>
         ))
       )}
@@ -284,7 +306,10 @@ export const formatPrecision = (row: ShadowDetectionSummaryRow): { value: string
   return { value: `${Math.round(precision * 100)}%`, comparison: `of ${conclusive.toLocaleString()} conclusive` };
 };
 
-/** Graded and precision count only records that would have acted; `noAction` rows are listed only. */
+/**
+ * Graded and precision count only admin verdicts on records that would have acted; `noAction` rows are
+ * listed only, and automation verdicts are counted apart.
+ */
 const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => {
   const graded = row.confirmedAbuse + row.legitimateHuman + row.legitimateAutomation + row.insufficientEvidence;
   const precision = formatPrecision(row);
@@ -303,7 +328,16 @@ const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => 
         <StatTile
           label="Graded"
           value={graded}
-          comparison={`${(row.recorded - row.noAction - graded).toLocaleString()} unreviewed`}
+          comparison={`${(row.recorded - row.noAction - graded - row.automated).toLocaleString()} unreviewed`}
+        />
+        <StatTile
+          label="Automation"
+          value={
+            <Box component="span" data-testid={`${testId}-automated`}>
+              {row.automated.toLocaleString()}
+            </Box>
+          }
+          comparison="stale, insufficient evidence"
         />
         <StatTile
           label="Precision"
@@ -540,6 +574,89 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowC
   );
 };
 
+const EMPTY_SELECTION: AdminSelection = { mode: 'explicit', ids: [] };
+
+const bulkOutcomeMessage = (result: ShadowDetectionBulkVerdictResult): string => {
+  const parts = [`Graded ${countOf(result.graded.length, 'detection')}.`];
+  if (result.conflicts.length > 0) {
+    parts.push(
+      `${countOf(result.conflicts.length, 'detection')} changed since you selected them and were left as they are.`
+    );
+  }
+  if (result.missing.length > 0) parts.push(`${countOf(result.missing.length, 'detection')} no longer exist.`);
+  if (result.failed.length > 0) parts.push(`${result.failed.length} could not be graded; try them again.`);
+  return parts.join(' ');
+};
+
+type BulkVerdictDialogProps = {
+  rows: ShadowDetectionRow[];
+  onClose: () => void;
+  onDone: (result: ShadowDetectionBulkVerdictResult) => void;
+};
+
+/** One verdict and reason for every selected detection; each still gets its own history entry. */
+const BulkVerdictDialog: React.FC<BulkVerdictDialogProps> = ({ rows, onClose, onDone }) => {
+  const mutation = useShadowDetectionBulkVerdict();
+  const [verdict, setVerdict] = useState<ShadowDetectionVerdict | null>(null);
+  const overCap = rows.length > SHADOW_DETECTION_BULK_VERDICT_LIMIT;
+
+  const submit = async (reason: string) => {
+    if (!verdict || overCap) return;
+    const result = await mutation.mutateAsync({
+      items: rows.map(row => ({ id: row.id, expectedRevision: row.revision })),
+      verdict,
+      reason,
+    });
+    onDone(result);
+  };
+
+  return (
+    <ActionDialog
+      open
+      onClose={() => {
+        if (!mutation.isPending) onClose();
+      }}
+      title={`Record a verdict for ${countOf(rows.length, 'detection')}`}
+      description="Every selected detection gets this verdict and reason as its own history entry. Grading measures the detectors; it changes nothing on any account. A detection someone else graded since you selected it is left as it is."
+      reasonPresets={ADMIN_REASON_PRESETS.shadowDetectionVerdict}
+      confirmLabel={verdict ? `Record ${VERDICT_DISPLAY[verdict].label.toLowerCase()}` : 'Record verdict'}
+      blockedReason={
+        overCap
+          ? `Grade at most ${SHADOW_DETECTION_BULK_VERDICT_LIMIT.toLocaleString()} detections at once. Narrow the filter or select fewer rows.`
+          : verdict
+            ? null
+            : 'Pick a verdict.'
+      }
+      pending={mutation.isPending}
+      onConfirm={submit}
+      data-testid="shadow-detection-bulk-verdict-dialog"
+    >
+      {mutation.error && (
+        <Alert color="danger" data-testid="shadow-detection-bulk-verdict-error">
+          {getErrorMessage(mutation.error)}
+        </Alert>
+      )}
+      <FormControl>
+        <FormLabel>Verdict</FormLabel>
+        <RadioGroup
+          name="shadow-detection-bulk-verdict"
+          value={verdict ?? ''}
+          onChange={event => setVerdict(event.target.value as ShadowDetectionVerdict)}
+        >
+          {SHADOW_DETECTION_VERDICTS.map(option => (
+            <Radio
+              key={option}
+              value={option}
+              label={VERDICT_DISPLAY[option].label}
+              slotProps={{ input: { 'data-testid': `shadow-detection-bulk-verdict-option-${option}` } }}
+            />
+          ))}
+        </RadioGroup>
+      </FormControl>
+    </ActionDialog>
+  );
+};
+
 /**
  * Shadow detections: what an abuse detector would have done to an actor, recorded without acting.
  * Grading each one measures the detector's precision before any automated containment exists.
@@ -549,9 +666,14 @@ export const ShadowDetectionsTab: React.FC = () => {
   const { detector, verdict } = readShadowDetectionFilters(view.filters);
   const detections = useShadowDetections(toListQuery(detector, verdict));
   const [grading, setGrading] = useState<ShadowDetectionRow | null>(null);
+  const [selection, setSelection] = useState<AdminSelection>(EMPTY_SELECTION);
+  const [bulkGrading, setBulkGrading] = useState(false);
+  const [bulkOutcome, setBulkOutcome] = useState<ShadowDetectionBulkVerdictResult | null>(null);
   const [now] = useState(() => Date.now());
 
   const rows = detections.data?.data ?? [];
+  // "All matching" is every loaded row of the current filter; the server caps one request.
+  const selectedRows = selection.mode === 'allMatching' ? rows : rows.filter(row => selection.ids.includes(row.id));
   const summary = (detections.data?.summary ?? [])
     .filter(row => !detector || row.detector === detector)
     .sort((a, b) => a.detector.localeCompare(b.detector) || b.policyVersion - a.policyVersion);
@@ -606,7 +728,13 @@ export const ShadowDetectionsTab: React.FC = () => {
     {
       id: 'verdict',
       label: 'Verdict',
-      render: row => <VerdictChip verdict={row.verdict} testId={`shadow-detection-verdict-${row.id}`} />,
+      render: row => (
+        <VerdictChip
+          verdict={row.verdict}
+          automated={isAutomationVerdict(row)}
+          testId={`shadow-detection-verdict-${row.id}`}
+        />
+      ),
       sortValue: row => (row.verdict ? VERDICT_DISPLAY[row.verdict].label : ''),
       width: '11rem',
     },
@@ -646,7 +774,9 @@ export const ShadowDetectionsTab: React.FC = () => {
       ? 'No detections recorded'
       : verdict === 'unreviewed'
         ? 'No unreviewed detections'
-        : `No detections graded ${VERDICT_DISPLAY[verdict].label.toLowerCase()}`;
+        : verdict === 'automated'
+          ? 'No detections graded by automation'
+          : `No detections graded ${VERDICT_DISPLAY[verdict].label.toLowerCase()}`;
 
   return (
     <Stack
@@ -682,8 +812,9 @@ export const ShadowDetectionsTab: React.FC = () => {
             <SummaryStrip key={`${row.detector}-${row.policyVersion}`} row={row} />
           ))}
           <Typography level="body-xs" sx={muted} data-testid="shadow-detection-precision-note">
-            Precision is confirmed abuse over conclusive verdicts; insufficient evidence is left out. Recall is not
-            measured: accounts the detectors did not flag are not sampled.
+            Precision is confirmed abuse over conclusive verdicts; insufficient evidence is left out. Automation
+            verdicts (stale signup bursts that nothing corroborated) are counted apart from admin verdicts. Recall is
+            not measured: accounts the detectors did not flag are not sampled.
           </Typography>
         </Stack>
       )}
@@ -707,6 +838,7 @@ export const ShadowDetectionsTab: React.FC = () => {
             filters: { detector: patch.filters.detector ?? '', verdict: patch.filters.verdict || ALL_VERDICTS_FILTER },
             view: '',
           });
+          setSelection(EMPTY_SELECTION);
         }}
         filters={[
           {
@@ -717,10 +849,12 @@ export const ShadowDetectionsTab: React.FC = () => {
           {
             id: 'verdict',
             label: 'Verdict',
-            options: (['unreviewed', ...SHADOW_DETECTION_VERDICTS, ALL_VERDICTS_FILTER] as const).map(value => ({
-              value,
-              label: VERDICT_FILTER_LABELS[value],
-            })),
+            options: (['unreviewed', ...SHADOW_DETECTION_VERDICTS, 'automated', ALL_VERDICTS_FILTER] as const).map(
+              value => ({
+                value,
+                label: VERDICT_FILTER_LABELS[value],
+              })
+            ),
           },
         ]}
       />
@@ -736,9 +870,12 @@ export const ShadowDetectionsTab: React.FC = () => {
         error={detections.error ? "Couldn't load detections." : undefined}
         onRetry={() => void detections.refetch()}
         rowActions={rowActions}
-        // Fixed-width columns (incl. row actions) total 61rem, leaving Summary a 12rem floor; keep in
-        // sync with the column widths above. Narrower screens scroll sideways.
-        minWidth="73rem"
+        selection={selection}
+        onSelectionChange={setSelection}
+        // Fixed-width columns (incl. the 2.75rem selection and 3.5rem row-action columns) total 63.75rem,
+        // leaving Summary a 12rem floor; keep in sync with the column widths above and in DataTable.
+        // Narrower screens scroll sideways.
+        minWidth="75.75rem"
         empty={
           <EmptyState
             title={emptyTitle}
@@ -762,6 +899,54 @@ export const ShadowDetectionsTab: React.FC = () => {
           />
         }
       />
+      {bulkOutcome && (
+        <Alert
+          color={
+            bulkOutcome.conflicts.length + bulkOutcome.missing.length + bulkOutcome.failed.length > 0
+              ? 'warning'
+              : 'success'
+          }
+          data-testid="shadow-detection-bulk-outcome"
+          endDecorator={
+            <Button size="sm" variant="plain" color="neutral" onClick={() => setBulkOutcome(null)}>
+              Dismiss
+            </Button>
+          }
+        >
+          {bulkOutcomeMessage(bulkOutcome)}
+        </Alert>
+      )}
+      <BulkActionBar
+        selection={selection}
+        totalMatching={rows.length}
+        selectAllLabel={detections.data?.truncated ? `Select all ${rows.length.toLocaleString()} loaded` : undefined}
+        onSelectAllMatching={() => setSelection({ mode: 'allMatching' })}
+        onClear={() => setSelection(EMPTY_SELECTION)}
+      >
+        <AdminPermissionAction requirement="users:moderate">
+          {disabled => (
+            <Button
+              size="sm"
+              disabled={disabled || selectedRows.length === 0}
+              data-testid="shadow-detection-bulk-grade-btn"
+              onClick={() => setBulkGrading(true)}
+            >
+              Record verdict
+            </Button>
+          )}
+        </AdminPermissionAction>
+      </BulkActionBar>
+      {bulkGrading && (
+        <BulkVerdictDialog
+          rows={selectedRows}
+          onClose={() => setBulkGrading(false)}
+          onDone={result => {
+            setBulkGrading(false);
+            setSelection(EMPTY_SELECTION);
+            setBulkOutcome(result);
+          }}
+        />
+      )}
       <CampaignWatchesPanel />
       {grading && <VerdictDialog row={grading} now={now} onClose={() => setGrading(null)} onRowChange={setGrading} />}
     </Stack>
