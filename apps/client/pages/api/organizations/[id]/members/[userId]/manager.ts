@@ -3,7 +3,7 @@
 // Billing owner or platform admin only (organizationService.setOrganizationManager). The per-member
 // twin of PUT ../../admins.ts, which replaces the whole list and so loses one of two concurrent edits.
 
-import { ApiKeyScope, toSafeOrganization } from '@bike4mind/common';
+import { toSafeOrganization } from '@bike4mind/common';
 import { organizationService } from '@bike4mind/services';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -40,8 +40,9 @@ const setManager = (isManager: boolean) =>
     return res.json(toSafeOrganization(change.organization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }));
   });
 
-// `admin:*` only, like the sibling credit-budget route: appointing a manager is org administration.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+// First-party only (`jwtOnly`), like the sibling transfer-ownership route: a new handler that took
+// API keys would need a v1 contract (scripts/check-contract-gate.sh).
+const handler = baseApi({ auth: 'jwtOnly' })
   .put(setManager(true))
   .delete(setManager(false));
 

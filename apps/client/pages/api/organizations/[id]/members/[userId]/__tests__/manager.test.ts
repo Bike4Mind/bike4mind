@@ -54,8 +54,8 @@ describe('/api/organizations/[id]/members/[userId]/manager', () => {
     });
   });
 
-  it('requires the admin:* API-key scope', () => {
-    expect(mockRefs.baseApiOptions).toEqual({ requiredScopes: ['admin:*'] });
+  it('is first-party only (jwtOnly)', () => {
+    expect(mockRefs.baseApiOptions).toEqual({ auth: 'jwtOnly' });
   });
 
   it('PUT appoints, audits org.admins.updated with both lists, and returns the safe org', async () => {
