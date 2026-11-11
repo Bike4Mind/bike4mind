@@ -101,7 +101,14 @@ vi.mock('sst', () => ({
   },
 }));
 
-import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl, missingQueueHelp } from './dlqRegistry';
+import {
+  coreDlqDescriptors,
+  getDlqRegistry,
+  getDlqByLabel,
+  getSourceQueueUrl,
+  getDlqUrl,
+  missingQueueHelp,
+} from './dlqRegistry';
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
@@ -145,6 +152,17 @@ describe('dlqRegistry', () => {
       expect(getDlqByLabel('fab-file-vectorize')?.replay).toBe('safe');
       expect(getDlqByLabel('webhook-delivery')?.replay).not.toBe('safe');
       expect(getDlqByLabel('agent-proactive-message')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('email-batch')?.replay).toBe('side-effects');
+      expect(getDlqByLabel('email-job')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('drive-disconnect-purge')?.replay).toBe('safe');
+    });
+
+    it('every core entry has description, replay, replayNote, owner', () => {
+      const incomplete = coreDlqDescriptors()
+        .map(entry => ({ label: entry.label, missing: missingQueueHelp(entry) }))
+        .filter(({ missing }) => missing.length > 0);
+      expect(incomplete).toEqual([]);
+      expect(coreDlqDescriptors()).toHaveLength(42);
     });
 
     it('includes tavern-heartbeat entry', () => {
