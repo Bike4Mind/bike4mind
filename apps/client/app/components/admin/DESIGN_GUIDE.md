@@ -317,6 +317,7 @@ Shortcuts:
 | Cmd+K | Command palette (`AdminCommandPalette`): find any user, org or key, or run any action |
 | `/` | Focus search |
 | `x` | Select the focused row |
+| `a` / `o` | Accept / override the focused row's AI suggestion (tables that offer one) |
 | `c` | Adjust credits (user profile) |
 | `s` | Suspend (user profile) |
 | Cmd+S | Save (settings forms) |
@@ -340,3 +341,29 @@ A new admin tab or admin tool adds at least one question to `b4m-core/services/s
 An exceptional import needs an immediately preceding comment: `// admin-toolkit-allow YYYY-MM-DD -- concrete reason the toolkit cannot serve this use case`. Keep exceptions local to one import; do not disable the rule for a file or directory.
 
 Pre-toolkit imports are recorded in `eslint-rules/admin-joy-legacy.mjs` (file, component, date, justification), each pinned to its line and a SHA-256 text fingerprint in `eslint-rules/admin-joy-legacy-imports.mjs`, so an allowance cannot pass to another import. New imports fail even in legacy files, and a changed, moved or removed import raises a stale-exception error until it is re-justified or its entry deleted. Remove entries when migrating; never add new screens.
+
+## 10. AI suggestions
+
+An AI proposal is shown with `AiSuggestion` (`shared/AiSuggestion.tsx`), beside the admin's own control and never in its place. The admin decides; the AI only proposes. Reference host: Shadow detections (`ShadowDetectionsTab.tsx`, `ShadowDetectionAssessmentPanel.tsx`).
+
+- **Two variants.** `row` is a neutral `StatusChip` for a table cell: the AI mark, the proposal and a confidence word, with the percentage and the `A`/`O` hint in its tooltip. `detail` is for a record or dialog: proposal, confidence word (percentage on hover), up to three reasons (each a link when it has evidence), model and age, then the actions.
+- **Neutral tone, always.** A suggestion is advisory, so it never uses `bad` or `good`, even when it proposes abuse. The verdict chip beside it keeps the real state.
+- **Confidence is a word.** High (>= 80%), Medium (>= 50%), Low (below). The raw percentage is secondary and lives in a tooltip. No probability, no word.
+- **No suggestion, no slot.** Pass `suggestion={null}` when AI is off, over budget, failed or forbidden (a 403): the component renders nothing. No empty box, no error banner, no "AI unavailable".
+- **Accept goes through the host's own write.** `onAccept` opens the host's `ActionDialog` prefilled: the proposed value and `ACCEPTED_AI_REASON` ("Accepted AI suggestion") via `initialReason`, still editable. Bump `formKey` to re-seed an already open dialog. The admin still confirms, so nothing is applied on a click.
+- **Override opens the manual control.** `onOverride` follows an optional "Why was the AI wrong?" pick (`AI_OVERRIDE_REASONS`); the host opens its control with nothing preselected.
+- **Dismiss** hides the suggestion locally. **Done by AI** (`status: 'auto_applied'`) shows a chip and, with `onUndo`, an Undo.
+- **Keys.** Give `DataTable` `rowShortcuts` returning `a`/`o` only for rows with a suggestion and only when the admin holds the permission the host's write needs; otherwise return `{}` so the keys stay inert.
+- **Bulk.** `AiSuggestionBulkAccept` accepts only pending High suggestions, behind an `ActionDialog` with a `ChangePreview`. It takes `reversible: true` as a literal, so an irreversible action cannot use it.
+
+### Recording decisions
+
+`onDecision` fires from the component only for Dismiss and Undo, which complete inside it. Accept and override are the host's to report: call `onDecision` with `accepted` or `overridden` after the host's own write lands, not when the button is clicked, because the admin can still cancel the dialog. Decisions are not stored yet; until the shared suggestion store exists, `onDecision` is a typed seam with no persistence behind it, and a dismissed suggestion returns on reload. Shadow detections does not wire `onDecision` yet.
+
+### Copy
+
+- Name the proposal as the value the admin would record ("Confirmed abuse"), not as a judgment of the person.
+- Say "AI suggestion" or "AI advisory", never "AI verdict" or "AI decided".
+- Pair any AI statement that could prompt action with its limit: "Advisory only" or "review before acting".
+- The prefilled reason is exactly "Accepted AI suggestion"; admins add to it rather than replace it.
+- Use the confidence words above; do not invent others ("Very likely", "Certain").
