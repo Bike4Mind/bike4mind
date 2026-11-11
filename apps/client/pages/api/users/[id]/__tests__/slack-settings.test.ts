@@ -397,8 +397,18 @@ describe('PATCH /api/users/:id/slack-settings - stale stored references', () => 
     mockAgentFindOne.mockReturnValue(null);
     const { res, promise } = run({ customAgentId: AGENT_ID });
     await promise;
-    expect(res._getStatusCode()).toBe(500);
-    expect(res._getJSONData().error).toBe('Failed to update settings');
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toBe('Selected custom agent not found or not accessible');
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed new customAgentId', async () => {
+    stored({});
+    const { res, promise } = run({ customAgentId: 'not-an-id' });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toBe('Invalid agent ID format');
+    expect(mockAgentFindOne).not.toHaveBeenCalled();
     expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
   });
 

@@ -8,7 +8,6 @@ import { User, Session, Agent, Project } from '@bike4mind/database';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const KeywordRoutingRuleSchema = z.object({
   keywords: z
@@ -215,7 +214,7 @@ const handler = baseApi()
           const id = slackSettings.customAgentId;
           const unchanged = id === stored.customAgentId;
           if (!isValidObjectId(id) && !unchanged) {
-            throw new BadRequestError('Invalid agent ID format');
+            return res.status(400).json({ error: 'Invalid agent ID format' });
           }
 
           const agent =
@@ -228,7 +227,7 @@ const handler = baseApi()
 
           if (!agent) {
             if (!unchanged) {
-              throw new BadRequestError('Selected custom agent not found or not accessible');
+              return res.status(400).json({ error: 'Selected custom agent not found or not accessible' });
             }
             removed.push({ field: 'customAgentId', id });
             delete slackSettings.customAgentId;
