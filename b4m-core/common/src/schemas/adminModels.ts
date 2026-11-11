@@ -5,7 +5,10 @@ import type { IModelPriceTier, ModelPriceUnit } from '../types/entities/ModelPri
 export const ADMIN_MODEL_STATUSES = ['listed', 'limited', 'needs-review', 'hidden', 'retiring', 'retired'] as const;
 export type AdminModelStatus = (typeof ADMIN_MODEL_STATUSES)[number];
 
-/** Listed covers Limited, Retiring covers Retired, and Needs review covers any pending lifecycle suggestion. */
+/**
+ * Listed covers Limited and Retiring covers Retired. Needs review also covers any pending lifecycle suggestion, and
+ * Retiring any model in the retiring window (ADMIN_MODEL_RETIRING_HORIZON_DAYS), whatever the model's status.
+ */
 export const ADMIN_MODEL_VIEWS = ['all', 'needs-review', 'listed', 'hidden', 'retiring'] as const;
 export type AdminModelView = (typeof ADMIN_MODEL_VIEWS)[number];
 
@@ -55,10 +58,14 @@ export const ADMIN_MODEL_FIX_ACTIONS = [
 ] as const;
 export type AdminModelFixAction = (typeof ADMIN_MODEL_FIX_ACTIONS)[number];
 
-export const ADMIN_MODEL_SORTS = ['status', 'name', 'rank', 'type', 'provider'] as const;
+/** `sunset` orders by sunsetDays: most overdue first, undated models last. */
+export const ADMIN_MODEL_SORTS = ['status', 'name', 'rank', 'type', 'provider', 'sunset'] as const;
 export type AdminModelSort = (typeof ADMIN_MODEL_SORTS)[number];
 
-/** Days ahead a deprecation or retirement date makes a model Retiring. */
+/**
+ * Days ahead a deprecation or retirement date puts a model in the retiring window, as does a date already past or a
+ * deprecated or retired lifecycle. Such a model reads Retiring unless it is Retired or a reason outranks it.
+ */
 export const ADMIN_MODEL_RETIRING_HORIZON_DAYS = 90;
 
 /**
@@ -167,6 +174,10 @@ export interface AdminModelRow {
   access: AdminModelAccess;
   price: AdminModelPrice | null;
   lifecycle: AdminModelLifecycle;
+  /** The sooner of lifecycle.deprecationDate and lifecycle.retirementDate (YYYY-MM-DD); null when it has neither. */
+  sunsetDate: string | null;
+  /** Whole UTC days from today to sunsetDate, zero or less once it has arrived; null when sunsetDate is. */
+  sunsetDays: number | null;
   lifecycleSuggestion: AdminModelLifecycleSuggestion | null;
   /** First discovery row for the model; null when discovery never recorded it. */
   firstSeenAt: string | null;
