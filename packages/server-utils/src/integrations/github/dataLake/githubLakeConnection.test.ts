@@ -230,9 +230,12 @@ describe('toGitHubLakeConnectionResponse', () => {
     connectedAt,
   };
 
-  beforeEach(() => h.getGitHubLakeAppConfig.mockReturnValue(CONFIG));
+  beforeEach(() => {
+    h.getGitHubLakeAppConfig.mockReturnValue(CONFIG);
+    h.ghConnFindByInstallationId.mockResolvedValue([{ id: base.id }]);
+  });
 
-  it('exposes sync state and the file count, never credentials or claim fields', () => {
+  it('exposes sync state and the file count, never credentials or claim fields', async () => {
     const lastSyncedAt = new Date('2026-02-01');
     const conn = {
       ...base,
@@ -249,7 +252,7 @@ describe('toGitHubLakeConnectionResponse', () => {
       ingestClaimToken: 'token-1',
     } as unknown as IOrgGitHubLakeConnectionDocument;
 
-    expect(toGitHubLakeConnectionResponse(conn, 5)).toEqual({
+    expect(await toGitHubLakeConnectionResponse(conn, 5)).toEqual({
       ...base,
       enabled: false,
       status: 'error',
@@ -261,40 +264,51 @@ describe('toGitHubLakeConnectionResponse', () => {
       skippedCount: 2,
       syncStale: false,
       fileCount: 5,
+      isLastInstallationBinding: true,
       disconnecting: false,
       disconnectStalled: false,
       fixAccessUrl: `https://github.com/apps/${CONFIG.slug}/installations/new`,
     });
   });
 
-  it('targets the fix link at the account, so a non-owner is not sent to the settings page GitHub 404s', () => {
+  it('counts other bindings globally, including disabled or disconnecting lakes', async () => {
+    h.ghConnFindByInstallationId.mockResolvedValue([
+      { id: base.id },
+      { id: 'other', organizationId: 'another-org', enabled: false, disconnectRequestedAt: new Date() },
+    ]);
+    const conn = { ...base, installationId: 42 } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(await toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ isLastInstallationBinding: false });
+    expect(h.ghConnFindByInstallationId).toHaveBeenCalledWith(42);
+  });
+
+  it('targets the fix link at the account, so a non-owner is not sent to the settings page GitHub 404s', async () => {
     const conn = { ...base, accountId: 9001 } as unknown as IOrgGitHubLakeConnectionDocument;
-    expect(toGitHubLakeConnectionResponse(conn, 0).fixAccessUrl).toBe(
+    expect((await toGitHubLakeConnectionResponse(conn, 0)).fixAccessUrl).toBe(
       `https://github.com/apps/${CONFIG.slug}/installations/new/permissions?target_id=9001`
     );
   });
 
-  it('falls back to the untargeted install page for a row written before accountId was recorded', () => {
+  it('falls back to the untargeted install page for a row written before accountId was recorded', async () => {
     const conn = base as unknown as IOrgGitHubLakeConnectionDocument;
-    expect(toGitHubLakeConnectionResponse(conn, 0).fixAccessUrl).toBe(
+    expect((await toGitHubLakeConnectionResponse(conn, 0)).fixAccessUrl).toBe(
       `https://github.com/apps/${CONFIG.slug}/installations/new`
     );
   });
 
-  it('reports no fix link at all when the data-lake App is unconfigured on this deployment', () => {
+  it('reports no fix link at all when the data-lake App is unconfigured on this deployment', async () => {
     h.getGitHubLakeAppConfig.mockReturnValue(null);
     const conn = { ...base, accountId: 9001 } as unknown as IOrgGitHubLakeConnectionDocument;
-    expect(toGitHubLakeConnectionResponse(conn, 0).fixAccessUrl).toBeNull();
+    expect((await toGitHubLakeConnectionResponse(conn, 0)).fixAccessUrl).toBeNull();
   });
 
-  it('carries access_lost through to the client rather than flattening it to a generic error', () => {
+  it('carries access_lost through to the client rather than flattening it to a generic error', async () => {
     const conn = { ...base, status: 'access_lost' } as unknown as IOrgGitHubLakeConnectionDocument;
-    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ status: 'access_lost' });
+    expect(await toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ status: 'access_lost' });
   });
 
-  it('fills the model defaults for a row that predates them', () => {
+  it('fills the model defaults for a row that predates them', async () => {
     const conn = base as unknown as IOrgGitHubLakeConnectionDocument;
-    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({
+    expect(await toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({
       enabled: true,
       status: 'connected',
       lastError: null,
@@ -309,48 +323,54 @@ describe('toGitHubLakeConnectionResponse', () => {
     });
   });
 
-  it('reads disconnecting true but not stalled right after the stamp', () => {
+  it('reads disconnecting true but not stalled right after the stamp', async () => {
     const conn = { ...base, disconnectRequestedAt: new Date() } as unknown as IOrgGitHubLakeConnectionDocument;
-    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ disconnecting: true, disconnectStalled: false });
+    expect(await toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({
+      disconnecting: true,
+      disconnectStalled: false,
+    });
   });
 
-  it('reads disconnectStalled once the stamp is older than GITHUB_DISCONNECT_STALL_MS', () => {
+  it('reads disconnectStalled once the stamp is older than GITHUB_DISCONNECT_STALL_MS', async () => {
     const conn = {
       ...base,
       disconnectRequestedAt: new Date(Date.now() - GITHUB_DISCONNECT_STALL_MS - 1000),
     } as unknown as IOrgGitHubLakeConnectionDocument;
-    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ disconnecting: true, disconnectStalled: true });
+    expect(await toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({
+      disconnecting: true,
+      disconnectStalled: true,
+    });
   });
 
   // @bike4mind/database is mocked above with importOriginal and only overrides specific repository
   // methods, so isGitHubLakeSyncClaimLive itself is the real implementation here.
-  it('marks a syncing row syncStale once its claim is older than the 20-minute window', () => {
+  it('marks a syncing row syncStale once its claim is older than the 20-minute window', async () => {
     const conn = {
       ...base,
       status: 'syncing',
       syncClaimedAt: new Date(Date.now() - 21 * 60 * 1000),
       activeIngestBatchId: null,
     } as unknown as IOrgGitHubLakeConnectionDocument;
-    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: true });
+    expect(await toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: true });
   });
 
-  it('does not mark a syncing row syncStale while its claim is fresh', () => {
+  it('does not mark a syncing row syncStale while its claim is fresh', async () => {
     const conn = {
       ...base,
       status: 'syncing',
       syncClaimedAt: new Date(Date.now() - 60 * 1000),
       activeIngestBatchId: null,
     } as unknown as IOrgGitHubLakeConnectionDocument;
-    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: false });
+    expect(await toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: false });
   });
 
-  it('never reads a connected row as syncStale, regardless of an old syncClaimedAt', () => {
+  it('never reads a connected row as syncStale, regardless of an old syncClaimedAt', async () => {
     const conn = {
       ...base,
       status: 'connected',
       syncClaimedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
     } as unknown as IOrgGitHubLakeConnectionDocument;
-    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: false });
+    expect(await toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: false });
   });
 });
 

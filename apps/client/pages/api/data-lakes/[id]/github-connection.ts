@@ -121,7 +121,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     }
     // Rides along for the disconnect confirmation, which must say how many files the purge deletes.
     const fileCount = await fabFileRepository.countByGitHubConnectionIdInDataLake(conn.id, lake.datalakeTag);
-    return res.json({ connection: toGitHubLakeConnectionResponse(conn, fileCount), canManage });
+    return res.json({ connection: await toGitHubLakeConnectionResponse(conn, fileCount), canManage });
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);

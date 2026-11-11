@@ -311,6 +311,10 @@ describe('GitHubRepositoryPickerModal', () => {
     wrap(<GitHubRepositoryPickerModal />);
 
     expect(screen.getByTestId('github-repo-picker-install-btn')).toHaveTextContent('Install on another account');
+    const hint = screen.getByTestId('github-repo-picker-install-hint');
+    expect(hint).toHaveTextContent('needs an owner to install the App');
+    expect(hint).toHaveTextContent('until the owner reinstalls it');
+    expect(hint).toHaveTextContent('Refresh list cannot restore an uninstalled App');
   });
 
   it('hints that an org repo needs an owner when there is no organization installation', () => {
