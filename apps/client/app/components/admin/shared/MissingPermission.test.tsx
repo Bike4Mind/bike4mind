@@ -73,6 +73,19 @@ describe('AdminPermissionAction', () => {
     );
   });
 
+  it('disables a permitted action when the target is blocked', () => {
+    wrap(
+      <AdminPermissionAction requirement="support:read" blockedReason="Full admin required for this target">
+        {disabled => <Button disabled={disabled}>Moderate</Button>}
+      </AdminPermissionAction>
+    );
+    expect(screen.getByText('Moderate')).toBeDisabled();
+    expect(screen.getByTestId('admin-missing-permission-action')).toHaveAttribute(
+      'aria-label',
+      'Full admin required for this target'
+    );
+  });
+
   it('disables the action and explains why', () => {
     action('settings:manage');
     expect(screen.getByTestId('save-btn')).toBeDisabled();

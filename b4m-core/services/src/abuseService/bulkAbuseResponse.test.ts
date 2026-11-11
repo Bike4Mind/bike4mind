@@ -169,6 +169,19 @@ describe('resolveBulkAbuseCohort', () => {
     });
   });
 
+  it('excludes an account with delegated admin access only when the actor is not a full admin', async () => {
+    const users = [makeUser(1), makeUser(2, { adminPermissions: ['support:read'] })];
+    const { adapters } = cohortAdapters({ users });
+    const target = { kind: 'users' as const, userIds: users.map(user => user.id) };
+
+    const delegated = await resolveBulkAbuseCohort(target, ACTOR_ID, adapters);
+    expect(delegated.included.map(user => user.id)).toEqual([id(1)]);
+    expect(delegated.excluded).toEqual([{ userId: id(2), email: users[1].email, reason: 'admin' }]);
+
+    const full = await resolveBulkAbuseCohort(target, ACTOR_ID, adapters, { actorIsFullAdmin: true });
+    expect(full.included.map(user => user.id)).toEqual([id(1), id(2)]);
+  });
+
   it('excludes seat members of an organization with org_member, by pointer or by users[] row', async () => {
     const users = [makeUser(1), makeUser(2, { organizationId: 'a'.repeat(24) }), makeUser(3), makeUser(4), makeUser(5)];
     const { adapters } = cohortAdapters({

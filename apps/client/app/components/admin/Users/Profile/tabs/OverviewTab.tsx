@@ -2,11 +2,14 @@ import React, { useState } from 'react';
 import { Box, Chip, Stack, Typography } from '@mui/joy';
 import {
   USER_TIMELINE_CATEGORIES,
+  isFullAdmin,
+  sortAdminPermissions,
   resolveUserStorageLimit,
   storageLimitToBytes,
   type AuditEntry,
   type UserTimelineCategory,
 } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
 import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
@@ -16,13 +19,21 @@ import { typesOfCategories } from '../activitySearch';
 import { CATEGORY_OPTIONS } from './ActivityTab';
 import type { ProfileAction } from '../actions/profileActions';
 import { RiskEvidenceCard } from '../RiskEvidenceCard';
+import { DetectionLinkedAccountsCard } from '../DetectionLinkedAccountsCard';
 import { UserNotesCard } from './UserNotesCard';
 import { OrganizationsCard } from './OrganizationsCard';
 import { ClientsCard } from './ClientsCard';
 import { HeaderAction, RowAction } from './cardActions';
 import { TimelineList, TimelineSkeleton } from './TimelineList';
 import { timelineItems } from './timelineItems';
-import { USER_ROLE_LABELS, isManagedTag, userRole, type AdminUserProfile } from '../userProfileModel';
+import {
+  ADMIN_PERMISSION_LABELS,
+  USER_ROLE_LABELS,
+  adminActionBlockedReason,
+  isManagedTag,
+  userRole,
+  type AdminUserProfile,
+} from '../userProfileModel';
 
 const RECENT_ACTIVITY_COUNT = 6;
 
@@ -42,6 +53,7 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
   user,
   onAction,
 }) => {
+  const { currentUser } = useUser();
   const storage = resolveUserStorageLimit(user);
   const network = user.signupMeta;
   const signupParts = [
@@ -83,7 +95,11 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
       <Fact label="Personal API keys" data-testid="user-profile-fact-key-trust">
         <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
           {user.apiKeyTrustApproved ? 'Trusted' : 'Usual checks'}
-          <RowAction onClick={() => onAction('apiKeyTrust')} data-testid="user-profile-key-trust-btn">
+          <RowAction
+            onClick={() => onAction('apiKeyTrust')}
+            disabledReason={adminActionBlockedReason(currentUser, user, 'keys:revoke')}
+            data-testid="user-profile-key-trust-btn"
+          >
             Change
           </RowAction>
         </Stack>
@@ -93,6 +109,18 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
           {user.newAccountSpendCapLifted ? 'Lifted' : 'Applies while the account is new'}
           <RowAction onClick={() => onAction('newAccountSpendCap')} data-testid="user-profile-spend-cap-btn">
             Change
+          </RowAction>
+        </Stack>
+      </Fact>
+      <Fact label="File indexing window" data-testid="user-profile-fact-file-embedding-window">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          Limits how much they can index per window
+          <RowAction
+            onClick={() => onAction('fileEmbeddingWindowReset')}
+            disabledReason={adminActionBlockedReason(currentUser, user, 'settings:manage')}
+            data-testid="user-actions-reset-file-embedding-window"
+          >
+            Reset
           </RowAction>
         </Stack>
       </Fact>
@@ -118,6 +146,10 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
   const access = useGetUserProductAccess(user.id);
   const held = access.data?.entitlements.filter(row => row.held) ?? [];
   const customTags = (user.tags ?? []).filter(tag => !isManagedTag(tag));
+  const { currentUser } = useUser();
+  const adminPermissions = sortAdminPermissions(user.adminPermissions ?? []);
+  // The endpoint is full-admin only and never edits a Super Admin or the viewer's own account.
+  const canEditPermissions = isFullAdmin(currentUser) && !user.isAdmin && currentUser?.id !== user.id;
 
   return (
     <SectionCard
@@ -131,6 +163,22 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
     >
       <Fact label="Role" data-testid="user-profile-fact-role">
         {USER_ROLE_LABELS[userRole(user)]}
+      </Fact>
+      <Fact label="Admin permissions" data-testid="user-profile-fact-admin-permissions">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          {user.isAdmin
+            ? 'All (Super Admin)'
+            : adminPermissions.length === 0
+              ? 'None'
+              : adminPermissions.map(id => (
+                  <StatusChip key={id} tone="neutral" label={ADMIN_PERMISSION_LABELS[id].label} />
+                ))}
+          {canEditPermissions && (
+            <RowAction onClick={() => onAction('permissions')} data-testid="user-profile-admin-permissions-btn">
+              Edit
+            </RowAction>
+          )}
+        </Stack>
       </Fact>
       <Fact label="Product access" data-testid="user-profile-fact-products">
         <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
@@ -240,41 +288,47 @@ type OverviewTabProps = {
   onAudit?: () => void;
 };
 
-/** Two columns of cards that collapse to one below ~700 px (DESIGN_GUIDE.md section 5). */
+/**
+ * Two columns of cards that collapse to one below ~700 px (DESIGN_GUIDE.md section 5), under a full-width
+ * card of detection-linked accounts when a cohort detection names the user.
+ */
 export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onViewActivity, onViewCredits, onAudit }) => (
-  <Box
-    sx={{
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(min(340px, 100%), 1fr))',
-      gap: 2,
-      alignItems: 'start',
-    }}
-    data-testid="user-profile-overview"
-  >
-    <Stack gap={2}>
-      <AccountCard user={user} onAction={onAction} />
-      <OrganizationsCard user={user} onAudit={onAudit} />
-      <AccessCard user={user} onAction={onAction} />
-      <ClientsCard user={user} />
-      <RiskEvidenceCard userId={user.id} />
-      <SectionCard
-        title="Subscription"
-        body="custom"
-        action={
-          <HeaderAction onClick={() => onAction('subscription')} data-testid="user-profile-grant-subscription-btn">
-            Grant
-          </HeaderAction>
-        }
-        data-testid="user-profile-subscription-card"
-      >
-        <Box sx={{ p: 0.5 }}>
-          <SubscriptionSummaryList userId={user.id} />
-        </Box>
-      </SectionCard>
-    </Stack>
-    <Stack gap={2}>
-      <RecentActivityCard userId={user.id} onViewAll={onViewActivity} onOpenCredits={onViewCredits} />
-      <UserNotesCard user={user} />
-    </Stack>
-  </Box>
+  <Stack gap={2}>
+    <DetectionLinkedAccountsCard userId={user.id} />
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(340px, 100%), 1fr))',
+        gap: 2,
+        alignItems: 'start',
+      }}
+      data-testid="user-profile-overview"
+    >
+      <Stack gap={2}>
+        <AccountCard user={user} onAction={onAction} />
+        <OrganizationsCard user={user} onAudit={onAudit} />
+        <AccessCard user={user} onAction={onAction} />
+        <ClientsCard user={user} />
+        <RiskEvidenceCard userId={user.id} />
+        <SectionCard
+          title="Subscription"
+          body="custom"
+          action={
+            <HeaderAction onClick={() => onAction('subscription')} data-testid="user-profile-grant-subscription-btn">
+              Grant
+            </HeaderAction>
+          }
+          data-testid="user-profile-subscription-card"
+        >
+          <Box sx={{ p: 0.5 }}>
+            <SubscriptionSummaryList userId={user.id} />
+          </Box>
+        </SectionCard>
+      </Stack>
+      <Stack gap={2}>
+        <RecentActivityCard userId={user.id} onViewAll={onViewActivity} onOpenCredits={onViewCredits} />
+        <UserNotesCard user={user} />
+      </Stack>
+    </Box>
+  </Stack>
 );

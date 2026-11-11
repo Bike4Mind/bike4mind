@@ -1,8 +1,8 @@
 import { Organization, organizationRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { assertDelegateCanCreditOrganization } from '@server/admin/creditGrants/delegateTargets';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
@@ -26,12 +26,8 @@ interface RequestQuery {
   id: string;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'credits:adjust' } }).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query as RequestQuery;
     if (!id) throw new BadRequestError('Organization id required');
 
@@ -44,6 +40,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
     const organization = await organizationRepository.findById(id);
     if (!organization) throw new NotFoundError('Organization not found');
+    await assertDelegateCanCreditOrganization(req.user, organization, 'convert');
 
     const activeSubs = await subscriptionRepository.findActiveSubscriptionsByOwner(
       SubscriptionOwnerType.Organization,

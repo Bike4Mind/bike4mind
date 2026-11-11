@@ -693,6 +693,27 @@ describe('gateReplayConfidence', () => {
     expect(deps.sendWs).toHaveBeenCalledWith('progress', { executionId: 'exec-1', status: 'paused' });
   });
 
+  it('records the streak but never pauses when pausing is disabled', async () => {
+    const deps = makeDeps({ recordIterationConfidence: vi.fn(async () => 2) });
+    const outcome = await gateReplayConfidence(
+      {
+        executionId: 'exec-1',
+        iterationIndex: 3,
+        confidence: 0.1,
+        confidenceGateThreshold: 0.6,
+        pauseEnabled: false,
+      },
+      deps
+    );
+    expect(outcome).toEqual({ status: 'proceed' });
+    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.1, {
+      belowThreshold: true,
+      recordTelemetry: true,
+    });
+    expect(deps.setPendingGate).not.toHaveBeenCalled();
+    expect(deps.recordGateEmitted).not.toHaveBeenCalled();
+  });
+
   it('never pauses when the profile threshold is 0 (unattended loops)', async () => {
     const deps = makeDeps();
     const outcome = await gateReplayConfidence(

@@ -11,6 +11,7 @@ import {
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   config: null as unknown,
+  guard: null as null | ((req: unknown, res: unknown, next: () => void) => void),
   findKey: vi.fn(),
   restore: vi.fn(),
   findUser: vi.fn(),
@@ -21,14 +22,17 @@ const h = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config: unknown) => {
     h.config = config;
-    return {
-      use: () => ({
-        post: (fn: typeof h.handler) => {
-          h.handler = fn;
-          return {};
-        },
-      }),
+    const chain = {
+      use: (guard: unknown) => {
+        h.guard ??= guard as typeof h.guard;
+        return chain;
+      },
+      post: (fn: typeof h.handler) => {
+        h.handler = fn;
+        return chain;
+      },
     };
+    return chain;
   },
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
@@ -76,6 +80,7 @@ const revokedKey = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 const request = (overrides: Record<string, unknown> = {}) => ({
+  method: 'POST',
   query: { id: 'key-1' },
   user: { id: 'admin-1', isAdmin: true },
   body: { reason: 'Revoked by mistake' },
@@ -85,6 +90,12 @@ const response = () => {
   const res = { status: vi.fn(), json: vi.fn() };
   res.status.mockReturnValue(res);
   return res;
+};
+
+// Runs the permission guard adminApi installs, then the handler, as the router would.
+const guarded = async (req: unknown) => {
+  h.guard!(req, {}, () => {});
+  return h.handler!(req, response());
 };
 
 describe('POST /api/admin/user-api-keys/[id]/restore', () => {
@@ -97,10 +108,8 @@ describe('POST /api/admin/user-api-keys/[id]/restore', () => {
   });
 
   it('is jwt-only and rejects non-admins and a missing reason before any read', async () => {
-    expect(h.config).toEqual({ auth: 'jwtOnly' });
-    await expect(h.handler!(request({ user: { id: 'u', isAdmin: false } }), response())).rejects.toBeInstanceOf(
-      ForbiddenError
-    );
+    expect(h.config).toEqual({ auth: 'jwtOnly', allowedMethods: ['POST'] });
+    await expect(guarded(request({ user: { id: 'u', isAdmin: false } }))).rejects.toBeInstanceOf(ForbiddenError);
     await expect(h.handler!(request({ body: {} }), response())).rejects.toBeInstanceOf(BadRequestError);
     expect(h.findKey).not.toHaveBeenCalled();
   });
@@ -158,5 +167,44 @@ describe('POST /api/admin/user-api-keys/[id]/restore', () => {
     );
     expect(JSON.stringify(h.audit.mock.calls)).not.toContain('SECRET');
     expect(res.json).toHaveBeenCalledWith({ keyId: 'key-1', status: 'active' });
+  });
+});
+
+describe('POST /api/admin/user-api-keys/[id]/restore - delegated admins', () => {
+  const delegate = (adminPermissions: string[]) => ({ id: 'admin-1', isAdmin: false, adminPermissions });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.audit.mockResolvedValue(undefined);
+    h.withTransaction.mockImplementation(async (fn: () => Promise<unknown>) => fn());
+    h.findKey.mockResolvedValue(revokedKey());
+    h.findUser.mockResolvedValue({ id: 'owner-1', email: 'owner@example.com' });
+    h.restore.mockResolvedValue(true);
+  });
+
+  it('refuses a delegate without the permission before any read', async () => {
+    await expect(guarded(request({ user: delegate(['support:read']) }))).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'Missing permission: keys:revoke',
+    });
+    expect(h.findKey).not.toHaveBeenCalled();
+  });
+
+  it('lets a delegate with the permission act on a non-admin owner', async () => {
+    await expect(guarded(request({ user: delegate(['keys:revoke']) }))).resolves.not.toThrow();
+    expect(h.restore).toHaveBeenCalled();
+  });
+
+  it('refuses a delegate on an admin owner without writing', async () => {
+    h.findUser.mockResolvedValue({ id: 'owner-1', isAdmin: false, adminPermissions: ['support:read'] });
+    await expect(guarded(request({ user: delegate(['keys:revoke']) }))).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.restore).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin act on an admin owner', async () => {
+    h.findUser.mockResolvedValue({ id: 'owner-1', isAdmin: true });
+    await expect(guarded(request())).resolves.not.toThrow();
+    expect(h.restore).toHaveBeenCalled();
   });
 });

@@ -17,12 +17,22 @@ vi.mock('@bike4mind/database', () => ({
   FeedbackTextModel: { find: (...args: unknown[]) => findText(...(args as [])) },
 }));
 
+const { auditWrite, adminAssistantAuditWriter } = vi.hoisted(() => {
+  const auditWrite = vi.fn();
+  return { auditWrite, adminAssistantAuditWriter: vi.fn(() => auditWrite) };
+});
+vi.mock('../auditWriter', () => ({ adminAssistantAuditWriter }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  isSameUserId: (left: string, right: string) => left.toLowerCase() === right.toLowerCase(),
+  userAuditTarget: async (id: string) => ({ kind: 'user', id, displayName: id }),
+}));
+
 import { getUserFeedbackTool } from './getUserFeedback';
 
 const USER_ID = '65f1a2b3c4d5e6f708192a3b';
 
 const context = {
-  user: { isAdmin: true },
+  user: { id: 'admin-1', isAdmin: true },
   userId: 'admin-1',
   logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
 } as unknown as Omit<ToolContext, 'config'>;
@@ -33,6 +43,7 @@ const runTool = async (args: unknown) => JSON.parse(await runRaw(args));
 const feedbackDoc = (extra: Record<string, unknown> = {}) => ({
   toJSON: () => ({
     id: 'f1',
+    userId: USER_ID,
     createdAt: new Date('2026-10-03T00:00:00Z'),
     type: 'bug',
     subject: 'turn',
@@ -51,6 +62,8 @@ describe('getUserFeedbackTool', () => {
     limit.mockReset().mockResolvedValue([]);
     find.mockClear();
     textLean.mockReset().mockResolvedValue([]);
+    auditWrite.mockReset().mockResolvedValue(null);
+    adminAssistantAuditWriter.mockClear();
   });
 
   it('returns not_found for an unknown user', async () => {
@@ -91,6 +104,44 @@ describe('getUserFeedbackTool', () => {
     for (const leaked of ['promptMeta', 'prompt-meta-value', 'userEmail', 'ada@example.com']) {
       expect(raw).not.toContain(leaked);
     }
+  });
+
+  it('records a feedback.viewed row for the returned reports before loading their text', async () => {
+    limit.mockResolvedValue([feedbackDoc({ id: 'f1' }), feedbackDoc({ id: 'f2' })]);
+    auditWrite.mockImplementation(async () => {
+      expect(findText).not.toHaveBeenCalled();
+      return null;
+    });
+    findText.mockClear();
+
+    await runTool({ userId: USER_ID, limit: 1 });
+
+    expect(adminAssistantAuditWriter).toHaveBeenCalledWith(context, 'admin_get_user_feedback');
+    expect(auditWrite).toHaveBeenCalledTimes(1);
+    expect(auditWrite).toHaveBeenCalledWith({
+      action: 'feedback.viewed',
+      target: { kind: 'user', id: USER_ID, displayName: USER_ID },
+      summary: 'viewed 1 feedback report(s) from 1 user(s)',
+      details: { userId: USER_ID, limit: 1, feedbackIds: ['f1'] },
+    });
+  });
+
+  it('fails the tool call and returns no text when the audit write fails', async () => {
+    limit.mockResolvedValue([feedbackDoc()]);
+    auditWrite.mockRejectedValue(new Error('audit store down'));
+
+    const raw = await runRaw({ userId: USER_ID });
+
+    expect(JSON.parse(raw)).toMatchObject({ ok: false, error: 'failed' });
+    expect(raw).not.toContain('It broke');
+  });
+
+  it('writes nothing when an admin reads their own reports', async () => {
+    resolveAdminUserRef.mockResolvedValue({ id: 'admin-1' });
+    limit.mockResolvedValue([feedbackDoc({ userId: 'admin-1' })]);
+
+    expect(await runTool({ userId: USER_ID })).toMatchObject({ ok: true });
+    expect(auditWrite).not.toHaveBeenCalled();
   });
 
   it('truncates text at 500 characters', async () => {

@@ -15,7 +15,7 @@ const LoginPage = () => {
     // Use a cancelled flag so that if the user logs in and navigates away before
     // clearClientCaches() resolves, we don't removeQueries() on the newly-mounted
     // ProviderBundle's queries - which would reset adminSettingsLoading and leave
-    // MFAEnforcementWrapper stuck on "Checking security settings...".
+    // MFAEnforcementWrapper stuck on its loader.
     let cancelled = false;
     clearClientCaches().then(() => {
       if (cancelled) return;

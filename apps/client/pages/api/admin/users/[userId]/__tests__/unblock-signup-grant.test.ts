@@ -83,6 +83,16 @@ describe('admin unblock signup grant', () => {
     expect(h.unblock).not.toHaveBeenCalled();
   });
 
+  it('stops a delegated admin from unblocking an account with admin access', async () => {
+    h.findById.mockResolvedValue({ id: 'user-1', isAdmin: true });
+    const delegate = { id: 'admin-2', isAdmin: false, adminPermissions: ['credits:adjust'] };
+
+    await expect(h.handler!(request({ user: delegate }), { json: vi.fn() })).rejects.toThrow(
+      'Only full administrators can unblock signup credit grants for users with admin access'
+    );
+    expect(h.unblock).not.toHaveBeenCalled();
+  });
+
   it('answers 404 for an unknown account', async () => {
     h.findById.mockResolvedValue(null);
 

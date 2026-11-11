@@ -113,7 +113,7 @@ describe('CI SST installation', () => {
         .filter(step => step.includes('- name: Generate SST types'))
         .map(step => ({ name: job.name, step }))
     );
-    expect(installJobs.map(job => job.name).sort()).toEqual(['cli-e2e', 'lint', 'test-shards', 'typecheck']);
+    expect(installJobs.map(job => job.name).sort()).toEqual(['cli-e2e', 'lint', 'test-shards']);
     for (const { step } of installJobs) {
       expect(step).toContain('run: bash scripts/ci-sst-install.sh');
       expect(step).toContain("CI: 'true'");

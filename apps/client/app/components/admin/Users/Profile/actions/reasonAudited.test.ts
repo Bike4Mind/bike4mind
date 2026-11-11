@@ -6,7 +6,8 @@ import { join, resolve } from 'path';
 // A dialog may only mark it unstored (or compute it) while its endpoint has no reason field, and must
 // be listed here with why. Wiring the reason through means deleting the prop and its entry.
 const UNAUDITED_REASON_EXEMPTIONS: Record<string, string> = {
-  'change-role-dialog': 'Only the Super Admin axis has roleChangeReason; a developer-tag-only change has none.',
+  'change-role-dialog':
+    'Only the Super Admin axis (the role route) stores a reason; a developer-tag-only change has none.',
   'manage-tags-dialog': 'The tags update has no reason field.',
   'product-access-dialog': 'Product access is written as tags, and the tags update has no reason field.',
 };

@@ -2640,7 +2640,7 @@ export async function buildAndSortMessages(
   if (VERBOSE_CHAT_CONTEXT) {
     if (options.verbose) {
       logger.log('\n=== 🤖 Chat Completion Context ===');
-      logger.log('📝 User Prompt:', userPrompt.map(m => m.content).join('\n'));
+      logger.log(`User Prompt: ${userPrompt.length} message(s)`);
       logger.log('\n📚 Context Summary:');
       logger.log(`• History Messages: ${previousMessages.length}`);
       logger.log(`• Knowledge Files: ${fabMessages.filter(m => m.role === 'user').length}`);

@@ -119,6 +119,7 @@ function props(overrides: Overrides = {}): Omit<SessionPanelProps, 'collapsed' |
   return {
     variant: overrides.variant ?? 'docked',
     ...(overrides.onDismiss ? { onDismiss: overrides.onDismiss } : {}),
+    ...(overrides.anchor ? { anchor: overrides.anchor } : {}),
     environment: {
       project: PROJECT,
       binding,
@@ -450,11 +451,13 @@ describe('section headers', () => {
   });
 });
 
-describe('the popover variant', () => {
-  it('shuts on Escape or a press outside it, and not on a press inside', async () => {
+describe('the overlay variant', () => {
+  it('shuts on Escape, a press outside it or on its scrim, and its close button, not on a press inside', async () => {
     const onDismiss = vi.fn();
-    await show({ variant: 'popover', onDismiss });
-    expect(get('session-panel').dataset.variant).toBe('popover');
+    await show({ variant: 'overlay', onDismiss });
+    expect(get('session-panel').dataset.variant).toBe('overlay');
+    expect(get('session-panel').getAttribute('role')).toBe('dialog');
+    expect(get('session-panel').getAttribute('aria-modal')).toBe('true');
 
     await act(async () =>
       get('session-panel-environment-toggle-btn').dispatchEvent(new Event('pointerdown', { bubbles: true }))
@@ -464,13 +467,47 @@ describe('the popover variant', () => {
     await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })));
     expect(onDismiss).toHaveBeenCalledTimes(1);
 
-    await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    await act(async () => get('session-panel-scrim').dispatchEvent(new Event('pointerdown', { bubbles: true })));
     expect(onDismiss).toHaveBeenCalledTimes(2);
+
+    await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(onDismiss).toHaveBeenCalledTimes(3);
+
+    await act(async () => get('session-panel-close-btn').click());
+    expect(onDismiss).toHaveBeenCalledTimes(4);
   });
 
-  it('ignores Escape and outside presses while docked', async () => {
+  it('takes focus, keeps Tab inside, and hands focus back to its anchor when it shuts', async () => {
+    const anchor = document.createElement('button');
+    document.body.appendChild(anchor);
+    await show({ variant: 'overlay', onDismiss: vi.fn(), anchor: { current: anchor } });
+
+    const close = get('session-panel-close-btn');
+    expect(document.activeElement).toBe(close);
+    const focusables = [...get('session-panel').querySelectorAll<HTMLElement>('button:not([disabled])')];
+    const last = focusables[focusables.length - 1];
+    const tab = (shiftKey: boolean) =>
+      act(async () => {
+        document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true }));
+      });
+
+    await tab(true);
+    expect(document.activeElement).toBe(last);
+    await tab(false);
+    expect(document.activeElement).toBe(close);
+
+    act(() => root.unmount());
+    expect(document.activeElement).toBe(anchor);
+    anchor.remove();
+    root = createRoot(host);
+  });
+
+  it('is not modal while docked: no scrim, no close button, and Escape and outside presses do nothing', async () => {
     const onDismiss = vi.fn();
     await show({ variant: 'docked', onDismiss });
+    expect(find('session-panel-scrim')).toBeNull();
+    expect(find('session-panel-close-btn')).toBeNull();
+    expect(get('session-panel').getAttribute('role')).toBe('complementary');
     await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })));
     await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     expect(onDismiss).not.toHaveBeenCalled();

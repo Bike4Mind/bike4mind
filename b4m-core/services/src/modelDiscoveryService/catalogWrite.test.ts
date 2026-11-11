@@ -1,6 +1,9 @@
 import {
   CATALOG_SCHEMA_VERSION,
   ModelBackend,
+  ModelCatalogRowInput,
+  resolveApiSurface,
+  type FieldGroup,
   type IModelCatalogRow,
   type IModelCatalogRowInput,
   type ModelInfo,
@@ -8,7 +11,12 @@ import {
 import { mergeCatalogWithDrops, resolveCatalogRecords } from '@bike4mind/llm-adapters';
 import { describe, expect, it } from 'vitest';
 import { testCredentials } from './__fixtures__/fakes';
-import { DISCOVERY_CONTRIBUTOR, planCatalogWrites, type CatalogWriteInput } from './catalogWrite';
+import {
+  DISCOVERY_CONTRIBUTOR,
+  planCatalogWrites,
+  SIBLING_CONTRIBUTOR_PREFIX,
+  type CatalogWriteInput,
+} from './catalogWrite';
 import { planLifecycleSignals } from './lifecyclePlan';
 import {
   normalizeBedrockModels,
@@ -2437,5 +2445,411 @@ describe('planCatalogWrites', () => {
       expect(result.diff[0]).toMatchObject({ modelId: 'gpt-6-astra-2026-09-01', kind: 'updated' });
       expect(result.rows[0].patch).toMatchObject({ contextWindow: 1_050_000 });
     });
+  });
+});
+
+describe('apiSurface inheritance', () => {
+  const claudeDispatch: CatalogWriteInput['resolveDispatch'] = record =>
+    record.backend === ModelBackend.Anthropic
+      ? {
+          adapterFamily: 'anthropic-messages',
+          dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'native' },
+        }
+      : record.backend === ModelBackend.Bedrock
+        ? {
+            adapterFamily: 'bedrock-anthropic',
+            dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'native' },
+          }
+        : null;
+
+  const claude = (id: string, patch: Record<string, unknown> = {}) => ({
+    id,
+    vendor: 'anthropic',
+    backend: ModelBackend.Anthropic,
+    type: 'text',
+    name: id,
+    contextWindow: 1_000_000,
+    ...patch,
+  });
+
+  /** A model an earlier run introduced, as the catalog holds it now. */
+  const heldRow = (patch: Record<string, unknown>, status = 'active'): IModelCatalogRow =>
+    ({
+      modelId: String(patch.id),
+      schemaVersion: CATALOG_SCHEMA_VERSION,
+      source: 'discovery',
+      ownedGroups: ['identity', 'limits', 'dispatch', 'lifecycle', ...('toolSearch' in patch ? ['apiSurface'] : [])],
+      patch: {
+        adapterFamily: patch.backend === ModelBackend.Bedrock ? 'bedrock-anthropic' : 'anthropic-messages',
+        dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'native' },
+        lifecycle: { status },
+        ...patch,
+      },
+      effectiveFrom: SEED_AT,
+    }) as unknown as IModelCatalogRow;
+
+  const fable52 = (patch: Record<string, unknown> = {}): DiscoveredModel => ({
+    modelId: 'claude-fable-5-2',
+    patch: claude('claude-fable-5-2', { reasoning: { supported: true, style: 'anthropic-adaptive' }, ...patch }),
+  });
+
+  /** A model the seed ships: no dispatch fields (the resolver derives them) and no apiSurface flags. */
+  const seededRow = (patch: Record<string, unknown>): IModelCatalogRow =>
+    seedRow({ lifecycle: { status: 'active' }, ...patch }, ['identity', 'limits', 'reasoning', 'lifecycle']);
+
+  const adaptive = { reasoning: { supported: true, style: 'anthropic-adaptive' } };
+
+  /** One run over the rows in force, the way planPass splits them into base and inForce. */
+  const anthropicRun = (
+    rows: IModelCatalogRow[],
+    records: DiscoveredModel[] = [fable52()],
+    extra: Partial<CatalogWriteInput> = {}
+  ) =>
+    plan({
+      contributions: [{ name: 'anthropic', kind: 'provider', records }],
+      base: resolveCatalogRecords(rows.filter(row => row.source !== 'operator')),
+      inForce: resolveCatalogRecords(rows),
+      coveredBackends: new Set<string>([ModelBackend.Anthropic]),
+      providerSourceNames: new Set(['anthropic']),
+      knownPricedModelIds: new Set(['claude-fable-5-2']),
+      resolveDispatch: claudeDispatch,
+      ...extra,
+    });
+
+  const persisted = (rows: IModelCatalogRowInput[]) =>
+    rows.map(row => ({ ...row, schemaVersion: CATALOG_SCHEMA_VERSION }) as unknown as IModelCatalogRow);
+
+  const servedSurface = (rows: IModelCatalogRow[], modelId: string) => {
+    const { models } = mergeCatalogWithDrops([], rows, {
+      apiKeys: { anthropic: 'key' },
+      isSelfHost: false,
+      bedrockReachable: true,
+    });
+    const served = models.find(model => model.id === modelId);
+    expect(served, modelId).toBeDefined();
+    return resolveApiSurface(served!);
+  };
+
+  const siblings = [
+    heldRow(claude('claude-fable-5')),
+    heldRow(claude('claude-fable-5-1')),
+    // Newer, but not active yet: an unpromoted introduction has not been served.
+    heldRow(claude('claude-fable-5-3', { toolSearch: false, forcedToolChoice: true }), 'discovered'),
+    // Active and newer, but another product line.
+    heldRow(claude('claude-opus-6', { toolSearch: false, forcedToolChoice: true })),
+    // Same line and version, but another adapter.
+    heldRow(claude('global.anthropic.claude-fable-5-1', { backend: ModelBackend.Bedrock })),
+  ];
+
+  it('copies the newest active sibling in the same line and adapter family, and names it as the contributor', () => {
+    const result = anthropicRun(siblings);
+
+    expect(result.rows).toHaveLength(1);
+    const [row] = result.rows;
+    expect(row.ownedGroups).toContain('apiSurface');
+    expect(row.patch).toMatchObject({
+      forcedToolChoice: false,
+      assistantPrefill: false,
+      toolSearch: true,
+      toolChanges: true,
+      deferredToolAddition: true,
+    });
+    expect(row.patch).not.toHaveProperty('refusalFallback');
+    expect(row.contributors).toContainEqual({
+      group: 'apiSurface',
+      source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-fable-5-1`,
+    });
+  });
+
+  it('never copies from a sibling newer than the model', () => {
+    const newer = [heldRow(claude('claude-opus-5-5')), heldRow(claude('claude-opus-5'))];
+    const legacy = anthropicRun(newer, [{ modelId: 'claude-opus-4-1', patch: claude('claude-opus-4-1') }]);
+    expect(legacy.rows[0].ownedGroups).not.toContain('apiSurface');
+
+    const withNewerFable = anthropicRun([...siblings, heldRow(claude('claude-fable-5-3', { toolSearch: false }))]);
+    expect(withNewerFable.rows[0].contributors).toContainEqual({
+      group: 'apiSurface',
+      source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-fable-5-1`,
+    });
+  });
+
+  it('copies nothing for an id with no Claude version', () => {
+    const openAiDispatch = {
+      adapterFamily: 'openai-chat',
+      dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'chat' },
+    };
+    const gpt5 = heldRow({ ...gpt6().patch, id: 'gpt-5', name: 'GPT-5', ...openAiDispatch, toolSearch: true });
+    const result = plan({ resolveDispatch: dispatchable, base: resolveCatalogRecords([gpt5]) });
+
+    expect(result.rows[0].modelId).toBe('gpt-6');
+    expect(result.rows[0].ownedGroups).not.toContain('apiSurface');
+  });
+
+  it('serves the introduced model with no forced tool_choice, no prefill and tool search on', () => {
+    const result = anthropicRun(siblings);
+    const persisted = result.rows.map(
+      row => ({ ...row, schemaVersion: CATALOG_SCHEMA_VERSION }) as unknown as IModelCatalogRow
+    );
+    const { models } = mergeCatalogWithDrops([], [...siblings, ...persisted], {
+      apiKeys: { anthropic: 'key' },
+      isSelfHost: false,
+      bedrockReachable: true,
+    });
+    const served = models.find(model => model.id === 'claude-fable-5-2');
+
+    expect(served).toBeDefined();
+    expect(resolveApiSurface(served!)).toMatchObject({
+      forcedToolChoice: false,
+      assistantPrefill: false,
+      toolSearch: true,
+    });
+  });
+
+  it('prefers a value the sibling row states over its seed-table verdict', () => {
+    const result = anthropicRun([heldRow(claude('claude-fable-5-1', { toolSearch: false }))]);
+
+    expect(result.rows[0].patch).toMatchObject({ toolSearch: false, forcedToolChoice: false, toolChanges: true });
+  });
+
+  it('inherits nothing when a source states a flag for the model', () => {
+    const result = anthropicRun(siblings, [fable52({ toolSearch: true })]);
+
+    expect(result.rows[0].patch).toMatchObject({ toolSearch: true });
+    expect(result.rows[0].patch).not.toHaveProperty('forcedToolChoice');
+    expect(result.rows[0].contributors).not.toContainEqual(
+      expect.objectContaining({ source: expect.stringMatching(/^sibling:/) })
+    );
+  });
+
+  it('inherits nothing for a model the seed tables already describe', () => {
+    const result = anthropicRun(siblings, [{ modelId: 'claude-mythos-5-1', patch: claude('claude-mythos-5-1') }]);
+
+    expect(result.rows[0].ownedGroups).not.toContain('apiSurface');
+  });
+
+  it('leaves the default in place when no active sibling in the line states or seeds a flag', () => {
+    const result = anthropicRun([heldRow(claude('claude-opus-6', { toolSearch: false }))]);
+
+    expect(result.rows[0].ownedGroups).not.toContain('apiSurface');
+    expect(result.rows[0].patch).not.toHaveProperty('toolSearch');
+  });
+
+  it.each([true, false])('skips refusal-only siblings with usable older sibling=%s', hasOlderSibling => {
+    const refusalOnly = heldRow(claude('claude-fable-5-2'));
+    const result = anthropicRun(
+      [
+        ...(hasOlderSibling ? [heldRow(claude('claude-fable-5-1'))] : []),
+        refusalOnly,
+        operatorRow({ id: refusalOnly.modelId, refusalFallback: true }, ['apiSurface']),
+      ],
+      [{ modelId: 'claude-fable-5-3', patch: claude('claude-fable-5-3', adaptive) }]
+    );
+
+    const [row] = result.rows;
+    expect(ModelCatalogRowInput.safeParse(row).success).toBe(true);
+    if (hasOlderSibling) {
+      expect(row.contributors).toContainEqual({
+        group: 'apiSurface',
+        source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-fable-5-1`,
+      });
+      expect(row.patch).toMatchObject({ toolSearch: true });
+    } else {
+      expect(row.ownedGroups).not.toContain('apiSurface');
+    }
+    expect(row.patch).not.toHaveProperty('refusalFallback');
+  });
+
+  it('writes the copy once: a later run carries it and its contributor unchanged', () => {
+    const first = anthropicRun(siblings);
+    const held = [
+      ...siblings,
+      ...first.rows.map(row => ({ ...row, schemaVersion: CATALOG_SCHEMA_VERSION }) as unknown as IModelCatalogRow),
+    ];
+    const second = plan({
+      contributions: [{ name: 'anthropic', kind: 'provider', records: [fable52()] }],
+      base: resolveCatalogRecords(held),
+      coveredBackends: new Set<string>([ModelBackend.Anthropic]),
+      providerSourceNames: new Set(['anthropic']),
+      knownPricedModelIds: new Set(['claude-fable-5-2']),
+      resolveDispatch: claudeDispatch,
+      priorDiscoveryGroups: new Map([['claude-fable-5-2', first.rows[0].ownedGroups]]),
+      priorContributors: new Map([['claude-fable-5-2', first.rows[0].contributors ?? []]]),
+    });
+
+    expect(second.rows.filter(row => row.modelId === 'claude-fable-5-2')).toEqual([]);
+  });
+
+  it.each([
+    ['claude-haiku-6', 'claude-haiku-5-5'],
+    ['claude-fable-5-3', 'claude-fable-5'],
+  ])('never widens %s past its own answer when the only sibling, %s, is a permissive older seed', (id, siblingId) => {
+    const result = anthropicRun(
+      [seededRow(claude(siblingId, adaptive))],
+      [{ modelId: id, patch: claude(id, adaptive) }]
+    );
+
+    const [row] = result.rows;
+    expect(row.contributors).toContainEqual({
+      group: 'apiSurface',
+      source: `${SIBLING_CONTRIBUTOR_PREFIX}${siblingId}`,
+    });
+    expect(row.patch).toMatchObject({
+      forcedToolChoice: false,
+      assistantPrefill: false,
+      toolSearch: true,
+      toolChanges: true,
+    });
+    expect(row.patch).not.toHaveProperty('refusalFallback');
+  });
+
+  it('chooses the sibling as operator rows corrected it', () => {
+    const corrected = anthropicRun([
+      ...siblings,
+      operatorRow({ id: 'claude-fable-5-1', toolSearch: false }, ['apiSurface']),
+    ]);
+    expect(corrected.rows[0].patch).toMatchObject({ toolSearch: false, toolChanges: true });
+
+    const deprecated = anthropicRun([
+      ...siblings,
+      operatorRow({ id: 'claude-fable-5-1', lifecycle: { status: 'deprecated' } }, ['lifecycle']),
+    ]);
+    expect(deprecated.rows[0].contributors).toContainEqual({
+      group: 'apiSurface',
+      source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-fable-5`,
+    });
+  });
+
+  // The rows production holds: the seed, a discovery row for first-party Fable 5.1, Fable 5.2 promoted before
+  // apiSurface existed, and an operator row that presents Fable 5.2.
+  it('backfills a model promoted before the group existed', () => {
+    const promoted: IModelCatalogRow = {
+      ...heldRow(claude('claude-fable-5-2', { ...adaptive, autoDisabled: false })),
+      ownedGroups: ['identity', 'limits', 'reasoning', 'dispatch', 'lifecycle', 'availability'],
+      contributors: [{ group: 'identity', source: 'anthropic' }],
+    } as IModelCatalogRow;
+    const rows = [
+      seededRow(claude('claude-fable-5', adaptive)),
+      seededRow(claude('global.anthropic.claude-fable-5-1', { ...adaptive, backend: ModelBackend.Bedrock })),
+      heldRow(claude('claude-fable-5-1', adaptive)),
+      promoted,
+      operatorRow({ id: 'claude-fable-5-2', description: 'Claude Fable 5.2', rank: 1 }, ['presentation']),
+    ];
+    const listed = ['claude-fable-5-1', 'claude-fable-5-2'];
+
+    const result = anthropicRun(
+      rows,
+      listed.map(id => ({ modelId: id, patch: claude(id, adaptive) })),
+      {
+        staticModelIds: new Set(['claude-fable-5', 'global.anthropic.claude-fable-5-1']),
+        operatorOwnedModelIds: new Set(['claude-fable-5-2']),
+        presentationOwnedElsewhere: new Set(['claude-fable-5-2']),
+        knownPricedModelIds: new Set(listed),
+        priorDiscoveryGroups: new Map([
+          ['claude-fable-5-1', rows[2].ownedGroups as FieldGroup[]],
+          ['claude-fable-5-2', promoted.ownedGroups as FieldGroup[]],
+        ]),
+        priorContributors: new Map([['claude-fable-5-2', promoted.contributors ?? []]]),
+      }
+    );
+
+    const row = result.rows.find(candidate => candidate.modelId === 'claude-fable-5-2');
+    expect(row?.ownedGroups).toContain('apiSurface');
+    expect(row?.contributors).toContainEqual({
+      group: 'apiSurface',
+      source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-fable-5-1`,
+    });
+    const inForce = [...rows.filter(held => held !== promoted), ...persisted(row ? [row] : [])];
+    expect(servedSurface(inForce, 'claude-fable-5-2')).toEqual({
+      forcedToolChoice: false,
+      assistantPrefill: false,
+      toolSearch: true,
+      toolChanges: true,
+      deferredToolAddition: true,
+      refusalFallback: true,
+    });
+  });
+
+  it.each([
+    ['the seed tables now name it', 'claude-mythos-5-1', new Set<string>()],
+    ['the adapter tables now ship it', 'claude-opus-4-1', new Set(['claude-opus-4-1'])],
+  ])('releases an inherited copy once %s', (_label, id, staticModelIds) => {
+    const held = heldRow(claude(id, { forcedToolChoice: true, toolSearch: false }));
+    const result = anthropicRun([held], [{ modelId: id, patch: claude(id) }], {
+      staticModelIds,
+      priorDiscoveryGroups: new Map([[id, held.ownedGroups as FieldGroup[]]]),
+      priorContributors: new Map([[id, [{ group: 'apiSurface', source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-x` }]]]),
+    });
+
+    const [row] = result.rows;
+    expect(row.ownedGroups).not.toContain('apiSurface');
+    expect(row.patch).not.toHaveProperty('forcedToolChoice');
+    expect(row.patch).not.toHaveProperty('toolSearch');
+    expect(result.diff[0].changedKeys).toEqual(expect.arrayContaining(['forcedToolChoice', 'toolSearch']));
+    if (id === 'claude-mythos-5-1') {
+      expect(servedSurface(persisted(result.rows), id)).toMatchObject({ forcedToolChoice: false, toolSearch: true });
+    }
+  });
+
+  it('keeps values a source stated even once the seed tables name the model', () => {
+    const held = heldRow(claude('claude-mythos-5-1', { forcedToolChoice: true, toolSearch: false }));
+    const result = anthropicRun([held], [{ modelId: 'claude-mythos-5-1', patch: claude('claude-mythos-5-1') }], {
+      priorDiscoveryGroups: new Map([['claude-mythos-5-1', held.ownedGroups as FieldGroup[]]]),
+      priorContributors: new Map([['claude-mythos-5-1', [{ group: 'apiSurface', source: 'anthropic' }]]]),
+    });
+
+    expect(result.rows).toEqual([]);
+  });
+
+  it.each([true, false])('keeps a source toolSearch=%s while releasing an inherited copy', toolSearch => {
+    const id = 'claude-mythos-5-1';
+    const held = heldRow(claude(id, { forcedToolChoice: true, toolSearch: !toolSearch }));
+    const result = anthropicRun([held], [{ modelId: id, patch: claude(id, { toolSearch }) }], {
+      priorDiscoveryGroups: new Map([[id, held.ownedGroups as FieldGroup[]]]),
+      priorContributors: new Map([[id, [{ group: 'apiSurface', source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-x` }]]]),
+    });
+
+    const [row] = result.rows;
+    expect(row.ownedGroups).toContain('apiSurface');
+    expect(row.patch).toMatchObject({ toolSearch });
+    expect(row.patch).not.toHaveProperty('forcedToolChoice');
+    expect(row.contributors).toContainEqual({ group: 'apiSurface', source: 'anthropic' });
+    expect(servedSurface(persisted(result.rows), id).toolSearch).toBe(toolSearch);
+  });
+
+  it('records a source claim equal to the inherited value so a later build does not release it', () => {
+    const id = 'claude-fable-5-2';
+    const held = heldRow(claude(id, { toolSearch: false }));
+    const result = anthropicRun([held], [{ modelId: id, patch: claude(id, { toolSearch: false }) }], {
+      priorDiscoveryGroups: new Map([[id, held.ownedGroups as FieldGroup[]]]),
+      priorContributors: new Map([[id, [{ group: 'apiSurface', source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-x` }]]]),
+    });
+
+    const [row] = result.rows;
+    expect(row).toBeDefined();
+    expect(row.contributors).toContainEqual({ group: 'apiSurface', source: 'anthropic' });
+    expect(result.diff[0].changedKeys).toEqual(['contributors']);
+
+    const later = anthropicRun(persisted(result.rows), [{ modelId: id, patch: claude(id) }], {
+      staticModelIds: new Set([id]),
+      priorDiscoveryGroups: new Map([[id, row.ownedGroups as FieldGroup[]]]),
+      priorContributors: new Map([[id, row.contributors ?? []]]),
+    });
+    expect(later.rows).toEqual([]);
+  });
+
+  it('releases other inherited flags when a source starts stating its own partial surface', () => {
+    const id = 'claude-fable-5-2';
+    const held = heldRow(claude(id, { toolSearch: false, toolChanges: true }));
+    const result = anthropicRun([held], [{ modelId: id, patch: claude(id, { toolSearch: false }) }], {
+      priorDiscoveryGroups: new Map([[id, held.ownedGroups as FieldGroup[]]]),
+      priorContributors: new Map([[id, [{ group: 'apiSurface', source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-x` }]]]),
+    });
+
+    const [row] = result.rows;
+    expect(row.patch).toMatchObject({ toolSearch: false });
+    expect(row.patch).not.toHaveProperty('toolChanges');
+    expect(row.contributors).toContainEqual({ group: 'apiSurface', source: 'anthropic' });
+    expect(result.diff[0].changedKeys).toEqual(['contributors', 'toolChanges']);
+    expect(servedSurface(persisted(result.rows), id)).toMatchObject({ toolSearch: false, toolChanges: false });
   });
 });

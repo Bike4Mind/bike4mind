@@ -562,6 +562,12 @@ export interface IChatCompletionServiceOptions {
    */
   onToolPreamble?: (preamble: string, toolName: string) => void;
   /**
+   * Optional observer of the turn's user-visible status lines ("Searching the web...", ...), fired for
+   * every non-silent, non-null status the turn sends. Out-of-band and best effort: a throw is logged
+   * and never reaches the turn. Hosts use it to mirror progress to surfaces other than the websocket.
+   */
+  onStatusUpdate?: (questId: string, status: string) => void;
+  /**
    * The `decide` tool's execution seam, forwarded into every ToolBuilder this service builds.
    * The app tier supplies it from the shared decision runner; absent, the tool refuses.
    */
@@ -2438,13 +2444,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
     if (coverage.filesWithheldReindexing > 0) {
       // Names TIME as the remedy, matching describeRetrievalUnavailable's wording rule: the reader
-      // must not be sent to re-embed a document that is already re-embedding.
+      // must not be sent to re-embed a document that is already being indexed.
       reasons.push(
-        `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were withheld - ` +
-          'their passages are being replaced and the replacements are not searchable yet; they return on their own'
+        `${coverage.filesWithheldReindexing} document(s) are still being indexed and were withheld - ` +
+          'their passages are not searchable yet; they return on their own'
       );
       readerReasons.push(
-        `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were skipped. ` +
+        `${coverage.filesWithheldReindexing} document(s) are still being indexed and were skipped. ` +
           'They return on their own.'
       );
     }

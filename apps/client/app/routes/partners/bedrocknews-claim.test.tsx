@@ -60,12 +60,12 @@ const READY = {
   credits: 150,
   rungs: [
     { date: '2026-11-01', length: 5, hard: false },
-    { date: '2026-11-02', length: 7, hard: true },
+    { date: '2026-11-02', length: 7, hard: true, word: 'journal' },
   ],
   account: 'victor@example.com',
 };
 
-const DONE = { total: 150, balance: 900, firstSolveCredits: 50, capped: 0, claimed: [] };
+const DONE = { total: 150, balance: 11218671, firstSolveCredits: 1000, capped: 0, claimed: [] };
 const UNAVAILABLE_COPY = 'Something went wrong on our side. Your credits are safe; try again.';
 const CAPPED_COPY =
   'Bike4Mind\u2019s daily limit is reached for that day, so those credits can\u2019t be paid. They stay waiting in Headword.';
@@ -99,6 +99,7 @@ describe('BedrockNewsClaimPage', () => {
     const rungs = screen.getAllByTestId('claim-rung');
     expect(rungs).toHaveLength(2);
     expect(rungs[0]).toHaveTextContent('2026-11-01 \u00b7 5-letter word');
+    expect(rungs[1]).toHaveTextContent('JOURNAL \u00b7 2026-11-02');
     expect(within(rungs[0]).queryByText('Hard mode')).not.toBeInTheDocument();
     expect(within(rungs[1]).getByText('Hard mode')).toBeInTheDocument();
     expect(screen.getByTestId('claim-card')).not.toHaveAttribute('aria-busy');
@@ -166,9 +167,9 @@ describe('BedrockNewsClaimPage', () => {
     const status = (await screen.findByText('150 credits added')).closest('[role="status"]') as HTMLElement;
     expect(within(status).getByText('to victor@example.com')).toBeInTheDocument();
     expect(screen.getByText('New balance')).toBeInTheDocument();
-    expect(screen.getByText('900')).toBeInTheDocument();
+    expect(screen.getByText('11,218,671')).toBeInTheDocument();
     expect(screen.getByText('First-solve bonus')).toBeInTheDocument();
-    expect(screen.getByText('+50')).toBeInTheDocument();
+    expect(screen.getByText('+1,000')).toBeInTheDocument();
     expect(screen.queryByText(/daily limit/)).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to Headword' })).toHaveAttribute(
       'href',

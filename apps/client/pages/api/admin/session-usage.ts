@@ -75,7 +75,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   const [usage, execDocs] = await Promise.all([
     usageEventRepository.sessionUsageSummary(
       sessionId,
-      orgScope ? { ownerId: orgScope, ownerType: CreditHolderType.Organization } : undefined
+      orgScope ? { ownerId: orgScope, ownerType: CreditHolderType.Organization } : undefined,
+      { includeExecuted: !orgScope }
     ),
     agentExecutionRepository.findBillingBySessionId(sessionId, orgScope),
   ]);

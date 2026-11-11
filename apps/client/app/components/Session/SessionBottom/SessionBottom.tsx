@@ -507,14 +507,19 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // Shared by the websocket event and the polling fallback (useModerationScanFallback),
   // which can both report the same scan, so an already-applied clean result is skipped.
   const applyModerationResult = useCallback(
-    (fabFileId: string, moderationStatus: 'pending' | 'clean' | 'blocked', fileUrl?: string) => {
+    (
+      fabFileId: string,
+      moderationStatus: 'pending' | 'clean' | 'blocked',
+      fileUrl?: string,
+      fileUrlExpireAt?: Date | string
+    ) => {
       if (moderationStatus !== 'clean') {
         recordModerationStatus(fabFileId, moderationStatus);
         return;
       }
       const existing = useSessionLayout.getState().pendingMessageFiles.find(item => item.fabFile.id === fabFileId);
       if (existing?.status === 'complete') return;
-      recordModerationStatus(fabFileId, 'clean', fileUrl);
+      recordModerationStatus(fabFileId, 'clean', fileUrl, fileUrlExpireAt);
 
       // An image the user explicitly scoped to the notebook is held back at upload
       // time and promoted only here, once the scan clears. A knowledgeIds entry
@@ -539,14 +544,16 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
       if (msg.moderationStatus === 'clean') {
         let fileUrl: string | undefined;
+        let fileUrlExpireAt: Date | string | undefined;
         try {
           const [fresh] = await getFabFilesFromServerByIds([msg.fabFileId]);
           fileUrl = fresh?.fileUrl ?? undefined;
+          fileUrlExpireAt = fresh?.fileUrlExpireAt ?? undefined;
         } catch {
           // Fall through - the reducer still flips status to 'complete'; a page refresh
           // (File Manager / message stream) self-heals by refetching a valid fileUrl.
         }
-        applyModerationResult(msg.fabFileId, 'clean', fileUrl);
+        applyModerationResult(msg.fabFileId, 'clean', fileUrl, fileUrlExpireAt);
       } else {
         applyModerationResult(msg.fabFileId, msg.moderationStatus);
       }

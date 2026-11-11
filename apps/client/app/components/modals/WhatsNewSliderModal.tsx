@@ -128,6 +128,12 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
         }
 
         const urlObj = new URL(imageUrl);
+        // /api/modals has already authorized and signed this image. Re-signing its key through
+        // the file endpoint drops ownerless modal-images uploads, which have no FabFile row.
+        if (urlObj.searchParams.has('X-Amz-Signature')) {
+          publicImages[modalId] = imageUrl;
+          continue;
+        }
         const filePath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
 
         pathFiles[modalId] = filePath;

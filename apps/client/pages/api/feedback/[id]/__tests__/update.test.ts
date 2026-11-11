@@ -36,6 +36,8 @@ const feedbackText = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/database', () => ({ FeedbackModel: model, FeedbackTextModel: feedbackText }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+const recordFeedbackRead = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/feedbackReadAudit', () => ({ recordFeedbackRead }));
 
 import '@pages/api/feedback/[id]/update';
 
@@ -58,6 +60,8 @@ describe('PUT /api/feedback/[id] - instance-level authorization', () => {
     // .toJSON() on it before redacting, so the mock needs that method too.
     model.findOneAndUpdate.mockResolvedValue({ ...updatedFeedbackDoc, toJSON: () => updatedFeedbackDoc });
     model.findOneAndUpdate.mockClear();
+    feedbackText.find.mockClear();
+    recordFeedbackRead.mockReset().mockResolvedValue(undefined);
   });
 
   it('authorizes against the fetched document, not the model class', async () => {
@@ -81,6 +85,25 @@ describe('PUT /api/feedback/[id] - instance-level authorization', () => {
     await mockRefs.putHandler!(req, res);
     expect(model.findOneAndUpdate).toHaveBeenCalledTimes(1);
     expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('records the read of the returned report before loading its text', async () => {
+    recordFeedbackRead.mockImplementation(async () => {
+      expect(feedbackText.find).not.toHaveBeenCalled();
+    });
+    const { req, res } = mocks(() => true);
+    await mockRefs.putHandler!(req, res);
+
+    expect(recordFeedbackRead).toHaveBeenCalledWith(req, [{ id: feedbackDoc.id, userId: 'owner1' }]);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('fails without responding when the read cannot be audited', async () => {
+    recordFeedbackRead.mockRejectedValue(new Error('audit store down'));
+    const { req, res } = mocks(() => true);
+
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow('audit store down');
+    expect(res._isEndCalled()).toBe(false);
   });
 
   it('redacts functionCalls[].returnValue in the response, the same as GET /api/feedback', async () => {

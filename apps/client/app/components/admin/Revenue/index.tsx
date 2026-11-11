@@ -27,7 +27,8 @@ import {
   formatMoney,
   type DataColumn,
 } from '../shared';
-import { adminFocus } from '../shared/adminStyles';
+import { ADMIN_REGION_GAP, adminFocus } from '../shared/adminStyles';
+import { SELF_HOST_DOCS_URL } from '../shared/selfHostDocs';
 import { subscriptionsColumns } from '../Subscriptions/subscriptionsColumns';
 import { MrrDefinitionHelp, atRiskNote, mrrExclusionNote } from '../Subscriptions/subscriptionsMrr';
 import type { SubscriptionsBuiltInView } from '../Subscriptions/subscriptionsListViews';
@@ -50,8 +51,6 @@ import {
 import { formatLongDay, formatShare, formatTrendDay, signedMoney, trendTakeaway } from './revenueFormat';
 import { subscriptionsViewSearch } from './revenueLinks';
 import { useAdminRevenue } from './useAdminRevenue';
-
-const SELF_HOST_DOCS_URL = 'https://docs.bike4mind.com/self-host#2-configure-your-environment';
 
 const RANGE_OPTIONS: readonly { value: RevenueRange; label: string }[] = [
   { value: '30d', label: '30 days' },
@@ -602,7 +601,7 @@ const AdminRevenue: React.FC = () => {
   }
 
   return (
-    <Stack gap={2} sx={{ width: '100%', minWidth: 0, px: { xs: 2, sm: 3 }, py: 2.5 }} data-testid="admin-revenue-tab">
+    <Stack gap={ADMIN_REGION_GAP} sx={{ width: '100%', minWidth: 0 }} data-testid="admin-revenue-tab">
       {header}
       {content}
     </Stack>

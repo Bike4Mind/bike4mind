@@ -474,17 +474,15 @@ export class NotebookExportService {
               if (content !== null) {
                 exportedFile.content = content.toString('base64');
               } else {
-                exportedFile.contentUrl = file.fileUrl ?? storagePath; // Fallback to URL or path reference
+                exportedFile.contentUrl = storagePath; // Fallback to path reference
               }
-            } else {
-              exportedFile.contentUrl = file.fileUrl; // No storage path; use available URL
             }
           } catch (error) {
             this.adapters.logger.warn('Failed to export file content', { fileId: file.id, error });
-            exportedFile.contentUrl = file.fileUrl ?? file.filePath; // Fallback to reference
+            exportedFile.contentUrl = file.filePath; // Fallback to reference
           }
         } else {
-          exportedFile.contentUrl = file.fileUrl ?? file.filePath;
+          exportedFile.contentUrl = file.filePath;
         }
 
         return exportedFile;

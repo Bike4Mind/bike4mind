@@ -1,6 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { IUserDocument } from '@bike4mind/common';
-import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError, hashEmailToken, secureParameters } from '@bike4mind/utils';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { EMAIL_VERIFICATION_TOKEN_EXPIRY } from './sendEmailVerification';
@@ -54,7 +54,7 @@ export const requestEmailChange = async (
   const token = randomUUID();
 
   user.pendingEmail = newEmail;
-  user.pendingEmailToken = token;
+  user.pendingEmailToken = hashEmailToken(token);
   user.pendingEmailSentAt = new Date();
   user.pendingEmailExpires = new Date(Date.now() + EMAIL_VERIFICATION_TOKEN_EXPIRY);
   // Reset used flag when generating new token

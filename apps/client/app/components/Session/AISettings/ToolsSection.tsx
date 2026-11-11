@@ -4,6 +4,7 @@ import CompareIcon from '@mui/icons-material/Compare';
 import LanguageIcon from '@mui/icons-material/Language';
 import DateTimeIcon from '@mui/icons-material/Schedule';
 import DiceIcon from '@mui/icons-material/Casino';
+import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import ImageIcon from '@mui/icons-material/Image';
 import MusicIcon from '@mui/icons-material/MusicNote';
 import AudioIcon from '@mui/icons-material/GraphicEq';
@@ -57,6 +58,7 @@ import {
   filterToolsForDisplay,
 } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
+import { useComposerMcpConnections } from '@client/app/hooks/useComposerMcpConnections';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { AGENT_ONLY_MCP_SERVERS } from '@client/app/components/common/ToolIndicators';
 import { IMAGE_TOOL_PRICE_TOOLTIP, useImageToolPrice } from './useImageToolPrice';
@@ -322,6 +324,9 @@ const ToolsSection = ({
     isPending: isLoadingMcpServers,
     isFetching: isFetchingMcpServers,
   } = useMcpServers();
+  // Custom MCP connectors: on unless switched off here (an opt-out list, so a new one starts on).
+  const { offered: customConnections } = useComposerMcpConnections();
+  const disabledMcpConnections = useLLM(state => state.disabledMcpConnections) ?? [];
 
   // Must stay above the unsupported-model early return further down, which cuts off hooks.
   const isMobile = useIsMobile();
@@ -434,6 +439,15 @@ const ToolsSection = ({
     const next = currentlyEnabled ? baseline.filter(name => name !== serverName) : [...baseline, serverName];
     setLLM({ enabledMcpServers: next });
   };
+
+  const isConnectionOn = (slug: string) => !disabledMcpConnections.includes(slug);
+
+  const toggleConnection = (slug: string) =>
+    setLLM({
+      disabledMcpConnections: isConnectionOn(slug)
+        ? [...disabledMcpConnections, slug]
+        : disabledMcpConnections.filter(s => s !== slug),
+    });
 
   const getMcpServerLabel = (serverName: string) => {
     switch (serverName) {
@@ -579,7 +593,9 @@ const ToolsSection = ({
   // than excluded here, so the number reflects everything the user has toggled on
   // and can actually use. MCP servers have no toolAvailability entry, so nothing to
   // filter for them.
-  const enabledMcpServerCount = visibleMcpServers.filter(server => isMcpServerEnabled(server.name)).length;
+  const enabledMcpServerCount =
+    visibleMcpServers.filter(server => isMcpServerEnabled(server.name)).length +
+    customConnections.filter(connection => isConnectionOn(connection.slug)).length;
   // Feature-gated switches that live outside the `tools` array (each has its own LLM
   // state flag) but appear in this panel, so they count like any other tool. Must stay
   // in sync with the same tally in AdvancedAISettings' otherActiveToolsCount.
@@ -941,6 +957,26 @@ const ToolsSection = ({
                 <SquareSlideToggle
                   onChange={() => toggleMcpServer(server.name)}
                   checked={isMcpServerEnabled(server.name)}
+                />
+              </ToolContainer>
+            </Grid>
+          ))}
+          {customConnections.map(connection => (
+            <Grid xs={12} key={connection.id} className={`tool-item tool-item-mcp-connection-${connection.slug}`}>
+              <ToolContainer sx={toolContainerSx}>
+                <Box
+                  className="tool-content"
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
+                >
+                  <HubOutlinedIcon
+                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                  />
+                  <ToolLabel name={connection.displayName} description={`Custom connector on ${connection.urlHost}`} />
+                </Box>
+                <SquareSlideToggle
+                  data-testid={`tool-toggle-mcp-connection-${connection.slug}`}
+                  onChange={() => toggleConnection(connection.slug)}
+                  checked={isConnectionOn(connection.slug)}
                 />
               </ToolContainer>
             </Grid>

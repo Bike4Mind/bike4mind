@@ -293,6 +293,8 @@ export async function gateReplayConfidence(
     iterationIndex: number;
     confidence: number | null;
     confidenceGateThreshold: number;
+    /** False records the streak but never pauses (gateMode 'answer'). Defaults to true. */
+    pauseEnabled?: boolean;
     confidenceOverrides?: readonly number[];
   },
   deps: {
@@ -330,7 +332,7 @@ export async function gateReplayConfidence(
     },
     (c, options) => deps.recordIterationConfidence(executionId, c, options)
   );
-  if (!decision.pause) return { status: 'proceed' };
+  if (!decision.pause || params.pauseEnabled === false) return { status: 'proceed' };
 
   // Same 0-indexed wire convention as `settleGatedCall`'s `permission_request` emit.
   const wireIteration = Math.max(0, iterationIndex - 1);
@@ -372,6 +374,7 @@ export async function resumeApprovedPauseAndGateConfidence<TCheckpoint>(
     approvedTools: string[];
     deniedTools: string[];
     confidenceGateThreshold: number;
+    pauseEnabled?: boolean;
     confidenceOverrides?: readonly number[];
     guardedToolNames: ReadonlySet<string>;
   },
@@ -426,6 +429,7 @@ export async function resumeApprovedPauseAndGateConfidence<TCheckpoint>(
       iterationIndex: params.iterationIndex,
       confidence: replayConfidence,
       confidenceGateThreshold: params.confidenceGateThreshold,
+      pauseEnabled: params.pauseEnabled,
       confidenceOverrides: params.confidenceOverrides,
     },
     deps

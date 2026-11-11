@@ -1,6 +1,7 @@
 import {
   adminSignupGrantPendingSchema,
   BadRequestError,
+  hasAdminPermission,
   NotFoundError,
   resolveSignupGrantSchedule,
 } from '@bike4mind/common';
@@ -33,7 +34,12 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'credits:ad
     return respond(
       res,
       adminSignupGrantPendingSchema,
-      buildSignupGrantPending({ user, schedule, rewards, viewerIsAdmin: req.user?.isAdmin === true })
+      buildSignupGrantPending({
+        user,
+        schedule,
+        rewards,
+        viewerCanRelease: hasAdminPermission(req.user, 'credits:adjust'),
+      })
     );
   })
 );

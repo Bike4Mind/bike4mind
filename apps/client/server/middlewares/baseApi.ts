@@ -176,6 +176,10 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
           connectMs: req.__connectMs ?? null,
           containerCold,
           aborted: !res.writableEnded, // true when the response never completed cleanly
+          // statusCode defaults to 200, so an aborted request is only a sent status when headersSent.
+          status: res.statusCode,
+          headersSent: res.headersSent,
+          ...(req.user ? { userId: req.user.id } : {}),
         })
         .info('req-timing');
     };

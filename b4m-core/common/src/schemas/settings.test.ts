@@ -939,8 +939,9 @@ describe('Credits System group', () => {
       expect(settingsMap[key].schema.safeParse('2500').success).toBe(true);
     });
 
-    it('is indexed in the Credits group with an order no sibling reuses', () => {
-      expect(API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.key)).toContain(key);
+    // Edited in the Invite Center Schedule section, so it is outside the Credits group.
+    it('is not indexed in the Credits group, whose orders stay unique', () => {
+      expect(API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.key)).not.toContain(key);
       const orders = API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.order);
       expect(new Set(orders).size).toBe(orders.length);
     });
@@ -1529,6 +1530,9 @@ describe('spend monitor settings', () => {
     spendMonitorAccountSpikeRatio: 10,
     spendMonitorAccountSpikeFloorCredits: 1000,
     spendMonitorAccountCeilingCredits: 5000,
+    spendMonitorPaidAccountSpikeFloorCredits: 20_000,
+    spendMonitorPaidAccountCeilingCredits: 40_000,
+    spendMonitorPaidAccountMinAgeDays: 7,
     spendMonitorTrustedAccountSpikeFloorCredits: 20_000,
     spendMonitorTrustedAccountCeilingCredits: 40_000,
   } as const;
@@ -1545,11 +1549,20 @@ describe('spend monitor settings', () => {
     'spendMonitorPlatformCostFloorUsd',
     'spendMonitorAccountSpikeFloorCredits',
     'spendMonitorAccountCeilingCredits',
+    'spendMonitorPaidAccountSpikeFloorCredits',
+    'spendMonitorPaidAccountCeilingCredits',
     'spendMonitorTrustedAccountSpikeFloorCredits',
     'spendMonitorTrustedAccountCeilingCredits',
   ] as const)('%s rejects 0 and accepts 1', key => {
     expect(settingsMap[key].schema.safeParse(0).success).toBe(false);
     expect(settingsMap[key].schema.parse(1)).toBe(1);
+  });
+
+  it('allows a zero paid-account minimum age and rejects negative or fractional days', () => {
+    const schema = settingsMap.spendMonitorPaidAccountMinAgeDays.schema;
+    expect(schema.parse(0)).toBe(0);
+    expect(schema.safeParse(-1).success).toBe(false);
+    expect(schema.safeParse(0.5).success).toBe(false);
   });
 
   it.each(['spendMonitorTrustedEmailDomains', 'spendMonitorTrustedAccountIds'] as const)(
@@ -1648,7 +1661,9 @@ describe('broadcastSafeSettingKeys', () => {
   });
 
   it('keeps the non-sensitive settings clients render live', () => {
-    expect(broadcastSafeSettingKeys()).toEqual(expect.arrayContaining(['EnableQuestMaster', 'EnableArtifacts']));
+    expect(broadcastSafeSettingKeys()).toEqual(
+      expect.arrayContaining(['EnableQuestMaster', 'EnableArtifacts', 'modelListRevision'])
+    );
   });
 
   it('never admits a setting name with no definition', () => {

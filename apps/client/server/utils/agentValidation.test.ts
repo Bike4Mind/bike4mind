@@ -3,6 +3,9 @@ import {
   validateToolList,
   validateMaxIterations,
   validateDefaultThoroughness,
+  validateConfidenceGateThreshold,
+  validateConfidenceGateMode,
+  validateConfidenceGateSelfReport,
   validateStringList,
   validateDefaultVariables,
   validateAgentUpdate,
@@ -108,6 +111,28 @@ describe('validateDefaultThoroughness', () => {
   it('rejects unknown levels and non-string values', () => {
     expect(() => validateDefaultThoroughness('thorough')).toThrow(/quick, medium, very_thorough/);
     expect(() => validateDefaultThoroughness(123)).toThrow(/quick, medium, very_thorough/);
+  });
+});
+
+describe('confidence gate validators', () => {
+  it('treat unset values as undefined', () => {
+    expect(validateConfidenceGateThreshold(undefined)).toBeUndefined();
+    expect(validateConfidenceGateMode('')).toBeUndefined();
+    expect(validateConfidenceGateSelfReport(null)).toBeUndefined();
+  });
+
+  it('accept in-range values, including a threshold of 0', () => {
+    expect(validateConfidenceGateThreshold(0)).toBe(0);
+    expect(validateConfidenceGateThreshold(1)).toBe(1);
+    expect(validateConfidenceGateMode('answer')).toBe('answer');
+    expect(validateConfidenceGateSelfReport(false)).toBe(false);
+  });
+
+  it('reject out-of-range or wrongly typed values', () => {
+    expect(() => validateConfidenceGateThreshold(1.5)).toThrow(/between 0 and 1/);
+    expect(() => validateConfidenceGateThreshold('0.5')).toThrow(/between 0 and 1/);
+    expect(() => validateConfidenceGateMode('sometimes')).toThrow(/iteration, answer, both, off/);
+    expect(() => validateConfidenceGateSelfReport('yes')).toThrow(/boolean/);
   });
 });
 

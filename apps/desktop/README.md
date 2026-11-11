@@ -777,10 +777,18 @@ panel into the collapsible **More**.
 
 ### Session panel
 
-In Code conversations, the session panel reserves space beside the conversation when the pane
-can fit the panel and a full reading column. The header, messages and composer recenter together
-when you toggle it. Smaller panes open the panel as a popover without shifting the conversation.
-The layout transition respects the system's reduced-motion preference.
+In Code conversations, how the session panel opens depends on the width of the conversation pane
+(not the window, so the sidebar and the browser pane count):
+
+- **Wide** (pane at least 1320px): the panel floats in the free margin beside the centered reading
+  column, and nothing moves when you toggle it.
+- **Medium** (1064px to 1319px): the panel reserves space, and the header, messages and composer
+  slide left together to make room.
+- **Narrow** (below 1064px): the panel opens from its header button as an overlay with a light
+  scrim. Escape, a click outside or its close button shuts it, and Tab stays inside it while open.
+
+In the orchestrator view there is no free margin beside the stage, so a wide pane reserves space
+instead. Layout transitions respect the system's reduced-motion preference.
 
 ## Orchestration worker models and task evidence
 

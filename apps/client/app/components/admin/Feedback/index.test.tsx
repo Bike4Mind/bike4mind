@@ -40,6 +40,20 @@ vi.mock('sonner', () => ({
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: mocks.useNavigate,
   useSearch: mocks.useSearch,
+  Link: ({
+    to,
+    params,
+    children,
+    ...rest
+  }: {
+    to: string;
+    params?: Record<string, string>;
+    children: React.ReactNode;
+  }) => (
+    <a href={to.replace('$userId', params?.userId ?? '')} {...rest}>
+      {children}
+    </a>
+  ),
 }));
 vi.mock('papaparse', () => ({ default: { unparse: mocks.papaUnparse } }));
 
@@ -90,12 +104,14 @@ const defaultFiltersReturn: UseFeedbackFiltersReturn = {
       [FeedbackStatus.Closed]: false,
     },
     selectedOrganizations: [],
+    types: [],
     sortAscending: false,
   },
   setSearchTerm: vi.fn(),
   setStatusFilters: vi.fn(),
   setSelectedOrganizations: vi.fn(),
   setSubject: vi.fn(),
+  setTypes: vi.fn(),
   toggleSortDirection: vi.fn(),
   filterParams: { sort: 'desc' },
 };
@@ -159,7 +175,14 @@ describe('FeedbackTab', () => {
     await waitFor(() => expect(mocks.papaUnparse).toHaveBeenCalledTimes(1));
 
     const [csvRows] = mocks.papaUnparse.mock.calls[0] as [Array<Record<string, unknown>>];
-    expect(csvRows[0]).toMatchObject({ HelpArticle: 'features/export' });
+    expect(csvRows[0]).toMatchObject({
+      HelpArticle: 'features/export',
+      Type: 'Feedback',
+      Subject: 'Help',
+      UserId: 'user-1',
+      Username: 'reporter',
+      UserEmail: 'reporter@example.com',
+    });
   });
 
   // The hook and the subject mapping are unit-tested on their own; what only a mounted render can
@@ -201,6 +224,73 @@ describe('FeedbackTab', () => {
       await userEvent.click(screen.getByTestId('admin-filter-clear-feedback-subject-btn'));
 
       expect(defaultFiltersReturn.setSubject).toHaveBeenCalledWith(undefined);
+    });
+  });
+
+  describe('type filter', () => {
+    beforeEach(() => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem()]));
+    });
+
+    it('sends the picked type to the filter hook', async () => {
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-type'));
+      await userEvent.click(screen.getByTestId(`admin-filter-feedback-type-${FeedbackType.THUMBS_DOWN}`));
+
+      expect(defaultFiltersReturn.setTypes).toHaveBeenCalledWith([FeedbackType.THUMBS_DOWN]);
+    });
+  });
+
+  describe('row content', () => {
+    it('labels each report with its type and subject', () => {
+      mocks.useFeedbackOperations.mockReturnValue(
+        makeOperationsReturn([makeFeedbackItem({ type: FeedbackType.BUG, subject: 'turn' })])
+      );
+
+      renderFeedbackTab();
+
+      const meta = screen.getByTestId('feedback-row-type-fb-1');
+      expect(meta).toHaveTextContent('Bug');
+      expect(screen.getByText('Conversation turn')).toBeInTheDocument();
+    });
+
+    it('shows an untyped report as Feedback', () => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem({ type: undefined })]));
+
+      renderFeedbackTab();
+
+      expect(screen.getByTestId('feedback-row-type-fb-1')).toHaveTextContent('Feedback');
+    });
+
+    it('says so when a rating carries no comment', () => {
+      mocks.useFeedbackOperations.mockReturnValue(
+        makeOperationsReturn([makeFeedbackItem({ type: FeedbackType.THUMBS_DOWN, content: '' })])
+      );
+
+      renderFeedbackTab();
+
+      expect(screen.getByText('No comment')).toBeInTheDocument();
+    });
+
+    it('links the reporter to their admin profile', () => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem({ userId: LONG_USER_ID })]));
+
+      renderFeedbackTab();
+
+      expect(screen.getByTestId('feedback-row-reporter-link-fb-1')).toHaveAttribute(
+        'href',
+        `/admin/users/${LONG_USER_ID}`
+      );
+    });
+
+    it('shows a reporter id that is not a user id as plain text', () => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem()]));
+
+      renderFeedbackTab();
+
+      expect(screen.queryByTestId('feedback-row-reporter-link-fb-1')).not.toBeInTheDocument();
+      expect(screen.getByText('reporter')).toBeInTheDocument();
     });
   });
 
@@ -302,7 +392,7 @@ describe('FeedbackTab', () => {
       renderFeedbackTab();
 
       expect(screen.getByRole('region', { name: 'Feedback' })).toHaveStyle({ overflowX: 'auto' });
-      expect(screen.getByTestId('feedback-table')).toHaveStyle({ minWidth: '56rem' });
+      expect(screen.getByTestId('feedback-table')).toHaveStyle({ minWidth: '44rem' });
     });
 
     it('shows the reporter id truncated, with the full id behind the copy chip', () => {

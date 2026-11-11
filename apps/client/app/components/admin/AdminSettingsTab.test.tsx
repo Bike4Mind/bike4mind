@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SETTING_TABS, settingsMap, type SettingKey } from '@bike4mind/common';
@@ -47,7 +47,8 @@ vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => router.navigate,
 }));
 
-import AdminSettingsTab, { GROWTH_PRICING_ONLY_KEYS } from './AdminSettingsTab';
+import AdminSettingsTab from './AdminSettingsTab';
+import { HOME_BY_KEY, SETTING_HOMES } from './settingHomes';
 import { GROWTH_PRICING_SECTIONS } from './AdminGrowthPricingTab';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
@@ -317,22 +318,42 @@ describe('AdminSettingsTab field default value', () => {
 });
 
 describe('AdminSettingsTab Credits System group', () => {
-  const renderCreditsTab = () => renderTab(findTab(settingsMap.billOperationalUsage.category));
+  const renderCreditsTab = () => renderTab(findTab(settingsMap.blockDisposableEmails.category));
 
-  it('lists only keys the Growth and Pricing tab edits', () => {
-    const growthPricingKeys = new Set<string>(GROWTH_PRICING_SECTIONS.flatMap(section => section.keys));
-    for (const key of GROWTH_PRICING_ONLY_KEYS) expect(growthPricingKeys.has(key), key).toBe(true);
+  it('gives every home key exactly one home, the growth home holding the Growth and Pricing keys', () => {
+    const seen = new Set<string>();
+    for (const home of SETTING_HOMES) {
+      for (const key of home.keys) {
+        expect(seen.has(key), key).toBe(false);
+        seen.add(key);
+        expect(settingsMap[key], key).toBeDefined();
+      }
+    }
+    expect(HOME_BY_KEY.size).toBe(seen.size);
+    const growth = SETTING_HOMES.find(home => home.id === 'growth-pricing');
+    expect(growth?.keys).toEqual(GROWTH_PRICING_SECTIONS.flatMap(section => section.keys));
   });
 
-  it('renders no editor for the Growth and Pricing keys and keeps the rest of the group', () => {
+  it('renders no generic editor for a home key in any section that holds one', () => {
+    const tabs = new Set([...HOME_BY_KEY.keys()].map(key => findTab(settingsMap[key as SettingKey].category)));
+    for (const tab of tabs) {
+      if (!tab) continue;
+      cleanup();
+      renderTab(tab);
+      for (const key of HOME_BY_KEY.keys()) {
+        expect(screen.queryByTestId(`generic-setting-${key}`), `${tab.id}:${key}`).toBeNull();
+      }
+    }
+  });
+
+  it('keeps the rest of the Credits System group', () => {
     renderCreditsTab();
 
-    for (const key of GROWTH_PRICING_ONLY_KEYS) {
-      expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
-    }
-    for (const key of ['billOperationalUsage', 'blockDisposableEmails', 'syntheticUserEmailDomains']) {
+    for (const key of ['blockDisposableEmails', 'maxSignupsPerIpPerDay', 'syntheticUserEmailDomains']) {
       expect(screen.getByTestId(`generic-setting-${key}`), key).toBeTruthy();
     }
+    // A pricing control: edited on Growth and Pricing.
+    expect(screen.queryByTestId('generic-setting-billOperationalUsage')).toBeNull();
     expect(screen.getByTestId('string-list-setting-blockedEmailDomains')).toBeTruthy();
   });
 
@@ -342,6 +363,20 @@ describe('AdminSettingsTab Credits System group', () => {
 
     fireEvent.click(screen.getByTestId('admin-settings-credits-growth-pricing-link'));
     expect(useAdminModal.getState().activeTab).toBe(AdminTab.GrowthPricing);
+  });
+
+  it.each([
+    ['invite-center-schedule', 'schedule'],
+    ['invite-center-rewards', 'rewards'],
+  ])('links to the Invite Center home %s', (homeId, section) => {
+    renderCreditsTab();
+
+    fireEvent.click(screen.getByTestId(`admin-settings-credits-${homeId}-link`));
+    expect(lastWrittenSearch({ tab: 'admin-settings', q: 'x' })).toMatchObject({
+      tab: 'waitlist',
+      inviteSection: section,
+      q: undefined,
+    });
   });
 
   it('points a search for a Growth and Pricing key to that tab', () => {
@@ -354,11 +389,27 @@ describe('AdminSettingsTab Credits System group', () => {
     expect(useAdminModal.getState().activeTab).toBe(AdminTab.GrowthPricing);
   });
 
-  it('shows no Growth and Pricing pointer for an unrelated search', () => {
+  it.each([
+    // 'drip' matches the drip cap's name; the audit log links a setting change as ?q=<key>.
+    ['drip', 'invite-center-schedule', 'schedule'],
+    ['signupGrantDripCap', 'invite-center-schedule', 'schedule'],
+    ['freeTierDays2To7SpendCapCredits', 'invite-center-schedule', 'schedule'],
+    ['ReferralHoldDays', 'invite-center-rewards', 'rewards'],
+    ['gearRewardMinAccountAgeDays', 'invite-center-rewards', 'rewards'],
+  ])('points a search for %s to its Invite Center section', (q, homeId, section) => {
+    router.search = { tab: 'admin-settings', q };
+    renderSettings();
+
+    expect(screen.getByTestId(`admin-settings-search-${homeId}-hint`)).toBeTruthy();
+    fireEvent.click(screen.getByTestId(`admin-settings-search-${homeId}-link`));
+    expect(lastWrittenSearch({ tab: 'admin-settings', q })).toMatchObject({ tab: 'waitlist', inviteSection: section });
+  });
+
+  it('shows no home pointer for an unrelated search', () => {
     router.search = { tab: 'admin-settings', q: 'slack' };
     renderSettings();
 
-    expect(screen.queryByTestId('admin-settings-search-growth-pricing-hint')).toBeNull();
+    for (const home of SETTING_HOMES) expect(screen.queryByTestId(`admin-settings-search-${home.id}-hint`)).toBeNull();
   });
 });
 

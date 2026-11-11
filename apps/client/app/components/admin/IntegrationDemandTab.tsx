@@ -13,6 +13,7 @@ import {
   useAdminListUrlState,
   type DataColumn,
 } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { toast } from 'sonner';
 import type { IntegrationDemand, IntegrationStage } from '@bike4mind/common';
@@ -223,7 +224,7 @@ export const IntegrationDemandTab: React.FC = () => {
 
   return (
     <Stack
-      spacing={2}
+      spacing={ADMIN_REGION_GAP}
       sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', borderRadius: 'md' }}
       data-testid="admin-integration-demand-tab"
     >

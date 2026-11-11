@@ -7,6 +7,7 @@ import {
   GENERIC_MODAL_API_KEY_SCOPES,
   genericApiKeyScopesFor,
 } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import { useUser } from '@client/app/contexts/UserContext';
 import AdminGenerateApiKeyModal from './AdminGenerateApiKeyModal';
 
 const h = vi.hoisted(() => ({
@@ -60,6 +61,7 @@ const renderModal = () =>
   );
 
 beforeEach(() => {
+  useUser.setState({ currentUser: { id: 'admin1', isAdmin: true } as never });
   h.lakes = [
     { id: 'lakeA', name: 'Lake A', canPreauthorize: true },
     { id: 'lakeB', name: 'Lake B', canPreauthorize: true },
@@ -194,6 +196,27 @@ describe('AdminGenerateApiKeyModal - ingest scopes', () => {
     fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
     fireEvent.click(scopeInput(GENERIC));
     expect(submitScopes()).toEqual([GENERIC]);
+  });
+});
+
+describe('AdminGenerateApiKeyModal - ingest scopes for a delegate', () => {
+  it('disables the ingest scopes with the reason for a delegate, but not the generic ones', () => {
+    useUser.setState({
+      currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['keys:revoke', 'users:impersonate'] } as never,
+    });
+    renderModal();
+    const input = (value: string) => screen.getByTestId(`admin-generate-key-scope-${value}`).querySelector('input')!;
+    expect(input(ApiKeyScope.QA_INGEST)).toBeDisabled();
+    expect(screen.getByTestId('admin-generate-key-ingest-reason')).toHaveTextContent(/Only full administrators/);
+    expect(input(GENERIC_MODAL_API_KEY_SCOPES[0].value)).toBeEnabled();
+  });
+
+  it('leaves the ingest scopes selectable for a full admin', () => {
+    renderModal();
+    expect(
+      screen.getByTestId(`admin-generate-key-scope-${ApiKeyScope.QA_INGEST}`).querySelector('input')
+    ).toBeEnabled();
+    expect(screen.queryByTestId('admin-generate-key-ingest-reason')).toBeNull();
   });
 });
 

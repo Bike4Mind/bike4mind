@@ -6,6 +6,9 @@ import {
   FEEDBACK_SUBJECTS,
   FeedbackEvents,
   FeedbackStatus,
+  FeedbackType,
+  hasFeedbackComment,
+  isFeedbackTriageNoise,
   Permission,
   PromptMetaZodSchema,
   redactPromptMetaForViewer,
@@ -27,6 +30,7 @@ import { postFeedbackToSlack } from '@bike4mind/server-utils/integrations/slack/
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { recordFeedbackRead } from '@server/utils/feedbackReadAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
 import { resolveFeedbackOrganization } from '@server/utils/feedbackOrganization';
@@ -102,6 +106,7 @@ const ListFeedbackQuerySchema = z.object({
   organization: z.union([z.string(), z.array(z.string())]).optional(),
   status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
   subject: z.enum(FEEDBACK_SUBJECTS).optional(),
+  type: z.union([z.enum(FeedbackType), z.array(z.enum(FeedbackType))]).optional(),
   // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
   search: z.string().min(1).max(200).optional(),
   sort: z.enum(['asc', 'desc']).prefault('desc'),
@@ -247,6 +252,13 @@ const handler = baseApi()
     const statuses = toArray(query.status);
     if (statuses.length > 0) clauses.push({ status: { $in: statuses } });
 
+    // Reports from the help modal and older ones carry no type and are shown as Feedback, so that
+    // filter also matches a missing type (`null` in `$in` matches an absent field).
+    const types = toArray(query.type);
+    if (types.length > 0) {
+      clauses.push({ type: { $in: types.includes(FeedbackType.FEEDBACK) ? [...types, null] : types } });
+    }
+
     if (query.search) {
       const pattern = new RegExp(escapeRegex(query.search), 'i');
 
@@ -281,6 +293,22 @@ const handler = baseApi()
       // full-collection scan on an unindexed field and must not ride along on unrelated reads.
       query.includeOrganizations === 'true' ? FeedbackModel.distinct('organization', readable) : undefined,
     ]);
+
+    // An admin's read grant spans every reporter, so the page they are about to read is audited.
+    await recordFeedbackRead(
+      req,
+      items.map(item => ({ id: item.id, userId: item.userId })),
+      {
+        page: query.page,
+        limit: query.limit,
+        search: query.search,
+        userId: query.userId,
+        sessionId: query.sessionId,
+        questId: query.questId,
+        organizationId: query.organizationId,
+        subject: query.subject,
+      }
+    );
 
     return res.json({
       items: await hydrateFeedbackText(items.map(toRedactedFeedback)),
@@ -345,7 +373,9 @@ const handler = baseApi()
       _id: feedbackId,
       userId: req.isAuthenticated() ? req.user.id : userId,
       tags,
-      status: FeedbackStatus.New,
+      status: isFeedbackTriageNoise({ type, hasContent: hasFeedbackComment(content), tags })
+        ? FeedbackStatus.Closed
+        : FeedbackStatus.New,
       username: req.isAuthenticated() ? req.user.username : username,
       userEmail: req.isAuthenticated() ? req.user.email : userEmail,
       organization: organization,

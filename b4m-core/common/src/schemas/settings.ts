@@ -65,6 +65,16 @@ import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } fro
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 import { ReleaseNotesConfigSchema } from './releaseNotes';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
+import {
+  DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_DEFAULT,
+  DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_MAX,
+  FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_DEFAULT,
+  FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_MAX,
+  FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_DEFAULT,
+  FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_MAX,
+  FILE_EMBEDDING_USER_WINDOW_HOURS_DEFAULT,
+  FILE_EMBEDDING_USER_WINDOW_HOURS_MAX,
+} from '../constants/fileEmbeddingLimits';
 
 /**
  * The measured per-space floors, rendered for an admin-facing description (e.g. "75 for
@@ -459,6 +469,7 @@ export const SettingKeySchema = z.enum([
   'apiKeyAccountAgeTrustsKeys',
   'requireThreeDSecureOnFirstPurchase',
   'threeDSecureNewAccountDays',
+  'requireCheckoutTermsConsent',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
   'apiKeyUntrustedRequestsPerDay',
@@ -513,6 +524,7 @@ export const SettingKeySchema = z.enum([
   'signupNetworkAlertMaxPerHostingAsn',
   'signupNetworkAlertMaxPerAsn',
   'shadowDetectionRecordingEnabled',
+  'shadowDetectionAutoGradeAfterDays',
   'paymentRiskAutoRefundEnabled',
   'paymentRiskAutoRefundMinUnspentPercent',
   'paymentRiskCheckoutMaxBlockedAttempts',
@@ -534,6 +546,9 @@ export const SettingKeySchema = z.enum([
   'spendMonitorAccountSpikeRatio',
   'spendMonitorAccountSpikeFloorCredits',
   'spendMonitorAccountCeilingCredits',
+  'spendMonitorPaidAccountSpikeFloorCredits',
+  'spendMonitorPaidAccountCeilingCredits',
+  'spendMonitorPaidAccountMinAgeDays',
   'spendMonitorTrustedEmailDomains',
   'spendMonitorTrustedAccountIds',
   'spendMonitorTrustedAccountSpikeFloorCredits',
@@ -602,11 +617,20 @@ export const SettingKeySchema = z.enum([
   'dataLakeVectorizeChunkBatchSize',
   'dataLakeEmbeddingTierMultiplierIndividual',
   'dataLakeEmbeddingTierMultiplierOrganization',
+  'dataLakeEmbeddingBudgetPerOwnerPeriodUsd',
+  'dataLakeMaxLakesPerUser',
+  'dataLakeRequirePaidPlan',
 
   // LAKE ACCESS AUDIT SETTINGS
   'LakeAccessAuditRetentionDays',
   'LakeAccessQueryTextRetentionDays',
   'LakeConfigAuditRetentionDays',
+
+  // FILE INDEXING LIMITS (see fileEmbeddingService and claimScopedSettingChange)
+  'fileEmbeddingUserBudgetPerWindowUsd',
+  'fileEmbeddingUserTokensPerWindow',
+  'fileEmbeddingUserWindowHours',
+  'DefaultChunkSizeChangeCooldownHours',
 
   // New MaxContentLength setting
   'MaxContentLength',
@@ -696,6 +720,7 @@ export const SettingKeySchema = z.enum([
 
   // HELP CENTER SETTINGS
   'EnableHelpChat',
+  'EnableCoreTutorials',
 
   // B4M PI SETTINGS
   'EnableBmPi',
@@ -791,6 +816,7 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryPriceBandPct',
   'modelDiscoveryAutoRemap',
   'modelDiscoveryProbeNewModels',
+  'modelListRevision',
   // PR REPORT GENERATOR
   'prReportRepo',
   'prReportIdentityMap',
@@ -824,6 +850,9 @@ export type IntentClassifierConfig = z.infer<typeof IntentClassifierConfigSchema
 
 export const LOW_CONFIDENCE_COMPLETION_MODES = ['block', 'annotate', 'off'] as const;
 export type LowConfidenceCompletionMode = (typeof LOW_CONFIDENCE_COMPLETION_MODES)[number];
+
+export const CONFIDENCE_GATE_MODES = ['iteration', 'answer', 'both', 'off'] as const;
+export type ConfidenceGateMode = (typeof CONFIDENCE_GATE_MODES)[number];
 
 export const OrchestrationDefaultsSchema = z.object({
   /**
@@ -933,6 +962,23 @@ export const OrchestrationDefaultsSchema = z.object({
    * `off` does neither. Omitted => `annotate`.
    */
   lowConfidenceCompletion: z.enum(LOW_CONFIDENCE_COMPLETION_MODES).optional(),
+  /**
+   * Confidence-gate threshold (0-1). Iterations whose every non-failed tool call scores below
+   * this count toward a pause streak for human review. Default 0.6.
+   */
+  confidenceGateThreshold: z.number().min(0).max(1).default(0.6),
+  /**
+   * Which sites use confidence: `iteration` enables pauses on low-confidence streaks,
+   * `answer` applies the lowConfidenceCompletion policy (annotate or block), `both`
+   * enables both sites, and `off` enables neither. Default `both`.
+   */
+  confidenceGateMode: z.enum(CONFIDENCE_GATE_MODES).default('both'),
+  /**
+   * Whether the executor consumes the agent's confidence scores. The agent still scores its
+   * tool calls; when false the executor drops those scores (and scripted overrides), so no
+   * streak is recorded and neither gate site fires, like `off`. Default true.
+   */
+  confidenceGateSelfReport: z.boolean().default(true),
 });
 
 export type OrchestrationDefaults = z.infer<typeof OrchestrationDefaultsSchema>;
@@ -1259,7 +1305,20 @@ export const DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT = 100;
 export const DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_MAX = 10_000;
 export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT = 50;
 export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_MAX = 5_000;
+/**
+ * Per-OWNER share of the period window: each lake owner (the organization for an org-owned lake,
+ * otherwise the creating user - see scopeForLake) gets its own fixed window of the same length,
+ * reserved BEFORE the platform window. An owner over its share pauses only its own lakes; the
+ * platform window still bounds the sum. Tiered like the per-run and per-lake budgets. Unlike the
+ * other budgets, 0 turns this window OFF rather than stopping spend (the platform levers already
+ * provide the stop); it ships off and is switched on in Admin Settings.
+ */
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT = 0;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_MAX = 5_000;
 export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT = 24;
+/** Most data lakes one user may have created and not deleted. 0 turns the cap off, the default. */
+export const DATA_LAKE_MAX_LAKES_PER_USER_DEFAULT = 0;
+export const DATA_LAKE_MAX_LAKES_PER_USER_MAX = 10_000;
 export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX = 720; // 30 days
 export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT = 120;
 export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX = 10_000;
@@ -1300,9 +1359,9 @@ export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX = 500;
  * operator tunes over time is literally "the ratio between them" - and so a change to the base
  * budget still moves both tiers together.
  *
- * Only the two per-resource budgets are tiered. The per-period budget and the rate limit meter
- * the whole platform through a single shared window, so they have no owner to tier by; the period
- * length and the chunk batch size are not spend values at all.
+ * The per-run, per-lake and per-owner-period budgets are tiered. The platform per-period budget
+ * and the rate limit meter the whole platform through a single shared window, so they have no
+ * owner to tier by; the period length and the chunk batch size are not spend values at all.
  *
  * Multiplier semantics follow the spend levers they scale: 0 is a valid "this tier spends nothing"
  * and the effective budget is clamped to the same MAX_* rail as the untiered value, so raising a
@@ -1624,6 +1683,25 @@ export const SignupDomainHoldAssessmentConfigSchema = z.object({
     title: 'Confirm confidence',
     description: 'Least confidence in an abuse verdict that confirms the hold; anything lower leaves it pending.',
   }),
+  autoReleaseEnabled: z.boolean().prefault(false).meta({
+    title: 'Auto-release legitimate holds',
+    description:
+      'Release a hold, paying out its held free credits, when the model judges it legitimate and every guard passes: a site with real content, Google or Microsoft mail, no disposable-mail wording on the site, known residential signup networks, and few waiting accounts. An auto-released domain stays under burst detection.',
+  }),
+  minReleaseConfidence: z.number().min(0.8).max(1).prefault(0.95).meta({
+    title: 'Release confidence',
+    description: 'Least confidence in a legitimate verdict that releases the hold; anything lower leaves it pending.',
+  }),
+  maxAutoReleasesPerDay: z.number().int().min(0).max(50).prefault(5).meta({
+    title: 'Auto-releases per 24 hours',
+    description:
+      'Holds released automatically per 24h window (opened by the first release); further ones wait for an admin.',
+  }),
+  maxAutoReleaseSignups: z.number().int().min(1).max(10).prefault(2).meta({
+    title: 'Most accounts to auto-release',
+    description:
+      'A domain with more verified accounts waiting than this always waits for an admin; it also caps the payout.',
+  }),
 });
 
 export type SignupDomainHoldAssessmentConfig = z.infer<typeof SignupDomainHoldAssessmentConfigSchema>;
@@ -1826,6 +1904,7 @@ export type LogoSettings = z.infer<typeof LogoSettingsSchema>;
 
 // RapidReply Settings Schema
 export const RapidReplySettingsSchema = z.object({
+  /** @deprecated Nothing writes this; the global toggle is the `EnableRapidReply` setting. */
   enabled: z.boolean().prefault(false),
   allowedUserTags: z.array(z.string()).prefault([]),
   defaultMaxTokens: z.number().prefault(150),
@@ -2266,7 +2345,7 @@ export const API_SERVICE_GROUPS = {
     description:
       'Spend levers for data-lake embedding work (ingestion, reprocessing, convergence). ' +
       'Budgets are USD; 0 means stop spending, not "use the default". The two tier multipliers ' +
-      'scale the per-run and per-lake budgets by whether a lake is individual- or organization-owned.',
+      'scale the per-run, per-lake and per-owner budgets by whether a lake is individual- or organization-owned.',
     icon: 'Savings',
     settings: [
       { key: 'dataLakeEmbeddingSpendEnabled', order: 1 },
@@ -2279,6 +2358,21 @@ export const API_SERVICE_GROUPS = {
       { key: 'dataLakeVectorizeChunkBatchSize', order: 8 },
       { key: 'dataLakeEmbeddingTierMultiplierIndividual', order: 9 },
       { key: 'dataLakeEmbeddingTierMultiplierOrganization', order: 10 },
+      { key: 'dataLakeEmbeddingBudgetPerOwnerPeriodUsd', order: 11 },
+    ],
+  },
+  FILE_INDEXING_LIMITS: {
+    id: 'fileIndexingLimits',
+    name: 'File Indexing Limits',
+    description:
+      'Per-user limits on embedding files outside a data lake, and the minimum interval between ' +
+      'changes of a scope owner\'s chunk size. Budgets are USD; 0 means stop, not "use the default".',
+    icon: 'Savings',
+    settings: [
+      { key: 'fileEmbeddingUserBudgetPerWindowUsd', order: 1 },
+      { key: 'fileEmbeddingUserTokensPerWindow', order: 2 },
+      { key: 'fileEmbeddingUserWindowHours', order: 3 },
+      { key: 'DefaultChunkSizeChangeCooldownHours', order: 4 },
     ],
   },
   VOICE_SESSION: {
@@ -2483,6 +2577,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableResearchEngineDefault', order: 111 },
       // Admin-only features
       { key: 'EnableHelpChat', order: 200 },
+      { key: 'EnableCoreTutorials', order: 205 },
       { key: 'EnableKnowledgeBaseSearch', order: 210 },
       { key: 'EnableMcpToolFiltering', order: 220 },
       { key: 'McpToolFilteringMaxTools', order: 221 },
@@ -2529,26 +2624,17 @@ export const API_SERVICE_GROUPS = {
     description: 'Credit system and pricing configuration',
     icon: 'Payments',
     // Signup, starter-credit, pricing and team-plan keys are edited only on the admin Growth and
-    // Pricing tab (AdminGrowthPricingTab); this group links there instead of repeating them.
+    // Pricing tab, and the signup schedule, free-tier limits and rewards only in the Invite Center
+    // (settingHomes.ts in the admin components); this group links there instead of repeating them.
     settings: [
-      { key: 'billOperationalUsage', order: 1 },
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
-      { key: 'signupGrantSignupPoolDaily', order: 7.1 },
-      { key: 'signupGrantTricklePoolDaily', order: 7.2 },
       { key: 'signupGrantRiskPolicy', order: 8 },
       { key: 'signupGrantActivityMinActiveSeconds', order: 11.5 },
       { key: 'signupGrantActivityPreviewTestMode', order: 14.5 },
       { key: 'signupUnlockPaymentHoldHours', order: 14.6 },
-      { key: 'signupGrantInitialCredits', order: 14.7 },
-      { key: 'signupGrantDailyCredits', order: 14.8 },
-      { key: 'signupGrantDripCap', order: 14.9 },
-      { key: 'signupGrantInviteBonusCredits', order: 14.95 },
       { key: 'maxSignupsPerIpPerDay', order: 15 },
       { key: 'maxSignupsPerAsnPerHour', order: 16 },
-      { key: 'freeTierDailySpendCapCredits', order: 17 },
-      { key: 'freeTierDay1SpendCapCredits', order: 18 },
-      { key: 'freeTierDays2To7SpendCapCredits', order: 19 },
       { key: 'newAccountSpendCapDays', order: 19.1 },
       { key: 'newAccountHourlySpendCapCredits', order: 19.2 },
       { key: 'newAccountDailySpendCapCredits', order: 19.3 },
@@ -2562,6 +2648,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorAccountSpikeRatio', order: 19.47 },
       { key: 'spendMonitorAccountSpikeFloorCredits', order: 19.48 },
       { key: 'spendMonitorAccountCeilingCredits', order: 19.49 },
+      { key: 'spendMonitorPaidAccountSpikeFloorCredits', order: 19.4901 },
+      { key: 'spendMonitorPaidAccountCeilingCredits', order: 19.4902 },
+      { key: 'spendMonitorPaidAccountMinAgeDays', order: 19.4903 },
       { key: 'spendMonitorTrustedEmailDomains', order: 19.491 },
       { key: 'spendMonitorTrustedAccountIds', order: 19.492 },
       { key: 'spendMonitorTrustedAccountSpikeFloorCredits', order: 19.493 },
@@ -2594,12 +2683,14 @@ export const API_SERVICE_GROUPS = {
       { key: 'paymentRiskFlagHostingNetwork', order: 37 },
       { key: 'requireThreeDSecureOnFirstPurchase', order: 38 },
       { key: 'threeDSecureNewAccountDays', order: 39 },
+      { key: 'requireCheckoutTermsConsent', order: 39.5 },
       { key: 'signupNetworkAlertsEnabled', order: 40 },
       { key: 'signupNetworkAlertWindowMinutes', order: 41 },
       { key: 'signupNetworkAlertMaxPerIp', order: 42 },
       { key: 'signupNetworkAlertMaxPerHostingAsn', order: 43 },
       { key: 'signupNetworkAlertMaxPerAsn', order: 44 },
       { key: 'shadowDetectionRecordingEnabled', order: 44.5 },
+      { key: 'shadowDetectionAutoGradeAfterDays', order: 44.6 },
       { key: 'paymentRiskAutoRefundEnabled', order: 45 },
       { key: 'paymentRiskAutoRefundMinUnspentPercent', order: 46 },
       { key: 'paymentRiskCheckoutMaxBlockedAttempts', order: 47 },
@@ -2834,6 +2925,16 @@ export const API_SERVICE_GROUPS = {
       { key: 'LakeAccessAuditRetentionDays', order: 1 },
       { key: 'LakeAccessQueryTextRetentionDays', order: 2 },
       { key: 'LakeConfigAuditRetentionDays', order: 3 },
+    ],
+  },
+  DATA_LAKE_LIMITS: {
+    id: 'dataLakeLimits',
+    name: 'Data Lake Limits',
+    description: 'Who may create data lakes and connect lake sources, and how many lakes one user may keep',
+    icon: 'Security',
+    settings: [
+      { key: 'dataLakeMaxLakesPerUser', order: 1 },
+      { key: 'dataLakeRequirePaidPlan', order: 2 },
     ],
   },
   USAGE_PATTERN_SIGNALS: {
@@ -3521,6 +3622,61 @@ export const settingsMap = {
         Math.min(Math.max(Math.floor(value), MIN_PASSAGE_TOKEN_TARGET), OVERSIZED_PASSAGE_TOKEN_THRESHOLD),
     },
   }),
+  fileEmbeddingUserBudgetPerWindowUsd: makeNumberSetting({
+    key: 'fileEmbeddingUserBudgetPerWindowUsd',
+    name: 'Per-User File Embedding Budget (USD per window)',
+    defaultValue: FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_DEFAULT,
+    min: 0,
+    max: FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_MAX,
+    description:
+      'Most USD one user may spend embedding files outside a data lake per window (see the window-hours ' +
+      'setting), whether or not that work is billed to them. A file that would exceed it fails with a ' +
+      'message naming when the window resets. 0 stops non-lake file embedding.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 1,
+  }),
+  fileEmbeddingUserTokensPerWindow: makeNumberSetting({
+    key: 'fileEmbeddingUserTokensPerWindow',
+    name: 'Per-User File Embedding Tokens (per window)',
+    defaultValue: FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_DEFAULT,
+    min: 0,
+    max: FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_MAX,
+    int: true,
+    description:
+      'Most tokens one user may embed from files outside a data lake per window. Metered beside the USD ' +
+      'budget because an unpriced model meters as free. 0 stops non-lake file embedding.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 2,
+  }),
+  fileEmbeddingUserWindowHours: makeNumberSetting({
+    key: 'fileEmbeddingUserWindowHours',
+    name: 'Per-User File Embedding Window (hours)',
+    defaultValue: FILE_EMBEDDING_USER_WINDOW_HOURS_DEFAULT,
+    min: 1,
+    max: FILE_EMBEDDING_USER_WINDOW_HOURS_MAX,
+    int: true,
+    description:
+      "Length of the per-user file embedding window in hours. The window opens at a user's first " +
+      'embedding after the previous one closed.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 3,
+  }),
+  DefaultChunkSizeChangeCooldownHours: makeNumberSetting({
+    key: 'DefaultChunkSizeChangeCooldownHours',
+    name: 'Chunk Size Change Cooldown (hours)',
+    defaultValue: DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_DEFAULT,
+    min: 0,
+    max: DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_MAX,
+    description:
+      'Minimum hours between two changes (set or clear) of one organization or owner Default Chunk Size ' +
+      "override. A new chunk size re-embeds that owner's files. 0 disables the cooldown.",
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 4,
+  }),
   ModerationEnabled: makeBooleanSetting({
     key: 'ModerationEnabled',
     name: 'Moderation Enabled',
@@ -4020,7 +4176,7 @@ export const settingsMap = {
     min: 1,
     int: true,
     description:
-      'Score at which an actor is reported. Each refused fetch scores 10, each failed webhook signature 5 and each invalid-id lookup 2. A 404, or a 401 or 403 from an API handler, scores 1, but only from an IP and account pair that also failed on 10 or more distinct paths in the window. Webhook failures carry no account, so 5 from one Stripe IP (for example after a signing-secret rotation) is enough at the default threshold.',
+      'Score at which an actor is reported, and at which each of its accounts, scored on its own, is recorded as an API probing detection. Each refused fetch scores 10, each failed webhook signature or refused ingest token 5 and each invalid-id lookup 2. Each distinct admin route answered 401 or 403 scores 3, once there are 5 or more. A 404, or a 401 or 403 from an API handler, scores 1, but only from an IP and account pair that also failed on 10 or more distinct paths in the window. Webhook failures carry no account, so 5 from one Stripe IP (for example after a signing-secret rotation) is enough at the default threshold, as are 5 calls with a stale ingest token after one is rotated.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.PROBE_DETECTION.id,
     order: 2,
@@ -4620,11 +4776,11 @@ export const settingsMap = {
     name: 'Bill Operational Usage',
     // Default OFF on hosted and self-host alike: free-tier accounts are billed for this spend
     // whenever Enforce Credits is on (isOperationalBillingEnabled), so the toggle only decides
-    // whether paying accounts are billed for it too, and turning it on is a pricing change.
+    // whether paying accounts are billed for it too, and turning it on is a pricing change. Edited on
+    // the admin Growth and Pricing tab (GROWTH_PRICING_SECTIONS), not in a settings group.
     defaultValue: false,
     description:
       'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings, file indexing) is billed to every user/org. Off = billed only to free-tier users paying for themselves (no credit purchase or active plan) and recorded as platform cost for everyone else. Requires Enforce Credits.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   enableTeamPlan: makeBooleanSetting({
@@ -5144,7 +5300,6 @@ export const settingsMap = {
     int: true,
     description:
       'Absolute free credits paid per UTC day for initial signup grants and invite bonuses. Grants past it are held until a later day. 0 pauses these grants; there is no unlimited mode, and a missing or invalid value also pauses them and alerts.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantTricklePoolDaily: makeNumberSetting({
@@ -5155,7 +5310,6 @@ export const settingsMap = {
     int: true,
     description:
       'Absolute free credits paid per UTC day for daily activity grants and gear and referral rewards. Activity grants past it are skipped for the day; rewards past it are queued and paid oldest first on a later day. 0 pauses all of them; there is no unlimited mode, and a missing or invalid value also pauses them and alerts.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantRiskPolicy: makeObjectSetting<Record<string, unknown>>({
@@ -5212,7 +5366,6 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description: 'Credits a new account receives after email verification. Unset means 0.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantDailyCredits: makeNumberSetting({
@@ -5224,7 +5377,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Credits paid for each day of qualifying activity until the drip cap is reached. Zero or unset disables the drip.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantDripCap: makeNumberSetting({
@@ -5236,7 +5388,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero disables the drip and pays an invite in full at signup. While unset, nothing drips and an invite pays its initial share at signup, the rest on unlock.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantInviteBonusCredits: makeNumberSetting({
@@ -5248,7 +5399,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Credits paid once, from the signup pool and outside the drip cap, to an account that signed up through a refer-a-friend invite or a paying organization invite, after its initial tranche is paid in full. 0 pays no bonus, and an account that becomes due its bonus while it is 0 is not paid if it is raised later.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   maxSignupsPerIpPerDay: makeNumberSetting({
@@ -5361,7 +5511,6 @@ export const settingsMap = {
     min: 0,
     description:
       'Daily credit allowance for a free-tier account older than 7 days, counted per UTC calendar day. Once spend for the day reaches this cap, new requests are refused with a 429 until the next UTC midnight; the request that crosses the cap is not cut off, so a day can end slightly over it. Set to 0 to disable the cap for every free-tier account, including the day-1 and days 2-7 tiers.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   freeTierDay1SpendCapCredits: makeNumberSetting({
@@ -5372,7 +5521,6 @@ export const settingsMap = {
     min: 0,
     description:
       'Daily spend cap for a free-tier account during its first 24 hours (by account age; spend still resets at UTC midnight). Higher than the steady-state cap to let genuine new users explore. Set to 0 to fall back to the steady-state cap.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   freeTierDays2To7SpendCapCredits: makeNumberSetting({
@@ -5383,7 +5531,6 @@ export const settingsMap = {
     min: 0,
     description:
       'Daily spend cap for a free-tier account aged 24 hours to 7 days. Intermediate ramp between the day-1 allowance and the steady-state cap. Set to 0 to fall back to the steady-state cap.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   // Enforced at every credit hold by assertNewAccountSpendWithinCap
@@ -5527,6 +5674,39 @@ export const settingsMap = {
     min: 1,
     description:
       'Credits per 15-minute window. Any single account spending this much in the window raises an alert regardless of its baseline. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorPaidAccountSpikeFloorCredits: makeNumberSetting({
+    key: 'spendMonitorPaidAccountSpikeFloorCredits',
+    name: 'Spend Monitor: Paid Account Spike Floor',
+    defaultValue: 20_000,
+    int: true,
+    min: 1,
+    description:
+      'Credits per 15-minute window. An established account with paid standing and an acceptable risk profile needs at least this much spend to qualify for a spike warning. Paid usage remains included in platform monitoring. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorPaidAccountCeilingCredits: makeNumberSetting({
+    key: 'spendMonitorPaidAccountCeilingCredits',
+    name: 'Spend Monitor: Paid Account Ceiling',
+    defaultValue: 40_000,
+    int: true,
+    min: 1,
+    description:
+      'Credits per 15-minute window. An established account with paid standing and an acceptable risk profile raises a critical alert at this spend regardless of its baseline. API keys and agents follow their payer. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorPaidAccountMinAgeDays: makeNumberSetting({
+    key: 'spendMonitorPaidAccountMinAgeDays',
+    name: 'Spend Monitor: Paid Account Minimum Age',
+    defaultValue: 7,
+    int: true,
+    min: 0,
+    description:
+      'Days. Minimum account age for automatic paid-account alert limits, alongside verified email, paid standing (active plan or unreversed credit purchase), and risk-profile checks. Organization payers and their responsible owners must both meet the age requirement. Independent young-account monitoring and spend caps are unchanged. Minimum 0.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
@@ -5816,14 +5996,14 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
-      'Lets a Decisions model judge pending young-domain Signup Domain Holds (abuse, legitimate or insufficient evidence) from a summary of counts and flags: domain age, mail provider class, whether the site answers with content, signup timing and network spread. It never sees emails, IPs, the domain name or site text. It only ever confirms a hold (keeps free credits held) on a confident abuse verdict, recorded in the Admin Audit Log as a system action; it never releases one, and every other verdict leaves the hold for an admin. Paid from the platform key and budget. Off means no provider calls.',
+      'Lets a Decisions model judge pending young-domain Signup Domain Holds (abuse, legitimate or insufficient evidence) from a summary of counts and flags: domain age, mail provider class, whether the site answers with content, signup timing and network spread. It never sees emails, IPs, the domain name or site text. A confident abuse verdict confirms the hold (keeps free credits held). A confident legitimate verdict releases it only when auto-release is on and every code guard passes; an auto-released domain stays watched and is re-held on a new risk signal. Each decision is recorded in the Admin Audit Log as a system action, and every other verdict leaves the hold for an admin. Paid from the platform key and budget. Off means no provider calls.',
   }),
   signupDomainHoldAssessmentConfig: makeObjectSetting({
     key: 'signupDomainHoldAssessmentConfig',
     name: 'Advisory Assessment of Young-Domain Holds: Model and Limits',
     defaultValue: SignupDomainHoldAssessmentConfigSchema.parse({}),
     description:
-      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, holds per 10-minute run, and the least confidence in an abuse verdict that confirms a hold. The defaults make no calls. The assessment only ever confirms; it never releases a hold.',
+      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, holds per 10-minute run, the least confidence in an abuse verdict that confirms a hold, and the auto-release switch, confidence and caps. The defaults make no calls and never release.',
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     dependsOn: 'signupDomainHoldAssessmentEnabled',
@@ -5928,6 +6108,17 @@ export const settingsMap = {
     order: 39,
     dependsOn: 'requireThreeDSecureOnFirstPurchase',
   }),
+  // Read by apps/client/server/integrations/stripe/termsConsent.ts at subscription checkout.
+  requireCheckoutTermsConsent: makeBooleanSetting({
+    key: 'requireCheckoutTermsConsent',
+    name: 'Require Terms of Service Acceptance at Checkout',
+    defaultValue: false,
+    description:
+      'Adds a required Terms of Service checkbox to Stripe Checkout for subscriptions, and records the acceptance on the account. Stripe rejects the checkout unless a Terms of Service URL is set in the Stripe dashboard (Settings > Public details), so set that first in every Stripe account this stage uses.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    order: 39.5,
+  }),
   signupNetworkAlertsEnabled: makeBooleanSetting({
     key: 'signupNetworkAlertsEnabled',
     name: 'Signup Network Burst Alerts',
@@ -5994,6 +6185,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Record what the abuse detectors (such as the signup network burst and payment risk alerts) would have done to an account, for admin review on the Detections page. Recording never acts: no access, credits or API keys change.',
+  }),
+  shadowDetectionAutoGradeAfterDays: makeNumberSetting({
+    key: 'shadowDetectionAutoGradeAfterDays',
+    name: 'Shadow Detections: Auto-grade Stale Signup Bursts After (days)',
+    defaultValue: 7,
+    int: true,
+    min: 0,
+    max: 365,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Ungraded signup network burst detections older than this are graded insufficient evidence by automation, unless an account in them was since suspended, reinstated or flagged by another detector, or the latest advisory assessment says anything but insufficient evidence. Automation verdicts are shown apart from admin verdicts. 0 turns it off.',
   }),
   paymentRiskAutoRefundEnabled: makeBooleanSetting({
     key: 'paymentRiskAutoRefundEnabled',
@@ -7117,7 +7320,7 @@ export const settingsMap = {
     min: 0,
     max: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
     description:
-      'Scales the per-run and per-lake embedding budgets for lakes owned by an individual user. ' +
+      'Scales the per-run, per-lake and per-owner embedding budgets for lakes owned by an individual user. ' +
       '1 means those lakes get exactly the configured budgets; 0 stops them spending at all. ' +
       'The effective budget is still capped by the same hard rail as the untiered value.',
     category: 'AI',
@@ -7131,12 +7334,53 @@ export const settingsMap = {
     min: 0,
     max: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
     description:
-      'Scales the per-run and per-lake embedding budgets for lakes owned by an organization, ' +
+      'Scales the per-run, per-lake and per-owner embedding budgets for lakes owned by an organization, ' +
       'which serve a whole team rather than one person. 0 stops org-owned lakes spending at all. ' +
       'The effective budget is still capped by the same hard rail as the untiered value.',
     category: 'AI',
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
     order: 10,
+  }),
+  dataLakeEmbeddingBudgetPerOwnerPeriodUsd: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPerOwnerPeriodUsd',
+    name: 'Embedding Budget Per Owner Per Period (USD)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_MAX,
+    description:
+      'Most USD one lake owner (the organization for an org-owned lake, otherwise the user) may spend on ' +
+      "data-lake embedding calls per period (see the period-hours setting), scaled by that owner's cost tier. " +
+      'An owner over it pauses only its own lakes until the window resets; the platform per-period budget still ' +
+      'caps the total. 0 turns the per-owner window off.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 11,
+  }),
+  dataLakeMaxLakesPerUser: makeNumberSetting({
+    key: 'dataLakeMaxLakesPerUser',
+    name: 'Max Data Lakes Per User',
+    defaultValue: DATA_LAKE_MAX_LAKES_PER_USER_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_MAX_LAKES_PER_USER_MAX,
+    int: true,
+    description:
+      'Most data lakes one user may have created and not deleted (archived lakes count). Creating one more is ' +
+      'refused with a message asking the user to delete a lake. 0 turns the cap off.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_LIMITS.id,
+    order: 1,
+  }),
+  dataLakeRequirePaidPlan: makeBooleanSetting({
+    key: 'dataLakeRequirePaidPlan',
+    name: 'Require a Paid Plan for Data Lakes',
+    defaultValue: false,
+    description:
+      'When on, creating a data lake and connecting Google Drive or GitHub to one need paid standing: an active ' +
+      'paid subscription (an org seat included) or a credit purchase, or an organization on a paid plan for an ' +
+      'org lake. Admins and developers are exempt. Off by default.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_LIMITS.id,
+    order: 2,
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({
@@ -7166,7 +7410,7 @@ export const settingsMap = {
       'Require TOTP (Time-based One-Time Password) for all users when logging in. When disabled, MFA is optional and users can enable/disable it in their profiles.',
     defaultValue: false,
     category: 'Users',
-    // publicSafe: gates the startup "Checking security settings..." spinner (M2.5).
+    // publicSafe: gates the startup MFA loader (MFAEnforcementWrapper) (M2.5).
     // A policy boolean - exposing it reveals nothing exploitable.
     publicSafe: true,
   }),
@@ -7562,6 +7806,16 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 200,
+  }),
+  EnableCoreTutorials: makeBooleanSetting({
+    key: 'EnableCoreTutorials',
+    name: 'Enable Core Tutorials',
+    defaultValue: false,
+    description: 'Serve the guided tutorials that ship with the app. Premium tutorials have their own switches.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 205,
+    userReadable: true,
   }),
   // B4M Pi (Project Intelligence) Settings
   EnableBmPi: makeBooleanSetting({
@@ -8007,6 +8261,14 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
     order: 7,
+  }),
+  modelListRevision: makeStringSetting({
+    key: 'modelListRevision',
+    name: 'Model List Revision',
+    defaultValue: '',
+    description:
+      'Internal stamp rewritten whenever a catalog or price change alters the model list, so open tabs refetch it. Written by packages/server-utils/src/modelDiscovery/modelListRevision.ts; not user-configurable.',
+    category: 'AI',
   }),
   prReportRepo: makeStringSetting({
     key: 'prReportRepo',

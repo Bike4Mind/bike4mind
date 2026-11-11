@@ -1,16 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { ResearchRunLevers } from '@bike4mind/common';
+import type { LegacyResearchRunLevers } from '@bike4mind/common';
 import { RESEARCH_RUN_PRODUCER } from '@bike4mind/common';
 import type { ProposalCandidate, ProposalOutcome } from '../dataLakeService/proposeDataLakeContent';
 import { executeResearchRun, type ResearchCandidate, type ResearchRunPorts } from './executeResearchRun';
 
 const NOW = new Date('2026-03-01T12:00:00.000Z');
 
-const levers = (overrides: Partial<ResearchRunLevers> = {}): ResearchRunLevers => ({
+const levers = (overrides: Partial<LegacyResearchRunLevers> = {}): LegacyResearchRunLevers => ({
   query: 'coastal erosion',
   maxResults: 10,
   maxProposals: 5,
-  allowedDomains: [],
+  trustedDomains: [],
+  reviewDomains: [],
+  unlistedSources: 'review',
   blockedDomains: [],
   minRelevance: 0.6,
   costCeilingMicroUsd: 10_000,
@@ -155,13 +157,38 @@ describe('executeResearchRun', () => {
       expect(result.totals.proposed).toBe(1);
     });
 
-    it('drops everything outside an allow list', async () => {
+    it('drops everything outside the review list when other sites are ignored', async () => {
       const { ports, calls } = makePorts({ candidates: [hit(1, 'other.com'), hit(2, 'docs.example.com')] });
 
-      const result = await executeResearchRun(levers({ allowedDomains: ['example.com'] }), 'run-1', ports);
+      const result = await executeResearchRun(
+        levers({ reviewDomains: ['example.com'], unlistedSources: 'drop' }),
+        'run-1',
+        ports
+      );
 
       expect(calls.judged).toEqual(['https://docs.example.com/2']);
       expect(result.totals.filteredBySource).toBe(1);
+    });
+
+    it('upgrades a legacy-shaped snapshot, so a stored allow list still restricts the run', async () => {
+      const { ports, calls } = makePorts({ candidates: [hit(1, 'other.com'), hit(2, 'docs.example.com')] });
+      const legacy: LegacyResearchRunLevers = { ...levers({ allowedDomains: ['example.com'] }) };
+      delete legacy.trustedDomains;
+      delete legacy.reviewDomains;
+      delete legacy.unlistedSources;
+
+      const result = await executeResearchRun(legacy, 'run-1', ports);
+
+      expect(calls.judged).toEqual(['https://docs.example.com/2']);
+      expect(result.totals.filteredBySource).toBe(1);
+    });
+
+    it('passes the source tier of each proposed candidate to propose', async () => {
+      const { ports, calls } = makePorts({ candidates: [hit(1, 'trusted.example'), hit(2, 'other.example')] });
+
+      await executeResearchRun(levers({ trustedDomains: ['trusted.example'] }), 'run-1', ports);
+
+      expect(calls.proposals.map(c => c.provenance.sourceTier)).toEqual(['trusted', 'review']);
     });
   });
 

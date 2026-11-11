@@ -164,7 +164,14 @@ export function PullDialog({
             {build.fit && (
               <Stack direction="row" spacing={1} alignItems="flex-start" data-testid="models-pull-dialog-fit">
                 <FitBadge fit={build.fit} bare />
-                <Typography level="body-sm">{build.fit.detail}</Typography>
+                <Stack spacing={0.5}>
+                  <Typography level="body-sm">{build.fit.detail}</Typography>
+                  {build.fit.warning && (
+                    <Typography level="body-sm" color="warning" data-testid="models-pull-dialog-fit-warning">
+                      {build.fit.warning}
+                    </Typography>
+                  )}
+                </Stack>
               </Stack>
             )}
             {tooLarge && (

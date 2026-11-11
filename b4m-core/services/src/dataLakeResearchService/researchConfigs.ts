@@ -5,7 +5,13 @@ import type {
   ResearchRunTrigger,
   ResearchScheduleCadence,
 } from '@bike4mind/common';
-import { RESEARCH_CONFIG_NAME_MAX_CHARS } from '@bike4mind/common';
+import {
+  deriveLegacyAllowedDomains,
+  isSameDomainSet,
+  normalizeDomainList,
+  RESEARCH_CONFIG_NAME_MAX_CHARS,
+  upgradeLegacyResearchLevers,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { researchConfigChange } from '../dataLakeService/diffLakeConfig';
 import type { LakeGrant, ManageActor } from '../dataLakeService/manageRule';
@@ -78,6 +84,38 @@ const resolveCadence = (
   return resolved;
 };
 
+/**
+ * Drop with nothing listed would ignore every hit, which no one means. Refused here and not in the
+ * normalizer, because the normalizer also runs at run start and must never throw on a stored config.
+ */
+const assertSourcesReachable = (levers: ResearchRunLevers): void => {
+  if (levers.unlistedSources === 'drop' && levers.trustedDomains.length + levers.reviewDomains.length === 0) {
+    throw new BadRequestError('List at least one site to review, or send other sites to review');
+  }
+};
+
+/** An input that names the tiers is the new shape; its legacy `allowedDomains`, if any, is ignored. */
+const usesTierFields = (input: ResearchLeversDraft): boolean =>
+  input.unlistedSources !== undefined || input.reviewDomains !== undefined;
+
+const withoutAllowedDomains = ({ allowedDomains: _ignored, ...rest }: ResearchLeversDraft): ResearchLeversDraft => rest;
+
+/**
+ * Resolves an edit that still carries `allowedDomains` (an open old tab) against the stored config.
+ * Resubmitting what the config already derives is a no-op, so a query-only edit cannot disturb the
+ * review list. A different value is an edit of the site list, mapped onto the tier fields.
+ */
+const resolveLegacyAllowedInput = (input: ResearchLeversDraft, existing: ResearchRunLevers): ResearchLeversDraft => {
+  if (input.allowedDomains === undefined) return input;
+  const rest = withoutAllowedDomains(input);
+  if (usesTierFields(input)) return rest;
+
+  const incoming = normalizeDomainList(input.allowedDomains);
+  if (isSameDomainSet(incoming, deriveLegacyAllowedDomains(existing))) return rest;
+  const converted = upgradeLegacyResearchLevers({ ...existing, allowedDomains: incoming });
+  return { ...rest, reviewDomains: converted.reviewDomains, unlistedSources: converted.unlistedSources };
+};
+
 export async function createResearchConfig(
   lake: LakeConfigAuditLakeRef,
   actor: ManageActor,
@@ -95,6 +133,8 @@ export async function createResearchConfig(
   const name = normalizeName(input.name);
   const cadence = resolveCadence(input, 'off');
   const firstRunAt = firstResearchRunAt(cadence, now());
+  const levers = normalizeResearchLevers(usesTierFields(input) ? withoutAllowedDomains(input) : input);
+  assertSourcesReachable(levers);
   const created = await db.dataLakeResearchConfigs.createConfig({
     dataLakeId: lake.id,
     name,
@@ -104,7 +144,7 @@ export async function createResearchConfig(
     nextRunAt: firstRunAt,
     scheduleAnchorAt: firstRunAt,
     createdByUserId: actor.userId,
-    ...normalizeResearchLevers(input),
+    ...levers,
   });
 
   // `grants` comes from the caller's own gate (assertLakeResearchManage), not re-fetched here -
@@ -138,7 +178,11 @@ const LEVER_EQUALITY: {
   maxResults: sameValue,
   maxProposals: sameValue,
   recencyDays: sameNullable,
-  allowedDomains: sameStringSet,
+  trustedDomains: sameStringSet,
+  reviewDomains: sameStringSet,
+  unlistedSources: sameValue,
+  // Derived from the three fields above, so it can never be the reason a config moved.
+  allowedDomains: () => true,
   blockedDomains: sameStringSet,
   minRelevance: sameValue,
   costCeilingMicroUsd: sameValue,
@@ -190,7 +234,11 @@ export async function updateResearchConfig(
   // the whole lever set (an absent `query` in a patch is "unchanged", but to the normalizer an
   // absent query is a refusal), and re-normalizing the merge is also what re-clamps a stored value
   // that a tightened bound has since put out of range.
-  const merged = normalizeResearchLevers({ ...existing, ...input });
+  // `allowedDomains` is dropped from the stored side: it is derived, and a stale copy next to a
+  // changed tier list would read as an edit by older code.
+  const { allowedDomains: _derived, ...stored } = existing;
+  const merged = normalizeResearchLevers({ ...stored, ...resolveLegacyAllowedInput(input, existing) });
+  assertSourcesReachable(merged);
   // Compared per lever via LEVER_EQUALITY, not a JSON.stringify of two object literals:
   // `normalizeResearchLevers` omits `model`/`recencyDays` when unset, so key order differs between
   // `merged` and a hand-built object and a byte-identical default-config resubmit would read as changed.

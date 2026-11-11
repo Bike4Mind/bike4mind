@@ -1,4 +1,9 @@
-import { CreditHolderType, CreditPurchaseStatus, UnprocessableEntityError } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  CreditPurchaseStatus,
+  GatewayTimeoutError,
+  UnprocessableEntityError,
+} from '@bike4mind/common';
 import {
   AnalyticsUserDay,
   CREDIT_BALANCE_EVENT_TYPES,
@@ -13,7 +18,13 @@ import {
 } from '@bike4mind/server-utils/lib/subscriptions/types';
 import type { UserFunnelStep } from '@client/app/utils/adminUsersFilter';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
-import { isActiveEligible, loadCountingContext, USER_FLAG_FIELDS, type UserFlags } from './signupCohort';
+import {
+  isActiveEligible,
+  loadCountingContext,
+  USER_FLAG_FIELDS,
+  type CountingContext,
+  type UserFlags,
+} from './signupCohort';
 
 /**
  * The activation funnel of docs/admin-analytics-spec.md 4.5. The users list's funnelStep filter resolves
@@ -31,6 +42,8 @@ export const PAID_CONVERSION_WINDOW_DAYS = 30;
 export const ACTIVATION_MIN_AGE_MS = ACTIVATION_WINDOW_DAYS * DAY_MS;
 /** Most signups one funnel filter resolves; a larger window is refused rather than truncated. */
 export const FUNNEL_COHORT_MAX = 20_000;
+/** ms. Per-query time limit for every cohort read, shared by the funnel counts and the Users drill-down. */
+export const COHORT_MAX_TIME_MS = 10_000;
 /** Stripe statuses under which no payment has been collected yet. */
 const UNPAID_SUBSCRIPTION_STATUSES = ['incomplete', 'incomplete_expired', 'trialing'];
 
@@ -69,6 +82,11 @@ export function funnelStepOf({
   if (!firstAction) return 'signedUp';
   if (!cameBack) return 'firstAction';
   return paid ? 'paid' : 'cameBack';
+}
+
+/** Whether a purchase today could still convert this signup: the paid window runs through the end of UTC day signupDay+30. */
+export function paidWindowOpen(signupAt: Date, now: Date): boolean {
+  return dayStart(utcDayOf(signupAt)) + (PAID_CONVERSION_WINDOW_DAYS + 1) * DAY_MS > now.getTime();
 }
 
 type CohortMember = { id: string; signupAt: Date };
@@ -158,46 +176,77 @@ async function loadPaymentTimes(batch: CohortMember[], deadlineMs: number): Prom
   return paidAt;
 }
 
+export type FunnelMember = { id: string; signupAt: Date; step: UserFunnelStep };
+
+const TOO_MANY_SIGNUPS = () =>
+  new UnprocessableEntityError(
+    `More than ${FUNNEL_COHORT_MAX.toLocaleString('en-US')} signups in this window. Narrow the created range.`
+  );
+
 /**
- * Ids of the active-eligible users (counted, not banned or AI-held, like the rollup) created in [start, end),
- * old enough to judge at `now`, whose furthest funnel step is `step`. A window holding more than
- * FUNNEL_COHORT_MAX signups is refused.
+ * Every active-eligible user (counted, not banned or AI-held, like the rollup) created in [start, end), old
+ * enough to judge at `now`, with the furthest step they reached. `withTooNew` also returns the ids of the
+ * active-eligible users in the window who are not old enough yet; they are read separately so they never count
+ * toward the FUNNEL_COHORT_MAX of the judged window. A window holding more than FUNNEL_COHORT_MAX judgeable
+ * signups is refused. `needsPayments: false` skips the payment lookups, so `paid` members read as `cameBack`.
+ * Past `expiresAt` (epoch ms) it stops with a 504.
  */
+export async function classifyFunnelCohort(
+  { start, end }: { start: Date; end: Date },
+  {
+    now,
+    deadlineMs,
+    needsPayments = true,
+    withTooNew = false,
+    expiresAt,
+  }: { now: Date; deadlineMs: number; needsPayments?: boolean; withTooNew?: boolean; expiresAt?: number }
+): Promise<{ members: FunnelMember[]; tooNewIds: string[] }> {
+  const judgeableUntil = new Date(now.getTime() - ACTIVATION_MIN_AGE_MS);
+  // Each query's limit shrinks to what is left of `expiresAt`, so no read outlives the request's budget.
+  const timeLeft = () =>
+    expiresAt === undefined ? deadlineMs : Math.max(1, Math.min(deadlineMs, expiresAt - Date.now()));
+  const findEligible = async (createdAt: Record<string, Date>, ctx: CountingContext) => {
+    const users = await User.find({ createdAt })
+      .select(USER_FLAG_FIELDS)
+      .hint({ createdAt: 1 })
+      .limit(FUNNEL_COHORT_MAX + 1)
+      .maxTimeMS(timeLeft())
+      .lean<(UserFlags & { createdAt: Date })[]>();
+    if (users.length > FUNNEL_COHORT_MAX) throw TOO_MANY_SIGNUPS();
+    return users.filter(user => isActiveEligible(user, ctx));
+  };
+  const ctx = await loadCountingContext();
+  const [counted, tooNew] = await Promise.all([
+    findEligible({ $gte: start, $lt: end, $lte: judgeableUntil }, ctx),
+    withTooNew ? findEligible({ $gte: start, $lt: end, $gt: judgeableUntil }, ctx) : [],
+  ]);
+  const cohort: CohortMember[] = counted.map(user => ({ id: String(user._id), signupAt: new Date(user.createdAt) }));
+  const members: FunnelMember[] = [];
+  for (let i = 0; i < cohort.length; i += USER_BATCH) {
+    if (expiresAt !== undefined && Date.now() > expiresAt) throw new GatewayTimeoutError('The funnel took too long.');
+    const batch = cohort.slice(i, i + USER_BATCH);
+    const [activeDays, paidAt] = await Promise.all([
+      loadActiveDays(batch, timeLeft()),
+      needsPayments ? loadPaymentTimes(batch, timeLeft()) : new Map<string, Date[]>(),
+    ]);
+    for (const member of batch) {
+      const paid = (paidAt.get(member.id) ?? []).some(at => paidInConversionWindow(member.signupAt, at));
+      members.push({
+        ...member,
+        step: funnelStepOf({ signupAt: member.signupAt, activeDays: activeDays.get(member.id) ?? [], paid }),
+      });
+    }
+  }
+  return { members, tooNewIds: tooNew.map(user => String(user._id)) };
+}
+
+/** Ids of the judged users in [start, end) whose furthest funnel step is `step`. */
 export async function funnelStepUserIds(
   { start, end, step }: { start: Date; end: Date; step: UserFunnelStep },
   { now, deadlineMs }: { now: Date; deadlineMs: number }
 ): Promise<string[]> {
-  const judgeableUntil = new Date(now.getTime() - ACTIVATION_MIN_AGE_MS);
-  const users = await User.find({ createdAt: { $gte: start, $lt: end, $lte: judgeableUntil } })
-    .select(USER_FLAG_FIELDS)
-    .hint({ createdAt: 1 })
-    .limit(FUNNEL_COHORT_MAX + 1)
-    .maxTimeMS(deadlineMs)
-    .lean<(UserFlags & { createdAt: Date })[]>();
-  if (users.length > FUNNEL_COHORT_MAX) {
-    throw new UnprocessableEntityError(
-      `More than ${FUNNEL_COHORT_MAX.toLocaleString('en-US')} signups in this window. Narrow the created range.`
-    );
-  }
-  const ctx = await loadCountingContext();
-  const cohort: CohortMember[] = users
-    .filter(user => isActiveEligible(user, ctx))
-    .map(user => ({ id: String(user._id), signupAt: new Date(user.createdAt) }));
   // A strict funnel: payment only separates came back from paid.
   const needsPayments = step === 'cameBack' || step === 'paid';
-  const matched: string[] = [];
-  for (let i = 0; i < cohort.length; i += USER_BATCH) {
-    const batch = cohort.slice(i, i + USER_BATCH);
-    const [activeDays, paidAt] = await Promise.all([
-      loadActiveDays(batch, deadlineMs),
-      needsPayments ? loadPaymentTimes(batch, deadlineMs) : new Map<string, Date[]>(),
-    ]);
-    for (const member of batch) {
-      const paid = (paidAt.get(member.id) ?? []).some(at => paidInConversionWindow(member.signupAt, at));
-      if (funnelStepOf({ signupAt: member.signupAt, activeDays: activeDays.get(member.id) ?? [], paid }) === step) {
-        matched.push(member.id);
-      }
-    }
-  }
-  return matched;
+  const { members } = await classifyFunnelCohort({ start, end }, { now, deadlineMs, needsPayments });
+  return members.filter(member => member.step === step).map(member => member.id);
 }

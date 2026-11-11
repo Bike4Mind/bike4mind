@@ -325,6 +325,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     atomicConsumeBackupCode: vi.fn(),
     claimFreeCreditGrant: vi.fn().mockResolvedValue(true),
     markInviteBonusPaid: vi.fn().mockResolvedValue(true),
+    restoreReleasedGrantState: vi.fn().mockResolvedValue(true),
     atomicEnableMfa: vi.fn(),
     findOrCreateByEmail: vi.fn(),
     recordModerationHit: vi.fn(),
@@ -368,6 +369,7 @@ export const createMockCreditTransactionRepository = (): MockedObject<ICreditTra
     findByPaymentIntentId: vi.fn(),
     updateTransactionStatus: vi.fn(),
     markPurchaseReversed: vi.fn(),
+    rekeyTransaction: vi.fn(),
     findUnreversedPurchase: vi.fn(),
     findByOwnerWithFilters: vi.fn(),
     queryLedgerPage: vi.fn(),
@@ -376,6 +378,7 @@ export const createMockCreditTransactionRepository = (): MockedObject<ICreditTra
     findAdminAdjustmentsForUser: vi.fn(),
     apiKeyUsageForOwner: vi.fn(),
     sourceUsageForOwner: vi.fn(),
+    usageTotalForOwner: vi.fn(),
   });
 
 /**

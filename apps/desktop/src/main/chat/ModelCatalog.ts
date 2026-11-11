@@ -53,6 +53,7 @@ interface WireModel {
   supportsVision?: unknown;
   can_think?: unknown;
   thinkingStyle?: unknown;
+  thinkingAlwaysOn?: unknown;
   dispatchProfile?: unknown;
   pricing?: unknown;
   disabled?: unknown;
@@ -388,11 +389,13 @@ export function selectUsableModels(wire: unknown, reasoning?: HostedReasoningByI
       const maxOutputTokens =
         typeof model.max_tokens === 'number' && model.max_tokens > 0 ? model.max_tokens : undefined;
       const stated = reasoning?.get(id);
+      const alwaysThinks = model.can_think === true && model.thinkingAlwaysOn === true;
       const controls = hostedControls(
         {
           id,
           ...(typeof model.backend === 'string' ? { backend: model.backend } : {}),
           canThink: model.can_think === true,
+          ...(alwaysThinks ? { thinkingAlwaysOn: true } : {}),
           ...(typeof model.thinkingStyle === 'string' ? { thinkingStyle: model.thinkingStyle } : {}),
           ...(maxOutputTokens ? { maxOutputTokens } : {}),
           maxCompletionTokens: maxTokensParamOf(model.dispatchProfile) === 'max_completion_tokens',
@@ -421,6 +424,7 @@ export function selectUsableModels(wire: unknown, reasoning?: HostedReasoningByI
           : {}),
         supportsTools: true,
         ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
+        ...(alwaysThinks ? { thinkingAlwaysOn: true } : {}),
         ...(model.disabled === true ? { disabled: true } : {}),
         ...pricingOf(model.pricing),
         controls,

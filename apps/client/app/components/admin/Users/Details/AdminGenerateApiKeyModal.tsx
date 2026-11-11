@@ -1,4 +1,11 @@
-import { ApiKeyScope, type ApiKeyScopeValue, CONFINED_API_KEY_SCOPES, QA_INGEST_USER_TAG } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  type ApiKeyScopeValue,
+  CONFINED_API_KEY_SCOPES,
+  QA_INGEST_USER_TAG,
+  isFullAdmin,
+} from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useAdminGenerateApiKey, AdminCreateUserApiKeyRequest } from '@client/app/hooks/data/userApiKeys';
 import { useGetPreauthorizableDataLakes } from '@client/app/hooks/data/dataLakes';
@@ -49,7 +56,12 @@ const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => s.value !== Api
 // replaces the selection and picking any other scope drops it.
 const confinedScopeValues = new Set<ApiKeyScopeValue>(CONFINED_API_KEY_SCOPES);
 
+const INGEST_FULL_ADMIN_ONLY = 'Only full administrators can create API keys with admin-provisioned scopes';
+
 export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminGenerateApiKeyModalProps) {
+  // Mirrors the mint route, which refuses admin-provisioned scopes unless the caller is a full admin.
+  const { currentUser } = useUser();
+  const canMintIngest = isFullAdmin(currentUser);
   // Embed keys are minted through the dedicated embed flow, not this generic modal, so
   // embed:chat is excluded from the offered scopes. Built-in premium scopes gate on the admin's
   // own access, which useOptiAccess grants admins whenever the overlay is mounted, so they are
@@ -137,12 +149,13 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     setFormData({ ...formData, scopes });
   };
 
-  const renderScope = (scope: ApiKeyScopeOption) => (
+  const renderScope = (scope: ApiKeyScopeOption, disabledReason?: string) => (
     <Box key={scope.value} sx={{ mb: 1 }}>
       <Checkbox
         label={scope.label}
         checked={formData.scopes.includes(scope.value)}
         onChange={e => toggleScope(scope.value, e.target.checked)}
+        disabled={!!disabledReason}
         data-testid={`admin-generate-key-scope-${scope.value}`}
       />
       <Typography level="body-xs" color="neutral" sx={{ ml: 4 }}>
@@ -246,7 +259,7 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
                 p: 1,
               }}
             >
-              {scopeOptions.map(renderScope)}
+              {scopeOptions.map(scope => renderScope(scope))}
             </Box>
           </FormControl>
 
@@ -257,8 +270,13 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
               above. A QA ingest key is refused (403) unless its owner carries the {QA_INGEST_USER_TAG} user tag, and a
               release-notes key can only be minted for a platform admin.
             </Typography>
+            {!canMintIngest && (
+              <Typography level="body-xs" color="warning" sx={{ mb: 1 }} data-testid="admin-generate-key-ingest-reason">
+                {INGEST_FULL_ADMIN_ONLY}
+              </Typography>
+            )}
             <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1 }}>
-              {ingestScopeOptions.map(renderScope)}
+              {ingestScopeOptions.map(scope => renderScope(scope, canMintIngest ? undefined : INGEST_FULL_ADMIN_ONLY))}
             </Box>
           </FormControl>
 

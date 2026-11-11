@@ -20,7 +20,9 @@ import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailu
 import { adminSettingsRepository, agentExecutionRepository, sessionToolApprovalRepository } from '@bike4mind/database';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
+import { endAgentRunLiveActivity } from '@server/utils/liveActivityPush';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { reopenLowConfidenceAnswer } from '@bike4mind/server-utils/utils/reopenLowConfidenceAnswer';
 import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
@@ -387,6 +389,7 @@ async function handleAbort(
     execution.status === 'awaiting_dag_children'
   ) {
     await agentExecutionRepository.markAborted(cmd.executionId);
+    await endAgentRunLiveActivity(execution, { status: 'stopped' }, logger);
   }
 
   // Cascade abort to the synchronous child the parent is waiting on, if any.
@@ -628,6 +631,7 @@ export async function handlePermissionResponse(
     // send: a closed socket makes the send throw, and a retried Deny cannot repair it
     // because the CAS above has already left `awaiting_permission`.
     await persistRunAsQuest(cmd.executionId, denialMessage, logger);
+    await endAgentRunLiveActivity(execution, { status: 'failed', errored: true }, logger);
     await sendAgentEvent(connectionId, endpoint, {
       action: 'failed',
       executionId: cmd.executionId,
@@ -735,6 +739,12 @@ export async function handlePermissionResponse(
  *   in the checkpoint so far, and emit a `completed` event. The user keeps
  *   whatever the agent had produced before the gate fired.
  *
+ * A completion-time pause (`pendingCompletion` set, see `low_confidence_completion` in the
+ * executor) holds a finished answer instead: Stop accepts it and finalizes the executor's
+ * snapshot exactly as a normal completion would, and Continue reopens the answer with a verify
+ * nudge (`reopenLowConfidenceAnswer`) before resuming. Continue also accepts when there is no
+ * answer step to reopen or no iteration left to reconsider in, rather than lose the answer.
+ *
  * Validates `executionId` ownership and current status. Silently ignores
  * gate responses for executions not in `paused` to defend against stale
  * client retries.
@@ -762,7 +772,10 @@ export async function handleGateResponse(
     // this, `markComplete` (which has no such guard) would silently overwrite
     // a freshly-aborted execution back to `completed`, contradicting the
     // user's abort decision.
-    const cleared = await agentExecutionRepository.clearPendingGate(cmd.executionId);
+    const cleared = await agentExecutionRepository.clearPendingGate(
+      cmd.executionId,
+      execution.pendingCompletion ? { keepCompletion: true } : undefined
+    );
     if (!cleared) {
       logger.warn('[Gate] Stop ignored — clearPendingGate matched 0 docs (likely aborted concurrently)', {
         executionId: cmd.executionId,
@@ -770,6 +783,10 @@ export async function handleGateResponse(
       return;
     }
     const checkpoint = execution.checkpoint as AgentCheckpoint | undefined;
+    if (execution.pendingCompletion) {
+      await acceptHeldCompletion(execution, connectionId, endpoint, logger);
+      return;
+    }
     const finalAnswer = checkpoint ? extractFinalAnswer(checkpoint.steps) : undefined;
     await agentExecutionRepository.markComplete(cmd.executionId, {
       answer: finalAnswer,
@@ -778,6 +795,7 @@ export async function handleGateResponse(
       totalIterations: checkpoint?.iteration ?? 0,
       stoppedByGate: true,
     });
+    await endAgentRunLiveActivity(execution, { status: 'completed' }, logger);
     await sendAgentEvent(connectionId, endpoint, {
       action: 'completed',
       executionId: cmd.executionId,
@@ -809,7 +827,22 @@ export async function handleGateResponse(
   if (!executorTarget) throw new Error('Agent execution is not configured');
 
   // decision === 'continue' - clear the gate and resume.
-  const cleared = await agentExecutionRepository.clearPendingGate(cmd.executionId);
+  const reopened =
+    execution.pendingCompletion?.canReconsider && execution.checkpoint
+      ? reopenLowConfidenceAnswer(execution.checkpoint as AgentCheckpoint)
+      : null;
+  if (execution.pendingCompletion && !reopened) {
+    if (await agentExecutionRepository.clearPendingGate(cmd.executionId, { keepCompletion: true })) {
+      await acceptHeldCompletion(execution, connectionId, endpoint, logger);
+    } else {
+      logger.warn('[Gate] Continue ignored - clearPendingGate matched 0 docs', { executionId: cmd.executionId });
+    }
+    return;
+  }
+  const cleared = await agentExecutionRepository.clearPendingGate(
+    cmd.executionId,
+    reopened ? { checkpoint: reopened } : undefined
+  );
   if (!cleared) {
     // Either the doc no longer exists or the execution was aborted between
     // the status check above and now. Bail rather than re-invoke into a
@@ -832,12 +865,67 @@ export async function handleGateResponse(
       await agentExecutionRepository.restoreRejectedResume(cmd.executionId, {
         status: 'paused',
         pendingGate: execution.pendingGate,
+        ...(execution.pendingCompletion && { pendingCompletion: execution.pendingCompletion }),
+        ...(reopened && { checkpoint: execution.checkpoint }),
       });
     }
     throw error;
   }
 
   logger.info('[Gate] Continue - executor re-invoked', { executionId: cmd.executionId });
+}
+
+/**
+ * Finalize the result a completion-time `block` pause held back, with the same result shape,
+ * `completed` event, Quest write and memento publish as the executor's normal completion.
+ * Caller must have won `clearPendingGate` first.
+ */
+async function acceptHeldCompletion(
+  execution: NonNullable<Awaited<ReturnType<typeof agentExecutionRepository.findById>>>,
+  connectionId: string,
+  endpoint: string,
+  logger: Logger
+): Promise<void> {
+  const completion = execution.pendingCompletion;
+  if (!completion) return;
+  const checkpoint = execution.checkpoint as AgentCheckpoint | undefined;
+  // Absent optionals in the Mixed snapshot read back as null; the completion path passes undefined.
+  const answer = completion.answer ?? undefined;
+  await agentExecutionRepository.markComplete(execution.id, {
+    answer,
+    steps: checkpoint?.steps ?? [],
+    totalTokens: completion.totalTokens,
+    totalIterations: completion.totalIterations,
+    reachedMaxIterations: completion.reachedMaxIterations,
+    lowConfidence: completion.lowConfidence,
+  });
+  await endAgentRunLiveActivity(execution, { status: 'completed' }, logger);
+  await persistRunAsQuest(
+    execution.id,
+    completion.replyText,
+    logger,
+    completion.generatedImages,
+    completion.finishReason ?? undefined,
+    completion.allSideEffects,
+    completion.retrievalSummary ?? undefined
+  );
+  await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
+  try {
+    await sendAgentEvent(connectionId, endpoint, {
+      action: 'completed',
+      executionId: execution.id,
+      answer,
+      totalIterations: completion.totalIterations,
+      totalCreditsUsed: execution.totalCreditsUsed,
+      mementoIds: execution.usedMementoIds ?? [],
+    });
+  } catch (error) {
+    logger.warn('[Gate] Completed event not delivered', {
+      executionId: execution.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  logger.info('[Gate] Accepted low-confidence completion', { executionId: execution.id });
 }
 
 async function handleReconnect(

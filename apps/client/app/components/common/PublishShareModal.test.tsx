@@ -1275,6 +1275,132 @@ describe('PublishShareModal - reopening an already-published reply', () => {
   });
 });
 
+describe('PublishShareModal - reopening an already-published artifact', () => {
+  const live: PublishResult = {
+    publicId: 'art-1',
+    url: '/p/u/u1/my-artifact',
+    tier: 'user',
+    scopeId: 'u1',
+    slug: 'my-artifact',
+    visibility: 'private',
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const existing = { title: 'My artifact', slug: 'my-artifact', visibility: 'private' as const };
+  const liveLink = {
+    id: 'l1',
+    shareToken: 'TOK',
+    shareUrl: '/a/TOK',
+    createdAt: '2026-01-05T12:00:00.000Z',
+    viewCount: 0,
+    lastViewedAt: null,
+    expiresAt: '2030-01-05T12:00:00.000Z',
+  };
+  const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
+
+  const renderReopened = () => {
+    apiGet.mockReset().mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/share-token')
+          ? { data: { shareToken: 'TOK', shareLinks: [liveLink] } }
+          : {
+              data: {
+                artifact: { visibility: 'private', accessGate: null, commentPolicy: 'none', discoverable: false },
+              },
+            }
+      )
+    );
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    const publish = vi.fn().mockResolvedValue(live);
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={publish}
+          title="An artifact"
+          resolveExisting={() => Promise.resolve(existing)}
+          resolvePublished={() => Promise.resolve(live)}
+        />
+      </Wrapper>
+    );
+    return publish;
+  };
+
+  it('shows the existing private link and its expiry without publishing', async () => {
+    const publish = renderReopened();
+    const token = (await screen.findByTestId('publish-share-token-url')) as HTMLInputElement;
+    expect(token.value).toContain('/a/TOK');
+    expect(screen.getByTestId('publish-share-token-expires').textContent).toContain('This link stops working on');
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('drops the old private link when the owner publishes as a separate page', async () => {
+    const publish = renderReopened();
+    const fresh: PublishResult = { ...live, publicId: 'new-2', slug: 'my-artifact-2', url: '/p/u/u1/my-artifact-2' };
+    publish.mockResolvedValue(fresh);
+    apiGet.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/art-1/share-token')
+          ? { data: { shareToken: 'TOK', shareLinks: [liveLink] } }
+          : url.endsWith('/share-token')
+            ? { data: { shareToken: null, shareLinks: [] } }
+            : {
+                data: {
+                  artifact: { visibility: 'private', accessGate: null, commentPolicy: 'none', discoverable: false },
+                },
+              }
+      )
+    );
+    await screen.findByTestId('publish-share-token-url');
+    fireEvent.click(screen.getByTestId('publish-share-republish'));
+    fireEvent.click(screen.getByTestId('publish-share-mode-new'));
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/publish/new-2/share-token'));
+    await screen.findByTestId('publish-share-token-create');
+    expect(screen.queryByTestId('publish-share-token-url')).toBeNull();
+    expect(screen.queryByTestId('publish-share-token-expires')).toBeNull();
+  });
+
+  it('republishes a new version in update mode from the same dialog', async () => {
+    const publish = renderReopened();
+    await screen.findByTestId('publish-share-token-url');
+    fireEvent.click(screen.getByTestId('publish-share-republish'));
+    const create = screen.getByTestId('publish-share-create');
+    expect(create.textContent).toContain('Publish new version');
+    fireEvent.click(create);
+    await waitFor(() =>
+      expect(publish).toHaveBeenCalledWith('private', { mode: 'update', existingSlug: 'my-artifact' })
+    );
+  });
+
+  it('does not offer the republish button on a reply, which has no update choice', async () => {
+    apiGet.mockReset().mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/share-token')
+          ? { data: { shareToken: null } }
+          : {
+              data: {
+                artifact: { visibility: 'public', accessGate: null, commentPolicy: 'none', discoverable: false },
+              },
+            }
+      )
+    );
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={vi.fn()}
+          title="An answer"
+          resolvePublished={() => Promise.resolve({ ...live, visibility: 'public' })}
+        />
+      </Wrapper>
+    );
+    await screen.findByTestId('publish-share-url');
+    expect(screen.queryByTestId('publish-share-republish')).toBeNull();
+  });
+});
+
 describe('PublishShareModal - access options match the Live Artifacts badge', () => {
   // MUI icons carry their component name as a test id, so this pins which icon each option draws.
   const ICON_TEST_ID: Record<PublishAccess, string> = {

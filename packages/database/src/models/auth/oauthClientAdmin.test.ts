@@ -230,6 +230,24 @@ describe('updateOAuthClient', () => {
     expect(await oauthClientRepository.verifyClientSecret(client.clientId, clientSecret)).not.toBeNull();
   });
 
+  it('sets, changes and clears the Overwatch product, leaving the rest of the client alone', async () => {
+    const { client } = await createOAuthClient(base);
+    expect(client.overwatchProductId).toBeUndefined();
+
+    const set = await updateOAuthClient(client.id, { overwatchProductId: 'reading-app' });
+    expect(set.after.overwatchProductId).toBe('reading-app');
+    expect(set.after.redirectUris).toEqual(base.redirectUris);
+    expect((await oauthClientRepository.findByClientId(client.clientId))?.overwatchProductId).toBe('reading-app');
+
+    const changed = await updateOAuthClient(client.id, { overwatchProductId: 'other-app' });
+    expect(changed.before.overwatchProductId).toBe('reading-app');
+    expect(changed.after.overwatchProductId).toBe('other-app');
+
+    const cleared = await updateOAuthClient(client.id, { overwatchProductId: null });
+    expect(cleared.after.overwatchProductId).toBeUndefined();
+    expect((await OAuthClientModel.findById(client.id).lean())?.overwatchProductId).toBeUndefined();
+  });
+
   it('rejects an empty update, unknown fields and invalid URIs', async () => {
     const { client } = await createOAuthClient(base);
     await expect(updateOAuthClient(client.id, {})).rejects.toThrow(/Nothing to update/);

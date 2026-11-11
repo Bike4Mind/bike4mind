@@ -24,6 +24,8 @@ name: Lambda Bundle Guard
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    # Mirrored as a regex list in the `paths` job below, which applies the same filter on
+    # merge_group (where `paths:` is not supported). Keep the two in sync.
     paths:
       - '**/package.json'
       - pnpm-lock.yaml
@@ -42,7 +44,9 @@ on:
   # Also run on the merge queue so the check reports there if it later becomes a
   # required check. It earns its keep in the queue specifically: two dependency
   # PRs that each bundle fine alone can resolve to a version neither one tested
-  # once they are combined, and a push to main auto-deploys staging.
+  # once they are combined, and a push to main auto-deploys staging. A queue entry
+  # whose group diff touches none of the paths above skips the bundle job, though;
+  # see the `paths` job.
   merge_group:
     branches: [main]
 
@@ -54,8 +58,57 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # merge_group has no `paths:` filter, so without this every queue entry paid for a second
+  # full core build. Diffs the group's base..head (which includes the entries queued ahead of
+  # this one, so the combined-lockfile case above is still covered) through the compare API,
+  # with no checkout. Fails open: any API error, or a diff at the API's 300-file cap, reports
+  # touched=true, and `bundle` treats an empty output the same way.
+  paths:
+    name: Lambda bundle paths
+    if: github.event_name == 'merge_group'
+    runs-on: ${{ vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      touched: ${{ steps.diff.outputs.touched }}
+    steps:
+      - name: Check the group diff against the pull_request paths
+        id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -uo pipefail
+          # Must match `on.pull_request.paths` above. GitHub's `**/package.json` also matches
+          # the root package.json, hence the optional `(.*/)?` prefix.
+          pattern='^((.*/)?package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|apps/workers/tsconfig\.json|scripts/check-lambda-bundle\.mjs|scripts/__tests__/check-lambda-bundle\.test\.mjs|\.github/workflows/lambda-bundle-guard\.yml)$'
+          if ! files=$(gh api "repos/${REPO}/compare/${BASE_SHA}...${HEAD_SHA}" --jq '(.files // [])[].filename'); then
+            echo "::warning::Could not list the merge group's changed files; running the bundle guard."
+            echo "touched=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          count=$(printf '%s\n' "$files" | grep -c . || true)
+          if [ "$count" -ge 300 ]; then
+            echo "Group diff hit the compare API's 300-file cap; running the bundle guard."
+            echo "touched=true" >> "$GITHUB_OUTPUT"
+          elif printf '%s\n' "$files" | grep -qE "$pattern"; then
+            echo "Group diff touches a bundle-guard path."
+            echo "touched=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Group diff (${count} files) touches no bundle-guard path; skipping."
+            echo "touched=false" >> "$GITHUB_OUTPUT"
+          fi
+
   bundle:
     name: Lambda handlers bundle
+    needs: paths
+    # `paths` is skipped on pull_request (the trigger's own filter already applied), so
+    # `!cancelled()` lifts the implicit success() on it. `!= 'false'` keeps the fail-open:
+    # a `paths` job that died without an output still runs the guard.
+    if: ${{ !cancelled() && (github.event_name != 'merge_group' || needs.paths.outputs.touched != 'false') }}
     runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:

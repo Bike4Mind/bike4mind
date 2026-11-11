@@ -18,6 +18,7 @@ import SeedStagedSignupSettings from './20260921235967_seed-staged-signup-settin
 import EnsureQuestSignupActivityIndex from './20260921235966_ensure-quest-signup-activity-index';
 import EnsureUserSignupGrantOrgIndex from './20260921235968_ensure-user-signup-grant-org-index';
 import RedropShareTokenScalarIndex from './20260921235975_redrop-share-token-scalar-index';
+import ModalImageUrlToKey from './20260921000002_modal-image-url-to-key';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureCreditTransactionBalanceEventIndex from './20260921235947_ensure-credit-transaction-balance-event-index';
 import BackfillStorageLimitOverrides from './20260921235964_backfill-storage-limit-overrides';
@@ -301,6 +302,11 @@ import EnsureBillingMismatchIndexes from './20260921239985_ensure-billing-mismat
 import EnsureStripeDisputeIndexes from './20260921239980_ensure-stripe-dispute-indexes';
 import EnsureAdminSearchIndexes from './20260921239987_ensure-admin-search-indexes';
 import EnsureAdminActionCountIndexes from './20260921240050_ensure-admin-action-count-indexes';
+import EnsureGeneratedMediaPurgeIndexes from './20260921240060_ensure-generated-media-purge-indexes';
+import EnsureSessionGroupReadIndex from './20260921240080_ensure-session-group-read-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import ResearchConfigSourceTiers from './20260921240100_research-config-source-tiers';
+import CloseFeedbackTriageNoise from './20260921240070_close-feedback-triage-noise';
 import ConvertLegacyQuestPlansToFiles from './20260921239990_convert-legacy-quest-plans-to-files';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import PinSignupGrantScheduleKeys from './20260921237480_pin-signup-grant-schedule-keys';
@@ -311,8 +317,11 @@ import DropRetiredGrantSettings from './20260921239996_drop-retired-grant-settin
 import EnsureUserLimitEventIndexes from './20260921240010_ensure-user-limit-event-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EncryptOAuthProviderTokens from './20260921240020_encrypt-oauth-provider-tokens';
+import ResealOAuthProviderTokens from './20260921241020_reseal-oauth-provider-tokens';
 import EnsureBillingEventIndexes from './20260921240030_ensure-billing-event-indexes';
 import EnsureApiKeyUsageLogUserPagingIndexes from './20260921240040_ensure-apikeyusagelog-user-paging-indexes';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import UnsetFabFileSignedUrls from './20260921240090_unset-fabfile-signed-urls';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 import EnsureAutoContainmentDecisionIndexes from './20260921239950_ensure-auto-containment-decision-indexes';
@@ -549,6 +558,13 @@ const coreMigrations: MigrationFile[] = [
   EnsureApiKeyUsageLogUserPagingIndexes,
   EnsureAdminSearchIndexes,
   EnsureAdminActionCountIndexes,
+  EnsureGeneratedMediaPurgeIndexes,
+  EnsureSessionGroupReadIndex,
+  ResealOAuthProviderTokens,
+  ResearchConfigSourceTiers,
+  CloseFeedbackTriageNoise,
+  ModalImageUrlToKey,
+  UnsetFabFileSignedUrls,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

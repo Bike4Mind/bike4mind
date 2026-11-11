@@ -15,7 +15,7 @@ import { silentLogger } from '../__tests__/utils/testUtils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { aiImageService, downloadImageAsBuffer, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { estimateImageCredits } from '../imageCost';
-import { ImageEditService, type ImageEditBody } from './ImageEdit';
+import { ImageEditBodySchema, ImageEditService, type ImageEditBody } from './ImageEdit';
 import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
 
 // The real stochastic rounding, with its draw pinned so the final debit is assertable.
@@ -349,6 +349,28 @@ describe('ImageEditService.process model dispatch', () => {
 
     expect(editSpy.mock.calls[0][2]).toMatchObject({ seed: 12345 });
   });
+
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN])(
+    'queues %s regions without a mask and retains them through queue parsing',
+    async model => {
+      const enqueue = vi.fn();
+      const { service } = makeService({}, enqueue);
+      const regions = [{ prompt: 'blue sky', bbox: [0.1, 0.2, 0.5, 0.8] as [number, number, number, number] }];
+      await service.invoke({
+        userId: 'user1',
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          prompt: 'edit',
+          model,
+          image: 'https://example.invalid/source.png',
+          fabFileIds: [],
+          edit_regions: regions,
+        },
+      });
+      expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ model, fabFileIds: [], edit_regions: regions }));
+    }
+  );
 
   it('rejects a mask on a FLUX.2 edit and queues nothing', async () => {
     const enqueue = vi.fn();
@@ -881,6 +903,28 @@ describe('ImageEditService.process reference images (#2744)', () => {
     expect(vi.mocked(aiImageService).mock.calls[0][0]).toBe('gemini');
     expect(editSpy.mock.calls[0][2]).not.toHaveProperty('referenceImages');
   });
+
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN])(
+    'dispatches %s through native editing with or without regions',
+    async model => {
+      const regions = [{ prompt: 'blue sky', bbox: [0.1, 0.2, 0.5, 0.8] }];
+      await run({ edit_regions: regions, referenceImageFabFileIds: ['b'] }, { model });
+      expect(editSpy).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.objectContaining({
+          model,
+          edit_regions: regions,
+          referenceImages: [b64('https://example.invalid/fab/b.png')],
+        })
+      );
+      editSpy.mockClear();
+      await run({}, { model });
+      expect(editSpy).toHaveBeenCalledTimes(1);
+      expect(editSpy.mock.calls[0][2].model).toBe(model);
+      expect(editSpy.mock.calls[0][2]).not.toHaveProperty('mask');
+    }
+  );
 
   it('edits with FLUX.2 from the prompt alone, sending each reference inline as base64 and no mask', async () => {
     await run({ referenceImageFabFileIds: ['b', 'a'] }, { model: ImageModels.FLUX_2_PRO });
@@ -1857,5 +1901,35 @@ describe('ImageEditService.process (settled quest and early failure)', () => {
 
     expect(users).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('ImageEditBodySchema region ingress', () => {
+  const body = {
+    sessionId: 's',
+    questId: 'q',
+    userId: 'u',
+    prompt: 'edit',
+    image: 'https://example.invalid/source.png',
+    model: ImageModels.FLUX_3_IMAGE,
+  };
+  const region = { prompt: 'blue sky', bbox: [0.1, 0.2, 0.5, 0.8] };
+  it('refuses regions for another provider before processing', () => {
+    expect(
+      ImageEditBodySchema.safeParse({ ...body, model: ImageModels.GPT_IMAGE_1_5, edit_regions: [region] }).success
+    ).toBe(false);
+  });
+  it('refuses a mask on FLUX 3 before processing', () => {
+    expect(ImageEditBodySchema.safeParse({ ...body, fabFileIds: ['mask'], edit_regions: [region] }).success).toBe(
+      false
+    );
+  });
+  it('shares the public bounds and region-count limit', () => {
+    expect(ImageEditBodySchema.safeParse({ ...body, edit_regions: [{ ...region, bbox: [-1, 0, 1, 1] }] }).success).toBe(
+      false
+    );
+    expect(
+      ImageEditBodySchema.safeParse({ ...body, edit_regions: Array.from({ length: 9 }, () => region) }).success
+    ).toBe(false);
   });
 });

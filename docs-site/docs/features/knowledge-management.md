@@ -139,7 +139,7 @@ confirmed. Administrators can tune where that threshold sits.
 :::warning A converging file is not searchable until it finishes
 Re-chunking replaces a file's passages, and the replacements carry no vectors until re-indexing
 completes. The previous passages are deleted first, so there is nothing to fall back on in between.
-Retrieval does not hide this: while any in-scope file is being re-indexed, the result is explicitly
+Retrieval does not hide this: while any in-scope file is still being indexed, the result is explicitly
 marked **partial** rather than quietly answering from the rest of the lake. Searches - the knowledge
 tools and the semantic-search API - name the affected files; grounded chat turns report how many were
 withheld. This starts the moment the rebuild is requested, not when the new passages are written, so

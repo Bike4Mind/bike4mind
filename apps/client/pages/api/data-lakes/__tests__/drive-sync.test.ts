@@ -27,8 +27,11 @@ const h = vi.hoisted(() => ({
   connUpdateHealth: vi.fn(),
   ghConnFindByDataLakeIdAny: vi.fn(),
   gatedFlags: [] as string[],
+  assertLakePlanAllowed: vi.fn(),
 }));
 
+// The plan gate has its own tests (server/entitlements/lakePlanGate.test.ts).
+vi.mock('@server/entitlements/lakePlanGate', () => ({ assertLakePlanAllowed: h.assertLakePlanAllowed }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
@@ -100,7 +103,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
 });
 
 import handler from '../drive-sync';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 const FOLDER_ID = 'Folder_Abc-123';
 
@@ -135,6 +138,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     h.ghConnFindByDataLakeIdAny.mockResolvedValue(null);
     h.dlClearPendingConnector.mockResolvedValue(undefined);
     h.sendToQueue.mockResolvedValue(undefined);
+    h.assertLakePlanAllowed.mockResolvedValue(undefined);
   });
 
   it('captures the org-owned credential on the connection and enqueues ingest', async () => {
@@ -155,6 +159,36 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     expect(status).toHaveBeenCalledWith(202);
     // The gate is checked against the LAKE's org, never a caller-supplied one.
     expect(h.verifyOrgAccess).toHaveBeenCalledWith(expect.anything(), 'orgA');
+  });
+
+  it('checks the paid plan against the lake organization', async () => {
+    const req = makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID });
+    await run(req, makeRes().res);
+    expect(h.assertLakePlanAllowed).toHaveBeenCalledWith(req, 'orgA');
+  });
+
+  it('checks the paid plan with no organization id for a personal lake', async () => {
+    h.dlFindById.mockResolvedValue({
+      id: 'lake1',
+      organizationId: undefined,
+      status: 'active',
+      origin: 'connector-fed',
+      createdByUserId: 'u1',
+    });
+    const req = makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID });
+    await run(req, makeRes().res);
+    expect(h.assertLakePlanAllowed).toHaveBeenCalledWith(req, undefined);
+  });
+
+  it('rejects with the plan error before any credential read or connection write when the gate refuses', async () => {
+    const refusal = new ForbiddenError('Data lakes need a paid plan', { code: 'DATA_LAKE_PLAN_REQUIRED' });
+    h.assertLakePlanAllowed.mockRejectedValueOnce(refusal);
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), makeRes().res)).rejects.toBe(refusal);
+    expect(h.userFindById).not.toHaveBeenCalled();
+    expect(h.getValidUserDriveAccessToken).not.toHaveBeenCalled();
+    expect(h.connCreate).not.toHaveBeenCalled();
+    expect(h.connUpdateCredential).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
   it('refuses to claim a folder the connecting user cannot read (anti-squat gate)', async () => {

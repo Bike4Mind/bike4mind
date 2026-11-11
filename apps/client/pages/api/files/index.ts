@@ -16,7 +16,9 @@ import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUs
 import { baseApi } from '@server/middlewares/baseApi';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { fileContentUrl } from '@server/files/browserFileSigner';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
+import { createCdnInvalidationBatch } from '@server/services/cdn/invalidateRouterCdn';
 import {
   assertFilesReadScope,
   assertFilesWriteScope,
@@ -43,11 +45,11 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
         adminSettings: adminSettingsRepository,
       },
       storage: {
-        ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
-        generateSignedUrl: async (path: string, expireInSeconds: number) => {
+        generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
           try {
             return await getFilesStorage().getSignedUrl(path, 'get', {
               expiresIn: expireInSeconds,
+              signingDate: options?.signingDate,
               audience: 'browser',
             });
           } catch (e) {
@@ -59,6 +61,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
             return null;
           }
         },
+        contentUrl: fileContentUrl,
       },
     });
 
@@ -91,6 +94,8 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
       const fabFileIds = (await FabFile.find(ownedFilter).select('_id').lean()).map(f => String(f._id));
       await unpublishUserArtifactsBySource(userId, { kind: 'fabfile', fabFileIds }, { logger: req.logger });
 
+      // Flushed whether or not the transaction commits: deleted bytes do not come back on a rollback.
+      const generatedCdn = createCdnInvalidationBatch('delete-all-files', req.logger);
       // The files this transaction actually deleted, returned out of it so a rolled-back attempt
       // never drives the reference cleanup below.
       const deleted = await withTransaction(async session => {
@@ -139,7 +144,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
             try {
               await fabFilesService.deleteStoredObjects(
                 files,
-                { files: getFilesStorage(), generated: getGeneratedCopyStore() },
+                { files: getFilesStorage(), generated: getGeneratedCopyStore({ batch: generatedCdn }) },
                 req.logger
               );
             } catch (error) {
@@ -164,7 +169,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
           });
           throw error;
         }
-      });
+      }).finally(() => generatedCdn.flush());
 
       // Every one of these files is gone for everyone now, so drop the references that would
       // otherwise keep re-attaching them - the same unlink a single delete leaves to its caller

@@ -75,7 +75,7 @@ const cases: {
   },
 ];
 
-const extras = { setSessionHistory: vi.fn(), settleLocalModel: vi.fn() };
+const extras = { setSessionHistory: vi.fn(), settleLocalModel: vi.fn(), setSessionOrchestrate: vi.fn() };
 let root: Root;
 let host: HTMLElement;
 let conversation: ConversationController;
@@ -86,10 +86,47 @@ function Harness({ id }: { id: string }) {
   return null;
 }
 
+/**
+ * Starts a save in s1, moves to s2 and back, and lands the save while s1's first read is still out.
+ * That read answers with s1 as it was before the save; any later read answers with `saved`.
+ */
+async function landSaveDuringReopen(
+  start: () => Promise<unknown>,
+  land: () => void,
+  saved: Partial<ChatSession>
+): Promise<{ reads: number }> {
+  await act(async () => root.render(<Harness id="s1" />));
+  let pending: Promise<unknown> = Promise.resolve();
+  await act(async () => {
+    pending = start();
+  });
+  await act(async () => root.render(<Harness id="s2" />));
+  const before = sessionFor('s1');
+  let answerFirstRead: (session: ChatSession) => void = () => {};
+  const counted = { reads: 0 };
+  window.b4m.chat.getSession = async (id: string) => {
+    if (id !== 's1') return sessionFor(id);
+    counted.reads++;
+    return counted.reads === 1
+      ? new Promise<ChatSession>(done => (answerFirstRead = done))
+      : { ...before, ...saved, id: 's1' };
+  };
+  await act(async () => root.render(<Harness id="s1" />));
+  expect(conversation.session?.id).toBe('s2');
+  await act(async () => {
+    land();
+    await pending;
+  });
+  await act(async () => answerFirstRead(before));
+  expect(conversation.session?.id).toBe('s1');
+  return counted;
+}
+
 beforeEach(() => {
   onSummaryChanged.mockReset();
   extras.setSessionHistory.mockReset();
   extras.settleLocalModel.mockReset();
+  extras.setSessionOrchestrate.mockReset();
   const chat: Record<string, unknown> = {
     getSession: async (id: string) => sessionFor(id),
     getQueuedMessages: async () => [],
@@ -98,6 +135,7 @@ beforeEach(() => {
     onStreamEvent: (_listener: (event: ChatStreamEvent) => void) => () => {},
     setSessionHistory: extras.setSessionHistory,
     settleLocalModel: extras.settleLocalModel,
+    setSessionOrchestrate: extras.setSessionOrchestrate,
   };
   for (const entry of cases) {
     saves[entry.save] = vi.fn<Save>();
@@ -157,6 +195,18 @@ describe.each(cases)('$name', entry => {
     saves[entry.save].mockImplementation(async id => summaryFor(id, entry.patch));
     await act(async () => root.render(<Harness id="s1" />));
     await act(async () => entry.call(conversation));
+    expect(entry.read(conversation)).toBe(Object.values(entry.patch)[0]);
+  });
+
+  it('reads the chat again when its save lands while the chat is being reopened', async () => {
+    let resolve: (summary: ChatSessionSummary) => void = () => {};
+    saves[entry.save].mockReturnValue(new Promise(done => (resolve = done)));
+    const { reads } = await landSaveDuringReopen(
+      () => entry.call(conversation),
+      () => resolve(summaryFor('s1', entry.patch)),
+      entry.patch as Partial<ChatSession>
+    );
+    expect(reads).toBe(2);
     expect(entry.read(conversation)).toBe(Object.values(entry.patch)[0]);
   });
 
@@ -234,5 +284,44 @@ describe.each([
     });
 
     expect(conversation.notice).toBeNull();
+  });
+});
+
+describe.each([
+  {
+    name: 'setHistory',
+    fn: 'setSessionHistory',
+    call: (c: ConversationController) => c.setHistory(true),
+    answer: summaryFor('s1', { historyEnabled: true }),
+    saved: { historyEnabled: true },
+    read: (c: ConversationController) => c.session?.historyEnabled,
+  },
+  {
+    name: 'settleLocalModel',
+    fn: 'settleLocalModel',
+    call: (c: ConversationController) => c.settleLocalModel(),
+    answer: { session: summaryFor('s1', { model: 'local:ollama:qwen3:8b' }) },
+    saved: { model: 'local:ollama:qwen3:8b' },
+    read: (c: ConversationController) => c.session?.model,
+  },
+  {
+    name: 'setOrchestrate',
+    fn: 'setSessionOrchestrate',
+    call: (c: ConversationController) => c.setOrchestrate(true),
+    answer: summaryFor('s1', { orchestrate: true }),
+    saved: { orchestrate: true },
+    read: (c: ConversationController) => c.session?.orchestrate,
+  },
+] as const)('$name during a reopen', entry => {
+  it('reads the chat again when its write lands while the chat is being reopened', async () => {
+    let resolve: (answer: unknown) => void = () => {};
+    extras[entry.fn].mockReturnValue(new Promise(done => (resolve = done)));
+    const { reads } = await landSaveDuringReopen(
+      () => entry.call(conversation),
+      () => resolve(entry.answer),
+      entry.saved
+    );
+    expect(reads).toBe(2);
+    expect(entry.read(conversation)).toBe(Object.values(entry.saved)[0]);
   });
 });

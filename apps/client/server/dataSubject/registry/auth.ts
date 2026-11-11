@@ -1,25 +1,24 @@
 import type { DataHolderRegistry } from '../types';
-
-// `userId` and `author` are immutable and every identity field is required, and revisions refuse any
-// update or delete, so neither anonymize nor delete can run on these records.
-const ADMIN_NOTE_REASON =
-  'Administrative case note kept as a tamper-proof accountability record (legitimate interest, GDPR Art. 6(1)(f))';
+import { ADMIN_NOTE, FINANCIAL_RECORD, expiresAfterTtl } from './retention';
 
 export const authHolders = {
+  // Notes about the person go with them: the account purge removes them through the raw collection,
+  // past the model's immutability hooks. A note this person wrote or edited as an admin about someone
+  // else is that other account's record, and its identity fields are required and immutable, so it stays.
   AdminUserNote: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'retain', reason: ADMIN_NOTE_REASON },
-      { path: 'author.id', matchBy: 'userId', action: 'retain', reason: ADMIN_NOTE_REASON },
-      { path: 'editor.id', matchBy: 'userId', action: 'retain', reason: ADMIN_NOTE_REASON },
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'author.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
+      { path: 'editor.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
     ],
   },
   AdminUserNoteRevision: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'retain', reason: ADMIN_NOTE_REASON },
-      { path: 'author.id', matchBy: 'userId', action: 'retain', reason: ADMIN_NOTE_REASON },
-      { path: 'editor.id', matchBy: 'userId', action: 'retain', reason: ADMIN_NOTE_REASON },
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'author.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
+      { path: 'editor.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
     ],
   },
   ApiKey: {
@@ -203,7 +202,7 @@ export const authHolders = {
         path: 'entries.userId',
         matchBy: 'userId',
         action: 'retain',
-        reason: 'Financial record kept for accounting and tax obligations (GDPR Art. 17(3)(b))',
+        ...FINANCIAL_RECORD,
       },
     ],
   },
@@ -215,12 +214,14 @@ export const authHolders = {
         matchBy: 'userId',
         action: 'retain',
         reason: 'Signup-abuse signal kept for its 7-day expiry to detect coordinated signups (legitimate interest)',
+        retention: expiresAfterTtl('verifiedAt', 7),
       },
       {
         path: 'email',
         matchBy: 'email',
         action: 'retain',
         reason: 'Signup-abuse signal kept for its 7-day expiry to detect coordinated signups (legitimate interest)',
+        retention: expiresAfterTtl('verifiedAt', 7),
       },
     ],
   },
@@ -318,14 +319,7 @@ export const authHolders = {
   },
   UserUsagePatternSignals: {
     kind: 'holder',
-    references: [
-      {
-        path: 'userId',
-        matchBy: 'userId',
-        action: 'retain',
-        reason: 'Fraud-detection score kept for its 30-day retention window to prevent abuse (legitimate interest)',
-      },
-    ],
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
   Voice: {
     kind: 'holder',

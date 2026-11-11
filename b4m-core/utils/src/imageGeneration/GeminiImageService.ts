@@ -11,7 +11,11 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { ImageModels, type ImageOutputFormat } from '@bike4mind/common';
 import { v4 as uuidv4 } from 'uuid';
-import { ExpectedImageGenerationError, ImageModerationBlockedError } from './imageGenerationErrors';
+import {
+  ExpectedImageGenerationError,
+  ImageInputRejectedError,
+  ImageModerationBlockedError,
+} from './imageGenerationErrors';
 
 /**
  * Finish reasons meaning Gemini withheld the output on policy grounds, rather than failing. String
@@ -86,20 +90,23 @@ export class GeminiImageService extends AIImageService {
         // Provide helpful error messages for common Gemini issues
         if (error.message.includes('API_KEY') || error.message.includes('401')) {
           throw new Error(
-            `Gemini image generation failed: Invalid API key or unauthorized access. Please check your Gemini API key. Original error: ${error.message}`
+            `Gemini image generation failed: Invalid API key or unauthorized access. Please check your Gemini API key. Original error: ${error.message}`,
+            { cause: error }
           );
         }
         if (error.message.includes('RATE_LIMIT') || error.message.includes('quota') || error.message.includes('429')) {
           throw new Error(
-            `Gemini image generation failed: Rate limit or quota exceeded. Please try again later. Original error: ${error.message}`
+            `Gemini image generation failed: Rate limit or quota exceeded. Please try again later. Original error: ${error.message}`,
+            { cause: error }
           );
         }
         if (error.message.includes('SAFETY') || error.message.includes('blocked')) {
           throw new Error(
-            `Gemini image generation failed: Content was blocked by safety filters. Please try adjusting your prompt. Original error: ${error.message}`
+            `Gemini image generation failed: Content was blocked by safety filters. Please try adjusting your prompt. Original error: ${error.message}`,
+            { cause: error }
           );
         }
-        throw new Error(`Gemini image generation failed: ${error.message}`);
+        throw new Error(`Gemini image generation failed: ${error.message}`, { cause: error });
       }
 
       throw new Error('Gemini image generation failed with unknown error');
@@ -216,7 +223,7 @@ export class GeminiImageService extends AIImageService {
     if (!imagePart?.inlineData?.data) {
       this.logger.error('[DEBUG] No image inline data in Gemini generateContent response.', candidate.content.parts);
       if (textMessage) {
-        throw new Error(textMessage);
+        throw new ImageInputRejectedError(textMessage, { provider: 'gemini', reason: 'text_only_response' });
       }
       throw new Error('No image data in Gemini response');
     }
@@ -414,7 +421,7 @@ export class GeminiImageService extends AIImageService {
       this.logger.error('Gemini image editing failed:', error);
 
       if (error instanceof Error) {
-        throw new Error(`Gemini image editing failed: ${error.message}`);
+        throw new Error(`Gemini image editing failed: ${error.message}`, { cause: error });
       }
 
       throw new Error('Gemini image editing failed with unknown error');

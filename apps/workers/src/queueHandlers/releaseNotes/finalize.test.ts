@@ -339,3 +339,75 @@ describe('generic and hype copy', () => {
     expect(result).toEqual({ kind: 'repair', reasons: ['the headline must not mention "acme"'] });
   });
 });
+
+describe('rebuilding copy that still hits the denylist', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const blocked = { embargoHours: 12, denylist: ['blockedterm'] };
+  const rebuild = (d: ReleaseNoteDraft) =>
+    finalizeReleaseNote(d, payload(), blocked, logger as never, { lastAttempt: true, rebuildDeniedCopy: true });
+
+  it('still asks for a rewrite without rebuildDeniedCopy', () => {
+    expect(run(draft({ headline: 'Built for BlockedTerm' }), blocked, payload(), true).kind).toBe('repair');
+  });
+
+  it('builds the headline from the surviving items and schedules the note', () => {
+    const result = rebuild(
+      draft({
+        headline: 'Built for BlockedTerm',
+        summary: 'BlockedTerm asked for it.',
+        items: [item('Search is quicker.'), item('Exports for BlockedTerm')],
+      })
+    );
+
+    expect(result).toMatchObject({
+      kind: 'ok',
+      heldForReview: false,
+      note: { headline: 'Search is quicker', summary: '', status: 'scheduled', items: [item('Search is quicker.')] },
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('rebuilt the headline from the items'),
+      expect.objectContaining({ reasons: expect.arrayContaining(['the headline must not mention "blockedterm"']) })
+    );
+  });
+
+  it('stores the note hidden with a blank headline when no item survives the denylist', () => {
+    const result = rebuild(draft({ headline: 'Built for BlockedTerm', items: [item('Exports for BlockedTerm')] }));
+
+    expect(result).toMatchObject({
+      kind: 'ok',
+      heldForReview: true,
+      note: { headline: '', summary: '', status: 'hidden', items: [] },
+    });
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('storing as hidden'), expect.anything());
+  });
+
+  it('stores the note hidden when the item-built headline still hits the denylist', () => {
+    // A hard cut of one long word ends the headline inside it, so a term buried mid-word in the item
+    // (no match) ends where the headline's last word does (a match).
+    const longWord = `${'a'.repeat(110)}zzqq${'b'.repeat(30)}`;
+    const result = finalizeReleaseNote(
+      draft({ headline: 'Built for BlockedTerm', items: [item(longWord)] }),
+      payload(),
+      { embargoHours: 12, denylist: ['blockedterm', 'qqbbb'] },
+      logger as never,
+      { lastAttempt: true, rebuildDeniedCopy: true }
+    );
+
+    expect(result).toMatchObject({
+      kind: 'ok',
+      heldForReview: true,
+      note: { headline: '', summary: '', status: 'hidden', items: [item(longWord)] },
+    });
+  });
+
+  it('leaves a clean draft untouched', () => {
+    const result = rebuild(draft());
+
+    expect(result).toMatchObject({
+      kind: 'ok',
+      heldForReview: false,
+      note: { headline: 'Faster search', summary: 'Search got quicker.', status: 'scheduled' },
+    });
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});

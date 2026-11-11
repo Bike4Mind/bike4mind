@@ -74,6 +74,19 @@ describe('UserProfilePage', () => {
     expect(screen.getByTestId('user-profile-page')).toBeInTheDocument();
   });
 
+  it('sits in the admin page frame and scrolls through the admin layout', () => {
+    renderPage();
+    const root = getComputedStyle(screen.getByTestId('user-profile-page'));
+    // jsdom resolves the frame's responsive px/pt to 0; paddingBottom is its one fixed value.
+    expect(root.paddingBottom).toBe('64px');
+    expect(['', 'visible']).toContain(root.overflow);
+    expect(['', 'visible']).toContain(root.overflowY);
+    expect(root.minHeight).not.toBe('100vh');
+    const content = getComputedStyle(screen.getByTestId('stub-user-profile-view').parentElement as HTMLElement);
+    expect(content.maxWidth).toBe('1280px');
+    expect(content.marginLeft).not.toBe('auto');
+  });
+
   it('mounts the compliance modal the header opens, which the view does not render itself', () => {
     renderPage();
 

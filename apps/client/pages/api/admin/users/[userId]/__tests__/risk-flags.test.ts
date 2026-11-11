@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { adminUserRiskFlagsSchema, ApiKeyScope } from '@bike4mind/common';
+import {
+  adminUserRiskFlagsSchema,
+  ApiKeyScope,
+  ForbiddenError,
+  MODERATION_PAGE_READ,
+  meetsAdminPermissionRequirement,
+  missingAdminPermissionMessage,
+  type AdminPermissionRequirement,
+} from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({
   findById: vi.fn(),
@@ -13,14 +21,25 @@ const mocks = vi.hoisted(() => ({
   incidentBatchError: undefined as Error | undefined,
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config: { adminPermissions: Partial<Record<string, AdminPermissionRequirement>> }) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
       {
         use: () => chain,
-        get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
+        get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => {
+          const fn = fns[fns.length - 1];
+          h.GET = async (req, res) => {
+            const requirement = config.adminPermissions.GET;
+            const { user } = req as { user?: Parameters<typeof meetsAdminPermissionRequirement>[0] };
+            if (requirement && !meetsAdminPermissionRequirement(user, requirement)) {
+              throw new ForbiddenError(missingAdminPermissionMessage(requirement));
+            }
+            return fn(req, res);
+          };
+          return chain;
+        },
         _config: config,
       }
     );
@@ -191,9 +210,23 @@ describe('GET /api/admin/users/[userId]/risk-flags', () => {
     }
   );
 
-  it('rejects a non-admin with 403 before reading anything', async () => {
-    await expect(call({}, { id: 'u2', isAdmin: false }).promise).rejects.toMatchObject({ statusCode: 403 });
+  it('declares MODERATION_PAGE_READ for GET', () => {
+    expect((handler as unknown as { _config?: { adminPermissions?: unknown } })._config?.adminPermissions).toEqual({
+      GET: MODERATION_PAGE_READ,
+    });
+  });
+
+  it('refuses a delegate without a moderation read permission before reading anything', async () => {
+    await expect(call({}, { id: 'u2', isAdmin: false, adminPermissions: ['credits:adjust'] }).promise).rejects.toThrow(
+      missingAdminPermissionMessage(MODERATION_PAGE_READ)
+    );
     expect(mocks.findById).not.toHaveBeenCalled();
+  });
+
+  it.each(['support:read', 'users:moderate'])('admits a delegate holding %s', async permission => {
+    const { res, promise } = call({}, { id: 'u2', isAdmin: false, adminPermissions: [permission] });
+    await promise;
+    expect(res._getJSONData()).toEqual({ flags: [] });
   });
 
   it('rejects a malformed id with 400 and an unknown user with 404', async () => {

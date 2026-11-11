@@ -81,14 +81,21 @@ describe('computeAdminActionCounts access gating', () => {
     expect(Object.keys(counts).sort()).toEqual([...ADMIN_ACTION_COUNT_KEYS].sort());
   });
 
-  it('gives a support:read delegate only the queues support:read acts on', async () => {
+  it('gives a support:read delegate the queues they may read', async () => {
     const counts = await computeAdminActionCounts(
       { id: 'd', isAdmin: false, adminPermissions: ['support:read'] },
       'd',
       NOW
     );
 
-    expect(Object.keys(counts).sort()).toEqual(['approvals', 'unreviewedAudit']);
+    expect(Object.keys(counts).sort()).toEqual([
+      'approvals',
+      'deadLetters',
+      'publishedPages',
+      'signupDomainHolds',
+      'signupRiskReview',
+      'unreviewedAudit',
+    ]);
   });
 
   it('gives a settings:manage and users:moderate delegate exactly those queues', async () => {
@@ -99,7 +106,16 @@ describe('computeAdminActionCounts access gating', () => {
     );
 
     expect(Object.keys(counts).sort()).toEqual(
-      ['deadLetters', 'modelLifecycle', 'sreAgent', 'stripeDisputes', 'waitingSubscribers'].sort()
+      [
+        'heldSignupGrants',
+        'modelLifecycle',
+        'publishedPages',
+        'signupDomainHolds',
+        'signupRiskReview',
+        'sreAgent',
+        'stripeDisputes',
+        'waitingSubscribers',
+      ].sort()
     );
   });
 
@@ -183,7 +199,7 @@ describe('approvals count', () => {
 });
 
 describe('dead letters count', () => {
-  const settingsManager = { id: 's', isAdmin: false, adminPermissions: ['settings:manage'] };
+  const settingsManager = { id: 's', isAdmin: false, adminPermissions: ['support:read', 'settings:manage'] };
 
   it('sums visible messages, skipping a queue that failed or reported -1', async () => {
     m.getQueueAttributes
@@ -194,6 +210,18 @@ describe('dead letters count', () => {
     const counts = await computeAdminActionCounts(settingsManager, 's', NOW);
 
     expect(counts.deadLetters).toBe(3);
+  });
+
+  it('counts for a support:read viewer, who can open the tab', async () => {
+    m.getQueueAttributes.mockResolvedValue({ approximateMessageCount: 2, approximateNotVisibleCount: 0 });
+
+    const counts = await computeAdminActionCounts(
+      { id: 'r', isAdmin: false, adminPermissions: ['support:read'] },
+      'r',
+      NOW
+    );
+
+    expect(counts.deadLetters).toBeGreaterThan(0);
   });
 
   it('is null when no queue answers', async () => {

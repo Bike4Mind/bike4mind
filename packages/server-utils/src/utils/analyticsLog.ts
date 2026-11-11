@@ -2,7 +2,7 @@ import { IUserDocument, WithOrgRef, IOrganizationDocument, ICounterLog } from '@
 import { mongoose, Ability, User, UserActivityCounter, CounterLog } from '@bike4mind/database';
 import { counterService } from '@bike4mind/services';
 import { isValidEnumValue } from '@bike4mind/utils';
-import type { ILogger } from '@bike4mind/observability';
+import { Logger, type ILogger } from '@bike4mind/observability';
 import { ANALYTICS_EVENTS, AnalyticsEventPayloads, AnalyticsEvents } from '../types/analytics/index';
 
 interface LogEventOptions {
@@ -107,7 +107,7 @@ export async function logEvent(event: AnalyticsEventPayloads, options?: LogEvent
  * to a client - so the retry re-runs a mutation that already happened, and
  * either duplicates it or fails against the state the first call left behind.
  *
- * Falls back to console.error so a failure is still recorded when no request
+ * Falls back to the global Logger so a failure is still recorded when no request
  * logger is threaded through. `context` (e.g. the affected record's id) is
  * appended to the failure line; the event payload itself is never logged.
  */
@@ -122,6 +122,6 @@ export async function logEventSafe(
   } catch (error) {
     const message = `Failed to log analytics event ${event.type}${context ? ` for ${context}` : ''}; continuing`;
     if (logger) logger.error(message, error);
-    else console.error(message, error);
+    else Logger.error(message, { error });
   }
 }

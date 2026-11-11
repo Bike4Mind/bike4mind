@@ -8,7 +8,7 @@ import {
   settingsMap,
   type SettingKey,
 } from '@bike4mind/common';
-import { withTransaction } from '@bike4mind/database';
+import { adminSettingsRepository, cacheRepository, withTransaction } from '@bike4mind/database';
 import { scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -68,6 +68,20 @@ export type ScopedOverrideDeleteQuery = z.infer<typeof ScopeAddressSchema>;
  */
 const SERVICE_REJECTION_PREFIX = '[scopedSettings]';
 
+const scopedOverrideWriteDb = {
+  scopedSettings: scopedSettingsRepository,
+  changeCooldown: {
+    adminSettings: adminSettingsRepository,
+    cache: cacheRepository,
+    scopedSettings: scopedSettingsRepository,
+  },
+};
+
+const asBadRequestIfRejection = (error: unknown): unknown =>
+  error instanceof Error && error.message.startsWith(SERVICE_REJECTION_PREFIX)
+    ? new BadRequestError(error.message)
+    : error;
+
 /**
  * The write service signals a rejection by throwing a plain `Error`, and `errorHandler` maps a plain
  * `Error` to 500 AND logs it at `error` level - which is what the LiveOps CloudWatch filter keys on.
@@ -75,14 +89,28 @@ const SERVICE_REJECTION_PREFIX = '[scopedSettings]';
  * back as a 400 with its own wording intact. Anything else (a driver or connection failure) is a
  * real server error and is rethrown untouched.
  */
-const runWrite = async (write: () => Promise<void>): Promise<void> => {
+const runWrite = async (
+  claimRef: { scopeLevel: ScopeLevel; scopeId: string },
+  settingName: SettingKey,
+  nextValue: string | null,
+  logger: Request['logger'],
+  write: (claim: scopedSettingsService.ScopedSettingChangeClaim | null) => Promise<void>
+): Promise<void> => {
+  let claim: scopedSettingsService.ScopedSettingChangeClaim | null = null;
   try {
-    await write();
+    // Taken once, outside the transaction below: withTransaction re-runs its callback on a transient
+    // commit failure, and a second claim would be refused by the first.
+    claim = await scopedSettingsService.claimScopedSettingChange(
+      settingName,
+      claimRef,
+      nextValue,
+      scopedOverrideWriteDb.changeCooldown,
+      { logger }
+    );
+    await write(claim);
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith(SERVICE_REJECTION_PREFIX)) {
-      throw new BadRequestError(error.message);
-    }
-    throw error;
+    await claim?.release().catch(() => undefined);
+    throw asBadRequestIfRejection(error);
   }
 };
 
@@ -120,6 +148,14 @@ const handler = adminApi({
     // schema (pickOverride), so String() is the exact round trip for all three scalar types.
     const settingValue = typeof value === 'string' ? value : String(value);
 
+    // Before the cooldown claim in runWrite, so a rejected value never opens a cooldown window and
+    // a value sent during one still gets its validation error.
+    try {
+      scopedSettingsService.assertScopedOverrideWritable(settingName, { scopeLevel, scopeId, ownerType }, settingValue);
+    } catch (error) {
+      throw asBadRequestIfRejection(error);
+    }
+
     // Validate against the setting's own schema BEFORE the floor check, so an out-of-range value
     // (150, 70.5) reports its range error rather than first being refused as above the floor - the
     // same order `/api/settings/update` uses. `writeScopedOverride` still owns the rejection below;
@@ -133,24 +169,28 @@ const handler = adminApi({
       await refuseFloorAboveMeasured(Number(parsedSetting.data), req.logger);
     }
 
-    await runWrite(() =>
+    await runWrite({ scopeLevel, scopeId }, settingName, settingValue, req.logger, claim =>
       withTransaction(async () => {
         const before = await readOverrideValue(settingName, scopeLevel, scopeId);
         await scopedSettingsService.writeScopedOverride(
           settingName,
           { scopeLevel, scopeId, ownerType },
           settingValue,
-          { scopedSettings: scopedSettingsRepository },
-          { logger: req.logger }
+          scopedOverrideWriteDb,
+          {
+            logger: req.logger,
+            claim,
+            afterWrite: () =>
+              recordAdminSettingChange(req, {
+                settingName,
+                before,
+                after: settingValue,
+                summary: `set the ${settingName} override at ${scopeLevel} ${scopeId}`,
+                target: scopedTarget(settingName, scopeLevel, scopeId),
+                details: { scopeLevel, scopeId, ownerType },
+              }),
+          }
         );
-        await recordAdminSettingChange(req, {
-          settingName,
-          before,
-          after: settingValue,
-          summary: `set the ${settingName} override at ${scopeLevel} ${scopeId}`,
-          target: scopedTarget(settingName, scopeLevel, scopeId),
-          details: { scopeLevel, scopeId, ownerType },
-        });
       })
     );
 
@@ -161,24 +201,24 @@ const handler = adminApi({
     // next-connect.
     const { settingName, scopeLevel, scopeId } = parseOrBadRequest(ScopeAddressSchema, req.query);
 
-    await runWrite(() =>
+    await runWrite({ scopeLevel, scopeId }, settingName, null, req.logger, claim =>
       withTransaction(async () => {
         const before = await readOverrideValue(settingName, scopeLevel, scopeId);
-        await scopedSettingsService.clearScopedOverride(
-          settingName,
-          { scopeLevel, scopeId },
-          { scopedSettings: scopedSettingsRepository },
-          { logger: req.logger }
-        );
-        // Clearing an address that holds no override changes nothing, so it is not an admin change.
-        if (before === null) return;
-        await recordAdminSettingChange(req, {
-          settingName,
-          before,
-          after: null,
-          summary: `cleared the ${settingName} override at ${scopeLevel} ${scopeId}`,
-          target: scopedTarget(settingName, scopeLevel, scopeId),
-          details: { scopeLevel, scopeId },
+        await scopedSettingsService.clearScopedOverride(settingName, { scopeLevel, scopeId }, scopedOverrideWriteDb, {
+          logger: req.logger,
+          claim,
+          // Clearing an address that holds no override changes nothing, so it is not an admin change.
+          afterWrite: async () => {
+            if (before === null) return;
+            await recordAdminSettingChange(req, {
+              settingName,
+              before,
+              after: null,
+              summary: `cleared the ${settingName} override at ${scopeLevel} ${scopeId}`,
+              target: scopedTarget(settingName, scopeLevel, scopeId),
+              details: { scopeLevel, scopeId },
+            });
+          },
         });
       })
     );

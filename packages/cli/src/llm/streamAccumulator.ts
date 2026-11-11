@@ -1,4 +1,5 @@
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
+import { isProviderRefusalStopReason } from '@bike4mind/common';
 import type { Credits, StreamEvent, ToolUse, Usage } from './streamEvents';
 import type { CompletionCallback } from './streamTransport';
 import { VisibleTextFilter } from './visibleTextFilter';
@@ -141,7 +142,7 @@ export class StreamAccumulator {
         stopReason: this.stopReason,
       };
       await callback([remainingText], info);
-    } else if (remainingText || this.textDelivered) {
+    } else if (remainingText || this.textDelivered || isProviderRefusalStopReason(this.stopReason)) {
       await callback([remainingText], { ...this.lastUsageInfo, stopReason: this.stopReason });
     }
   }

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * logEventSafe is the entry point every post-mutation call site uses: the
@@ -54,13 +55,15 @@ describe('logEventSafe', () => {
     expect(message).not.toContain(event.metadata.name);
   });
 
-  it('falls back to console.error so a failure is never silently dropped', async () => {
+  it('falls back to the global Logger so a failure is never silently dropped', async () => {
     incrementUserCounter.mockRejectedValueOnce(new Error('counter write failed'));
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const loggerError = vi.spyOn(Logger, 'error').mockImplementation(() => {});
 
     await expect(logEventSafe(event)).resolves.toBeUndefined();
 
-    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining(UserApiKeyEvents.REVOKED), expect.any(Error));
+    expect(loggerError).toHaveBeenCalledWith(expect.stringContaining(UserApiKeyEvents.REVOKED), {
+      error: expect.any(Error),
+    });
   });
 
   it('forwards the event and options to logEvent on the success path', async () => {

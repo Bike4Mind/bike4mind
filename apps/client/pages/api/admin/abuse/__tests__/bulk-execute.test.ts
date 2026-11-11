@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, type AdminPermissionId } from '@bike4mind/common';
 import { ADMIN, ALL_ACTIONS, OTHER_ID, USER_ID, makeUser } from '@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks';
 
-vi.mock('@server/middlewares/baseApi', async () =>
-  (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).baseApiMock()
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).adminApiMock()
 );
 vi.mock('@server/middlewares/asyncHandler', async () =>
   (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).asyncHandlerMock()
@@ -65,6 +65,7 @@ function succeeded(userId: string) {
 }
 
 const mockLoggerError = vi.fn();
+const delegate = (...adminPermissions: AdminPermissionId[]) => ({ ...ADMIN, isAdmin: false, adminPermissions });
 
 async function call(body: Record<string, unknown>, user: Record<string, unknown> = ADMIN, canEditSettings = true) {
   const { req, res } = createMocks({ method: 'POST', body });
@@ -97,12 +98,49 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: 'users:moderate' },
     });
   });
 
-  it('refuses a non-admin', async () => {
-    await expect(call(validBody(), { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
+  it('refuses a delegate without users:moderate', async () => {
+    await expect(call(validBody(), delegate('support:read'))).rejects.toThrow('Missing permission: users:moderate');
     expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('refuses revoking keys without keys:revoke when the ban is not also selected', async () => {
+    const actions = { ...ALL_ACTIONS, ban: false, clawbackFreeCredits: false };
+
+    await expect(call(validBody({ actions }), delegate('users:moderate'))).rejects.toThrow(
+      'Missing permission: keys:revoke'
+    );
+    expect(mockResolve).not.toHaveBeenCalled();
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('refuses a credit clawback without credits:adjust', async () => {
+    const actions = { ...ALL_ACTIONS, ban: false, revokeApiKeys: false };
+
+    await expect(call(validBody({ actions }), delegate('users:moderate'))).rejects.toThrow(
+      'Missing permission: credits:adjust'
+    );
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('admits a delegate whose ban covers the key revocation', async () => {
+    const actions = { ...ALL_ACTIONS, clawbackFreeCredits: false };
+    const token = signBulkAbusePreviewToken(
+      ADMIN.id,
+      abuseService.bulkAbuseFingerprint(USERS_TARGET, actions, [USER_ID]),
+      null
+    );
+
+    const res = await call(validBody({ actions, previewToken: token }), delegate('users:moderate'));
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockResolve).toHaveBeenCalledWith(USERS_TARGET, ADMIN.id, expect.anything(), {
+      upToUserId: undefined,
+      actorIsFullAdmin: false,
+    });
   });
 
   it('executes a matching preview and records a summary entry', async () => {
@@ -190,7 +228,10 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
     expect(mockAddBlockedDomain).toHaveBeenCalledWith(expect.anything(), 'kashre.com');
     expect(order).toEqual(['block', 'execute']);
     // Re-resolved against the preview's bound, so accounts created since the preview do not 409 it.
-    expect(mockResolve).toHaveBeenCalledWith(target, ADMIN.id, expect.anything(), { upToUserId: BOUND });
+    expect(mockResolve).toHaveBeenCalledWith(target, ADMIN.id, expect.anything(), {
+      upToUserId: BOUND,
+      actorIsFullAdmin: true,
+    });
     expect(res._getJSONData()).toMatchObject({ blockedDomain: 'kashre.com' });
   });
 
