@@ -294,7 +294,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/model-logs/[id]` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `hooks/useModelLogs.ts` |
 | `/api/admin/model-metrics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/ModelMetrics/hooks/useModelMetrics.ts` |
 | `/api/admin/model-prices` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 2: `components/admin/CreditAnalysis/components/ModelPricingCatalog.tsx`, `components/admin/Models/Prices/AddPriceDialog.tsx` |
-| `/api/admin/models` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 2: `components/admin/Models/Discovery/useModelIndex.ts`, `hooks/data/adminModels.ts` |
+| `/api/admin/models` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/adminModels.ts` |
 | `/api/admin/models/access` | PATCH | jwt | - | PATCH: `settings:manage` | no | - | 1: `hooks/data/adminModels.ts` |
 | `/api/admin/models/access/bulk` | POST | jwt | - | POST: `settings:manage` | no | - | 1: `hooks/data/adminModels.ts` |
 | `/api/admin/moderation-incidents` | GET | jwt+key | `admin:*` | - | no | - | 1: `hooks/data/moderationIncidents.ts` |
