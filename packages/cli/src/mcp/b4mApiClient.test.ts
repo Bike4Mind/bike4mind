@@ -1039,6 +1039,23 @@ describe('B4mApiClient publish', () => {
     await expect(client.uploadFileBytes('/api/other', Buffer.from('abc'), 'text/plain')).rejects.toThrow('Unexpected');
   });
 
+  it('throws when the hosted upload PUT is not OK', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 403 }));
+    await expect(client.uploadFileBytes('https://s3.example/put', Buffer.from('abc'), 'text/plain')).rejects.toThrow(
+      'file upload failed (403)'
+    );
+  });
+
+  it('refuses an upload URL with a non-http protocol', async () => {
+    await expect(client.uploadFileBytes('ftp://x/y', Buffer.from('abc'), 'text/plain')).rejects.toThrow('Unexpected');
+    expect(globalFetch).not.toHaveBeenCalled();
+  });
+
+  it('deletes a file through the files route', async () => {
+    await client.deleteFile('f1');
+    expect(mockDelete).toHaveBeenCalledWith('/api/files/f1');
+  });
+
   it('attaches an uploaded file through the notebook and project write routes', async () => {
     await client.attachFileToNotebook('f1', '64b7f0c2a1e4d5f6a7b8c9d0');
     await client.attachFileToProject('f1', 'p1');
