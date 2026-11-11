@@ -384,5 +384,15 @@ describe('share-token route against real storage', () => {
       }
       expect(liveShareTokens((await raw()) as never)).toHaveLength(MAX_LIVE_SHARE_LINKS);
     });
+
+    it('does not count a token-less entry toward the live limit', async () => {
+      const { token: _token, ...tokenless } = liveEntry(99);
+      await seed({
+        shareTokens: [...Array.from({ length: MAX_LIVE_SHARE_LINKS - 1 }, (_, n) => liveEntry(n)), tokenless],
+      });
+      const added = await call({ body: { additional: true } });
+      expect(added.status).toBe(200);
+      expect(liveShareTokens((await raw()) as never)).toHaveLength(MAX_LIVE_SHARE_LINKS);
+    });
   });
 });

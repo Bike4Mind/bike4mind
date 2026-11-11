@@ -446,8 +446,8 @@ describe('DELETE /api/publish/[publicId]/share-token', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ revoked: true, remaining: 0 });
     const [, pipeline] = mockUpdateOne.mock.calls[0] as [unknown, RevokeStage[]];
-    // Stamped, never pulled: the token must stay claimed in the unique index so a revoked link
-    // can never be re-minted, and its view count has to survive.
+    // Stamped, never pulled: the retained entry keeps its token claimed in the unique index and
+    // its view count until the cap prunes it.
     expect(pipeline[0].$set.shareTokens.$map.in.$cond[0]).toEqual({
       $and: [IS_LIVE_EXPR, { $literal: true }],
     });

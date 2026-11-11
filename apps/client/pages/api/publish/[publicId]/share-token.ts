@@ -56,13 +56,14 @@ function parseShareLinkExpiry(raw: unknown, now: Date): Date | null | 'invalid' 
  */
 
 /** Ceiling on live links per artifact. Not a security boundary (the owner can revoke and
- *  mint freely); it stops a stuck client from growing the subdocument array without bound,
- *  and keeps the owner's list a list rather than a scroll. */
+ *  mint freely); it keeps the owner's list a list rather than a scroll. The array as a whole
+ *  is bounded by MAX_SHARE_TOKEN_ENTRIES. */
 export const MAX_LIVE_SHARE_LINKS = 20;
 
 /** Ceiling on the whole `shareTokens[]` array, revoked and expired entries included. Every mint
- *  prunes the oldest dead entries past it; live entries are never pruned. Must exceed
- *  MAX_LIVE_SHARE_LINKS + 1 so a full live set still leaves room for retained revoked entries. */
+ *  prunes the oldest dead entries past it; live entries are never pruned. Kept well above
+ *  MAX_LIVE_SHARE_LINKS so a full live set still leaves room for retained revoked entries; at
+ *  or below it, a mint would prune every revoked entry. */
 export const MAX_SHARE_TOKEN_ENTRIES = 50;
 
 interface ShareTokenArtifactLean {
@@ -142,9 +143,15 @@ function isLive(now: Date): Record<string, unknown> {
   };
 }
 
-/** Live-entry count of `shareTokens`, as an aggregation expression. */
+/** Live-entry count of `shareTokens`, as an aggregation expression. Also requires a token, as
+ *  `liveShareTokens()` does, so this precondition and the snapshot's 400 count the same set. */
 function liveCount(now: Date): Record<string, unknown> {
-  return { $size: { $filter: { input: { $ifNull: ['$shareTokens', []] }, as: 'entry', cond: isLive(now) } } };
+  const hasToken = { $gt: [{ $strLenCP: { $ifNull: ['$$entry.token', ''] } }, 0] };
+  return {
+    $size: {
+      $filter: { input: { $ifNull: ['$shareTokens', []] }, as: 'entry', cond: { $and: [isLive(now), hasToken] } },
+    },
+  };
 }
 
 /**
@@ -357,7 +364,8 @@ const handler = baseApi()
       });
     }
 
-    // Lost the race: a concurrent request already minted/rotated/added. Return what persisted.
+    // Lost the race: a concurrent request already minted/rotated/added. An additional mint
+    // reports why it failed; otherwise return what persisted unless it no longer fits the request.
     const current = await PublishedArtifact.findOne({ publicId: artifact.publicId, deletedAt: null })
       .select('shareTokens')
       .lean<ShareTokenArtifactLean>();
