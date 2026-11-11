@@ -27,14 +27,17 @@ type TokenCounts = Pick<PromptMetaSummary, 'inputTokens' | 'cachedInputTokens' |
 
 /**
  * All counts come from one basis so they add up: billed (`actual*`) when the provider reported
- * usage, else the estimate. Billed `actualInputTokens` is only the uncached tail, so cache reads
+ * usage, else the estimate. A local settlement counts as an estimate: its `cacheReadInputTokens` is a
+ * discount capped at the local input, not a token count to add (`useSessionContextUsage` reads it the
+ * same way). Billed `actualInputTokens` is only the uncached tail, so cache reads
  * and writes are added back into "in"; the total is derived because `actualTotalTokens` is not
  * recorded on every path.
  */
 function summarizeTokens(usage: PromptMeta['tokenUsage'] | undefined): TokenCounts {
   if (!usage) return {};
 
-  const billed = usage.actualInputTokens !== undefined || usage.actualOutputTokens !== undefined;
+  const billed =
+    usage.settledBasis !== 'local' && (usage.actualInputTokens !== undefined || usage.actualOutputTokens !== undefined);
   if (!billed) {
     const { inputTokens, outputTokens } = usage;
     const derivedTotal =
@@ -72,7 +75,7 @@ export function summarizePromptMeta(promptMeta: Partial<PromptMeta> | null | und
     failedToolCallCount: calls.filter(call => call.success === false).length,
     ...summarizeTokens(usage),
     retrievalOutcome: retrieval?.attempted
-      ? (RETRIEVAL_OUTCOME_LABELS[retrieval.outcome ?? ''] ?? 'Ran')
+      ? (RETRIEVAL_OUTCOME_LABELS[retrieval.outcome ?? ''] ?? retrieval.outcome ?? 'Unknown')
       : retrieval
         ? 'Not run'
         : undefined,

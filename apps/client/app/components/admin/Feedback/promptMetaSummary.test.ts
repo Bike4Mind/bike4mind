@@ -51,6 +51,7 @@ describe('summarizePromptMeta', () => {
           actualInputTokens: 120,
           actualOutputTokens: 60,
           actualTotalTokens: 999,
+          settledBasis: 'provider',
         },
       })
     );
@@ -77,6 +78,25 @@ describe('summarizePromptMeta', () => {
     expect(summary).toMatchObject({ inputTokens: 7897, cachedInputTokens: 7895, outputTokens: 152, totalTokens: 8049 });
   });
 
+  // On local settlement cacheReadInputTokens is a discount capped at the local input, not tokens to add.
+  it('uses the estimate on a local settlement even when billed counts are present', () => {
+    const summary = summarizePromptMeta(
+      meta({
+        tokenUsage: {
+          inputTokens: 100,
+          outputTokens: 50,
+          actualInputTokens: 100,
+          actualOutputTokens: 50,
+          cacheReadInputTokens: 80,
+          settledBasis: 'local',
+        },
+      })
+    );
+
+    expect(summary).toMatchObject({ inputTokens: 100, outputTokens: 50, totalTokens: 150 });
+    expect(summary?.cachedInputTokens).toBeUndefined();
+  });
+
   it('uses the estimate throughout when no billed counts were recorded', () => {
     const summary = summarizePromptMeta(meta({ tokenUsage: { inputTokens: 100, outputTokens: 50 } }));
 
@@ -99,5 +119,11 @@ describe('summarizePromptMeta', () => {
     expect(
       summarizePromptMeta(meta({ retrieval: { attempted: false } as PromptMeta['retrieval'] }))?.retrievalOutcome
     ).toBe('Not run');
+  });
+
+  it('does not report an attempted retrieval with no recorded outcome as having run', () => {
+    expect(
+      summarizePromptMeta(meta({ retrieval: { attempted: true } as PromptMeta['retrieval'] }))?.retrievalOutcome
+    ).toBe('Unknown');
   });
 });
