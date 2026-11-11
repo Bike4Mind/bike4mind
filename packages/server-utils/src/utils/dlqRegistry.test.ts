@@ -141,6 +141,12 @@ describe('dlqRegistry', () => {
       }
     });
 
+    it('classifies replay safety from what the consumer does', () => {
+      expect(getDlqByLabel('fab-file-vectorize')?.replay).toBe('safe');
+      expect(getDlqByLabel('webhook-delivery')?.replay).not.toBe('safe');
+      expect(getDlqByLabel('agent-proactive-message')?.replay).toBe('unsafe');
+    });
+
     it('includes tavern-heartbeat entry', () => {
       const tavernEntry = getDlqRegistry().find(e => e.label === 'tavern-heartbeat');
       expect(tavernEntry).toBeDefined();
