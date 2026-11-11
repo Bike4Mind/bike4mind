@@ -42,7 +42,7 @@
     "mongoose": "^8.22.1"
   },
   "devDependencies": {
-    "mongoose": "^8.24.1",
+    "mongoose": "^8.24.7",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
     "vitest": "^4.1.12"
