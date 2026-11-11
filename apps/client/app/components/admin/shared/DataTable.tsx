@@ -70,7 +70,7 @@ export type DataTableProps<Row> = {
   alwaysShowScrollbar?: boolean;
   /**
    * `false` drops the table's own border and radius, for a table that is the body of a `SectionCard`
-   * (`body="custom"`): the card is then the one surface (DESIGN_GUIDE.md, Tables).
+   * (`body="custom"`): the card is then the one surface (DESIGN_GUIDE.md, Cards).
    */
   framed?: boolean;
 };
@@ -260,7 +260,14 @@ export function DataTable<Row>({
       sx={{
         ...adminSurface,
         ...adminFocusScope,
-        ...(framed ? { borderWidth: 1, borderStyle: 'solid', borderRadius: 'lg' } : { border: 0, borderRadius: 0 }),
+        ...(framed
+          ? { borderWidth: 1, borderStyle: 'solid', borderRadius: 'lg' }
+          : {
+              border: 0,
+              borderRadius: 0,
+              // As a card's last child, round with the card or the square corner paints over its border arc.
+              '&:last-child': { borderBottomLeftRadius: 'inherit', borderBottomRightRadius: 'inherit' },
+            }),
         overflow: 'hidden',
       }}
       data-testid={`${testId}-frame`}
