@@ -310,4 +310,15 @@ describe('useAdminTabUrlSync', () => {
     expect(result.current.activeTab).toBe(AdminTab.Users);
     expect(lastNavigation().search({}).tab).toBe('users');
   });
+
+  it("falls back when a delegate's deep link names a tab they cannot open", () => {
+    routerMock.search = { tab: 'live-ops-triage' };
+    const delegateTabs: IsAdminTabRenderable = tab => tab === AdminTab.Models || tab === AdminTab.HelpAnalytics;
+
+    const { result } = renderHook(() => useHarness(AdminTab.Dashboard, delegateTabs));
+
+    expect(result.current.activeTab).not.toBe(AdminTab.LiveOpsTriage);
+    expect(delegateTabs(result.current.activeTab as AdminTab)).toBe(true);
+    expect(lastNavigation().search({ tab: 'live-ops-triage' }).tab).not.toBe('live-ops-triage');
+  });
 });
