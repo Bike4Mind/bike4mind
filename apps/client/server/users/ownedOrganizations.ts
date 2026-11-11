@@ -9,6 +9,9 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import { groupRepository } from '@bike4mind/database/social';
 import { organizationService } from '@bike4mind/services';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { resolveSubscriptionSource } from '@bike4mind/server-utils/services/organizationService';
 import { clearDeletedOrganizationReferences } from '@server/organizations/clearDeletedOrganizationReferences';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
@@ -58,11 +61,20 @@ export async function deleteSoleOwnedOrganizations(
   const deleted: OwnedOrganization[] = [];
   for (const org of solo) {
     await assertLease?.();
-    // Subscriptions were cancelled when deletion was scheduled, so the route's active-subscription
-    // validation is not applied here.
+    // Stripe subscriptions were cancelled when deletion was scheduled, so the route's active-subscription
+    // validation is not applied here. An admin grant has no Stripe customer and that cancel never reaches
+    // it, so it is closed here in the delete's transaction, the same way the admin revoke does.
     const removed = await withTransaction(async () => {
       const current = (await organizationRepository.findById(org.id)) as WithId<IOrganizationDocument> | null;
       if (!current || String(current.userId) !== userId || hasOtherMembers(current, userId)) return false;
+      const activeSubscriptions = await subscriptionRepository.findActiveSubscriptionsByOwner(
+        SubscriptionOwnerType.Organization,
+        org.id
+      );
+      for (const subscription of activeSubscriptions) {
+        if (resolveSubscriptionSource(subscription) !== SubscriptionSource.AdminGrant) continue;
+        await subscriptionRepository.update({ id: subscription.id, status: 'canceled', canceledAt: new Date() });
+      }
       await organizationService.deleteOrganization(
         owner,
         { id: org.id },
