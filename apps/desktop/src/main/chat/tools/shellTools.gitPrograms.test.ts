@@ -224,6 +224,7 @@ const ROWS: [string, string, string][] = [
   ['rsync -a --exclude .git --include-from=in.txt lrepo/ d8/ && git -C d8 st', '', 'aaaa'],
   ['rsync -a --exclude .git --relative lrepo d8/ && git -C d8 st', '', 'aaaa'],
   ['rsync -a --exclude .git --files-from=list.txt lrepo d8/ && git -C d8 st', '', 'aaaa'],
+  ['rsync -a --exclude .git lrepo/.git/ d9/ && git -C d9 st', '', 'aaaa'],
   ['unset GIT_CONFIG_COUNT; git log', '', 'aaaa'],
   ['unset GIT_CONFIG_COUNT; cp -r evil/.git/. bare/ && git -C bare log', '', 'aaaa'],
   ['export -n GIT_CONFIG_COUNT; git log', '', 'aaaa'],
