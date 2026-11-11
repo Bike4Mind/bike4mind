@@ -75,7 +75,7 @@ export function partAllowed(
   part: Pick<ApprovalPart, 'text' | 'coverable' | 'opaque' | 'ask'>,
   tainted = false
 ): boolean {
-  if (!part.coverable || (part.opaque && (tainted || part.ask))) return false;
+  if (!part.coverable || (part.opaque && tainted)) return false;
   const kinds = part.ask?.kinds ?? [];
   return patterns.some(
     ({ pattern, askedOver }) => kinds.every(kind => askedOver.has(kind)) && patternMatches(pattern, part.text)

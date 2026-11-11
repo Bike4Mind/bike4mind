@@ -501,11 +501,13 @@ describe('ApprovalGate', () => {
       expect(partAllowed(gate.allowedPatterns('a', 'bash_execute'), sending)).toBe(true);
     });
 
-    it('never lets a prefix cover an inline script that has a reason to ask', async () => {
+    it('lets a prefix cover an inline script only while the conversation is untainted', async () => {
       const gate = new ApprovalGate();
-      const inline = part('node -e 1', 'node -e *', { opaque: 'node -e', ask: outbound });
+      const inline = part('node -e 1', 'node *', { opaque: 'node -e', ask: outbound });
       await allow(gate, 'a', [inline]);
-      expect(partAllowed(gate.allowedPatterns('a', 'bash_execute'), { ...inline, text: 'node -e 2' })).toBe(false);
+      const again = { ...inline, text: 'node -e 2' };
+      expect(partAllowed(gate.allowedPatterns('a', 'bash_execute'), again)).toBe(true);
+      expect(partAllowed(gate.allowedPatterns('a', 'bash_execute', true), again, true)).toBe(false);
     });
 
     it("lets a spawned session use its parents' allowances, and stops when the link is dropped", async () => {
