@@ -58,7 +58,12 @@ function parseShareLinkExpiry(raw: unknown, now: Date): Date | null | 'invalid' 
 /** Ceiling on live links per artifact. Not a security boundary (the owner can revoke and
  *  mint freely); it stops a stuck client from growing the subdocument array without bound,
  *  and keeps the owner's list a list rather than a scroll. */
-const MAX_LIVE_SHARE_LINKS = 20;
+export const MAX_LIVE_SHARE_LINKS = 20;
+
+/** Ceiling on the whole `shareTokens[]` array, revoked and expired entries included. Every mint
+ *  prunes the oldest dead entries past it; live entries are never pruned. Must exceed
+ *  MAX_LIVE_SHARE_LINKS + 1 so a full live set still leaves room for retained revoked entries. */
+export const MAX_SHARE_TOKEN_ENTRIES = 50;
 
 interface ShareTokenArtifactLean {
   publicId: string;
@@ -134,6 +139,56 @@ function isLive(now: Date): Record<string, unknown> {
         $or: [{ $eq: [{ $ifNull: ['$$entry.expiresAt', null] }, null] }, { $gt: ['$$entry.expiresAt', now] }],
       },
     ],
+  };
+}
+
+/** Live-entry count of `shareTokens`, as an aggregation expression. */
+function liveCount(now: Date): Record<string, unknown> {
+  return { $size: { $filter: { input: { $ifNull: ['$shareTokens', []] }, as: 'entry', cond: isLive(now) } } };
+}
+
+/**
+ * Bounds the post-mint array `next` to MAX_SHARE_TOKEN_ENTRIES by dropping its oldest dead
+ * entries. Keeps every live entry (even past the cap) and the original order, so the newest
+ * live entry stays last.
+ */
+function capShareTokens(next: unknown, now: Date): Record<string, unknown> {
+  const deadRoom = {
+    $subtract: [MAX_SHARE_TOKEN_ENTRIES, { $size: { $filter: { input: '$$next', as: 'entry', cond: isLive(now) } } }],
+  };
+  const deadIds = {
+    $map: {
+      input: { $filter: { input: '$$next', as: 'entry', cond: { $not: [isLive(now)] } } },
+      as: 'entry',
+      in: '$$entry._id',
+    },
+  };
+  return {
+    $let: {
+      vars: { next },
+      in: {
+        $let: {
+          vars: { deadRoom, deadIds },
+          in: {
+            $let: {
+              // $slice rejects a count of 0, hence the guard.
+              vars: {
+                keptDeadIds: {
+                  $cond: [{ $gt: ['$$deadRoom', 0] }, { $slice: ['$$deadIds', { $multiply: ['$$deadRoom', -1] }] }, []],
+                },
+              },
+              in: {
+                $filter: {
+                  input: '$$next',
+                  as: 'entry',
+                  cond: { $or: [isLive(now), { $in: ['$$entry._id', '$$keptDeadIds'] }] },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
   };
 }
 
@@ -227,13 +282,13 @@ const handler = baseApi()
     // Mint, rotate or add under a compare-and-set so two racing POSTs cannot hand a caller a
     // link that loses the write race (which would 404). A mint requires "no live entry" and a
     // rotate pins the exact entry it rotates away from, so only one racer's write lands.
-    // `additional` has no precondition: adding a link is not idempotent by intent, and the
-    // limit above is its only guard.
+    // `additional` is not idempotent by intent, so it pins only the live-link limit: the check
+    // above reads a snapshot, and concurrent adds would otherwise each pass it.
     // (256-bit tokens, so a partial-unique-index collision is negligible.)
     const candidate = generateShareToken();
     const rotatingFrom = regenerate ? newestLive(live) : undefined;
     const precondition = additional
-      ? {}
+      ? { $expr: { $lt: [liveCount(now), MAX_LIVE_SHARE_LINKS] } }
       : rotatingFrom
         ? { shareTokens: { $elemMatch: { _id: new Types.ObjectId(rotatingFrom.id), ...liveShareTokenMatch(now) } } }
         : { shareTokens: { $not: { $elemMatch: liveShareTokenMatch(now) } } };
@@ -251,33 +306,39 @@ const handler = baseApi()
       // A rotate marks EVERY live entry revoked, not just the pinned one: `regenerate: true`
       // has always meant "revoke every outstanding link", and the shipped Replace control still
       // means that. Replacing one link of several is revoke-by-id followed by `additional`.
+      //
+      // The same write prunes the oldest dead entries past MAX_SHARE_TOKEN_ENTRIES, so repeated
+      // rotate or revoke+add cycles cannot grow the array without bound.
       [
         {
           $set: {
-            shareTokens: {
-              $concatArrays: [
-                regenerate
-                  ? {
-                      $map: {
-                        input: { $ifNull: ['$shareTokens', []] },
-                        as: 'entry',
-                        in: { $cond: [isLive(now), { $mergeObjects: ['$$entry', { revokedAt: now }] }, '$$entry'] },
-                      },
-                    }
-                  : { $ifNull: ['$shareTokens', []] },
-                [
-                  {
-                    _id: entryId,
-                    token: candidate,
-                    createdAt: now,
-                    revokedAt: null,
-                    expiresAt,
-                    viewCount: 0,
-                    lastViewedAt: null,
-                  },
+            shareTokens: capShareTokens(
+              {
+                $concatArrays: [
+                  regenerate
+                    ? {
+                        $map: {
+                          input: { $ifNull: ['$shareTokens', []] },
+                          as: 'entry',
+                          in: { $cond: [isLive(now), { $mergeObjects: ['$$entry', { revokedAt: now }] }, '$$entry'] },
+                        },
+                      }
+                    : { $ifNull: ['$shareTokens', []] },
+                  [
+                    {
+                      _id: entryId,
+                      token: candidate,
+                      createdAt: now,
+                      revokedAt: null,
+                      expiresAt,
+                      viewCount: 0,
+                      lastViewedAt: null,
+                    },
+                  ],
                 ],
-              ],
-            },
+              },
+              now
+            ),
           },
         },
       ],
@@ -296,10 +357,22 @@ const handler = baseApi()
       });
     }
 
-    // Lost the race: a concurrent request already minted/rotated. Return what persisted.
+    // Lost the race: a concurrent request already minted/rotated/added. Return what persisted.
     const current = await PublishedArtifact.findOne({ publicId: artifact.publicId, deletedAt: null })
       .select('shareTokens')
       .lean<ShareTokenArtifactLean>();
+    if (additional) {
+      if (!current) return res.status(404).json({ error: 'Not found' });
+      if (liveLinkViews(current).length >= MAX_LIVE_SHARE_LINKS) {
+        return res.status(400).json({
+          error: `An artifact may have at most ${MAX_LIVE_SHARE_LINKS} live share links - revoke one before minting another`,
+          code: 'SHARE_LINK_LIMIT',
+        });
+      }
+      return res
+        .status(409)
+        .json({ error: 'The share links changed while adding one - try again', code: 'SHARE_LINK_RACED' });
+    }
     const persisted = current ? liveLinkViews(current) : [];
     const newest = newestLive(persisted);
     // Compared by token: it is what a holder possesses.
@@ -358,8 +431,8 @@ const handler = baseApi()
     }
 
     if (revoking.length) {
-      // Stamped rather than pulled, so each token stays claimed in the unique index (a revoked
-      // link can never be re-minted) and its view count survives.
+      // Stamped rather than pulled, so the token stays claimed in the unique index and its view
+      // count survives until a later mint prunes it past MAX_SHARE_TOKEN_ENTRIES.
       //
       // The survivor requirement has to be part of the FILTER, not just the in-memory check
       // above: that check reads the `loadOwnedArtifact` snapshot, so two concurrent
