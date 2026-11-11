@@ -33,7 +33,10 @@ type Editor = 'toggle' | 'audience' | 'ranking';
 const RANK_MIN = 0;
 const RANK_MAX = 100;
 
-/** A fallback a user can actually be moved to: one the picker lists to someone. */
+/**
+ * A fallback a user can actually be moved to. Narrower on purpose than offeredInPicker in b4m-core/services
+ * adminModelList.ts, which also counts retiring rows and suggestion-only needs-review rows: both are on their way out.
+ */
 const FALLBACK_STATUSES: ReadonlySet<AdminModelStatus> = new Set(['listed', 'limited']);
 
 const listOrNone = (values: readonly string[]) => (values.length > 0 ? values.join(', ') : 'None');

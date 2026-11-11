@@ -124,6 +124,17 @@ describe('DataTable', () => {
     expect(row).not.toHaveAttribute('aria-keyshortcuts');
   });
 
+  it('ignores x and disables every checkbox while selection is disabled', () => {
+    const onSelectionChange = vi.fn();
+    renderTable({ selection: { mode: 'explicit', ids: [] }, onSelectionChange, selectionDisabled: true });
+    const row = screen.getByTestId('admin-table-row-1');
+
+    fireEvent.keyDown(row, { key: 'x' });
+    expect(onSelectionChange).not.toHaveBeenCalled();
+    expect(within(screen.getByTestId('admin-table-select-1')).getByRole('checkbox')).toBeDisabled();
+    expect(within(screen.getByTestId('admin-table-select-page')).getByRole('checkbox')).toBeDisabled();
+  });
+
   it('renders every supplied row without local pagination when the caller owns paging', () => {
     renderTable({ pagination: false });
     expect(tableRows()).toHaveLength(101);
