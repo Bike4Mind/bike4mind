@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.bike4mind.com/schemas/export-v2/notebook.schema.json",
+  "title": "Notebook v2 record",
+  "type": "object",
+  "required": ["id", "name", "firstCreated", "lastUpdated", "tags", "isAutoNamed"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string" },
+    "firstCreated": { "type": "string", "format": "date-time" },
+    "lastUpdated": { "type": "string", "format": "date-time" },
+    "language": { "type": "string" },
+    "summary": { "type": "string" },
+    "summaryAt": { "type": "string", "format": "date-time" },
+    "tags": { "type": "array", "items": { "type": "object", "required": ["name", "strength"], "properties": { "name": { "type": "string" }, "strength": { "type": "number" } }, "additionalProperties": false } },
+    "taggedAt": { "type": "string", "format": "date-time" },
+    "isAutoNamed": { "type": "boolean" },
+    "lastUsedModel": { "type": "string" },
+    "clonedFromId": { "type": "string" },
+    "forkedFromId": { "type": "string" }
+  },
+  "additionalProperties": true
+}
