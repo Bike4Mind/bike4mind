@@ -26,7 +26,9 @@ Each handler was bundled with esbuild from its entry file (the same resolution t
 
 ## Result
 
-150 handlers are declared. 144 were VPC-attached before this change.
+Counts are as of this audit; the table below is the current record and is checked against `infra/` by `infra/__tests__/lambdaVpcAudit.test.ts`.
+
+150 handlers were declared. 144 were VPC-attached before this change.
 
 - **2 detached**: `ImageProcessor` and the WebSocket `heartbeat` route.
 - **142 stay attached**: 137 connect to MongoDB, 4 could not be traced because their source is not in this repository, and 1 (`mcpHandler`) reaches nothing private but is kept for the reason below.
@@ -43,6 +45,8 @@ The issue's premise that most Lambdas reach only public managed services does no
 `infra/vpc.ts` now adds Gateway VPC endpoints for S3 and DynamoDB to the private route tables **when the stack provisions its own VPC** (`VPC_ID` unset). Gateway endpoints have no hourly or data charge.
 
 When `VPC_ID` is set the VPC is shared by several stages and owned outside this stack. A route table takes one gateway endpoint per service, so each stage adding its own would fail on the second deploy. For a shared VPC, add the two gateway endpoints once, where the VPC itself is defined.
+
+A stack-provisioned VPC that already has an S3 or DynamoDB gateway endpoint added by hand on its private route tables will fail to deploy this change with a route conflict. Remove the hand-added endpoint first.
 
 Interface endpoints (SQS, Secrets Manager, Bedrock) are not added. Each costs an hourly charge per AZ plus a per-GB charge, so they pay off only where the NAT data they displace is larger. Decide that from the NAT measurement below.
 
