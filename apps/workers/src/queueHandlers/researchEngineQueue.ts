@@ -39,7 +39,7 @@ import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState'
  */
 async function meteredOperationsLlm(user: IUserDocument, logger: Logger) {
   await assertOwnerCanAfford(user);
-  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsTextModel();
+  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsTextModel({ endUserId: user.id });
   if (!llm) {
     throw new Error('No LLM found');
   }
