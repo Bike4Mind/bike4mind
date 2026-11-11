@@ -9,11 +9,13 @@ import OrganizationUserCard from './UserCard';
 import { MemberCreditUsage } from './memberCreditBudget';
 
 const setOverride = vi.fn();
+const setManager = vi.fn();
 const viewer = vi.hoisted(() => ({ id: 'viewer' }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useRemoveMemberFromOrganization: () => ({ mutateAsync: vi.fn() }),
   useLeaveOrganization: () => ({ mutateAsync: vi.fn() }),
   useSetMemberCreditOverride: () => ({ mutateAsync: setOverride, isPending: false }),
+  useSetOrganizationManager: () => ({ mutate: setManager, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/invites', () => ({ useCancelInvite: () => ({ mutateAsync: vi.fn() }) }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => vi.fn() }));
@@ -38,7 +40,11 @@ type Roster = { invite: boolean; revoke: boolean };
 const renderCard = (
   user: ReturnType<typeof member>,
   canManageCreditBudgets: boolean,
-  roster: boolean | Roster = false
+  roster: boolean | Roster = false,
+  {
+    canManageManagers = false,
+    organization = org,
+  }: { canManageManagers?: boolean; organization?: IOrganizationDocument } = {}
 ) =>
   render(
     ((children: ReactNode) => (
@@ -47,11 +53,12 @@ const renderCard = (
       </QueryClientProvider>
     ))(
       <OrganizationUserCard
-        organization={org}
+        organization={organization}
         user={user}
         canInviteMembers={typeof roster === 'boolean' ? roster : roster.invite}
         canRevokeMembers={typeof roster === 'boolean' ? roster : roster.revoke}
         canManageCreditBudgets={canManageCreditBudgets}
+        canManageManagers={canManageManagers}
       />
     )
   );
@@ -163,6 +170,86 @@ describe('OrganizationUserCard roster actions', () => {
     renderCard(accepted(), false, { invite: false, revoke: false });
     expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
     renderCard(member('p', null, 'pending'), false, { invite: false, revoke: false });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+  });
+});
+
+describe('OrganizationUserCard manager role', () => {
+  const managedOrg = { ...org, adminUserIds: ['mgr'] } as unknown as IOrganizationDocument;
+  const usage: MemberCreditUsage = { tracked: true, used: 0, cap: 500, isOverride: false };
+
+  beforeEach(() => {
+    viewer.id = 'owner1';
+    setManager.mockReset();
+  });
+
+  it('shows a Manager chip in place of the sharing label', () => {
+    renderCard(member('mgr', usage), false, false, { organization: managedOrg });
+    expect(screen.getByTestId('organization-user-card-manager-chip')).toBeTruthy();
+    expect(screen.queryByText('Viewer')).toBeNull();
+  });
+
+  it('shows the Owner chip, not Manager, on the owner row', () => {
+    renderCard(member('owner1', usage), false, false, {
+      organization: { ...org, adminUserIds: ['owner1'] } as unknown as IOrganizationDocument,
+    });
+    expect(screen.getByTestId('organization-user-card-owner-chip')).toBeTruthy();
+    expect(screen.queryByTestId('organization-user-card-manager-chip')).toBeNull();
+  });
+
+  it('offers Make manager to the owner on a member row', async () => {
+    renderCard(member('a', usage), false, false, { canManageManagers: true, organization: managedOrg });
+    openMenu();
+    fireEvent.click(await screen.findByTestId('organization-user-card-make-manager'));
+    expect(setManager).toHaveBeenCalledWith({ organizationId: 'org1', userId: 'a', isManager: true });
+  });
+
+  it('offers Remove manager on a manager row', async () => {
+    renderCard(member('mgr', usage), false, false, { canManageManagers: true, organization: managedOrg });
+    openMenu();
+    fireEvent.click(await screen.findByTestId('organization-user-card-remove-manager'));
+    expect(setManager).toHaveBeenCalledWith({ organizationId: 'org1', userId: 'mgr', isManager: false });
+  });
+
+  it('offers no manager action to a viewer who cannot manage managers', () => {
+    renderCard(member('a', usage), false, false, { organization: managedOrg });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+  });
+
+  it('offers no manager action on the owner row', async () => {
+    renderCard(member('owner1', usage), true, false, { canManageManagers: true, organization: managedOrg });
+    openMenu();
+    expect(await screen.findByText('Set monthly limit')).toBeTruthy();
+    expect(screen.queryByTestId('organization-user-card-make-manager')).toBeNull();
+  });
+
+  it('withholds Make manager from a deactivated member', () => {
+    renderCard({ ...member('a', usage), isBanned: true }, false, false, {
+      canManageManagers: true,
+      organization: managedOrg,
+    });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+  });
+
+  it('still offers Remove manager on a deactivated manager', async () => {
+    renderCard({ ...member('mgr', usage), isBanned: true }, false, false, {
+      canManageManagers: true,
+      organization: managedOrg,
+    });
+    openMenu();
+    expect(await screen.findByTestId('organization-user-card-remove-manager')).toBeTruthy();
+  });
+
+  it('withholds Make manager from a row whose permissions confer no membership', () => {
+    renderCard({ ...member('a', usage), permissions: [] }, false, false, {
+      canManageManagers: true,
+      organization: managedOrg,
+    });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+  });
+
+  it('offers no manager action on a pending invite', () => {
+    renderCard(member('p', null, 'pending'), false, false, { canManageManagers: true, organization: managedOrg });
     expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
   });
 });

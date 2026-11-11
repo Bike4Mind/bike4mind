@@ -48,11 +48,13 @@ vi.mock('./UserCard', () => ({
     user: { id: string; creditUsage: { used: number } | null };
     canInviteMembers: boolean;
     canRevokeMembers: boolean;
+    canManageManagers: boolean;
   }) => (
     <div
       data-testid={`member-card-${p.user.id}`}
       data-invite={String(p.canInviteMembers)}
       data-revoke={String(p.canRevokeMembers)}
+      data-manage-managers={String(p.canManageManagers)}
       data-credit-usage={p.user.creditUsage?.used ?? 'hidden'}
     />
   ),
@@ -396,5 +398,47 @@ describe('OrganizationMembers email invitations', () => {
     renderMembers(buildOrg({}));
     expect(screen.queryByTestId('member-add-modal')).toBeNull();
     expect(screen.queryByTestId('organization-invite-by-email-btn')).toBeNull();
+  });
+});
+
+// Mirrors the owner-only gate on the manager route: a manager cannot appoint or remove managers.
+describe('OrganizationMembers manager controls', () => {
+  beforeEach(() => {
+    mocks.viewer = undefined;
+    mocks.members = [{ id: 'member1', name: 'Member One' }];
+    mocks.pending = [];
+  });
+
+  const org = () =>
+    buildOrg({
+      adminUserIds: ['admin1'],
+      users: [
+        { userId: 'admin1', permissions: [Permission.read] },
+        { userId: 'member1', permissions: [Permission.read] },
+      ],
+    });
+
+  it('are offered to the owner', () => {
+    mocks.viewerId = 'owner1';
+    renderMembers(org());
+    expect(screen.getByTestId('member-card-member1').getAttribute('data-manage-managers')).toBe('true');
+  });
+
+  it('are offered to a platform admin', () => {
+    mocks.viewer = { id: 'staff1', isAdmin: true };
+    renderMembers(org());
+    expect(screen.getByTestId('member-card-member1').getAttribute('data-manage-managers')).toBe('true');
+  });
+
+  it('are withheld in a personal organization', () => {
+    mocks.viewerId = 'owner1';
+    renderMembers({ ...org(), personal: true });
+    expect(screen.getByTestId('member-card-member1').getAttribute('data-manage-managers')).toBe('false');
+  });
+
+  it('are withheld from a manager', () => {
+    mocks.viewerId = 'admin1';
+    renderMembers(org());
+    expect(screen.getByTestId('member-card-member1').getAttribute('data-manage-managers')).toBe('false');
   });
 });
