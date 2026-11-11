@@ -42,19 +42,19 @@ const PROMPT =
   'Write the numbers from one to one hundred as English words, in order, separated by single spaces, ' +
   'all on one line. Output only the words: no digits, no punctuation, no markdown, no commentary.';
 
-interface StreamFrame {
+type StreamFrame = {
   questId: string;
   sessionId: string;
   reply: string;
   status?: string;
   type?: string;
-}
+};
 
-interface SocketProbe {
+type SocketProbe = {
   /** True once any frame crossed a socket; a socket that never opened carries none. */
   opened: boolean;
   frames: StreamFrame[];
-}
+};
 
 /**
  * Records every `streamed_chat_completion` frame the page receives. Frames split into
@@ -250,6 +250,7 @@ test('a chat reply streams over the WebSocket and survives a reload', async ({ p
 
     const doneIndex = frames.findIndex(f => f.status === 'done');
     expect(doneIndex, 'the reply stream never delivered a frame with status "done"').toBeGreaterThanOrEqual(0);
+    expect(collapseWhitespace(longest.reply), 'the socket reply differs from the rendered answer').toBe(streamedText);
     const finalLength = Math.max(...frames.map(f => f.reply.length));
     const partialLengths: number[] = [];
     for (const frame of frames.slice(0, doneIndex)) {
