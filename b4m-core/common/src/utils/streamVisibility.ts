@@ -248,6 +248,9 @@ export const REASONING_CHANNEL_BY_ADAPTER_FAMILY: Record<AdapterFamily, Reasonin
  * `opt-in` families read as FALSE, so a caller admitting them carries the obligation not to
  * enable thinking on the request. The public embed route is the one such caller: it passes
  * only temperature/maxTokens/stream, pinned by a test.
+ *
+ * Family-only: an adapter-literal model carries no adapterFamily and reads as true here.
+ * A gate over model rows wants reasoningChannelOf, which also infers from the backend.
  */
 export function inlinesReasoningIntoText(adapterFamily: string | null | undefined): boolean {
   if (!adapterFamily) return true;
