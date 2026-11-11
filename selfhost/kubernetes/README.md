@@ -113,7 +113,7 @@ Settings (environment, or `apps/client/.env.e2e`):
 | `SELFHOST_ROLL_TIMEOUT_MS` | Optional budget for one roll command. Default 300000. |
 | `SELFHOST_RECONNECT_TIMEOUT_MS` | Optional budget for the client to be back on a working socket. Default 180000. |
 
-A `kubectl port-forward` ends when the pod behind it is replaced, so with the loopback forwards from the install steps each roll command must leave a forward running again, or the forwards must run in a loop (`while true; do kubectl port-forward ...; sleep 1; done`). With an ingress the rollout commands are enough:
+A `kubectl port-forward` ends when the pod behind it is replaced, so with the loopback forwards from the install steps each roll command must leave a forward running again (with its output redirected, so it does not hold the test run open), or the forwards must run in a loop (`while true; do kubectl port-forward ...; sleep 1; done`). With an ingress the rollout commands are enough:
 
 ```sh
 cd apps/client

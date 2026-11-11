@@ -1,7 +1,7 @@
 import { type APIRequestContext } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
-import { apiCreateTestUser } from './helpers/api';
+import { apiCreateSession, apiCreateTestUser } from './helpers/api';
 import { readPodRollEnv, runRollCommand, RealtimeSocketTracker, type PodRollEnv } from './helpers/selfhost-pod-roll';
 
 /**
@@ -23,6 +23,8 @@ import { readPodRollEnv, runRollCommand, RealtimeSocketTracker, type PodRollEnv 
 const SENTINEL_KEY = '__podRollSentinel';
 
 interface ChatHistoryItem {
+  type?: string | null;
+  errorCode?: string | null;
   prompt?: string | null;
   reply?: string | null;
   replies?: string[] | null;
@@ -41,7 +43,10 @@ async function fetchHistory(request: APIRequestContext, token: string, sessionId
   return body.data ?? [];
 }
 
-const hasReply = (item: ChatHistoryItem) => !!item.reply?.trim() || !!item.replies?.some(r => r.trim());
+// An error quest also carries reply text and arrives as a stream frame, so "has a reply" alone
+// would accept a turn that failed.
+const isAnswered = (item: ChatHistoryItem | undefined) =>
+  !!item && item.type !== 'error' && !item.errorCode && (!!item.reply?.trim() || !!item.replies?.some(r => r.trim()));
 
 // Read before any fixture runs, so a missing setting is reported as such and not after a browser launch.
 let env: PodRollEnv;
@@ -68,6 +73,16 @@ test('the chat client reconnects and resumes when the app and WebSocket pods rol
   });
   const user = { accessToken: created.accessToken, userId: String(created.user.id || created.user._id) };
   authState.current = user;
+  // Created up front so the session id never depends on how the first message navigates.
+  const sessionId = await apiCreateSession(request, user.accessToken, `Pod roll ${runMarker}`);
+  // Retried briefly: the reply can reach the page a moment before its final write lands.
+  const expectAnswered = (prompt: string) =>
+    expect(async () => {
+      const history = await fetchHistory(request, user.accessToken, sessionId);
+      const item = history.find(h => h.prompt?.includes(prompt));
+      expect(item, `prompt missing from the persisted history: ${prompt}`).toBeTruthy();
+      expect(isAnswered(item), `no persisted answer (or an error reply) for: ${prompt}`).toBe(true);
+    }).toPass({ timeout: TIMEOUTS.ACTION });
   const prompts: string[] = [];
   // One chat turn; returns the time it was sent. The marker makes each prompt findable in history.
   // ChatPage reloads the page when the send button never enables; that wipes the sentinel below,
@@ -78,6 +93,7 @@ test('the chat client reconnects and resumes when the app and WebSocket pods rol
     const sentAt = Date.now();
     const reply = await chatPage.sendMessageAndWaitForResponse(prompt);
     expect(reply.trim(), `the ${label} turn produced no reply text`).not.toBe('');
+    await expectAnswered(prompt);
     return sentAt;
   };
   /** Poll a tracker condition; the failure lists the sockets as they are when the wait gives up. */
@@ -91,17 +107,29 @@ test('the chat client reconnects and resumes when the app and WebSocket pods rol
   const expectLiveSocket = (since: number, what: string) => waitForSocket(() => !!tracker.liveSince(since), what);
 
   await test.step('start a chat and get a streamed reply', async () => {
-    await page.goto('/new');
+    // The fixture's pre-dismiss only knows users that existed when the page was set up.
+    await chatPage.handleGearsDiscoveryModal();
+    await page.goto(`/notebooks/${sessionId}`);
     await expectLiveSocket(0, 'the client never got a working realtime socket before any roll');
     const sentAt = await sendTurn('before');
     expect(tracker.streamFramesSince(sentAt), 'the first reply was not streamed over the socket').toBeGreaterThan(0);
-    await page.waitForURL(/\/notebooks\/[^/]+/, { timeout: TIMEOUTS.ACTION });
     await page.evaluate(([key, value]) => Reflect.set(window, key, value), [SENTINEL_KEY, runMarker] as const);
   });
-  const sessionId = new URL(page.url()).pathname.split('/')[2];
 
   await test.step('roll the app pod', async () => {
     await runRollCommand('app', env.appRollCommand, env.rollTimeoutMs);
+    // The gateway keeps the socket through an app roll, so a live socket does not show the app is
+    // back; the roll command may also return before a port-forward to the new pod is up.
+    await expect
+      .poll(
+        () =>
+          request
+            .get('/api/settings/serverConfig', { headers: { Authorization: `Bearer ${user.accessToken}` } })
+            .then(r => r.ok())
+            .catch(() => false),
+        { timeout: env.reconnectTimeoutMs, message: 'the app did not answer after its pod rolled' }
+      )
+      .toBe(true);
     const rolledAt = Date.now();
     await expectLiveSocket(rolledAt, 'no realtime socket carried traffic after the app pod rolled');
     const sentAt = await sendTurn('after-app');
@@ -136,12 +164,7 @@ test('the chat client reconnects and resumes when the app and WebSocket pods rol
   });
 
   await test.step('persisted history is intact', async () => {
-    const history = await fetchHistory(request, user.accessToken, sessionId);
-    for (const prompt of prompts) {
-      const item = history.find(h => h.prompt?.includes(prompt));
-      expect(item, `prompt missing from the persisted history: ${prompt}`).toBeTruthy();
-      expect(item && hasReply(item), `no persisted reply for: ${prompt}`).toBe(true);
-    }
+    for (const prompt of prompts) await expectAnswered(prompt);
     // Only now, after the no-reload assertion, load the chat cold to show it reads back.
     await page.goto(`/notebooks/${sessionId}`);
     await expect(chatPage.aiResponseRoot.last()).toBeVisible({ timeout: TIMEOUTS.ACTION });
