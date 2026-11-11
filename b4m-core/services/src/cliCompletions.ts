@@ -54,6 +54,7 @@ import {
   withholdsReasoning,
   type ICacheRepository,
   type CompletionRunAttribution,
+  isOrgServiceAccountOf,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -625,10 +626,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // platform admin mints org-billed keys on a customer org's behalf as a normal support action -
     // pages/api/user-api-keys/index.ts admits them explicitly - and is never on that org's roster,
     // so without this arm such a key would fail on its very first call, not merely after someone
-    // left. Only queried on the refusal path, so the happy path keeps its no-extra-query property.
+    // left. The org's own service account (an org-owned key's holder) is likewise never on the
+    // roster. Only queried on the refusal path, so the happy path keeps its no-extra-query property.
     if (!isCurrentOrgMember(organization, userId)) {
       const actor = await db.users.findById(userId);
-      if (!actor?.isAdmin) {
+      if (!actor?.isAdmin && !isOrgServiceAccountOf(actor, organization.id)) {
         logger?.warn?.('[CLI_CREDITS] API key minter is no longer a member of the billing organization', {
           userId,
           organizationId: organization.id,

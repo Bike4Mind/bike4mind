@@ -475,6 +475,14 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // No index: the only read is by the key's own id (already indexed), never a bulk lookup by
     // lake. `default: undefined` so an ordinary key does not materialize an empty array.
     preauthorizedLakeIds: { type: [String], default: undefined },
+    // Org-owned key (see IUserApiKey.orgOwned). Set on insert only.
+    orgOwned: {
+      type: new mongoose.Schema<{ createdByUserId: string }>(
+        { createdByUserId: { type: String, required: true } },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     branding: {
       type: new mongoose.Schema<IEmbedBranding>(
         {
