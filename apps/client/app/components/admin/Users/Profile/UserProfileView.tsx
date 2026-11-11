@@ -14,9 +14,11 @@ import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { ReinstateDialog, SuspendDialog } from './actions/SuspendDialog';
 import { EditProfileDialog } from './actions/EditProfileDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
+import { AdminPermissionsDialog } from './actions/AdminPermissionsDialog';
 import {
   ApiKeyTrustDialog,
   CancelDeletionDialog,
+  FileEmbeddingWindowResetDialog,
   NewAccountSpendCapDialog,
   InternalAccountDialog,
   DeleteUserDialog,
@@ -39,6 +41,7 @@ import { ApiKeysTab } from './tabs/keys/ApiKeysTab';
 import { ActivityTab } from './tabs/ActivityTab';
 import { AdminLogTab } from './tabs/AdminLogTab';
 import { SignInsTab } from './tabs/SignInsTab';
+import { UserBillingTab } from './tabs/UserBillingTab';
 import { USER_PROFILE_TAB_LABELS, type UserProfileTab } from './userProfileSearch';
 import { DELETION_SOURCE_LABELS, displayName, formatDeletionDay, type AdminUserProfile } from './userProfileModel';
 
@@ -70,6 +73,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <ShadowTierDialog {...props} />;
     case 'role':
       return <ChangeRoleDialog {...props} />;
+    case 'permissions':
+      return <AdminPermissionsDialog {...props} />;
     case 'productAccess':
       return <ProductAccessDialog {...props} />;
     case 'tags':
@@ -82,6 +87,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <ApiKeyTrustDialog {...props} />;
     case 'newAccountSpendCap':
       return <NewAccountSpendCapDialog {...props} />;
+    case 'fileEmbeddingWindowReset':
+      return <FileEmbeddingWindowResetDialog {...props} />;
     case 'internalAccount':
       return <InternalAccountDialog {...props} />;
     case 'subscription':
@@ -286,6 +293,8 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
         return <ActivityTab userId={user.id} onOpenCredits={() => onTabChange('credits')} />;
       case 'credits':
         return <CreditsTab user={user} onAdjust={() => setAction('credits')} />;
+      case 'billing':
+        return <UserBillingTab userId={user.id} />;
       case 'keys':
         return <ApiKeysTab user={user} />;
       case 'signins':

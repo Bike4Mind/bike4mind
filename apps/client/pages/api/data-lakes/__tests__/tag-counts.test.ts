@@ -16,6 +16,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/dataLakes', () => ({
+  adminBypassLakeIds: vi.fn(async () => []),
   resolveAccessibleLakes: mockResolveAccessibleLakes,
   queryDataLakeTagCounts: mockQueryDataLakeTagCounts,
   queryScopedDataLakeTagCounts: mockQueryScopedDataLakeTagCounts,

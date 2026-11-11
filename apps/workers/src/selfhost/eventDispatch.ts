@@ -8,14 +8,15 @@ import { handler as sessionTaggingHandler } from '@workers/events/sessionTagging
 import { handler as notebookCurationHandler } from '@workers/events/notebookCuration';
 import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import { handler as sendPushHandler } from '@workers/events/sendPush';
+import { handler as invoicePaymentSucceededHandler } from '@workers/events/stripe/invoicePaymentSucceeded';
+import { handler as customerSubscriptionUpdatedHandler } from '@workers/events/stripe/customerSubscriptionUpdated';
 
 /**
  * Self-host event routing.
  *
  * eventBus.publishSelfHost enqueues non-email events to SELF_HOST_EVENT_QUEUE as
  * `{ detailType, detail }`. This table maps each detailType to the SAME hosted event
- * handler the cloud EventBridge rules invoke, so enrichment (memento creation, session
- * auto-naming, summaries, tagging) runs identically in self-host. Handlers are
+ * handler the cloud EventBridge rules invoke for enrichment and billing fulfillment. Handlers are
  * withEventContext-wrapped and connect to Mongo themselves.
  *
  * detail-types with no entry here are logged at debug and treated as handled: most
@@ -45,6 +46,9 @@ const HANDLERS: Record<string, EventHandler> = {
   'notebook.curation.start': notebookCurationHandler,
   // No-ops unless all four APNS_* values are set (see readApnsCredentials in server-utils pushDelivery).
   'notification.push': sendPushHandler,
+  'stripe.invoice.payment_succeeded': invoicePaymentSucceededHandler,
+  'stripe.cus.sub.updated': customerSubscriptionUpdatedHandler,
+  'notification.liveActivity': sendPushHandler,
 };
 
 export async function dispatchSelfHostEvent(

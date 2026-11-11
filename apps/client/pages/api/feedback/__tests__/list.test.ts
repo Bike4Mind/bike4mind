@@ -222,6 +222,8 @@ describe('GET /api/feedback', () => {
     expect(mockSelect).toHaveBeenCalledWith(FEEDBACK_LIST_FIELDS);
     const selected = mockSelect.mock.calls[0][0] as string;
     expect(selected).not.toContain('promptMeta');
+    // Named here rather than compared to the constant: dropping the field would blank the chips and CSV columns.
+    expect(selected.split(' ')).toContain('clientContext');
   });
 
   it('returns exactly items/total/page/limit, sourced from countDocuments', async () => {
@@ -269,6 +271,42 @@ describe('GET /api/feedback', () => {
     expect(res._getJSONData()).not.toHaveProperty('organizations');
   });
 
+  it('serves only the organization facet on facetsOnly, reading and auditing no rows', async () => {
+    mockDistinct.mockResolvedValue(['Beta', 'Acme']);
+
+    const { req, res } = buildRequest({ facetsOnly: 'true', page: '2', limit: '7' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ items: [], total: 0, page: 2, limit: 7, organizations: ['Acme', 'Beta'] });
+    expect(mockDistinct).toHaveBeenCalledTimes(1);
+    expect(mockFind).not.toHaveBeenCalled();
+    expect(mockCountDocuments).not.toHaveBeenCalled();
+    expect(mockRecordFeedbackRead).not.toHaveBeenCalled();
+  });
+
+  it('keeps the ownership filter on a nonadmin facets-only query', async () => {
+    mockDistinct.mockResolvedValue(['Own organization']);
+    const ability = ownAbility('user-1');
+    const { req, res } = buildRequest({ facetsOnly: 'true' }, ability);
+    await runHandler(req, res);
+    const readable = accessibleBy(ability, 'read').ofType(FeedbackModelMock);
+    expect(JSON.stringify(readable)).toContain('user-1');
+    expect(mockDistinct).toHaveBeenCalledWith('organization', readable);
+    expect(mockFind).not.toHaveBeenCalled();
+    expect(mockRecordFeedbackRead).not.toHaveBeenCalled();
+    expect(res._getJSONData().organizations).toEqual(['Own organization']);
+  });
+
+  it('reads rows as usual when facetsOnly is false', async () => {
+    const { req, res } = buildRequest({ facetsOnly: 'false' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(mockFind).toHaveBeenCalledTimes(1);
+    expect(mockRecordFeedbackRead).toHaveBeenCalledTimes(1);
+    expect(mockDistinct).not.toHaveBeenCalled();
+  });
+
   it('computes the organization facet over the accessible set, not the org-filtered set', async () => {
     const { req, res } = buildRequest({ organization: 'acme', includeOrganizations: 'true' }, adminAbility());
     await runHandler(req, res);
@@ -303,6 +341,30 @@ describe('GET /api/feedback', () => {
     expect(findFilter.$and).toContainEqual({ sessionId: 'session-1' });
     expect(findFilter.$and).toContainEqual({ subject: 'turn' });
     expect(findFilter.$and).toContainEqual({ userId: 'user-1' });
+  });
+
+  it('ANDs the type filter in as an $in over the picked types', async () => {
+    const { req, res } = buildRequest({ type: ['Bug', 'Thumbs Down'] }, adminAbility());
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ type: { $in: ['Bug', 'Thumbs Down'] } });
+  });
+
+  it('lets the Feedback type also match reports that carry no type', async () => {
+    const { req, res } = buildRequest({ type: 'Feedback' }, adminAbility());
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ type: { $in: ['Feedback', null] } });
+  });
+
+  it('rejects a type outside FeedbackType with a 422 before any query runs', async () => {
+    const { req, res } = buildRequest({ type: 'Spam' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFind).not.toHaveBeenCalled();
   });
 
   it('does NOT narrow to the caller without an explicit userId, even for an admin', async () => {

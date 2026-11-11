@@ -1,10 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { classifySource, hostMatchesDomain, sourceHostname } from './sourceFilter';
+import { classifySource, hostMatchesDomain, isQueueableVerdict, sourceHostname } from './sourceFilter';
 
-const levers = (allowedDomains: string[] = [], blockedDomains: string[] = []) => ({
-  allowedDomains,
-  blockedDomains,
+const levers = (
+  overrides: Partial<Parameters<typeof classifySource>[1]> = {}
+): Parameters<typeof classifySource>[1] => ({
+  trustedDomains: [],
+  reviewDomains: [],
+  blockedDomains: [],
+  unlistedSources: 'review',
+  ...overrides,
 });
+
+// The two-list filter this replaced, expressed on the new fields: an allow list is the review list
+// with other sites dropped, and every queueable verdict is what used to be 'allowed'.
+const legacy = (allowedDomains: string[] = [], blockedDomains: string[] = []) =>
+  levers({
+    reviewDomains: allowedDomains,
+    blockedDomains,
+    unlistedSources: allowedDomains.length > 0 ? 'drop' : 'review',
+  });
 
 describe('sourceHostname', () => {
   it('lowercases the hostname of an http(s) URL', () => {
@@ -51,28 +65,103 @@ describe('hostMatchesDomain', () => {
 });
 
 describe('classifySource', () => {
-  it('allows anything when neither list is set', () => {
-    expect(classifySource('https://example.com/a', levers())).toBe('allowed');
+  it('returns each of the four verdicts', () => {
+    const config = levers({
+      trustedDomains: ['trusted.example'],
+      reviewDomains: ['review.example'],
+      blockedDomains: ['blocked.example'],
+      unlistedSources: 'drop',
+    });
+    expect(classifySource('https://docs.trusted.example/a', config)).toBe('trusted');
+    expect(classifySource('https://review.example/a', config)).toBe('review');
+    expect(classifySource('https://blocked.example/a', config)).toBe('blocked');
+    expect(classifySource('https://other.example/a', config)).toBe('unlisted_dropped');
   });
 
-  it('admits only the allow list once one is set', () => {
-    const config = levers(['example.com']);
-    expect(classifySource('https://docs.example.com/a', config)).toBe('allowed');
-    expect(classifySource('https://other.com/a', config)).toBe('not_in_allow_list');
+  it('sends an unlisted source to review when unlistedSources is review', () => {
+    expect(classifySource('https://other.example/a', levers({ trustedDomains: ['trusted.example'] }))).toBe('review');
   });
 
-  it('applies deny after allow, so a subdomain can be carved out of an allowed domain', () => {
-    const config = levers(['example.com'], ['blog.example.com']);
-    expect(classifySource('https://docs.example.com/a', config)).toBe('allowed');
-    expect(classifySource('https://blog.example.com/a', config)).toBe('blocked');
+  describe('precedence', () => {
+    it('lets a blocked match win over trusted and review', () => {
+      const config = levers({
+        trustedDomains: ['example.com'],
+        reviewDomains: ['example.com'],
+        blockedDomains: ['blog.example.com'],
+      });
+      expect(classifySource('https://blog.example.com/a', config)).toBe('blocked');
+    });
+
+    it('lets a blocked match win even when a trusted entry is more specific', () => {
+      const config = levers({ trustedDomains: ['docs.example.com'], blockedDomains: ['example.com'] });
+      expect(classifySource('https://docs.example.com/', config)).toBe('blocked');
+    });
+
+    it('lets the longest matching entry win across trusted and review', () => {
+      const trustedWins = levers({ trustedDomains: ['docs.example.com'], reviewDomains: ['example.com'] });
+      expect(classifySource('https://docs.example.com/a', trustedWins)).toBe('trusted');
+      expect(classifySource('https://www.example.com/a', trustedWins)).toBe('review');
+
+      const reviewWins = levers({ trustedDomains: ['example.com'], reviewDomains: ['docs.example.com'] });
+      expect(classifySource('https://docs.example.com/a', reviewWins)).toBe('review');
+      expect(classifySource('https://www.example.com/a', reviewWins)).toBe('trusted');
+    });
+
+    it('sends a tie (the same entry in both lists) to review', () => {
+      const config = levers({ trustedDomains: ['example.com'], reviewDomains: ['example.com'] });
+      expect(classifySource('https://example.com/a', config)).toBe('review');
+    });
+
+    it('reports an unparseable or non-http URL as blocked', () => {
+      expect(classifySource('ftp://example.com/x', levers())).toBe('blocked');
+      expect(classifySource('nonsense', levers())).toBe('blocked');
+    });
   });
 
-  it('blocks a denied domain even with no allow list', () => {
-    expect(classifySource('https://spam.net/a', levers([], ['spam.net']))).toBe('blocked');
-  });
+  // The old two-list filter, replayed on the migrated shape: queueable exactly where it was 'allowed'.
+  describe('equivalence with the allow/deny filter', () => {
+    const queueable = (url: string, config: ReturnType<typeof legacy>) =>
+      isQueueableVerdict(classifySource(url, config));
 
-  it('reports an unusable URL as blocked, so it is dropped before any spend', () => {
-    expect(classifySource('ftp://example.com/x', levers())).toBe('blocked');
-    expect(classifySource('nonsense', levers())).toBe('blocked');
+    it('allows anything when neither list is set', () => {
+      expect(queueable('https://example.com/a', legacy())).toBe(true);
+    });
+
+    it('admits only the allow list once one is set', () => {
+      const config = legacy(['example.com']);
+      expect(queueable('https://docs.example.com/a', config)).toBe(true);
+      expect(queueable('https://other.com/a', config)).toBe(false);
+    });
+
+    it('applies deny after allow, so a subdomain can be carved out of an allowed domain', () => {
+      const config = legacy(['example.com'], ['blog.example.com']);
+      expect(queueable('https://docs.example.com/a', config)).toBe(true);
+      expect(queueable('https://blog.example.com/a', config)).toBe(false);
+    });
+
+    it('blocks a denied domain even with no allow list', () => {
+      expect(queueable('https://spam.net/a', legacy([], ['spam.net']))).toBe(false);
+    });
+
+    it('does not let a lookalike domain through an allow list', () => {
+      expect(queueable('https://evil-example.com/a', legacy(['example.com']))).toBe(false);
+    });
+
+    it('matches through www. and a trailing root dot', () => {
+      expect(queueable('https://www.example.com./a', legacy(['example.com']))).toBe(true);
+    });
+
+    it('drops an unparseable URL', () => {
+      expect(queueable('nonsense', legacy())).toBe(false);
+    });
+  });
+});
+
+describe('isQueueableVerdict', () => {
+  it('admits trusted and review only', () => {
+    expect(isQueueableVerdict('trusted')).toBe(true);
+    expect(isQueueableVerdict('review')).toBe(true);
+    expect(isQueueableVerdict('blocked')).toBe(false);
+    expect(isQueueableVerdict('unlisted_dropped')).toBe(false);
   });
 });

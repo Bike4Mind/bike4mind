@@ -40,8 +40,8 @@ vi.mock('@bike4mind/database', () => ({
   campaignWatchRepository: { removeUser: removeFromWatchesMock },
   userLimitEventRepository: { deleteAllForUser: deleteLimitEventsMock },
 }));
-vi.mock('@server/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: retainTracesMock }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: retainTracesMock }));
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   purgeUserPublishedArtifacts: purgePublishedMock,
 }));
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: withdrawListingsMock }));
@@ -49,10 +49,12 @@ vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
   revokeDriveGrant: revokeDriveMock,
   decryptStoredToken: (v: string | undefined) => (v ? `plain-${v}` : null),
 }));
-vi.mock('@server/integrations/google/drive/flagConnectionsStoppedByDisconnect', () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/flagConnectionsStoppedByDisconnect', () => ({
   flagConnectionsStoppedByDisconnect: flagConnectionsMock,
 }));
-vi.mock('@server/integrations/jira/revokeAtlassianGrant', () => ({ revokeAtlassianGrant: revokeAtlassianMock }));
+vi.mock('@bike4mind/server-utils/integrations/jira/revokeAtlassianGrant', () => ({
+  revokeAtlassianGrant: revokeAtlassianMock,
+}));
 
 import { purgeDeletedUserData } from './purgeDeletedUserData';
 

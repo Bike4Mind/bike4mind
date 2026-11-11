@@ -7,18 +7,18 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({ userService: {} }));
-vi.mock('@server/billing/linkedAccounts', () => ({ findLinkedAccounts: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({ findLinkedAccounts: vi.fn() }));
 vi.mock('@server/security/autoContainment/deviceLinkEvaluation', () => ({
   DEFAULT_DEVICE_LINK_CONFIG: { windowHours: 168, commonNetworks: 5 },
   evaluateDeviceLinks: vi.fn(),
   liveDeviceLinkReaders: {},
 }));
-vi.mock('@server/security/autoContainment/executor', () => ({ loadAutoContainmentConfig: vi.fn() }));
+vi.mock('@server/security/autoContainment/config', () => ({ loadAutoContainmentConfig: vi.fn() }));
 
-import type { LinkedAccount } from '@server/billing/linkedAccounts';
+import type { LinkedAccount } from '@bike4mind/server-utils/billing/linkedAccounts';
 import { loadDeviceLinkAccounts } from '@bike4mind/database';
+import { loadAutoContainmentConfig } from '@server/security/autoContainment/config';
 import { evaluateDeviceLinks } from '@server/security/autoContainment/deviceLinkEvaluation';
-import { loadAutoContainmentConfig } from '@server/security/autoContainment/executor';
 import {
   buildLinkedAccountEvidence,
   liveLinkedAccountEvidenceDeps,

@@ -4,7 +4,7 @@ import { FINANCIAL_RECORD, SAFETY_INCIDENT } from './registry/retention';
 /**
  * Where a person's data lands outside MongoDB, and what erasure does about each place. The Mongo side
  * is `DATA_HOLDER_REGISTRY` (`registry/index.ts`); this list completes the data map for the stores
- * the coverage test cannot walk. `externalStores.test.ts` fails when an S3 bucket or event bus is
+ * the coverage test cannot walk. `externalStores.repo.test.ts` fails when an S3 bucket or event bus is
  * declared in `infra/` without an entry here, and when an `erasedBy` function is not exported.
  */
 

@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
   sendToQueue: vi.fn(),
   loggerError: vi.fn(),
+  loggerWarn: vi.fn(),
+  loggerInfo: vi.fn(),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/data-lake-cleanup'),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
@@ -29,6 +31,7 @@ const h = vi.hoisted(() => ({
   enableDriveConnectionForLake: vi.fn(),
   disableGitHubConnectionForLake: vi.fn(),
   enableGitHubConnectionForLake: vi.fn(),
+  isLakePlanAllowed: vi.fn(async () => true),
   inTransaction: [] as string[],
   commitError: undefined as Error | undefined,
   retryAfterAbort: false,
@@ -105,7 +108,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+// The plan gate has its own tests (server/entitlements/lakePlanGate.test.ts).
+vi.mock('@server/entitlements/lakePlanGate', () => ({ isLakePlanAllowed: h.isLakePlanAllowed }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
@@ -126,7 +131,12 @@ const makeRes = () => {
   return { res, json, statusJson: json };
 };
 const req = (body: unknown) =>
-  ({ method: 'POST', query: { id: 'lake1' }, body, logger: { error: h.loggerError } }) as never;
+  ({
+    method: 'POST',
+    query: { id: 'lake1' },
+    body,
+    logger: { error: h.loggerError, warn: h.loggerWarn, info: h.loggerInfo },
+  }) as never;
 
 // The route must release with the very claim id it handed the service, so the release can only
 // match a claim this request took.
@@ -502,6 +512,65 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
     const port = call[portKey] as (args: { dataLakeId: string }) => Promise<void>;
     await port({ dataLakeId: 'lake1' });
     expect(h[portName]).toHaveBeenCalledWith('lake1');
+  });
+});
+
+describe('POST /api/data-lakes/[id]/lifecycle - paid-plan gate on connector re-enable', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeWritable.mockReturnValue(undefined);
+    h.assertLakeAccessById.mockResolvedValue({
+      id: 'lake1',
+      status: 'archived',
+      createdByUserId: 'u1',
+      organizationId: 'orgA',
+    });
+    h.unarchiveDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
+    h.restoreDeletedDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
+  });
+
+  it.each([
+    ['unarchive', 'unarchiveDataLake'],
+    ['restore', 'restoreDeletedDataLake'],
+  ] as const)(
+    '%s brings the lake back with its connectors paused when the caller is not entitled',
+    async (action, serviceName) => {
+      h.isLakePlanAllowed.mockResolvedValueOnce(false);
+      const { res } = makeRes();
+      await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+      expect(h.isLakePlanAllowed).toHaveBeenCalledWith(expect.anything(), 'orgA');
+      const call = h[serviceName].mock.calls[0][2] as Record<string, unknown>;
+      expect(call.enableDriveConnection).toBeUndefined();
+      expect(call.enableGitHubConnection).toBeUndefined();
+    }
+  );
+
+  it.each([
+    ['unarchive', 'unarchiveDataLake'],
+    ['restore', 'restoreDeletedDataLake'],
+  ] as const)('%s still succeeds with connectors paused when the plan check throws', async (action, serviceName) => {
+    h.isLakePlanAllowed.mockRejectedValueOnce(new Error('settings read failed'));
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+    expect(h.loggerWarn).toHaveBeenCalled();
+    expect(h.loggerInfo).toHaveBeenCalled();
+    const call = h[serviceName].mock.calls[0][2] as Record<string, unknown>;
+    expect(call.enableDriveConnection).toBeUndefined();
+    expect(call.enableGitHubConnection).toBeUndefined();
+  });
+
+  it.each([
+    ['unarchive', 'unarchiveDataLake'],
+    ['restore', 'restoreDeletedDataLake'],
+  ] as const)('%s re-enables the connectors when the caller is entitled', async (action, serviceName) => {
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+    const call = h[serviceName].mock.calls[0][2] as Record<string, unknown>;
+    expect(call.enableDriveConnection).toEqual(expect.any(Function));
+    expect(call.enableGitHubConnection).toEqual(expect.any(Function));
   });
 });
 

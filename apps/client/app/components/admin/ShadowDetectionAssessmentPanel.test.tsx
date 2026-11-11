@@ -18,10 +18,10 @@ vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUs
 
 const DETECTION_ID = 'a'.repeat(24);
 const appTheme = extendTheme({ ...getThemeConfig() });
-const renderPanel = () =>
+const renderPanel = (props: Partial<React.ComponentProps<typeof ShadowDetectionAssessmentPanel>> = {}) =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <ShadowDetectionAssessmentPanel detectionId={DETECTION_ID} enabled />
+      <ShadowDetectionAssessmentPanel detectionId={DETECTION_ID} enabled {...props} />
     </CssVarsProvider>
   );
 
@@ -174,11 +174,33 @@ describe('ShadowDetectionAssessmentPanel', () => {
 
   it('renders the latest result and its probabilities', () => {
     renderPanel();
-    expect(screen.getByTestId('shadow-detection-assessment-result').textContent).toContain('Abuse');
+    expect(screen.getByTestId('shadow-detection-assessment-suggestion-proposal').textContent).toBe('Confirmed abuse');
     const list = screen.getByTestId('shadow-detection-assessment-probabilities').textContent;
     expect(list).toContain('Abuse: 70%');
     expect(list).toContain('Legitimate automation: 20%');
-    expect(screen.getByTestId('shadow-detection-assessment-confidence').textContent).toContain('70%');
+    expect(screen.getByTestId('shadow-detection-assessment-suggestion-confidence').textContent).toContain('Medium');
+  });
+
+  it('words the suggestion from the proposed result probability, and dates it once', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [
+        makeItem({
+          probabilities: [
+            { value: 'abuse', probability: 0.85 },
+            { value: 'legitimate_automation', probability: 0.1 },
+            { value: 'insufficient_evidence', probability: 0.05 },
+          ],
+          confidence: 0.6,
+        }),
+      ],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    const word = screen.getByTestId('shadow-detection-assessment-suggestion-confidence');
+    expect(word.textContent).toContain('High');
+    expect(word).toHaveAttribute('data-confidence', 'high');
+    expect(screen.queryByTestId('shadow-detection-assessment-suggestion-meta')).toBeNull();
   });
 
   it('lists the model reasons in fixed wording beside the label', () => {
@@ -230,6 +252,26 @@ describe('ShadowDetectionAssessmentPanel', () => {
     expect(screen.getByTestId('shadow-detection-assessment-failure').textContent).toContain('overloaded');
   });
 
+  it('shows no suggestion for an unknown result', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [makeItem({ result: 'unknown', confidence: null, probabilities: [] })],
+      isPending: false,
+      error: null,
+    });
+    renderPanel({ onAccept: vi.fn() });
+    expect(screen.queryByTestId('shadow-detection-assessment-suggestion')).toBeNull();
+  });
+
+  it('hands the proposed verdict to the host on Accept, and offers no buttons without a host', () => {
+    const onAccept = vi.fn();
+    const { unmount } = renderPanel({ onAccept, onOverride: vi.fn() });
+    fireEvent.click(screen.getByTestId('shadow-detection-assessment-suggestion-accept-btn'));
+    expect(onAccept).toHaveBeenCalledWith('confirmed_abuse');
+    unmount();
+    renderPanel();
+    expect(screen.queryByTestId('shadow-detection-assessment-suggestion-accept-btn')).toBeNull();
+  });
+
   it('requests an assessment when Assess now is clicked', async () => {
     mutateAsync.mockResolvedValue({ status: 'assessed', cached: true, item: makeItem() });
     renderPanel();
@@ -241,7 +283,7 @@ describe('ShadowDetectionAssessmentPanel', () => {
   it('hides Assess now from a support-only admin', () => {
     hooks.currentUser = { adminPermissions: ['support:read'] };
     renderPanel();
-    expect(screen.getByTestId('shadow-detection-assessment-result')).toBeTruthy();
+    expect(screen.getByTestId('shadow-detection-assessment-suggestion')).toBeTruthy();
     expect(screen.queryByTestId('shadow-detection-assess-btn')).toBeNull();
   });
 

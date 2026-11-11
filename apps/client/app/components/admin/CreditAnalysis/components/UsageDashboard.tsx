@@ -22,6 +22,7 @@ import { useOwnerUsage } from '../hooks/useOwnerUsage';
 import { zeroFillDailySeries } from '../utils/dailySeries';
 import { DailyAreaChart } from './DailyAreaChart';
 import { BreakdownTable } from '@client/app/components/common/BreakdownTable';
+import { usageFeatureLabel } from '../utils/usageFeatureLabels';
 
 const DAY_RANGES = [30, 60, 90] as const;
 type DayRange = (typeof DAY_RANGES)[number];
@@ -37,13 +38,27 @@ type OrgOption = { id: string; name: string };
  * `ownerType` selects the owner kind. `ownerId` pins the owner; when omitted for
  * an Organization owner an admin org picker is shown (cross-org admin surface).
  * A User owner is always pinned to `ownerId` (no picker).
+ *
+ * `days` lets a parent that already owns a range toggle (the profile ledger) drive the window; the
+ * panel then hides its own toggle.
+ *
+ * `reconcileLedger` makes the totals follow the credit ledger, adding an "Other charges" row for spend
+ * with no usage event. Only the profile page sets it, because it shows the ledger beside this panel and
+ * the two must agree. Org views have no ledger section, and the ledger's generic_deduct rows include
+ * non-spend debits (expiry, clawbacks, admin adjustments) for any owner.
  */
-export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: string }> = ({ ownerType, ownerId }) => {
+export const UsageDashboard: React.FC<{
+  ownerType: UsageOwnerType;
+  ownerId?: string;
+  days?: number;
+  reconcileLedger?: boolean;
+}> = ({ ownerType, ownerId, days: controlledDays, reconcileLedger = false }) => {
   const isOrg = ownerType === CreditHolderType.Organization;
   const showOrgPicker = isOrg && !ownerId;
 
   const [selectedOrg, setSelectedOrg] = useState<OrgOption | null>(null);
-  const [days, setDays] = useState<DayRange>(30);
+  const [ownDays, setDays] = useState<DayRange>(30);
+  const days = controlledDays ?? ownDays;
 
   const activeOwnerId = ownerId ?? (showOrgPicker ? (selectedOrg?.id ?? null) : null);
 
@@ -70,7 +85,16 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
 
   const { data, isLoading, isFetching, error, refetch } = useOwnerUsage(ownerType, activeOwnerId, days);
 
-  const hasUsage = (data?.totals.requests ?? 0) > 0;
+  const eventCredits = data?.totals.creditsCharged ?? 0;
+  // The ledger is what the owner was charged; events miss charges written without a per-call record.
+  const ledgerCredits = reconcileLedger ? (data?.ledger?.creditsCharged ?? eventCredits) : eventCredits;
+  const residualCredits = ledgerCredits - eventCredits;
+  const hasResidual = residualCredits > 0;
+  const hasEvents = (data?.totals.requests ?? 0) > 0;
+  const hasUsage = hasEvents || hasResidual;
+  // The posted ledger remains authoritative even when per-call records exceed it.
+  const totalCredits = ledgerCredits;
+  const detailExceedsLedger = reconcileLedger && eventCredits > ledgerCredits;
   const chartData = useMemo(() => zeroFillDailySeries(data?.overTime ?? [], days, d => d.creditsCharged), [data, days]);
 
   return (
@@ -99,18 +123,20 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
           <Box />
         )}
         <Stack direction="row" spacing={1} alignItems="center">
-          <ToggleButtonGroup
-            size="sm"
-            value={String(days)}
-            onChange={(_, value) => value && setDays(Number(value) as DayRange)}
-            data-testid="usage-range-toggle"
-          >
-            {DAY_RANGES.map(r => (
-              <Button key={r} value={String(r)}>
-                {r}d
-              </Button>
-            ))}
-          </ToggleButtonGroup>
+          {controlledDays === undefined && (
+            <ToggleButtonGroup
+              size="sm"
+              value={String(days)}
+              onChange={(_, value) => value && setDays(Number(value) as DayRange)}
+              data-testid="usage-range-toggle"
+            >
+              {DAY_RANGES.map(r => (
+                <Button key={r} value={String(r)}>
+                  {r}d
+                </Button>
+              ))}
+            </ToggleButtonGroup>
+          )}
           <IconButton
             size="sm"
             onClick={() => refetch()}
@@ -124,8 +150,9 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
 
       <Alert color="neutral" size="sm" sx={{ mb: 2 }}>
         {isOrg
-          ? "Spend billed to this organization's credit pool (owner-scoped). Members are the users who ran each call; feature is the product surface (chat, agent, operations, embedding). Data comes from usage events recorded since deploy."
-          : "Spend billed to your personal credit pool (owner-scoped). Feature is the product surface (chat, agent, operations, embedding); keys billed to an organization appear in that org's dashboard instead. Data comes from usage events recorded since deploy."}
+          ? "Spend billed to this organization's credit pool (owner-scoped). Members are the users who ran each call; feature is the product surface (chat, agent, operations, embedding). Per-call detail comes from usage events recorded since deploy."
+          : "Spend billed to your personal credit pool (owner-scoped). Feature is the product surface (chat, agent, operations, embedding); keys billed to an organization appear in that org's dashboard instead. Per-call detail comes from usage events recorded since deploy." +
+            (reconcileLedger ? ' Charges with no such record appear as Other charges.' : '')}
       </Alert>
 
       {error && (
@@ -149,7 +176,7 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
         <Stack spacing={3}>
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
             <Chip color="primary" variant="soft" data-testid="usage-total-credits">
-              {formatCredits(data?.totals.creditsCharged ?? 0)} credits
+              {formatCredits(totalCredits)} credits
             </Chip>
             <Chip color="neutral" variant="soft" data-testid="usage-total-cogs">
               {formatUsd(data?.totals.cogsUsd ?? 0)} COGS
@@ -167,6 +194,10 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
               <Typography level="body-sm" color="neutral">
                 No usage in this window.
               </Typography>
+            ) : !hasEvents ? (
+              <Typography level="body-sm" color="neutral" data-testid="usage-no-events-note">
+                The charges in this window have no per-call record, so there is no daily chart.
+              </Typography>
             ) : (
               <DailyAreaChart
                 data={chartData}
@@ -176,7 +207,20 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
                 height={260}
               />
             )}
+            {hasResidual && hasEvents && (
+              <Typography level="body-xs" color="neutral" data-testid="usage-chart-detail-note">
+                Chart covers charges with a per-call record only.
+              </Typography>
+            )}
           </Box>
+
+          {detailExceedsLedger && (
+            <Typography level="body-xs" color="neutral" data-testid="usage-ledger-detail-note">
+              Per-call records total {formatCredits(eventCredits)} credits, above the posted ledger total of{' '}
+              {formatCredits(ledgerCredits)} credits. The chart and per-call breakdown show those records; the headline
+              shows the posted ledger.
+            </Typography>
+          )}
 
           {isOrg && (
             <BreakdownTable
@@ -198,6 +242,7 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
             title="By model"
             testid="usage-model-table"
             keyLabel="Model"
+            emptyText={hasResidual ? "No per-call detail for this window's charges." : undefined}
             rows={(data?.byModel ?? []).map(r => ({
               key: `${r.provider}-${r.model}`,
               label: `${r.provider} / ${r.model}`,
@@ -211,14 +256,33 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
             title="By feature"
             testid="usage-feature-table"
             keyLabel="Feature"
-            rows={(data?.byFeature ?? []).map(r => ({
-              key: r.feature,
-              label: r.feature,
-              requests: r.requests,
-              cogsUsd: r.cogsUsd,
-              creditsCharged: r.creditsCharged,
-            }))}
+            rows={[
+              ...(data?.byFeature ?? []).map(r => ({
+                key: r.feature,
+                label: usageFeatureLabel(r.feature),
+                requests: r.requests,
+                cogsUsd: r.cogsUsd,
+                creditsCharged: r.creditsCharged,
+              })),
+              ...(hasResidual
+                ? [
+                    {
+                      key: 'other-charges',
+                      label: 'Other charges (no per-call detail)',
+                      requests: 0,
+                      cogsUsd: 0,
+                      creditsCharged: residualCredits,
+                    },
+                  ]
+                : []),
+            ]}
           />
+          {hasResidual && (
+            <Typography level="body-xs" color="neutral" sx={{ mt: -2 }} data-testid="usage-residual-note">
+              Other charges are on your credit ledger but have no per-call record, so they carry no model, request count
+              or COGS.
+            </Typography>
+          )}
 
           <Box>
             <Typography level="title-sm" sx={{ mb: 1 }}>
@@ -272,6 +336,7 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
               {isOrg
                 ? 'Where this org\'s spend originated (from the ledger; credits only, no COGS). "Unclassified" is usage with no source recorded on the ledger row.'
                 : 'Where your spend originated (from the ledger; credits only, no COGS). "Unclassified" is usage with no source recorded on the ledger row.'}
+              {hasResidual && ' Metered AI usage only; other charges are not attributed to a source.'}
             </Typography>
             <Sheet sx={{ maxHeight: 320, overflow: 'auto' }}>
               <Table stickyHeader hoverRow size="sm" data-testid="usage-source-table">
@@ -294,7 +359,7 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
                     <tr>
                       <td colSpan={3}>
                         <Typography level="body-sm" color="neutral">
-                          No usage in this window.
+                          {hasResidual ? 'No metered AI usage in this window.' : 'No usage in this window.'}
                         </Typography>
                       </td>
                     </tr>

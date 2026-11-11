@@ -29,8 +29,8 @@ export const DEGENERATE_FINISH_REASON = 'degenerate_repetition';
 
 /**
  * The model declined the request (Anthropic's native `stop_reason: 'refusal'`). Only reaches a
- * settled turn for models outside REFUSAL_FALLBACK_MODELS; for those the backend throws so the
- * completion loop falls back instead.
+ * settled turn when refusalFallback resolves false (see resolveApiSurface) or the caller requests
+ * settleRefusal; otherwise the backend throws so the completion loop falls back instead.
  */
 export const REFUSAL_FINISH_REASON = 'refusal';
 
@@ -46,6 +46,9 @@ export const CONTENT_FILTER_FINISH_REASON = 'content_filter';
 export function isProviderRefusalStopReason(stopReason: string | undefined | null): boolean {
   return stopReason === REFUSAL_FINISH_REASON || stopReason === CONTENT_FILTER_FINISH_REASON;
 }
+
+/** Shown when the model declined and produced no answer; same copy as the completions API's content_blocked frame (sseRoute.ts). */
+export const MODEL_DECLINED_MESSAGE = 'The model declined this request';
 
 /**
  * Stamped on `promptMeta.finishReason` when recovery settles a quest whose run died without

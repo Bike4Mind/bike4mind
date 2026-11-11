@@ -21,6 +21,7 @@ import {
   type ViewTab,
 } from '../shared';
 import { AnomalyBanner } from '../shared/AnomalyBanner';
+import { useMissingAdminPermission } from '../shared/MissingPermission';
 import { ADMIN_REGION_GAP, adminFocus } from '../shared/adminStyles';
 import { useAdminModal } from '../useAdminModal';
 import { useAdminRevenueTrend } from '../Revenue/useAdminRevenue';
@@ -274,7 +275,9 @@ const AdminSubscriptions: React.FC = () => {
   const pastDue = summary?.views.pastDue;
   const mrr = summary?.mrr;
   const mismatches = summary?.mismatches;
-  const sparklines = useTileSparklines(!searching && SPARKLINE_VIEWS.has(activeView?.id ?? ''));
+  // The revenue trend is a support:read route; a credits-only delegate gets the tiles without sparklines.
+  const canReadRevenue = useMissingAdminPermission('support:read') === null;
+  const sparklines = useTileSparklines(canReadRevenue && !searching && SPARKLINE_VIEWS.has(activeView?.id ?? ''));
 
   return (
     <Stack gap={ADMIN_REGION_GAP} sx={{ width: '100%', minWidth: 0 }} data-testid="admin-subscriptions-tab">

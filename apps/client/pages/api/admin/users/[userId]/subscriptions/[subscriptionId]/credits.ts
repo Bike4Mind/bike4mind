@@ -1,7 +1,6 @@
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ApiKeyScope } from '@bike4mind/common';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_MAP } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
@@ -12,7 +11,8 @@ import {
   recordAdminActionFromRequest,
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
-import { baseApi } from '@server/middlewares/baseApi';
+import { assertDelegateCanChangeSubscription } from '@server/admin/creditGrants/delegateTargets';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
@@ -28,17 +28,8 @@ interface RequestQuery {
   subscriptionId: string;
 }
 
-// requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
-// before req.user is set, so a key issued for a narrow integration can't modify
-// a subscription's credit rate just because its owner is an admin. JWT/browser
-// admins skip that check and still pass the isAdmin gate below.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { PUT: 'credits:adjust' } }).put(
   asyncHandler(async (req, res) => {
-    // Check admin authorization
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { userId, subscriptionId } = req.query as RequestQuery;
     const { creditsPerCycle } = UpdateCreditsSchema.parse(req.body);
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
@@ -62,6 +53,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
     if (!subscription) {
       throw new NotFoundError('Subscription not found');
     }
+    await assertDelegateCanChangeSubscription(req.user, subscription, 'change the credits of');
     // Same owner rule as the comp route: the user, or the organization's billing owner.
     const ownerUserId =
       subscription.ownerType === SubscriptionOwnerType.Organization

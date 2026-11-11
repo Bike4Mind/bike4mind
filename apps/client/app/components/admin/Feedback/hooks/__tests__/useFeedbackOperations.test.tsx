@@ -74,6 +74,18 @@ describe('useFeedbackOperations totalSettled', () => {
   });
 });
 
+describe('useFeedbackOperations organizations query', () => {
+  it('asks the server for the facet alone', async () => {
+    mocks.getFeedbackFromServer.mockReset();
+    mocks.getFeedbackFromServer.mockResolvedValue({ items: [], total: 0, organizations: ['Acme'] });
+
+    const { result } = renderOperations(listParams(1));
+
+    await waitFor(() => expect(result.current.organizations).toEqual(['Acme']));
+    expect(mocks.getFeedbackFromServer).toHaveBeenCalledWith(expect.objectContaining({ facetsOnly: true }));
+  });
+});
+
 describe('useFeedbackOperations isError', () => {
   beforeEach(() => {
     mocks.getFeedbackFromServer.mockReset();
@@ -81,7 +93,7 @@ describe('useFeedbackOperations isError', () => {
 
   it('reports a failed list request', async () => {
     mocks.getFeedbackFromServer.mockImplementation((params: FeedbackListParams) =>
-      params.includeOrganizations
+      params.facetsOnly
         ? Promise.resolve({ items: [], total: 0, organizations: [] })
         : Promise.reject(new Error('list failed'))
     );
@@ -102,7 +114,7 @@ describe('useFeedbackOperations isError', () => {
 });
 
 describe('useFeedbackOperations handleStatusChange', () => {
-  it('names the new status by its label in the toast', async () => {
+  it('names the type, reporter and new status label in the toast', async () => {
     mocks.getFeedbackFromServer.mockResolvedValue({ items: [], total: 0, organizations: [] });
     mocks.updateFeedbackOnServer.mockResolvedValue({ ok: true });
     const item: IExtendedFeedbackDocument = {
@@ -126,9 +138,28 @@ describe('useFeedbackOperations handleStatusChange', () => {
     const { result } = renderOperations(listParams(1));
     await act(() => result.current.handleStatusChange(item, FeedbackStatus.InProgress));
 
-    expect(mocks.toastSuccess).toHaveBeenCalledWith(
-      '"Short report" feedback from reporter updated to: In progress',
-      expect.anything()
-    );
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Feedback from reporter set to In progress', expect.anything());
+    expect(mocks.updateFeedbackOnServer).toHaveBeenCalledTimes(1);
+    const [id, payload] = mocks.updateFeedbackOnServer.mock.calls[0];
+    expect(id).toBe('fb-1');
+    expect(payload).toEqual({ userId: 'user-1', username: 'reporter', status: FeedbackStatus.InProgress });
+  });
+
+  it('names the report by its type rather than quoting its text, which may be empty', async () => {
+    mocks.getFeedbackFromServer.mockResolvedValue({ items: [], total: 0, organizations: [] });
+    mocks.updateFeedbackOnServer.mockResolvedValue({ ok: true });
+    const item = {
+      _id: 'fb-2',
+      userId: 'user-2',
+      status: FeedbackStatus.New,
+      username: 'rater',
+      type: FeedbackType.THUMBS_DOWN,
+      content: '',
+    } as unknown as IExtendedFeedbackDocument;
+
+    const { result } = renderOperations(listParams(1));
+    await act(() => result.current.handleStatusChange(item, FeedbackStatus.Closed));
+
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Thumbs down from rater set to Closed', expect.anything());
   });
 });

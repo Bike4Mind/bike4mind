@@ -18,6 +18,19 @@ export const AdminPermissionsSchema = z
   .max(ADMIN_PERMISSIONS.length)
   .refine(ids => new Set(ids).size === ids.length, 'Admin permissions must not repeat');
 export type AdminPermissionId = z.infer<typeof AdminPermissionSchema>;
+
+/** `before` is the set the editor loaded, so a concurrent change is a conflict rather than a silent overwrite. */
+export const AdminUserPermissionsChangeSchema = z
+  .object({ before: AdminPermissionsSchema, adminPermissions: AdminPermissionsSchema, reason: z.string() })
+  .strict();
+export type AdminUserPermissionsChange = z.infer<typeof AdminUserPermissionsChangeSchema>;
+
+/**
+ * Orders a permission set the way ADMIN_PERMISSIONS lists them, so stored arrays and audit diffs are
+ * stable. Drops repeats and ids no longer in the list.
+ */
+export const sortAdminPermissions = (ids: readonly string[]): AdminPermissionId[] =>
+  ADMIN_PERMISSIONS.filter(id => ids.includes(id));
 /** One permission, or a list any one of which suffices. */
 export type AdminPermissionRequirement = AdminPermissionId | readonly AdminPermissionId[];
 
@@ -30,6 +43,9 @@ export const SETTINGS_PAGE_READ = ['support:read', 'settings:manage'] as const s
 
 /** The reads of a page whose writes need `users:moderate`; the SETTINGS_PAGE_READ counterpart for moderation. */
 export const MODERATION_PAGE_READ = ['support:read', 'users:moderate'] as const satisfies readonly AdminPermissionId[];
+
+/** The same for credits: the credit, grant and subscription reads a `credits:adjust` delegate needs beside its writes. */
+export const CREDITS_PAGE_READ = ['support:read', 'credits:adjust'] as const satisfies readonly AdminPermissionId[];
 
 type AdminIdentity = {
   isAdmin?: boolean | null;

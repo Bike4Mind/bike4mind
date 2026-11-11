@@ -1,5 +1,5 @@
 import type { AdminSubscriptionSyncChange } from '@client/app/utils/adminSubscriptionDetail';
-import type { ApplyStripeSubscriptionStateResult } from './applyStripeSubscriptionState';
+import type { ApplyStripeSubscriptionStateResult } from '@bike4mind/server-utils/subscriptions/applyStripeSubscriptionState';
 
 // Every value applyStripeSubscriptionState writes except lastSyncedAt, which changes on every run.
 const SYNCED_FIELDS = [

@@ -12,7 +12,7 @@ import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions
 import { evaluateSpend, type EvaluateDeps } from './evaluate';
 import type { SpendThresholds } from './rules';
 import { createSpendPost } from './slackPost';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { NO_TRUST, parseSpendTrustConfig, type SpendTrustConfig } from './trust';
 
 const BUCKET_MS = 5 * 60 * 1000;

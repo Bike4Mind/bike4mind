@@ -29,31 +29,35 @@ const REFUSAL_MESSAGES = {
 const failureBody = (error: string, code: string, requestId: string | undefined) =>
   buildErrorBody({ error, requestId, additionalInfo: { code } });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.REWARDS_GRANT], allowedMethods: ['POST'] }).post(
-  async (req, res) => {
-    // The scope gate only runs for key callers, so a session would otherwise reach the payout.
-    if (!req.apiKeyInfo) throw new ForbiddenError('API key required');
+// A partner server calling in: a use of the key, never an action by its owner.
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.REWARDS_GRANT],
+  allowedMethods: ['POST'],
+  recordsActivity: false,
+  recordsKeyUse: true,
+}).post(async (req, res) => {
+  // The scope gate only runs for key callers, so a session would otherwise reach the payout.
+  if (!req.apiKeyInfo) throw new ForbiddenError('API key required');
 
-    const parsed = bodySchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json(failureBody(fromZodError(parsed.error).message, 'INVALID', req.requestId));
-    }
-    const { userId, puzzleDate, tier, hard } = parsed.data;
-    if (!isWithinPuzzleWindow(puzzleDate)) {
-      return res.status(400).json(failureBody('puzzleDate out of range', 'INVALID', req.requestId));
-    }
-
-    const result = await grantPuzzleReward({ userId, puzzleDate, tier, hard });
-    if (!result.ok) {
-      Logger.info('[partners] headword reward refused', { userId, puzzleDate, tier, code: result.code });
-      return res.status(result.status).json(failureBody(REFUSAL_MESSAGES[result.code], result.code, req.requestId));
-    }
-
-    const { granted, credits, balance, firstSolveCredits } = result;
-    Logger.info('[partners] headword reward', { userId, puzzleDate, tier, granted, credits });
-    return res.status(200).json({ granted, credits, balance, firstSolveCredits });
+  const parsed = bodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json(failureBody(fromZodError(parsed.error).message, 'INVALID', req.requestId));
   }
-);
+  const { userId, puzzleDate, tier, hard } = parsed.data;
+  if (!isWithinPuzzleWindow(puzzleDate)) {
+    return res.status(400).json(failureBody('puzzleDate out of range', 'INVALID', req.requestId));
+  }
+
+  const result = await grantPuzzleReward({ userId, puzzleDate, tier, hard });
+  if (!result.ok) {
+    Logger.info('[partners] headword reward refused', { userId, puzzleDate, tier, code: result.code });
+    return res.status(result.status).json(failureBody(REFUSAL_MESSAGES[result.code], result.code, req.requestId));
+  }
+
+  const { granted, credits, balance, firstSolveCredits } = result;
+  Logger.info('[partners] headword reward', { userId, puzzleDate, tier, granted, credits });
+  return res.status(200).json({ granted, credits, balance, firstSolveCredits });
+});
 
 export const config = {
   api: {

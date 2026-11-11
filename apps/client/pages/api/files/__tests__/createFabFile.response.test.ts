@@ -18,6 +18,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
+  fabFileRepository: {},
   adminSettingsRepository: { getSettingsValue: vi.fn() },
   scopedSettingsRepository: { findOverrides: vi.fn().mockResolvedValue([]) },
   dataLakeRepository: { findByDatalakeTag: vi.fn(), find: vi.fn().mockResolvedValue([]) },
@@ -29,7 +30,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn(async (id: string) => ({ id, isAdmin: false })) },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
     userId: req.user.id,
     isAdmin: !!req.user.isAdmin,
@@ -43,6 +44,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
   return { ...actual, fabFilesService: { ...actual.fabFilesService, createFabFile: h.createFabFile } };
 });
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-fab-bucket' } } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
 
 import handler from '../createFabFile';
 

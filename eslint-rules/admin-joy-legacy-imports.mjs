@@ -27,7 +27,6 @@ export default {
   'EventMetrics/UserActivity/AnalyticsErrorCard.tsx': [[2, '3e3939bbcd273e74']],
   'EventMetrics/UserActivity/filters/MetadataFilterPanel.tsx': [[2, 'b522c36076f32b47']],
   'EventMetrics/UserActivity/UserActivityTab.tsx': [[2, '7fe9553a65056a2a']],
-  'Feedback/FocusedFeedbackCard.tsx': [[1, '5ba6a9b295238192']],
   'FilesTab/EditTagModal.tsx': [[3, 'e29b446aa5957de4']],
   'FilesTab/index.tsx': [[4, 'bb9b66251f6b8489']],
   'GitHubConnectionTab.tsx': [[8, '1fd7087d06a0ddbe']],

@@ -28,11 +28,11 @@ export const editImageContract = defineEndpoint({
   description:
     'Queues an edit of an existing image and returns the quest that will carry the result, before the ' +
     'render runs. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` ' +
-    'schema). `image` is the URL of the source image; `fabFileIds` must name at least one file except on FLUX.2 models, ' +
+    'schema). `image` is the URL of the source image; `fabFileIds` must name at least one file except on FLUX.2 and FLUX 3 models, ' +
     'which edit from the prompt with no mask and reject `fabFileIds` with a 400; elsewhere the first is ' +
     'the inpainting mask. `referenceImageFabFileIds` adds reference images after the ' +
     'source image, so the mask always applies to the source: up to 15 on gpt-image models, 7 on FLUX.2 ' +
-    "models other than klein, and 3 on FLUX.2 klein (the source takes one of FLUX.2's slots). Sending any " +
+    'models other than klein, 3 on FLUX.2 klein, and 9 on FLUX 3 (the source takes one input slot). Sending any ' +
     "with another model, or more than the model's limit, is rejected with a 400 rather than ignored; more " +
     'than 15 ids fails schema validation with a 422. Both id fields take ids ' +
     'from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` ' +
@@ -40,7 +40,13 @@ export const editImageContract = defineEndpoint({
     '`image` takes a URL rather than an id, so a source uploaded the same way is passed as its ' +
     '`download_url`, which must still be unexpired when the render runs. The edited image is not a file ' +
     'id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. ' +
-    '`seed` makes an edit reproducible on BFL (FLUX) models only; gpt-image and Gemini models ignore it. ' +
+    '`seed` makes an edit reproducible on BFL models that support seeds; FLUX 3 Image (not Klein), gpt-image and Gemini ignore it. ' +
+    '`edit_regions` carries region-edit bounding boxes: each entry has a `prompt` and a ' +
+    '`bbox` of `[y_min, x_min, y_max, x_max]` in normalised [0, 1] coordinates (BFL convention, ' +
+    'vertical axis first). At most 8 regions per request. Accepted on FLUX 3 models only ' +
+    '(non-FLUX-3 → 400); schema-validated on ingress (422 on bad coordinates / degenerate boxes / ' +
+    "over-cap count, or a box that collapses after rounding to the 0-1000 grid), then converted to BFL's " +
+    'prompt-inline edit layout (`from`, `src_bbox`, `tgt_bbox`, `desc`) before provider submission. ' +
     'Credits are checked when ' +
     'the render runs, so insufficient credits arrive on the polled quest rather than as a 422. ' +
     '`organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case ' +
@@ -88,7 +94,7 @@ export const editImageContract = defineEndpoint({
     },
     422: {
       description:
-        'The body is malformed, or it names the billing organization ambiguously. Both `organizationId` and ' +
+        'The body is malformed, `edit_regions` has an out-of-range coordinate or degenerate box, or it names the billing organization ambiguously. Both `organizationId` and ' +
         '`organization_id` sent with different values is a `422`; so is an empty or blank value for either ' +
         '(a blank is never treated as an omission, which would bill a different payer), and so is any other ' +
         'billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped ' +

@@ -144,7 +144,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ bucket: 'generated', delete: generatedDelete }),
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: (...args: unknown[]) => {
     mockRefs.unpublishArgs = args;
     return Promise.resolve({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
@@ -174,11 +174,9 @@ describe('GET /api/files', () => {
       await mockRefs.getHandler!(req, res);
       const adapter = mockRefs.searchArgs?.[2] as {
         storage: {
-          signedUrlCache?: string;
           generateSignedUrl: (path: string, expiry: number) => Promise<string | null>;
         };
       };
-      expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
       await adapter.storage.generateSignedUrl('owned/report.txt', 600);
       expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', {
         expiresIn: 600,

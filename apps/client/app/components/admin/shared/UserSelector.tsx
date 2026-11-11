@@ -1,5 +1,5 @@
 import { useGetUsers } from '@client/app/hooks/data/user';
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 import {
   Autocomplete,
   AutocompleteOption,

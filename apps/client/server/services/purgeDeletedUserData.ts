@@ -9,12 +9,12 @@ import {
   campaignWatchRepository,
 } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
-import { retainDeletedSignupTraces } from '@server/auth/signupNetworkLimits';
-import { purgeUserPublishedArtifacts } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { retainDeletedSignupTraces } from '@bike4mind/server-utils/auth/signupNetworkLimits';
+import { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { withdrawAuthorListings } from '@bike4mind/server-utils/skillMarket/market';
 import { decryptStoredToken, revokeDriveGrant } from '@bike4mind/server-utils/integrations/google/drive/common';
-import { flagConnectionsStoppedByDisconnect } from '@server/integrations/google/drive/flagConnectionsStoppedByDisconnect';
-import { revokeAtlassianGrant } from '@server/integrations/jira/revokeAtlassianGrant';
+import { flagConnectionsStoppedByDisconnect } from '@bike4mind/server-utils/integrations/google/drive/flagConnectionsStoppedByDisconnect';
+import { revokeAtlassianGrant } from '@bike4mind/server-utils/integrations/jira/revokeAtlassianGrant';
 
 interface MinimalLogger {
   info: (msg: string) => void;

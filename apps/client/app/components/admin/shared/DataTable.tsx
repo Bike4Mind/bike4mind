@@ -55,6 +55,8 @@ export type DataTableProps<Row> = {
   selection?: AdminSelection;
   onSelectionChange?: (selection: AdminSelection) => void;
   onRowActivate?: (row: Row) => void;
+  /** Single-key commands on a focused row (A accept, O override); same modifier and IME guards as X. */
+  rowShortcuts?: (row: Row) => Partial<Record<DataTableRowShortcut, () => void>>;
   activeRowId?: string;
   testId?: string;
   rowTestId?: (row: Row) => string;
@@ -74,12 +76,19 @@ export type DataTableProps<Row> = {
   maxHeight?: string;
   /** Show the scrollbar thumb all the time instead of only on hover. */
   alwaysShowScrollbar?: boolean;
+  /**
+   * `false` drops the table's own border and radius, for a table that is the body of a `SectionCard`
+   * (`body="custom"`): the card is then the one surface (DESIGN_GUIDE.md, Cards).
+   */
+  framed?: boolean;
 };
 const CELL_CONTROLS = 'button, input, a, [role="checkbox"], [role="menu"], [role="menuitem"]';
 
 function nextDirection(current: DataTableSort | undefined, columnId: string): DataTableSort {
   return { columnId, direction: current?.columnId === columnId && current.direction === 'asc' ? 'desc' : 'asc' };
 }
+
+export type DataTableRowShortcut = 'a' | 'o';
 
 export function DataTable<Row>({
   rows,
@@ -93,6 +102,7 @@ export function DataTable<Row>({
   selection,
   onSelectionChange,
   onRowActivate,
+  rowShortcuts,
   activeRowId,
   testId = 'admin-data-table',
   rowTestId,
@@ -105,6 +115,7 @@ export function DataTable<Row>({
   minWidth = '40rem',
   maxHeight = '65vh',
   alwaysShowScrollbar = false,
+  framed = true,
 }: DataTableProps<Row>) {
   const [localSort, setLocalSort] = useState<DataTableSort>();
   const [localPage, setLocalPage] = useState(0);
@@ -187,24 +198,30 @@ export function DataTable<Row>({
   };
   const onRowKeyDown = (event: KeyboardEvent<HTMLTableRowElement>, row: Row, id: string) => {
     if (event.target !== event.currentTarget) return;
+    const plainKey =
+      !event.metaKey && !event.ctrlKey && !event.altKey && !event.repeat && !event.nativeEvent.isComposing;
+    const shortcut =
+      plainKey && !event.shiftKey ? rowShortcuts?.(row)[event.key.toLowerCase() as DataTableRowShortcut] : undefined;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       focusSiblingRow(event.currentTarget, event.key === 'ArrowDown' ? 1 : -1);
-    } else if (
-      event.key.toLowerCase() === 'x' &&
-      selectable &&
-      !event.metaKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.repeat &&
-      !event.nativeEvent.isComposing
-    ) {
+    } else if (event.key.toLowerCase() === 'x' && selectable && plainKey) {
       event.preventDefault();
       toggleRow(id, !isSelected(id), event.shiftKey);
+    } else if (shortcut) {
+      event.preventDefault();
+      shortcut();
     } else if (onRowActivate && (event.key === 'Enter' || event.key === ' ')) {
       event.preventDefault();
       onRowActivate(row);
     }
+  };
+  const rowKeyShortcuts = (row: Row): string | undefined => {
+    const keys = [
+      ...(selectable ? ['x'] : []),
+      ...Object.entries(rowShortcuts?.(row) ?? {}).flatMap(([key, run]) => (run !== undefined ? [key] : [])),
+    ];
+    return keys.length ? keys.join(' ') : undefined;
   };
   const onRowClick = (event: MouseEvent<HTMLTableRowElement>, row: Row) => {
     const target = event.target as HTMLElement;
@@ -260,12 +277,18 @@ export function DataTable<Row>({
       sx={{
         ...adminSurface,
         ...adminFocusScope,
-        borderWidth: 1,
-        borderStyle: 'solid',
-        borderRadius: 'lg',
+        ...(framed
+          ? { borderWidth: 1, borderStyle: 'solid', borderRadius: 'lg' }
+          : {
+              border: 0,
+              borderRadius: 0,
+              // As a card's last child, round with the card or the square corner paints over its border arc.
+              '&:last-child': { borderBottomLeftRadius: 'inherit', borderBottomRightRadius: 'inherit' },
+            }),
         overflow: 'hidden',
       }}
       data-testid={`${testId}-frame`}
+      data-framed={framed}
     >
       <Box
         role="region"
@@ -295,7 +318,8 @@ export function DataTable<Row>({
             '--TableCell-headBackground': 'var(--joy-palette-admin-surfaceSubtle)',
             '--TableCell-paddingX': '12px',
             '& th, & td': { borderColor: 'admin.border', color: 'admin.ink', verticalAlign: 'middle' },
-            '& thead th': { height: 38, color: 'admin.inkMuted', fontSize: 12, fontWeight: 500 },
+            // No block padding: a sortable header's 32 px skinned `sm` button would otherwise push the row to 42.
+            '& thead th': { height: 38, py: 0, color: 'admin.inkMuted', fontSize: 12, fontWeight: 500 },
             '& tbody tr[data-row-id] td': { height: 56 },
             '& tbody tr[data-row-id]:focus-visible': {
               outline: '2px solid var(--joy-palette-admin-accent)',
@@ -402,8 +426,8 @@ export function DataTable<Row>({
                         <tr
                           key={id}
                           data-row-id={id}
-                          tabIndex={onRowActivate || selectable ? 0 : undefined}
-                          aria-keyshortcuts={selectable ? 'x' : undefined}
+                          tabIndex={onRowActivate || selectable || rowShortcuts ? 0 : undefined}
+                          aria-keyshortcuts={rowKeyShortcuts(row)}
                           aria-selected={selectable ? isSelected(id) : activeRowId === id}
                           data-testid={rowTestId?.(row) ?? `admin-table-row-${id}`}
                           onClick={event => onRowClick(event, row)}

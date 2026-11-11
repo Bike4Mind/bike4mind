@@ -99,9 +99,16 @@ vi.mock('@tanstack/react-router', () => ({
   useRouter: () => ({ history: {} }),
 }));
 // finishLogin calls applyRedirect(router.history, ...); stub it so the empty history is inert.
-vi.mock('@client/app/utils/authRedirect', () => ({
+vi.mock('@client/app/utils/authRedirect', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/authRedirect')>()),
   applyRedirect: mocks.applyRedirect,
   appendRedirectTo: (url: string) => url,
+}));
+const premiumNav = vi.hoisted(() => ({ items: [] as import('@client/app/premiumContract').PremiumNavDescriptor[] }));
+vi.mock('@client/app/premium-generated/premiumNavItems.generated', () => ({
+  get premiumNavItems() {
+    return premiumNav.items;
+  },
 }));
 vi.mock('@client/app/utils/refreshCoordinator', () => ({ resetRefreshCoordinator: vi.fn() }));
 vi.mock('@client/app/utils/signupConversion', () => ({ trackSignupConversion: mocks.trackSignupConversion }));
@@ -1089,5 +1096,37 @@ describe('MultiStepLogin - signup bot checks', () => {
     await submitEmail(userEvent.setup());
     expect(mocks.formToken.refetch).not.toHaveBeenCalled();
     expect(mocks.sendOTC).toHaveBeenCalledWith({ email: 'new@test.com', formToken: undefined, formExtra: '' });
+  });
+});
+
+describe('MultiStepLogin - product hint from redirectTo', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userState.currentUser = null;
+    mocks.accessTokenState.accessToken = null;
+  });
+  afterEach(() => {
+    premiumNav.items = [];
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('names the product on the email step only', async () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/login?redirectTo=%2Fproduct%2Frun');
+    const user = userEvent.setup();
+    renderLogin();
+    expect(screen.getByTestId('auth-redirect-product-hint')).toHaveTextContent('auth.signInToContinueTo');
+    await user.type(textboxIn('login-email-input'), 'someone@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+    await screen.findByTestId('login-otc-input');
+    expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
+  });
+
+  it('leaves a sign-in with no product redirect unchanged', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/login?redirectTo=%2Fnew');
+    renderLogin();
+    expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
+    expect(screen.getByText('auth.signInOrCreate')).toBeInTheDocument();
   });
 });

@@ -101,6 +101,9 @@ describe('describeAuditEntry', () => {
     expect(sentence('emailVerified', true, false)).toBe('Marked email unverified');
     expect(sentence('tags', ['a'], ['a', 'b'])).toBe('Tags: added b');
     expect(sentence('tags', 'a', null)).toBe('Changed tags');
+    expect(sentence('adminPermissions', ['support:read'], ['keys:revoke'])).toBe(
+      'Admin permissions: added keys:revoke; removed support:read'
+    );
     expect(sentence('preferredContact', 'Text', 'Call')).toBe('Changed preferred contact');
   });
 
@@ -145,7 +148,7 @@ describe('auditUndo', () => {
 
   it('reverses a field change that still stands', () => {
     expect(auditUndo(suspend, [], buildProfile({ isBanned: true }))).toEqual({
-      patch: { isBanned: false, statusChangeReason: 'Undo: Chargeback' },
+      patch: { isBanned: false, statusChangeReason: 'Undo: Chargeback', undoSuspension: true },
       redo: { isBanned: true, statusChangeReason: 'Chargeback' },
     });
   });
@@ -158,7 +161,7 @@ describe('auditUndo', () => {
       changes: [{ field: 'isBanned', before: false, after: true }],
     });
     expect(auditUndo(entry, [], buildProfile({ isBanned: true }))).toEqual({
-      patch: { isBanned: false, statusChangeReason: 'Undo: Repeated abuse reports' },
+      patch: { isBanned: false, statusChangeReason: 'Undo: Repeated abuse reports', undoSuspension: true },
       redo: { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
     });
   });

@@ -204,7 +204,7 @@ UsageEventSchema.index({ sessionId: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s optional source filter over a time window.
 UsageEventSchema.index({ source: 1, createdAt: -1 });
 // Supports the hourly completion sequence/synchrony sweeps' 24h scan of completion_api rows.
-// Built via migration 20260921240070_ensure-usage-event-feature-status-index, not autoIndex.
+// Built via migration 20260921240075_ensure-usage-event-feature-status-index, not autoIndex.
 UsageEventSchema.index({ feature: 1, status: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s byConsumer cut ($match apiKeyId present).
 UsageEventSchema.index({ apiKeyId: 1, createdAt: -1 });
@@ -789,7 +789,9 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     ownerType: CreditHolderType,
     days: number = 30
   ): Promise<IOwnerUsageSummary> {
-    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    // setDate, like the ledger queries, so both cuts of GET /api/usage share one cutoff.
+    const from = new Date();
+    from.setDate(from.getDate() - days);
 
     // Every breakdown shares the same three sums, so $group + $project them once.
     const spendSums = {

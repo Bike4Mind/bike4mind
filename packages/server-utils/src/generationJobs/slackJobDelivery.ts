@@ -40,6 +40,8 @@ export type SlackJobDeliveryDeps = {
   downloadOutput(output: VideoJobOutput): Promise<Buffer>;
   /** Behind the same moderation gate: a url only when the output may be served. */
   signOutputUrl(output: VideoJobOutput, expiresInSeconds: number): Promise<SignedOutput>;
+  /** An app link that re-checks `userId`'s access when clicked; null when the output cannot be linked. */
+  buildOutputLink(output: VideoJobOutput, userId: string, ttlSeconds: number): string | null;
   sleep(ms: number): Promise<void>;
   logger: Logger;
 };
@@ -125,13 +127,17 @@ const deliverClip = async (
       await post(client, job, target, NOT_POSTED_TEXT, deps);
       return;
     }
-    // No duration is promised: a URL signed with the worker's temporary credentials can stop working sooner than
-    // the TTL requested above.
+    const link = deps.buildOutputLink(output, job.requestedBy, SLACK_VIDEO_LINK_TTL_SECONDS);
+    if (!link) {
+      deps.logger.warn('slack video link skipped: the output cannot be linked', { jobId: job.id });
+      await post(client, job, target, NOT_POSTED_TEXT, deps);
+      return;
+    }
     await post(
       client,
       job,
       target,
-      `Your video is ready: <${fallback.url}|Download video> (the link is time-limited).`,
+      `Your video is ready: <${link}|Download video> (the link expires in ${SLACK_VIDEO_LINK_TTL_SECONDS / 86400} days).`,
       deps
     );
   } catch (error) {
@@ -142,7 +148,7 @@ const deliverClip = async (
 
 /**
  * Posts a finished video job back to the Slack thread that asked for it: the clip itself when it fits the upload
- * cap, a presigned link otherwise, and a plain message for a failed, blocked or cancelled job. A no-op for any
+ * cap, an app file link otherwise, and a plain message for a failed, blocked or cancelled job. A no-op for any
  * other job. The engine notifies a terminal job once, so this does not de-duplicate.
  */
 export async function deliverJobToSlack(job: IGenerationJobDocument, deps: SlackJobDeliveryDeps): Promise<void> {

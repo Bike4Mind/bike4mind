@@ -104,9 +104,28 @@ export interface WebSyncSettings {
   enabled: boolean;
 }
 
+/** The sidebar's dismissible pointers to the syncs; see renderer chat/SyncHints. */
+export type SyncHintId = 'sidebar-empty' | 'claude-code' | 'web';
+
+const SYNC_HINT_IDS: readonly SyncHintId[] = ['sidebar-empty', 'claude-code', 'web'];
+
+export function isSyncHintId(value: unknown): value is SyncHintId {
+  return SYNC_HINT_IDS.includes(value as SyncHintId);
+}
+
+export interface SyncHintsState {
+  /** Hints this account closed for good. */
+  dismissed: SyncHintId[];
+  /** Claude Code worktree sessions in the default folder, by file name alone; null until looked. */
+  codeSessions: number | null;
+  /** Notebooks the account has on the web; null until counted. */
+  webNotebooks: number | null;
+}
+
 export interface ClaudeImportState {
   /** Imports land in the signed-in account's sessions, so nothing runs while signed out. */
   signedIn: boolean;
+  hints: SyncHintsState;
   code: {
     settings: ClaudeCodeImportSettings;
     /** The folder actually read: the setting, or the default. */

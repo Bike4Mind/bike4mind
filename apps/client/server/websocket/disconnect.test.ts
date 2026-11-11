@@ -55,6 +55,21 @@ describe('$disconnect', () => {
     expect(mockUpdateLogoutTime).toHaveBeenCalledWith('user-1', expect.anything());
   });
 
+  it('marks the user offline without stamping lastActiveAt', async () => {
+    await run();
+
+    expect(mockUserUpdateOne).toHaveBeenCalledWith({ _id: 'user-1' }, { isOnline: false });
+  });
+
+  it('writes nothing to the user while another connection is still open', async () => {
+    mockCountDocuments.mockResolvedValue(1);
+
+    await run();
+
+    expect(mockUserUpdateOne).not.toHaveBeenCalled();
+    expect(mockUpdateLogoutTime).not.toHaveBeenCalled();
+  });
+
   it('still pulls the subscribers when the row is already gone', async () => {
     mockFindOneAndDelete.mockResolvedValue(null);
 

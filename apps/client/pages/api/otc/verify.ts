@@ -54,7 +54,7 @@ import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecond
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
-import { assertSignupNetworkWithinLimits } from '@server/auth/signupNetworkLimits';
+import { assertSignupNetworkWithinLimits } from '@bike4mind/server-utils/auth/signupNetworkLimits';
 import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
@@ -603,8 +603,14 @@ const handler = baseApi({ auth: false })
           riskSignals: signals.map(type => ({ type, at: new Date() })),
         });
         // Missing or expired form tokens are record-only: the token fetch can be in flight, fail, be rate-limited, or the tab left open.
+        // So is a token reused for another email: the post-send token refresh can fail, leaving the old token in place.
         // Too-fast alone is record-only too (autofill + Enter can beat the timer); it rides along with a stronger signal.
-        const recordOnly: UserRiskSignalType[] = ['signup_token_missing', 'signup_token_expired', 'signup_too_fast'];
+        const recordOnly: UserRiskSignalType[] = [
+          'signup_token_missing',
+          'signup_token_expired',
+          'signup_too_fast',
+          'signup_token_reused',
+        ];
         const actionable = signals.filter(s => !recordOnly.includes(s));
         if (actionable.length) {
           step = 'set throttle tier';

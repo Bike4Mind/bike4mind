@@ -43,6 +43,8 @@ export interface DataLakeProposalProvenance {
   query?: string;
   /** When the producer actually retrieved the candidate - not when the row was written. */
   retrievedAt: Date;
+  /** The source tier the producer routed this candidate under. Absent for other producers and older rows. */
+  sourceTier?: 'trusted' | 'review';
 }
 
 export interface IDataLakeProposal {

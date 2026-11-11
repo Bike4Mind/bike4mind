@@ -15,7 +15,7 @@ const SERVER_ONLY_EVENTS: ReadonlySet<string> = new Set([
 ]);
 
 // Every tracked UI action posts here unbatched, so it would dominate the shared default write budget.
-const handler = baseApi({ defaultWriteRateLimit: false }).post(
+const handler = baseApi({ defaultWriteRateLimit: false, recordsActivity: false }).post(
   async (req: Request<{}, unknown, Omit<AnalyticsEventPayloads, 'userId'>>, res) => {
     if (SERVER_ONLY_EVENTS.has(req.body?.type)) {
       throw new ForbiddenError('This event can only be recorded by the server');

@@ -8,6 +8,7 @@ import {
   LLMEventPayload,
   LLMEvents,
   BFL_SAFETY_TOLERANCE,
+  BflEditRegionsSchema,
   IChatHistoryItemRepository,
   IUserRepository,
   PromptMeta,
@@ -32,6 +33,7 @@ import {
   isGeminiImageModel,
   rejectsTransparentBackground,
   isFlux2ImageModel,
+  isFlux3ImageModel,
   getMaxEditReferenceImages,
   MAX_REFERENCE_IMAGES,
   supportsImageEditEndpoint,
@@ -106,6 +108,7 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   // Declared here as well as on EditImageRequestBodySchema: invoke() parses the queue payload
   // through this schema, and an undeclared key is stripped before it reaches process().
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
+  edit_regions: BflEditRegionsSchema.optional(),
   image: z.string(),
   /** Minted per invoke(); see ImageGenerationBodySchema.generationId. */
   generationId: z.string().optional(),
@@ -116,6 +119,15 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
   // accepted and ignored, never billed. Narrowing it to 1 here would 400 an API-key caller whose
   // request succeeds today.
+}).superRefine((body, context) => {
+  if (body.edit_regions?.length && !isFlux3ImageModel(body.model))
+    context.addIssue({
+      code: 'custom',
+      path: ['edit_regions'],
+      message: 'edit_regions are only supported on FLUX 3 models',
+    });
+  if (isFlux3ImageModel(body.model) && body.fabFileIds?.length)
+    context.addIssue({ code: 'custom', path: ['fabFileIds'], message: 'FLUX 3 edits take no mask; omit fabFileIds' });
 });
 export type ImageEditBody = z.infer<typeof ImageEditBodySchema>;
 
@@ -233,9 +245,14 @@ export class ImageEditService {
       organizationId,
       ...rest
     } = EditImageRequestBodySchema.parse(body);
-    // FLUX.2 edits from the prompt alone; a mask is refused rather than ignored, like any other unusable input.
-    if (isFlux2ImageModel(requestedModel)) {
-      if (fabFileIds.length > 0) throw new BadRequestError('FLUX.2 edits take no mask; omit fabFileIds');
+    if (rest.edit_regions?.length && !isFlux3ImageModel(requestedModel))
+      throw new BadRequestError('edit_regions are only supported on FLUX 3 models');
+    // Native FLUX edits take the source image and optional references, without a mask.
+    if (isFlux2ImageModel(requestedModel) || isFlux3ImageModel(requestedModel)) {
+      if (fabFileIds.length > 0)
+        throw new BadRequestError(
+          `${isFlux3ImageModel(requestedModel) ? 'FLUX 3' : 'FLUX.2'} edits take no mask; omit fabFileIds`
+        );
     } else if (fabFileIds.length === 0) {
       throw new BadRequestError('No fabFileIds provided');
     }
@@ -484,6 +501,7 @@ export class ImageEditService {
       image: sourceImageUrl,
       organizationId,
       generationId,
+      edit_regions,
     } = ImageEditBodySchema.parse(body);
     // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
     // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
@@ -761,7 +779,25 @@ export class ImageEditService {
 
       let editResponse: ImageEditResponse;
       if (provider === 'bfl') {
-        if (isFlux2ImageModel(model)) {
+        if (isFlux3ImageModel(model)) {
+          // FLUX 3 region edits: formatBflEditRegionsPrompt (in the service layer) embeds the
+          // layout as prompt-inline JSON on a 0-1000 grid; the source image rides in `images`.
+          const referenceBase64Images = await Promise.all(
+            referenceImageUrls.map(async url => {
+              const encoded = await imageUrlToBase64(url, true);
+              if (!encoded) throw new NotFoundError('Reference image not found');
+              return encoded;
+            })
+          );
+          editResponse = await service.edit(sourceBase64Image, truncatedPrompt, {
+            model,
+            referenceImages: referenceBase64Images,
+            edit_regions,
+            safety_tolerance,
+            seed,
+            output_format,
+          });
+        } else if (isFlux2ImageModel(model)) {
           // FLUX.2 takes the references inline as base64, like the generation path; the URLs are freshly signed above.
           const referenceBase64Images = await Promise.all(
             referenceImageUrls.map(async url => {

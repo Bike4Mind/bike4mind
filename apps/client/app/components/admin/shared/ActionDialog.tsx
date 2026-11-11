@@ -52,6 +52,15 @@ export type ActionDialogProps = {
    * Its button id is `<id>-secondary-btn`; the reason draft is kept for the caller's next item.
    */
   secondaryAction?: { label: string; onConfirm: (reason: string) => void | Promise<void> };
+  /**
+   * Keeps Cancel enabled while the write is in flight, for a caller whose `onConfirm` stops at
+   * `onClose` (a run of writes that checks between them and leaves the rest unsent).
+   */
+  cancelStopsWrite?: boolean;
+  /** Seeds the reason when the dialog opens, still editable: an accepted AI suggestion prefills one. */
+  initialReason?: AdminReasonDraft;
+  /** Changing it remounts the form, re-seeding `initialReason` and clearing typed input in an open dialog. */
+  formKey?: string | number;
   /** Derived ids: `<id>-reason-input`, `<id>-confirm-btn`, `<id>-cancel-btn`, `<id>-hint`, `<id>-typed-input`. */
   'data-testid': string;
   /** Overrides individual derived ids where an existing test or page object depends on them. */
@@ -70,7 +79,7 @@ export const ActionDialog: React.FC<ActionDialogProps> = props => (
     width={560}
     data-testid={props['data-testid']}
   >
-    <ActionDialogForm {...props} />
+    <ActionDialogForm key={props.formKey} {...props} />
   </AdminDialog>
 );
 
@@ -88,12 +97,14 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   typedConfirm,
   pending = false,
   secondaryAction,
+  cancelStopsWrite = false,
+  initialReason = EMPTY_ADMIN_REASON,
   'data-testid': testId,
   testIds = {},
 }) => {
   const hintId = useId();
   const typedInputId = useId();
-  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
+  const [reason, setReason] = useState<AdminReasonDraft>(initialReason);
   const [typedValue, setTypedValue] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -185,8 +196,14 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
             <Kbd>Enter</Kbd> to apply
           </Typography>
         )}
-        {/* Held while the write is in flight: closing then would not cancel it. */}
-        <Button variant="plain" color="neutral" onClick={onClose} disabled={busy} data-testid={`${testId}-cancel-btn`}>
+        {/* Held while the write is in flight (closing would not cancel it) unless the caller stops at close. */}
+        <Button
+          variant="plain"
+          color="neutral"
+          onClick={onClose}
+          disabled={busy && !cancelStopsWrite}
+          data-testid={`${testId}-cancel-btn`}
+        >
           Cancel
         </Button>
         {secondaryAction && (

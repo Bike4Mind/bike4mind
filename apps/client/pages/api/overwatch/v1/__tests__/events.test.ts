@@ -2,8 +2,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
+const { baseApiOptions } = vi.hoisted(() => ({ baseApiOptions: [] as unknown[] }));
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (opts: unknown) => ({ post: (fn: (req: unknown, res: unknown) => unknown) => fn }),
+  baseApi: (opts: unknown) => {
+    baseApiOptions.push(opts);
+    return { post: (fn: (req: unknown, res: unknown) => unknown) => fn };
+  },
 }));
 
 const mockSendBatch = vi.fn();
@@ -81,6 +85,10 @@ function createReq({
 }
 
 describe('POST /api/overwatch/v1/events', () => {
+  it('counts ingest as a use of the key but never stamps its owner active', () => {
+    expect(baseApiOptions[0]).toMatchObject({ recordsActivity: false, recordsKeyUse: true });
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockSendBatch.mockResolvedValue([{ index: 0, success: true, messageId: 'msg-1' }]);

@@ -656,7 +656,7 @@ describe('updateFabFile (narrowed write pins)', () => {
     ]);
   });
 
-  it('writes the content-rewrite patch with the new url when fileContent changes', async () => {
+  it('writes the content-rewrite patch, with the new url on the response only, when fileContent changes', async () => {
     findUpdateAccessById.mockResolvedValue(textFile());
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -664,13 +664,13 @@ describe('updateFabFile (narrowed write pins)', () => {
 
     // The size is persisted only by commitContentRewrite, so the trailing write cannot clobber it.
     expect(result.fileSize).toBe(8);
+    expect(result.fileUrl).toBe('https://s3.example.com/new-signed-url');
+    expect(result.fileUrlExpireAt).toBeInstanceOf(Date);
     expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
     expect(dbUpdate).toHaveBeenCalledTimes(1);
     expect(dbUpdate.mock.calls[0]).toStrictEqual([
       {
         id: 'file-1',
-        fileUrl: 'https://s3.example.com/new-signed-url',
-        fileUrlExpireAt: new Date('2026-01-01T01:00:00Z'),
         ...FAB_FILE_CONTENT_REWRITE_PATCH,
         systemPriority: undefined,
         updatedAt: NOW,
@@ -693,8 +693,6 @@ describe('updateFabFile (narrowed write pins)', () => {
     expect(dbUpdate.mock.calls[0]).toStrictEqual([
       {
         id: 'file-1',
-        fileUrl: 'https://s3.example.com/new-signed-url',
-        fileUrlExpireAt: new Date('2026-01-01T01:00:00Z'),
         ...FAB_FILE_CONTENT_REWRITE_PATCH,
         systemPriority: undefined,
         updatedAt: NOW,

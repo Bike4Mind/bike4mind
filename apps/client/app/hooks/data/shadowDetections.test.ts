@@ -158,13 +158,15 @@ describe('useShadowDetectionBulkVerdict', () => {
   });
 
   it('sends a large selection in batches of the server limit and merges the results', async () => {
-    const items = Array.from({ length: 150 }, (_, index) => ({
+    const items = Array.from({ length: 300 }, (_, index) => ({
       id: index.toString(16).padStart(24, '0'),
       expectedRevision: 0,
     }));
-    post.mockResolvedValueOnce({ data: { updated: [row()], conflicts: [], notFound: ['x'] } }).mockResolvedValueOnce({
-      data: { updated: [], conflicts: [row({ verdict: 'legitimate_human' })], notFound: [] },
-    });
+    post
+      .mockResolvedValueOnce({ data: { graded: [row()], conflicts: [], missing: ['x'], failed: [] } })
+      .mockResolvedValueOnce({
+        data: { graded: [], conflicts: [row({ verdict: 'legitimate_human' })], missing: [], failed: [] },
+      });
     const { result } = renderHook(() => useShadowDetectionBulkVerdict(), { wrapper: createWrapper() });
 
     let outcome: unknown;
@@ -174,24 +176,24 @@ describe('useShadowDetectionBulkVerdict', () => {
 
     expect(post).toHaveBeenCalledTimes(2);
     expect(post.mock.calls[0]).toEqual([
-      '/api/admin/shadow-detections/verdicts',
-      { items: items.slice(0, 100), verdict: 'confirmed_abuse', reason: 'Same cohort' },
+      '/api/admin/shadow-detections/bulk-verdict',
+      { items: items.slice(0, 200), verdict: 'confirmed_abuse', reason: 'Same cohort' },
     ]);
-    expect(post.mock.calls[1][1].items).toEqual(items.slice(100));
+    expect(post.mock.calls[1][1].items).toEqual(items.slice(200));
     expect(outcome).toMatchObject({
-      updated: [{ id: DETECTION_ID }],
+      graded: [{ id: DETECTION_ID }],
       conflicts: [{ verdict: 'legitimate_human' }],
-      notFound: ['x'],
+      missing: ['x'],
     });
   });
 
   it('preserves completed batches and reports the failed and unattempted ids for retry', async () => {
-    const items = Array.from({ length: 250 }, (_, index) => ({
+    const items = Array.from({ length: 450 }, (_, index) => ({
       id: index.toString(16).padStart(24, '0'),
       expectedRevision: 0,
     }));
     post
-      .mockResolvedValueOnce({ data: { updated: [row()], conflicts: [], notFound: [], failed: ['server-failed'] } })
+      .mockResolvedValueOnce({ data: { graded: [row()], conflicts: [], missing: [], failed: ['server-failed'] } })
       .mockRejectedValueOnce(new Error('Connection lost'));
     const { result } = renderHook(() => useShadowDetectionBulkVerdict(), { wrapper: createWrapper() });
 
@@ -201,12 +203,12 @@ describe('useShadowDetectionBulkVerdict', () => {
     });
 
     expect(post).toHaveBeenCalledTimes(2);
-    expect(post.mock.calls[1][1].items).toEqual(items.slice(100, 200));
+    expect(post.mock.calls[1][1].items).toEqual(items.slice(200, 400));
     expect(outcome).toEqual({
-      updated: [row()],
+      graded: [row()],
       conflicts: [],
-      notFound: [],
-      failed: ['server-failed', ...items.slice(100).map(item => item.id)],
+      missing: [],
+      failed: ['server-failed', ...items.slice(200).map(item => item.id)],
       failureMessage: 'Connection lost',
     });
   });

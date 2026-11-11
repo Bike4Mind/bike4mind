@@ -1,7 +1,7 @@
 import { organizationRepository } from '@bike4mind/database';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
-import { holdsPaidStanding } from './paidStanding';
+import { holdsPaidStanding } from '@bike4mind/server-utils/entitlements/paidStanding';
 
 /**
  * Paid standing for an organization, by the same rule as an account (paidStanding.ts): an active paid

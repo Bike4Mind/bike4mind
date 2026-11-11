@@ -5,6 +5,7 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { NotFoundError, BadRequestError, isZodError } from '@bike4mind/server-utils/utils/errors';
 import { ModalModel } from '@bike4mind/database/social';
+import { withSignedModalImage } from '@client/server/tools/modalImageUrls';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { modalAuditTitle } from '@client/server/tools/modalOperations';
 import { MODAL_AUDIENCE_KEY_SET, MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
@@ -82,7 +83,7 @@ const handler = adminApi({
     if (!modal) throw new NotFoundError('Modal not found');
 
     // Return the document unextracted - the leak guard is intentionally not run here.
-    return res.json(modal);
+    return res.json(await withSignedModalImage(modal));
   })
   // Create or replace the variants map for a modal.
   .put(async (req: Request, res: Response) => {
@@ -113,7 +114,7 @@ const handler = adminApi({
         details: { audienceKeys: Object.keys(variants) },
       });
 
-      return res.json({ success: true, modal: updated });
+      return res.json({ success: true, modal: await withSignedModalImage(updated) });
     } catch (error) {
       const zr = zodResponse(res, error);
       if (zr) return zr;
@@ -152,7 +153,7 @@ const handler = adminApi({
         });
       }
 
-      return res.json({ success: true, modal: updated });
+      return res.json({ success: true, modal: await withSignedModalImage(updated) });
     } catch (error) {
       const zr = zodResponse(res, error);
       if (zr) return zr;

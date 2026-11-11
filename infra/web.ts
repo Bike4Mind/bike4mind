@@ -27,7 +27,26 @@ import {
   emailIngestionQueueDLQ,
   emailAnalysisQueueDLQ,
 } from './emailIngestion';
-import { eventBus } from './eventBus';
+import {
+  eventBus,
+  telemetryAlertDeadLetter,
+  sessionEnrichmentDeadLetter,
+  billingEventsDeadLetter,
+  emailEventsDeadLetter,
+  pushEventsDeadLetter,
+  notebookEventsDeadLetter,
+  completionEventsDeadLetter,
+} from './eventBus';
+import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
+import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
+import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
+import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
+import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
+import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
+import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
+import { businessMetricAlertsDLQ } from './businessMetricAlerts';
+import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { mcpHandler } from './mcp';
 import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
@@ -46,6 +65,8 @@ import {
   accountDataExportQueue,
   publishThumbnailQueue,
   publishThumbnailQueueDLQ,
+  generatedMediaPurgeQueue,
+  generatedMediaPurgeQueueDLQ,
   dataLakeCleanupQueue,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueue,
@@ -73,6 +94,7 @@ import {
   liveOpsTriageQueue,
   // DLQ exports used by the dlqUrls Linkable (not directly linked to avoid IAM bloat).
   fabFileChunkQueueDLQ,
+  fabFileModerationDLQ,
   fabFileVectorizeQueueDLQ,
   generationCallbackQueueDLQ,
   imageGenerationDLQ,
@@ -149,52 +171,82 @@ const stageScopedQueueUrls = (urls: Record<string, $util.Output<string>>): Recor
 // time: no IAM statements generated, no env var size concerns. The stage-scoped SQS
 // statement on the server function (stageQueueArns above) grants runtime access.
 const dlqUrls = new sst.Linkable('dlqUrls', {
-  properties: stageScopedQueueUrls({
-    // Contributed entries go first so a core key always wins.
-    ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, dlq }) => [spec.label, dlq.url])),
-    'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
-    'fab-file-chunk': fabFileChunkQueueDLQ.url,
-    'generation-callback': generationCallbackQueueDLQ.url,
-    'image-generation': imageGenerationDLQ.url,
-    'image-edit': imageEditDLQ.url,
-    'generation-job': generationJobDLQ.url,
-    'research-engine': researchEngineQueueDLQ.url,
-    'release-notes': whatsNewGenerationQueueDLQ.url,
-    'whats-new-highlights': whatsNewHighlightsQueueDLQ.url,
-    'notebook-curation': notebookCurationQueueDLQ.url,
-    'agent-proactive-message': agentProactiveMessageQueueDLQ.url,
-    'slack-export': slackExportQueueDLQ.url,
-    'github-webhook': githubWebhookQueueDLQ.url,
-    'webhook-delivery': webhookDeliveryQueueDLQ.url,
-    'quest-export': questExportQueueDLQ.url,
-    'account-data-export': accountDataExportQueueDLQ.url,
-    'liveops-triage': liveOpsTriageQueueDLQ.url,
-    'email-ingestion': emailIngestionQueueDLQ.url,
-    'email-analysis': emailAnalysisQueueDLQ.url,
-    'email-batch': emailBatchQueueDLQ.url,
-    'email-job': emailJobQueueDLQ.url,
-    'tavern-heartbeat': tavernHeartbeatQueueDLQ.url,
-    'deep-agent-wake': deepAgentWakeQueueDLQ.url,
-    'sre-fix': sreFixQueueDLQ.url,
-    'sre-job': sreJobQueueDLQ.url,
-    'secops-triage': secopsTriageQueueDLQ.url,
-    'overwatch-analytics': overwatchAnalyticsQueueDLQ.url,
-    'agent-continuation': agentContinuationQueueDLQ.url,
-    'optihashi-run-completion': optihashiRunCompletionQueueDLQ.url,
-    'bob-run': bobRunQueueDLQ.url,
-    'libreoncology-audio-render': libreoncologyAudioRenderQueueDLQ.url,
-    'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
-    'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
-    'data-lake-research': dataLakeResearchQueueDLQ.url,
-    'lake-memory': lakeMemoryQueueDLQ.url,
-    'risk-evidence': riskEvidenceQueueDLQ.url,
-    'lake-inconsistency-model': lakeInconsistencyModelQueueDLQ.url,
-    'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
-    'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
-    'github-lake-ingest': githubLakeIngestQueueDLQ.url,
-    'github-lake-revoke': githubLakeRevokeQueueDLQ.url,
-    'publish-thumbnail': publishThumbnailQueueDLQ.url,
-  }),
+  properties: {
+    ...stageScopedQueueUrls({
+      // Contributed entries go first so a core key always wins.
+      ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, dlq }) => [spec.label, dlq.url])),
+      'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
+      'fab-file-chunk': fabFileChunkQueueDLQ.url,
+      'generation-callback': generationCallbackQueueDLQ.url,
+      'image-generation': imageGenerationDLQ.url,
+      'image-edit': imageEditDLQ.url,
+      'generation-job': generationJobDLQ.url,
+      'research-engine': researchEngineQueueDLQ.url,
+      'release-notes': whatsNewGenerationQueueDLQ.url,
+      'whats-new-highlights': whatsNewHighlightsQueueDLQ.url,
+      'notebook-curation': notebookCurationQueueDLQ.url,
+      'agent-proactive-message': agentProactiveMessageQueueDLQ.url,
+      'slack-export': slackExportQueueDLQ.url,
+      'github-webhook': githubWebhookQueueDLQ.url,
+      'webhook-delivery': webhookDeliveryQueueDLQ.url,
+      'quest-export': questExportQueueDLQ.url,
+      'account-data-export': accountDataExportQueueDLQ.url,
+      'liveops-triage': liveOpsTriageQueueDLQ.url,
+      'email-ingestion': emailIngestionQueueDLQ.url,
+      'email-analysis': emailAnalysisQueueDLQ.url,
+      'email-batch': emailBatchQueueDLQ.url,
+      'email-job': emailJobQueueDLQ.url,
+      'tavern-heartbeat': tavernHeartbeatQueueDLQ.url,
+      'deep-agent-wake': deepAgentWakeQueueDLQ.url,
+      'sre-fix': sreFixQueueDLQ.url,
+      'sre-job': sreJobQueueDLQ.url,
+      'secops-triage': secopsTriageQueueDLQ.url,
+      'overwatch-analytics': overwatchAnalyticsQueueDLQ.url,
+      'agent-continuation': agentContinuationQueueDLQ.url,
+      'optihashi-run-completion': optihashiRunCompletionQueueDLQ.url,
+      'bob-run': bobRunQueueDLQ.url,
+      'libreoncology-audio-render': libreoncologyAudioRenderQueueDLQ.url,
+      'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
+      'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
+      'data-lake-research': dataLakeResearchQueueDLQ.url,
+      'lake-memory': lakeMemoryQueueDLQ.url,
+      'risk-evidence': riskEvidenceQueueDLQ.url,
+      'lake-inconsistency-model': lakeInconsistencyModelQueueDLQ.url,
+      'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
+      'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
+      'github-lake-ingest': githubLakeIngestQueueDLQ.url,
+      'github-lake-revoke': githubLakeRevokeQueueDLQ.url,
+      'publish-thumbnail': publishThumbnailQueueDLQ.url,
+      'generated-media-purge': generatedMediaPurgeQueueDLQ.url,
+      'fab-file-moderation': fabFileModerationDLQ.url,
+      'telemetry-alert-rule': telemetryAlertDeadLetter.queue.url,
+      'session-enrichment': sessionEnrichmentDeadLetter.queue.url,
+      'billing-events': billingEventsDeadLetter.queue.url,
+      'email-events': emailEventsDeadLetter.queue.url,
+      'push-events': pushEventsDeadLetter.queue.url,
+      'notebook-events': notebookEventsDeadLetter.queue.url,
+      'completion-events': completionEventsDeadLetter.queue.url,
+      ...(youngAccountSpendAlertDeadLetter && {
+        'young-account-spend-alert': youngAccountSpendAlertDeadLetter.queue.url,
+      }),
+      ...(apiProbeDetectorDeadLetter && { 'api-probe-detector': apiProbeDetectorDeadLetter.queue.url }),
+      ...(imageModerationReviewSweepDeadLetter && {
+        'image-moderation-review-sweep': imageModerationReviewSweepDeadLetter.queue.url,
+      }),
+      ...(spendMonitorDeadLetter && { 'spend-monitor': spendMonitorDeadLetter.queue.url }),
+      ...(signupGrantHeldReleaseDeadLetter && {
+        'signup-grant-held-release': signupGrantHeldReleaseDeadLetter.queue.url,
+      }),
+      ...(revenueSnapshotDeadLetter && { 'revenue-snapshot': revenueSnapshotDeadLetter.queue.url }),
+      ...(subscriptionReconciliationDeadLetter && {
+        'subscription-reconciliation': subscriptionReconciliationDeadLetter.queue.url,
+      }),
+      ...(accountDeletionSweepDeadLetter && { 'account-deletion-sweep': accountDeletionSweepDeadLetter.queue.url }),
+      ...(businessMetricAlertsDLQ && { 'business-metric-alerts': businessMetricAlertsDLQ.url }),
+    }),
+    // This raw AWS queue retains its existing provider-assigned physical name.
+    ...(dlqAlarmHandlerDlq && { 'alarm-handler': dlqAlarmHandlerDlq.url }),
+  },
 });
 
 // Lambda function names exposed via sst.Linkable to avoid generating per-resource IAM
@@ -207,11 +259,8 @@ const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
     // Admin "Run now" (pages/api/admin/model-discovery) invokes the same
     // function the discovery cron targets, with { trigger: 'manual' }.
     modelDiscovery: modelDiscoveryFunction.name,
-    // QuestMaster v5 dispatches a node run from an API route
-    // (pages/api/quest-nodes/[id]/run -> runQuestNode). The WebSocket
-    // `agent_execute` handler reaches the same function through its own link;
-    // the frontend cannot, so the name is surfaced here rather than linking the
-    // whole function into the web app.
+    // The WebSocket `agent_execute` handler reaches the agent executor function
+    // through its own link; the name is surfaced here for the frontend.
     agentExecutor: agentExecutor.name,
   },
 });
@@ -261,6 +310,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     githubLakeIngestQueue: githubLakeIngestQueue.url,
     githubLakeRevokeQueue: githubLakeRevokeQueue.url,
     publishThumbnailQueue: publishThumbnailQueue.url,
+    generatedMediaPurgeQueue: generatedMediaPurgeQueue.url,
   }),
 });
 
@@ -429,7 +479,7 @@ export const web = new sst.aws.Nextjs(
         // prefix pattern instead of one ARN per queue keeps the inline policy well under Lambda's
         // size cap, which is why the queue URLs travel as Linkables in the first place.
         actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SendMessage'],
-        resources: [stageQueueArns],
+        resources: [stageQueueArns, ...(dlqAlarmHandlerDlq ? [dlqAlarmHandlerDlq.arn] : [])],
       },
       {
         // CloudFront cache invalidation for What's New modal edit/delete

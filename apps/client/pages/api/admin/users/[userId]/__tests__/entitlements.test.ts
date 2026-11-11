@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ApiKeyScope, CREDITS_PAGE_READ } from '@bike4mind/common';
 import {
   allKnownEntitlementKeys,
   grantTagForEntitlement,
@@ -16,14 +17,15 @@ const { mockUserFind, mockSubs, mockPartnerKeys } = vi.hoisted(() => ({
   mockPartnerKeys: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
       {
         use: () => chain,
         get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
+        _config: config,
       }
     );
     return chain;
@@ -73,16 +75,11 @@ beforeEach(() => {
 });
 
 describe('GET /api/admin/users/:userId/entitlements', () => {
-  it('rejects non-admins before touching any data source', async () => {
-    const { promise } = run({ user: { id: 'u2', isAdmin: false } });
-    await expect(promise).rejects.toThrow();
-    expect(mockUserFind).not.toHaveBeenCalled();
-  });
-
-  it('rejects an unauthenticated request (no req.user)', async () => {
-    const { promise } = run();
-    await expect(promise).rejects.toThrow();
-    expect(mockUserFind).not.toHaveBeenCalled();
+  it('is admin-scoped and gated on the credits page permissions', () => {
+    expect((handler as unknown as { _config?: unknown })._config).toEqual({
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: CREDITS_PAGE_READ },
+    });
   });
 
   it('rejects when the target user does not exist', async () => {

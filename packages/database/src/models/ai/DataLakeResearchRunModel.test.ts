@@ -1,16 +1,19 @@
 import { describe, it, expect, vi } from 'vitest';
 import mongoose from 'mongoose';
-import type { IDataLakeResearchRun, ResearchRunLevers } from '@bike4mind/common';
+import type { IDataLakeResearchRun, LegacyResearchRunLevers } from '@bike4mind/common';
 import { emptyResearchRunTotals, RESEARCH_RUN_STALE_AFTER_MS } from '@bike4mind/common';
 import { DataLakeResearchRunModel, dataLakeResearchRunRepository as repo } from './DataLakeResearchRunModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 const LAKE = 'lake-1';
 
-const levers = (overrides: Partial<ResearchRunLevers> = {}): ResearchRunLevers => ({
+const levers = (overrides: Partial<LegacyResearchRunLevers> = {}): LegacyResearchRunLevers => ({
   query: 'coastal erosion',
   maxResults: 10,
   maxProposals: 5,
+  trustedDomains: [],
+  reviewDomains: [],
+  unlistedSources: 'review',
   allowedDomains: [],
   blockedDomains: [],
   minRelevance: 0.6,

@@ -41,7 +41,7 @@ import {
 } from '@bike4mind/common';
 import { createTokenizer, getSettingsByNames, normalizeId, type ITokenizer } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import type { RetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
+import type { RetrievalLakeScope } from '@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import { getRequestMembershipOrgIds } from '@bike4mind/server-utils/dataLakes/requestMembership';
 import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';

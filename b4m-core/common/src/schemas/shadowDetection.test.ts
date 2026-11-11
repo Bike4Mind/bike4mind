@@ -8,13 +8,13 @@ import {
 } from './shadowDetection';
 
 describe('shadowDetectionBulkVerdictResponseSchema', () => {
-  it('accepts old responses without failed ids and new partial-progress responses', () => {
-    const previous = { updated: [], conflicts: [], notFound: [] };
-    expect(shadowDetectionBulkVerdictResponseSchema.parse(previous)).toEqual(previous);
-    expect(shadowDetectionBulkVerdictResponseSchema.parse({ ...previous, failed: ['detection-id'] })).toEqual({
-      ...previous,
-      failed: ['detection-id'],
-    });
+  it('accepts complete and partial-progress responses and requires the failed ids', () => {
+    const complete = { graded: [], conflicts: [], missing: [], failed: [] };
+    expect(shadowDetectionBulkVerdictResponseSchema.parse(complete)).toEqual(complete);
+    const partial = { ...complete, failed: ['detection-id'] };
+    expect(shadowDetectionBulkVerdictResponseSchema.parse(partial)).toEqual(partial);
+    const withoutFailed = { graded: [], conflicts: [], missing: [] };
+    expect(shadowDetectionBulkVerdictResponseSchema.safeParse(withoutFailed).success).toBe(false);
   });
 });
 

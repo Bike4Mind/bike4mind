@@ -22,7 +22,7 @@ import SortIcon from '@mui/icons-material/Sort';
 import CreditCardIcon from '@mui/icons-material/CreditCard';
 import SharedPaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 import { useUserCreditsManager } from '../hooks/useUserCreditsManager';
 import ViewUserProfile from './ViewUserProfile';
 import { CreditAdjustmentModal } from './CreditAdjustmentModal';
@@ -31,11 +31,11 @@ interface UserCreditsManagerProps {
   onRefresh?: () => void;
 }
 
-// A user with no websocket activity within this window is shown as Inactive.
+// A user with no action (lastActiveAt) within this window is shown as Inactive.
 const ACTIVE_WITHIN_DAYS = 30;
 
 // Most recent explicit login (loginRecords, as the Admin > Users view uses); falls back
-// to the websocket-tracked lastActiveAt for users with no recorded login yet.
+// to lastActiveAt (last action) for users with no recorded login yet.
 const getLastLoginDate = (user: AdminUserListItem): Date | null => {
   const latest = user.loginRecords?.reduce<string | Date | undefined>((acc, record) => {
     const t = record?.loginTime;

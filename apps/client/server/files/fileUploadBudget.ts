@@ -9,7 +9,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
 import type { ActiveSubscriptionsRequest } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
-import { resolveUserRateTier, type RateTierUser, type UserRateTier } from '@server/utils/userRateTier';
+import { resolveUserRateTier, type RateTierUser, type UserRateTier } from '@bike4mind/server-utils/utils/userRateTier';
 
 /**
  * Per-user hourly allowance of files entering the upload pipeline, counted per FILE (a 100-file batch

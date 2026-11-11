@@ -7,12 +7,14 @@ const {
   recordCampaignGroup,
   getSettingsMap,
   sweepDeviceLinks,
+  gradeStaleSignupBursts,
 } = vi.hoisted(() => ({
   sweepDeviceLinks: vi.fn(),
   loadCampaignScanAccounts: vi.fn(),
   findSignupFingerprintClusters: vi.fn(),
   recordCampaignGroup: vi.fn(),
   getSettingsMap: vi.fn(),
+  gradeStaleSignupBursts: vi.fn(),
 }));
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
@@ -29,11 +31,16 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap,
 }));
-vi.mock('@server/security/autoContainment/deviceLink', () => ({
+vi.mock('@workers/security/autoContainment/deviceLink', () => ({
   sweepDeviceLinks,
   liveDeviceLinkDeps: () => ({}),
   DeviceLinkAssessError: class DeviceLinkAssessError extends Error {},
 }));
+vi.mock('@server/security/shadowDetectionAutoGrade', () => ({
+  gradeStaleSignupBursts,
+  liveStaleDetectionGradeDeps: (deps: unknown) => deps,
+}));
+vi.mock('@workers/utils/systemAuditWriter', () => ({ systemAuditWriter: () => vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%' } }));
 
 import type { Context } from 'aws-lambda';
@@ -75,6 +82,7 @@ beforeEach(() => {
   recordCampaignGroup.mockResolvedValue('created');
   getSettingsMap.mockResolvedValue({});
   sweepDeviceLinks.mockResolvedValue({ status: 'done', failed: 0, assessFailed: 0 });
+  gradeStaleSignupBursts.mockReset().mockResolvedValue({ considered: 0 });
 });
 
 describe('toCampaignAccount', () => {
@@ -189,7 +197,7 @@ describe('handler', () => {
     await expect(handler({}, context)).rejects.toThrow('failed to record 1 group(s)');
   });
 
-  it('does nothing while shadow detection recording is off', async () => {
+  it('records nothing while shadow detection recording is off, but still auto-grades stale detections', async () => {
     getSettingsMap.mockResolvedValue({ shadowDetectionRecordingEnabled: 'false' });
 
     await handler({}, context);
@@ -197,5 +205,23 @@ describe('handler', () => {
     expect(loadCampaignScanAccounts).not.toHaveBeenCalled();
     expect(recordCampaignGroup).not.toHaveBeenCalled();
     expect(sweepDeviceLinks).not.toHaveBeenCalled();
+    expect(gradeStaleSignupBursts).toHaveBeenCalledTimes(1);
+  });
+
+  it('auto-grades with the configured age, defaulting to 7 days', async () => {
+    await handler({}, context);
+    expect(gradeStaleSignupBursts).toHaveBeenLastCalledWith(expect.objectContaining({ afterDays: 7 }));
+
+    getSettingsMap.mockResolvedValue({ shadowDetectionAutoGradeAfterDays: 14 });
+    await handler({}, context);
+    expect(gradeStaleSignupBursts).toHaveBeenLastCalledWith(expect.objectContaining({ afterDays: 14 }));
+  });
+
+  it('still runs the campaign sweep when the auto-grade throws', async () => {
+    gradeStaleSignupBursts.mockRejectedValue(new Error('read failed'));
+
+    await handler({}, context);
+
+    expect(recordCampaignGroup).toHaveBeenCalledTimes(1);
   });
 });

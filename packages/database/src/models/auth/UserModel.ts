@@ -43,7 +43,7 @@ import {
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
-import { NotFoundError } from '@bike4mind/utils';
+import { emailTokenStoredValues, NotFoundError } from '@bike4mind/utils';
 import { decryptAtRest, encryptAtRest, isEncrypted } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
@@ -377,6 +377,7 @@ export type UserLinkState = {
   isBanned: boolean;
   disputePending: boolean;
   moderation: { status: UserModerationStatus } | null;
+  currentCredits: number;
 };
 
 // A held review tranche is paid only by the admin approve path, so automatic approval skips it.
@@ -559,12 +560,45 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }
   }
 
-  async findByEmailVerificationToken(token: string) {
-    return this.model.findOne({ emailVerificationToken: token });
+  /** Rotate only the pending change that was read, preserving its original expiry. */
+  async rotatePendingEmailToken(
+    user: Pick<
+      IUserDocument,
+      'id' | 'pendingEmail' | 'pendingEmailToken' | 'pendingEmailSentAt' | 'pendingEmailExpires'
+    >,
+    tokenHash: string,
+    expiresAt: Date,
+    now: Date
+  ): Promise<boolean> {
+    if (expiresAt <= now) return false;
+    const query = this.model.updateOne(
+      {
+        _id: user.id,
+        pendingEmail: user.pendingEmail,
+        pendingEmailToken: user.pendingEmailToken,
+        pendingEmailSentAt: user.pendingEmailSentAt ?? null,
+        pendingEmailExpires: user.pendingEmailExpires ?? null,
+        pendingEmailUsed: { $ne: true },
+      },
+      { $set: { pendingEmailToken: tokenHash, pendingEmailSentAt: now, pendingEmailExpires: expiresAt } }
+    );
+    if (this._txn) query.session(this._txn);
+    const result = await query;
+    return result.modifiedCount === 1;
   }
 
+  /** Takes the raw token from the email link; the stored value is its hash. */
+  async findByEmailVerificationToken(token: string) {
+    const values = emailTokenStoredValues(token);
+    if (values.length === 0) return null;
+    return this.model.findOne({ emailVerificationToken: { $in: values } });
+  }
+
+  /** Takes the raw token from the email link; the stored value is its hash. */
   async findByPendingEmailToken(token: string) {
-    return this.model.findOne({ pendingEmailToken: token });
+    const values = emailTokenStoredValues(token);
+    if (values.length === 0) return null;
+    return this.model.findOne({ pendingEmailToken: { $in: values } });
   }
 
   async findByIdWithPassword(id: string): Promise<IUserDocument | null> {
@@ -955,7 +989,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (validIds.length === 0) return [];
     const docs = await this.model
       .find({ _id: { $in: convertIds(validIds) } })
-      .select('name email createdAt isBanned disputePending moderation.status')
+      .select('name email createdAt isBanned disputePending moderation.status currentCredits')
       .lean();
     return docs.map(d => ({
       id: String(d._id),
@@ -965,6 +999,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       isBanned: d.isBanned ?? false,
       disputePending: d.disputePending ?? false,
       moderation: d.moderation?.status ? { status: d.moderation.status } : null,
+      currentCredits: d.currentCredits ?? 0,
     }));
   }
 
@@ -1517,6 +1552,8 @@ const UserAcquisitionSchema = new Schema(
     lastTouch: { type: AcquisitionTouchSchema, required: false },
     // A verified hop the signup followed - see IUserAcquisition.verifiedTouch.
     verifiedTouch: { type: VerifiedTouchSchema, required: false },
+    // The OAuth client the account was created to sign in to - see IUserAcquisition.oauthTouch.
+    oauthTouch: { type: AcquisitionTouchSchema, required: false },
     signupMethod: { type: String, required: true },
     capturedAt: { type: Date, required: true },
   },
@@ -1739,6 +1776,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     aupAcceptedVersion: { type: String },
     aupAcceptedAt: { type: Date },
     ageAttestedAdult: { type: Boolean },
+    // Stamped by the Stripe webhook when the payer ticks Checkout's terms checkbox.
+    checkoutTermsAcceptedVersion: { type: String },
+    checkoutTermsAcceptedAt: { type: Date },
 
     // email verification
     emailVerified: { type: Boolean, default: false, index: true },
@@ -2088,7 +2128,7 @@ UserSchema.index({ createdAt: 1 });
 // accounts created before signup network capture carry no signupMeta. Explicit name so migration
 // 20260921235973 and autoIndex agree - see the authProviders_strategy_id note above.
 UserSchema.index({ 'signupMeta.capturedAt': 1 }, { name: 'user_signupMeta_capturedAt', sparse: true });
-// Serves the linked-account lookup by signup IP (apps/client/server/billing/linkedAccounts.ts). Partial:
+// Serves the linked-account lookup by signup IP (packages/server-utils/src/billing/linkedAccounts.ts). Partial:
 // the signupIpRetention cron clears the IP, and older accounts never had one. Explicit name so migration
 // 20260921236600 and autoIndex agree.
 UserSchema.index(

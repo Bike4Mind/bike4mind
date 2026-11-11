@@ -5,10 +5,11 @@ import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/serve
 import { z } from 'zod';
 import { createModalVideoSchema, hasAdminPermission } from '@bike4mind/common';
 import { definedKeys } from '@bike4mind/server-utils/utils/adminAudit';
-import { modalAuditTitle } from '@client/server/tools/modalOperations';
+import { modalAuditTitle, storableModalImageUrl } from '@client/server/tools/modalOperations';
 import { recordModalChanges } from '@client/server/tools/recordModalChanges';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
-import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
+import { withSignedModalImage } from '@client/server/tools/modalImageUrls';
+import { cacheExternalImages } from '@server/utils/cacheExternalImage';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { extractVariantForViewer, viewerClassifier } from '@bike4mind/services';
 
@@ -72,7 +73,7 @@ const handler = baseApi().put(
     if (!modal) throw new NotFoundError('Modal not found');
 
     if (updateData.imageUrl) {
-      updateData.imageUrl = await cacheExternalImage(updateData.imageUrl);
+      updateData.imageUrl = await storableModalImageUrl(updateData.imageUrl);
     }
 
     if (updateData.images && updateData.images.length > 0) {
@@ -108,7 +109,8 @@ const handler = baseApi().put(
     const audienceKey = await viewerClassifier.classify({
       isAdmin: hasAdminPermission(req.user, 'settings:manage'),
     } as never);
-    return res.json(extractVariantForViewer(updatedModal.toObject(), audienceKey));
+    const served = extractVariantForViewer(updatedModal.toObject(), audienceKey);
+    return res.json(served ? await withSignedModalImage(served) : served);
   })
 );
 

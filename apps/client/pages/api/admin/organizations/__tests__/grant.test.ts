@@ -5,8 +5,8 @@ import { ApiKeyScope } from '@bike4mind/common';
 // Captures the config so a test can assert requiredScopes: the scope gate lives in
 // apiKeyAuth (real middleware, not exercised here), so asserting the handler is
 // registered with it is the only guard available at this level.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'POST']?.(req, res),
@@ -71,11 +71,11 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
     return null;
   }),
 }));
-vi.mock('@server/entitlements/paidStanding', () => ({ priceAffectsEntitlements: vi.fn(() => true) }));
+vi.mock('@bike4mind/server-utils/entitlements/paidStanding', () => ({ priceAffectsEntitlements: vi.fn(() => true) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
+import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 const approvalMocks = vi.hoisted(() => ({
   policy: vi.fn(async (_credits: number): Promise<unknown> => null),
@@ -128,13 +128,7 @@ describe('POST /api/admin/organizations/grant', () => {
     // would skip baseApi's entire api-key chain (baseApi.ts's `if (resolvedOptions.auth)`)
     // and disable this gate while leaving requiredScopes untouched.
     const config = (handler as unknown as { _config?: unknown })._config;
-    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
-  });
-
-  it('rejects a non-admin', async () => {
-    const { run } = call({ isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
-    expect(mockOrgCreate).not.toHaveBeenCalled();
+    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'credits:adjust' } });
   });
 
   it('creates the organization with a subscription for an admin', async () => {
@@ -257,7 +251,7 @@ describe('POST /api/admin/organizations/grant - approval gate', () => {
       expect.objectContaining({
         action: 'org.credits.grant',
         requiredPermission: 'credits:adjust',
-        requiresFullAdmin: true,
+        requiresFullAdmin: false,
         params: expect.objectContaining({ ownerEmail: BODY.ownerEmail, initialCredits: 1000, reason: BODY.reason }),
       }),
       POLICY

@@ -71,7 +71,7 @@ vi.mock('@server/auth/networkMeta', () => ({
 }));
 const mockAssertSignupNetworkWithinLimits = vi.fn().mockResolvedValue(undefined);
 const mockSignupRiskCollector = vi.fn();
-vi.mock('@server/auth/signupNetworkLimits', () => ({
+vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({
   assertSignupNetworkWithinLimits: (...a: any[]) => mockAssertSignupNetworkWithinLimits(...a),
   createSignupRiskCollector: () => mockSignupRiskCollector,
 }));
@@ -1986,6 +1986,19 @@ describe('/api/otc/verify - signup bot-check signals', () => {
     expect(mockUserUpdate).toHaveBeenCalledWith({
       id: 'user-1',
       riskSignals: [{ type: 'signup_token_expired', at: expect.any(Date) }],
+    });
+    expect(mockSetThrottleTier).not.toHaveBeenCalled();
+    expect(mockRecordAdminActionForActor).not.toHaveBeenCalled();
+  });
+
+  it('records a lone reused form token without shadowing the account', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    withSignals(['signup_token_reused']);
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserUpdate).toHaveBeenCalledWith({
+      id: 'user-1',
+      riskSignals: [{ type: 'signup_token_reused', at: expect.any(Date) }],
     });
     expect(mockSetThrottleTier).not.toHaveBeenCalled();
     expect(mockRecordAdminActionForActor).not.toHaveBeenCalled();

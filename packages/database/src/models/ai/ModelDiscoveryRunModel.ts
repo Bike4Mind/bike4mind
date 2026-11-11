@@ -184,6 +184,34 @@ const ModelDiscoveryRunSchema = new Schema<IModelDiscoveryRunDocument>(
       ],
       required: false,
     },
+    longContextGaps: {
+      type: [
+        new Schema(
+          {
+            modelId: { type: String, required: true },
+            source: { type: String, required: true },
+            base: { type: PerMTokRatesSchema, required: true },
+            brackets: {
+              type: [
+                new Schema(
+                  {
+                    aboveTokens: { type: Number, required: true },
+                    inputPerMTok: { type: Number, required: true },
+                    outputPerMTok: { type: Number, required: true },
+                  },
+                  { _id: false }
+                ),
+              ],
+              required: false,
+              default: [],
+            },
+            detail: { type: String, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      required: false,
+    },
     priceSkips: {
       type: [
         new Schema(
@@ -241,6 +269,7 @@ const ModelDiscoveryRunSchema = new Schema<IModelDiscoveryRunDocument>(
           priceFlags: { type: Number, required: false },
           priceRows: { type: Number, required: false },
           priceOverrides: { type: Number, required: false },
+          longContextGaps: { type: Number, required: false },
           priceSkips: { type: Number, required: false },
           lifecycleTransitions: { type: Number, required: false },
           catalogDiff: { type: Number, required: false },
@@ -265,7 +294,7 @@ ModelDiscoveryRunSchema.index({ startedAt: 1 }, { expireAfterSeconds: RUN_RETENT
 export type IModelDiscoveryRunModel = Model<IModelDiscoveryRunDocument>;
 
 /**
- * The report bodies, left off the list. Twenty runs carrying six bounded detail
+ * The report bodies, left off the list. Twenty runs carrying seven bounded detail
  * arrays each is megabytes on an endpoint the status card polls, and the list
  * shows counts; runById is what reads a run's detail.
  */
@@ -273,6 +302,7 @@ const RUN_LIST_PROJECTION = {
   priceFlags: 0,
   priceRows: 0,
   priceOverrides: 0,
+  longContextGaps: 0,
   priceSkips: 0,
   lifecycleTransitions: 0,
   catalogDiff: 0,

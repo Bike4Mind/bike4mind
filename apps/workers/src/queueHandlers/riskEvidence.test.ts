@@ -18,11 +18,11 @@ vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
   requestRiskEvidenceRefresh,
   riskEvidenceDb: () => ({}),
 }));
-vi.mock('@server/security/autoContainment/strongLink', () => ({
+vi.mock('@workers/security/autoContainment/strongLink', () => ({
   checkStrongLink,
   liveStrongLinkDeps: () => ({}),
 }));
-vi.mock('@server/security/autoContainment/deviceLink', () => ({
+vi.mock('@workers/security/autoContainment/deviceLink', () => ({
   checkDeviceLink,
   liveDeviceLinkDeps: () => ({}),
 }));

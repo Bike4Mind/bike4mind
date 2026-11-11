@@ -1,5 +1,5 @@
 import { OrchestrationSettings } from './OrchestrationSettings';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
@@ -17,7 +17,7 @@ import type { AuthState } from '@shared/auth';
 import type { PermissionsState } from '@shared/permissions';
 import { updateAttention, updateSummary } from '@shared/update';
 import { EnvironmentPicker } from '../auth/EnvironmentPicker';
-import type { ClaudeImportState } from '@shared/claudeImport';
+import type { ClaudeImportKind, ClaudeImportState } from '@shared/claudeImport';
 import { ClaudeImportSettings, claudeImportSummary, useClaudeImport } from './ClaudeImportSettings';
 import type { LocalContextFit, LocalContextSetting } from '@shared/localContextSetting';
 import { LocalContextSettings, localContextSummary, useLocalContextSetting } from './LocalContextSettings';
@@ -269,6 +269,78 @@ function localHistoryEntry(): ConfigEntry {
   };
 }
 
+function errorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  // Electron prefixes a rejected invoke with where it came from; the user needs the reason only.
+  return message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+}
+
+function LocalDataExport() {
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  const run = async () => {
+    if (pending) return;
+    setPending(true);
+    setMessage(null);
+    try {
+      const result = await window.b4m.chat.exportLocalData();
+      if (result.saved) {
+        setFailed(false);
+        setMessage(
+          result.warnings?.length
+            ? `Export saved to ${result.path}. Skipped: ${result.warnings.join(' ')}`
+            : `Export saved to ${result.path}`
+        );
+      }
+    } catch (error) {
+      setFailed(true);
+      setMessage(`Could not export local data: ${errorText(error)}`);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <Stack spacing={1}>
+      <Typography level="body-xs" textColor="text.tertiary">
+        Save conversations, attachments, generated media, and project memories to a folder you choose. Credentials and
+        server settings are not included.
+      </Typography>
+      <Button
+        size="sm"
+        variant="outlined"
+        loading={pending}
+        onClick={() => void run()}
+        data-testid="settings-export-local-btn"
+      >
+        Export local data...
+      </Button>
+      {message && (
+        <Typography
+          level="body-xs"
+          color={failed ? 'danger' : 'success'}
+          role="status"
+          data-testid="settings-export-local-status"
+        >
+          {message}
+        </Typography>
+      )}
+    </Stack>
+  );
+}
+
+function localDataExportEntry(): ConfigEntry {
+  return {
+    id: 'local-data-export',
+    icon: <DownloadIcon />,
+    label: 'Export local data',
+    summary: 'Save your local conversations and project memories in a portable bundle.',
+    control: <LocalDataExport />,
+  };
+}
+
 function worktreesEntry(): ConfigEntry {
   return {
     id: 'worktrees',
@@ -298,14 +370,17 @@ function claudeImportEntry(
   state: ClaudeImportState | null,
   setState: (state: ClaudeImportState) => void,
   loadError: string | null,
-  onRetry: () => void
+  onRetry: () => void,
+  focus?: ClaudeImportKind
 ): ConfigEntry {
   return {
     id: 'claude-import',
     icon: <FolderIcon />,
     label: 'Import from Claude',
     summary: loadError ? 'Could not load import settings' : claudeImportSummary(state),
-    control: <ClaudeImportSettings state={state} onState={setState} loadError={loadError} onRetry={onRetry} />,
+    control: (
+      <ClaudeImportSettings state={state} onState={setState} loadError={loadError} onRetry={onRetry} focus={focus} />
+    ),
   };
 }
 
@@ -403,7 +478,10 @@ const SECTION_ICON: Record<SettingsSection, ReactNode> = {
  * Nothing stays mounted while the page is shut. What an unopened Settings still has to report
  * is one string, which the account strip reads for itself - see `useSettingsAttention`.
  */
-function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, ConfigEntry[]> {
+function useSettingsEntries(
+  auth: AuthState | null,
+  importFocus?: ClaudeImportKind
+): Record<SettingsSection, ConfigEntry[]> {
   const showDollarCosts = useCostDisplayPreference(state => state.showDollarCosts);
   const setShowDollarCosts = useCostDisplayPreference(state => state.setShowDollarCosts);
   const [showTokenRate, toggleTokenRate] = useTokenRateSetting();
@@ -445,13 +523,14 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
         curatedList.saving
       ),
       localHistoryEntry(),
+      localDataExportEntry(),
       ...(import.meta.env.DEV ? [dollarCostsEntry(showDollarCosts, setShowDollarCosts)] : []),
       ...(auth ? [serverEntry(auth)] : []),
       updatesEntry(update),
     ],
     servers: [modelServersEntry(modelServers, setModelServers, modelServersError)],
     permissions: [permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions)],
-    import: [claudeImportEntry(claudeImport, setClaudeImport, importError, retryImport)],
+    import: [claudeImportEntry(claudeImport, setClaudeImport, importError, retryImport, importFocus)],
     worktrees: [worktreesEntry()],
   };
 }
@@ -501,15 +580,18 @@ function SectionPage({ section, entries }: { section: SettingsSection; entries: 
 export function SettingsScreen({
   auth,
   section = 'general',
+  importFocus,
   onSection,
   onClose,
 }: {
   auth: AuthState | null;
   section?: SettingsSection;
+  /** Import page only: the source to scroll to, as the sidebar's sync hints ask. */
+  importFocus?: ClaudeImportKind;
   onSection?: (section: SettingsSection) => void;
   onClose: () => void;
 }) {
-  const entries = useSettingsEntries(auth);
+  const entries = useSettingsEntries(auth, section === 'import' ? importFocus : undefined);
 
   return (
     <Stack sx={{ height: '100vh', bgcolor: 'background.body' }} data-testid="settings-panel">

@@ -5,6 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ActionDialog, type ActionDialogProps } from './ActionDialog';
+import { ACCEPTED_AI_REASON, isAdminReasonComplete } from './adminReason';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -47,6 +48,52 @@ const openDialog = (props: HarnessProps = {}) => {
 };
 
 describe('ActionDialog', () => {
+  it('seeds a complete, editable reason from initialReason', async () => {
+    const onConfirm = vi.fn();
+    expect(isAdminReasonComplete(ACCEPTED_AI_REASON)).toBe(true);
+    const confirm = openDialog({ onConfirm, initialReason: ACCEPTED_AI_REASON });
+
+    expect(screen.getByTestId('adjust-dialog-reason-input')).toHaveValue('Accepted AI suggestion');
+    expect(confirm).toBeEnabled();
+    fireEvent.change(screen.getByTestId('adjust-dialog-reason-input'), {
+      target: { value: 'Accepted AI suggestion, checked the logs' },
+    });
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('Accepted AI suggestion, checked the logs'));
+  });
+
+  it('re-seeds the reason when formKey changes while open', () => {
+    const { rerender } = render(
+      <ActionDialog
+        open
+        onClose={vi.fn()}
+        title="Grade"
+        reasonPresets={PRESETS}
+        confirmLabel="Record"
+        onConfirm={vi.fn()}
+        data-testid="grade-dialog"
+        formKey={0}
+      />,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.getByTestId('grade-dialog-reason-input')).toHaveValue('');
+    rerender(
+      <ActionDialog
+        open
+        onClose={vi.fn()}
+        title="Grade"
+        reasonPresets={PRESETS}
+        confirmLabel="Record"
+        onConfirm={vi.fn()}
+        data-testid="grade-dialog"
+        formKey={1}
+        initialReason={ACCEPTED_AI_REASON}
+      />
+    );
+    expect(screen.getByTestId('grade-dialog-reason-input')).toHaveValue('Accepted AI suggestion');
+  });
+
   it('names the command, repeats the consequence on the commit button and labels the dialog', () => {
     const confirm = openDialog({ description: 'Credits drop to zero immediately.' });
 
@@ -154,6 +201,19 @@ describe('ActionDialog', () => {
     await waitFor(() => expect(screen.getByTestId('adjust-dialog-cancel-btn')).toBeDisabled());
     finish?.();
     await waitFor(() => expect(screen.getByTestId('adjust-dialog-cancel-btn')).toBeEnabled());
+  });
+
+  it('keeps Cancel enabled mid-write when the caller stops at close', async () => {
+    const onClose = vi.fn();
+    const onConfirm = vi.fn(() => new Promise<void>(() => {}));
+    const confirm = openDialog({ onConfirm, onClose, cancelStopsWrite: true });
+    fireEvent.click(screen.getByTestId('adjust-dialog-reason-input-preset-0'));
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(confirm).toHaveClass('MuiButton-loading'));
+    expect(screen.getByTestId('adjust-dialog-cancel-btn')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('adjust-dialog-cancel-btn'));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the required star on the typed-confirm sentence instead of a line of its own', () => {

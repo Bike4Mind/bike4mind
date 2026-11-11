@@ -20,12 +20,16 @@
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
  *
+ * plus packages/scripts/migrate/migrations/core.generated.ts, the core migrations registry built
+ * from the migration files on disk (not overlay glue, but every consumer already runs this script),
+ *
  * and, because apps/workers reaches them too, into packages/server-utils/src/premium-generated/:
  *
  *   premiumLlmTools.generated.ts - LLM tool contributions
  *   premiumSystemPrompts.generated.ts - system prompt contributions
  *   premiumAgentExtensions.generated.ts - agent surface profiles + tool-map guards
  *   premiumAdminSettings.generated.ts - contributed admin setting definitions
+ *   premiumTutorialOwners.generated.ts - tutorial owner contributions
  *   premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
  *   premiumEntitlementGrants.generated.ts - entitlement registry rows
@@ -1561,6 +1565,44 @@ function generateAdminSettings(packages) {
   );
 }
 
+// --- Generate tutorial owner contributions ---
+//
+// A premium package that owns tutorials contributes b4mContributions.tutorialOwnersExport -> a module exporting
+// `tutorialOwners: TutorialOwner[]` ({ owner, label, adminBase, adminHref }). It carries no tutorial content: core
+// serves the list to full admins only. The entries are data inside the overlay module, so the generated file
+// validates them with assertTutorialOwners when it loads.
+function generateTutorialOwners(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumTutorialOwners.generated.ts');
+
+  const contributors = packages.filter(p => p.contributions.tutorialOwnersExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\nimport type { TutorialOwner } from '@bike4mind/common';\n\nexport const premiumTutorialOwners: TutorialOwner[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.tutorialOwnersExport, p.name, 'tutorialOwnersExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.tutorialOwnersExport, 'tutorialOwnersExport', outPath);
+      return `import { tutorialOwners as owners${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  ...owners${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\nimport { assertTutorialOwners, type TutorialOwner } from '@bike4mind/common';\n${imports}\n\nexport const premiumTutorialOwners: TutorialOwner[] = assertTutorialOwners([\n${items}\n]);\n`
+  );
+}
+
 const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 // Session fields a workspace owns, resolved at read time. Each id must name an open
@@ -2052,6 +2094,29 @@ function generateInfraResources(packages) {
   for (const target of INFRA_RESOURCE_TARGETS) writeFile(target, content);
 }
 
+// --- Generate core migrations registry ---
+
+// Same pattern packages/scripts/migrate/migrations/index.test.ts scans with; keep them in sync.
+const CORE_MIGRATION_FILE_RE = /^\d{11,14}[-_].+\.ts$/;
+
+// Static imports, not a runtime readdir: the DatabaseMigrator Lambda is esbuild-bundled, so the
+// registry has to be resolvable at bundle time. A missing directory (a Docker install layer that
+// has only package.json files) writes nothing; the post-COPY regeneration emits the real list.
+function generateCoreMigrations() {
+  const migrationsDir = join(REPO_ROOT, 'packages/scripts/migrate/migrations');
+  if (!existsSync(migrationsDir)) return;
+  const files = readdirSync(migrationsDir)
+    .filter(f => CORE_MIGRATION_FILE_RE.test(f) && !f.endsWith('.test.ts'))
+    .sort();
+  const imports = files.map((f, i) => `import migration${i} from './${f.replace(/\.ts$/, '')}';`).join('\n');
+  const entries = files.map((_, i) => `  migration${i},`).join('\n');
+  writeFile(
+    join(migrationsDir, 'core.generated.ts'),
+    `${GENERATED_BANNER}\nimport type { MigrationFile } from '@bike4mind/database';\n${imports}\n\n` +
+      `export const coreMigrations: MigrationFile[] = [\n${entries}\n];\n`
+  );
+}
+
 // --- Main ---
 
 const packages = discoverPremiumPackages();
@@ -2108,9 +2173,11 @@ generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
 generateAgentExtensions(linkedPackages);
 generateAdminSettings(linkedPackages);
+generateTutorialOwners(linkedPackages);
 generateWorkspaceSessionSettings(linkedPackages);
 // Relative-import glue read only at build or deploy time: needs no node_modules link, so it gets
 // the full list. Any NEW generator goes in whichever group matches how it imports the overlay.
+generateCoreMigrations();
 generateMigrations(packages);
 generateContracts(packages);
 generateInfraGlue(packages);

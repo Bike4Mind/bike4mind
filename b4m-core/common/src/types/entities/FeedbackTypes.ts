@@ -16,6 +16,31 @@ export enum FeedbackType {
   THUMBS_DOWN = 'Thumbs Down',
 }
 
+/** Tag the pre-subscriber "coming soon" form put on the waitlist signups it stored as feedback,
+ * always with no `type`. Those rows, and any a stale client still sends, are kept out of triage. */
+export const WAITLIST_FEEDBACK_TAG = 'comingSoon';
+
+/** Content older bug-report modals sent when the user typed nothing. It is not a comment. */
+export const NO_FEEDBACK_DETAILS_PLACEHOLDER = 'No feedback details provided';
+
+/** Whether submitted feedback text is a real comment: not blank and not the legacy placeholder. */
+export function hasFeedbackComment(content: string): boolean {
+  const trimmed = content.trim();
+  return trimmed.length > 0 && trimmed !== NO_FEEDBACK_DETAILS_PLACEHOLDER;
+}
+
+/**
+ * Whether a new report has nothing for triage to act on, so it is stored Closed rather than New:
+ * a thumbs-up with no comment (it still counts in trends), or an untyped waitlist signup - a typed
+ * report carrying the tag is still a real report. A comment-less thumbs-down stays New. Keep in
+ * sync with the waitlist filter in packages/scripts/migrate/feedbackTriageNoise.ts. Historical
+ * thumbs-ups are preserved by that migration because their original comments may be unavailable.
+ */
+export function isFeedbackTriageNoise(report: { type?: string; hasContent: boolean; tags?: string[] }): boolean {
+  if (!report.type && report.tags?.includes(WAITLIST_FEEDBACK_TAG)) return true;
+  return report.type === FeedbackType.THUMBS_UP && !report.hasContent;
+}
+
 /** What a feedback report is about - server-derived from what the submission actually resolved
  * to, never client-set (see the create handler). 'help' is derived from the route that wrote the
  * report rather than from a resolved quest/session, so `resolveFeedbackContext` never returns it;
@@ -65,6 +90,107 @@ export interface IHelpFeedbackContext {
   reportType?: HelpFeedbackReportType;
 }
 
+/** Which app surface wrote a report. Client-declared, so it is a label for triage and never a key
+ * anything authorizes on. */
+export const FEEDBACK_CLIENT_PLATFORMS = ['web', 'desktop', 'ios'] as const;
+export type FeedbackClientPlatform = (typeof FEEDBACK_CLIENT_PLATFORMS)[number];
+
+/** Per-field ceilings for a stored `clientContext`. Every string is client-controlled and the
+ * object rides on a permanent row, so each one is clipped rather than trusted. */
+export const FEEDBACK_CLIENT_CONTEXT_LIMITS = {
+  path: 200,
+  appVersion: 50,
+  model: 100,
+  userAgent: 300,
+  viewportMax: 20000,
+} as const;
+
+// A path segment this long and containing a digit is treated as an opaque credential (reset link,
+// signed URL, token), not a route name or a 24-char object id. The digit requirement keeps a long
+// kebab-case slug readable, so a base64url token that happens to have no digit slips past it:
+// routes known to carry credentials are masked by position instead (see sanitizeFeedbackPagePath).
+const OPAQUE_PATH_SEGMENT = /^(?=.*\d)[A-Za-z0-9_-]{32,}$/;
+
+/**
+ * Reduces a location to the route alone: query string and hash are dropped (they carry tokens and
+ * search text) and any opaque long segment is masked, then the result is clipped. Applied on both
+ * sides, since the server cannot assume the client sanitized.
+ */
+export function sanitizeFeedbackPagePath(path: string): string {
+  const pathOnly = path.split(/[?#]/, 1)[0] ?? '';
+  const segments = pathOnly.split('/');
+  const masked = segments.map((segment, index) => {
+    // The /share/ param is an invite credential in several shapes (comma-joined ids, a base64url
+    // token, a legacy 24-hex id), so it is masked whatever its length or characters.
+    if (index === 2 && segments[1] === 'share' && segment !== '') return ':redacted';
+    return OPAQUE_PATH_SEGMENT.test(segment) ? ':redacted' : segment;
+  });
+  return masked.join('/').slice(0, FEEDBACK_CLIENT_CONTEXT_LIMITS.path);
+}
+
+const viewportDimension = z.number().int().min(0).max(FEEDBACK_CLIENT_CONTEXT_LIMITS.viewportMax);
+
+const clientContextFields = {
+  path: z.string().transform(sanitizeFeedbackPagePath).pipe(z.string().min(1)),
+  appVersion: z.string().trim().min(1).max(FEEDBACK_CLIENT_CONTEXT_LIMITS.appVersion),
+  platform: z.enum(FEEDBACK_CLIENT_PLATFORMS),
+  viewport: z.object({ width: viewportDimension, height: viewportDimension }),
+  model: z.string().trim().min(1).max(FEEDBACK_CLIENT_CONTEXT_LIMITS.model),
+};
+
+/**
+ * What a producer reports about where the report was written. Unknown keys are stripped, so
+ * nothing outside this list reaches the document. `userAgent` is deliberately not a member: the
+ * server reads it from the request itself rather than taking the client's word for it.
+ */
+export const FeedbackClientContextSchema = z.object({
+  path: clientContextFields.path.optional(),
+  appVersion: clientContextFields.appVersion.optional(),
+  platform: clientContextFields.platform.optional(),
+  viewport: clientContextFields.viewport.optional(),
+  model: clientContextFields.model.optional(),
+});
+
+export type FeedbackClientContextInput = z.input<typeof FeedbackClientContextSchema>;
+
+/** The stored shape: the validated client fields plus the request's user agent. */
+export interface IFeedbackClientContext {
+  path?: string;
+  appVersion?: string;
+  platform?: FeedbackClientPlatform;
+  viewport?: { width: number; height: number };
+  /** The model selected in the client when the report was written. */
+  model?: string;
+  userAgent?: string;
+}
+
+/**
+ * Request-side parse of `clientContext`, one field at a time: an invalid field is dropped and the
+ * rest survive, so a producer from a newer deploy sending a value this server does not know yet
+ * (a new platform, say) costs only that field. A malformed object costs the report its context,
+ * never the report - it was the thing worth keeping.
+ */
+export function parseFeedbackClientContext(input: unknown, userAgent?: string): IFeedbackClientContext | undefined {
+  const raw = typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
+  const pick = <T>(schema: z.ZodType<T>, value: unknown): T | undefined => {
+    const parsed = schema.safeParse(value);
+    return parsed.success ? parsed.data : undefined;
+  };
+
+  const clipped = userAgent?.slice(0, FEEDBACK_CLIENT_CONTEXT_LIMITS.userAgent);
+  const context: IFeedbackClientContext = {
+    path: pick(clientContextFields.path, raw.path),
+    appVersion: pick(clientContextFields.appVersion, raw.appVersion),
+    platform: pick(clientContextFields.platform, raw.platform),
+    viewport: pick(clientContextFields.viewport, raw.viewport),
+    model: pick(clientContextFields.model, raw.model),
+    userAgent: clipped || undefined,
+  };
+
+  const defined = Object.fromEntries(Object.entries(context).filter(([, value]) => value !== undefined));
+  return Object.keys(defined).length > 0 ? defined : undefined;
+}
+
 /**
  * Page bounds for the feedback list endpoint. Shared rather than mirrored on each side: the
  * server rejects a larger `limit`, and the CSV export pages at exactly the maximum - so a lower
@@ -100,6 +226,8 @@ export interface IFeedback {
   subject: FeedbackSubject;
   /** Set only on reports routed from the help center (`subject: 'help'`). */
   helpContext?: IHelpFeedbackContext;
+  /** Where the report was written. Absent on reports from before it was captured. */
+  clientContext?: IFeedbackClientContext;
   /** True iff the sibling `IFeedbackText` document was successfully written - lets a reader tell
    * "text expired under the 90-day TTL" apart from "this report never had text". */
   contentStored: boolean;

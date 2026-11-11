@@ -66,13 +66,13 @@ import {
   visibleReplyText,
   tokenEstimateMultiplier,
   pairDataLakeTools,
-  isClaudeModelId,
   questGenerationJobs,
   resolveWorkspaceDeniedTools,
   filterRunnableModels,
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
   respondFromWorkspace,
+  respondFromCoreTutorial,
   createReasoningWithholder,
   reasoningChannelOf,
   withholdsReasoning,
@@ -129,6 +129,7 @@ import { TurnTimingRecorder } from './turnTiming';
 import type { FabFileNotice } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
+import { chatReasoningOptionsFor } from './chatReasoningOptions';
 import { withOllamaThinkingDefault } from './ollamaThinkingDefault';
 import { buildRecentGeneratedImagesNote } from './recentGeneratedImagesNote';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
@@ -162,7 +163,7 @@ import {
   openAIEffortIncompatibleWithTools,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { timedOutAttemptUsageFields } from './timedOutAttemptUsage';
+import { refusedUsageOf, timedOutAttemptUsageFields } from './timedOutAttemptUsage';
 import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
@@ -1294,6 +1295,7 @@ export class ChatCompletionProcess {
   private abilityGetter: IChatCompletionServiceOptions['abilityGetter'];
   private workspaceDeniedTools: IChatCompletionServiceOptions['workspaceDeniedTools'];
   private workspaceSessionSettings: IChatCompletionServiceOptions['workspaceSessionSettings'];
+  private coreTutorialTurns: IChatCompletionServiceOptions['coreTutorialTurns'];
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   private customMcp: IChatCompletionServiceOptions['customMcp'];
@@ -1311,6 +1313,7 @@ export class ChatCompletionProcess {
   private _bedrockSvc: Map<string, BedrockGuardrailsService> = new Map();
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
+  private onStatusUpdate?: IChatCompletionServiceOptions['onStatusUpdate'];
   private decide?: IChatCompletionServiceOptions['decide'];
   private verbose: boolean = false;
   // Per-name queue of each tool call's reserved credits, in call order (see
@@ -1375,6 +1378,7 @@ export class ChatCompletionProcess {
     this.abilityGetter = options.abilityGetter;
     this.workspaceDeniedTools = options.workspaceDeniedTools;
     this.workspaceSessionSettings = options.workspaceSessionSettings;
+    this.coreTutorialTurns = options.coreTutorialTurns;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
     this.getThinkingVisibility = options.getThinkingVisibility;
@@ -1391,6 +1395,7 @@ export class ChatCompletionProcess {
     this.gpcSignalDetected = options.gpcSignalDetected ?? false;
     this.onReplyStream = options.onReplyStream;
     this.onToolPreamble = options.onToolPreamble;
+    this.onStatusUpdate = options.onStatusUpdate;
     this.decide = options.decide;
     this.statusManager = null;
     this.userAbility = null;
@@ -2505,15 +2510,17 @@ export class ChatCompletionProcess {
         return;
       }
 
-      const workspaceReply = await respondFromWorkspace(
-        {
-          user: this.user,
-          logger,
-          session,
-          quest: { id: questId, prompt: quest.prompt, fabFileIds: quest.fabFileIds },
-        },
-        this.workspaceSessionSettings
-      );
+      const turnQuest = { id: questId, prompt: quest.prompt, fabFileIds: quest.fabFileIds };
+      // Ahead of the workspace hook: a core marker sits only on main-surface sessions, so the two never both answer.
+      const workspaceReply =
+        (await respondFromCoreTutorial(
+          { user: this.user, logger, session: { id: sessionId, tutorial: session.tutorial }, quest: turnQuest },
+          this.coreTutorialTurns
+        )) ??
+        (await respondFromWorkspace(
+          { user: this.user, logger, session, quest: turnQuest },
+          this.workspaceSessionSettings
+        ));
       if (workspaceReply) {
         quest.replies = workspaceReply.replies;
         quest.reply = workspaceReply.replies.join('');
@@ -3462,6 +3469,14 @@ export class ChatCompletionProcess {
         logit_bias: logitBias = null,
         thinking,
       } = params;
+
+      const userReasoningEffort = this.user.preferredReasoningEffort;
+      const explicitReasoningEffort: ReasoningEffort | undefined =
+        userReasoningEffort && userReasoningEffort !== 'auto' ? (userReasoningEffort as ReasoningEffort) : undefined;
+      const chatThinking =
+        thinking && modelInfo.can_think
+          ? { enabled: thinking.enabled, budget_tokens: thinking.budget_tokens ?? 16000 }
+          : undefined;
 
       // Generic per-session temperature override: a session can pin a fixed
       // temperature (e.g. a regulated reference product wanting lower variance for
@@ -4910,6 +4925,11 @@ export class ChatCompletionProcess {
         );
       }
 
+      const resolveResearchRunModel = (requested: ModelInfo): ModelInfo =>
+        shadowSettings
+          ? (resolveShadowModelInfo(this.user, requested, models, shadowSettings.allowlist, logger) ?? requested)
+          : requested;
+
       this.turnCreditLimiter = null;
       if (adminSettingsEnforceCredits) {
         const creditValidationStartTime = Date.now();
@@ -4926,25 +4946,34 @@ export class ChatCompletionProcess {
         // The Anthropic adapters raise the max_tokens they send past safeMaxTokens for thinking
         // (buildThinkingParams), so the hold and the member cap below are priced on the ceiling
         // actually sent, and a turn that thinks is held like one that reasons inside its output budget.
-        const sentMaxTokens = sentMaxTokensFor(modelInfo, thinking, safeMaxTokens);
+        const sentMaxTokens = sentMaxTokensFor(
+          modelInfo,
+          chatReasoningOptionsFor(modelInfo, explicitReasoningEffort, chatThinking).thinking,
+          safeMaxTokens
+        );
         // Research mode runs every enabled configuration instead of the primary, so it holds each of
         // them at the output ceiling it runs with (researchConfigMaxTokens), and the cap below too.
-        // Each configuration inherits the turn's thinking options (gated on the primary's can_think,
-        // as `options` below is), so its ceiling is raised for thinking the same way.
-        const researchThinking = modelInfo.can_think ? thinking : undefined;
+        // Size each configuration on its executing model; credit pricing keeps the requested model.
+        // Thinking is inherited from the turn and reconciled per executing model, as in ResearchModeService.
+        const researchThinking = chatThinking;
         const researchCosts = isResearchMode
           ? researchMode.configurations
               .filter(config => config.enabled)
               .map(config => {
                 const configModel = models.find(m => m.id === config.model);
                 if (!configModel) throw new BadRequestError(`Invalid model: "${config.model}" is not available`);
-                const requested = researchConfigMaxTokens(config.parameters?.maxTokens, safeMaxTokens, configModel);
-                const ceiling = sentMaxTokensFor(configModel, researchThinking, requested);
+                const runConfigModel = resolveResearchRunModel(configModel);
+                const requested = researchConfigMaxTokens(config.parameters?.maxTokens, safeMaxTokens, runConfigModel);
+                const ceiling = sentMaxTokensFor(
+                  runConfigModel,
+                  chatReasoningOptionsFor(runConfigModel, explicitReasoningEffort, researchThinking).thinking,
+                  requested
+                );
                 return {
                   hold: getTextModelCost(
                     configModel,
                     inputTokens,
-                    reservationOutputTokens(ceiling, ceiling > requested || reasonsWithinOutputBudget(configModel))
+                    reservationOutputTokens(ceiling, ceiling > requested || reasonsWithinOutputBudget(runConfigModel))
                   ),
                   ceiling: getTextModelCost(configModel, inputTokens, ceiling),
                 };
@@ -5281,10 +5310,6 @@ export class ChatCompletionProcess {
 
       // Determine reasoning effort: user preference takes precedence over auto-classification
       // If user set 'auto' or null, use auto-classification from queryComplexity
-      const userReasoningEffort = this.user.preferredReasoningEffort;
-      const explicitReasoningEffort: ReasoningEffort | undefined =
-        userReasoningEffort && userReasoningEffort !== 'auto' ? (userReasoningEffort as ReasoningEffort) : undefined;
-
       if (explicitReasoningEffort) {
         logger.info(`🧠 [ReasoningEffort] Using user preference: ${explicitReasoningEffort}`);
       } else {
@@ -5300,18 +5325,12 @@ export class ChatCompletionProcess {
         logitBias: logitBias ?? undefined,
         // Pass query complexity for auto-classification of reasoning effort
         complexity: queryComplexity as 'simple' | 'contextual' | 'complex',
-        // Pass explicit user reasoning effort preference (if not 'auto'); withheld from Claude per attempt below
+        // Pass explicit user reasoning effort preference (if not 'auto'); narrowed per attempt below
         reasoningEffort: explicitReasoningEffort,
         // Gate on can_think so we never ask a non-thinking model to think:
         // Ollama returns a hard 400 ("does not support thinking") for think:true
         // on such a model, which would fail the whole completion.
-        thinking:
-          thinking && modelInfo.can_think
-            ? {
-                enabled: thinking.enabled,
-                budget_tokens: thinking.budget_tokens ?? 16000,
-              }
-            : undefined,
+        thinking: chatThinking,
         tools: allTools,
         // The adapters append a model-identity line on their own; see resolveIdentityReminder.
         ...resolveIdentityReminder({ promptMode, offeredToolNames }),
@@ -5436,10 +5455,7 @@ export class ChatCompletionProcess {
           models,
           logger,
           this.user.id,
-          shadowSettings
-            ? requested =>
-                resolveShadowModelInfo(this.user, requested, models, shadowSettings.allowlist, logger) ?? requested
-            : undefined
+          resolveResearchRunModel
         );
 
         // Handle Research Mode parallel processing
@@ -5854,6 +5870,7 @@ export class ChatCompletionProcess {
                   return null;
                 })
               : currentLlm;
+            const attemptReasoning = chatReasoningOptionsFor(currentModel, options.reasoningEffort, options.thinking);
             await hopLlm.complete(
               currentModel.id,
               hopRequest.messages,
@@ -5867,14 +5884,11 @@ export class ChatCompletionProcess {
                 // Per attempt: a fallback hop must name the model that actually serves it.
                 modelDisplayName: attemptLedgerModel.name,
                 modelIdentityId: attemptLedgerModel.id,
-                // The preference is set from a selector shown only for OpenAI-style reasoning models, so
-                // it must not retune Claude, whose adapters honour reasoningEffort for the completions API.
-                // Checked per attempt: a fallback can swap a GPT model for a Claude one (and back).
-                // Claude still follows the auto-classified `complexity` below, which the adapters map
-                // to a low effort on simple/contextual queries.
-                reasoningEffort: isClaudeModelId(currentModel.id) ? undefined : options.reasoningEffort,
-                // Per attempt too: the explicit think-off is Ollama's alone, and a fallback can change backend.
-                thinking: withOllamaThinkingDefault(options.thinking, currentModel),
+                // Per attempt: a fallback can swap a GPT model for a Claude one (and back). Unset, the
+                // adapter falls back to the auto-classified `complexity`, then the model default.
+                reasoningEffort: attemptReasoning.reasoningEffort,
+                // Apply Ollama's backend-specific default after reconciling this attempt's saved preference.
+                thinking: withOllamaThinkingDefault(attemptReasoning.thinking, currentModel),
                 abortSignal: abortController.signal,
                 cacheStrategy,
                 _internal: {
@@ -6109,11 +6123,11 @@ export class ChatCompletionProcess {
             }
             const isRetryableError = shouldTriggerFallback(lastError);
             // A refused call throws rather than settles, so record it here, whether or not a
-            // fallback then answers. Same enforceCredits gate as the settlement row. Not billed:
-            // the user got no output, and the backend throws before reporting usage, so its
-            // tokens and COGS are unknown and left at 0.
+            // fallback then answers. Same enforceCredits gate as the settlement row. Not charged (the
+            // user got no answer); what the provider billed before the refusal, if any, is kept as COGS.
             if (adminSettingsEnforceCredits && isSafetyRefusalError(lastError)) {
               const refusalLedgerModel = this.ledgerModel(currentModel);
+              const refusedUsage = refusedUsageOf(lastError);
               this.db.usageEvents
                 ?.record({
                   requestId: quest.id,
@@ -6122,15 +6136,20 @@ export class ChatCompletionProcess {
                   ownerType: this.reservedCreditsOwnerType,
                   sessionId: quest.sessionId,
                   feature: 'chat',
+                  source: 'web',
+                  ...(refusedUsage
+                    ? timedOutAttemptUsageFields(currentModel, refusedUsage)
+                    : {
+                        inputTokens: 0,
+                        outputTokens: 0,
+                        cachedInputTokens: 0,
+                        cacheWriteTokens: 0,
+                        costUsd: 0,
+                        creditsCharged: 0,
+                      }),
                   provider: refusalLedgerModel.backend,
                   model: refusalLedgerModel.id,
-                  source: 'web',
-                  inputTokens: 0,
-                  outputTokens: 0,
-                  cachedInputTokens: 0,
-                  cacheWriteTokens: 0,
-                  costUsd: 0,
-                  creditsCharged: 0,
+                  ...executedModelFields(refusalLedgerModel, currentModel),
                   status: 'refusal',
                 })
                 .catch((usageEventError: unknown) => {
@@ -7181,6 +7200,7 @@ export class ChatCompletionProcess {
           // Dual-write usage event: ties frozen COGS to credits debited
           // for margin reporting. Fire-and-forget - must never affect billing.
           const settledLedgerModel = this.ledgerModel(currentModel);
+          const settledReasoning = chatReasoningOptionsFor(currentModel, explicitReasoningEffort, chatThinking);
           this.db.usageEvents
             ?.record({
               requestId: quest.id,
@@ -7223,9 +7243,12 @@ export class ChatCompletionProcess {
                 stopReason: providerStopReason,
                 maxOutputTokens: safeMaxTokens,
                 limiter: this.turnCreditLimiter,
-                reasoningEffort: explicitReasoningEffort ?? (queryComplexity ? `auto:${queryComplexity}` : undefined),
+                reasoningEffort:
+                  settledReasoning.reasoningEffort ?? (queryComplexity ? `auto:${queryComplexity}` : undefined),
                 thinkingBudgetTokens:
-                  thinking?.enabled && currentModel.can_think ? (thinking.budget_tokens ?? 16000) : undefined,
+                  settledReasoning.thinking?.enabled && currentModel.can_think
+                    ? settledReasoning.thinking.budget_tokens
+                    : undefined,
                 functionCalls: quest.promptMeta?.functionCalls,
                 attachedFiles: quest.promptMeta?.context?.attachedFiles,
               }),
@@ -7957,6 +7980,15 @@ export class ChatCompletionProcess {
     }
   }
 
+  private notifyStatusObserver(q: IChatHistoryItemDocument, status: string | null, silent?: boolean) {
+    if (!this.onStatusUpdate || !status || silent) return;
+    try {
+      this.onStatusUpdate(String(q.id), status);
+    } catch (error) {
+      this.logger.warn('[onStatusUpdate] observer failed', { error });
+    }
+  }
+
   public async sendStatusUpdate(
     q: IChatHistoryItemDocument,
     status: string | null,
@@ -7969,6 +8001,7 @@ export class ChatCompletionProcess {
       skipPayloadOptimization?: boolean;
     } = {}
   ) {
+    this.notifyStatusObserver(q, status, options.silent);
     if (!this.statusManager) {
       // IF NOT INITIALIZED, INITIALIZE IT
       this.statusManager = new StatusManager(
@@ -7997,6 +8030,7 @@ export class ChatCompletionProcess {
       skipPayloadOptimization?: boolean;
     } = {}
   ) {
+    this.notifyStatusObserver(q, status, options.silent);
     if (!this.statusManager) {
       // IF NOT INITIALIZED, INITIALIZE IT
       this.statusManager = new StatusManager(

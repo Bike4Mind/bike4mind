@@ -54,7 +54,7 @@ vi.mock('@server/dataLakes/assertLakeResearchManage', () => ({
   assertLakeResearchManage: h.assertLakeResearchManage,
 }));
 
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async () => ({ userId: 'user-1', isAdmin: false })),
 }));
 
@@ -114,6 +114,55 @@ describe('/api/data-lakes/[id]/research/configs', () => {
 
     expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject(schedule);
     expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject(schedule);
+  });
+
+  describe('source tiers', () => {
+    const tiers = { reviewDomains: ['a.example'], unlistedSources: 'drop', blockedDomains: ['b.example'] };
+
+    it('forwards the review list and unlistedSources on create and update', async () => {
+      const { res } = makeRes();
+      await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', ...tiers }), res);
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, tiers), res);
+      expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject(tiers);
+      expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject(tiers);
+    });
+
+    it('does not pass trustedDomains from a request body on to the service', async () => {
+      const { res } = makeRes();
+      await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', trustedDomains: ['t.example'] }), res);
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, { trustedDomains: ['t.example'] }), res);
+      expect(h.createResearchConfig.mock.calls[0][3]).not.toHaveProperty('trustedDomains');
+      expect(h.updateResearchConfig.mock.calls[0][4]).not.toHaveProperty('trustedDomains');
+    });
+
+    it('still accepts a legacy allowedDomains body from a tab opened before the tiers', async () => {
+      const { res } = makeRes();
+      await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', allowedDomains: ['a.example'] }), res);
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, { allowedDomains: ['a.example'] }), res);
+      expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject({ allowedDomains: ['a.example'] });
+      expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject({ allowedDomains: ['a.example'] });
+    });
+
+    it('rejects an unknown unlistedSources value', async () => {
+      const { res } = makeRes();
+      await expect(
+        call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', unlistedSources: 'maybe' }), res)
+      ).rejects.toThrow();
+    });
+
+    it('returns the tier fields next to the derived legacy allowedDomains', async () => {
+      const stored = {
+        ...savedConfig,
+        trustedDomains: [],
+        reviewDomains: ['a.example'],
+        unlistedSources: 'drop',
+        allowedDomains: ['a.example'],
+      };
+      h.listResearchConfigs.mockResolvedValue([stored]);
+      const { res, json } = makeRes();
+      await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+      expect(json).toHaveBeenCalledWith({ data: [stored], pendingProposals: 7 });
+    });
   });
 
   it('strips undeclared fields from each listed configuration, keeping pendingProposals', async () => {

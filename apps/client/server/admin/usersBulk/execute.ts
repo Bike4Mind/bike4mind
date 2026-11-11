@@ -8,8 +8,8 @@ import {
   type AdminUsersBulkExecuteRequest,
   type AdminUsersBulkResult,
   blocksEmailDomains,
-} from '@client/app/utils/adminUsersBulk';
-import type { AccountSubscriptionCancellation } from '@server/billing/cancelAccountSubscriptions';
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
+import type { AccountSubscriptionCancellation } from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 import { emailDomainsOf } from './emailDomains';
 import {
   cohortHashOf,

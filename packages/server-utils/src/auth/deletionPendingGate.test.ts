@@ -22,6 +22,14 @@ describe('isBlockedByPendingDeletion', () => {
     expect(isBlockedByPendingDeletion(frozen, '/api/users/u2', 'GET')).toBe(true);
   });
 
+  it('lets a pending account complete the step-up the export download requires', () => {
+    expect(isBlockedByPendingDeletion(frozen, '/api/auth/step-up', 'POST')).toBe(false);
+    expect(isBlockedByPendingDeletion(frozen, '/api/auth/step-up/options', 'GET')).toBe(false);
+    expect(isBlockedByPendingDeletion(frozen, '/api/auth/step-up/passkey-options', 'POST')).toBe(false);
+    expect(isBlockedByPendingDeletion(frozen, '/api/auth/step-up/email/send', 'POST')).toBe(false);
+    expect(isBlockedByPendingDeletion(frozen, '/api/auth/step-up', 'GET')).toBe(true);
+  });
+
   it('lets a pending account download an export it requested, but not start a new one', () => {
     const download = '/api/users/me/data-export/7d0c1f5e-9a7b-4c1e-8f0a-2b3c4d5e6f70';
     expect(isBlockedByPendingDeletion(frozen, download, 'GET')).toBe(false);

@@ -167,7 +167,13 @@ describe('AdminGrowthPricingTab', () => {
     fireEvent.change(screen.getByTestId('admin-setting-teamPlanCreditsPerSeat-input'), { target: { value: '1234' } });
     expect(screen.getByTestId('admin-save-bar').textContent).toContain('2 unsaved changes');
 
+    // teamPlanCreditsPerSeat changes what customers pay, so the batch waits on the price warning.
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    const warning = await screen.findByTestId('admin-settings-warning-dialog');
+    expect(warning).toHaveTextContent('Team Plan Credits Per Seat changes what customers pay');
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('admin-settings-warning-save-btn'));
     await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
     expect(mocks.mutateAsync).toHaveBeenCalledTimes(2);
     expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'teamPlanMaxSeats', value: 300 });

@@ -112,7 +112,7 @@ const RATE_LIMIT_HEADERS = {
 
 // The Mongo-backed per-API-key rate-limit counter (buffers forever against a
 // stubbed connectDB otherwise). Overridable per-test.
-vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', () => ({
   checkFreeTierDailySpendCap: (...args: unknown[]) => mockCheckFreeTierDailySpendCap(...args),
 }));
 
@@ -134,7 +134,7 @@ vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn()
 // limiter short-circuited before its counter, so no chat test - happy path included -
 // ever exercised the increment, and the whole rate-limit-vs-validation ordering was
 // untested. Individual tests override it.
-vi.mock('@server/utils/userRateTier', () => ({
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({
   resolveUserRateLimitPerMin: (...a: unknown[]) => mockResolveUserRateLimitPerMin(...a),
 }));
 
@@ -597,7 +597,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     // Went the API-key route (not JWT): the key validator ran with the Bearer token.
-    expect(mockValidate).toHaveBeenCalledWith('b4m_live_testkey', expect.anything());
+    expect(mockValidate).toHaveBeenCalledWith('b4m_live_testkey', expect.anything(), { recordUse: true });
   });
 
   it('leaves a Bearer JWT (no b4m_ prefix) to JWT auth, not api-key auth', async () => {

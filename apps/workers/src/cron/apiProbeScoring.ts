@@ -84,6 +84,9 @@ export const REQUEST_PATH_PATTERN = `^[A-Z]+ (?<reqPath>[^ ?]+)[^ ]* ${ARROW} [0
  */
 export const ADMIN_DENIED_PATH_PATTERN = `^[A-Z]+ (?<adminDeniedPath>/api/admin(?:/[A-Za-z_-]+)*)[^ ]* ${ARROW} 40[13]:`;
 
+/** Logs Insights ends a `/regex/` literal at the first `/`, so each one inside the pattern is escaped. */
+const parseRegex = (pattern: string): string => `parse message /${pattern.replaceAll('/', '\\/')}/`;
+
 /** Per-line 0/1 indicator for each line signal, as Logs Insights expressions over `message`. */
 const SIGNAL_EXPRESSIONS: Record<LineSignal, string> = {
   refusedFetch: `strcontains(message, "${ARROW} 400: Refusing to fetch")`,
@@ -103,8 +106,8 @@ const SIGNAL_EXPRESSIONS: Record<LineSignal, string> = {
 export const PROBE_QUERY = [
   'filter ispresent(clientIp) or ispresent(userId)',
   'fields coalesce(clientIp, "") as ip, coalesce(userId, "") as uid',
-  `parse message /${REQUEST_PATH_PATTERN}/`,
-  `parse message /${ADMIN_DENIED_PATH_PATTERN}/`,
+  parseRegex(REQUEST_PATH_PATTERN),
+  parseRegex(ADMIN_DENIED_PATH_PATTERN),
   ...LINE_SIGNALS.map(signal => `fields ${SIGNAL_EXPRESSIONS[signal]} as is_${signal}`),
   `fields ${LINE_SIGNALS.map(signal => `${SIGNAL_WEIGHTS[signal]} * is_${signal}`).join(' + ')} as weight`,
   'stats ' +

@@ -10,6 +10,8 @@ export type AdminPermissionCase = {
   permission: string;
   /** Every method the route declares in its adminApi permission map; defaults to [method]. */
   allowedMethods?: string[];
+  /** A permission the route must refuse; defaults to one other than `permission`, which an any-of route may accept. */
+  rejectedPermission?: string;
 };
 
 export const createAdminPermissionsState = (): AdminPermissionsState => ({ guard: undefined, options: undefined });
@@ -49,54 +51,57 @@ export function describeAdminPermissionCases(
     vi.resetModules();
   });
 
-  describe.each(cases)('$file ($method)', ({ file, method, permission, allowedMethods }) => {
-    const load = async () => {
-      state.guard = undefined;
-      state.options = undefined;
-      await importRoute(file);
-    };
+  describe.each(cases)(
+    '$file ($method, $permission)',
+    ({ file, method, permission, allowedMethods, rejectedPermission }) => {
+      const load = async () => {
+        state.guard = undefined;
+        state.options = undefined;
+        await importRoute(file);
+      };
 
-    it('allows a delegate holding the declared permission without isAdmin', async () => {
-      await load();
-      expect(runGuard(method, { isAdmin: false, adminPermissions: [permission] })).toHaveBeenCalledOnce();
-    });
+      it('allows a delegate holding the declared permission without isAdmin', async () => {
+        await load();
+        expect(runGuard(method, { isAdmin: false, adminPermissions: [permission] })).toHaveBeenCalledOnce();
+      });
 
-    it('rejects a delegate holding a different permission', async () => {
-      await load();
-      const other = permission === 'support:read' ? 'settings:manage' : 'support:read';
-      expect(() => runGuard(method, { isAdmin: false, adminPermissions: [other] })).toThrow(
-        `Missing permission: ${permission}`
-      );
-    });
+      it('rejects a delegate holding a different permission', async () => {
+        await load();
+        const other = rejectedPermission ?? (permission === 'support:read' ? 'settings:manage' : 'support:read');
+        expect(() => runGuard(method, { isAdmin: false, adminPermissions: [other] })).toThrow(
+          new RegExp(`^Missing permission: (.+ or )?${permission}( or .+)?$`)
+        );
+      });
 
-    it('rejects a non-admin with no permissions', async () => {
-      await load();
-      expect(() => runGuard(method, { isAdmin: false })).toThrow();
-    });
+      it('rejects a non-admin with no permissions', async () => {
+        await load();
+        expect(() => runGuard(method, { isAdmin: false })).toThrow();
+      });
 
-    it('allows a full admin', async () => {
-      await load();
-      expect(runGuard(method, { isAdmin: true })).toHaveBeenCalledOnce();
-    });
+      it('allows a full admin', async () => {
+        await load();
+        expect(runGuard(method, { isAdmin: true })).toHaveBeenCalledOnce();
+      });
 
-    it('rejects a full admin using an API key without the admin scope', async () => {
-      await load();
-      expect(() => runGuard(method, { isAdmin: true }, { apiKeyInfo: { scopes: ['chat:read'] } })).toThrow(
-        'Insufficient API key permissions'
-      );
-    });
+      it('rejects a full admin using an API key without the admin scope', async () => {
+        await load();
+        expect(() => runGuard(method, { isAdmin: true }, { apiKeyInfo: { scopes: ['chat:read'] } })).toThrow(
+          'Insufficient API key permissions'
+        );
+      });
 
-    it('allows a full admin using an admin-scoped API key', async () => {
-      await load();
-      expect(
-        runGuard(method, { isAdmin: true }, { apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] } })
-      ).toHaveBeenCalledOnce();
-    });
+      it('allows a full admin using an admin-scoped API key', async () => {
+        await load();
+        expect(
+          runGuard(method, { isAdmin: true }, { apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] } })
+        ).toHaveBeenCalledOnce();
+      });
 
-    it('declares exactly the expected allowed methods', async () => {
-      await load();
-      const actual = (state.options as { allowedMethods: string[] }).allowedMethods;
-      expect([...actual].sort()).toEqual([...(allowedMethods ?? [method])].sort());
-    });
-  });
+      it('declares exactly the expected allowed methods', async () => {
+        await load();
+        const actual = (state.options as { allowedMethods: string[] }).allowedMethods;
+        expect([...actual].sort()).toEqual([...(allowedMethods ?? [method])].sort());
+      });
+    }
+  );
 }

@@ -12,6 +12,7 @@ import {
   RESEARCH_RUN_STATUSES,
   RESEARCH_RUN_STOP_REASONS,
   RESEARCH_RUN_TRIGGERS,
+  RESEARCH_UNLISTED_SOURCES,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -26,6 +27,10 @@ const ResearchRunLeversSchema = {
   maxResults: { type: Number, required: true },
   maxProposals: { type: Number, required: true },
   recencyDays: { type: Number, default: null },
+  trustedDomains: { type: [String], default: [] },
+  reviewDomains: { type: [String], default: [] },
+  // No default: a snapshot taken before the tiers has none, and the executor upgrades it.
+  unlistedSources: { type: String, enum: RESEARCH_UNLISTED_SOURCES },
   allowedDomains: { type: [String], default: [] },
   blockedDomains: { type: [String], default: [] },
   minRelevance: { type: Number, required: true },

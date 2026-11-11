@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 /**
@@ -40,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   resolveWonDispute: vi.fn(),
   recordBillingEvent: vi.fn(),
   publishSubscriptionUpdated: vi.fn(),
+  publishInvoicePayment: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -100,7 +102,10 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
-  StripeEvents: { CustomerSubscriptionUpdated: { publish: mocks.publishSubscriptionUpdated } },
+  StripeEvents: {
+    CustomerSubscriptionUpdated: { publish: mocks.publishSubscriptionUpdated },
+    InvoicePaymentSucceeded: { publish: mocks.publishInvoicePayment },
+  },
 }));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   CustomerType: {},
@@ -113,8 +118,8 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
 }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
 // The real event builders run; the post itself (stage gate, wording) is covered in subscriptionLifecycle.test.ts.
-vi.mock('@server/integrations/slack/subscriptionLifecycle', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/integrations/slack/subscriptionLifecycle')>()),
+vi.mock('@bike4mind/server-utils/integrations/slack/subscriptionLifecycle', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/integrations/slack/subscriptionLifecycle')>()),
   postSubscriptionLifecycleToSlack: mocks.postSubscriptionLifecycleToSlack,
 }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: mocks.sendToClient }));
@@ -132,7 +137,7 @@ vi.mock('@server/billing/paymentRisk', () => ({
   screenPaymentOutcome: vi.fn(),
 }));
 vi.mock('@server/billing/earlyFraudWarning', () => ({ respondToEarlyFraudWarning: vi.fn() }));
-vi.mock('@server/billing/linkedAccounts', () => ({ propagateAccountRisk: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({ propagateAccountRisk: vi.fn() }));
 vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({
   emitPurchaseEvents: vi.fn(),
   emitBillingEvent: mocks.emitBillingEvent,
@@ -152,11 +157,17 @@ vi.mock('@server/billing/billingEventStore', () => ({ recordBillingEvent: mocks.
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' }, App: { stage: 'test' } } }));
 
 import '@pages/api/stripe/webhook';
+import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 
 /** Deliver `event` as a signed webhook. The raw body is irrelevant: constructEvent is mocked. */
-const deliver = async (event: { id?: string; type: string; data: { object: Record<string, unknown> } }) => {
+const deliver = async (event: {
+  id?: string;
+  type: string;
+  created?: number;
+  data: { object: Record<string, unknown> };
+}) => {
   mocks.constructEvent.mockReturnValue(event);
   const { res } = createMocks();
   const req = {
@@ -1078,11 +1089,32 @@ describe('BillingEvent recording', () => {
     };
 
     await deliver(updated);
-    expect(mocks.publishSubscriptionUpdated).toHaveBeenCalledWith({ subscriptionId: 'sub_1' });
+    expect(mocks.publishSubscriptionUpdated).toHaveBeenCalledWith(
+      { subscriptionId: 'sub_1' },
+      { requireAcceptance: true }
+    );
     expect(mocks.recordBillingEvent).toHaveBeenCalledExactlyOnceWith(updated, {}, logger);
 
     mocks.publishSubscriptionUpdated.mockRejectedValueOnce(new Error('bus down'));
     await expect(deliver(updated)).rejects.toThrow('bus down');
+    expect(mocks.recordBillingEvent).toHaveBeenCalledOnce();
+  });
+
+  it('requires invoice delivery acceptance before recording success and allows redelivery after failure', async () => {
+    const event = {
+      id: 'evt_invoice_1',
+      type: 'invoice.payment_succeeded',
+      data: { object: { id: 'in_1', parent: { subscription_details: { subscription: 'sub_1' } } } },
+    };
+    mocks.publishInvoicePayment.mockRejectedValueOnce(new Error('broker unavailable'));
+    await expect(deliver(event)).rejects.toThrow('broker unavailable');
+    expect(mocks.recordBillingEvent).not.toHaveBeenCalled();
+    const response = await deliver(event);
+    expect(response._getStatusCode()).toBe(200);
+    expect(mocks.publishInvoicePayment).toHaveBeenCalledWith(
+      { invoiceId: 'in_1', subscriptionId: 'sub_1' },
+      { requireAcceptance: true }
+    );
     expect(mocks.recordBillingEvent).toHaveBeenCalledOnce();
   });
 
@@ -1114,5 +1146,101 @@ describe('BillingEvent recording', () => {
       { data: { dunningNoticeSent: true } },
       logger
     );
+  });
+});
+
+describe('checkout.session.completed - terms consent', () => {
+  const completed = (object: Record<string, unknown>) => ({
+    type: 'checkout.session.completed',
+    created: 1_800_000_000,
+    data: { object: { id: 'cs_1', ...object } },
+  });
+
+  it('records the current terms version and the event time on the buyer when terms were accepted', async () => {
+    await deliver(completed({ client_reference_id: 'user_1', consent: { terms_of_service: 'accepted' } }));
+
+    expect(mocks.updateUser).toHaveBeenCalledWith({
+      id: 'user_1',
+      checkoutTermsAcceptedVersion: CURRENT_POLICY_VERSION,
+      checkoutTermsAcceptedAt: new Date(1_800_000_000 * 1000),
+    });
+  });
+
+  it('records nothing when the session collected no terms consent', async () => {
+    await deliver(completed({ client_reference_id: 'user_1', consent: null }));
+    await deliver(completed({ client_reference_id: 'user_1' }));
+
+    expect(mocks.updateUser).not.toHaveBeenCalled();
+  });
+
+  it('records nothing when the session names no buyer', async () => {
+    await deliver(completed({ client_reference_id: null, consent: { terms_of_service: 'accepted' } }));
+
+    expect(mocks.updateUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('payment_intent.succeeded - credit purchase terms consent', () => {
+  const succeeded = (metadata: Record<string, unknown>) => ({
+    type: 'payment_intent.succeeded',
+    created: 1_800_000_000,
+    data: {
+      object: {
+        object: 'payment_intent',
+        id: 'pi_terms',
+        amount: 2000,
+        currency: 'usd',
+        customer: 'cus_1',
+        metadata: { environment: 'test', credits: '100', userId: 'user_1', ...metadata },
+      },
+    },
+  });
+
+  // The grant and everything after it have their own suites; stopping there keeps this to the terms record.
+  beforeEach(() => {
+    vi.mocked(grantCreditPurchase).mockRejectedValueOnce(new Error('stop after terms'));
+  });
+
+  it('records the version the buyer accepted at start and the event time on the resolved user', async () => {
+    mocks.findUserByStripeCustomerId.mockResolvedValue({ ...owner, id: 'user_by_customer' });
+
+    await expect(deliver(succeeded({ termsAcceptedVersion: '2020-01-01' }))).rejects.toThrow('stop after terms');
+
+    expect(mocks.updateUser).toHaveBeenCalledWith({
+      id: 'user_by_customer',
+      checkoutTermsAcceptedVersion: '2020-01-01',
+      checkoutTermsAcceptedAt: new Date(1_800_000_000 * 1000),
+    });
+  });
+
+  it('records nothing when the intent carries no terms version', async () => {
+    mocks.findUserByStripeCustomerId.mockResolvedValue(owner);
+
+    await expect(deliver(succeeded({}))).rejects.toThrow('stop after terms');
+
+    expect(mocks.updateUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('checkout.session.completed - terms consent in payment mode', () => {
+  it('records the acceptance for a one-time payment session too', async () => {
+    await deliver({
+      type: 'checkout.session.completed',
+      created: 1_800_000_000,
+      data: {
+        object: {
+          id: 'cs_pay',
+          mode: 'payment',
+          client_reference_id: 'user_1',
+          consent: { terms_of_service: 'accepted' },
+        },
+      },
+    });
+
+    expect(mocks.updateUser).toHaveBeenCalledWith({
+      id: 'user_1',
+      checkoutTermsAcceptedVersion: CURRENT_POLICY_VERSION,
+      checkoutTermsAcceptedAt: new Date(1_800_000_000 * 1000),
+    });
   });
 });

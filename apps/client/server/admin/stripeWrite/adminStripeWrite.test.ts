@@ -416,8 +416,16 @@ describe('runAdminStripeWrite', () => {
     expect(mockStripeUpdate).not.toHaveBeenCalled();
   });
 
-  it('refuses a non-admin and an impersonated session before anything else', async () => {
+  it('lets a credits:adjust delegate write', async () => {
+    await run(makeReq({ user: { id: 'delegate-1', adminPermissions: ['credits:adjust'] } }));
+    expect(mockStripeUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a non-admin, another delegate and an impersonated session before anything else', async () => {
     await expect(run(makeReq({ user: { id: 'a', isAdmin: false } }))).rejects.toMatchObject({ statusCode: 403 });
+    await expect(run(makeReq({ user: { id: 'a', adminPermissions: ['support:read'] } }))).rejects.toMatchObject({
+      statusCode: 403,
+    });
     await expect(run(makeReq({ user: { id: 'a', isAdmin: true, impersonatedBy: 'root' } }))).rejects.toMatchObject({
       statusCode: 403,
     });

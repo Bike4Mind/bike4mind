@@ -14,6 +14,10 @@ import {
   isFullAdmin,
   isRegisteredSettingKey,
   resolveSettingDefinition,
+  checkSignupGrantSave,
+  isSignupGrantGuardedSaveKey,
+  SIGNUP_GRANT_GUARD_SETTING_KEYS,
+  type SignupGrantGuardSettings,
 } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
@@ -24,12 +28,17 @@ import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import {
+  BadRequestError,
+  ForbiddenError,
+  NotFoundError,
+  UnprocessableEntityError,
+} from '@bike4mind/server-utils/utils/errors';
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
+import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 
 // One-time guard so a self-host install running without a configured key logs the
 // plaintext-at-rest degradation once, rather than silently or on every write.
@@ -46,7 +55,16 @@ export const FULL_ADMIN_SETTING_KEYS = new Set([
   'SlackSecurityAlertsWebhookUrl',
   'enforceMFA',
   'allowTrustedDevices',
+  // Sets how large a signup grant may be while the signup assessment policy is off (checkSignupGrantSave).
+  'signupGrantUnprotectedMaxCredits',
 ]);
+
+// The stored settings checkSignupGrantSave reads. This route is the admin write path the check guards;
+// migrations also write some of these keys, without the check.
+async function readSignupGrantGuardSettings(): Promise<SignupGrantGuardSettings> {
+  const rows = await AdminSettings.find({ settingName: { $in: [...SIGNUP_GRANT_GUARD_SETTING_KEYS] } }).lean();
+  return Object.fromEntries(rows.map(row => [row.settingName, row.settingValue]));
+}
 
 // Update Admin Setting
 const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
@@ -126,6 +144,11 @@ const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
         );
       }
       value = valid;
+    }
+
+    if (isSignupGrantGuardedSaveKey(key)) {
+      const verdict = checkSignupGrantSave(key, value, await readSignupGrantGuardSettings());
+      if (!verdict.ok) throw new UnprocessableEntityError(verdict.reason);
     }
 
     const isSensitiveSetting = definition.isSensitive === true;

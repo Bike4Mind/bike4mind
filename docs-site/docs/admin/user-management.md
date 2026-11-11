@@ -324,6 +324,8 @@ The **Roles** section on the profile page's Overview tab provides:
 | **Predefined Tags** | Checkboxes for system-defined tags |
 | **Custom Tags** | Text input to add comma-separated custom tags, with remove buttons for each custom tag |
 
+To give a user part of the admin area without making them a Super Admin, edit their **Admin permissions** on the Access card. See [Delegated Admin Permissions](./delegated-permissions.md#granting-permissions).
+
 ## Admin Actions (Ban, Moderate, Delete)
 
 Destructive user operations live in the **Danger zone** on the Admin tab of the user profile page:

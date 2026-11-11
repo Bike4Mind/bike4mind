@@ -17,6 +17,7 @@ import {
   Box,
 } from '@mui/joy';
 import { createFeedbackOnServer } from '@client/app/utils/feedbackAPICalls';
+import { buildFeedbackClientContext } from '@client/app/utils/feedbackClientContext';
 import { FeedbackStatus, feedbackDeliveryFailed } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSessions } from '@client/app/contexts/SessionsContext';
@@ -109,6 +110,7 @@ export const HelpModal: React.FC = () => {
         tags: ['feedback', 'cs'],
         content: feedbackContent,
         status: FeedbackStatus.New,
+        clientContext: buildFeedbackClientContext(queryClient),
         ...sessionContext(),
       });
 

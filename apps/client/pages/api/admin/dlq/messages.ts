@@ -1,9 +1,15 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, meetsAdminPermissionRequirement } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { getDlqByLabel, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import {
+  getDlqByLabel,
+  getDlqUrl,
+  getSourceQueueUrl,
+  type SourceQueueName,
+} from '@bike4mind/server-utils/utils/dlqRegistry';
 import { receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
+import { dlqFailureRepository } from '@bike4mind/database';
 import { z } from 'zod';
 
 const QuerySchema = z.object({
@@ -17,15 +23,32 @@ const QuerySchema = z.object({
     }),
 });
 
+async function findFailures(queueLabel: string, sourceQueue: SourceQueueName | null, messageIds: string[]) {
+  if (!sourceQueue || !messageIds.length) return { failures: [], lookupFailed: false };
+  try {
+    const sourceQueueName = new URL(getSourceQueueUrl(sourceQueue)).pathname.split('/').pop();
+    if (!sourceQueueName) return { failures: [], lookupFailed: false };
+    const failures = await dlqFailureRepository.findForMessages(sourceQueueName, messageIds);
+    return { failures, lookupFailed: false };
+  } catch (error) {
+    Logger.warn('[DLQ Messages] Failure details unavailable', {
+      queueLabel,
+      errorName: error instanceof Error ? error.name : 'Unknown',
+    });
+    return { failures: [], lookupFailed: true };
+  }
+}
+
 /**
  * GET /api/admin/dlq/messages?queue=<label>&maxMessages=10
  *
- * Peeks at messages in a specific DLQ. Uses a 120-second visibility
- * timeout so that receipt handles remain valid while the admin reviews
- * and decides whether to replay individual messages.
+ * Peeks at messages in a specific DLQ. Callers who can replay get a
+ * 120-second visibility timeout so their receipt handles stay valid while
+ * they decide. Read-only callers cannot replay, so their peek leaves the
+ * messages visible and returns no receipt handles.
  */
 const handler = adminApi({
-  adminPermissions: { GET: 'settings:manage' },
+  adminPermissions: { GET: 'support:read' },
   requiredScopes: [ApiKeyScope.ADMIN],
 }).get(async (req, res) => {
   const result = QuerySchema.safeParse(req.query);
@@ -46,17 +69,38 @@ const handler = adminApi({
 
   Logger.info(`[DLQ Messages] Peeking at ${queueLabel}`, { adminUserId, maxMessages });
 
-  // Use 120s visibility timeout so receipt handles stay valid while the admin decides to replay
-  const messages = await receiveFromQueue(dlqUrl, maxMessages, 120);
+  const canReplay = meetsAdminPermissionRequirement(req.user, 'settings:manage');
+  const received = await receiveFromQueue(dlqUrl, maxMessages, canReplay ? 120 : 0);
+  // A visibility-0 receive can return the same message more than once; keep the latest copy.
+  const receiveCount = (msg: (typeof received)[number]) =>
+    parseInt(msg.Attributes?.ApproximateReceiveCount ?? '0', 10) || 0;
+  const byId = new Map<string, (typeof received)[number]>();
+  for (const msg of received) {
+    if (!msg.MessageId) continue;
+    const existing = byId.get(msg.MessageId);
+    if (!existing || receiveCount(msg) > receiveCount(existing)) byId.set(msg.MessageId, msg);
+  }
+  const messages = [...byId.values()];
+  const { failures, lookupFailed } = await findFailures(
+    queueLabel,
+    dlqEntry.sourceQueue,
+    messages.map(msg => msg.MessageId!)
+  );
+  const failureById = new Map(failures.map(failure => [failure.messageId, failure]));
 
-  const formatted = messages.map(msg => ({
-    messageId: msg.MessageId,
-    body: msg.Body,
-    receiptHandle: msg.ReceiptHandle,
-    sentTimestamp: msg.Attributes?.SentTimestamp,
-    approximateReceiveCount: msg.Attributes?.ApproximateReceiveCount,
-    approximateFirstReceiveTimestamp: msg.Attributes?.ApproximateFirstReceiveTimestamp,
-  }));
+  const formatted = messages.map(msg => {
+    const failure = failureById.get(msg.MessageId!);
+    return {
+      messageId: msg.MessageId,
+      body: msg.Body,
+      receiptHandle: canReplay ? msg.ReceiptHandle : undefined,
+      sentTimestamp: msg.Attributes?.SentTimestamp,
+      approximateReceiveCount: msg.Attributes?.ApproximateReceiveCount,
+      approximateFirstReceiveTimestamp: msg.Attributes?.ApproximateFirstReceiveTimestamp,
+      ...(lookupFailed ? { failureLookupFailed: true } : {}),
+      failure: failure ? { errorMessage: failure.errorMessage, category: failure.category } : undefined,
+    };
+  });
 
   Logger.info(`[DLQ Messages] Returned ${formatted.length} messages from ${queueLabel}`, { adminUserId });
 

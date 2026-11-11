@@ -6,6 +6,10 @@ import {
   FEEDBACK_SUBJECTS,
   FeedbackEvents,
   FeedbackStatus,
+  FeedbackType,
+  hasFeedbackComment,
+  isFeedbackTriageNoise,
+  parseFeedbackClientContext,
   Permission,
   PromptMetaZodSchema,
   redactPromptMetaForViewer,
@@ -73,6 +77,7 @@ export const FEEDBACK_LIST_FIELDS = [
   'type',
   'subject',
   'helpContext',
+  'clientContext',
   'sessionId',
   'questId',
   'createdAt',
@@ -103,6 +108,7 @@ const ListFeedbackQuerySchema = z.object({
   organization: z.union([z.string(), z.array(z.string())]).optional(),
   status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
   subject: z.enum(FEEDBACK_SUBJECTS).optional(),
+  type: z.union([z.enum(FeedbackType), z.array(z.enum(FeedbackType))]).optional(),
   // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
   search: z.string().min(1).max(200).optional(),
   sort: z.enum(['asc', 'desc']).prefault('desc'),
@@ -111,7 +117,18 @@ const ListFeedbackQuerySchema = z.object({
   // the result away (the paged list, the CSV export loop, the per-session "Reported" read).
   // An explicit enum rather than z.coerce.boolean(), which reads the string "false" as true.
   includeOrganizations: z.enum(['true', 'false']).optional(),
+  // Serves the facet alone: no rows are read or audited, so the org filter menu does not page a
+  // report through the audit trail just to learn the organization names.
+  facetsOnly: z.enum(['true', 'false']).optional(),
 });
+
+/** Distinct, non-empty organization names, sorted for the filter menu. */
+async function readOrganizationFacet(readable: FilterQuery<unknown>): Promise<string[]> {
+  const names = await FeedbackModel.distinct('organization', readable);
+  return names
+    .filter((name): name is string => typeof name === 'string' && name.length > 0)
+    .sort((a, b) => a.localeCompare(b));
+}
 
 /** `qs.parse` hands back a lone value or an array depending on how many times a key repeats. */
 function toArray<T>(value: T | T[] | undefined): T[] {
@@ -133,6 +150,9 @@ const CreateFeedbackRequestSchema = z.object({
   questId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
   contextQuestId: z.string().min(1).optional(),
+  // Left loose here on purpose: parseFeedbackClientContext validates and bounds it, and a malformed
+  // object must cost the report its context, not the report.
+  clientContext: z.unknown().optional(),
 });
 
 // Trim each address and drop blanks so 'a@x.com, b@x.com' doesn't leave a leading space on every
@@ -234,6 +254,16 @@ const handler = baseApi()
     // pass for every logged-in user).
     const readable = accessibleBy(req.ability, Permission.read).ofType(FeedbackModel);
 
+    if (query.facetsOnly === 'true') {
+      return res.json({
+        items: [],
+        total: 0,
+        page: query.page,
+        limit: query.limit,
+        organizations: await readOrganizationFacet(readable),
+      });
+    }
+
     const clauses: FilterQuery<unknown>[] = [readable];
 
     if (query.userId) clauses.push({ userId: query.userId });
@@ -247,6 +277,13 @@ const handler = baseApi()
 
     const statuses = toArray(query.status);
     if (statuses.length > 0) clauses.push({ status: { $in: statuses } });
+
+    // Reports from the help modal and older ones carry no type and are shown as Feedback, so that
+    // filter also matches a missing type (`null` in `$in` matches an absent field).
+    const types = toArray(query.type);
+    if (types.length > 0) {
+      clauses.push({ type: { $in: types.includes(FeedbackType.FEEDBACK) ? [...types, null] : types } });
+    }
 
     if (query.search) {
       const pattern = new RegExp(escapeRegex(query.search), 'i');
@@ -280,7 +317,7 @@ const handler = baseApi()
       // selecting an organization would prune every other option out of the dropdown that
       // selected it. Which is also why it is opt-in: `readable` is `{}` for an admin, so this is a
       // full-collection scan on an unindexed field and must not ride along on unrelated reads.
-      query.includeOrganizations === 'true' ? FeedbackModel.distinct('organization', readable) : undefined,
+      query.includeOrganizations === 'true' ? readOrganizationFacet(readable) : undefined,
     ]);
 
     // An admin's read grant spans every reporter, so the page they are about to read is audited.
@@ -306,11 +343,7 @@ const handler = baseApi()
       limit: query.limit,
       // Omitted rather than [] when not requested: an empty array is indistinguishable from "no
       // organizations have any feedback", which would empty the filter menu.
-      ...(organizationFacet && {
-        organizations: organizationFacet
-          .filter((name): name is string => typeof name === 'string' && name.length > 0)
-          .sort((a, b) => a.localeCompare(b)),
-      }),
+      ...(organizationFacet && { organizations: organizationFacet }),
     });
   })
   .post(async (req, res) => {
@@ -320,8 +353,20 @@ const handler = baseApi()
       console.log('Authenticated');
     }
 
-    const { userId, content, tags, username, userEmail, promptMeta, type, questId, sessionId, contextQuestId } =
-      newFeedbackData;
+    const {
+      userId,
+      content,
+      tags,
+      username,
+      userEmail,
+      promptMeta,
+      type,
+      questId,
+      sessionId,
+      contextQuestId,
+      clientContext: rawClientContext,
+    } = newFeedbackData;
+    const clientContext = parseFeedbackClientContext(rawClientContext, req.headers['user-agent']);
 
     // The org lookup must key off the resolved identity too, not the raw body userEmail -- otherwise
     // two authenticated submissions from the same account can be stamped with different organizations
@@ -362,7 +407,9 @@ const handler = baseApi()
       _id: feedbackId,
       userId: req.isAuthenticated() ? req.user.id : userId,
       tags,
-      status: FeedbackStatus.New,
+      status: isFeedbackTriageNoise({ type, hasContent: hasFeedbackComment(content), tags })
+        ? FeedbackStatus.Closed
+        : FeedbackStatus.New,
       username: req.isAuthenticated() ? req.user.username : username,
       userEmail: req.isAuthenticated() ? req.user.email : userEmail,
       organization: organization,
@@ -373,6 +420,7 @@ const handler = baseApi()
       contextQuestId: feedbackContext.contextQuestId,
       organizationId: feedbackContext.organizationId,
       subject: feedbackContext.subject,
+      clientContext,
       contentStored,
     });
     await saveFeedbackOrRollbackText({ feedback: newFeedback, contentStored, logger: req.logger });

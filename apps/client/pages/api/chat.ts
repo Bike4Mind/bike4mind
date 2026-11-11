@@ -16,7 +16,7 @@ import { sessionService } from '@bike4mind/services';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { adminRoleWithheldFor, requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
 import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import {
   getDefaultChatCompletionOptions,
@@ -63,7 +63,7 @@ import { readVisitId } from '@server/analytics/visitSession';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
-import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
+import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
 import {
   TIMED_OUT_RUN,
@@ -266,7 +266,7 @@ async function handleChat(
     },
   };
   // wait=true runs tools inline: one that re-reads the owner by id must see the same role as req.user.
-  // Kept out of the literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.test.ts).
+  // Kept out of the literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.repo.test.ts).
   chatCompletionOptions.db = {
     ...chatCompletionOptions.db,
     users: requesterScopedUsers(req, chatCompletionOptions.db.users),

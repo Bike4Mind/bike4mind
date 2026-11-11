@@ -31,7 +31,10 @@ export async function handler(event: never, context: Context) {
         await sendToQueue(Resource.researchEngineQueue.url, { action: 'process', payload });
       },
       [TaskScheduleHandler.CUSTOM_TASK_PROCESS]: async payload => {
-        console.log('CUSTOM_TASK_PROCESS', payload);
+        logger.info('Custom scheduled task received; no handler is wired', {
+          handler: TaskScheduleHandler.CUSTOM_TASK_PROCESS,
+          payloadKeys: Object.keys(payload ?? {}),
+        });
       },
     },
   });

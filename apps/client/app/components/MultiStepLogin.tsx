@@ -5,7 +5,7 @@ import {
   getLoginErrorMessage,
   isBlockedAccountLoginError,
   withSupportContact,
-} from '@client/app/utils/loginErrorMessages';
+} from '@bike4mind/server-utils/app/utils/loginErrorMessages';
 import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
@@ -37,6 +37,7 @@ import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } fro
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
 import OtcNoCodeHint from './OtcNoCodeHint';
+import RedirectProductHint from './RedirectProductHint';
 import SignupHoneypot from './SignupHoneypot';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
@@ -582,6 +583,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   ? 'Finish creating your account'
                   : t('auth.checkYourEmail')}
           </Typography>
+
+          {currentStep === 'email' && <RedirectProductHint mode="signIn" />}
 
           {currentStep === 'email' && (
             <Typography

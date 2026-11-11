@@ -38,6 +38,7 @@ const DataLakeProposalSchema = new Schema<IDataLakeProposalDocument>(
       runId: { type: String },
       query: { type: String },
       retrievedAt: { type: Date, required: true },
+      sourceTier: { type: String, enum: ['trusted', 'review'] },
     },
     priorDisposition: { type: String, enum: DATA_LAKE_PROPOSAL_STATUSES, default: null },
     reviewedByUserId: { type: String, default: null },

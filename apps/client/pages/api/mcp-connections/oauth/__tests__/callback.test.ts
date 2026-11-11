@@ -26,7 +26,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
     return refs.limiter;
   },
 }));
-vi.mock('@server/mcpConnections/customMcpAccess', () => ({
+vi.mock('@bike4mind/server-utils/mcpConnections/customMcpAccess', () => ({
   assertCustomMcpEnabled: vi.fn(async () => ({ enabled: true })),
 }));
 vi.mock('@server/mcpConnections/oauth/completeOAuth', () => ({ completeUserConnectionOAuth: refs.complete }));
