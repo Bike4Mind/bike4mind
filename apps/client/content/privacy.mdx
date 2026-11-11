@@ -40,6 +40,9 @@ export default function Bike4MindGuide() {
         <List>
           <ListItem> - We use the data collected to operate, maintain, and improve our services.</ListItem>
           <ListItem> - Personal information is not used for training AI models without explicit consent.</ListItem>
+          <ListItem> - We do not train models on the inputs or outputs of requests sent through our API.</ListItem>
+          <ListItem> - Our completions and embeddings APIs do not save the text of your prompts, messages, tool results or responses. They record usage metadata only (identifiers, IP address, endpoint, response status and time, error details, model, token counts and cost) for billing, security and usage reporting.</ListItem>
+          <ListItem> - Requests we send to OpenAI's chat APIs are sent with OpenAI's storage option turned off. Each AI provider that processes a request applies its own retention policy.</ListItem>
         </List>
       </Card>
 

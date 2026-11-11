@@ -7,6 +7,7 @@ import { eventBus } from './bus';
 import { notebookCurationQueue, riskEvidenceQueue, riskEvidenceQueueDLQ, sreFixQueue, sreFixQueueDLQ } from './queues';
 import { createEventBusDeadLetter } from './eventBusDeadLetter';
 import { otcEmailConfigurationSet } from './otcEmailMetrics';
+import { mailTransportEnvironment, sesSendPermissions } from './mailTransport';
 import { appUrlForLambdaEnv } from './router';
 
 // Stripe events
@@ -105,8 +106,9 @@ export const emailSendSubscription = eventBus.subscribe(
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       OTC_SES_CONFIGURATION_SET: otcEmailConfigurationSet?.name ?? '',
+      ...mailTransportEnvironment,
     },
-    permissions: [emailEventsDeadLetter.sendPermission],
+    permissions: [emailEventsDeadLetter.sendPermission, ...sesSendPermissions],
     transform: emailEventsDeadLetter.functionTarget,
   },
   {
@@ -150,7 +152,8 @@ export const notificationPushSubscription = eventBus.subscribe(
   },
   {
     pattern: {
-      detailType: ['notification.push'],
+      // One Lambda handles both and routes on the detail-type; a live activity frame shares the push DLQ.
+      detailType: ['notification.push', 'notification.liveActivity'],
     },
     transform: pushEventsDeadLetter.ruleTarget,
   }

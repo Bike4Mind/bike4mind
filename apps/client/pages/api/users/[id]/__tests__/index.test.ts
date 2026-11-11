@@ -1,12 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFindById } = vi.hoisted(() => ({ mockFindById: vi.fn() }));
+const { mockFindById, mockFindMembershipOrgIds, mockProjectExists, mockSessionExists } = vi.hoisted(() => ({
+  mockFindById: vi.fn(),
+  mockFindMembershipOrgIds: vi.fn(),
+  mockProjectExists: vi.fn(),
+  mockSessionExists: vi.fn(),
+}));
 
 vi.mock('@bike4mind/database', () => ({
   User: {
     findById: () => ({ populate: () => ({ select: mockFindById }) }),
   },
+  Project: { exists: mockProjectExists },
+  Session: { exists: mockSessionExists },
+  organizationRepository: { findMembershipOrgIds: mockFindMembershipOrgIds },
+  readAccessArms: (user: { id: string }) => [{ userId: user.id }],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -34,6 +43,9 @@ const run = async (viewer: { id: string; isAdmin: boolean }) => {
 describe('GET /api/users/[id] restricted-tier fields', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFindMembershipOrgIds.mockResolvedValue([]);
+    mockProjectExists.mockResolvedValue(null);
+    mockSessionExists.mockResolvedValue(null);
     mockFindById.mockResolvedValue({
       id: SUBJECT_ID,
       username: 'subject',

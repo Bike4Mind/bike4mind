@@ -1,7 +1,7 @@
 import type { IUserDocument } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
 import { userApiKeyService } from '@bike4mind/services';
-import { toEntitlementUser, getUserEntitlements } from '../../entitlements';
+import { toEntitlementUser, getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
 import { getActiveSubscriptionsForUser } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { defineAdminTool } from '../defineAdminTool';
@@ -13,7 +13,7 @@ const MAX_ORGANIZATIONS = 20;
 
 /**
  * The only user fields the admin assistant may emit. Mirrors the non-secret subset of
- * ADMIN_USER_LIST_FIELDS (apps/client/app/utils/adminUserProjection.ts); `lastActiveAt` is the
+ * ADMIN_USER_LIST_FIELDS (packages/server-utils/src/app/utils/adminUserProjection.ts); `lastActiveAt` is the
  * schema's last-seen timestamp. Output is always built by picking these, never by spreading a doc.
  */
 export const ADMIN_ASSISTANT_USER_FIELDS = [

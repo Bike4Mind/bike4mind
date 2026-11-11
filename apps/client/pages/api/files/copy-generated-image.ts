@@ -22,6 +22,7 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { saveGeneratedAsset } from '@bike4mind/services';
+import { fileUrlSigningDate, FILE_URL_TTL_SECONDS, signedUrlExpiresAt } from '@bike4mind/utils';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -147,14 +148,15 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           : result;
       if (responseFile.filePath && isImageServeable(responseFile)) {
         const presignedUrl = await getFilesStorage().getSignedUrl(responseFile.filePath, 'get', {
-          expiresIn: 3600,
+          expiresIn: FILE_URL_TTL_SECONDS,
           audience: 'browser',
+          signingDate: fileUrlSigningDate(),
         });
 
         return respond(res, fabFileResponseSchema, {
           ...responseFile,
           fileUrl: presignedUrl,
-          fileUrlExpireAt: new Date(Date.now() + 3600 * 1000),
+          fileUrlExpireAt: signedUrlExpiresAt(presignedUrl, FILE_URL_TTL_SECONDS),
         });
       }
 

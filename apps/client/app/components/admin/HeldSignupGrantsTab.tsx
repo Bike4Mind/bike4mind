@@ -15,6 +15,7 @@ import {
   FilterChip,
   type AdminSelection,
 } from './shared';
+import { AdminPermissionAction } from './shared/MissingPermission';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 const QUERY_KEY = ['held-signup-grants'];
@@ -26,7 +27,10 @@ type ReleaseResult = {
   batchId: string;
   results: { userId: string; outcome: string; credits: number }[];
 };
-type RevokeResult = { batchId: string; results: { userId: string; outcome: string; credits: number }[] };
+type RevokeResult = {
+  batchId: string;
+  results: { userId: string; outcome: string; credits: number; heldRestored?: boolean }[];
+};
 
 const REASON_LABELS: Record<HeldReason, string> = {
   budget_exhausted: 'Daily budget spent',
@@ -80,7 +84,10 @@ export default function HeldSignupGrantsTab() {
   const paid = release.data?.results.filter(result => result.outcome === 'released') ?? [];
   const revokeDone =
     revoke.data?.batchId === release.data?.batchId &&
-    !revoke.data?.results.some(result => result.outcome === 'insufficient_balance' || result.outcome === 'failed');
+    !revoke.data?.results.some(
+      result =>
+        result.outcome === 'insufficient_balance' || result.outcome === 'state_changed' || result.outcome === 'failed'
+    );
   const changeReason = (value: HeldReason | undefined) => {
     setReason(value);
     setCursors([undefined]);
@@ -101,9 +108,8 @@ export default function HeldSignupGrantsTab() {
               title={
                 <Typography level="body-sm" component="div">
                   A grant held by the daily budget is also paid automatically once a new day&apos;s budget opens.
-                  Releasing here pays the original grant without drawing the budget; Revoke permanently debits the
-                  credits a release paid (balances already spent are skipped), and the account is not paid this grant
-                  again.
+                  Releasing here pays the original grant without drawing the budget; Revoke takes back the credits a
+                  release paid (balances already spent are skipped) and returns the account to this list.
                 </Typography>
               }
             >
@@ -144,6 +150,10 @@ export default function HeldSignupGrantsTab() {
         <Alert color="neutral" data-testid="held-signup-grants-revoke-result">
           Revoked {revoke.data.results.filter(result => result.outcome === 'reversed').length} of{' '}
           {revoke.data.results.length} grants.
+          {revoke.data.results.some(result => result.outcome === 'state_changed') &&
+            ' Accounts that received more credits since the release were left as they are.'}
+          {revoke.data.results.some(result => result.outcome === 'reversed' && !result.heldRestored) &&
+            ' Releases without saved account state only had their credits taken back and were not returned to the held list.'}
         </Alert>
       )}
       <ActionDialog
@@ -151,7 +161,7 @@ export default function HeldSignupGrantsTab() {
         onClose={() => setConfirmRevoke(false)}
         title="Revoke this release?"
         tone="danger"
-        description="This permanently debits the credits granted by this release. The accounts will not be paid this grant again, and they leave the held list."
+        description="This takes back the credits granted by this release and returns the accounts to the held list, where they are paid again like any other held grant."
         reasonPresets={ADMIN_REASON_PRESETS.heldSignupGrantRevoke}
         reasonAudited={false}
         confirmLabel="Revoke credits"
@@ -261,15 +271,19 @@ export default function HeldSignupGrantsTab() {
         onSelectAllMatching={() => undefined}
         onClear={() => setSelection({ mode: 'explicit', ids: [] })}
       >
-        <Button
-          size="sm"
-          data-testid="held-signup-grants-release-btn"
-          disabled={busy}
-          loading={release.isPending}
-          onClick={() => setConfirmRelease(true)}
-        >
-          Release grants
-        </Button>
+        <AdminPermissionAction requirement="credits:adjust">
+          {missingPermission => (
+            <Button
+              size="sm"
+              data-testid="held-signup-grants-release-btn"
+              disabled={missingPermission || busy}
+              loading={release.isPending}
+              onClick={() => setConfirmRelease(true)}
+            >
+              Release grants
+            </Button>
+          )}
+        </AdminPermissionAction>
       </BulkActionBar>
     </Stack>
   );

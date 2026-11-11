@@ -306,6 +306,30 @@ describe('useBatchUpload onError', () => {
     expect(progress.errorMessage).toBe('The server ran into a problem. Please try again in a moment.');
   });
 
+  it('moves a lake-cap refusal off Configure to the final Upload error state, with no Retry', async () => {
+    apiPost.mockRejectedValue({
+      isAxiosError: true,
+      message: 'Request failed with status code 403',
+      response: {
+        status: 403,
+        data: { error: 'You have reached the limit of 1 data lake per account.', code: 'DATA_LAKE_LIMIT_REACHED' },
+      },
+    });
+    seedWizardFile();
+    useDataLakeWizardStore.getState().setStep('config');
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+    const { step, uploadProgress } = useDataLakeWizardStore.getState();
+    expect(step).toBe('upload');
+    expect(uploadProgress).toMatchObject({ status: 'error', errorKind: 'entitlement' });
+    expect(toastMock.error.mock.calls[0][1]).toMatchObject({ action: undefined });
+  });
+
   it('surfaces the server message for a non-422 4xx instead of axios default text', async () => {
     // The EnableDataLakes feature gate 403s with a curated message; showing
     // "Request failed with status code 403" instead would be a downgrade. Only 422
@@ -1353,6 +1377,32 @@ describe('useCreateLakeFromDrive (#1916)', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(useDataLakeWizardStore.getState().uploadProgress.lakeStatus).toBe('draft');
+  });
+
+  it('moves a plan refusal at create time to the final error state', async () => {
+    apiPost.mockRejectedValue({
+      isAxiosError: true,
+      message: 'Request failed with status code 403',
+      response: {
+        status: 403,
+        data: { error: 'Data lakes need a paid plan.', code: 'DATA_LAKE_PLAN_REQUIRED' },
+      },
+    });
+    seedDriveOnly();
+    useDataLakeWizardStore.getState().setStep('config');
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    const { step, uploadProgress } = useDataLakeWizardStore.getState();
+    expect(step).toBe('upload');
+    expect(uploadProgress).toMatchObject({
+      status: 'error',
+      errorKind: 'entitlement',
+      errorMessage: 'Data lakes need a paid plan.',
+    });
+    expect(postCall('/api/data-lakes/drive-sync')).toBeUndefined();
   });
 
   it('lands the wizard on the upload step with a fileless progress record', async () => {

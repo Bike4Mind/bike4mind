@@ -36,7 +36,7 @@ vi.mock('@server/middlewares/oauthIpRateLimit', () => ({
   },
 }));
 const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown[] }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (opts: unknown) => {
     rateLimitOptions.push(opts);
     mockChain.order.push('rateLimit');
@@ -333,7 +333,7 @@ describe('[strategy]/callback - banned user gate', () => {
   it('refuses to issue a session for a banned user and records the refusal', async () => {
     const res = await runCallback(null, { id: 'u-banned', email: 'banned@example.com', isBanned: true }, undefined);
 
-    expect(res._getRedirectUrl()).toBe('/login?error=account_suspended');
+    expect(res._getRedirectUrl()).toBe('/login?error=account_suspended&reason=terms_violation');
     expect(mockAuthFailCreate).toHaveBeenCalledWith(
       expect.objectContaining({ strategy: 'github', reason: 'user_banned', email: 'banned@example.com' })
     );

@@ -1,6 +1,17 @@
-import { FEEDBACK_ID_PARAM, FEEDBACK_SUBJECTS, FeedbackStatus, type FeedbackSubject } from '@bike4mind/common';
+import {
+  FEEDBACK_ID_PARAM,
+  FEEDBACK_SUBJECTS,
+  FeedbackStatus,
+  FeedbackType,
+  type FeedbackSubject,
+} from '@bike4mind/common';
 import { oneOf, parseObjectId, parsePage, parseStringList, toNumber } from '../adminSearchValues';
-import { FEEDBACK_DEFAULT_PAGE_SIZE, FEEDBACK_PAGE_SIZE_OPTIONS, FEEDBACK_STATUS_ORDER } from './constants';
+import {
+  FEEDBACK_DEFAULT_PAGE_SIZE,
+  FEEDBACK_PAGE_SIZE_OPTIONS,
+  FEEDBACK_STATUS_ORDER,
+  FEEDBACK_TYPE_ORDER,
+} from './constants';
 
 /**
  * The Feedback tab's `/admin` search params and their coercion. Pure and React-free: adminTabParams.ts
@@ -12,6 +23,7 @@ import { FEEDBACK_DEFAULT_PAGE_SIZE, FEEDBACK_PAGE_SIZE_OPTIONS, FEEDBACK_STATUS
 
 export const FEEDBACK_STATUS_PARAM = 'feedbackStatus';
 export const FEEDBACK_SUBJECT_PARAM = 'feedbackSubject';
+export const FEEDBACK_TYPE_PARAM = 'feedbackType';
 export const FEEDBACK_ORG_PARAM = 'feedbackOrg';
 export const FEEDBACK_ORDER_PARAM = 'feedbackOrder';
 export const FEEDBACK_PAGE_PARAM = 'feedbackPage';
@@ -21,6 +33,7 @@ export const FEEDBACK_LIMIT_PARAM = 'feedbackLimit';
 const FEEDBACK_VIEW_PARAMS = [
   FEEDBACK_STATUS_PARAM,
   FEEDBACK_SUBJECT_PARAM,
+  FEEDBACK_TYPE_PARAM,
   FEEDBACK_ORG_PARAM,
   FEEDBACK_ORDER_PARAM,
   FEEDBACK_PAGE_PARAM,
@@ -40,6 +53,7 @@ type FeedbackOrder = (typeof FEEDBACK_ORDERS)[number];
 export type FeedbackSearch = {
   [FEEDBACK_STATUS_PARAM]?: string;
   [FEEDBACK_SUBJECT_PARAM]?: FeedbackSubject;
+  [FEEDBACK_TYPE_PARAM]?: FeedbackType[];
   [FEEDBACK_ORG_PARAM]?: string[];
   [FEEDBACK_ORDER_PARAM]?: FeedbackOrder;
   [FEEDBACK_PAGE_PARAM]?: number;
@@ -51,6 +65,8 @@ export type FeedbackView = {
   statusFilters: Record<FeedbackStatus, boolean>;
   /** Undefined is every subject. */
   subject: FeedbackSubject | undefined;
+  /** Report types in severity order; empty is every type. */
+  types: FeedbackType[];
   /** Organization names; empty is every organization. */
   organizations: string[];
   sortAscending: boolean;
@@ -70,6 +86,7 @@ export const checkedStatuses = (statusFilters: Record<FeedbackStatus, boolean>):
 export const DEFAULT_FEEDBACK_VIEW: FeedbackView = {
   statusFilters: toStatusFilters([FeedbackStatus.New]),
   subject: undefined,
+  types: [],
   organizations: [],
   sortAscending: false,
   page: 1,
@@ -95,6 +112,14 @@ const parseStatus = (value: unknown): string | undefined => {
   return statuses && encodeStatuses(statuses);
 };
 
+/** The known types a `feedbackType` value names, in severity order; unknown tokens are dropped. */
+const parseTypes = (value: unknown): FeedbackType[] | undefined => {
+  const tokens = parseStringList(value);
+  if (!tokens) return undefined;
+  const types = FEEDBACK_TYPE_ORDER.filter(type => tokens.includes(type));
+  return types.length > 0 ? types : undefined;
+};
+
 const parseLimit = (value: unknown): number | undefined => {
   const limit = toNumber(value);
   return FEEDBACK_PAGE_SIZE_OPTIONS.includes(limit) ? limit : undefined;
@@ -109,6 +134,7 @@ export const FEEDBACK_SEARCH_PARSERS: {
 } = {
   [FEEDBACK_STATUS_PARAM]: parseStatus,
   [FEEDBACK_SUBJECT_PARAM]: oneOf(FEEDBACK_SUBJECTS),
+  [FEEDBACK_TYPE_PARAM]: parseTypes,
   [FEEDBACK_ORG_PARAM]: parseStringList,
   [FEEDBACK_ORDER_PARAM]: parseOrder,
   [FEEDBACK_PAGE_PARAM]: parsePage,
@@ -122,6 +148,7 @@ export function feedbackViewFromSearch(search: Record<string, unknown>): Feedbac
   return {
     statusFilters: statuses ? toStatusFilters(statuses) : DEFAULT_FEEDBACK_VIEW.statusFilters,
     subject: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SUBJECT_PARAM](search[FEEDBACK_SUBJECT_PARAM]),
+    types: parseTypes(search[FEEDBACK_TYPE_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.types,
     organizations: parseStringList(search[FEEDBACK_ORG_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.organizations,
     sortAscending: search[FEEDBACK_ORDER_PARAM] === 'asc',
     page: parsePage(search[FEEDBACK_PAGE_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.page,
@@ -141,6 +168,7 @@ export function feedbackViewToSearch(view: FeedbackView): {
   return {
     [FEEDBACK_STATUS_PARAM]: statuses === defaultStatuses ? undefined : statuses,
     [FEEDBACK_SUBJECT_PARAM]: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SUBJECT_PARAM](view.subject),
+    [FEEDBACK_TYPE_PARAM]: parseTypes(view.types),
     [FEEDBACK_ORG_PARAM]: parseStringList(view.organizations),
     [FEEDBACK_ORDER_PARAM]: view.sortAscending ? 'asc' : undefined,
     [FEEDBACK_PAGE_PARAM]: view.page === DEFAULT_FEEDBACK_VIEW.page ? undefined : parsePage(view.page),

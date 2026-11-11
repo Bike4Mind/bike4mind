@@ -15,7 +15,7 @@
  * `pnpm turbo:core:build` must be current.
  *
  * Runs in the integration lane only - `CLIENT_TEST_LANE=integration` (apps/client/package.json's
- * `test:integration`, the `client-integration` CI job). Without it vitest EXCLUDES `*.e2e.test.ts`
+ * `test:integration`, run by a CI leg's integration lane). Without it vitest EXCLUDES `*.e2e.test.ts`
  * and reports 0 tests with exit 0, which reads as a pass.
  */
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';

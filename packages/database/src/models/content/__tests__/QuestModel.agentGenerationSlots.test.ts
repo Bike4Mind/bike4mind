@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { GENERATION_JOB_KINDS } from '@bike4mind/common';
+import { QUEST_GENERATION_JOB_KINDS } from '@bike4mind/common';
 import { createMongoServer } from '../../../__test__/createMongoServer';
 import { Quest, questRepository } from '../QuestModel';
 
@@ -31,7 +31,7 @@ describe('QuestModel agent generation slots', () => {
       status: 'running',
     });
 
-  describe.each(GENERATION_JOB_KINDS)('%s', kind => {
+  describe.each(QUEST_GENERATION_JOB_KINDS)('%s', kind => {
     it('grants exactly `limit` slots, even to concurrent claimers', async () => {
       const quest = await createQuest();
       const results = await Promise.all(

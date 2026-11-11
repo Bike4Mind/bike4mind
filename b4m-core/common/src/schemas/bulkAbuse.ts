@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { normalizeEmailDomain } from '../utils/emailDomain';
+import type { AdminPermissionId } from '../adminPermissions';
 
 /**
  * Users acted on per request. A domain cohort past this continues with `afterUserId`; the cap keeps
@@ -36,6 +37,23 @@ export const BulkAbuseActionsSchema = z
   .refine(actions => Object.values(actions).some(Boolean), 'Select at least one action');
 export type BulkAbuseActions = z.infer<typeof BulkAbuseActionsSchema>;
 export type BulkAbuseAction = keyof BulkAbuseActions;
+
+/** The permission each selected action needs, on top of the routes' own `users:moderate`. */
+export const BULK_ABUSE_ACTION_PERMISSIONS: Readonly<Record<BulkAbuseAction, AdminPermissionId>> = {
+  ban: 'users:moderate',
+  revokeApiKeys: 'keys:revoke',
+  revokeSessions: 'users:moderate',
+  clawbackFreeCredits: 'credits:adjust',
+};
+
+/** A ban always deactivates the account's keys, as a single-user suspend does, so it needs no keys:revoke. */
+export const bulkAbuseActionPermissions = (actions: BulkAbuseActions): AdminPermissionId[] => [
+  ...new Set(
+    (Object.keys(BULK_ABUSE_ACTION_PERMISSIONS) as BulkAbuseAction[])
+      .filter(action => actions[action] && !(action === 'revokeApiKeys' && actions.ban))
+      .map(action => BULK_ABUSE_ACTION_PERMISSIONS[action])
+  ),
+];
 
 export const BulkAbusePreviewRequestSchema = z.object({
   target: BulkAbuseTargetSchema,

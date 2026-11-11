@@ -18,7 +18,7 @@ const mockResource = vi.hoisted(() => ({
   App: { stage: 'test' },
 }));
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('sst', () => ({ Resource: mockResource }));
 
@@ -36,6 +36,12 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToConnection: mo
 // server doesn't drag in the whole world and so we can assert it's invoked on a valid 202.
 const mockProcessQuest = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/queueHandlers/questProcessor', () => ({ processQuest: mockProcessQuest }));
+
+// Scale-in protection is driven by the drain set's in-flight count (unit-tested in taskProtection.test.ts).
+const mockProtectionUpdate = vi.hoisted(() => vi.fn());
+vi.mock('./taskProtection', () => ({
+  createTaskProtection: () => ({ update: mockProtectionUpdate, idle: async () => undefined }),
+}));
 
 // questRepository.settleIfUnfinished - the error path's status-guarded terminal write.
 // connectDB/mongoose unused by /process. The remaining repos are pulled in by the completions
@@ -338,6 +344,18 @@ describe('ChatCompletion /process', () => {
     const res = await post(VALID_BODY, { authorization: AUTH });
     expect(res.status).toBe(202);
     await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
+  });
+
+  it('holds scale-in protection while a quest is in flight and releases it when the task is idle', async () => {
+    let finishQuest: () => void = () => undefined;
+    mockProcessQuest.mockImplementationOnce(() => new Promise<void>(resolve => (finishQuest = resolve)));
+
+    await post(VALID_BODY, { authorization: AUTH });
+    await vi.waitFor(() => expect(mockProcessQuest).toHaveBeenCalledTimes(1));
+    expect(mockProtectionUpdate).toHaveBeenLastCalledWith(1);
+
+    finishQuest();
+    await vi.waitFor(() => expect(mockProtectionUpdate).toHaveBeenLastCalledWith(0));
   });
 });
 

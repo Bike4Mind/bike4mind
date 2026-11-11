@@ -1,11 +1,9 @@
 import { SupportAccess } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, BadRequestError } from '@server/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { customerSupportAccess } from '@bike4mind/server-utils/auth/impersonation';
-import { ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'users:impersonate' } }).get(async (req, res) => {
   const userId = req.query.userId;
   if (typeof userId !== 'string' || !/^[0-9a-f]{24}$/i.test(userId)) throw new BadRequestError('Invalid user id');
   const rows = await SupportAccess.find({ userId })

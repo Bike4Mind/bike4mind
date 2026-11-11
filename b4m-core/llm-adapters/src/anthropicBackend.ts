@@ -17,15 +17,17 @@ import {
   ModelBackend,
   NO_TEMPERATURE_MODELS,
   PermissionDeniedError,
-  REFUSAL_FALLBACK_MODELS,
   estimateStreamedOutputTokens,
-  supportsForcedToolChoice,
+  resolveApiSurface,
+  THINK_OPEN_TAG,
   TOOL_SEARCH_BLOCK_TYPES,
+  type ApiSurface,
   type ModelInfo,
   type ToolSearchServerTool,
   type TurnUsage,
 } from '@bike4mind/common';
 import { federatedAnthropicCredentials } from './anthropicFederation';
+import { closeThinkMarker } from './thinkMarkers';
 import { selectedWifTokenSource } from './wifTokenSource';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
@@ -75,6 +77,7 @@ import {
   type AnthropicEffort,
   type ReasoningEffortPlan,
   type ThinkingConfig,
+  thinkingTurnedOff,
 } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
 import { logAnthropicLimitResponse, pickRateLimitHeaders } from './anthropicRateLimitLog';
@@ -84,6 +87,7 @@ import {
   createAnthropicStreamTimeoutError,
   type LlmStreamTimeoutKind,
 } from './llmTimeoutErrors';
+import { SafetyRefusalError } from './llmRefusalErrors';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
@@ -682,6 +686,29 @@ export class AnthropicBackend implements ICompletionBackend {
           "Anthropic's newest Claude 5 Sonnet model. Near-Opus quality on coding and agentic work at Sonnet cost, with adaptive extended thinking and a 1M-token context window.",
       },
       {
+        id: ChatModels.CLAUDE_5_5_SONNET,
+        type: 'text',
+        name: 'Claude Sonnet 5.5',
+        backend: ModelBackend.Anthropic,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          // Cache hits are 0.05x input on Sonnet 5.5, not the default 0.1x; the 5m cache write is the default 1.25x.
+          1_000_000: { input: 2 / 1_000_000, output: 10 / 1_000_000, cache_read: 0.1 / 1_000_000 }, // $2 / 1M Input tokens, $10 / 1M Output tokens
+        },
+        supportsVision: true,
+        supportsTools: true,
+        supportsImageVariation: false,
+        logoFile: 'Anthropic_logo.png',
+        rank: 1, // the Opus and Fable flagships hold rank 0
+        trainingCutoff: '2026-06-01',
+        description:
+          "Anthropic's Claude 5.5 Sonnet model. Combines speed and intelligence for coding and agentic work, with adaptive extended thinking and a 1M-token context window.",
+      },
+      {
         id: ChatModels.CLAUDE_4_6_OPUS,
         type: 'text',
         name: 'Claude Opus 4.6',
@@ -779,7 +806,7 @@ export class AnthropicBackend implements ICompletionBackend {
         // behind Fable/Mythos access this deployment's key lacked; access has since
         // been granted, so the model is now selectable. Its safety classifiers can return
         // stop_reason: 'refusal' on benign requests - those are routed to Opus 5 via the
-        // existing fallback machinery (see REFUSAL_FALLBACK_MODELS + the refusal throw below).
+        // existing fallback machinery (its seeded refusalFallback + the refusal throw below).
       },
       {
         id: ChatModels.CLAUDE_5_OPUS,
@@ -891,6 +918,17 @@ export class AnthropicBackend implements ICompletionBackend {
     }
   }
 
+  /**
+   * The model's request features. Catalog record first, unlike modelRecordFor: for a tabled model the
+   * merged record equals the table unless an operator row overrode a flag, and that override must win.
+   */
+  private apiSurfaceFor(model: string): ApiSurface {
+    return resolveApiSurface(
+      this._dispatch.for(model) ??
+        this.getModelInfoList().find(m => m.id === model) ?? { id: model, backend: ModelBackend.Anthropic }
+    );
+  }
+
   /** True when only the catalog knows this model - the adapter table does not list it. */
   private isCatalogOnly(model: string): boolean {
     return !this.getModelInfoList().some(m => m.id === model) && this._dispatch.for(model) !== undefined;
@@ -937,7 +975,7 @@ export class AnthropicBackend implements ICompletionBackend {
 
     // Forced tool_choice ('any'/'tool') returns 400 on these models, so a caller's forced choice
     // becomes auto + strict + an instruction, held fixed for every recursive turn of this request.
-    const forcedToolChoiceSupported = supportsForcedToolChoice(model);
+    const forcedToolChoiceSupported = this.apiSurfaceFor(model).forcedToolChoice;
     const downgradedToolChoice = forcedToolChoiceSupported
       ? undefined
       : (options._internal?.downgradedToolChoice ??
@@ -974,6 +1012,34 @@ export class AnthropicBackend implements ICompletionBackend {
     // handoffs add the turn in directly, since they need the running number itself.
     const reasoningSoFar = (usage: unknown) =>
       reasoningTokensField(addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(usage)));
+
+    // Thrown only when the model falls back on refusal and the caller has a fallback loop to continue on.
+    const throwsOnRefusal = (stopReason: string | null | undefined) =>
+      stopReason === 'refusal' && !options.settleRefusal && this.apiSurfaceFor(model).refusalFallback;
+
+    // The refusal carries what was billed: the rounds already run, plus the refused request when it
+    // streamed output (a mid-stream refusal bills normally; a pre-output one depends on its category).
+    const safetyRefusal = (refusedTurn: AnthropicUsage) => {
+      const billedTurn = (refusedTurn?.output_tokens ?? 0) > 0 ? refusedTurn : undefined;
+      const inputTokens = accumInputTokens + (billedTurn?.input_tokens ?? 0);
+      const cacheReadInputTokens = accumCacheReadTokens + (billedTurn?.cache_read_input_tokens ?? 0);
+      const cacheCreationInputTokens = accumCacheWriteTokens + (billedTurn?.cache_creation_input_tokens ?? 0);
+      const outputTokens = accumOutputTokens + (billedTurn?.output_tokens ?? 0);
+      const turnUsage = billedTurn ? appendAnthropicTurn(accumTurnUsage, billedTurn) : accumTurnUsage;
+      const billed = inputTokens + cacheReadInputTokens + cacheCreationInputTokens + outputTokens > 0;
+      return new SafetyRefusalError(
+        model,
+        billed
+          ? {
+              inputTokens,
+              cacheReadInputTokens,
+              cacheCreationInputTokens,
+              ...(outputTokens > 0 ? { outputTokens } : {}),
+              ...(turnUsage?.length ? { turnUsage } : {}),
+            }
+          : undefined
+      );
+    };
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute).
     // Honor a per-request override (a surface-set, admin-tunable maxToolCalls); else the default.
@@ -1391,11 +1457,15 @@ export class AnthropicBackend implements ICompletionBackend {
       };
       const isQuestMaster = thinkingOptions.questMaster === true;
       // The API rejects thinking alongside a forced tool_choice, so a caller forcing one keeps
-      // no complexity default; an explicit reasoningEffort still goes through the plan below.
+      // no complexity default; an explicit reasoningEffort or thinking off still goes through the plan below.
       const forcedToolChoice = apiParams.tool_choice?.type === 'any' || apiParams.tool_choice?.type === 'tool';
       const reasoningEffort =
         options.reasoningEffort ??
-        (forcedToolChoice ? undefined : effortForComplexity(model, currentModelInfo, options.complexity));
+        (thinkingTurnedOff(model, currentModelInfo, thinkingOptions.thinking)
+          ? 'none'
+          : forcedToolChoice
+            ? undefined
+            : effortForComplexity(model, currentModelInfo, options.complexity));
       // The forced response_format tool cannot run alongside thinking, so an explicit request falls
       // through to the reasoningEffort plan below, which only keeps the off switch there.
       const userThinkingEnabled = thinkingOptions.thinking?.enabled === true && !usingResponseFormatToolUse;
@@ -1705,6 +1775,10 @@ export class AnthropicBackend implements ICompletionBackend {
               if (requestTimeout) clearTimeout(requestTimeout);
 
               let isInThinkingBlock = false;
+              // The open marker waits for the first reasoning text: a model whose thinking display
+              // is omitted streams a block with only a signature, which would otherwise persist
+              // as a bare `<think></think>` reply slot.
+              let thinkMarkerOpened = false;
               let thinkingBlockIndex = 0;
               // The SDK iterator returns normally, without throwing, both on abort and when
               // the HTTP body ends early, so message_stop is the only proof of a finished turn.
@@ -1850,11 +1924,7 @@ export class AnthropicBackend implements ICompletionBackend {
                       // content_block carries type/thinking (empty at start) plus signature -
                       // spread it directly; thinking_delta events accumulate into it below.
                       collectedContent[event.index] = { ...event.content_block };
-                      streamedText[event.index] = '<think>';
-                      // Tagged, not suppressed: an adaptive model opens a thinking block on
-                      // every turn whether or not the caller enabled thinking (see the
-                      // max_tokens note above), so this marker reaches consumers regardless.
-                      await cb(streamedText, { toolsUsed, channel: 'reasoning' });
+                      thinkMarkerOpened = false;
                     } else if ('content_block' in event && event.content_block.type === 'tool_use') {
                       // Handle tool use start
                       const toolBlock = event.content_block;
@@ -1912,8 +1982,18 @@ export class AnthropicBackend implements ICompletionBackend {
                       // provider-authored and can contain marker-shaped substrings that would
                       // otherwise be indistinguishable from the real <think>/</think> we wrap
                       // around it.
-                      streamedText[event.index] = reasoningEscaper.push(thinkingText);
-                      await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
+                      const escaped = reasoningEscaper.push(thinkingText);
+                      if (escaped) {
+                        if (!thinkMarkerOpened) {
+                          thinkMarkerOpened = true;
+                          // Tagged, not suppressed: an adaptive model opens a thinking block on
+                          // every turn whether or not the caller enabled thinking (see the
+                          // max_tokens note above), so this marker reaches consumers regardless.
+                          await cb(markerAt(event.index, THINK_OPEN_TAG), { toolsUsed, channel: 'reasoning' });
+                        }
+                        streamedText[event.index] = escaped;
+                        await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
+                      }
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
                       const textBlock = collectedContent[event.index];
                       if (textBlock?.type === 'text') textBlock.text = `${textBlock.text}${event.delta.text}`;
@@ -1973,8 +2053,11 @@ export class AnthropicBackend implements ICompletionBackend {
                   } else if (event.type === 'content_block_stop') {
                     if (isInThinkingBlock) {
                       isInThinkingBlock = false;
-                      streamedText[event.index] = reasoningEscaper.flush() + '</think>';
-                      await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
+                      const closing = closeThinkMarker(reasoningEscaper.flush(), thinkMarkerOpened);
+                      if (closing) {
+                        streamedText[event.index] = closing;
+                        await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
+                      }
                     } else if (collectedContent[event.index] && collectedContent[event.index].type === 'tool_use') {
                       // Parse the complete tool input when the block ends
                       if (func[event.index] && func[event.index].parameters) {
@@ -2120,9 +2203,9 @@ export class AnthropicBackend implements ICompletionBackend {
                 streamEndedEarlyThisTurn = true;
                 if (isInThinkingBlock) {
                   isInThinkingBlock = false;
-                  const closing: string[] = [];
-                  closing[thinkingBlockIndex] = reasoningEscaper.flush() + '</think>';
-                  await cb(closing, { toolsUsed, channel: 'reasoning' });
+                  const closingText = closeThinkMarker(reasoningEscaper.flush(), thinkMarkerOpened);
+                  if (closingText)
+                    await cb(markerAt(thinkingBlockIndex, closingText), { toolsUsed, channel: 'reasoning' });
                 }
                 if (options.abortSignal?.aborted) {
                   this.logger.info('[AnthropicBackend] Stream ended before message_stop after abort', { model });
@@ -2163,24 +2246,22 @@ export class AnthropicBackend implements ICompletionBackend {
                 return;
               }
 
-              // Safety-classifier refusal (Claude Fable 5 GA). The API returns HTTP 200 with
-              // stop_reason: 'refusal' and empty/partial content when its cyber/bio classifiers
-              // decline a request - which can false-positive on benign adjacent work. Rather than
-              // surfacing a hard refusal, throw a recognized error so the completion loop's
-              // existing fallback machinery (shouldTriggerFallback -> getLlmWithFallback) continues
-              // on Opus 4.8. Scoped to REFUSAL_FALLBACK_MODELS so a *genuine* refusal from any
-              // other model still surfaces unchanged; any partial output here is discarded by the
-              // retry (the loop resets streaming state before re-running).
-              if (stopReason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model)) {
+              // Safety-classifier refusal. The API returns HTTP 200 with stop_reason: 'refusal' and
+              // empty/partial content when its cyber/bio classifiers decline a request - which can
+              // false-positive on benign adjacent work. Rather than surfacing a hard refusal, throw a
+              // recognized error so the completion loop's existing fallback machinery
+              // (shouldTriggerFallback -> getLlmWithFallback) continues on the model's fallback chain.
+              // Scoped to models whose refusalFallback resolves true so a *genuine*
+              // refusal from any other model still surfaces unchanged; any partial output here is
+              // discarded by the retry (the loop resets streaming state before re-running).
+              if (throwsOnRefusal(stopReason)) {
                 this.logger.warn(
                   '[AnthropicBackend] Safety classifier refusal — falling back to an alternative model',
                   {
                     model,
                   }
                 );
-                reject(
-                  new Error(`Anthropic safety classifier refusal for ${model} — falling back to an alternative model`)
-                );
+                reject(safetyRefusal(streamingTurnUsage));
                 return;
               }
 
@@ -2816,15 +2897,15 @@ export class AnthropicBackend implements ICompletionBackend {
         }
 
         // Safety-classifier refusal on the non-streaming path (mirrors the streaming branch
-        // above). A stream=false request for a REFUSAL_FALLBACK_MODELS model - reachable when a
-        // caller sets stream:false even for Fable 5 - returns HTTP 200 with stop_reason:'refusal'
+        // above). A stream=false request for a refusalFallback model - reachable when a
+        // caller sets stream:false even for a Fable model - returns HTTP 200 with stop_reason:'refusal'
         // and empty content; without this the caller would see a silently-empty completion and no
-        // fallback. Throw the same recognized error so the completion loop continues on Opus 4.8.
+        // fallback. Throw the same recognized error so the completion loop continues on the fallback chain.
         const nonStreamStopReason =
           'stop_reason' in response ? (response as { stop_reason?: string }).stop_reason : undefined;
-        if (nonStreamStopReason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model)) {
+        if (throwsOnRefusal(nonStreamStopReason)) {
           this.logger.warn('[AnthropicBackend] Safety classifier refusal (non-streaming) — falling back', { model });
-          throw new Error(`Anthropic safety classifier refusal for ${model} — falling back to an alternative model`);
+          throw safetyRefusal(('usage' in response ? response.usage : undefined) as AnthropicUsage);
         }
 
         // Populate toolsUsed from func (non-streaming path)
@@ -2872,6 +2953,7 @@ export class AnthropicBackend implements ICompletionBackend {
           });
         }
         await cb(streamedText, {
+          ...(nonStreamStopReason ? { stopReason: nonStreamStopReason } : {}),
           inputTokens: isTerminalTurn ? accumInputTokens + (usage?.input_tokens || 0) : 0,
           outputTokens: isTerminalTurn ? accumOutputTokens + (usage?.output_tokens || 0) : 0,
           toolsUsed: toolsUsed,
@@ -3595,6 +3677,12 @@ export class AnthropicBackend implements ICompletionBackend {
       'id' in event
     );
   }
+}
+
+function markerAt(index: number, text: string): string[] {
+  const frame: string[] = [];
+  frame[index] = text;
+  return frame;
 }
 
 // Replayed verbatim and surfaced to the caller, never executed.

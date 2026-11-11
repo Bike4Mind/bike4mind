@@ -3,6 +3,7 @@ import { Button, Dropdown, Link, ListDivider, ListItemContent, Menu, MenuButton,
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import type { AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
 import { EntityHeader, StatusChip } from '../../shared';
+import { AdminPermissionAction, useMissingAdminPermission } from '../../shared/MissingPermission';
 import { COMPED_DISPLAY, isCompedRow, subscriptionStatusDisplay } from '../subscriptionStatusTone';
 import {
   ownerDisplayName,
@@ -55,6 +56,7 @@ export const SubscriptionDetailHeader: React.FC<SubscriptionDetailHeaderProps> =
   onOpenOwner,
 }) => {
   const { subscription } = detail;
+  const missingCredits = useMissingAdminPermission('credits:adjust');
   const name = ownerDisplayName(subscription);
   const link = ownerLink(subscription);
   const status = subscriptionStatusDisplay(subscription);
@@ -97,43 +99,63 @@ export const SubscriptionDetailHeader: React.FC<SubscriptionDetailHeaderProps> =
         <>
           {available.compActions && (
             <>
-              <Button
-                variant="outlined"
-                color="neutral"
-                onClick={() => onAction('extend')}
-                data-testid="subscription-detail-extend-btn"
-              >
-                Extend comp
-              </Button>
-              <Button
-                variant="outlined"
-                color="danger"
-                onClick={() => onAction('end')}
-                data-testid="subscription-detail-end-btn"
-              >
-                End comp
-              </Button>
+              <AdminPermissionAction requirement="credits:adjust">
+                {disabled => (
+                  <Button
+                    disabled={disabled}
+                    variant="outlined"
+                    color="neutral"
+                    onClick={() => onAction('extend')}
+                    data-testid="subscription-detail-extend-btn"
+                  >
+                    Extend comp
+                  </Button>
+                )}
+              </AdminPermissionAction>
+              <AdminPermissionAction requirement="credits:adjust">
+                {disabled => (
+                  <Button
+                    disabled={disabled}
+                    variant="outlined"
+                    color="danger"
+                    onClick={() => onAction('end')}
+                    data-testid="subscription-detail-end-btn"
+                  >
+                    End comp
+                  </Button>
+                )}
+              </AdminPermissionAction>
             </>
           )}
           {available.stripeCancel && (
-            <Button
-              variant="outlined"
-              color="danger"
-              onClick={() => onAction('cancel')}
-              data-testid="subscription-detail-cancel-btn"
-            >
-              Cancel subscription
-            </Button>
+            <AdminPermissionAction requirement="credits:adjust">
+              {disabled => (
+                <Button
+                  disabled={disabled}
+                  variant="outlined"
+                  color="danger"
+                  onClick={() => onAction('cancel')}
+                  data-testid="subscription-detail-cancel-btn"
+                >
+                  Cancel subscription
+                </Button>
+              )}
+            </AdminPermissionAction>
           )}
           {available.stripeResume && (
-            <Button
-              variant="outlined"
-              color="neutral"
-              onClick={() => onAction('resume')}
-              data-testid="subscription-detail-resume-btn"
-            >
-              Resume subscription
-            </Button>
+            <AdminPermissionAction requirement="credits:adjust">
+              {disabled => (
+                <Button
+                  disabled={disabled}
+                  variant="outlined"
+                  color="neutral"
+                  onClick={() => onAction('resume')}
+                  data-testid="subscription-detail-resume-btn"
+                >
+                  Resume subscription
+                </Button>
+              )}
+            </AdminPermissionAction>
           )}
           <Dropdown>
             <MenuButton
@@ -148,7 +170,7 @@ export const SubscriptionDetailHeader: React.FC<SubscriptionDetailHeaderProps> =
               {available.editCredits.visible && (
                 <ExplainedMenuItem
                   label="Edit credits per cycle"
-                  disabledReason={available.editCredits.disabledReason}
+                  disabledReason={missingCredits ?? available.editCredits.disabledReason}
                   onClick={() => onAction('credits')}
                   data-testid="subscription-detail-menu-credits-item"
                 />
@@ -156,7 +178,7 @@ export const SubscriptionDetailHeader: React.FC<SubscriptionDetailHeaderProps> =
               {available.sync.visible && (
                 <ExplainedMenuItem
                   label="Sync from Stripe"
-                  disabledReason={available.sync.disabledReason}
+                  disabledReason={missingCredits ?? available.sync.disabledReason}
                   onClick={() => onAction('sync')}
                   data-testid="subscription-detail-menu-sync-item"
                 />
@@ -165,7 +187,7 @@ export const SubscriptionDetailHeader: React.FC<SubscriptionDetailHeaderProps> =
               <ExplainedMenuItem
                 label="Remove subscription"
                 danger
-                disabledReason={available.remove.disabledReason}
+                disabledReason={missingCredits ?? available.remove.disabledReason}
                 onClick={() => onAction('remove')}
                 data-testid="subscription-detail-menu-remove-item"
               />

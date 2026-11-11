@@ -12,6 +12,13 @@ import tsconfigPaths from 'vite-tsconfig-paths';
 import { barrelImportsPlugin } from './vitest.barrelImports';
 
 const INTEGRATION_LANE = process.env.CLIENT_TEST_LANE === 'integration';
+// `test:repo`: the `*.repo.test.ts` files, which read the repo far outside this package (`git grep`
+// over every tracked file, say). CI runs that lane uncached, so the unit lane's turbo hash can stay
+// scoped to this package's own inputs. scripts/__tests__/turbo-test-cache.test.mjs pins the naming.
+const REPO_LANE = process.env.CLIENT_TEST_LANE === 'repo';
+// Every extension the guard's REPO_LANE_FILE accepts, so no file it treats as uncached runs in the
+// cached unit lane.
+const REPO_LANE_GLOB = '**/*.repo.test.?(c|m)[jt]s?(x)';
 
 // This package is the Next Pages-API backend and the SPA in one workspace, so its test files
 // split cleanly by directory: everything under these trees is a route/queue/cron handler or the
@@ -44,7 +51,7 @@ const VITEST_DEFAULT_INCLUDE = ['**/*.{test,spec}.?(c|m)[jt]s?(x)'];
 // `undefined` in the unit lane means "whatever vitest includes by default" - see above.
 // This filename convention is load-bearing: __tests__/mongoTestTimeoutBudget.test.ts fails the
 // build if any real-Mongo suite is not named *.e2e.test.ts, since membership here is by name only.
-const LANE_INCLUDE = INTEGRATION_LANE ? ['**/*.e2e.test.ts'] : undefined;
+const LANE_INCLUDE = INTEGRATION_LANE ? ['**/*.e2e.test.ts'] : REPO_LANE ? [REPO_LANE_GLOB] : undefined;
 
 // The node project claims exactly these; the jsdom project excludes exactly these. Deriving both
 // sides from this one list is what makes the split disjoint AND jointly complete: a file these
@@ -60,6 +67,7 @@ const LANE_EXCLUDE = [
   '.next/**',
   '.open-next/**',
   ...(INTEGRATION_LANE ? [] : ['**/*.e2e.test.ts']),
+  ...(REPO_LANE ? [] : [REPO_LANE_GLOB]),
 ];
 
 // Test options both projects share. Spread rather than relied on as inherited: a project config

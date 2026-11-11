@@ -98,6 +98,11 @@ declare module '@bike4mind/services' {
     ): Promise<import('@bike4mind/common').AuditEntry | null>;
   }
 }
+declare module '@bike4mind/observability' {
+  export class Logger {
+    static error(...args: unknown[]): void;
+  }
+}
 declare module '@bike4mind/utils' {
   export function getSettingsMap(db: unknown, options?: unknown): Promise<Record<string, string>>;
   export function getSettingsValue(key: string, settings: Record<string, string>, defaultValue: number): number;

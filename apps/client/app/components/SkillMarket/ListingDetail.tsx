@@ -59,7 +59,9 @@ import {
   TierChip,
   VisibilityChip,
   formatCount,
+  isEscapeFromOpenListbox,
 } from './parts';
+import { SELF_APPROVED_LABEL } from './ScanResult';
 
 const REPORT_REASONS: Array<{ value: SkillListingReportReason; label: string }> = [
   { value: 'malicious', label: 'Malicious or unsafe behaviour' },
@@ -267,7 +269,13 @@ const ReportDialog: FC<{ listingId: string; token?: string; onClose: () => void 
     }
   };
   return (
-    <Modal open onClose={onClose}>
+    <Modal
+      open
+      onClose={(event, reason) => {
+        if (reason === 'escapeKeyDown' && isEscapeFromOpenListbox(event)) return;
+        onClose();
+      }}
+    >
       <ModalDialog sx={{ width: 460, maxWidth: '95vw' }} data-testid="market-report-dialog">
         <ModalClose />
         <DialogTitle>Report this skill</DialogTitle>
@@ -478,7 +486,7 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
                 </Chip>
               ) : live ? (
                 <Chip size="sm" variant="soft" color="success" startDecorator={<VerifiedUserIcon />}>
-                  Reviewed by a person
+                  {version?.selfApproved ? SELF_APPROVED_LABEL : 'Reviewed by a person'}
                 </Chip>
               ) : null}
               {viewer.canReview || viewer.isAuthor ? <TierChip tier={listing.riskTier} /> : null}

@@ -34,7 +34,14 @@ describe('the account strip', () => {
 });
 
 describe('the account menu', () => {
-  const html = markup(<AccountMenu state={signedIn} onOpenSettings={() => {}} onProfile={() => {}} />);
+  const html = markup(
+    <AccountMenu state={signedIn} onOpenSettings={() => {}} onProfile={() => {}} onSendFeedback={() => {}} />
+  );
+
+  it('offers Send Feedback in the avatar menu', () => {
+    expect(html).toContain('data-testid="account-feedback-btn"');
+    expect(html).toContain('Send Feedback');
+  });
 
   /**
    * Settings has no nav row - a second config row under Customize said the same thing twice -
@@ -47,6 +54,19 @@ describe('the account menu', () => {
   it('offers no Settings row when the shell gave it no way to open one', () => {
     const noOpener = markup(<AccountMenu state={signedIn} onProfile={() => {}} />);
     expect(noOpener).not.toContain('data-testid="account-settings-btn"');
+  });
+
+  it('offers Billing for a signed-in user', () => {
+    const html = markup(<AccountMenu state={signedIn} onBilling={() => {}} onProfile={() => {}} />);
+    expect(html).toContain('data-testid="account-billing-btn"');
+  });
+
+  it.each([
+    { ...signedIn, status: 'signed-out' as const },
+    { ...signedIn, user: undefined },
+  ])('hides Billing without a signed-in user', state => {
+    const html = markup(<AccountMenu state={state} onBilling={() => {}} onProfile={() => {}} />);
+    expect(html).not.toContain('data-testid="account-billing-btn"');
   });
 
   /** Primary, not danger: a waiting update is not a fault the user has to go and fix. */

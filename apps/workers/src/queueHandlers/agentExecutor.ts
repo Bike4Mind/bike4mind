@@ -50,7 +50,7 @@ import {
   scopedSettingsRepository,
   cacheRepository,
 } from '@bike4mind/database';
-import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
 import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
@@ -84,7 +84,7 @@ import { Logger } from '@bike4mind/observability';
 import { Permission } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
-import { getUserEntitlements } from '@server/entitlements';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
@@ -106,6 +106,7 @@ import {
   CreditHolderType,
   PAID_PLAN_ENTITLEMENT_KEY,
   type AttachmentLakeAccess,
+  OrchestrationDefaultsSchema,
   type IAgent,
   type IUserDocument,
 } from '@bike4mind/common';
@@ -265,14 +266,20 @@ import {
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
-import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { publishRunPendingAction } from './agentExecutor.pendingAction';
-import { createAgentPushDeps, withAgentTerminalPush, publishAgentTerminalPush } from './agentExecutor.push';
-import { publishPushNotification, sessionDeepLink } from '@server/utils/pushNotifications';
+import {
+  createAgentPushDeps,
+  withAgentTerminalPush,
+  publishAgentTerminalPush,
+  endAgentLiveActivity,
+  type AgentPushSender,
+} from './agentExecutor.push';
+import { publishPushNotification, sessionDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
 import { createAgentToolEchoMarker, persistedExecutionSteps } from '@bike4mind/server-utils/utils/markAgentToolEchoes';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
-import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
+import { resolveAndPublishMementoCompletion } from '@bike4mind/server-utils/utils/publishMementoCompletion';
 import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIterationMementosPreamble';
 import { resolveExecutionMementoGates } from '@bike4mind/server-utils/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@workers/utils/getFirstIterationSkillsPreamble';
@@ -331,7 +338,8 @@ const AGENT_HISTORY_QUEST_COUNT = 20;
  * or until the stale-active sweep reaps it (`cleanupStaleActive` includes
  * `paused`).
  */
-const CONFIDENCE_GATE_THRESHOLD = 0.6;
+// Single source for the gate defaults: the schema defaults in common.
+const CONFIDENCE_GATE_FALLBACK = OrchestrationDefaultsSchema.parse({});
 
 // `persistRunAsQuest` moved to `@server/utils/persistRunAsQuest` so the
 // WebSocket `gate_response: stop` handler can share the same chat-history
@@ -983,9 +991,37 @@ async function processExecution(
   checkpointDepth: number = 0
 ): Promise<void> {
   logger.updateMetadata({ executionId });
-  // Every terminal frame of a top-level run also publishes its push (agentExecutor.push.ts).
+  // Every terminal frame of a top-level run also publishes its push, and progress frames feed its live
+  // activity (agentExecutor.push.ts).
   const sendWs = withAgentTerminalPush(createWsSender(connectionId, logger), createAgentPushDeps(logger), logger);
+  try {
+    await runExecution(
+      sendWs,
+      executionId,
+      connectionId,
+      isNewExecution,
+      startPayload,
+      context,
+      logger,
+      checkpointDepth
+    );
+  } finally {
+    // An invocation can exit without a terminal frame (checkpoint self-dispatch); its last throttled
+    // live activity stage must be published before the container freezes.
+    await sendWs.flush();
+  }
+}
 
+async function runExecution(
+  sendWs: AgentPushSender,
+  executionId: string,
+  connectionId: string,
+  isNewExecution: boolean,
+  startPayload: StartExecutionPayload | undefined,
+  context: Context,
+  logger: Logger,
+  checkpointDepth: number
+): Promise<void> {
   // Depth guard: refuse to process if this execution has self-dispatched too many times.
   // A runaway agent (infinite tool loop, stuck abort signal) would otherwise chain Lambdas
   // indefinitely. Must stay above the DB load below - terminating before any DB work is the
@@ -1438,6 +1474,25 @@ async function processExecution(
         adminDefaults: orchestrationDefaults,
         model: execution.model,
       });
+    }
+    // Resolved once on the first invocation and persisted: the profile does not survive a
+    // Lambda handoff, so a continuation reads the stored values (legacy rows fall back to the
+    // profile, then the schema defaults).
+    const persistedGate = isNewExecution ? undefined : execution.confidenceGate;
+    const confidenceGateSettings = {
+      threshold:
+        persistedGate?.threshold ??
+        orchestrationProfile?.confidenceGateThreshold ??
+        CONFIDENCE_GATE_FALLBACK.confidenceGateThreshold,
+      mode:
+        persistedGate?.mode ?? orchestrationProfile?.confidenceGateMode ?? CONFIDENCE_GATE_FALLBACK.confidenceGateMode,
+      selfReport:
+        persistedGate?.selfReport ??
+        orchestrationProfile?.confidenceGateSelfReport ??
+        CONFIDENCE_GATE_FALLBACK.confidenceGateSelfReport,
+    };
+    if (isNewExecution) {
+      await agentExecutionRepository.persistConfidenceGate(executionId, confidenceGateSettings);
     }
     if (orchestrationProfile && isNewExecution) {
       // Persist the profile's denials so continuations can enforce them: the profile
@@ -2851,18 +2906,26 @@ async function processExecution(
     const resetLastIterationConfidence = () => {
       lastIterationConfidenceState = null;
     };
-    const confidenceGate = (iterationConfidence: number, agentIterationIndex: number) => {
-      lastIterationConfidenceState = { iteration: agentIterationIndex, confidence: iterationConfidence };
-      // Always proceed - the actual gate decision is made post-iteration by
-      // the block below. `confidence` and `reason` are echoed back only to
-      // satisfy the `ConfidenceGateDecision` type; the agent ignores both
-      // when `action === 'proceed'`.
-      return {
-        action: 'proceed' as const,
-        confidence: iterationConfidence,
-        reason: '',
-      };
-    };
+    const {
+      threshold: confidenceGateThreshold,
+      mode: gateMode,
+      selfReport: selfReportEnabled,
+    } = confidenceGateSettings;
+    const iterationGateEnabled = gateMode === 'iteration' || gateMode === 'both';
+    const confidenceGate = !selfReportEnabled
+      ? undefined
+      : (iterationConfidence: number, agentIterationIndex: number) => {
+          lastIterationConfidenceState = { iteration: agentIterationIndex, confidence: iterationConfidence };
+          // Always proceed - the actual gate decision is made post-iteration by
+          // the block below. `confidence` and `reason` are echoed back only to
+          // satisfy the `ConfidenceGateDecision` type; the agent ignores both
+          // when `action === 'proceed'`.
+          return {
+            action: 'proceed' as const,
+            confidence: iterationConfidence,
+            reason: '',
+          };
+        };
 
     // See `toolGate` below for why these two are exempt from the pre-execution gate.
     // Reuses `DELEGATION_TOOLS` so the exemption cannot drift from the tools it names.
@@ -2926,7 +2989,8 @@ async function processExecution(
           approvedToolCallId: approvedPause.toolCallId,
           approvedTools,
           deniedTools,
-          confidenceGateThreshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
+          confidenceGateThreshold,
+          pauseEnabled: iterationGateEnabled,
           confidenceOverrides: execution.confidenceOverrides,
           guardedToolNames: customToolNameSet,
         },
@@ -2952,7 +3016,10 @@ async function processExecution(
           // post-iteration gate check below: they ran outside any `runIteration()`
           // call, and the next one clears `iterationConfidences` at its own start
           // regardless - see `ReActAgent.takeIterationConfidence`.
-          takeIterationConfidence: () => agent.takeIterationConfidence(),
+          takeIterationConfidence: () => {
+            const confidence = agent.takeIterationConfidence();
+            return selfReportEnabled ? confidence : null;
+          },
           recordIterationConfidence: (id, confidence, options) =>
             agentExecutionRepository.recordIterationConfidence(id, confidence, options),
           setPendingGate: (id, gate) => agentExecutionRepository.setPendingGate(id, gate),
@@ -3499,17 +3566,17 @@ async function processExecution(
       // each step (thought / action / observation / final_answer) already
       // reached the client mid-iteration.
 
-      // Confidence gate - pause low-confidence runs for human
-      // review. Evaluated AFTER the permission gate so a tool that needs
-      // approval pauses for that more specific signal first, and only
-      // checked on non-terminal iterations (a final_answer iteration is
-      // complete by definition; pausing it would discard the answer).
-      // Failed tool calls do not count toward it - see `evaluateConfidenceGate`.
-      // It pauses on a streak of low iterations, not one (`LOW_CONFIDENCE_STREAK_TO_PAUSE`);
-      // the streak is persisted on the execution doc so it survives continuations.
-      // Per-profile override wins over the global default; a profile threshold of 0
-      // disables the gate entirely (confidence is never < 0) for unattended loops.
-      const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
+      // Confidence gate - pause low-confidence runs for human review. Evaluated AFTER
+      // the permission gate so a tool that needs approval pauses for that more specific
+      // signal first, and only on non-terminal iterations (a final_answer iteration is
+      // complete by definition; pausing it would discard the answer). Failed tool calls
+      // do not count toward it - see `evaluateConfidenceGate`. It pauses on a streak of
+      // low iterations (`LOW_CONFIDENCE_STREAK_TO_PAUSE`) persisted on the execution doc
+      // so it survives continuations. A threshold of 0 disables it (confidence is never
+      // < 0) for unattended loops.
+      // Always evaluate + record, whatever the mode: the streak must advance even when
+      // only the answer-site gate is active, otherwise gateMode 'answer' is dead.
+      // `gateMode` controls which site actually pauses.
       const gate = evaluateConfidenceGate({
         gate: readLastIterationConfidence(),
         isComplete: iterationResult.isComplete,
@@ -3518,17 +3585,14 @@ async function processExecution(
         iterationSteps: iterationResult.allSteps,
         confidenceOverrides: execution.confidenceOverrides,
       });
-      // Telemetry: record every iteration the gate evaluates -
-      // including ones that complete in the same turn (isComplete=true) or
-      // clear the threshold - so `evaluatedCount` is the true denominator for
-      // fire rate. `recordGateEmitted` below increments the numerator only on
-      // a real pause. Baseline observability before touching signal quality.
-      // A scripted (`overridden`) iteration advances the streak but skips the
-      // telemetry counters: it would skew the real fire rate.
+      // Telemetry: every evaluated iteration is recorded (including ones that complete this
+      // turn or clear the threshold), so `evaluatedCount` is the true denominator for fire
+      // rate; `recordGateEmitted` below increments the numerator only on a real pause. A
+      // scripted (`overridden`) iteration advances the streak but skips the counters.
       const decision = await decideIterationConfidencePause(gate, (confidence, options) =>
         agentExecutionRepository.recordIterationConfidence(executionId, confidence, options)
       );
-      if (gate !== null && decision?.pause) {
+      if (iterationGateEnabled && gate !== null && decision?.pause) {
         // 0-indexed wire convention: the agent reports 1-indexed
         // `this.iterations`, but the client's `IterationStream` and
         // `permission_request` use 0-indexed (see the matching subtraction
@@ -3585,11 +3649,14 @@ async function processExecution(
     const finalCheckpoint = agent.toCheckpoint();
 
     // A final-answer iteration runs no tools, so the per-iteration gate never scores it; `block`
-    // parks the run paused with the answer in the checkpoint (Continue iterates, Stop accepts).
+    // parks the run paused with the finished result snapshotted on `pendingCompletion`. Stop
+    // finalizes that snapshot; Continue reopens the answer with a verify nudge (handleGateResponse in
+    // apps/client/server/websocket/agentExecute.ts).
     const completedOnAnswer =
       iterationResult?.isComplete && !iterationResult.reachedMaxIterations && !iterationResult.reachedMaxTotalTokens;
+    const answerGateEnabled = gateMode === 'answer' || gateMode === 'both';
     const lowConfidenceCompletion =
-      completedOnAnswer && (updatedExecution?.lowConfidenceStreak ?? 0) > 0
+      answerGateEnabled && completedOnAnswer && (updatedExecution?.lowConfidenceStreak ?? 0) > 0
         ? evaluateLowConfidenceCompletion({
             mode:
               orchestrationProfile?.lowConfidenceCompletion ??
@@ -3604,36 +3671,13 @@ async function processExecution(
               DEFAULT_LOW_CONFIDENCE_COMPLETION,
             lowConfidenceStreak: updatedExecution?.lowConfidenceStreak,
             lastConfidence: updatedExecution?.lastConfidence,
-            threshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
+            threshold: confidenceGateThreshold,
           })
         : null;
     if (lowConfidenceCompletion) {
       const { mode, confidence, reason } = lowConfidenceCompletion;
       logger.info('[ConfidenceGate] Low-confidence completion', { executionId, mode, confidence });
       await sendWs('low_confidence_completion', { executionId, confidence, reason, mode });
-      if (mode === 'block') {
-        // Stop on this pause finishes via handleGateResponse (apps/client/server/websocket/agentExecute.ts),
-        // which persists a thinner result than the completion below (no resolveDisplayAnswer, artifacts, images).
-        const paused = await agentExecutionRepository.setPendingGate(executionId, {
-          iteration: Math.max(0, finalCheckpoint.iteration - 1),
-          confidence,
-          reason,
-          requestedAt: new Date(),
-        });
-        if (!paused) {
-          logger.info('[ConfidenceGate] Aborted concurrently - bailing without pausing');
-          await sendWs('failed', { executionId, reason: 'aborted' });
-          return;
-        }
-        await sendWs('confidence_gate', {
-          executionId,
-          iteration: Math.max(0, finalCheckpoint.iteration - 1),
-          confidence,
-          reason,
-        });
-        await sendWs('progress', { executionId, status: 'paused' });
-        return;
-      }
     }
 
     const finalAnswer = extractFinalAnswer(finalCheckpoint.steps);
@@ -3660,6 +3704,76 @@ async function processExecution(
       }),
     });
 
+    const buildReplyText = async (): Promise<string> => {
+      let replyText = displayAnswer ?? 'Agent execution completed without a final answer.';
+
+      // DAG subagent artifact bubble-up. The parent re-summarizes the aggregated
+      // child report and may drop the raw `<artifact>` blocks the workers emitted,
+      // so append the ones the parent didn't reproduce to the reply text - the
+      // client renders cards from the text (see collectDagChildArtifactBlocks).
+      // Re-read children here (rather than carrying from the DAG-resume block)
+      // so it survives a parent self-dispatch after resume; gated on the same
+      // `EnableArtifacts` flag as emission. Best-effort - never fails the run.
+      if (enableArtifacts && execution.dagSpec) {
+        try {
+          const dagChildren = await agentExecutionRepository.findDagChildrenLean(executionId);
+          const completedChildren = dagChildren.filter(c => c.status === 'completed');
+          const childAnswers = completedChildren.map(c => (c.result as { answer?: string } | undefined)?.answer ?? '');
+          const childSteps = completedChildren.map(c => persistedExecutionSteps(c));
+          // The parent may reproduce what a child quoted from the web, so its own reply is
+          // checked against every child's tool output too (its own steps are checked at persist).
+          replyText = createAgentToolEchoMarker(childSteps.flat())(replyText);
+          const extraBlocks = collectDagChildArtifactBlocks({ parentAnswer: replyText, childAnswers, childSteps });
+          if (extraBlocks.length > 0) {
+            replyText = `${replyText}\n\n${extraBlocks.join('\n\n')}`;
+            logger.info('[Artifacts] Surfaced DAG subagent artifacts on parent completion', {
+              executionId,
+              count: extraBlocks.length,
+            });
+          }
+        } catch (bubbleErr) {
+          logger.warn('[Artifacts] Failed to bubble up DAG subagent artifacts - continuing', {
+            executionId,
+            error: bubbleErr instanceof Error ? bubbleErr.message : String(bubbleErr),
+          });
+        }
+      }
+      return replyText;
+    };
+
+    if (lowConfidenceCompletion?.mode === 'block') {
+      const { confidence, reason } = lowConfidenceCompletion;
+      const gateIteration = Math.max(0, finalCheckpoint.iteration - 1);
+      const paused = await agentExecutionRepository.setPendingGate(
+        executionId,
+        { iteration: gateIteration, confidence, reason, requestedAt: new Date() },
+        {
+          checkpoint: finalCheckpoint,
+          completion: {
+            answer: displayAnswer,
+            replyText: await buildReplyText(),
+            totalTokens: finalCheckpoint.totalTokens,
+            totalIterations: finalCheckpoint.iteration,
+            reachedMaxIterations,
+            canReconsider: finalCheckpoint.iteration < maxIterations,
+            lowConfidence: { confidence, reason },
+            generatedImages,
+            finishReason: finalCheckpoint.finishReason,
+            allSideEffects,
+            retrievalSummary,
+          },
+        }
+      );
+      if (!paused) {
+        logger.info('[ConfidenceGate] Aborted concurrently - bailing without pausing');
+        await sendWs('failed', { executionId, reason: 'aborted' });
+        return;
+      }
+      await sendWs('confidence_gate', { executionId, iteration: gateIteration, confidence, reason });
+      await sendWs('progress', { executionId, status: 'paused' });
+      return;
+    }
+
     await agentExecutionRepository.markComplete(executionId, {
       answer: displayAnswer,
       steps: finalCheckpoint.steps,
@@ -3685,40 +3799,7 @@ async function processExecution(
 
     // Persist a Quest so the run survives page refresh - see persistRunAsQuest
     // docstring. Best-effort; failures are logged but don't fail the run.
-    let replyText = displayAnswer ?? 'Agent execution completed without a final answer.';
-
-    // DAG subagent artifact bubble-up. The parent re-summarizes the aggregated
-    // child report and may drop the raw `<artifact>` blocks the workers emitted,
-    // so append the ones the parent didn't reproduce to the reply text - the
-    // client renders cards from the text (see collectDagChildArtifactBlocks).
-    // Re-read children here (rather than carrying from the DAG-resume block)
-    // so it survives a parent self-dispatch after resume; gated on the same
-    // `EnableArtifacts` flag as emission. Best-effort - never fails the run.
-    if (enableArtifacts && execution.dagSpec) {
-      try {
-        const dagChildren = await agentExecutionRepository.findDagChildrenLean(executionId);
-        const completedChildren = dagChildren.filter(c => c.status === 'completed');
-        const childAnswers = completedChildren.map(c => (c.result as { answer?: string } | undefined)?.answer ?? '');
-        const childSteps = completedChildren.map(c => persistedExecutionSteps(c));
-        // The parent may reproduce what a child quoted from the web, so its own reply is
-        // checked against every child's tool output too (its own steps are checked at persist).
-        replyText = createAgentToolEchoMarker(childSteps.flat())(replyText);
-        const extraBlocks = collectDagChildArtifactBlocks({ parentAnswer: replyText, childAnswers, childSteps });
-        if (extraBlocks.length > 0) {
-          replyText = `${replyText}\n\n${extraBlocks.join('\n\n')}`;
-          logger.info('[Artifacts] Surfaced DAG subagent artifacts on parent completion', {
-            executionId,
-            count: extraBlocks.length,
-          });
-        }
-      } catch (bubbleErr) {
-        logger.warn('[Artifacts] Failed to bubble up DAG subagent artifacts — continuing', {
-          executionId,
-          error: bubbleErr instanceof Error ? bubbleErr.message : String(bubbleErr),
-        });
-      }
-    }
-
+    const replyText = await buildReplyText();
     await persistRunAsQuest(
       executionId,
       replyText,
@@ -3753,7 +3834,7 @@ async function processExecution(
       // Don't leak internal error details to client. Recognized, non-sensitive failure
       // categories (billing/rate-limit/timeout/auth) get a specific message; everything else stays
       // generic. Full details remain in the logs above.
-      const userFacingMessage = toUserFacingFailureMessage(errorMessage);
+      const userFacingMessage = toUserFacingFailureMessage(errorMessage, err);
       await sendWs('failed', { executionId, reason: 'error', message: userFacingMessage });
       // Persist the failed run in chat history so the user still sees their
       // prompt after refresh, with the (sanitized) reason as the reply. Pre-existing 3-arg call
@@ -3839,6 +3920,11 @@ async function fireDagNodeTerminalOnRefusal(args: {
       await sendWs('failed', { executionId: parentExecutionId, reason: 'dag_hook_error' });
       // This sender belongs to the child's dispatch, so the parent's push is published explicitly.
       await publishAgentTerminalPush(
+        { executionId: parentExecutionId, outcome: 'failed' },
+        createAgentPushDeps(logger),
+        logger
+      );
+      await endAgentLiveActivity(
         { executionId: parentExecutionId, outcome: 'failed' },
         createAgentPushDeps(logger),
         logger

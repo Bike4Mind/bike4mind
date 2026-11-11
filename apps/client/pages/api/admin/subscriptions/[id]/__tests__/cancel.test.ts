@@ -3,8 +3,8 @@ import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
 const rateLimitOptions = vi.hoisted(() => [] as unknown[]);
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: { method?: string }, res: unknown) => handlers[req.method ?? 'POST']?.(req, res),
@@ -17,7 +17,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => (rateLimitOptions.push(options), () => undefined),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
@@ -143,6 +143,7 @@ describe('POST /api/admin/subscriptions/[id]/cancel', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: 'credits:adjust' },
     });
     expect(rateLimitOptions).toContainEqual({ limit: 10, windowMs: 60_000, bucket: 'admin-stripe-write' });
   });
@@ -195,12 +196,11 @@ describe('POST /api/admin/subscriptions/[id]/cancel', () => {
     expect(mockStripeUpdate).not.toHaveBeenCalled();
   });
 
-  it('400s without a reason and 403s for a non-admin', async () => {
+  it('400s without a reason', async () => {
     await expect(call(handler, { body: { reason: undefined } })).rejects.toMatchObject({
       statusCode: 400,
       message: ADMIN_ACTION_REASON_MISSING_MESSAGE,
     });
-    await expect(call(handler, { isAdmin: false })).rejects.toMatchObject({ statusCode: 403 });
     expect(mockStripeUpdate).not.toHaveBeenCalled();
   });
 });

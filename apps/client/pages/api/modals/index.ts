@@ -4,6 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { FilterQuery } from 'mongoose';
 import { IModalDocument, hasAdminPermission } from '@bike4mind/common';
+import { withSignedModalImage } from '@client/server/tools/modalImageUrls';
 import { extractVariantForViewer, viewerClassifier } from '@bike4mind/services';
 
 const WHATS_NEW_TAG = 'whats-new';
@@ -77,9 +78,10 @@ const handler = baseApi().get(
     // generationMetadata, flattens the viewer's variant fields to top level,
     // and drops documents with no content for this audience key.
     // Applied to every viewer including admins - never bypassed.
-    const served = modals
+    const visible = modals
       .map(doc => extractVariantForViewer(doc.toObject(), audienceKey))
       .filter((doc): doc is NonNullable<typeof doc> => doc !== null);
+    const served = await Promise.all(visible.map(withSignedModalImage));
 
     // Prevent caching to ensure users always get fresh modal data
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');

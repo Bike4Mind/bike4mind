@@ -56,6 +56,7 @@ export function registerClaudeImport(ipcMain: Pick<IpcMain, 'handle'>, deps: Pic
     await service.syncWeb();
     return service.state();
   });
+  ipcMain.handle(IPC_CHANNELS.claudeImportDismissHint, (_event, id: unknown) => service.dismissHint(id));
   ipcMain.handle(IPC_CHANNELS.claudeImportRemove, (_event, kind: unknown) => service.removeImported(kind));
   return service;
 }

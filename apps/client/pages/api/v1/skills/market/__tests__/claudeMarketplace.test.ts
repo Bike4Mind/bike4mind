@@ -92,7 +92,7 @@ const { default: feedHandler } = await import('@pages/api/v1/skills/market/claud
 const zipBaseApiIndex = baseApiOptions.length;
 const { default: zipHandler } = await import('@pages/api/v1/skills/market/[id]/claude-plugin.zip');
 const { default: bundleZipHandler } = await import('@pages/api/v1/skills/market/bundles/[id]/claude-plugin.zip');
-const { publicAppUrl } = await import('@server/utils/validators');
+const { publicAppUrl } = await import('@bike4mind/server-utils/utils/validators');
 
 const ORG_ID = '65a0000000000000000000aa';
 const LISTING_A = '65b000000000000000000001';
@@ -392,6 +392,12 @@ describe('GET /api/v1/skills/market/{id}/claude-plugin.zip', () => {
     const text = (await zipOf(LISTING_A)).toString('utf8');
     expect(text).toContain('allowed-tools: Bash(git:*), Read');
     expect(text).not.toContain('web_search');
+  });
+
+  it("carries the author's Claude Code model into the plugin's SKILL.md", async () => {
+    const v = version(LISTING_A);
+    mockFindVersion.mockResolvedValue(doc({ ...v, snapshot: { ...v.snapshot, claudeCodeModel: 'haiku' } }));
+    expect((await zipOf(LISTING_A)).toString('utf8')).toContain('model: haiku');
   });
 
   it("404s a caller who is not a member of the listing's org", async () => {

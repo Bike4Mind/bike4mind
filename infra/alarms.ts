@@ -21,7 +21,23 @@ import {
   voiceHoldSweepCron,
 } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
-import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
+import { reauthConnectionRoute, subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
+import {
+  defaultRoute,
+  connectRoute,
+  disconnectRoute,
+  heartbeatRoute,
+  voiceSendTranscriptRoute,
+  voiceEndedRoute,
+  cliCompletionRoute,
+  cliToolRoute,
+  keepCommandRequestRoute,
+  keepCommandResponseRoute,
+  jupyterCellOutputRoute,
+  ccAgentRegisterRoute,
+  ccAgentEventRoute,
+  ccAgentDisconnectRoute,
+} from './websocket';
 import { dlqAlarmTopic } from './dlqAlarms';
 import { websocketRouteLogGroup } from './websocketRouteLogGroup';
 import {
@@ -673,14 +689,19 @@ if (isMonitoredStage) {
   /**
    * Alarm: Integration Health High Latency
    *
-   * Triggers when P95 latency across all integrations exceeds 5 seconds.
+   * Triggers when P95 latency across all integrations exceeds 5 seconds in 2 of 3 periods.
    * Indicates network degradation or slow API responses requiring investigation.
+   * Each period holds one probe cycle (~4 samples), so P95 is effectively the slowest probe; 2-of-3
+   * keeps a single slow call from paging. Probes that time out publish no Latency (see
+   * publishMetrics in packages/server-utils/src/services/integrationHealthService.ts) and are
+   * reported by the per-integration failure alarms instead.
    */
   new aws.cloudwatch.MetricAlarm('integrationHealthHighLatency', {
     name: `${$app.name}-${$app.stage}-integration-health-high-latency`,
-    alarmDescription: 'Integration health probe P95 latency exceeds 5 seconds',
+    alarmDescription: 'Integration health probe P95 latency exceeds 5 seconds in 2 of 3 periods',
     comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
+    evaluationPeriods: 3,
+    datapointsToAlarm: 2,
     metricName: 'Latency',
     namespace: 'Lumina5/IntegrationHealth',
     period: 300, // 5 minutes
@@ -779,10 +800,10 @@ if (isMonitoredStage) {
    *
    * Lambda OOM/SIGKILL events surface only in logs (no native CloudWatch metric) and often during
    * INIT with no application output — exactly the failure mode that hit agent_execute at 256 MB.
-   * subscribe_query / unsubscribe_query are now at 1024 MB, but a log-metric filter on the OOM
-   * signatures publishes a metric so a future regression (memory drop, dependency bloat) pages
-   * loudly instead of degrading silently. Each route publishes to its OWN metric name and gets its
-   * own alarm (sharing one SNS topic), so a firing alarm names the culprit route directly.
+   * Every WebSocket route defined in websocket.ts and subscriberFanout.ts gets a log-metric filter on
+   * the OOM signatures so a future regression (memory drop, dependency bloat) pages loudly instead
+   * of degrading silently. Each route publishes to its OWN metric name and gets its own alarm
+   * (sharing one SNS topic), so a firing alarm names the culprit route directly.
    *
    * NOTE: we deliberately do NOT use a single metric dimensioned by route. CloudWatch only allows
    * metric-filter dimensions whose values are extracted from named tokens in the filter pattern;
@@ -796,6 +817,21 @@ if (isMonitoredStage) {
   for (const { key, metricName, route } of [
     { key: 'subscribe-query', metricName: 'SubscribeQueryOutOfMemory', route: subscribeQueryRoute },
     { key: 'unsubscribe-query', metricName: 'UnsubscribeQueryOutOfMemory', route: unsubscribeQueryRoute },
+    { key: 'reauth-connection', metricName: 'ReauthConnectionOutOfMemory', route: reauthConnectionRoute },
+    { key: 'ws-default', metricName: 'DefaultRouteOutOfMemory', route: defaultRoute },
+    { key: 'ws-connect', metricName: 'ConnectRouteOutOfMemory', route: connectRoute },
+    { key: 'ws-disconnect', metricName: 'DisconnectRouteOutOfMemory', route: disconnectRoute },
+    { key: 'heartbeat', metricName: 'HeartbeatRouteOutOfMemory', route: heartbeatRoute },
+    { key: 'voice-send-transcript', metricName: 'VoiceSendTranscriptOutOfMemory', route: voiceSendTranscriptRoute },
+    { key: 'voice-ended', metricName: 'VoiceEndedOutOfMemory', route: voiceEndedRoute },
+    { key: 'cli-completion', metricName: 'CliCompletionOutOfMemory', route: cliCompletionRoute },
+    { key: 'cli-tool', metricName: 'CliToolOutOfMemory', route: cliToolRoute },
+    { key: 'keep-command-request', metricName: 'KeepCommandRequestOutOfMemory', route: keepCommandRequestRoute },
+    { key: 'keep-command-response', metricName: 'KeepCommandResponseOutOfMemory', route: keepCommandResponseRoute },
+    { key: 'jupyter-cell-output', metricName: 'JupyterCellOutputOutOfMemory', route: jupyterCellOutputRoute },
+    { key: 'cc-agent-register', metricName: 'CcAgentRegisterOutOfMemory', route: ccAgentRegisterRoute },
+    { key: 'cc-agent-event', metricName: 'CcAgentEventOutOfMemory', route: ccAgentEventRoute },
+    { key: 'cc-agent-disconnect', metricName: 'CcAgentDisconnectOutOfMemory', route: ccAgentDisconnectRoute },
   ]) {
     new aws.cloudwatch.LogMetricFilter(`websocketRouteOomFilter-${key}`, {
       name: `${$app.name}-${$app.stage}-${key}-oom`,

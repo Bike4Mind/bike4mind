@@ -18,6 +18,7 @@ import { persistRateLimitEvents, throttleIfNearRateLimit } from './mcpRateLimitS
 import { resolveMcpTenantKey, UNATTRIBUTED_MCP_TENANT } from './mcpTenantKey';
 import { randomUUID } from 'crypto';
 import { Resource } from 'sst';
+import { Logger } from '@bike4mind/observability';
 
 // Shared const so the auditable set can never drift from the model's enum.
 const AUDITABLE_INTEGRATIONS = new Set<string>(INTEGRATION_AUDIT_INTEGRATION_NAMES);
@@ -122,7 +123,7 @@ export async function invokeMcpHandler<T = unknown>(payload: InvokeMcpHandlerPay
       });
     }
   } catch (auditCreateError) {
-    console.error('[invokeMcpHandler] Failed to create audit logger:', auditCreateError);
+    Logger.error('[invokeMcpHandler] Failed to create audit logger', { error: auditCreateError });
   }
 
   // In-memory circuit breaker: fail-fast when repeated failures detected
@@ -146,14 +147,14 @@ export async function invokeMcpHandler<T = unknown>(payload: InvokeMcpHandlerPay
     try {
       auditLogger?.success({ toolName, mcpServerName: name });
     } catch (auditError) {
-      console.error('[invokeMcpHandler] Audit log failed on success path:', auditError);
+      Logger.error('[invokeMcpHandler] Audit log failed on success path', { error: auditError });
     }
 
     return result;
   } catch (error) {
     // Convert CircuitBreakerError to a user-friendly message
     if (error instanceof CircuitBreakerError) {
-      console.warn(`[CircuitBreaker] Rejected call to ${name} (${opType}) — breaker is ${error.state}`);
+      Logger.warn(`[CircuitBreaker] Rejected call to ${name} (${opType}) - breaker is ${error.state}`);
       // Awaited: the throw ends the invocation, and a frozen Lambda loses a pending emit.
       await recordCircuitBreakerRejection(name);
       const userError = new Error(
@@ -176,7 +177,7 @@ export async function invokeMcpHandler<T = unknown>(payload: InvokeMcpHandlerPay
         mcpServerName: name,
       });
     } catch (auditError) {
-      console.error('[invokeMcpHandler] Audit log failed on error path:', auditError);
+      Logger.error('[invokeMcpHandler] Audit log failed on error path', { error: auditError });
     }
 
     throw error;

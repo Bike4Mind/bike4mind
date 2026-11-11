@@ -69,11 +69,12 @@ import { registerGenerationIpc } from './generationIpc';
 import { modelSettingsChanged, registerModelSettingsIpc } from './modelSettingsIpc';
 import { ModelSettingsStore } from './ModelSettingsStore';
 import { registerLocalContextIpc } from './localContextIpc';
-import { localContextSizing, localHardware, localLlamaServer } from './localContextSizing';
+import { localContextSizing, localHardware, localLlamaServer, relistAfterSave } from './localContextSizing';
 import { findOnPath, resolveUserPath } from './tools/userPath';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionExportIpc } from './sessionExportIpc';
+import { registerLocalDataExportIpc } from './localDataExportIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
@@ -559,9 +560,10 @@ export function registerChat(
     localLlamaServer({
       views: () => serversLoaded.then(() => modelServers.views()),
       onPath: async () => findOnPath('llama-server', await resolveUserPath()),
-    })
+    }),
+    message => logger.warn(message)
   );
-  modelServers.onServerSaved(() => localHardware.relistLlamaServer());
+  modelServers.onServerSaved(relistAfterSave(localHardware, () => modelServers.views(), logger));
   void localHardware.profile();
   const local = new LocalModels(
     new OllamaLocal((url, init) => net.fetch(url, init), localSizing, undefined, loadSettings),
@@ -1251,6 +1253,14 @@ export function registerChat(
     },
     writeFile: (path, content) => writeFile(path, content, 'utf8'),
     downloadsDirectory: () => app.getPath('downloads'),
+  });
+
+  registerLocalDataExportIpc(ipcMain, {
+    sessions: store,
+    attachments,
+    media,
+    userData,
+    pickFolder: sender => pickDirectory(sender),
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListArtifacts, () => artifactLibrary.list());

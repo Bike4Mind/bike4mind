@@ -62,8 +62,8 @@ function readShardLegs(contents: string): Array<{ index: number; count: number; 
  * none, prints "No projects matched the filters" and exits 0. Zero tests run and the leg is
  * green, which is why the assertion below pins bare tokens.
  */
-function readShardFilters(contents: string): string[] {
-  return [...contents.matchAll(/^\s*filter:\s*(\S.*?)\s*$/gm)].map(match => {
+function readShardFilters(contents: string, key: 'filter' | 'integration-filter' = 'filter'): string[] {
+  return [...contents.matchAll(new RegExp(`^\\s*${key}:\\s*(\\S.*?)\\s*$`, 'gm'))].map(match => {
     const raw = match[1];
     const unquoted = /^'(.*)'$/.exec(raw) ?? /^"(.*)"$/.exec(raw);
     return unquoted ? unquoted[1] : raw;
@@ -71,19 +71,26 @@ function readShardFilters(contents: string): string[] {
 }
 
 /**
- * Every matrix block's `filter:` and `script:` values, one entry per block, for legs that are not
- * sharded and so never show up in readShardLegs. Same block split and quote handling as the two
- * readers above; a block with no `filter:` is not a test leg and is skipped.
+ * Every lane a matrix block runs, for legs that are not sharded and so never show up in
+ * readShardLegs: its `filter:` under its `script:` (the unit `test` lane when unset), plus its
+ * `integration-filter:` under `test:integration`, which the workflow's "Run integration lane" step
+ * runs on the same runner. Same block split and quote handling as the readers above; a block with
+ * no `filter:` is not a test leg and is skipped.
  */
-function readLegBlocks(contents: string): Array<{ filter: string; script: string }> {
+function readLegBlocks(contents: string): Array<{ name: string; filter: string; script: string }> {
   return contents
     .split(/^\s*- name:/m)
     .slice(1)
     .flatMap(block => {
       const [filter] = readShardFilters(block);
       if (filter === undefined) return [];
+      const name = block.split('\n')[0].trim();
       const script = /^\s*script:\s*'([^']+)'\s*$/m.exec(block);
-      return [{ filter, script: script ? script[1] : 'test' }];
+      const lanes = [{ name, filter, script: script ? script[1] : 'test' }];
+      for (const integrationFilter of readShardFilters(block, 'integration-filter')) {
+        lanes.push({ name, filter: integrationFilter, script: 'test:integration' });
+      }
+      return lanes;
     });
 }
 
@@ -97,9 +104,10 @@ describe.each([
   { pkgName: '@bike4mind/workers', dir: ['apps', 'workers'] },
   { pkgName: '@bike4mind/server-utils', dir: ['packages', 'server-utils'] },
 ])('$pkgName integration leg in ci.yml', ({ pkgName, dir }) => {
-  // Each package's real-Mongo suites run only in an unsharded `test:integration` leg; its unit lane
-  // runs elsewhere. That leg has no `--shard` args, so the shard guards below skip it, and dropping
-  // the package from it would leave CI green with those suites never running.
+  // Each package's real-Mongo suites run only in an unsharded `test:integration` lane (a leg's
+  // `integration-filter`); its unit lane runs elsewhere. That lane has no `--shard` args, so the
+  // shard guards below skip it, and dropping the package from it would leave CI green with those
+  // suites never running.
   it('is named by exactly one `test:integration` leg', () => {
     const legs = readLegBlocks(fs.readFileSync(CI_WORKFLOW, 'utf8')).filter(
       leg => leg.script === 'test:integration' && filterPackages(leg.filter).includes(pkgName)
@@ -155,14 +163,18 @@ describe('apps/client test-shard legs in ci.yml', () => {
 
   // `pnpm ... test -- --shard=1/3` forwards the literal `--` to vitest, which then reads the
   // rest as positional path filters: the shard is ignored and the leg runs the WHOLE suite, at
-  // 3x the total cost, without erroring. Measured, not hypothetical. Pin the bare form.
+  // 3x the total cost, without erroring. Measured, not hypothetical.
+  //
+  // The leg runs turbo, which needs its own `--` to tell its flags from the script's, and then
+  // runs `pnpm run test --shard=1/3` with no separator (checked against turbo 2.10). So the one
+  // allowed `--` is turbo's, directly before the args array, and no pnpm script call carries one.
   //
   // The matrix value no longer reaches the command by `${{ }}` interpolation; it goes through
   // an `env:` entry and a bash array. So walk that chain rather than assuming any link in it:
-  // matrix.shard.args -> SHARD_ARGS -> the array the step splits it into -> the pnpm argv. A
+  // matrix.shard.args -> SHARD_ARGS -> the array the step splits it into -> the turbo argv. A
   // guard that only matched a fixed name would pass vacuously the next time the shape moves,
   // which is exactly how this assertion went stale before.
-  it('appends the shard args with no `--` separator', () => {
+  it('appends the shard args through turbo, with no pnpm `--` separator', () => {
     expect(contents, 'SHARD_ARGS should carry matrix.shard.args into the step').toMatch(
       /^\s*SHARD_ARGS:\s*\$\{\{\s*matrix\.shard\.args\s*\}\}\s*$/m
     );
@@ -170,15 +182,21 @@ describe('apps/client test-shard legs in ci.yml', () => {
     expect(binding, 'the step should split SHARD_ARGS into an argv array').not.toBeNull();
     const argsArray = binding![1];
     const runLine = contents.split('\n').find(line => /\bpnpm\b/.test(line) && line.includes(`\${${argsArray}[@]}`));
-    expect(runLine, `the sharded test command should pass ${argsArray} to pnpm`).toBeDefined();
-    expect(runLine).not.toMatch(/\s--\s/);
+    expect(runLine, `the sharded test command should pass ${argsArray} to turbo`).toBeDefined();
+    expect(runLine).toMatch(/^\s*pnpm exec turbo run\s/);
+    expect(runLine!.match(/\s--\s/g), "exactly one `--`, turbo's own").toHaveLength(1);
+    expect(runLine).toContain(` -- "\${${argsArray}[@]}"`);
+    const pnpmScriptCalls = contents
+      .split('\n')
+      .filter(line => /^\s*pnpm (--recursive|--filter|run)\b.*"\$SHARD_SCRIPT"/.test(line));
+    for (const line of pnpmScriptCalls) expect(line).not.toMatch(/\s--\s/);
   });
 
   // The other half of the same env hop. Word splitting is what turns one env var back into
   // several arguments, and it does not strip quotes - so a quoted token here silently matches
   // no package rather than erroring. Pin bare `--filter <pattern>` pairs.
   it('declares every leg filter as bare `--filter <pattern>` pairs', () => {
-    const filters = readShardFilters(contents);
+    const filters = [...readShardFilters(contents), ...readShardFilters(contents, 'integration-filter')];
     expect(filters, 'no shard filters declared in ci.yml').not.toHaveLength(0);
     for (const filter of filters) {
       expect(filter, `quote character inside a shard filter: ${filter}`).not.toMatch(/['"]/);
@@ -192,6 +210,33 @@ describe('apps/client test-shard legs in ci.yml', () => {
         );
       }
     }
+  });
+});
+
+describe('ci.yml unit-lane buckets', () => {
+  const unitLanes = readLegBlocks(fs.readFileSync(CI_WORKFLOW, 'utf8')).filter(leg => leg.script === 'test');
+  const misc = unitLanes.find(leg => leg.name === 'misc');
+
+  // misc is the negation catch-all. A package named by another unit bucket but not excluded from
+  // misc runs twice; one excluded from misc but named nowhere never runs at all.
+  it('excludes from misc exactly the packages the other unit buckets name', () => {
+    expect(misc, 'no misc leg declared').toBeDefined();
+    const excluded = filterPackages(misc!.filter).map(pattern => {
+      expect(pattern, `misc filter is not an exclusion: ${pattern}`).toMatch(/^!/);
+      return pattern.slice(1);
+    });
+    const named = unitLanes.filter(leg => leg !== misc).flatMap(leg => filterPackages(leg.filter));
+    expect([...new Set(excluded)].sort()).toEqual([...new Set(named)].sort());
+    expect(excluded, 'misc excludes a package twice').toHaveLength(new Set(excluded).size);
+  });
+});
+
+describe('ci.yml typecheck leg', () => {
+  // The workspace typecheck runs inside the test-shards job, on whichever leg sets the flag. None
+  // and the typecheck silently stops gating; two and it runs twice for nothing.
+  it('is carried by exactly one matrix leg', () => {
+    const flags = [...fs.readFileSync(CI_WORKFLOW, 'utf8').matchAll(/^\s*typecheck:\s*'true'\s*$/gm)];
+    expect(flags).toHaveLength(1);
   });
 });
 
@@ -283,8 +328,27 @@ describe('readLegBlocks', () => {
       "            filter: '--filter @bike4mind/services'",
     ].join('\n');
     expect(readLegBlocks(contents)).toEqual([
-      { filter: '--filter @bike4mind/workers --filter @bike4mind/server-utils', script: 'test:integration' },
-      { filter: '--filter @bike4mind/services', script: 'test' },
+      {
+        name: 'workers-server-utils-integration',
+        filter: '--filter @bike4mind/workers --filter @bike4mind/server-utils',
+        script: 'test:integration',
+      },
+      { name: 'services', filter: '--filter @bike4mind/services', script: 'test' },
+    ]);
+  });
+
+  it("reads a block's integration-filter as a second, test:integration lane of the same leg", () => {
+    const contents = [
+      '          - name: services-workers-integration',
+      "            filter: '--filter @bike4mind/services'",
+      "            integration-filter: '--filter @bike4mind/workers'",
+      '          - name: misc',
+      "            filter: '--filter !@bike4mind/services'",
+    ].join('\n');
+    expect(readLegBlocks(contents)).toEqual([
+      { name: 'services-workers-integration', filter: '--filter @bike4mind/services', script: 'test' },
+      { name: 'services-workers-integration', filter: '--filter @bike4mind/workers', script: 'test:integration' },
+      { name: 'misc', filter: '--filter !@bike4mind/services', script: 'test' },
     ]);
   });
 

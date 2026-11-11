@@ -3,7 +3,7 @@
 // POST /api/auth/apple/callback
 //   - Apple's form_post return; bounces to the GET form (see below)
 
-import { AuthStrategy } from '@bike4mind/common';
+import { AuthStrategy, toSuspensionReasonCategory } from '@bike4mind/common';
 import { authFailLogRepository } from '@bike4mind/database';
 import type { OAuthUser } from '@server/utils/auth/verifyCallback';
 import { issueBrowserSession } from '@server/auth/issueSession';
@@ -14,7 +14,7 @@ import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecond
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { oauthIpRateLimit } from '@server/middlewares/oauthIpRateLimit';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 import passport from 'passport';
@@ -29,8 +29,11 @@ import { recordSignupNetwork } from '@server/auth/networkMeta';
 import { recordSignupLanding } from '@server/auth/signupLanding';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { AuthEvents } from '@bike4mind/common';
-import { resolveOAuthFailureReason, oauthFailureLoginErrorCode } from '@server/utils/auth/oauthFailureReason';
-import { isLocalAppUrl } from '@server/utils/validators';
+import {
+  resolveOAuthFailureReason,
+  oauthFailureLoginErrorCode,
+} from '@bike4mind/server-utils/utils/auth/oauthFailureReason';
+import { isLocalAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { APPLE_DISPLAY_NAME_MAX_LENGTH, APPLE_USER_FIELD_MAX_LENGTH } from '@bike4mind/server-utils/auth/appleConfig';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -199,7 +202,9 @@ const handler = baseApi({ auth: false })
           } catch (logErr) {
             console.error('Failed to write AuthFailLog (oauth banned):', logErr);
           }
-          return res.redirect('/login?error=account_suspended');
+          // The category, never the detection signal, so the login page can name the rule.
+          const reason = toSuspensionReasonCategory(user.suspensionReasonCategory);
+          return res.redirect(`/login?error=account_suspended&reason=${reason}`);
         }
         const blockedCode = blockedSignInErrorCode(user);
         if (blockedCode) {

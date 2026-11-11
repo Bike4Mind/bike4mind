@@ -1,11 +1,15 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { mockPatch } = vi.hoisted(() => ({ mockPatch: vi.fn() }));
+const { mockPatch, mockToastError, mockToastSuccess } = vi.hoisted(() => ({
+  mockPatch: vi.fn(),
+  mockToastError: vi.fn(),
+  mockToastSuccess: vi.fn(),
+}));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: mockPatch, put: vi.fn() },
@@ -14,7 +18,7 @@ vi.mock('@client/app/hooks/data/settings', () => ({
   useConfig: () => ({ data: { fabfileBucketName: 'fab-bucket' } }),
 }));
 vi.mock('sonner', () => ({
-  toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }),
+  toast: Object.assign(vi.fn(), { error: mockToastError, success: mockToastSuccess }),
 }));
 
 import ReleaseNoteEditDialog from '../ReleaseNoteEditDialog';
@@ -66,14 +70,82 @@ describe('ReleaseNoteEditDialog', () => {
     });
   });
 
-  const renderDialog = (value: AdminReleaseNote) =>
+  const renderDialog = (value: AdminReleaseNote, onClose = vi.fn()) =>
     render(
       <QueryClientProvider client={new QueryClient()}>
         <CssVarsProvider theme={appTheme}>
-          <ReleaseNoteEditDialog note={value} onClose={vi.fn()} />
+          <ReleaseNoteEditDialog note={value} onClose={onClose} />
         </CssVarsProvider>
       </QueryClientProvider>
     );
+
+  it('opens in the admin dialog shell, whose close button and Cancel both close without saving', () => {
+    const onClose = vi.fn();
+    renderDialog(note, onClose);
+
+    const dialog = screen.getByTestId('release-note-edit-dialog');
+    const title = within(dialog).getByRole('heading', { level: 2 });
+    expect(title.textContent).toBe('Edit release notes for v1.0.0');
+    expect(dialog).toHaveAttribute('aria-labelledby', title.id);
+
+    fireEvent.click(screen.getByTestId('release-note-edit-dialog-close-btn'));
+    fireEvent.click(screen.getByTestId('release-note-edit-cancel-btn'));
+    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(mockPatch).not.toHaveBeenCalled();
+  });
+
+  it('stays open while the save is in flight: Cancel is disabled and the close button and Esc do nothing', async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    mockPatch.mockImplementation(() => new Promise(resolve => (finish = resolve)));
+    const onClose = vi.fn();
+    renderDialog(note, onClose);
+
+    fireEvent.click(screen.getByTestId('release-note-edit-save-btn'));
+    await waitFor(() => expect(screen.getByTestId('release-note-edit-cancel-btn')).toBeDisabled());
+    fireEvent.click(screen.getByTestId('release-note-edit-dialog-close-btn'));
+    fireEvent.keyDown(screen.getByTestId('release-note-edit-headline'), { key: 'Escape', code: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+
+    finish({ data: note });
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(mockToastSuccess).toHaveBeenCalledWith('Release note saved');
+  });
+
+  it('reports a failed save and stays open so the edit is not lost', async () => {
+    mockPatch.mockRejectedValue(
+      Object.assign(new Error('Request failed with status code 500'), {
+        isAxiosError: true,
+        response: { status: 500, data: { error: 'The release note could not be saved' } },
+      })
+    );
+    const onClose = vi.fn();
+    renderDialog(note, onClose);
+
+    fireEvent.change(screen.getByTestId('release-note-edit-headline'), { target: { value: 'Edited headline' } });
+    fireEvent.click(screen.getByTestId('release-note-edit-save-btn'));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('The release note could not be saved'));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('release-note-edit-headline')).toHaveValue('Edited headline');
+    await waitFor(() => expect(screen.getByTestId('release-note-edit-cancel-btn')).not.toBeDisabled());
+  });
+
+  it.each(['success', 'error'] as const)('reports save %s even after the dialog unmounts', async outcome => {
+    const request = Promise.withResolvers<{ data: AdminReleaseNote }>();
+    mockPatch.mockReturnValue(request.promise);
+    const { unmount } = renderDialog(note);
+    fireEvent.click(screen.getByTestId('release-note-edit-save-btn'));
+    await waitFor(() => expect(mockPatch).toHaveBeenCalledTimes(1));
+    unmount();
+
+    await act(async () => {
+      if (outcome === 'success') request.resolve({ data: note });
+      else request.reject(new Error('Service unavailable'));
+    });
+
+    if (outcome === 'success') expect(mockToastSuccess).toHaveBeenCalledWith('Release note saved');
+    else expect(mockToastError).toHaveBeenCalledWith('Service unavailable');
+  });
 
   it('sends the video when one is pasted', async () => {
     mockPatch.mockResolvedValue({ data: note });

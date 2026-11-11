@@ -203,7 +203,7 @@ export async function generateAgentDescription(agent: IAgent, logger: Logger, me
   // Clean up the generated description
   const cleanDescription = generatedDescription.trim();
 
-  logger.info(`Generated description for agent ${agent.name}: ${cleanDescription.substring(0, 100)}...`);
+  logger.info(`Generated description for agent ${agent.id}`, { descriptionLength: cleanDescription.length });
 
   return cleanDescription;
 }

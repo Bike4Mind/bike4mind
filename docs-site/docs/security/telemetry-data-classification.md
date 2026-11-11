@@ -23,6 +23,7 @@ personal information or secrets in campaign URLs.
 | Resolved consent         | App cookie `b4m_consent`, republished on every load                                              | 90 days, cleared when consent resolves unset   | Let the server read the browser's decision     |
 | Purchase attribution     | Stripe subscription metadata `acq_first_*` / `acq_last_*` and MongoDB `Subscription.acquisition` | No automatic expiry configured by this feature | Record the consenting buyer's checkout touches |
 | Purchase visit           | Random server-minted 30-minute visit id in MongoDB `PaymentAttempt.visitId` (not sent to Stripe) | 90 days, the payment attempt's TTL             | Name the visit a purchase was started in       |
+| OAuth client credit      | MongoDB `User.acquisition.oauthTouch`, written by the server                                     | The account's lifetime                         | Credit an account to the OAuth client it was created to sign in to |
 
 The app's three campaign cookies and `b4m_consent` use `path=/` and
 `SameSite=Lax`. They are JavaScript-readable and scoped to the app host. Lax,
@@ -132,6 +133,16 @@ Account creation emits a `signup` event to each Overwatch product named by the
 consenting visitor's campaign touches, for products this deployment holds an
 ingest key for. The host product is excluded from `signup`, because it already
 receives `signup_completed` for every new account from the signup funnel.
+
+An OAuth client can be registered with an Overwatch product. When an account is
+created and its first authorization code goes to such a client within 30 minutes,
+the server that issued the code stores `User.acquisition.oauthTouch` (`source`: the
+client's product, `medium`: `oauth`, `content`: the `client_id`) and emits that
+product the same `signup`, marked `touch: 'oauth'`. It is written once per account,
+only with the same consent the campaign touches need, and never for a synthetic
+account. The browser does not supply it: the product comes from the client's
+registration. A product that a campaign touch already names keeps that touch, and
+is credited once.
 
 A later payment by that account emits a `purchase` event to the host product and
 to the same products:
@@ -444,6 +455,12 @@ Every authenticated request to a `baseApi` route records which client the accoun
 | Client seen    | `clientUsage.<web, desktop, cli or api>.firstSeenAt`, `lastSeenAt` | Account lifetime; deleted with the account | Usage statistics, hiding the desktop app prompt |
 | Client version | `clientUsage.<desktop or cli>.version`, at most 32 characters   | Account lifetime; deleted with the account | Usage statistics                                |
 
+## Manual campaign watches
+
+Admins can save a fixed group of accounts for manual follow-up independently of the rolling AI advisory. A watch contains its name, member user ids, an optional source detection id, owner id, status, revision and lifecycle timestamps. It also stores a hash of the originally selected ids to avoid duplicate open watches. It does not copy account names, emails, IPs, fingerprints or request histories. Account details are read from current user records when a watch is opened.
+
+Watch records have no automatic expiry; closing a watch retains it in the Closed list. Account purge removes that account's membership and clears its ownership without deleting a watch shared with other accounts. Lifecycle writes require an audit reason and use the admin audit log's retention policy. Watches enable no automated alerts or enforcement.
+
 ## Usage pattern signals
 
 A scheduled job, off by default behind the `usagePatternSignalsEnabled` admin setting, derives a usage profile for recently active free-tier accounts and stores the latest result per user in the `UserUsagePatternSignals` collection. It collects no new raw data: every input already exists in `UsageEvent`, `ApiKeyUsageLog` or `UserApiKey`. The result is for admin review only and triggers no automatic action on the account, its keys or its balance. Paid accounts get a marker with no signals.
@@ -472,7 +489,7 @@ Off by default behind the `abuseAssessmentEnabled` and `abuseAssessmentConfig` a
 
 ## Advisory signup domain hold assessments
 
-Off by default behind the `signupDomainHoldAssessmentEnabled` and `signupDomainHoldAssessmentConfig` admin settings, a scheduled job can ask a Decisions model to judge a signup domain hold placed on a recently registered domain as abuse, legitimate or insufficient evidence. The model receives only a summary computed by the platform: the domain's age in days, a mail-provider class, whether the domain's website answers and has content, signup counts and timing, and counts of distinct networks, network operators and countries across the held signups, with a hosting-network share. It never receives the domain name, an email, an IP, a network number, a user id or any text from the domain's website. Calls use the platform's provider key and a platform budget. A confident abuse judgment can only confirm the hold, which keeps the signups' free credits held; it never releases a hold, and an admin can still release it.
+Off by default behind the `signupDomainHoldAssessmentEnabled` and `signupDomainHoldAssessmentConfig` admin settings, a scheduled job can ask a Decisions model to judge a signup domain hold placed on a recently registered domain as abuse, legitimate or insufficient evidence. The model receives only a summary computed by the platform: the domain's age in days, a mail-provider class, whether the domain's website answers and has content and whether it describes a temporary or disposable mail service (both judged by the platform), signup counts and timing, and counts of distinct networks, network operators and countries across the held signups, with a hosting-network share. It never receives the domain name, an email, an IP, a network number, a user id or any text from the domain's website. Calls use the platform's provider key and a platform budget. A confident abuse judgment confirms the hold, which keeps the signups' free credits held, and an admin can still release it. A confident legitimate judgment releases the hold only when a separate auto-release setting is on and checks computed by the platform also pass; it then pays only the signups it judged, and the domain is re-held on a new risk signal.
 
 | Data       | Storage                                                                                       | Lifetime                  | Purpose                 |
 | ---------- | --------------------------------------------------------------------------------------------- | ------------------------- | ----------------------- |
@@ -526,6 +543,19 @@ A failed refresh stores a short error message (200 characters at most) and a tim
 | ------------------- | ---------------------- | -------------------------- | --------------------------------------------- |
 | Evidence summary    | `riskEvidence.summary` | Account lifetime, replaced | Give admins context when reviewing an account |
 | Refresh diagnostics | `riskEvidence.refresh` | Account lifetime, replaced | Show when and why a refresh failed            |
+
+## Feedback report context
+
+Each feedback report stores where it was written as `clientContext` on the report document, so a bug can be reproduced without asking the reporter. The browser sends the page, app version, platform, window size and selected model. The server validates each field on its own, drops any it cannot accept, and reads the user agent from the request itself rather than from the browser's payload. The page keeps the route only: the query string and hash are dropped, and any long opaque path segment (a reset link or signed URL token) is replaced with `:redacted`. The context is diagnostic only and never used for authorization. Reporters can read it on their own reports, admins on all reports, and it appears in the admin CSV export. Reports from before this was captured have no context.
+
+| Data        | Storage                                                           | Lifetime                      | Purpose                               |
+| ----------- | ----------------------------------------------------------------- | ----------------------------- | ------------------------------------- |
+| Page        | `clientContext.path`, route only, first 200 characters            | Lives with the report; no TTL | Reproduce the report on the same page |
+| App version | `clientContext.appVersion`                                        | Lives with the report; no TTL | Tie the report to a release           |
+| Platform    | `clientContext.platform`: `web` (also accepts `desktop`, `ios`)   | Lives with the report; no TTL | Triage by app surface                 |
+| Window size | `clientContext.viewport`: width and height in pixels              | Lives with the report; no TTL | Reproduce layout issues               |
+| Model       | `clientContext.model`: the model selected in the client           | Lives with the report; no TTL | Reproduce model-specific issues       |
+| User agent  | `clientContext.userAgent`, read server-side, first 300 characters | Lives with the report; no TTL | Identify the browser and OS           |
 
 ## Chat turn timing
 
@@ -591,6 +621,28 @@ message. You use these records to identify broken model references and review
 lifecycle changes. Metrics follow CloudWatch retention, and logs follow the
 deployment's configured log retention. This operational monitoring does not send
 product usage events to third-party analytics services.
+
+## API request and web-fetch diagnostics
+
+Outside development mode, `req-timing` records request duration, database-connect
+duration, whether the container is cold, response status, whether headers were
+sent, and whether the response ended before completion. It includes `userId`
+when the request has a user. Treat these records as account-associated operational
+data. A status is only a sent response status when `headersSent` is true.
+
+After input validation, the `web-fetch` API route records the target hostname and
+an outcome of `ok`, `refused`, or `error`. The target's user information, port,
+path, query, and fragment are excluded. Validation failures emit no `web-fetch`
+line, and insufficient credits count as `error`. These lines inherit the request
+logger's request id, method, API route path, deployment stage, client IP, and
+trace id when present; the API route path is distinct from the fetched URL.
+
+You use these logs to diagnose request latency, response failures, and fetch
+outcomes. They are operational logs rather than consent-gated product analytics
+events. Hosted API logs go to CloudWatch with one-week retention configured by
+the deployment. Self-hosted logs go to the runtime's console output; you control
+their collection and retention. These log additions do not send events to
+third-party analytics services.
 
 ## Credit hold monitoring
 

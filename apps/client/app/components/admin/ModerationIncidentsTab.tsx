@@ -12,6 +12,7 @@ import {
   relativeTime,
   type DataColumn,
 } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import ModerationIncidentDetail from './ModerationIncidentDetail';
 import { REVIEW_STATUS_LABELS, formatLabel, surfaceLabel } from './moderationIncidentLabels';
 import {
@@ -120,7 +121,7 @@ export const ModerationIncidentsTab: React.FC = () => {
 
   return (
     <Stack
-      spacing={2}
+      spacing={ADMIN_REGION_GAP}
       sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', borderRadius: 'md' }}
       data-testid="admin-moderation-incidents-tab"
     >

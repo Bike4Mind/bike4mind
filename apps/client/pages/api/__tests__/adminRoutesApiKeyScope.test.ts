@@ -103,7 +103,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: () => ({ can: () => true }) }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn().mockResolvedValue({ administeredOrgIds: [] }),
 }));
 vi.mock('@bike4mind/server-utils/utils/generatedImageAccess', () => ({
@@ -213,7 +213,7 @@ describe.each(routes)('$name with an admin-owned caller', ({ handler, method }) 
 describe('auth/mfa/force-reset with an admin-owned caller', () => {
   it('refuses an API key without the admin scope', async () => {
     keyWith([ApiKeyScope.AI_CHAT]);
-    expect((await call(forceMfaReset, 'POST', 'key'))._getStatusCode()).toBe(403);
+    await expect(call(forceMfaReset, 'POST', 'key')).rejects.toBeInstanceOf(ForbiddenError);
   });
 });
 

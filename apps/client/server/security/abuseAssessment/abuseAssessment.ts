@@ -12,7 +12,7 @@
  * - A provider failure is stored as `unknown` with a diagnostic code, never as a judgment.
  * - Advisory only: nothing here writes to a user, an API key, credits, riskScore or reviewState. The
  *   sweep hands each judgment to an injected `afterAssessment` hook; automated containment
- *   (../autoContainment) is the one that may act on it.
+ *   (apps/workers/src/security/autoContainment) is the one that may act on it.
  */
 
 import {
@@ -67,8 +67,8 @@ import {
   evidenceHash,
   rolloutBucket,
   type AssessedAccountSource,
-} from './featureSummary';
-import { collectRequestActivity } from './requestActivity';
+} from '@bike4mind/server-utils/security/abuseAssessment/featureSummary';
+import { collectRequestActivity } from '@bike4mind/server-utils/security/abuseAssessment/requestActivity';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Namespaces this feature's budget, call cap and concurrency in the shared platform policy.
@@ -107,6 +107,11 @@ export const ABUSE_ASSESSMENT_QUESTION: DecisionQuestion = {
     'scope refusals and other API surfaces are absent. Zero recorded admin requests or refusals does not',
     "prove none were attempted. A successful identity check reads the caller's own account and is not",
     'an admin request or proof of abuse. Failed request evidence is unknown. Server errors can be platform faults.',
+    'An apiProbe detection is different: it scores one account probing the API from the server log, browser',
+    'sessions included, so it needs no coordination. Its signals (refused fetch targets, refused ingest tokens,',
+    'failed webhook signatures, denied admin routes, invalid-id lookups, broad 401/403/404s) are deliberate',
+    'attempts, not routine use; several of them on one account is abuse, while a few denials or 404s alone',
+    'can be a stale tab or an outdated client.',
   ].join(' '),
   choices: [
     { value: 'abuse', description: 'Several independent signals point to coordinated abuse.' },

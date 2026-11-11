@@ -137,6 +137,11 @@ const api: DesktopApi = {
   account: {
     getCredits: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetCredits),
     getProfile: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetProfile),
+    getBilling: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetBilling),
+    subscribePlan: priceId => ipcRenderer.invoke(IPC_CHANNELS.accountSubscribePlan, priceId),
+    purchaseCredits: (packageId, acceptedTerms) =>
+      ipcRenderer.invoke(IPC_CHANNELS.accountPurchaseCredits, packageId, acceptedTerms),
+    sendFeedback: (content: string) => ipcRenderer.invoke(IPC_CHANNELS.accountSendFeedback, content),
   },
   usage: {
     getHistory: (window: UsageWindowId, force?: boolean) =>
@@ -204,6 +209,7 @@ const api: DesktopApi = {
     setSessionArchived: (sessionId: string, archived: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
     exportSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatExportSession, sessionId),
+    exportLocalData: () => ipcRenderer.invoke(IPC_CHANNELS.chatExportLocalData),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
     createSession: (request?: CreateSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession, request),
     createCodeSession: (request: CreateCodeSessionRequest) =>
@@ -484,6 +490,7 @@ const api: DesktopApi = {
     setWatchFolder: (clear: boolean) => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSetWatchFolder, clear),
     setWebSettings: patch => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSetWebSettings, patch),
     syncWeb: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSyncWeb),
+    dismissHint: id => ipcRenderer.invoke(IPC_CHANNELS.claudeImportDismissHint, id),
     remove: kind => ipcRenderer.invoke(IPC_CHANNELS.claudeImportRemove, kind),
     onStateChanged: listener => {
       const handler = (_event: unknown, state: ClaudeImportState) => listener(state);

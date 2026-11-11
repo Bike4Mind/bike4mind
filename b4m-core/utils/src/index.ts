@@ -80,7 +80,10 @@ export * from './user';
 export * from './pricing';
 export * from './functionQueueRunner';
 export * from './fabfile';
+export * from './emailToken';
 export * from './signedUrlExpiry';
+export * from './signedUrlWindow';
+export * from './fileContentToken';
 export * from './office/officeEdit';
 export * from './artifactParser';
 // NOT barrel-exported on purpose: `artifactElision` is reached only via the

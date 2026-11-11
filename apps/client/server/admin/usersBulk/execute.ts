@@ -8,8 +8,8 @@ import {
   type AdminUsersBulkExecuteRequest,
   type AdminUsersBulkResult,
   blocksEmailDomains,
-} from '@client/app/utils/adminUsersBulk';
-import type { AccountSubscriptionCancellation } from '@server/billing/cancelAccountSubscriptions';
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
+import type { AccountSubscriptionCancellation } from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 import { emailDomainsOf } from './emailDomains';
 import {
   cohortHashOf,
@@ -76,6 +76,8 @@ export type ExecuteActor = {
   id: string;
   /** The admin plus, under impersonation, the impersonated account: never acted on. */
   selfIds: string[];
+  /** Only a full admin may act on accounts with delegated admin access; omitted means it may not. */
+  fullAdmin?: boolean;
   /** Balances used by the approval gate for a direct set action. */
   creditBalances?: Readonly<Record<string, number>>;
 };
@@ -459,7 +461,9 @@ export async function confirmedCohort(
   deps: ResolveDeps,
   at: Date
 ): Promise<BulkUser[]> {
-  const cohort = await resolveAdminUsersBulk(request.target, actor.selfIds, deps, at);
+  const cohort = await resolveAdminUsersBulk(request.target, actor.selfIds, deps, at, {
+    actorIsFullAdmin: actor.fullAdmin === true,
+  });
   if (cohort.overCap) {
     throw new BadRequestError(
       `A bulk action can act on at most ${ADMIN_USERS_BULK_MAX} users. Narrow the selection and try again.`

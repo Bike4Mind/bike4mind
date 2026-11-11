@@ -4,6 +4,8 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { AuditFilterBar, dateInputToIso, isoToDateInput } from './AuditFilterBar';
 
+const user = vi.hoisted(() => ({ current: { isAdmin: true } as { isAdmin: boolean; adminPermissions?: string[] } }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
 vi.mock('@client/app/hooks/data/adminAuditLog', () => ({ downloadAuditLogCsv: vi.fn() }));
 vi.mock('@client/app/contexts/SnackbarContext', () => ({ useSnackbar: () => ({ showSnackbar: vi.fn() }) }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
@@ -73,5 +75,47 @@ describe('date range conversion', () => {
     expect(isoToDateInput(dateInputToIso('2026-10-01', 'end'))).toBe('2026-10-01');
     expect(isoToDateInput(undefined)).toBe('');
     expect(isoToDateInput('not-a-date')).toBe('');
+  });
+});
+
+describe('AuditFilterBar account filters', () => {
+  beforeEach(() => {
+    user.current = { isAdmin: true };
+  });
+
+  it('offers the user and organization lookups to a full admin', () => {
+    render(<AuditFilterBar filters={{ targetKind: 'user' }} onChange={vi.fn()} onClear={vi.fn()} />, {
+      wrapper: TestWrapper,
+    });
+    expect(screen.getByTestId('mock-user-selector-Actor')).toBeInTheDocument();
+    expect(screen.getByTestId('mock-user-selector-Target user')).toBeInTheDocument();
+  });
+
+  it('clears the delegate actor input when the filters are cleared', () => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read'] };
+    const onChange = vi.fn();
+    const onClear = vi.fn();
+    const { rerender } = render(
+      <AuditFilterBar filters={{ actorUserId: 'abc' }} onChange={onChange} onClear={onClear} />,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.getByTestId('audit-filter-actor-id')).toHaveValue('abc');
+
+    rerender(<AuditFilterBar filters={{}} onChange={onChange} onClear={onClear} />);
+    expect(screen.getByTestId('audit-filter-actor-id')).toHaveValue('');
+  });
+
+  it('gives a delegate id inputs, since the lookups list only full admins results', () => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read'] };
+    const onChange = vi.fn();
+    render(<AuditFilterBar filters={{ targetKind: 'organization' }} onChange={onChange} onClear={vi.fn()} />, {
+      wrapper: TestWrapper,
+    });
+    expect(screen.queryByTestId('mock-user-selector-Actor')).toBeNull();
+    const actor = screen.getByTestId('audit-filter-actor-id');
+    fireEvent.change(actor, { target: { value: ' 0123456789abcdef01234567 ' } });
+    fireEvent.blur(actor);
+    expect(onChange).toHaveBeenCalledWith({ actorUserId: '0123456789abcdef01234567' });
+    expect(screen.getByTestId('audit-filter-target-id')).toBeInTheDocument();
   });
 });

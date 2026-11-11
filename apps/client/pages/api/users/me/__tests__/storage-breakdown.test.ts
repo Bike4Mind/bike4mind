@@ -36,7 +36,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { name: 'fabFiles' },
   dataLakeRepository: { name: 'dataLakes' },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: async (req: { user: { id: string } }) => ({ userId: req.user.id, isAdmin: false }),
 }));
 vi.mock('@bike4mind/services', () => ({

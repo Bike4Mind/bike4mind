@@ -8,6 +8,7 @@ import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
+import type { SuspensionReasonCategory } from '../../accountSuspensionCategories';
 import type { SignupRiskSignal } from '../../schemas/settings';
 import type { SignupRiskAutoApprovalPolicy } from '../../schemas/signupRiskReview';
 import type { RiskEvidenceRecord, RiskEvidenceSummary, RiskEvidenceTrigger } from '../../schemas/riskEvidence';
@@ -315,6 +316,7 @@ export const USER_RISK_SIGNAL_TYPES = [
   'signup_token_missing',
   'signup_token_invalid',
   'signup_token_expired',
+  'signup_token_reused',
 ] as const;
 export type UserRiskSignalType = (typeof USER_RISK_SIGNAL_TYPES)[number];
 
@@ -452,6 +454,8 @@ export interface IUser extends ICreditHolder {
   signupGrantHeldAt?: Date | null;
   level: UserLevelType;
   isBanned: boolean;
+  /** Why the account is suspended, as told to the user; null when not suspended or suspended without one. */
+  suspensionReasonCategory?: SuspensionReasonCategory | null;
   isModerated: boolean;
   /** Admin override that trusts the account for personal API keys (userApiKeyService/trust.ts). Absent on legacy docs. */
   apiKeyTrustApproved?: boolean;
@@ -551,6 +555,9 @@ export interface IUser extends ICreditHolder {
   aupAcceptedAt?: Date | null;
   /** True when the user attested to being 18 or older. No DOB is collected or stored. */
   ageAttestedAdult?: boolean | null;
+  /** Terms version (`CURRENT_POLICY_VERSION`) accepted on Stripe Checkout's consent checkbox, and when. */
+  checkoutTermsAcceptedVersion?: string | null;
+  checkoutTermsAcceptedAt?: Date | null;
 
   // email verification
   emailVerified: boolean;
@@ -930,6 +937,13 @@ export interface IUserAcquisition {
   lastTouch?: IUserAcquisitionTouch;
   /** Absent for a signup that followed no verified hop. */
   verifiedTouch?: IUserVerifiedTouch;
+  /**
+   * The product of the OAuth client the account was created to sign in to (apps/client
+   * server/analytics/oauthSignupCredit.ts): `source` is the client's Overwatch product, `medium`
+   * is `oauth` and `content` the client_id. Written once, with consent, by the server that issued
+   * the authorization code, so the browser never names it.
+   */
+  oauthTouch?: IUserAcquisitionTouch;
   /** How the account was created (`otc`, `google`, `github`, ...). */
   signupMethod: string;
   capturedAt: Date;
@@ -1037,6 +1051,14 @@ export interface IUserRepository
    * (now or from an earlier attempt), false when another account already does.
    */
   claimFreeCreditGrant: (userId: string) => Promise<boolean>;
+  /**
+   * Reapplies a reversed grant release's saved fields only while signupGrant.creditsReleased still equals
+   * `creditsReleased` (or signupGrant is absent when null). False when nothing matched.
+   */
+  restoreReleasedGrantState: (
+    userId: string,
+    input: { creditsReleased: number | null; set: Partial<IUserDocument>; unset: (keyof IUserDocument)[] }
+  ) => Promise<boolean>;
   /** Sets signupGrant.inviteBonusPaid only where it is unset; false when another write set it first. */
   markInviteBonusPaid: (userId: string, credits: number) => Promise<boolean>;
   /**
@@ -1132,8 +1154,8 @@ export interface IUserRepository
   findRiskScoringCandidateIds: (since: Date, options: { afterId?: string; limit: number }) => Promise<string[]>;
   /** Unbanned users whose risk review is pending, highest score first, at most `limit`. */
   findPendingRiskReviews: (limit: number) => Promise<IUserDocument[]>;
-  /** Count of the users findPendingRiskReviews would return, without the limit. */
-  countPendingRiskReviews: () => Promise<number>;
+  /** Count of the users findPendingRiskReviews would return; `options.limit` stops counting there. */
+  countPendingRiskReviews: (options?: { limit?: number }) => Promise<number>;
   /**
    * Move a user's review from `from` to `to`, only if it is still `from`; false when it was not
    * (already decided or no score). Used for admin approve and its undo; clears riskReviewAutoApproval,

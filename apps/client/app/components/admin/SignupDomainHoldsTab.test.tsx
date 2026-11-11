@@ -2,8 +2,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useUser } from '@client/app/contexts/UserContext';
 import type { SignupDomainReview } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCounts';
 import SignupDomainHoldsTab from './SignupDomainHoldsTab';
 
 const { getMock, postMock, router } = vi.hoisted(() => {
@@ -105,6 +107,7 @@ const listParams = (overrides: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => {
+  useUser.setState({ currentUser: { id: 'admin-1', isAdmin: true } as never });
   router.set({});
   getMock.mockReset();
   postMock.mockReset();
@@ -207,6 +210,79 @@ describe('SignupDomainHoldsTab', () => {
       'Advisory assessment failed (provider error, attempt 2)'
     );
   });
+  it('marks a hold the advisory assessment released as auto-released', async () => {
+    getMock.mockResolvedValue({
+      data: {
+        data: [
+          {
+            ...reviews[0],
+            status: 'released',
+            reason: 'young-domain (<30 days)',
+            autoDecision: { policy: 'advisory-decision', decidedAt: '2026-01-02T00:00:00.000Z' },
+          },
+        ],
+        total: 1,
+      },
+    });
+    renderTab();
+    expect(await screen.findByTestId(`signup-domain-auto-decision-${reviews[0].domain}`)).toHaveTextContent(
+      'Auto-released by the advisory assessment'
+    );
+  });
+  it('lets an admin confirm or take over an auto-released hold through the explicit Release dialog', async () => {
+    getMock.mockResolvedValue({
+      data: {
+        data: [
+          {
+            ...reviews[0],
+            status: 'released',
+            autoDecision: { policy: 'advisory-decision', decidedAt: '2026-01-02T00:00:00.000Z' },
+          },
+        ],
+        total: 1,
+      },
+    });
+    postMock.mockResolvedValue({ data: { status: 'released', creditsReleased: 0, remaining: 0, nextCursor: null } });
+    renderTab();
+    await openMenu('alpha.test');
+    expectEnabledItem('signup-domain-confirm-alpha.test');
+    expect(screen.getByTestId('signup-domain-release-alpha.test')).toHaveTextContent('Release hold');
+    fireEvent.click(screen.getByTestId('signup-domain-release-alpha.test'));
+    await confirmDialog();
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith(endpoint, {
+        domain: 'alpha.test',
+        action: 'release',
+        overrideAutoDecision: true,
+      })
+    );
+  });
+  it('retries an auto-released hold payout in one click without taking it over', async () => {
+    getMock.mockResolvedValue({
+      data: {
+        data: [
+          {
+            ...reviews[0],
+            status: 'released',
+            autoDecision: { policy: 'advisory-decision', decidedAt: '2026-01-02T00:00:00.000Z' },
+          },
+        ],
+        total: 1,
+      },
+    });
+    postMock.mockResolvedValue({ data: { status: 'released', creditsReleased: 25, remaining: 0, nextCursor: null } });
+    renderTab();
+    await openMenu('alpha.test');
+    fireEvent.click(screen.getByTestId('signup-domain-retry-alpha.test'));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith(endpoint, { domain: 'alpha.test', action: 'release' }));
+    expect(screen.queryByTestId('signup-domain-decision-dialog')).not.toBeInTheDocument();
+  });
+  it('offers no auto-release retry on a pending hold', async () => {
+    renderTab();
+    await openMenu('alpha.test');
+    expect(screen.getByTestId('signup-domain-release-alpha.test')).toBeInTheDocument();
+    expect(screen.queryByTestId('signup-domain-retry-alpha.test')).not.toBeInTheDocument();
+  });
   it('uses server pagination without a second local pager', async () => {
     renderTab();
     await openMenu('alpha.test');
@@ -268,6 +344,7 @@ describe('SignupDomainHoldsTab', () => {
       domain: 'alpha.test',
       action: 'release',
       afterUserId: undefined,
+      overrideAutoDecision: true,
     });
   });
 
@@ -302,7 +379,9 @@ describe('SignupDomainHoldsTab', () => {
   it('explains why Confirm hold is unavailable on a settled hold', async () => {
     renderTab();
     await openMenu('gamma.test');
-    expect(screen.getByTestId('signup-domain-confirm-hint-gamma.test')).toHaveTextContent('Only pending holds');
+    expect(screen.getByTestId('signup-domain-confirm-hint-gamma.test')).toHaveTextContent(
+      'Only pending or auto-released holds'
+    );
   });
 
   it('refreshes pending exposure when a domain release fails after possible payouts', async () => {
@@ -339,6 +418,7 @@ describe('SignupDomainHoldsTab', () => {
         domain: 'alpha.test',
         action: 'release',
         afterUserId: 'alpha-cursor',
+        overrideAutoDecision: true,
       })
     );
   });
@@ -403,7 +483,10 @@ describe('SignupDomainHoldsTab', () => {
       },
     });
     renderTab();
-    expect(await screen.findByTestId('signup-domain-aged-alpha.test')).toHaveTextContent('Domain now aged');
+    expect(await screen.findByTestId('signup-domain-aged-alpha.test')).toHaveTextContent(
+      'Domain now agedPast the young-domain threshold (registered'
+    );
+    expect(screen.getByTestId('signup-domain-aged-alpha.test')).not.toHaveTextContent('Release');
     expect(screen.queryByTestId('signup-domain-aged-beta.test')).not.toBeInTheDocument();
     expect(screen.queryByTestId('signup-domain-aged-delta.test')).not.toBeInTheDocument();
   });
@@ -414,5 +497,117 @@ describe('SignupDomainHoldsTab', () => {
     const help = await screen.findByRole('tooltip');
     expect(help).toHaveTextContent('Confirm and Release only change free signup credits, never the account itself.');
     expect(help).toHaveTextContent('exempts the domain from holds permanently; it cannot be re-blocked');
+  });
+
+  it('hides the aged caption when the latest assessment judged abuse', async () => {
+    getMock.mockResolvedValue({
+      data: {
+        data: [
+          {
+            ...reviews[0],
+            reason: 'young-domain (<30 days)',
+            domainAgedAt: new Date('2026-01-05'),
+            assessment: {
+              outcome: 'judged',
+              policyVersion: 1,
+              judgment: 'abuse',
+              confidence: 0.7,
+              model: 'gpt-6-luna',
+              assessedAt: '2026-01-02T00:00:00.000Z',
+            },
+          },
+        ],
+        total: 1,
+      },
+    });
+    renderTab();
+    await screen.findByTestId('signup-domain-assessment-alpha.test');
+    expect(screen.queryByTestId('signup-domain-aged-alpha.test')).not.toBeInTheDocument();
+  });
+
+  it('shows how long each hold has waited and flags pending holds older than 24 hours', async () => {
+    getMock.mockResolvedValue({
+      data: {
+        data: [
+          reviews[0],
+          reviews[1],
+          {
+            ...reviews[2],
+            domain: 'fresh.test',
+            status: 'held_pending_review',
+            triggeredAt: new Date(Date.now() - 3_600_000),
+          },
+        ],
+        total: 3,
+      },
+    });
+    renderTab();
+    expect(await screen.findByTestId('signup-domain-stale-alpha.test')).toHaveTextContent('Waiting over 24h');
+    expect(screen.getByTestId('signup-domain-held-at-alpha.test')).toHaveTextContent(/^Held .+ ago$/);
+    expect(screen.queryByTestId('signup-domain-stale-beta.test')).not.toBeInTheDocument();
+    expect(screen.getByTestId('signup-domain-held-at-fresh.test')).toHaveTextContent('Held 1 hour ago');
+    expect(screen.queryByTestId('signup-domain-stale-fresh.test')).not.toBeInTheDocument();
+  });
+
+  it('links each domain to its site in a new tab', async () => {
+    renderTab();
+    const link = await screen.findByTestId('signup-domain-open-alpha.test');
+    expect(link).toHaveAttribute('href', 'https://alpha.test');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer nofollow');
+  });
+
+  it('sends nothing when the release dialog is cancelled', async () => {
+    renderTab();
+    await openMenu('alpha.test');
+    fireEvent.click(screen.getByTestId('signup-domain-release-alpha.test'));
+    expect(await screen.findByTestId('signup-domain-decision-dialog')).toHaveTextContent(
+      'exempt the domain from holds'
+    );
+    fireEvent.click(screen.getByTestId('signup-domain-decision-dialog-cancel-btn'));
+    await waitFor(() => expect(screen.queryByTestId('signup-domain-decision-dialog')).not.toBeInTheDocument());
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
+  it('confirms a hold only after the dialog', async () => {
+    postMock.mockResolvedValue({ data: { status: 'blocked', creditsReleased: 0, remaining: 0, nextCursor: null } });
+    renderTab();
+    await decideThroughDialog('alpha.test', 'confirm');
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith(endpoint, { domain: 'alpha.test', action: 'confirm' }));
+  });
+
+  it('refreshes the sidebar action counts after a decision', async () => {
+    postMock.mockResolvedValue({ data: { status: 'blocked', creditsReleased: 0, remaining: 0, nextCursor: null } });
+    const invalidate = renderTab();
+    await decideThroughDialog('alpha.test', 'confirm');
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: adminActionCountsQueryKey }));
+  });
+
+  it('drops the retry guidance once a release has nothing left', async () => {
+    postMock.mockResolvedValue({ data: { status: 'released', creditsReleased: 1000, remaining: 0, nextCursor: null } });
+    renderTab();
+    await decideThroughDialog('alpha.test', 'release');
+    expect(await screen.findByTestId('signup-domain-holds-release-result')).toHaveTextContent(
+      /^Released 1,000 credits\.$/
+    );
+  });
+
+  it('keeps the retry guidance while grants remain', async () => {
+    postMock.mockResolvedValue({
+      data: { status: 'released', creditsReleased: 5, remaining: 2, nextCursor: 'cursor' },
+    });
+    renderTab();
+    await decideThroughDialog('alpha.test', 'release');
+    expect(await screen.findByTestId('signup-domain-holds-release-result')).toHaveTextContent(
+      'Released 5 credits. 2 pending grants remain'
+    );
+  });
+
+  it('disables Confirm and Release for a delegate without the moderation and credit permissions', async () => {
+    useUser.setState({ currentUser: { id: 'd-1', isAdmin: false, adminPermissions: ['support:read'] } as never });
+    renderTab();
+    await openMenu('alpha.test');
+    expectDisabledItem('signup-domain-confirm-alpha.test');
+    expectDisabledItem('signup-domain-release-alpha.test');
   });
 });

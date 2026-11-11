@@ -46,6 +46,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'github-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueueDLQ',
   'github-lake-revoke': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueueDLQ',
   'publish-thumbnail': 'https://sqs.us-east-2.amazonaws.com/123456789/publishThumbnailQueueDLQ',
+  'generated-media-purge': 'https://sqs.us-east-2.amazonaws.com/123456789/generatedMediaPurgeQueueDLQ',
 }));
 
 const mockSourceQueueUrls = vi.hoisted(() => ({
@@ -91,6 +92,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   githubLakeIngestQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueue',
   githubLakeRevokeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueue',
   publishThumbnailQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/publishThumbnailQueue',
+  generatedMediaPurgeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generatedMediaPurgeQueue',
 }));
 
 // Mock SST Resource bindings: both DLQ and source queue URLs via Linkables
@@ -101,13 +103,20 @@ vi.mock('sst', () => ({
   },
 }));
 
-import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './dlqRegistry';
+import {
+  coreDlqDescriptors,
+  getDlqRegistry,
+  getDlqByLabel,
+  getSourceQueueUrl,
+  getDlqUrl,
+  missingQueueHelp,
+} from './dlqRegistry';
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
     it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(42);
+      expect(registry).toHaveLength(43);
     });
 
     it('each entry has required fields', () => {
@@ -139,6 +148,27 @@ describe('dlqRegistry', () => {
         expect(typeof sourceUrl).toBe('string');
         expect(sourceUrl).toContain('sqs.us-east-2.amazonaws.com');
       }
+    });
+
+    it('classifies replay safety from what the consumer does', () => {
+      expect(getDlqByLabel('fab-file-chunk')?.replay).toBe('safe');
+      expect(getDlqByLabel('liveops-triage')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('secops-triage')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('fab-file-vectorize')?.replay).toBe('side-effects');
+      expect(getDlqByLabel('webhook-delivery')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('account-data-export')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('agent-proactive-message')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('email-batch')?.replay).toBe('side-effects');
+      expect(getDlqByLabel('email-job')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('drive-disconnect-purge')?.replay).toBe('safe');
+      expect(getDlqByLabel('github-webhook')?.replay).toBe('unsafe');
+    });
+
+    it('every core entry has description, replay, replayNote, owner', () => {
+      const incomplete = coreDlqDescriptors()
+        .map(entry => ({ label: entry.label, missing: missingQueueHelp(entry) }))
+        .filter(({ missing }) => missing.length > 0);
+      expect(incomplete).toEqual([]);
     });
 
     it('includes tavern-heartbeat entry', () => {
@@ -184,6 +214,34 @@ describe('dlqRegistry', () => {
       // @ts-expect-error testing runtime behavior with invalid name
       expect(() => getSourceQueueUrl('nonExistentQueue')).toThrow('Missing source queue URL for: nonExistentQueue');
     });
+  });
+});
+
+describe('missingQueueHelp', () => {
+  const valid = { description: 'Does a thing', replay: 'safe', replayNote: 'Upserts by id', owner: 'Platform ops' };
+
+  it('returns nothing for a complete entry', () => {
+    expect(missingQueueHelp(valid)).toEqual([]);
+  });
+
+  it('flags empty and whitespace-only strings', () => {
+    expect(missingQueueHelp({ ...valid, description: '' })).toEqual(['description']);
+    expect(missingQueueHelp({ ...valid, owner: '   ' })).toEqual(['owner']);
+  });
+
+  it('flags a missing key', () => {
+    expect(missingQueueHelp({ description: valid.description, replay: valid.replay, owner: valid.owner })).toEqual([
+      'replayNote',
+    ]);
+  });
+
+  it('flags a replay value outside the enum', () => {
+    expect(missingQueueHelp({ ...valid, replay: 'maybe' })).toEqual(['replay']);
+    expect(missingQueueHelp({ ...valid, replay: undefined })).toEqual(['replay']);
+  });
+
+  it('flags every field of an entry with no help', () => {
+    expect(missingQueueHelp({})).toEqual(['description', 'replayNote', 'owner', 'replay']);
   });
 });
 

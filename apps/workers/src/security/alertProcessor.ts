@@ -8,6 +8,7 @@ import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 
 interface IUserData {
+  id: string;
   username: string;
   email: string;
 }
@@ -114,16 +115,16 @@ export const formatSecurityAlert = (pattern: ISuspiciousPattern, username: strin
 /**
  * Get user data (username and email) from usernames
  */
-const getUserDataFromUsernames = async (usernames: string[]): Promise<IUserData[]> => {
+const getUserDataFromUsernames = async (usernames: string[], logger: Logger): Promise<IUserData[]> => {
   try {
-    console.log(`Fetching user data for usernames: ${JSON.stringify(usernames)}`);
+    logger.info('Fetching user data for suspicious login usernames', { usernameCount: usernames.length });
 
     const users = await userRepository.findAllByEmailsOrUsernames([], usernames);
-    console.log(`Found ${users.length} users via findAllByEmailsOrUsernames`);
+    logger.info('Looked up users in bulk', { userCount: users.length });
 
     // If no users found, try individual lookups
     if (users.length === 0) {
-      console.log('No users found via findAllByEmailsOrUsernames, trying individual lookups...');
+      logger.info('No users found in bulk lookup, trying individual lookups', { usernameCount: usernames.length });
       const individualUsers = [];
 
       for (const username of usernames) {
@@ -139,25 +140,27 @@ const getUserDataFromUsernames = async (usernames: string[]): Promise<IUserData[
 
           if (user) {
             individualUsers.push(user);
-            console.log(`Found user: ${user.username} (${user.email})`);
+            logger.info('Found user by individual lookup', { userId: String(user.id) });
           }
         } catch (error) {
-          console.log(`Failed to find user for identifier: ${username}`, error);
+          logger.warn('Failed to find user by individual lookup', { error });
         }
       }
 
       return individualUsers.map(user => ({
+        id: String(user.id),
         username: user.username,
         email: user.email || '',
       }));
     }
 
     return users.map(user => ({
+      id: String(user.id),
       username: user.username,
       email: user.email || '',
     }));
   } catch (error) {
-    console.error('Error fetching user data:', error);
+    logger.error('Error fetching user data', { error });
     return [];
   }
 };
@@ -165,7 +168,7 @@ const getUserDataFromUsernames = async (usernames: string[]): Promise<IUserData[
 /**
  * Get suspicious patterns for alerts (last 5 minutes)
  */
-const getSuspiciousPatternsForAlerts = async (): Promise<ISuspiciousPattern[]> => {
+const getSuspiciousPatternsForAlerts = async (logger: Logger): Promise<ISuspiciousPattern[]> => {
   try {
     const since = new Date(Date.now() - 5 * 60 * 1000);
 
@@ -174,7 +177,7 @@ const getSuspiciousPatternsForAlerts = async (): Promise<ISuspiciousPattern[]> =
 
     return allPatterns;
   } catch (error) {
-    console.error('Error fetching suspicious patterns:', error);
+    logger.error('Error fetching suspicious patterns', { error });
     return [];
   }
 };
@@ -184,28 +187,31 @@ const getSuspiciousPatternsForAlerts = async (): Promise<ISuspiciousPattern[]> =
  * Triggered by CloudWatch Events schedule (every 5 minutes)
  */
 export const handler = async (event: unknown, context: Context) => {
+  const logger = new Logger().withMetadata(contextToLogs(context));
   try {
-    const logger = new Logger().withMetadata(contextToLogs(context));
     await connectDB(Resource.MONGODB_URI.value.replace('%STAGE%', Resource.App.stage), logger);
-    console.log('Security alert processor triggered:', JSON.stringify(event, null, 2));
+    const { id: eventId, time: eventTime } = (event ?? {}) as { id?: string; time?: string };
+    logger.info('Security alert processor triggered', { eventId, eventTime });
 
-    const suspiciousPatterns = await getSuspiciousPatternsForAlerts();
-    console.log(`Found ${suspiciousPatterns.length} suspicious patterns`);
+    const suspiciousPatterns = await getSuspiciousPatternsForAlerts(logger);
+    logger.info('Found suspicious patterns', { patternCount: suspiciousPatterns.length });
 
     let alertsSent = 0;
 
     for (const pattern of suspiciousPatterns) {
       const ipAddress = pattern.ip || (typeof pattern._id === 'object' ? pattern._id.ip : pattern._id) || 'Unknown IP';
-      console.log(
-        `Processing pattern: IP=${ipAddress}, Attempts=${pattern.attempts}, Usernames=${pattern.usernames.length}`
-      );
+      logger.info('Processing suspicious login pattern', {
+        ip: ipAddress,
+        attempts: pattern.attempts,
+        usernameCount: pattern.usernames.length,
+      });
 
-      const userData = await getUserDataFromUsernames(pattern.usernames);
-      console.log(`Found ${userData.length} users for pattern`);
+      const userData = await getUserDataFromUsernames(pattern.usernames, logger);
+      logger.info('Found users for pattern', { userCount: userData.length });
 
       for (const user of userData) {
         if (!user.email || !user.email.includes('@')) {
-          console.log(`Skipping user ${user.username} - invalid email: ${user.email}`);
+          logger.warn('Skipping user with invalid email', { userId: user.id });
           continue;
         }
 
@@ -219,20 +225,15 @@ export const handler = async (event: unknown, context: Context) => {
             body: alertMessage,
           });
 
-          console.log(`Alert sent to ${user.username} (${user.email})`);
+          logger.info('Security alert sent', { userId: user.id });
           alertsSent++;
         } catch (error) {
-          console.error(`Failed to send alert to ${user.username}:`, error);
-          logger.error('Failed to send security alert email', {
-            username: user.username,
-            email: user.email,
-            error: error instanceof Error ? error.message : String(error),
-          });
+          logger.error('Failed to send security alert email', { userId: user.id, error });
         }
       }
     }
 
-    console.log(`Security alert processing completed. ${alertsSent} alerts sent.`);
+    logger.info('Security alert processing completed', { alertsSent });
 
     return {
       statusCode: 200,
@@ -244,7 +245,7 @@ export const handler = async (event: unknown, context: Context) => {
       }),
     };
   } catch (error) {
-    console.error('Error in security alert processor:', error);
+    logger.error('Error in security alert processor', { error });
 
     return {
       statusCode: 500,

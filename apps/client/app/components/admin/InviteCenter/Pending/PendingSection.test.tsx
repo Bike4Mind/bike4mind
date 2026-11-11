@@ -43,6 +43,7 @@ const row = (overrides: Partial<AdminSignupGrantPendingRow> = {}): AdminSignupGr
   email: 'held@example.com',
   createdAt: '2026-11-01T00:00:00.000Z',
   source: 'default',
+  inviteSource: null,
   stage: 'signup',
   status: 'held',
   held: { reason: 'budget_exhausted', since: '2026-11-02T00:00:00.000Z', credits: 500 },
@@ -66,6 +67,8 @@ const listOf = (rows: AdminSignupGrantPendingRow[], extra: Record<string, unknow
 
 const SUMMARY: AdminSignupGrantPendingSummary = {
   exposure: { accountsWithRemaining: 7, totalRemaining: 12000, totalDripRemaining: 9000 },
+  activity: { days: 7, accounts: 4, remaining: 5000 },
+  drip: { day: '2026-11-06', committed: 600, accounts: 6 },
   trickle: { day: '2026-11-06', spentToday: 150, limit: 1000, missing: false },
   queue: { held: 3, oldestHeldAt: '2026-11-02T00:00:00.000Z' },
 };
@@ -87,8 +90,14 @@ describe('PendingSection', () => {
 
   it('shows the exposure header from the summary', () => {
     render(<PendingSection />, { wrapper: Wrapper });
-    const [accounts, drip, trickle, queue] = tiles();
+    const [accounts, drip, active, dueToday, trickle, queue] = tiles();
     expect(accounts).toContain('7');
+    expect(active).toContain('Active in last 7 days');
+    expect(active).toContain('4');
+    expect(active).toContain('5,000 left in their grants');
+    expect(dueToday).toContain('Drip due today (UTC)');
+    expect(dueToday).toContain('600');
+    expect(dueToday).toContain('Upper bound if all 6 are active; 850 left in the pool');
     expect(drip).toContain('9,000');
     expect(drip).toContain('12,000 left in all grants');
     expect(trickle).toContain('150 of 1,000');
@@ -97,13 +106,34 @@ describe('PendingSection', () => {
   });
 
   it('shows Unavailable, not zero, for a part whose read failed', () => {
-    mocks.summary = { data: { ...SUMMARY, trickle: null, exposure: null }, isError: false };
+    mocks.summary = {
+      data: { ...SUMMARY, trickle: null, exposure: null, activity: null, drip: null },
+      isError: false,
+    };
     render(<PendingSection />, { wrapper: Wrapper });
-    const [accounts, drip, trickle, queue] = tiles();
+    const [accounts, drip, active, dueToday, trickle, queue] = tiles();
     expect(accounts).toContain('Unavailable');
     expect(drip).toContain('Unavailable');
+    expect(active).toContain('Unavailable');
+    expect(dueToday).toContain('Unavailable');
+    expect(dueToday).not.toContain('left in the pool');
     expect(trickle).toContain('Unavailable');
     expect(queue).toContain('3');
+  });
+
+  it('states how far the drip upper bound runs past the pool', () => {
+    mocks.summary = { data: { ...SUMMARY, drip: { ...SUMMARY.drip!, committed: 1000 } }, isError: false };
+    render(<PendingSection />, { wrapper: Wrapper });
+    const [, , , dueToday] = tiles();
+    expect(dueToday).toContain('850 left in the pool (150 over)');
+  });
+
+  it('leaves the pool out of the drip tile when no trickle pool is set', () => {
+    mocks.summary = { data: { ...SUMMARY, trickle: { ...SUMMARY.trickle!, missing: true } }, isError: false };
+    render(<PendingSection />, { wrapper: Wrapper });
+    const [, , , dueToday] = tiles();
+    expect(dueToday).toContain('Upper bound if all 6 are active');
+    expect(dueToday).not.toContain('left in the pool');
   });
 
   it('renders each row with the remaining the payload carries', () => {
@@ -142,6 +172,7 @@ describe('PendingSection', () => {
       status: 'held',
       heldReason: undefined,
       source: undefined,
+      invite: undefined,
       sort: 'remaining',
     });
 
@@ -215,6 +246,33 @@ describe('PendingSection', () => {
     expect(screen.getByTestId('pending-bulk-dialog-stub')).toHaveAttribute('data-ids', 'a'.repeat(24));
   });
 
+  it('passes the invite filter to the list query, writes it to the URL and labels invited rows', () => {
+    const invited = row({ id: 'c'.repeat(24), inviteSource: 'organization' });
+    mocks.list = listOf([row(), invited]);
+    mocks.search = { pendingInvite: 'invited' };
+    render(<PendingSection />, { wrapper: Wrapper });
+    expect(mocks.listArgs.at(-1)).toMatchObject({ invite: 'invited' });
+    expect(screen.getByTestId(`pending-row-invite-${'c'.repeat(24)}`)).toHaveTextContent('Organization invite');
+    expect(screen.queryByTestId(`pending-row-invite-${'a'.repeat(24)}`)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('admin-filter-invite'));
+    fireEvent.click(screen.getByTestId('admin-filter-invite-uninvited'));
+    const { search } = mocks.navigate.mock.calls.at(-1)![0];
+    expect(search({ pendingInvite: 'invited' })).toMatchObject({ pendingInvite: 'uninvited' });
+  });
+
+  it('sizes the Source column for its chips rather than an equal share of the table', () => {
+    mocks.list = listOf([row({ inviteSource: 'organization' })]);
+    render(<PendingSection />, { wrapper: Wrapper });
+    expect(screen.getByRole('columnheader', { name: 'Source' })).toHaveStyle({ width: '11rem' });
+  });
+
+  it('ignores an unknown invite value in the URL', () => {
+    mocks.search = { pendingInvite: 'maybe' };
+    render(<PendingSection />, { wrapper: Wrapper });
+    expect(mocks.listArgs.at(-1)).toMatchObject({ invite: undefined });
+  });
+
   it('offers to clear filters when filters match nothing', () => {
     mocks.list = listOf([]);
     mocks.search = { pendingStatus: 'blocked' };
@@ -222,8 +280,9 @@ describe('PendingSection', () => {
     expect(screen.getByText('No accounts match these filters')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('pending-clear-filters-btn'));
     const { search } = mocks.navigate.mock.calls.at(-1)![0];
-    expect(search({ pendingStatus: 'blocked', pendingSort: 'remaining' })).toMatchObject({
+    expect(search({ pendingStatus: 'blocked', pendingInvite: 'invited', pendingSort: 'remaining' })).toMatchObject({
       pendingStatus: undefined,
+      pendingInvite: undefined,
       pendingSort: undefined,
     });
   });
@@ -270,7 +329,7 @@ describe('PendingSection', () => {
     expect(screen.queryByTestId('pending-bulk-release-btn')).not.toBeInTheDocument();
   });
 
-  it('shows Release to a full admin', () => {
+  it('shows Release to a viewer who can release', () => {
     render(<PendingSection />, { wrapper: Wrapper });
     selectFirstRow();
     expect(screen.getByTestId('pending-bulk-release-btn')).toBeInTheDocument();

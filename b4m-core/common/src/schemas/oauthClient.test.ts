@@ -123,6 +123,16 @@ describe('updateOAuthClientSchema', () => {
     expect(updateOAuthClientSchema.parse({ federatedIdp: null }).federatedIdp).toBeNull();
   });
 
+  it('accepts an Overwatch product id and null, and rejects one that is not a lower-case slug', () => {
+    expect(updateOAuthClientSchema.parse({ overwatchProductId: ' reading-app ' }).overwatchProductId).toBe(
+      'reading-app'
+    );
+    expect(updateOAuthClientSchema.parse({ overwatchProductId: null }).overwatchProductId).toBeNull();
+    for (const bad of ['', 'Reading-App', '-reading', 'reading app', 'a'.repeat(65)]) {
+      expect(updateOAuthClientSchema.safeParse({ overwatchProductId: bad }).success).toBe(false);
+    }
+  });
+
   it('rejects a non-https issuer in federatedIdp', () => {
     expect(
       updateOAuthClientSchema.safeParse({ federatedIdp: { ...trust, issuer: 'http://b4m.example.test' } }).success

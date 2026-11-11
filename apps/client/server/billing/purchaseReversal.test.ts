@@ -20,7 +20,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: mocks.sendToClient }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
-vi.mock('@server/integrations/slack/subscriptionLifecycle', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/subscriptionLifecycle', () => ({
   adminOwnerSlackRef: ({ ownerId }: { ownerId: string }) => `\`${ownerId}\``,
 }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://ws.example.com' } } }));

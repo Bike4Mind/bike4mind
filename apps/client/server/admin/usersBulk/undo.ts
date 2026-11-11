@@ -1,6 +1,6 @@
 import { ConflictError, ForbiddenError, HTTPError, type AuditChange } from '@bike4mind/common';
 import { userService } from '@bike4mind/services';
-import type { AdminUsersBulkUndoResult } from '@client/app/utils/adminUsersBulk';
+import type { AdminUsersBulkUndoResult } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import {
   EXECUTE_BUDGET_MS,
   UNDO_RECORD_GRACE_MS,
@@ -21,6 +21,8 @@ import type { BulkUser } from './resolve';
 
 export type UndoDeps = {
   db: UsersBulkDb;
+  /** Re-check the current target inside its transaction before reverting any field. */
+  authorizeTarget: (user: BulkUser) => void;
   store: Pick<UsersBulkStore, 'findByKey' | 'deleteByKeyAndReturn' | 'createOrUpdate' | 'readDedup' | 'casDeleteDedup'>;
   withTransaction: RunInTransaction;
   /** Strict: called inside the user's transaction. */
@@ -48,7 +50,12 @@ const parseRecord = (value: unknown): UndoRecord => {
 export type RevertDeps = Pick<UndoDeps, 'db' | 'store' | 'withTransaction' | 'audit'>;
 
 /** Reverts one user's snapshot inside its transaction and writes the strict `user.bulk.undone` entry. */
-async function revertUser(snapshot: UserUndoSnapshot, record: UndoRecord, deps: RevertDeps): Promise<void> {
+async function revertUser(
+  snapshot: UserUndoSnapshot,
+  record: UndoRecord,
+  deps: RevertDeps,
+  authorizeTarget?: (user: BulkUser) => void
+): Promise<void> {
   const { db, store } = deps;
   const { userId } = snapshot;
   // A newer batch that changed this user owns it: reverting ours would also revert part of theirs.
@@ -56,6 +63,7 @@ async function revertUser(snapshot: UserUndoSnapshot, record: UndoRecord, deps: 
   if (owner && owner.batchId !== record.batchId) throw new Error(SUPERSEDED_MESSAGE);
   const user = await db.findUser(userId);
   if (!user) throw new Error('User not found');
+  authorizeTarget?.(user);
   const changes: AuditChange[] = [];
   const details: Record<string, unknown> = { batchId: record.batchId, undoneAction: record.action };
   let creditTransactionId: string | undefined;
@@ -127,7 +135,9 @@ async function revertUser(snapshot: UserUndoSnapshot, record: UndoRecord, deps: 
 export async function undoAdminUsersBulk(
   batchId: string,
   adminId: string,
-  deps: UndoDeps
+  deps: UndoDeps,
+  /** Throws when the caller may no longer make the batch's own action; runs before the record is taken. */
+  authorize: (record: UndoRecord) => void = () => {}
 ): Promise<AdminUsersBulkUndoResult> {
   const clock = deps.now ?? (() => new Date());
   const now = clock();
@@ -136,6 +146,7 @@ export async function undoAdminUsersBulk(
   if (!found) throw new HTTPError(HTTP_GONE, EXPIRED_MESSAGE);
   const record = parseRecord(found.result);
   if (record.adminId !== adminId) throw new ForbiddenError('Only the admin who ran a bulk action can undo it.');
+  authorize(record);
   if (now.getTime() > new Date(record.undoExpiresAt).getTime()) throw new HTTPError(HTTP_GONE, EXPIRED_MESSAGE);
   if (!(await deps.store.deleteByKeyAndReturn(key))) throw new ConflictError('This bulk action was already undone.');
 
@@ -201,7 +212,7 @@ async function revertWithin(
   deps: UndoDeps
 ): Promise<{ snapshot: UserUndoSnapshot; error: string } | null> {
   try {
-    await deps.withTransaction(() => revertUser(snapshot, record, deps));
+    await deps.withTransaction(() => revertUser(snapshot, record, deps, deps.authorizeTarget));
     return null;
   } catch (error) {
     deps.logger?.error('Users bulk undo failed for user', { userId: snapshot.userId, error });

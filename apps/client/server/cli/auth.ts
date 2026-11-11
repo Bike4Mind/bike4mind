@@ -19,12 +19,13 @@ import {
   API_KEY_ACCESS_DENIED_MESSAGE,
   assertCliSessionAllowed,
   isApiKeyAccessAllowed,
-} from '@server/utils/apiKeyAccessGate';
+} from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { resolveUntrustedKeyLimits } from '@bike4mind/server-utils/utils/apiKeyTrust';
 import { z } from 'zod';
+import { refuseIfSuspendedOwner } from '@server/auth/suspendedApiKeyRefusal';
 import { Logger } from '@bike4mind/observability';
 
 /** `additionalInfo` of a rate-limit TooManyRequestsError; transports turn it into response headers. */
@@ -299,6 +300,8 @@ export async function verifyApiKey(
     });
 
     if (!validation.isValid || !validation.userId || !validation.keyId || !validation.scopes || !validation.rateLimit) {
+      // Same suspended-owner answer apiKeyAuth gives: suspension disables the owner's keys.
+      if (validation.reason === 'not_found') await refuseIfSuspendedOwner(apiKey, Logger.globalInstance);
       throw new UnauthorizedError(
         validation.reason ? `Invalid API key: ${validation.reason}` : 'Invalid or expired API key'
       );

@@ -149,6 +149,7 @@ export class LocalServerSupervisor {
         starting: null,
       };
       this.slots.set(record.id, slot);
+      if (handle.warning) this.deps.logger.warn(`MODEL SERVERS: ${handle.warning}`);
       const { unverifiedLaunches, ...fresh } = record;
       this.records.set(record.id, fresh);
       if (unverifiedLaunches) reset = true;
@@ -314,6 +315,7 @@ export class LocalServerSupervisor {
       startedAt: new Date().toISOString(),
       settings,
       ...(handle.apiKey ? { apiKey: handle.apiKey } : {}),
+      ...(handle.warning ? { warning: handle.warning } : {}),
     });
     await this.persist();
     return true;

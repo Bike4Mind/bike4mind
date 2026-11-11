@@ -5,8 +5,8 @@ import { ApiKeyScope } from '@bike4mind/common';
 // Captures the config so a test can assert requiredScopes: the scope gate lives in
 // apiKeyAuth (real middleware, not exercised here), so asserting the handler is
 // registered with it is the only guard available at this level.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'POST']?.(req, res),
@@ -121,13 +121,7 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
     // would skip baseApi's entire api-key chain (baseApi.ts's `if (resolvedOptions.auth)`)
     // and disable this gate while leaving requiredScopes untouched.
     const config = (handler as unknown as { _config?: unknown })._config;
-    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
-  });
-
-  it('rejects a non-admin', async () => {
-    const { run } = call({ isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
-    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'credits:adjust' } });
   });
 
   it('grants credits to the organization for an admin', async () => {
@@ -340,12 +334,6 @@ describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
     await expect(run()).rejects.toThrow();
     expect(mockAddCredits).not.toHaveBeenCalled();
   });
-
-  it('still rejects a non-admin on the refund path', async () => {
-    const { run } = call({ isAdmin: false, body: { ...body, kind: 'refund' } });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
-    expect(mockAddCredits).not.toHaveBeenCalled();
-  });
 });
 
 describe('POST /api/admin/organizations/[id]/top-up - approval gate', () => {
@@ -368,7 +356,7 @@ describe('POST /api/admin/organizations/[id]/top-up - approval gate', () => {
       expect.objectContaining({
         action: 'org.credits.top_up',
         requiredPermission: 'credits:adjust',
-        requiresFullAdmin: true,
+        requiresFullAdmin: false,
         params: {
           organizationId: 'org-1',
           credits: BODY.credits,

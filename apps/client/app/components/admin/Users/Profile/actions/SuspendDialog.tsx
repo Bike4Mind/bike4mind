@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Checkbox, Sheet, Typography } from '@mui/joy';
+import { isFullAdmin, type SuspensionReasonCategory } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import { ActionDialog, ADMIN_REASON_PRESETS, undoAdminReason, useUndoToast } from '../../../shared';
 import { formatCredits } from './creditAdjustment';
 import { useAdminUserUpdate } from './useAdminUserUpdate';
@@ -7,6 +9,7 @@ import { warnSubscriptionCancelFailures } from './warnSubscriptionCancelFailures
 import { BALANCE_REFRESH_FAILED, useRefreshedUser } from './useRefreshedUser';
 import type { ProfileDialogProps } from './profileActions';
 import { displayName } from '../userProfileModel';
+import { SUSPENSION_CATEGORY_REQUIRED, SuspensionCategoryField } from './SuspensionCategoryField';
 
 /**
  * Suspend (DESIGN_GUIDE.md section 4, "changes access"). Suspending signs the user out everywhere;
@@ -17,14 +20,19 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
   const { refreshing, failed: refreshFailed } = useRefreshedUser(user.id);
   const balance = user.currentCredits ?? 0;
   const [zeroCredits, setZeroCredits] = useState(false);
+  // The user update route's moderation branch takes no credit fields: only a full admin may zero them here.
+  const canZeroCredits = isFullAdmin(useUser().currentUser);
+  const [category, setCategory] = useState<SuspensionReasonCategory | null>(null);
   const update = useAdminUserUpdate(user.id);
   const showUndo = useUndoToast();
   const name = displayName(user);
 
   const handleConfirm = async (reason: string) => {
     const removed = zeroCredits && balance > 0 ? balance : 0;
+    if (!category) return;
     const response = await update({
       isBanned: true,
+      suspensionReasonCategory: category,
       statusChangeReason: reason,
       ...(removed > 0 && { currentCredits: 0, creditReason: reason }),
     });
@@ -37,6 +45,7 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
         update({
           isBanned: false,
           statusChangeReason: undoAdminReason(reason),
+          undoSuspension: true,
           ...(removed > 0 && { creditDelta: removed, creditReason: undoAdminReason(reason) }),
         }),
       onViewAudit: onAudit,
@@ -53,11 +62,14 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
       confirmLabel="Suspend account"
       tone="danger"
       // Suspending alone needs no balance; only the wipe and its refund do.
-      blockedReason={zeroCredits && refreshFailed ? BALANCE_REFRESH_FAILED : null}
+      blockedReason={
+        !category ? SUSPENSION_CATEGORY_REQUIRED : zeroCredits && refreshFailed ? BALANCE_REFRESH_FAILED : null
+      }
       pending={refreshing}
       onConfirm={handleConfirm}
       data-testid="suspend-dialog"
     >
+      <SuspensionCategoryField value={category} onChange={setCategory} testIdPrefix="suspend-dialog" />
       {balance > 0 && (
         <Sheet
           variant="outlined"
@@ -65,13 +77,16 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
         >
           <Checkbox
             checked={zeroCredits}
+            disabled={!canZeroCredits}
             onChange={event => setZeroCredits(event.target.checked)}
             label="Also set credits to 0"
             slotProps={{ input: { 'data-testid': 'suspend-dialog-zero-credits-checkbox' } }}
             sx={{ fontWeight: 500 }}
           />
           <Typography level="body-sm" sx={{ pl: 3.5, color: 'admin.inkMuted' }}>
-            Removes {formatCredits(balance)} credits.
+            {canZeroCredits
+              ? `Removes ${formatCredits(balance)} credits.`
+              : 'Only full administrators can change credits while suspending.'}
           </Typography>
         </Sheet>
       )}

@@ -1,8 +1,8 @@
 import {
+  CREDITS_PAGE_READ,
   adminCreditSummarySchema,
   BadRequestError,
   CreditHolderType,
-  ForbiddenError,
   NotFoundError,
 } from '@bike4mind/common';
 import {
@@ -12,9 +12,9 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { isFreeTierCapUser, utcMidnight } from '@server/billing/freeTierDailyCapGate';
+import { isFreeTierCapUser, utcMidnight } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { chargedSpend, zeroFilledDailySpend } from '@server/utils/adminCreditSummary';
 import { loadLedgerWriteOffs } from '@server/utils/ledgerWriteOffs';
 import { respond } from '@server/utils/respond';
@@ -30,10 +30,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * charged: a capped turn's written-off shortfall is reported separately in writtenOff. systemCost is the
  * provider USD of system-sourced work, read from usage events since that work often bills 0 credits.
  */
-const handler = baseApi({ auth: 'jwtOnly' }).get(
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: CREDITS_PAGE_READ } }).get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
-
     const { userId } = req.query as { userId?: string | string[] };
     if (typeof userId !== 'string' || !userId) throw new BadRequestError('Invalid user ID');
 

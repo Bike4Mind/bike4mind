@@ -26,13 +26,20 @@ export const ADMIN_REASON_PRESETS = {
   profileEdit: ['Customer request', 'Correcting a typo', 'Account recovery, identity verified'],
   apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],
   newAccountSpendCap: ['Verified customer', 'Known high-volume user', 'Suspicious usage'],
+  fileEmbeddingWindowReset: [
+    'Re-indexing after a support request',
+    'Window spent by a failed import',
+    'Internal testing',
+  ],
   internalAccount: ['Team member', 'Contractor or partner', 'Marked in error'],
   apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
   apiKeyAdminScope: ['Partner integration', 'Internal service', 'Requested by the account owner'],
+  embedKeyRevoke: ['Compromised or leaked key', 'Site no longer embeds the agent', 'Customer request'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
   productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
   systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],
+  permissionsChange: ['Joined the support rotation', 'Role change on the team', 'Access no longer needed'],
   roleChange: ['Joined the admin team', 'Left the admin team', 'Temporary on-call access'],
   subscriptionGrant: ['Pilot or partner access', 'Billing correction', 'Goodwill grant', 'Internal testing'],
   userDeletion: ['User requested deletion', 'Spam or bot account', 'Terms of service violation', 'Duplicate account'],
@@ -102,6 +109,7 @@ export const ADMIN_REASON_PRESETS = {
   signupDomainHoldConfirm: ['Reviewed, domain is abusive', 'Matches a known abuse pattern', 'Under investigation'],
   heldSignupGrantRelease: ['Reviewed, not abusive', 'Verified customer', 'Support request', 'Internal testing'],
   heldSignupGrantRevoke: ['Abuse / automated signups', 'Credit farming', 'Granted in error'],
+  knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;
@@ -109,6 +117,9 @@ export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;
 export type AdminReasonDraft = { preset: string | null; note: string };
 
 export const EMPTY_ADMIN_REASON: AdminReasonDraft = { preset: null, note: '' };
+
+/** The reason an Accept on an AiSuggestion prefills; the admin can still edit it before applying. */
+export const ACCEPTED_AI_REASON: AdminReasonDraft = { preset: null, note: 'Accepted AI suggestion' };
 
 export const ADMIN_REASON_HINT = `Pick a reason or write at least ${ADMIN_ACTION_REASON_MIN_LENGTH} characters.`;
 

@@ -5,6 +5,8 @@ import {
   computeImageUsdCostPerImage,
   estimateImageCredits,
   estimateImageToolCredits,
+  estimateImageUsd,
+  resolveBilledImageQuality,
   UnsupportedImageModelError,
 } from './index';
 
@@ -165,5 +167,73 @@ describe('estimateImageToolCredits', () => {
     expect(estimateImageToolCredits(models, { model: ImageModels.GPT_IMAGE_1_5 })).toBeNull();
     const unpriced = [{ id: 'not-an-image-model' }] as ModelInfo[];
     expect(estimateImageToolCredits(unpriced, { model: 'not-an-image-model' as never })).toBeNull();
+  });
+});
+
+describe('resolveBilledImageQuality', () => {
+  it('pins an omitted tier to medium for a gpt-image model', () => {
+    expect(resolveBilledImageQuality(ImageModels.GPT_IMAGE_1, undefined)).toBe('medium');
+    expect(resolveBilledImageQuality(ImageModels.GPT_IMAGE_2, undefined)).toBe('medium');
+  });
+
+  it('maps the legacy standard and hd tiers to medium and high', () => {
+    expect(resolveBilledImageQuality(ImageModels.GPT_IMAGE_1, 'standard')).toBe('medium');
+    expect(resolveBilledImageQuality(ImageModels.GPT_IMAGE_1, 'hd')).toBe('high');
+  });
+
+  it.each(['low', 'medium', 'high', 'auto'] as const)('keeps an explicit %s tier', quality => {
+    expect(resolveBilledImageQuality(ImageModels.GPT_IMAGE_1, quality)).toBe(quality);
+  });
+
+  it('returns quality unchanged for a model without tiers', () => {
+    expect(resolveBilledImageQuality(ImageModels.FLUX_PRO_1_1, undefined)).toBeUndefined();
+    expect(resolveBilledImageQuality(ImageModels.FLUX_PRO_1_1, 'hd')).toBe('hd');
+    expect(resolveBilledImageQuality(ImageModels.GEMINI_3_PRO_IMAGE, 'standard')).toBe('standard');
+  });
+
+  it('bills an omitted tier at the price of an explicit medium', () => {
+    const model = ImageModels.GPT_IMAGE_1;
+    const omitted = resolveBilledImageQuality(model, undefined);
+    expect(computeImageUsdCostPerImage(model, { model, quality: omitted })).toBe(
+      computeImageUsdCostPerImage(model, { model, quality: 'medium' })
+    );
+  });
+});
+
+describe('estimateImageUsd', () => {
+  const model = ImageModels.GPT_IMAGE_2;
+  const input = { model, quality: 'high', size: '1024x1024' } as const;
+  const calculator = new OpenAIImageCostCalculator();
+
+  it('is n times the per-image cost plus the input images once', () => {
+    const withInputs = { ...input, inputImageCount: 2 };
+    expect(estimateImageUsd(model, 3, withInputs)).toBeCloseTo(
+      3 * computeImageUsdCostPerImage(model, withInputs) + calculator.getInputImageCost(withInputs),
+      10
+    );
+  });
+
+  it('charges the input term once however many images render', () => {
+    const withInputs = { ...input, inputImageCount: 2 };
+    const delta = estimateImageUsd(model, 2, withInputs) - estimateImageUsd(model, 1, withInputs);
+    expect(delta).toBeCloseTo(computeImageUsdCostPerImage(model, withInputs), 10);
+  });
+
+  it('is n times the per-image cost with no input images', () => {
+    expect(estimateImageUsd(model, 3, input)).toBe(3 * computeImageUsdCostPerImage(model, input));
+  });
+
+  it('adds no input term for a non-GPT model', () => {
+    const flux = ImageModels.FLUX_PRO_1_1;
+    expect(estimateImageUsd(flux, 2, { model: flux, inputImageCount: 4 } as never)).toBe(
+      2 * computeImageUsdCostPerImage(flux, { model: flux })
+    );
+  });
+
+  it('matches estimateImageCredits usdCost', () => {
+    const withInputs = { ...input, inputImageCount: 1 };
+    expect(estimateImageCredits({ id: model } as ModelInfo, 2, withInputs).usdCost).toBe(
+      estimateImageUsd(model, 2, withInputs)
+    );
   });
 });

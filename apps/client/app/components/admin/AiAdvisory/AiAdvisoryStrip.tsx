@@ -4,12 +4,13 @@ import { Button, Stack, Typography } from '@mui/joy';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import type { ShadowDetector } from '@bike4mind/common';
 import { useAiAdvisory, type AiAbuseAdvisoryRow } from '@client/app/hooks/data/aiAdvisory';
-import { AI_ADVISORY_WINDOW_HOURS, type AiAdvisoryNetwork } from '@client/app/utils/aiAdvisory';
+import { AI_ADVISORY_WINDOW_HOURS, type AiAdvisoryNetwork } from '@bike4mind/server-utils/app/utils/aiAdvisory';
 import { BlockIpDialog } from '../BlockedIPs/IpBlockDialogs';
-import { AI_ADVISORY_MARK } from '../Users/List/AiAdvisoryBadge';
+import { AI_ADVISORY_MARK } from '../shared/AiSuggestion';
 import { usersTabLinkSearch } from '../Users/usersTabSearch';
 import { DETECTOR_LABELS } from '../shadowDetectorLabels';
 import { SectionCard } from '../shared/SectionCard';
+import { WatchAccountsButton } from '../CampaignWatches/WatchAccountsButton';
 
 // Enough to point at the worst offenders without turning the strip into a table.
 const MAX_SHOWN_CANDIDATES = 3;
@@ -62,6 +63,7 @@ export function AiAdvisoryStrip() {
       }
     >
       <Stack spacing={1} sx={{ px: 2, py: 1.5 }}>
+        <WatchAccountsButton userIds={advisories.map(item => item.userId)} incomplete={data?.truncated} />
         <Typography level="body-sm" sx={{ color: 'admin.ink' }} data-testid="admin-dashboard-ai-advisory-summary">
           {`${count} ${advisories.length === 1 ? 'account' : 'accounts'} likely abuse (last ${AI_ADVISORY_WINDOW_HOURS}h, unreviewed)`}
           {detector && ` \u00b7 top signal: ${DETECTOR_LABELS[detector]}`}

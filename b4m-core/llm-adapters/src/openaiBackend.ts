@@ -83,6 +83,7 @@ const O1_MODELS: string[] = [
 
 const GPT5_MODELS: string[] = [
   ChatModels.GPT5,
+  ChatModels.GPT5_2025_08_07,
   ChatModels.GPT5_MINI,
   ChatModels.GPT5_NANO,
   ChatModels.GPT5_CHAT_LATEST,
@@ -1157,6 +1158,8 @@ export class OpenAIBackend implements ICompletionBackend {
       model,
       messages: this.formatMessages(messages, isO1Model, model, options),
       temperature: options.temperature ?? 0.9,
+      // Explicit even though Chat Completions defaults to false, so a default change cannot start retaining requests.
+      store: false,
       // Attribute the request to the end user (opaque, non-PII) so OpenAI can
       // scope abuse enforcement to them instead of the shared platform key.
       ...(this._endUserId ? { safety_identifier: this._endUserId } : {}),

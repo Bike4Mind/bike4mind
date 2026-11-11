@@ -1,4 +1,9 @@
-import { adminSettingsRepository, pendingOtcTokenRepository, userRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  cacheRepository,
+  pendingOtcTokenRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -11,6 +16,7 @@ import {
   ipSubject,
   otcCounterLimit,
   otcDistinctEmailsPerIpLimit,
+  otcEmailKey,
   otcEmailBudgetRetryAfter,
   reserveOtcEmailBudget,
 } from '@server/utils/otcLimits';
@@ -19,15 +25,19 @@ import { checkTurnstileToken, requireTurnstile } from '@server/middlewares/requi
 import { getTurnstileStepUpPolicy } from '@server/utils/auth/turnstile';
 import { wasTurnstileVerified } from '@server/auth/signupChallenge';
 import type { Request } from 'express';
-import { TURNSTILE_ACTION_OTC_SEND, emailDomainOf } from '@bike4mind/common';
+import { TURNSTILE_ACTION_OTC_SEND, emailDomainOf, type UserRiskSignalType } from '@bike4mind/common';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
-import { evaluateSignupSignals } from '@server/utils/signupBotChecks';
+import { evaluateSignupSignals, verifiedSignupFormTokenId } from '@server/utils/signupBotChecks';
 import { getLogoUrl } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { Config, isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import jwt from 'jsonwebtoken';
 
-// Bot-check signals for a send; empty when checks are off or evaluation fails.
-async function collectSignupSignals(body: Record<string, unknown>, logger: { warn: (...args: unknown[]) => void }) {
+// Bot-check signals for a send; empty when checks are off or evaluation fails. A failed reuse claim drops only that signal.
+async function collectSignupSignals(
+  body: Record<string, unknown>,
+  normalizedEmail: string,
+  logger: { warn: (...args: unknown[]) => void }
+): Promise<UserRiskSignalType[]> {
   if (isE2EEnabled()) return [];
   try {
     const settings = await getSettingsMap(
@@ -35,12 +45,27 @@ async function collectSignupSignals(body: Record<string, unknown>, logger: { war
       { names: ['signupBotChecksEnabled', 'signupMinSubmitMs'] }
     );
     if (!getSettingsValue('signupBotChecksEnabled', settings, true)) return [];
-    return evaluateSignupSignals({
+    const signals = evaluateSignupSignals({
       formToken: body.formToken,
       formExtra: body.formExtra,
       nowMs: Date.now(),
       minSubmitMs: getSettingsValue('signupMinSubmitMs', settings, 1500),
     });
+    // A token is bound to the first email it is submitted with; resends for that email never flag.
+    try {
+      const tokenId = verifiedSignupFormTokenId(body.formToken);
+      if (!tokenId) return signals;
+      const emailKey = otcEmailKey(normalizedEmail);
+      const { claimed, existingData } = await cacheRepository.claimDedup(
+        `signup-form-token:${tokenId.jti}`,
+        { email: emailKey },
+        Math.max(1000, tokenId.expMs - Date.now())
+      );
+      return !claimed && existingData?.email !== emailKey ? [...signals, 'signup_token_reused'] : signals;
+    } catch (err) {
+      logger.warn('signup form token claim failed', err);
+      return signals;
+    }
   } catch (err) {
     logger.warn('signup signal evaluation failed', err);
     return [];
@@ -125,7 +150,7 @@ const handler = baseApi({ auth: false })
     await chargeOtcEmailBudget(normalizedEmail, ipBucket, OTC_SEND_CHALLENGE_BUDGETS);
 
     // Evaluated on every send, existing users included, so the response never reveals whether the email has an account.
-    const riskSignals = await collectSignupSignals(req.body, req.logger);
+    const riskSignals = await collectSignupSignals(req.body, normalizedEmail, req.logger);
 
     const result = await userService
       .sendOTC(

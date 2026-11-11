@@ -62,16 +62,17 @@ const handler = adminApi({
       throw error;
     };
 
-    // Get system settings
-    const settings = await adminSettingsRepository
-      .getSettingsValue('RapidReplySettings')
-      .catch(recordFailedRunAndRethrow);
+    const [settings, enableRapidReply] = await Promise.all([
+      adminSettingsRepository.getSettingsValue('RapidReplySettings'),
+      adminSettingsRepository.getSettingsValue('EnableRapidReply'),
+    ]).catch(recordFailedRunAndRethrow);
     if (!settings) {
       return recordFailedRunAndRethrow(new Error('Rapid Reply settings not found. Please configure settings first.'));
     }
 
-    // Check if Rapid Reply is enabled
-    if (!settings.enabled) {
+    // Same toggle chat reads in pages/api/ai/rapid-reply.ts; RapidReplySettings.enabled is never written.
+    const globalEnabled = enableRapidReply === true;
+    if (!globalEnabled) {
       await recordTestRun(false);
       return res.json({
         success: false,
@@ -339,8 +340,7 @@ const handler = adminApi({
       console.log('🧪 - Has reply:', !!completedQuest?.reply);
       console.log('🧪 - Reply length:', completedQuest?.reply?.length || 0);
       console.log('🧪 - Replies array length:', completedQuest?.replies?.length || 0);
-      console.log('🧪 - First reply:', completedQuest?.replies?.[0]?.substring(0, 100) || 'none');
-      console.log('🧪 - All replies:', completedQuest?.replies);
+      console.log('- First reply length:', completedQuest?.replies?.[0]?.length ?? 0);
       console.log('🧪 - Prompt meta:', JSON.stringify(completedQuest?.promptMeta, null, 2));
 
       // Check if there's any content in the quest at all
@@ -489,7 +489,7 @@ const handler = adminApi({
             : [],
       },
       settings: {
-        globalEnabled: settings.enabled,
+        globalEnabled,
         allowedUserTags: settings.allowedUserTags,
         transitionMode: settings.transitionMode,
         showIndicator: settings.showIndicator,

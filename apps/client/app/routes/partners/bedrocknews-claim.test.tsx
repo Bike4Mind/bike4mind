@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const mockNavigate = vi.fn();
@@ -38,12 +39,19 @@ vi.mock('@client/app/hooks/data/user', () => ({
   useUserLogout: () => ({ mutate: mockLogout, isPending: false }),
 }));
 
+const mockSyncCreditBalance = vi.fn();
+vi.mock('@client/app/components/CreditBalanceSyncListener', () => ({
+  syncCreditBalance: (...args: unknown[]) => mockSyncCreditBalance(...args),
+}));
+
 import BedrockNewsClaimPage from './bedrocknews-claim';
 
 const TICKET = 'tkt_abcdefghijklmnop1234';
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
-  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  <QueryClientProvider client={new QueryClient()}>
+    <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  </QueryClientProvider>
 );
 const renderPage = () => render(<BedrockNewsClaimPage />, { wrapper: TestWrapper });
 
@@ -52,12 +60,12 @@ const READY = {
   credits: 150,
   rungs: [
     { date: '2026-11-01', length: 5, hard: false },
-    { date: '2026-11-02', length: 7, hard: true },
+    { date: '2026-11-02', length: 7, hard: true, word: 'journal' },
   ],
   account: 'victor@example.com',
 };
 
-const DONE = { total: 150, balance: 900, firstSolveCredits: 50, capped: 0, claimed: [] };
+const DONE = { total: 150, balance: 11218671, firstSolveCredits: 1000, capped: 0, claimed: [] };
 const UNAVAILABLE_COPY = 'Something went wrong on our side. Your credits are safe; try again.';
 const CAPPED_COPY =
   'Bike4Mind\u2019s daily limit is reached for that day, so those credits can\u2019t be paid. They stay waiting in Headword.';
@@ -91,6 +99,7 @@ describe('BedrockNewsClaimPage', () => {
     const rungs = screen.getAllByTestId('claim-rung');
     expect(rungs).toHaveLength(2);
     expect(rungs[0]).toHaveTextContent('2026-11-01 \u00b7 5-letter word');
+    expect(rungs[1]).toHaveTextContent('JOURNAL \u00b7 2026-11-02');
     expect(within(rungs[0]).queryByText('Hard mode')).not.toBeInTheDocument();
     expect(within(rungs[1]).getByText('Hard mode')).toBeInTheDocument();
     expect(screen.getByTestId('claim-card')).not.toHaveAttribute('aria-busy');
@@ -158,15 +167,30 @@ describe('BedrockNewsClaimPage', () => {
     const status = (await screen.findByText('150 credits added')).closest('[role="status"]') as HTMLElement;
     expect(within(status).getByText('to victor@example.com')).toBeInTheDocument();
     expect(screen.getByText('New balance')).toBeInTheDocument();
-    expect(screen.getByText('900')).toBeInTheDocument();
+    expect(screen.getByText('11,218,671')).toBeInTheDocument();
     expect(screen.getByText('First-solve bonus')).toBeInTheDocument();
-    expect(screen.getByText('+50')).toBeInTheDocument();
+    expect(screen.getByText('+1,000')).toBeInTheDocument();
     expect(screen.queryByText(/daily limit/)).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to Headword' })).toHaveAttribute(
       'href',
       `https://news.example/games/headword#claim=${TICKET}`
     );
     expect(screen.queryByRole('button', { name: /credits/ })).not.toBeInTheDocument();
+  });
+
+  it('refreshes the app balance after a confirm pays, so Open Bike4Mind shows it', async () => {
+    mockPost.mockResolvedValueOnce({ data: READY }).mockResolvedValueOnce({ data: { state: 'done', result: DONE } });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Add 150 credits/ }));
+    await waitFor(() => expect(mockSyncCreditBalance).toHaveBeenCalledTimes(1));
+  });
+
+  it('leaves the balance alone when the confirm pays nothing', async () => {
+    mockPost.mockResolvedValueOnce({ data: READY }).mockResolvedValueOnce({ data: { state: 'expired' } });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Add 150 credits/ }));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
+    expect(mockSyncCreditBalance).not.toHaveBeenCalled();
   });
 
   it('names the account the redeem paid, not the one the preview showed', async () => {

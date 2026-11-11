@@ -17,6 +17,9 @@ vi.mock('@bike4mind/server-utils/generations/signOutputUrl', () => ({
 vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
 vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: h.initializeSlackPackage }));
 vi.mock('@bike4mind/slack', () => ({ SlackClient: h.SlackClient }));
+vi.mock('@bike4mind/server-utils/files/fileLinkToken', () => ({
+  buildFileLinkUrl: (target: unknown, userId: string, ttl: number) => JSON.stringify({ target, userId, ttl }),
+}));
 
 import { createSlackJobDeliveryDeps } from './slackJobDeliveryDeps';
 
@@ -62,5 +65,25 @@ describe('createSlackJobDeliveryDeps getSlackClient', () => {
     );
     expect(h.initializeSlackPackage).not.toHaveBeenCalled();
     expect(h.SlackClient).not.toHaveBeenCalled();
+  });
+});
+
+describe('createSlackJobDeliveryDeps buildOutputLink', () => {
+  const common = { s3Key: 'k.mp4', contentType: 'video/mp4', bytes: 1, durationSeconds: 1 };
+
+  it('links a Files output by its FabFile and a generated output by its key', () => {
+    const link = (output: Parameters<ReturnType<typeof deps>['buildOutputLink']>[0]) =>
+      deps().buildOutputLink(output, 'u1', 60);
+    expect(JSON.parse(link({ ...common, location: 'files', fileId: 'f1' })!)).toEqual({
+      target: { kind: 'fabFile', fileId: 'f1' },
+      userId: 'u1',
+      ttl: 60,
+    });
+    expect(JSON.parse(link({ ...common, location: 'generated' })!)).toEqual({
+      target: { kind: 'generatedKey', key: 'k.mp4' },
+      userId: 'u1',
+      ttl: 60,
+    });
+    expect(link({ ...common, location: 'files' })).toBeNull();
   });
 });

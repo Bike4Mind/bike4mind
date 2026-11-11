@@ -169,9 +169,36 @@ describe('GitHubLakeCallbackPage', () => {
     expect(readGitHubLakeConnectHandoff()).toBeNull();
   });
 
-  it('asks for a restart without opening a lake when the handoff is gone', () => {
+  it('finishes a first-time authorize on the server lake when the handoff is gone', () => {
     sessionStorage.clear();
     setSearch({ code: 'c1', state: 's1' });
+    renderPage();
+
+    expect(h.authorizeMutate).toHaveBeenCalledWith({ state: 's1', code: 'c1' }, expect.any(Object));
+    const [, options] = h.authorizeMutate.mock.calls[0];
+    options.onSuccess({ dataLakeId: 'lake9' });
+    expect(h.replace).toHaveBeenCalledWith('/');
+    expect(h.openManager).toHaveBeenCalledWith('mine', 'lake9');
+    expect(h.openGitHubRepoPicker).toHaveBeenCalledWith('lake9');
+    expect(h.toastError).not.toHaveBeenCalled();
+  });
+
+  it('toasts the server reason when a handoff-less authorize fails', () => {
+    sessionStorage.clear();
+    setSearch({ code: 'c1', state: 's1' });
+    renderPage();
+
+    const [, options] = h.authorizeMutate.mock.calls[0];
+    options.onError({ isAxiosError: true, response: { data: { error: 'This authorization already expired.' } } });
+    expect(h.toastError).toHaveBeenCalledWith('This authorization already expired.');
+    expect(h.setGitHubConnectFailure).not.toHaveBeenCalled();
+    expect(h.replace).toHaveBeenCalledWith('/');
+    expect(h.openManager).not.toHaveBeenCalled();
+  });
+
+  it('asks for a restart without opening a lake when the handoff is gone and there is no code', () => {
+    sessionStorage.clear();
+    setSearch({ state: 's1' });
     renderPage();
 
     expect(h.toastError).toHaveBeenCalledWith(RESTART_NOTICE);

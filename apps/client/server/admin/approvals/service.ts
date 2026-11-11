@@ -362,7 +362,8 @@ export async function redeemApproval(
 
 type ApprovalListFlags = { stalled: boolean; canDecide: boolean };
 
-export type VisibleApprovalListRow = Omit<AdminApproval, 'paramsJson'> & ApprovalListFlags & { params: unknown };
+export type VisibleApprovalListRow = Omit<AdminApproval, 'paramsJson'> &
+  ApprovalListFlags & { params: unknown; own: boolean };
 
 export type WithheldApprovalListRow = Pick<AdminApproval, 'id' | 'action' | 'status' | 'createdAt' | 'expiresAt'> &
   ApprovalListFlags & { summary: null; reason: null; params: null };
@@ -406,6 +407,6 @@ export async function listApprovals(
       const { id, action, createdAt, expiresAt } = approval;
       return { id, action, status, createdAt, expiresAt, summary: null, reason: null, params: null, ...flags };
     }
-    return { ...approval, status, params: JSON.parse(paramsJson), ...flags };
+    return { ...approval, status, params: JSON.parse(paramsJson), ...flags, own };
   });
 }

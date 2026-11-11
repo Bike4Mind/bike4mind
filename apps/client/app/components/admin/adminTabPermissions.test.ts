@@ -13,6 +13,7 @@ describe('canOpenAdminTab', () => {
 
   it('opens a mapped tab for a delegate holding its permission', () => {
     expect(canOpenAdminTab(delegate('settings:manage'), AdminTab.Modals)).toBe(true);
+    expect(canOpenAdminTab(delegate('credits:adjust'), AdminTab.HeldSignupGrants)).toBe(true);
   });
 
   it('keeps unmapped tabs full-admin only, whatever the delegate holds', () => {
@@ -23,6 +24,14 @@ describe('canOpenAdminTab', () => {
 
   it('refuses a mapped tab to a delegate without its permission', () => {
     expect(canOpenAdminTab(delegate('support:read'), AdminTab.Modals)).toBe(false);
+    expect(canOpenAdminTab(delegate('settings:manage'), AdminTab.AuditLog)).toBe(false);
+    expect(canOpenAdminTab(delegate('support:read'), AdminTab.HeldSignupGrants)).toBe(false);
+  });
+
+  it('opens a settings page to either a support reader or a settings manager', () => {
+    expect(canOpenAdminTab(delegate('support:read'), AdminTab.ToolDefinitions)).toBe(true);
+    expect(canOpenAdminTab(delegate('settings:manage'), AdminTab.ToolDefinitions)).toBe(true);
+    expect(canOpenAdminTab(delegate('users:moderate'), AdminTab.ToolDefinitions)).toBe(false);
   });
 
   it('refuses everything to a user with no admin role', () => {
@@ -46,10 +55,11 @@ describe('canEnterAdminConsole', () => {
   it('admits a full admin and a delegate with a tab to open', () => {
     expect(canEnterAdminConsole(admin)).toBe(true);
     expect(canEnterAdminConsole(delegate('settings:manage'))).toBe(true);
+    expect(canEnterAdminConsole(delegate('support:read'))).toBe(true);
   });
 
   it('turns away a delegate whose permissions open no tab', () => {
-    expect(canEnterAdminConsole(delegate('support:read'))).toBe(false);
+    expect(canEnterAdminConsole(delegate('users:impersonate'))).toBe(false);
   });
 
   it('turns away a user with no admin permissions', () => {

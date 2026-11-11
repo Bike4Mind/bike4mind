@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { AuditEntry } from './AdminAuditLogTypes';
 import type { IActiveSessionDto } from './AuthSessionTypes';
+import type { ShadowDetectionVerdict } from '../../schemas/shadowDetection';
 
 /**
  * The sources merged into a user's Activity timeline. Each is one store, paged on the same
@@ -147,7 +148,7 @@ export type UserTimelineEntry =
 
 /**
  * Limits and refusals worth showing an admin. Recorded at the refusal sites through
- * recordUserLimitEvent (apps/client/server/billing/userLimitEvents.ts).
+ * recordUserLimitEvent (packages/server-utils/src/billing/userLimitEvents.ts).
  */
 export const USER_LIMIT_EVENT_KINDS = [
   'new_account_hourly_cap',
@@ -201,7 +202,7 @@ export type UserSignupCluster = {
 
 /**
  * Accounts linked to a user through payments or signup: the same card (strong), or only the same
- * signup or payment IP (weak). Built by apps/client/server/billing/linkedAccounts.ts.
+ * signup or payment IP (weak). Built by packages/server-utils/src/billing/linkedAccounts.ts.
  */
 export type UserLinkedAccount = {
   id: string;
@@ -211,6 +212,46 @@ export type UserLinkedAccount = {
   via: Array<'card' | 'paymentNetwork' | 'signupNetwork'>;
   /** Banned, suspended or dispute-locked. */
   blocked: boolean;
+};
+
+/** Shadow detectors whose detections tie several accounts together into one cohort. */
+export const COHORT_SHADOW_DETECTORS = ['accountCampaign', 'signupNetworkBurst', 'signupIpLinkedToBlocked'] as const;
+export type CohortShadowDetector = (typeof COHORT_SHADOW_DETECTORS)[number];
+
+/** Spend on the detection-linked accounts table covers this many trailing days. */
+export const DETECTION_LINK_SPEND_DAYS = 30;
+
+/**
+ * Accounts that cohort shadow detections name together with a user, with what an admin needs to act on
+ * them as one group. Built by apps/client/server/admin/detectionLinkedAccounts.ts.
+ */
+export type UserDetectionLinks = {
+  detections: Array<{
+    id: string;
+    detector: CohortShadowDetector;
+    summary: string;
+    detectedAt: Date;
+    /** Null until reviewed. */
+    verdict: ShadowDetectionVerdict | null;
+    accountCount: number;
+  }>;
+  accounts: Array<{
+    id: string;
+    name: string | null;
+    email: string | null;
+    signedUpAt: Date | null;
+    /** Banned, suspended or dispute-locked. */
+    blocked: boolean;
+    isBanned: boolean;
+    balance: number;
+    /** AI spend in credits over the last DETECTION_LINK_SPEND_DAYS days. */
+    spent: number;
+    activeApiKeys: number;
+    /** The detection ids naming this account, newest first. */
+    detectionIds: string[];
+  }>;
+  /** True when more detections or accounts matched than were returned. */
+  truncated: boolean;
 };
 
 /** Sign-in and signup methods as admins read them. Stored values are free strings (auth strategy names). */

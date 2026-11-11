@@ -1,7 +1,5 @@
 import type { DataHolderRegistry } from '../types';
-
-const AUDIT_LOG_REASON =
-  'Tamper-proof administrative audit record kept for security accountability (legitimate interest, GDPR Art. 6(1)(f))';
+import { AUDIT_LOG, EMAIL_SUPPRESSION, expiresAfterTtl } from './retention';
 
 export const infraHolders = {
   // Advisory model judgment of a shadow detection, kept for as long as the detection.
@@ -11,15 +9,22 @@ export const infraHolders = {
     foreignKey: 'detectionId',
     attribution: [{ path: 'requestedBy', matchBy: 'userId', action: 'anonymize' }],
   },
+  // Advisory model verdict on an admin queue item. `entityId` is that item (a detection, a ticket), not a
+  // person, and evidence is pseudonymised before it is stored; the deciding admin is the only reference.
+  // `overrideReason` is the admin's free text and is not scanned.
+  AdminAiSuggestion: {
+    kind: 'holder',
+    references: [{ path: 'decidedBy.userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['decidedBy.name'] }],
+  },
   // An admin's request for a second admin's sign-off on a privileged action, kept with the audit trail.
   // `summary` and `paramsJson` (which may name the target account) are free text and not scanned.
   AdminApproval: {
     kind: 'holder',
     references: [
-      { path: 'requestedBy.id', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
-      { path: 'requestedBy.selfIds', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
-      { path: 'requestedBy.email', matchBy: 'email', action: 'retain', reason: AUDIT_LOG_REASON },
-      { path: 'decidedBy.id', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
+      { path: 'requestedBy.id', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      { path: 'requestedBy.selfIds', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      { path: 'requestedBy.email', matchBy: 'email', action: 'retain', ...AUDIT_LOG },
+      { path: 'decidedBy.id', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
     ],
   },
   AdminAuditAlertState: {
@@ -31,13 +36,13 @@ export const infraHolders = {
   AdminAuditLog: {
     kind: 'holder',
     references: [
-      { path: 'actor.userId', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
-      { path: 'actor.impersonatedUserId', matchBy: 'userId', action: 'retain', reason: AUDIT_LOG_REASON },
+      { path: 'actor.userId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      { path: 'actor.impersonatedUserId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
       {
         path: 'target.id',
         matchBy: 'userId',
         action: 'retain',
-        reason: AUDIT_LOG_REASON,
+        ...AUDIT_LOG,
         where: { 'target.kind': 'user' },
       },
     ],
@@ -85,6 +90,7 @@ export const infraHolders = {
         matchBy: 'userId',
         action: 'retain',
         reason: 'Fraud containment record kept to prevent repeat abuse (GDPR Art. 17(3)(e) / Art. 6(1)(f))',
+        retention: expiresAfterTtl('decidedAt', 365),
       },
     ],
   },
@@ -99,6 +105,15 @@ export const infraHolders = {
     kind: 'noUserData',
     note: 'Short-lived dedupe, lease and rate-limit entries keyed by an opaque string; rows expire on their TTL.',
   },
+  // An admin's working list of accounts suspected of acting together; the evidence lives on the linked detection
+  // (`sourceDetectionId`), so an erased member is pulled and the owner anonymized.
+  CampaignWatch: {
+    kind: 'holder',
+    references: [
+      { path: 'userIds', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'ownerId', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
   // Activity counters behind platform metrics: the row stays for the aggregates, the person's identity goes.
   CounterLog: {
     kind: 'holder',
@@ -111,6 +126,10 @@ export const infraHolders = {
     ],
   },
   Counters: { kind: 'noUserData', note: 'Platform-wide named counters.' },
+  DlqFailure: {
+    kind: 'noUserData',
+    note: 'Queue failure metadata keyed by SQS message ID, not a user reference. Thrown error text may contain incidental identifiers and expires after 15 days.',
+  },
   // `messageBody` is the replayed queue message and may carry user content; it is not scanned.
   DlqReplayLog: {
     kind: 'holder',
@@ -142,7 +161,7 @@ export const infraHolders = {
         path: 'email',
         matchBy: 'email',
         action: 'retain',
-        reason: 'Suppression record: keeps the address from being mailed again after an objection (Art. 21).',
+        ...EMAIL_SUPPRESSION,
       },
     ],
     secretPaths: ['unsubscribeToken'],
@@ -344,17 +363,13 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
   },
-  // A fraud-detection record naming several accounts and a network: kept to prevent repeat abuse, so the reviewer
-  // verdicts are anonymized but `userIds` and `network` are not removed.
+  // A fraud-detection record naming several accounts and a network. The person is pulled from
+  // `userIds` (`shadowDetectionRepository.removeUser`), which also deletes a record left naming no one
+  // and rebuilds or deletes a campaign group; reviewer verdicts are anonymized.
   ShadowDetection: {
     kind: 'holder',
     references: [
-      {
-        path: 'userIds',
-        matchBy: 'userId',
-        action: 'retain',
-        reason: 'Fraud signal kept for the legitimate interest in preventing repeat abuse (GDPR Art. 6(1)(f))',
-      },
+      { path: 'userIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'verdicts.reviewerId', matchBy: 'userId', action: 'anonymize' },
     ],
   },

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 const { findById, userUpdate, mcpFindOne, mcpUpdate } = vi.hoisted(() => ({
   findById: vi.fn(),
@@ -44,8 +45,8 @@ function mockTokenResponse(body: Record<string, unknown>) {
 describe('AtlassianTokenManager.getValidTokens refresh', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(Logger, 'info').mockImplementation(() => {});
+    vi.spyOn(Logger, 'error').mockImplementation(() => {});
     findById.mockResolvedValue(expiringUser);
     mcpFindOne.mockResolvedValue(null);
   });
@@ -92,5 +93,23 @@ describe('AtlassianTokenManager.getValidTokens refresh', () => {
 
     expect(result).toBeNull();
     expect(userUpdate).not.toHaveBeenCalled();
+  });
+
+  it('logs the status, not the response body, when a refresh fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: false, status: 503, text: () => Promise.resolve('provider-body-marker') })
+    );
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+
+    const result = await AtlassianTokenManager.getValidTokens('user-1');
+
+    expect(result).toBeNull();
+    expect(errorSpy).toHaveBeenCalled();
+    const logged = errorSpy.mock.calls.map(call =>
+      JSON.stringify(call, (_k, v) => (v instanceof Error ? v.message : v))
+    );
+    expect(logged.join('\n')).toContain('status 503');
+    expect(logged.join('\n')).not.toContain('provider-body-marker');
   });
 });

@@ -7,6 +7,7 @@
  *
  * Triggered during deployment by scripts/invoke-data-syncer.mjs when SYNC_PREVIEW_SETTINGS=true.
  */
+import { Logger } from '@bike4mind/observability';
 
 import { Resource } from 'sst';
 import { ciphertextPatternSource } from '@bike4mind/utils/security';
@@ -14,6 +15,28 @@ import type { Handler } from 'aws-lambda';
 import { MongoClient } from 'mongodb';
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { allSettingDefinitions } from '@bike4mind/common';
+
+const MAX_LOG_ERROR_DEPTH = 5;
+
+/**
+ * A bare copy of an error: name, message, code, stack and cause only. Logging the error itself would
+ * serialize its enumerable fields (a Mongo bulk-write error carries the whole documents being written),
+ * and it stays an Error so the Logger's redactor keeps its message.
+ */
+function describeError(error: unknown, seen = new Set<Error>()): Error {
+  if (!(error instanceof Error)) return new Error(String(error));
+  // Logging happens before rollback, so a cyclic or deep cause must never interrupt recovery.
+  if (seen.has(error) || seen.size >= MAX_LOG_ERROR_DEPTH) return new Error('[Truncated]');
+  seen.add(error);
+  const copy = new Error(
+    error.message,
+    error.cause !== undefined ? { cause: describeError(error.cause, seen) } : undefined
+  );
+  copy.name = error.name;
+  copy.stack = error.stack;
+  const { code } = error as { code?: unknown };
+  return code === undefined ? copy : Object.assign(copy, { code });
+}
 
 interface DataSyncerEvent {
   // Whether to sync preview settings from staging on preview deploys; the syncmarker makes repeat runs skip
@@ -55,7 +78,14 @@ const SENSITIVE_ADMIN_SETTING_NAMES = new Set(
 
 // Settings tied to a stage's own Cloudflare Turnstile widget. Copying them would enable the challenge
 // on a preview whose hostname the widget does not list; a preview opts in by setting them itself.
-const PREVIEW_UNSYNCED_ADMIN_SETTING_NAMES = ['turnstileEnabled', 'turnstileFailClosed', 'turnstileSiteKey'];
+// modelListRevision mirrors a cache row this sync does not copy; a copied value would make every tab
+// on the preview refetch its model list on each load.
+const PREVIEW_UNSYNCED_ADMIN_SETTING_NAMES = [
+  'turnstileEnabled',
+  'turnstileFailClosed',
+  'turnstileSiteKey',
+  'modelListRevision',
+];
 
 // Source-side query for a synced collection. adminsettings excludes sensitive rows (above);
 // every other collection copies in full. Used for BOTH the count and the cursor so the
@@ -90,14 +120,14 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
   skipped?: string;
   emptyCollections?: string[];
 }> {
-  console.log('=== Syncing Preview Settings from Staging ===');
+  Logger.info('Syncing preview settings from staging');
 
   const stage = process.env.SEED_STAGE_NAME || 'unknown';
 
   // Strict validation: only allow preview stages (pr<number>), never staging/production
   if (!PREVIEW_STAGE_PATTERN.test(stage)) {
-    console.error(
-      `✗ Error: Target stage "${stage}" is not a valid preview environment (must match pr<number>). Sync aborted for safety.`
+    Logger.error(
+      `Error: Target stage "${stage}" is not a valid preview environment (must match pr<number>). Sync aborted for safety.`
     );
     return { synced: 0, skipped: `target stage "${stage}" is not a preview (pr<number>)` };
   }
@@ -106,18 +136,18 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
   const previewUri = Resource.MONGODB_URI.value.replace('%STAGE%', stage);
 
   if (!stagingUri) {
-    console.log('⏭️  STAGING_MONGODB_URI not configured. Skipping preview settings sync.');
+    Logger.info('STAGING_MONGODB_URI not configured. Skipping preview settings sync.');
     return { synced: 0, skipped: 'STAGING_MONGODB_URI not configured' };
   }
 
   // Safety check: abort if source and target are the same database
   if (stagingUri === previewUri) {
-    console.error('✗ Error: Source and target MongoDB URIs are identical. Sync aborted to prevent data loss.');
+    Logger.error('Error: Source and target MongoDB URIs are identical. Sync aborted to prevent data loss.');
     return { synced: 0, skipped: 'source and target URIs are identical' };
   }
 
-  console.log(`  Source: staging (from STAGING_MONGODB_URI)`);
-  console.log(`  Target: preview (${stage})`);
+  Logger.info(`Source: staging (from STAGING_MONGODB_URI)`);
+  Logger.info(`Target: preview (${stage})`);
 
   const sourceClient = new MongoClient(stagingUri);
   const targetClient = new MongoClient(previewUri);
@@ -135,8 +165,8 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
     if (existingMarker) {
       const markerDoc = existingMarker as { syncedAt?: Date; stage?: string };
       if (strict && markerDoc.stage !== stage) throw new Error('Sync marker stage does not match');
-      console.log(`✓ Staging configs already synced at ${markerDoc.syncedAt?.toISOString()}, skipping`);
-      console.log('  (To force re-sync, delete the marker from the syncmarkers collection)');
+      Logger.info(`Staging configs already synced at ${markerDoc.syncedAt?.toISOString()}, skipping`);
+      Logger.info('(To force re-sync, delete the marker from the syncmarkers collection)');
       return {
         synced: 0,
         alreadySeeded: true,
@@ -146,13 +176,13 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
     }
 
     await sourceClient.connect();
-    console.log('  ✓ Connected to SOURCE (Staging)');
-    console.log('  ✓ Connected to TARGET (Preview)');
+    Logger.info('Connected to SOURCE (Staging)');
+    Logger.info('Connected to TARGET (Preview)');
 
     const sourceDb = sourceClient.db();
 
     for (const collectionName of COLLECTIONS_TO_SYNC) {
-      console.log(`\n📦 Syncing collection: ${collectionName}`);
+      Logger.info(`Syncing collection: ${collectionName}`);
 
       const sourceCollection = sourceDb.collection(collectionName);
       const targetCollection = targetDb.collection(collectionName);
@@ -161,7 +191,7 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
 
       const sourceFilter = syncSourceFilter(collectionName);
       if (Object.keys(sourceFilter).length > 0) {
-        console.log(
+        Logger.info(
           `  - Excluding ${SENSITIVE_ADMIN_SETTING_NAMES.size} sensitive settings (encrypted under the source ` +
             `stage's key; a preview cannot decrypt them) and ${PREVIEW_UNSYNCED_ADMIN_SETTING_NAMES.length} ` +
             `stage-specific settings from the cross-stage sync.`
@@ -171,12 +201,12 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
       const totalDocs = await sourceCollection.countDocuments(sourceFilter);
 
       if (totalDocs === 0) {
-        console.log(`  - No documents found in ${collectionName}. Skipping.`);
+        Logger.info(`No documents found in ${collectionName}. Skipping.`);
         skippedCollections.push(collectionName);
         continue;
       }
 
-      console.log(`  - Found ${totalDocs} documents in source.`);
+      Logger.info(`Found ${totalDocs} documents in source.`);
 
       // Rollback touches the target only once its backup is complete, i.e. from the clear on:
       // before that the target is intact and the backup may be partial. Set before the clear
@@ -186,14 +216,14 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
         // Drop any stale backup from a previous failed run
         await backupCollection.drop().catch((err: Error) => {
           if (!err.message.includes('ns not found')) {
-            console.warn(`  ⚠ Warning: Failed to drop stale backup ${backupCollectionName}:`, err.message);
+            Logger.warn(`Warning: Failed to drop stale backup ${backupCollectionName}`, { error: err.message });
           }
         });
 
         // Create backup of existing target data before replacing
         const existingDocs = await targetCollection.countDocuments({});
         if (existingDocs > 0) {
-          console.log(`  - Creating backup of ${existingDocs} existing documents...`);
+          Logger.info(`Creating backup of ${existingDocs} existing documents...`);
           const existingDocsCursor = targetCollection.find({});
           let backupBatch: Record<string, unknown>[] = [];
           for await (const doc of existingDocsCursor) {
@@ -206,12 +236,12 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
           if (backupBatch.length > 0) {
             await backupCollection.insertMany(backupBatch, { ordered: false });
           }
-          console.log(`  - Backup created in ${backupCollectionName}`);
+          Logger.info(`Backup created in ${backupCollectionName}`);
         }
 
         backupComplete = true;
         const deleteResult = await targetCollection.deleteMany({});
-        console.log(`  - Cleared ${deleteResult.deletedCount} existing documents in target.`);
+        Logger.info(`Cleared ${deleteResult.deletedCount} existing documents in target.`);
 
         // Stream documents from source and insert into target in batches
         const cursor = sourceCollection.find(sourceFilter);
@@ -224,7 +254,7 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
             const batchResult = await targetCollection.insertMany(batch, { ordered: false });
             insertedCount += batchResult.insertedCount;
             batch = [];
-            console.log(`    ... synced ${insertedCount}/${totalDocs}`);
+            Logger.info(`Synced ${insertedCount}/${totalDocs}`);
           }
         }
 
@@ -234,17 +264,17 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
         }
 
         if (strict && insertedCount !== totalDocs) throw new Error('Source copy was incomplete');
-        console.log(`  ✓ Sync complete: ${insertedCount} documents.`);
+        Logger.info(`Sync complete: ${insertedCount} documents.`);
         totalSynced += insertedCount;
 
         // Clean up backup after successful sync
         await backupCollection.drop().catch((err: Error) => {
           if (!err.message.includes('ns not found')) {
-            console.warn(`  ⚠ Warning: Failed to clean up backup ${backupCollectionName}:`, err.message);
+            Logger.warn(`Warning: Failed to clean up backup ${backupCollectionName}`, { error: err.message });
           }
         });
       } catch (error) {
-        console.error(`  ✗ Error syncing ${collectionName}:`, error instanceof Error ? error.message : error);
+        Logger.error('Error syncing collection', { collectionName, error: describeError(error) });
 
         if (backupComplete) {
           try {
@@ -253,7 +283,7 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
             await targetCollection.deleteMany({});
             const backupDocs = await backupCollection.find({}).toArray();
             const backupCount = backupDocs.length;
-            console.log(`  - Attempting rollback from backup (${backupCount} documents)...`);
+            Logger.info(`Attempting rollback from backup (${backupCount} documents)...`);
             const bulkOps = backupDocs.map(doc => ({
               replaceOne: {
                 filter: { _id: doc._id },
@@ -264,26 +294,23 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
             if (bulkOps.length > 0) {
               await targetCollection.bulkWrite(bulkOps, { ordered: false });
             }
-            console.log(`  ✓ Rolled back ${backupCount} documents from backup`);
+            Logger.info(`Rolled back ${backupCount} documents from backup`);
             await backupCollection.drop().catch((err: Error) => {
               if (!err.message.includes('ns not found')) {
-                console.warn(`  ⚠ Warning: Failed to drop backup after rollback:`, err.message);
+                Logger.warn(`Warning: Failed to drop backup after rollback`, { error: err.message });
               }
             });
           } catch (rollbackError) {
             const originalMessage = error instanceof Error ? error.message : String(error);
             const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
-            console.error(
-              `  ✗ Rollback failed:`,
-              rollbackError instanceof Error ? rollbackError.message : rollbackError
-            );
+            Logger.error('Rollback failed', { error: rollbackMessage });
             throw new Error(
               `Sync of ${collectionName} failed: ${originalMessage} (rollback also failed: ${rollbackMessage})`,
               { cause: error }
             );
           }
         } else {
-          console.log('  - Target was not modified yet; leaving it untouched.');
+          Logger.info('Target was not modified yet; leaving it untouched.');
         }
 
         throw error;
@@ -297,7 +324,7 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
       const reason = allSourcesEmpty
         ? `source was empty for ${skippedCollections.join(', ')}`
         : 'no documents were copied';
-      console.log(`  - Sync marker not set: ${reason}`);
+      Logger.info(`Sync marker not set: ${reason}`);
       return {
         synced: 0,
         skipped: allSourcesEmpty
@@ -318,13 +345,13 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
       const marker = await targetDb.collection(SYNC_MARKER_COLLECTION).findOne({ key: SYNC_MARKER_KEY, stage });
       if (marker?.stage !== stage) throw new Error('Sync marker was not persisted');
     }
-    console.log('  ✓ Sync marker set');
+    Logger.info('Sync marker set');
 
-    console.log(`\n✓ Preview settings sync complete: ${totalSynced} total documents synced`);
+    Logger.info(`Preview settings sync complete: ${totalSynced} total documents synced`);
   } finally {
     await sourceClient.close();
     await targetClient.close();
-    console.log('✓ MongoDB connections closed');
+    Logger.info('MongoDB connections closed');
   }
 
   return { synced: totalSynced, markerStage: stage, emptyCollections: skippedCollections };
@@ -371,20 +398,23 @@ async function strictSeed(event: DataSyncerEvent): Promise<StrictSeedResponse> {
       'Sync marker was not persisted',
     ];
     const reason = error instanceof Error && invariantFailures.includes(error.message) ? error.message : undefined;
-    console.error('Preview seed failed', { stage, errorType, errorCode, reason });
+    Logger.error('Preview seed failed', { stage, errorType, errorCode, reason });
     return result('failed');
   }
 }
 
 export const handler: Handler<DataSyncerEvent, DataSyncerResponse | StrictSeedResponse> = async event => {
   if (event.resultVersion === 1) return strictSeed(event);
-  console.log('DataSyncer invoked with event:', event);
+  Logger.info('DataSyncer invoked', {
+    resultVersion: event.resultVersion,
+    syncPreviewSettings: event.syncPreviewSettings,
+  });
 
   const isPreviewEnvironment = PREVIEW_STAGE_PATTERN.test(process.env.SEED_STAGE_NAME ?? '');
   // syncPreviewSettings is passed from the invoke script on preview deploys; the syncmarker makes repeat runs skip
   const shouldSyncPreviewSettings = event.syncPreviewSettings === true;
 
-  console.log(
+  Logger.info(
     `Environment check: SEED_STAGE_NAME=${process.env.SEED_STAGE_NAME}, isPreviewEnvironment=${isPreviewEnvironment}, shouldSyncPreviewSettings=${shouldSyncPreviewSettings}`
   );
 
@@ -415,11 +445,11 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse | StrictSeedRe
         );
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        console.error('Error syncing preview settings from staging:', error);
+        Logger.error('Error syncing preview settings from staging', { error: describeError(error) });
         messages.push(`Preview settings sync failed: ${errorMsg}`);
       }
     } else {
-      console.log('⏭️  Skipping preview settings sync (SYNC_PREVIEW_SETTINGS not enabled)');
+      Logger.info('Skipping preview settings sync (SYNC_PREVIEW_SETTINGS not enabled)');
       messages.push('Skipped preview settings sync (SYNC_PREVIEW_SETTINGS not enabled)');
     }
 
@@ -430,10 +460,10 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse | StrictSeedRe
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error('Error in DataSyncer:', error);
+    Logger.error('Error in DataSyncer', { error: describeError(error) });
 
     // Log warning but don't fail deployment
-    console.warn('WARNING: DataSyncer failed but will not block deployment');
+    Logger.warn('WARNING: DataSyncer failed but will not block deployment');
 
     return {
       success: true, // Return success to not block deployment

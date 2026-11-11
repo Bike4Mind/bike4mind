@@ -15,6 +15,8 @@ const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: unknown, res: unknown) => unknown),
 }));
 
+const { mockRecordFeedbackRead } = vi.hoisted(() => ({ mockRecordFeedbackRead: vi.fn() }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
@@ -83,6 +85,8 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsValue: vi.fn(),
 }));
 
+// The audit write pulls the admin audit chain; feedbackReadAudit.test.ts covers it.
+vi.mock('@server/utils/feedbackReadAudit', () => ({ recordFeedbackRead: mockRecordFeedbackRead }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postFeedbackToSlack: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
@@ -153,6 +157,7 @@ describe('GET /api/feedback', () => {
     mockListDocs.mockReturnValue([]);
     mockCountDocuments.mockResolvedValue(0);
     mockDistinct.mockResolvedValue([]);
+    mockRecordFeedbackRead.mockResolvedValue(undefined);
     mockTextFind.mockReturnValue({ select: () => ({ lean: vi.fn().mockResolvedValue([]) }) });
   });
 
@@ -217,6 +222,8 @@ describe('GET /api/feedback', () => {
     expect(mockSelect).toHaveBeenCalledWith(FEEDBACK_LIST_FIELDS);
     const selected = mockSelect.mock.calls[0][0] as string;
     expect(selected).not.toContain('promptMeta');
+    // Named here rather than compared to the constant: dropping the field would blank the chips and CSV columns.
+    expect(selected.split(' ')).toContain('clientContext');
   });
 
   it('returns exactly items/total/page/limit, sourced from countDocuments', async () => {
@@ -300,6 +307,30 @@ describe('GET /api/feedback', () => {
     expect(findFilter.$and).toContainEqual({ userId: 'user-1' });
   });
 
+  it('ANDs the type filter in as an $in over the picked types', async () => {
+    const { req, res } = buildRequest({ type: ['Bug', 'Thumbs Down'] }, adminAbility());
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ type: { $in: ['Bug', 'Thumbs Down'] } });
+  });
+
+  it('lets the Feedback type also match reports that carry no type', async () => {
+    const { req, res } = buildRequest({ type: 'Feedback' }, adminAbility());
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ type: { $in: ['Feedback', null] } });
+  });
+
+  it('rejects a type outside FeedbackType with a 422 before any query runs', async () => {
+    const { req, res } = buildRequest({ type: 'Spam' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFind).not.toHaveBeenCalled();
+  });
+
   it('does NOT narrow to the caller without an explicit userId, even for an admin', async () => {
     const { req, res } = buildRequest({ sessionId: 'session-1', subject: 'turn' }, adminAbility());
     await runHandler(req, res);
@@ -339,5 +370,37 @@ describe('GET /api/feedback', () => {
     const serialized = JSON.stringify(findFilter.$and);
     expect(serialized).toContain('match-1');
     expect(serialized).toContain('match-2');
+  });
+
+  describe('audit of staff reads', () => {
+    it('records the page it is about to serve, with the ids and the filters that produced it', async () => {
+      mockListDocs.mockReturnValue([
+        { id: 'f1', userId: 'reporter-1', toJSON: () => ({ id: 'f1' }) },
+        { id: 'f2', userId: 'reporter-2', toJSON: () => ({ id: 'f2' }) },
+      ]);
+
+      const { req, res } = buildRequest({ search: 'crash', page: '2', limit: '5' }, adminAbility());
+      await runHandler(req, res);
+
+      expect(mockRecordFeedbackRead).toHaveBeenCalledTimes(1);
+      const [auditedReq, reports, details] = mockRecordFeedbackRead.mock.calls[0];
+      expect(auditedReq).toBe(req);
+      expect(reports).toEqual([
+        { id: 'f1', userId: 'reporter-1' },
+        { id: 'f2', userId: 'reporter-2' },
+      ]);
+      expect(details).toMatchObject({ page: 2, limit: 5, search: 'crash' });
+    });
+
+    it('fails the request and serves no items when the audit write fails', async () => {
+      mockListDocs.mockReturnValue([{ id: 'f1', userId: 'reporter-1', toJSON: () => ({ id: 'f1' }) }]);
+      mockRecordFeedbackRead.mockRejectedValue(new Error('audit store down'));
+
+      const { req, res } = buildRequest({}, adminAbility());
+      await runHandler(req, res);
+
+      expect(res._getStatusCode()).toBe(500);
+      expect(res._getData()).not.toContain('f1');
+    });
   });
 });

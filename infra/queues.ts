@@ -5,11 +5,7 @@ import {
   publishedArtifactsBucket,
   slackExportBucket,
 } from './buckets';
-import {
-  DEFAULT_LAMBDA_ENVIRONMENT,
-  SINGLE_RECORD_BATCH,
-  TEST_GENERATION_PROVIDER_ENVIRONMENT,
-} from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
 import { imageProcessor } from './imageProcessor';
 import {
   buildQueuePair,
@@ -25,7 +21,7 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
-import { appUrlForLambdaEnv, cdnUrlForLambdaEnv } from './router';
+import { appUrlForLambdaEnv, cdnUrlForLambdaEnv, router, routerDistributionId } from './router';
 import { searxngUrl } from './searxng';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
@@ -203,8 +199,10 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
+    // sreJobQueue / overwatchAnalyticsQueue below. partialResponses: a retryable spend-gate
+    // (rate window) denial is handed back as a batch item failure rather than thrown, so it
+    // retries without an Invoke Error (see returnRecordForRedelivery).
+    batch: { size: 1, partialResponses: true },
   }
 );
 
@@ -1108,6 +1106,43 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Generated media a notebook or message delete could not purge within its request budget
+// (apps/client/server/sessions/purgeDeletedNotebookMedia.ts, purgeDeletedMessageMedia.ts) finishes here.
+const generatedMediaPurgeQueueDLQ = new sst.aws.Queue('generatedMediaPurgeQueueDLQ', {});
+const generatedMediaPurgeQueue = new sst.aws.Queue('generatedMediaPurgeQueue', {
+  visibilityTimeout: '6 minutes',
+  dlq: {
+    queue: generatedMediaPurgeQueueDLQ.arn,
+    retry: 3,
+  },
+});
+const generatedMediaPurgeQueueSubscription = generatedMediaPurgeQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/generatedMediaPurge.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    vpc: lambdaVpc,
+    // Links its own queue: a run that hits its deadline re-enqueues what it did not reach.
+    link: [...allSecrets, generatedImagesBucket, routerDistributionId, generatedMediaPurgeQueue],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['cloudfront:CreateInvalidation'],
+        resources: [router.nodes.cdn.apply(cdn => cdn.nodes.distribution.arn)],
+      },
+    ],
+  },
+  {
+    ...SINGLE_RECORD_BATCH,
+    // Each run flushes up to 500 exact CDN paths (MAX_DELETES_PER_RUN in purgeDeletedNotebookMedia.ts), so
+    // 2 runs hold a third of the in-flight quota publish takedowns share; 2 is the SQS minimum.
+    // Capped at the event source rather than on the function, so throttled polls never burn the DLQ retries.
+    transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 2 } } },
+  }
+);
+
 // Legacy What's New highlights queue, retained with its consumer until in-flight messages drain.
 // The admin generate-highlights route now sends to whatsNewGenerationQueue; there is no scheduled trigger.
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
@@ -1197,7 +1232,11 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
       eventBus,
       generationCallbackQueue,
       generationJobQueue,
+      // A masked image edit converts the mask to PNG there.
+      imageProcessor,
     ],
+    // Image jobs run our post-generation scan before the image is stored.
+    permissions: [{ actions: ['rekognition:DetectModerationLabels'], resources: ['*'] }],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
@@ -1651,7 +1690,8 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
     timeout: '5 minutes',
     memory: '1024 MB',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi],
+    // appFilesBucket: a run's first-screen screenshots are stored under bob-screenshots/<runId>/.
+    link: [...allSecrets, websocketApi, appFilesBucket],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1769,6 +1809,7 @@ export {
   driveDisconnectPurgeQueue,
   githubLakeIngestQueue,
   githubLakeRevokeQueue,
+  generatedMediaPurgeQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1808,6 +1849,7 @@ export {
   driveDisconnectPurgeQueueDLQ,
   githubLakeIngestQueueDLQ,
   githubLakeRevokeQueueDLQ,
+  generatedMediaPurgeQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1850,6 +1892,7 @@ export {
   driveDisconnectPurgeQueueSubscription,
   githubLakeIngestQueueSubscription,
   githubLakeRevokeQueueSubscription,
+  generatedMediaPurgeQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,

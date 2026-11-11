@@ -43,8 +43,13 @@ vi.mock('@bike4mind/database', () => ({
   // Faithful copy of the model's helper - the real one's behavior (including the legacy-scalar
   // fold-in) is pinned by PublishedArtifactModel.shareToken.test.ts. The gate-surface check
   // reads it rather than the scalar as of #3255 step 3.
-  liveShareTokens: (artifact: { shareToken?: string; shareTokens?: { token?: string; revokedAt?: Date | null }[] }) => {
-    const live = (artifact.shareTokens ?? []).filter(e => !!e?.token && !e.revokedAt);
+  liveShareTokens: (artifact: {
+    shareToken?: string;
+    shareTokens?: { token?: string; revokedAt?: Date | null; expiresAt?: Date | null }[];
+  }) => {
+    const live = (artifact.shareTokens ?? []).filter(
+      e => !!e?.token && !e.revokedAt && (!e.expiresAt || e.expiresAt > new Date())
+    );
     const legacy = artifact.shareToken;
     if (legacy && !live.some(e => e.token === legacy)) return [{ token: legacy, revokedAt: null }, ...live];
     return live;
@@ -148,7 +153,9 @@ describe('GET public artifact - share-token capability', () => {
     const select = vi.fn();
     await getArtifact({ id: 'someone-else', isAdmin: false }, makePublicArtifactRow(), select);
     expect(select).toHaveBeenCalledOnce();
-    expect(select).toHaveBeenCalledWith('-shareTokens.token -thumbnail');
+    expect(select).toHaveBeenCalledWith(
+      '-shareTokens.token -thumbnail -accessGate.passphraseHash -citables -renderedBody'
+    );
   });
 });
 
@@ -254,17 +261,37 @@ describe('GET public artifact - response scoping', () => {
     expect(artifact.title).toBe('My Artifact');
   });
 
-  it('returns the full record to the owner (manage modal needs it)', async () => {
+  it('returns management metadata to the owner', async () => {
     const res = await getArtifact({ id: OWNER, isAdmin: false });
     const { artifact } = res._getJSONData();
     expect(artifact.ownerId).toBe(OWNER);
     expect(artifact.storageKeyPrefix).toBe('artifacts/pub-1/');
   });
 
-  it('returns the full record to an admin', async () => {
+  it('returns management metadata to an admin', async () => {
     const res = await getArtifact({ id: 'admin-1', isAdmin: true });
     const { artifact } = res._getJSONData();
     expect(artifact.ownerId).toBe(OWNER);
+  });
+
+  it.each([
+    ['owner', { id: OWNER, isAdmin: false }],
+    ['admin', { id: 'admin-1', isAdmin: true }],
+  ])('keeps manage fields without content snapshots or a gate hash for %s', async (_label, user) => {
+    const row = {
+      ...makePublicArtifactRow(),
+      accessGate: { kind: 'passphrase', passphraseHash: 'stored-hash' },
+      citables: [{ metadata: { fullContext: 'snapshot-text' } }],
+      renderedBody: 'published-reply-body',
+    };
+    const res = await getArtifact(user, row);
+    expect(res._getStatusCode()).toBe(200);
+    const { artifact } = res._getJSONData();
+    expect(artifact).toMatchObject({ title: 'My Artifact', visibility: 'public', accessGate: { kind: 'passphrase' } });
+    expect(artifact.accessGate).toEqual({ kind: 'passphrase' });
+    expect(artifact).not.toHaveProperty('citables');
+    expect(artifact).not.toHaveProperty('renderedBody');
+    expect(row.accessGate.passphraseHash).toBe('stored-hash');
   });
 
   it('does not leak DTO metadata for a GATED public artifact to a non-manager (404)', async () => {
@@ -568,6 +595,37 @@ describe('PATCH /api/publish/artifacts/[id] - a gate needs an ENFORCING surface,
     expect(res._getStatusCode()).toBe(400);
     expect(res._getJSONData().code).toBe('GATE_REQUIRES_ENFORCING_SURFACE');
     expect(artifact.save).not.toHaveBeenCalled();
+  });
+
+  it('REJECTS a passphrase gate on a private artifact whose only array link has expired', async () => {
+    const { res, artifact } = await patchBody(
+      { accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } },
+      arrayOnlyShared({ expiresAt: new Date(Date.now() - 60_000) })
+    );
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().code).toBe('GATE_REQUIRES_ENFORCING_SURFACE');
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
+
+  describe('a gated private artifact whose only link expired', () => {
+    function expiredGated() {
+      const a = arrayOnlyShared({ expiresAt: new Date(Date.now() - 60_000) });
+      (a as unknown as { accessGate: unknown }).accessGate = { kind: 'passphrase', passphraseHash: 'hash' };
+      return a;
+    }
+
+    it('refuses a visibility PATCH that keeps the artifact non-public', async () => {
+      const { res, artifact } = await patchBody({ visibility: 'private' }, expiredGated());
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData().code).toBe('GATE_REQUIRES_ENFORCING_SURFACE');
+      expect(artifact.save).not.toHaveBeenCalled();
+    });
+
+    it('still lets the owner clear the gate', async () => {
+      const { res, artifact } = await patchBody({ accessGate: null }, expiredGated());
+      expect(res._getStatusCode()).toBe(200);
+      expect(artifact.save).toHaveBeenCalled();
+    });
   });
 
   it('ACCEPTS a passphrase gate on a private artifact that has a share token', async () => {

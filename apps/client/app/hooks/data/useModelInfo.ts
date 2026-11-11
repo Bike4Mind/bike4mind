@@ -10,13 +10,21 @@ import { useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
  */
 export const MODEL_CATALOG_QUERY_KEY = ['llm', 'models'] as const;
 
+const CATALOG_STALE_MS = 60 * 60 * 1000;
+// Matches the server's 30s retry window for a list built without the catalog.
+export const UNAVAILABLE_CATALOG_REFETCH_MS = 30_000;
+const isFallback = (query: { state: { data?: ModelCatalog } }) => query.state.data?.catalogUnavailable === true;
+
 // Gate on the fully-authenticated state so this doesn't fire during the login
 // mfaPending window, where /api/models would 401 (#804).
 function catalogQuery(isFullyAuthenticated: boolean) {
   return {
     queryKey: MODEL_CATALOG_QUERY_KEY,
     queryFn: getModelCatalog,
-    staleTime: 60 * 60 * 1000, // 1 hour
+    staleTime: (query: { state: { data?: ModelCatalog } }) =>
+      isFallback(query) ? UNAVAILABLE_CATALOG_REFETCH_MS : CATALOG_STALE_MS,
+    refetchInterval: (query: { state: { data?: ModelCatalog } }) =>
+      isFallback(query) ? UNAVAILABLE_CATALOG_REFETCH_MS : false,
     enabled: isFullyAuthenticated,
     // One blip would otherwise leave the composer on "no models" for the whole session.
     retry: 2,

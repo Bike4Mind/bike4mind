@@ -3,10 +3,13 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { makeAuditEntry } from '@client/app/components/admin/AuditLog/shared/auditTestFixtures';
 import { buildProfile, ProfileTestWrapper } from '../profileTestUtils';
 
-const mocks = vi.hoisted(() => ({ get: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  get: vi.fn(),
+  currentUser: { id: 'admin1' } as { id: string; isAdmin: boolean; adminPermissions?: string[] },
+}));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
-vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { id: 'admin1' } }) }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: mocks.currentUser }) }));
 vi.mock('@client/app/hooks/data/entitlements', () => ({
   useGetUserProductAccess: () => ({ data: undefined, isLoading: false }),
 }));
@@ -15,6 +18,7 @@ vi.mock('../RiskEvidenceCard', () => ({
   RiskEvidenceCard: ({ userId }: { userId: string }) => <div data-testid="risk-evidence-card-stub">{userId}</div>,
 }));
 vi.mock('../actions/useAdminUserUpdate', () => ({ useAdminUserUpdate: () => vi.fn() }));
+vi.mock('../DetectionLinkedAccountsCard', () => ({ DetectionLinkedAccountsCard: () => null }));
 
 import { OverviewTab } from './OverviewTab';
 
@@ -55,6 +59,7 @@ const renderTab = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.currentUser = { id: 'admin1' };
 });
 
 describe('OverviewTab internal account row', () => {
@@ -72,6 +77,19 @@ describe('OverviewTab internal account row', () => {
     expect(screen.getByTestId('user-profile-fact-internal')).toHaveTextContent(text);
     fireEvent.click(screen.getByTestId('user-profile-internal-btn'));
     expect(onAction).toHaveBeenCalledWith('internalAccount');
+  });
+});
+
+describe('OverviewTab file indexing window row', () => {
+  it('opens the reset action', () => {
+    mocks.currentUser = { id: 'admin1', isAdmin: true };
+    const onAction = vi.fn();
+    render(<OverviewTab user={buildProfile()} onAction={onAction} onViewActivity={vi.fn()} onViewCredits={vi.fn()} />, {
+      wrapper: ProfileTestWrapper,
+    });
+
+    fireEvent.click(screen.getByTestId('user-actions-reset-file-embedding-window'));
+    expect(onAction).toHaveBeenCalledWith('fileEmbeddingWindowReset');
   });
 });
 
@@ -114,5 +132,73 @@ describe('OverviewTab recent activity', () => {
     renderTab();
 
     expect(await screen.findByText('Activity could not be loaded.')).toBeInTheDocument();
+  });
+});
+
+describe('OverviewTab API key trust row', () => {
+  beforeEach(() => {
+    mocks.get.mockResolvedValue({ data: { entries: [], nextCursor: null, notes: [], items: [] } });
+  });
+
+  it('is enabled for a full admin', () => {
+    mocks.currentUser = { id: 'admin1', isAdmin: true };
+    renderTab();
+    expect(screen.getByTestId('user-profile-key-trust-btn')).toBeEnabled();
+  });
+
+  it('is disabled with the missing permission for a delegate without keys:revoke', () => {
+    mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['support:read'] };
+    renderTab();
+    expect(screen.getByTestId('user-profile-key-trust-btn')).toBeDisabled();
+    expect(screen.getByTestId('user-profile-key-trust-btn-reason')).toHaveAttribute(
+      'aria-label',
+      'Missing permission: keys:revoke'
+    );
+  });
+
+  it('is disabled for a keys:revoke delegate on an account with admin access', () => {
+    mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['keys:revoke'] };
+    render(
+      <OverviewTab
+        user={buildProfile({ isAdmin: true })}
+        onAction={vi.fn()}
+        onViewActivity={vi.fn()}
+        onViewCredits={vi.fn()}
+      />,
+      { wrapper: ProfileTestWrapper }
+    );
+    expect(screen.getByTestId('user-profile-key-trust-btn')).toBeDisabled();
+    expect(screen.getByTestId('user-profile-key-trust-btn-reason')).toHaveAttribute(
+      'aria-label',
+      'Only full administrators can act on accounts with admin access'
+    );
+  });
+
+  it('is enabled for a delegate with keys:revoke', () => {
+    mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['keys:revoke'] };
+    renderTab();
+    expect(screen.getByTestId('user-profile-key-trust-btn')).toBeEnabled();
+  });
+});
+
+describe('OverviewTab file indexing window reset row', () => {
+  beforeEach(() => {
+    mocks.get.mockResolvedValue({ data: { entries: [], nextCursor: null, notes: [], items: [] } });
+  });
+
+  it('is disabled with the missing permission for a delegate without settings:manage', () => {
+    mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['support:read'] };
+    renderTab();
+    expect(screen.getByTestId('user-actions-reset-file-embedding-window')).toBeDisabled();
+    expect(screen.getByTestId('user-actions-reset-file-embedding-window-reason')).toHaveAttribute(
+      'aria-label',
+      'Missing permission: settings:manage'
+    );
+  });
+
+  it('is enabled for a delegate with settings:manage', () => {
+    mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['settings:manage'] };
+    renderTab();
+    expect(screen.getByTestId('user-actions-reset-file-embedding-window')).toBeEnabled();
   });
 });

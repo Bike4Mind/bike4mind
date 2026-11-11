@@ -1,8 +1,9 @@
-import { CreditHolderType, isSignupGrantBlocked, settingsMap } from '@bike4mind/common';
+import { CreditHolderType, settingsMap } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   creditLotRepository,
   creditTransactionRepository,
+  heldCreditRewardRepository,
   REFERRAL_REWARD_STEPS,
   referralSubscriptionRewardRepository,
   User,
@@ -11,7 +12,9 @@ import {
   type ReferralRewardCloseReason,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { creditService } from '@bike4mind/services';
+import { creditService, userService } from '@bike4mind/services';
+import { REFERRED_USER_ID_METADATA_KEY } from '@bike4mind/services/creditService';
+import { buildCreditRewardAdapters } from '../credits/creditRewardAdapters';
 import { getStripe } from '../integrations/stripe/stripe';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { PROFESSIONAL_PRICE_ID } from '../lib/userSubscriptions/constants';
@@ -31,7 +34,7 @@ const MAX_REVERSAL_ATTEMPTS = 3;
 
 const PARTY_FIELDS = 'isSynthetic deletedAt isBanned disputePending moderation.status';
 // An admin's grant block applies to the account the reward pays, never to the invited friend who paid.
-const INVITER_FIELDS = `${PARTY_FIELDS} signupGrant.blocked`;
+const INVITER_FIELDS = `${PARTY_FIELDS} signupGrant.blocked signupGrant.unlockForfeited`;
 
 // In Stripe v22 the payment intent lives on invoice.payments (expand it when retrieving the invoice).
 const invoicePaymentIntentId = (invoice: Stripe.Invoice): string | undefined => {
@@ -72,6 +75,12 @@ export function isFullPriceProfessionalInvoice(invoice: Stripe.Invoice, subscrip
 /** Transaction id and lot reference of a reward's grant; the take-back finds the lot through it. */
 const rewardGrantRef = ({ inviterId, invoiceId }: { inviterId: string; invoiceId: string }) =>
   `referral-subscription:${inviterId}:${invoiceId}`;
+
+// Rolls a release back when payCreditReward refuses the inviter, so the reward stays pending and is retried.
+class InviterRefusedError extends Error {}
+
+// Rolls a refund take-back back when the queued reward changed under it; the reversal re-reads and retries.
+class QueuedRewardChangedError extends Error {}
 
 const REWARD_SETTINGS = ['ReferralFirstPaymentCredits', 'ReferralSecondPaymentCredits', 'ReferralHoldDays'] as const;
 
@@ -178,7 +187,9 @@ export interface ReleaseSubscriptionRewardsResult {
 }
 
 /**
- * Credits every held reward whose hold has ended. An inviter or payer who has since been deleted,
+ * Pays every held reward whose hold has ended through creditService.payCreditReward, so a dry trickle pool
+ * queues it as a held credit reward (the referral row still reads released). An inviter or payer who has
+ * since been deleted,
  * suspended, banned or put under a chargeback earns nothing and the reward is cancelled. So is a reward
  * whose payment Stripe shows as refunded or disputed: the refund webhook cancels it too, but it misses a
  * refund that arrived before the reward was recorded or whose handling failed. Each claim and grant commit
@@ -215,7 +226,7 @@ export async function releaseDueSubscriptionRewards({
         User.findById(candidate.payerId).select(PARTY_FIELDS).lean<RewardParty>(),
       ]);
       const blocked: ReferralRewardCloseReason | null =
-        !inviter || creditService.isRewardPartyBlocked(inviter)
+        !inviter || creditService.isRewardPartyBlocked(inviter) || inviter.signupGrant?.unlockForfeited
           ? 'inviter_blocked'
           : !payer || creditService.isRewardPartyBlocked(payer)
             ? 'payer_blocked'
@@ -224,8 +235,8 @@ export async function releaseDueSubscriptionRewards({
         if (await referralSubscriptionRewardRepository.cancelPending(candidate.id, blocked, now)) result.cancelled++;
         continue;
       }
-      // Unblock lifts an admin grant block, so the reward stays pending instead of closing for good.
-      if (inviter && isSignupGrantBlocked(inviter)) continue;
+      // An admin can lift a grant block, so the reward stays pending instead of closing for good.
+      if (inviter && creditService.isRewardRecipientBlocked(inviter)) continue;
 
       // A Stripe failure throws into the catch below, so the reward is retried next run rather than paid.
       const outcome = candidate.paymentIntentId ? await paymentOutcome(candidate.paymentIntentId) : 'paid';
@@ -234,28 +245,39 @@ export async function releaseDueSubscriptionRewards({
         continue;
       }
 
-      const creditTransactionId = await withTransaction(async () => {
-        const claimed = await referralSubscriptionRewardRepository.claimForRelease(candidate.id, now);
-        if (!claimed) return null;
-        const grant = await creditService.addCreditsWithLedgerRow(
-          {
-            ownerId: claimed.inviterId,
-            ownerType: CreditHolderType.User,
-            credits: claimed.credits,
-            type: 'generic_add',
-            transactionId: rewardGrantRef(claimed),
-            reason: REFERRAL_REWARD_REASON,
-            description: 'Referral reward: subscription payment from an invited friend',
-            metadata: { step: claimed.step, referredUserId: claimed.payerId, invoiceId: claimed.invoiceId },
-          },
-          {
-            db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
-            creditHolderMethods: userRepository,
-            lotRef: rewardGrantRef(claimed),
-          }
+      let creditTransactionId: string | null;
+      try {
+        // The budget draw commits outside the transaction, so a rollback hands it back.
+        creditTransactionId = await userService.refundBudgetOnFailure(() =>
+          withTransaction(async () => {
+            const claimed = await referralSubscriptionRewardRepository.claimForRelease(candidate.id, now);
+            if (!claimed) return null;
+            const ref = rewardGrantRef(claimed);
+            const paid = await creditService.payCreditReward(
+              {
+                transactionId: ref,
+                userId: claimed.inviterId,
+                credits: claimed.credits,
+                source: 'referral_subscription',
+                reason: REFERRAL_REWARD_REASON,
+                description: 'Referral reward: subscription payment from an invited friend',
+                lotRef: ref,
+                metadata: {
+                  step: claimed.step,
+                  [REFERRED_USER_ID_METADATA_KEY]: claimed.payerId,
+                  invoiceId: claimed.invoiceId,
+                },
+              },
+              buildCreditRewardAdapters({ inTransaction: true, duplicateTransactionId: 'throw' })
+            );
+            if (paid.outcome === 'blocked') throw new InviterRefusedError();
+            return paid.outcome === 'paid' ? paid.creditTransactionId : '';
+          })
         );
-        return grant.creditTransactionId ?? '';
-      });
+      } catch (err) {
+        if (err instanceof InviterRefusedError) continue;
+        throw err;
+      }
       if (creditTransactionId === null) continue;
 
       result.released++;
@@ -322,6 +344,34 @@ export async function reverseSubscriptionRewardForRefund({
     if (newlyDue <= 0) return;
 
     const recorded = await withTransaction(async () => {
+      // A reward the trickle pool has not paid yet is still a held credit reward: lower or void that
+      // instead, since none of it reached the inviter's balance.
+      const [held] = await heldCreditRewardRepository.findByTransactionIds([rewardGrantRef(reward)]);
+      if (held && held.status !== 'paid') {
+        const unpaid = held.status === 'held' || held.status === 'paused';
+        const applied = await referralSubscriptionRewardRepository.recordTakeBack(
+          reward.id,
+          reward.refundTargetCredits,
+          {
+            refundTargetCredits,
+            takenBackCredits: reward.takenBackCredits + (unpaid ? newlyDue : 0),
+            fullyRefunded: refundedShare >= 1,
+          },
+          now
+        );
+        if (!applied) return false;
+        if (
+          unpaid &&
+          !(await heldCreditRewardRepository.reduceHeld(
+            held.transactionId,
+            held.credits,
+            reward.credits - refundTargetCredits
+          ))
+        )
+          throw new QueuedRewardChangedError();
+        return true;
+      }
+
       const [inviter, rewardLots] = await Promise.all([
         User.findById(reward.inviterId).select('currentCredits').lean<{ currentCredits?: number }>(),
         creditLotRepository.findByStripeRef(rewardGrantRef(reward)),
@@ -359,6 +409,9 @@ export async function reverseSubscriptionRewardForRefund({
         });
       }
       return true;
+    }).catch(err => {
+      if (err instanceof QueuedRewardChangedError) return false;
+      throw err;
     });
     if (recorded) return;
   }

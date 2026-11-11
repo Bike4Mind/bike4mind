@@ -81,8 +81,12 @@ vi.mock('@bike4mind/services', () => ({
     isRewardRecipientBlocked: (party: {
       isBanned?: boolean;
       moderation?: { status?: string };
-      signupGrant?: { blocked?: unknown };
-    }) => !!party.isBanned || party.moderation?.status === 'suspend_pending' || !!party.signupGrant?.blocked,
+      signupGrant?: { blocked?: unknown; unlockForfeited?: unknown };
+    }) =>
+      !!party.isBanned ||
+      party.moderation?.status === 'suspend_pending' ||
+      !!party.signupGrant?.blocked ||
+      !!party.signupGrant?.unlockForfeited,
   },
 }));
 vi.mock('@bike4mind/common', () => ({
@@ -165,6 +169,7 @@ describe('GET /api/gears/status', () => {
       deletedAt: 1,
       isSynthetic: 1,
       'signupGrant.blocked': 1,
+      'signupGrant.unlockForfeited': 1,
     });
     const body = res._getJSONData() as { gears: Array<{ unlocked: boolean }>; totalUnlocked: number };
     expect(body.gears).toHaveLength(GEAR_DEFAULTS.length);
@@ -238,6 +243,10 @@ describe('GET /api/gears/status', () => {
     { label: 'a suspend_pending moderation status', account: { moderation: { status: 'suspend_pending' } } },
     { label: 'a ban', account: { isBanned: true } },
     { label: 'an admin grant block', account: { signupGrant: { blocked: { at: new Date() } } } },
+    {
+      label: 'a forfeited signup unlock',
+      account: { signupGrant: { unlockForfeited: { cause: 'refund', at: new Date() } } },
+    },
   ])('an account with $label sees an unlocked gear as unavailable, not claimable', async ({ account }) => {
     mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
     mocks.userFindById.mockReturnValue({

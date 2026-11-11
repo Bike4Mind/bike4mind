@@ -43,7 +43,7 @@ const builderWith = (customMcp: CustomMcpToolHost | undefined, builtIns: unknown
 const run = (
   builder: ToolBuilder,
   onPendingAction = vi.fn(async () => undefined),
-  extra: { requestedMcpServers?: string[]; disableUserIntegrations?: boolean } = {}
+  extra: { requestedMcpServers?: string[]; disabledMcpConnections?: string[]; disableUserIntegrations?: boolean } = {}
 ) =>
   builder.buildMcpTools({
     enableMCPServer: true,
@@ -116,6 +116,18 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
     const { mcpToolsByServer } = await run(builderWith(host as never), undefined, { requestedMcpServers: [] });
 
     expect(mcpToolsByServer.acme.map(t => t.name)).toEqual(['acme__search', 'acme__create']);
+  });
+
+  it('withholds a connector switched off in the composer and keeps the others', async () => {
+    const other = { ...connection, connectionId: 'c2', slug: 'docs', displayName: 'Docs' };
+    const host = { listConnections: vi.fn(async () => [connection, other]), callTool: vi.fn() };
+    const { mcpToolsByServer, customMcpToolNames } = await run(builderWith(host as never), undefined, {
+      requestedMcpServers: ['notion'],
+      disabledMcpConnections: ['acme', 'not_a_connection'],
+    });
+
+    expect(Object.keys(mcpToolsByServer)).toEqual(['docs']);
+    expect([...customMcpToolNames]).toEqual(['docs__search', 'docs__create']);
   });
 
   it('adds the connector-output-is-data notice to the tool prompt only when custom tools are offered', async () => {

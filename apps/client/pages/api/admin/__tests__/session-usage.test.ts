@@ -79,7 +79,7 @@ describe('GET /api/admin/session-usage — access', () => {
     expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
     expect(mockSessionBelongsToOwner).not.toHaveBeenCalled();
     // No owner filter: admins see the full cross-org rollup.
-    expect(mockSessionUsageSummary).toHaveBeenCalledWith(SESSION, undefined);
+    expect(mockSessionUsageSummary).toHaveBeenCalledWith(SESSION, undefined, { includeExecuted: true });
     expect(mockFindBillingBySessionId).toHaveBeenCalledWith(SESSION, undefined);
     expect(res._getJSONData().sessionId).toBe(SESSION);
   });
@@ -98,7 +98,7 @@ describe('GET /api/admin/session-usage — access', () => {
     });
     await run();
     expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
-    expect(mockSessionUsageSummary).toHaveBeenCalledWith(SESSION, undefined);
+    expect(mockSessionUsageSummary).toHaveBeenCalledWith(SESSION, undefined, { includeExecuted: true });
   });
 
   it('scopes an org owner to their org slice of the session (no cross-owner leak)', async () => {
@@ -108,7 +108,11 @@ describe('GET /api/admin/session-usage — access', () => {
     expect(mockSessionBelongsToOwner).toHaveBeenCalledWith(SESSION, ORG, 'Organization');
     // Both response queries owner-scoped to the org - a mixed-owner session must
     // not surface another owner's spend to a non-admin.
-    expect(mockSessionUsageSummary).toHaveBeenCalledWith(SESSION, { ownerId: ORG, ownerType: 'Organization' });
+    expect(mockSessionUsageSummary).toHaveBeenCalledWith(
+      SESSION,
+      { ownerId: ORG, ownerType: 'Organization' },
+      { includeExecuted: false }
+    );
     expect(mockFindBillingBySessionId).toHaveBeenCalledWith(SESSION, ORG);
     expect(res._getJSONData().sessionId).toBe(SESSION);
   });

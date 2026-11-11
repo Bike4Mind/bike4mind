@@ -8,7 +8,9 @@ const h = vi.hoisted(() => ({
   limits: vi.fn(),
 }));
 vi.mock('@bike4mind/server-utils/auth/signupProtection', () => ({ signupProtection: h.protection }));
-vi.mock('@bike4mind/services', () => ({ userService: { dripSignupGrant: h.drip, resolveDripLimits: h.limits } }));
+vi.mock('@bike4mind/services', () => ({
+  userService: { dripSignupGrant: h.drip, resolveDripLimits: h.limits, alertIfDripCapDefault: vi.fn() },
+}));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findBySettingName: h.setting },
   creditLotRepository: {},

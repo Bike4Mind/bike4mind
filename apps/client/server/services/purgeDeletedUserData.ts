@@ -6,14 +6,15 @@ import {
   hideDeletedAuthorAnnotations,
   integrationRequestRepository,
   shadowDetectionRepository,
+  campaignWatchRepository,
 } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
-import { retainDeletedSignupTraces } from '@server/auth/signupNetworkLimits';
-import { purgeUserPublishedArtifacts } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { retainDeletedSignupTraces } from '@bike4mind/server-utils/auth/signupNetworkLimits';
+import { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { withdrawAuthorListings } from '@bike4mind/server-utils/skillMarket/market';
 import { decryptStoredToken, revokeDriveGrant } from '@bike4mind/server-utils/integrations/google/drive/common';
-import { flagConnectionsStoppedByDisconnect } from '@server/integrations/google/drive/flagConnectionsStoppedByDisconnect';
-import { revokeAtlassianGrant } from '@server/integrations/jira/revokeAtlassianGrant';
+import { flagConnectionsStoppedByDisconnect } from '@bike4mind/server-utils/integrations/google/drive/flagConnectionsStoppedByDisconnect';
+import { revokeAtlassianGrant } from '@bike4mind/server-utils/integrations/jira/revokeAtlassianGrant';
 
 interface MinimalLogger {
   info: (msg: string) => void;
@@ -134,6 +135,12 @@ export async function purgeDeletedUserData(
     logger.info(`Removed deleted user ${userId} from shadow detections (${deleted} record(s) deleted)`);
   } catch (err) {
     logger.error(`Failed to remove deleted user ${userId} from shadow detections: ${String(err)}`);
+  }
+
+  try {
+    await campaignWatchRepository.removeUser(userId);
+  } catch (err) {
+    logger.error(`Failed to remove deleted user ${userId} from campaign watches: ${String(err)}`);
   }
 
   // Last: the revokes call out to the providers, and a slow provider must not cost the local steps above.

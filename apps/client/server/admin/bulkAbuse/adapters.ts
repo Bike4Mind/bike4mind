@@ -16,7 +16,10 @@ import {
   isSelfOrImpersonator,
   recordAdminActionFromRequest,
 } from '@bike4mind/server-utils/utils/adminAudit';
-import { cancelAccountSubscriptions, subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
+import {
+  cancelAccountSubscriptions,
+  subscriptionCancellationAudit,
+} from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 
 type AuditRequest = Parameters<typeof recordAdminActionFromRequest>[0];
 type Actor = { id: string; email?: string | null; username?: string };

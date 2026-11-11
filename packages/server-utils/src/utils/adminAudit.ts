@@ -17,6 +17,7 @@ import { userRepository } from '@bike4mind/database/auth';
 import { adminAuditService } from '@bike4mind/services';
 import { getClientIp } from './ip';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 
 // A hand-written slice of the client's augmented Express.User (apps/client/global.d.ts). Keep in sync:
 // apps/client/server/utils/adminAuditActor.typecheck.ts fails client typecheck when the user stops fitting it.
@@ -52,7 +53,7 @@ const lookUpImpersonator = async (req: AuditRequest, impersonatedBy: string) => 
     // Attribution must not abort the admin operation; the fallback actor still names who acted.
     const meta = { impersonatedBy, error };
     if (req.logger) req.logger.error('[ADMIN_AUDIT_ACTOR_LOOKUP_FAILED]', meta);
-    else console.error('[ADMIN_AUDIT_ACTOR_LOOKUP_FAILED]', meta);
+    else Logger.error('[ADMIN_AUDIT_ACTOR_LOOKUP_FAILED]', meta);
     return null;
   }
 };

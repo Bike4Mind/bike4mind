@@ -2,17 +2,23 @@ import { IBaseRepository, IMongoDocument } from '.';
 import { PaginatedResponse } from '../common';
 
 /**
- * Where a waitlist signup came from. Everything but `subscribe_page` is a person who
- * tried to create an account while open registration was off.
+ * Where a waitlist signup came from. `subscribe_page` and `coming_soon_page` are people who asked
+ * to join; every other source is a person who tried to create an account while open registration
+ * was off (see `isSignupClosedSource`).
  */
 export const SUBSCRIBER_SOURCES = [
   'subscribe_page',
   'login_signup_closed',
   'register_signup_closed',
   'oauth_signup_closed',
+  'coming_soon_page',
 ] as const;
 
 export type SubscriberSource = (typeof SUBSCRIBER_SOURCES)[number];
+
+export function isSignupClosedSource(source: SubscriberSource): boolean {
+  return source !== 'subscribe_page' && source !== 'coming_soon_page';
+}
 
 /**
  * Why a waitlist name looks like a probe rather than a person: HTML or script markup, a leading
@@ -87,7 +93,8 @@ export interface ISubscriberRepository extends IBaseRepository<ISubscriberDocume
     credits: number,
     storage: number
   ) => Promise<ISubscriberDocument>;
-  countWaiting: () => Promise<number>;
+  /** `limit` stops counting there, so a capped badge never scans the whole backlog. */
+  countWaiting: (options?: { limit?: number }) => Promise<number>;
   /** Drop signupNetwork from rows captured before `cutoff`; returns how many rows were cleared. */
   clearSignupNetworkBefore: (cutoff: Date) => Promise<number>;
 }

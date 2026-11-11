@@ -1,15 +1,13 @@
 import { Request } from 'express';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { ApiKeyScope, MODERATION_PAGE_READ } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { RateLimitSnapshot } from '@bike4mind/database';
 import { assertParseableDate } from '@server/utils/dateParam';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: MODERATION_PAGE_READ },
+}).get(async (req: Request, res) => {
   const { dateFrom, dateTo, integration, throttledOnly, limit } = req.query;
 
   // Build query filter

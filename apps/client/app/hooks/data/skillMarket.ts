@@ -25,6 +25,8 @@ export type MarketVersionView = {
   snapshot: ISkillSnapshot;
   honestSummary?: ISkillHonestSummary;
   riskTier?: SkillRiskTier;
+  /** The listing's author approved it themselves; no second reviewer. */
+  selfApproved?: boolean;
   createdAt: string;
 };
 
@@ -100,13 +102,13 @@ export const useRecommendedListings = (enabled = true) =>
     staleTime: 5 * 60 * 1000,
   });
 
-/** Detail by id, or by unlisted share token when `token` is given without an id. */
+/** Detail by id, or by unlisted share token when only `token` is given. */
 export const useListingDetail = (args: { id?: string; token?: string }) =>
   useQuery({
-    queryKey: ['skill-market', 'listing', args.id ?? null, args.token ?? null],
+    queryKey: ['skill-market', 'listing', args.id ?? null, args.id ? null : (args.token ?? null)],
     queryFn: async () => {
       const url = args.id
-        ? `/api/skills/market/${args.id}${args.token ? `?token=${encodeURIComponent(args.token)}` : ''}`
+        ? `/api/skills/market/${args.id}`
         : `/api/skills/market/by-token/${encodeURIComponent(args.token ?? '')}`;
       return (await api.get<ListingDetail>(url)).data;
     },
@@ -221,6 +223,16 @@ export const useWithdrawListing = () => {
   return useMutation({
     mutationFn: async (listingId: string) => {
       await api.delete(`/api/skills/market/${listingId}`);
+    },
+    onSuccess: invalidate,
+  });
+};
+
+export const useDeleteListing = () => {
+  const invalidate = useInvalidateMarket();
+  return useMutation({
+    mutationFn: async (listingId: string) => {
+      await api.delete(`/api/skills/market/${listingId}/permanent`);
     },
     onSuccess: invalidate,
   });

@@ -86,6 +86,8 @@ AnnotationSchema.index({ publicId: 1, kind: 1, deletedAt: 1 });
 // A user's authored annotations, recency-ordered - backs the per-author
 // anti-spam throttle ({ authorId, createdAt: { $gte } }) and recent-activity.
 AnnotationSchema.index({ authorId: 1, createdAt: -1 });
+// A viewer's own live annotations on one artifact (ownership lookup).
+AnnotationSchema.index({ publicId: 1, authorId: 1, deletedAt: 1 });
 // Threaded replies under a root.
 AnnotationSchema.index({ threadRootId: 1 });
 // Deleted-account dustbin: rows hidden by hideDeletedAuthorAnnotations are removed for good

@@ -12,6 +12,7 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { createModal, updateModal, deleteModal, listModals } from './modalOperations';
 import { parseNaturalLanguageQueryDirect } from '@client/pages/api/admin/modal-tool';
 import { Logger } from '@bike4mind/observability';
+import { resolveModalImageUrl, withSignedModalImage } from './modalImageUrls';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import {
   showHelp,
@@ -194,7 +195,7 @@ export class ModalManagementToolServer implements AdminTool {
             tags: createdModal.tags || [],
             startDate: createdModal.startDate,
             endDate: createdModal.endDate,
-            imageUrl: createdModal.imageUrl,
+            imageUrl: await resolveModalImageUrl(createdModal.imageUrl),
             closeButton: createdModal.closeButton,
             agreeButton: createdModal.agreeButton,
           },
@@ -382,7 +383,7 @@ export class ModalManagementToolServer implements AdminTool {
         };
       }
 
-      const structuredModals = modals.map((modal: IModalDocument) => ({
+      const structuredRows = modals.map((modal: IModalDocument) => ({
         id: modal._id ? modal._id.toString() : '',
         title: modal.title || modal.textMessage || 'Untitled',
         content: modal.description || '',
@@ -395,6 +396,7 @@ export class ModalManagementToolServer implements AdminTool {
         imageUrl: modal.imageUrl,
         dismissible: modal.closeButton,
       }));
+      const structuredModals = await Promise.all(structuredRows.map(withSignedModalImage));
 
       return {
         success: true,
@@ -406,7 +408,7 @@ export class ModalManagementToolServer implements AdminTool {
         },
       };
     } catch (error) {
-      console.error('Error fetching modals:', error);
+      modalToolLogger.error('Error fetching modals', { error });
       return {
         success: false,
         error: `Failed to fetch modals: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -504,7 +506,7 @@ export class ModalManagementToolServer implements AdminTool {
             tags: modal.tags || [],
             startDate: modal.startDate,
             endDate: modal.endDate,
-            imageUrl: modal.imageUrl,
+            imageUrl: await resolveModalImageUrl(modal.imageUrl),
             dismissible: modal.closeButton,
             isBanner: modal.isBanner,
             closeButton: modal.closeButton,
@@ -515,7 +517,7 @@ export class ModalManagementToolServer implements AdminTool {
         },
       };
     } catch (error) {
-      console.error('Error triggering modal:', error);
+      modalToolLogger.error('Error triggering modal', { error });
       return {
         success: false,
         error: `Failed to trigger modal: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -570,7 +572,7 @@ export class ModalManagementToolServer implements AdminTool {
                     tags: createdModal.tags || [],
                     startDate: createdModal.startDate,
                     endDate: createdModal.endDate,
-                    imageUrl: createdModal.imageUrl,
+                    imageUrl: await resolveModalImageUrl(createdModal.imageUrl),
                     closeButton: createdModal.closeButton,
                     agreeButton: createdModal.agreeButton,
                   },
@@ -625,7 +627,7 @@ export class ModalManagementToolServer implements AdminTool {
 
       return result;
     } catch (error) {
-      console.error('LLM modal processing error:', error);
+      modalToolLogger.error('LLM modal processing error', { error });
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to process modal request',

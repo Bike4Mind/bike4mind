@@ -23,6 +23,17 @@ configured operator environment, run it a second time to confirm convergence, th
 workers. Do not run the backfill during a rolling deployment or while legacy writers remain active.
 The command is repeatable and is not marked permanently complete by the migration manager.
 
+To see what is left, run the read-only census, `pnpm --filter @bike4mind/scripts audit:credential-census`, before
+and after the backfills and after restoring a backup. It prints the database it read and, per credential field, how
+many stored values are still plaintext, unhashed or not yet context-bound. Each pending row names the backfill that
+converts it, or `no backfill`. Exit 0 means nothing is pending. Exit 1 means values remain; a `no backfill` row needs
+a manual fix, so exit 1 does not always clear after the backfills. Exit 2 means an error, or that every field was
+empty (wrong or empty database). The census writes nothing and prints no values or document ids.
+
+The `identityproviders` row is covered by a deploy migration that `migrate up` skips once it is recorded as
+applied. To re-apply it, delete its record (id `20260904000000`) from the `migrations` collection, then run
+`migrate up`.
+
 Before deployment, provision a persistent `MEMORY_KEY_SECRET` alongside `SECRET_ENCRYPTION_KEY`.
 Generate independent random values; for example, `openssl rand -hex 32`. Cloud deployments validate the
 secret before creating resources. Self-host installations provide it through their runtime environment.

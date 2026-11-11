@@ -7,6 +7,7 @@ const mockProcess = vi.hoisted(() => vi.fn());
 const processOptions = vi.hoisted(() => vi.fn());
 const mockCapCheck = vi.hoisted(() => vi.fn());
 const mockRecordFirstChatValue = vi.hoisted(() => vi.fn(async () => false));
+const mockLiveActivityEnd = vi.hoisted(() => vi.fn(async () => undefined));
 
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
@@ -81,10 +82,15 @@ vi.mock('@server/billing/meterPlatformCompletion', async importOriginal => ({
 
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 
+vi.mock('./questProcessor.push', async importOriginal => ({
+  ...(await importOriginal<typeof import('./questProcessor.push')>()),
+  createChatLiveActivity: () => ({ end: mockLiveActivityEnd }),
+}));
+
 vi.mock('@server/analytics/funnel', () => ({ recordFirstChatValue: mockRecordFirstChatValue }));
 
-vi.mock('@server/billing/freeTierDailyCapGate', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/billing/freeTierDailyCapGate')>()),
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/freeTierDailyCapGate')>()),
   checkFreeTierDailySpendCap: mockCapCheck,
 }));
 
@@ -373,4 +379,48 @@ describe('processQuest', () => {
       )
     ).rejects.toThrow('boom');
   }, 120_000);
+
+  describe('live activity end', () => {
+    const run = async () => {
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      return processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} } as never,
+        logger as never
+      );
+    };
+
+    it('ends once with no outcome when the turn completes', async () => {
+      mockLiveActivityEnd.mockClear();
+      await run();
+      expect(mockLiveActivityEnd.mock.calls).toEqual([[]]);
+    }, 120_000);
+
+    it('ends once as failed on the free-tier cap path', async () => {
+      const { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } = await import('@bike4mind/common');
+      const { questRepository } = await import('@bike4mind/database');
+      const settle = vi.spyOn(questRepository, 'settleIfUnfinished').mockResolvedValue(true);
+      mockCapCheck.mockRejectedValueOnce(
+        new TooManyRequestsError('limit', { errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE })
+      );
+      mockLiveActivityEnd.mockClear();
+      await run();
+      expect(mockLiveActivityEnd.mock.calls).toEqual([['failed']]);
+      settle.mockRestore();
+    }, 120_000);
+
+    it('ends once as failed when the cap check throws something else', async () => {
+      mockCapCheck.mockRejectedValueOnce(new Error('boom'));
+      mockLiveActivityEnd.mockClear();
+      await expect(run()).rejects.toThrow('boom');
+      expect(mockLiveActivityEnd.mock.calls).toEqual([['failed']]);
+    }, 120_000);
+
+    it('ends once as failed when process() throws', async () => {
+      mockProcess.mockRejectedValueOnce(new Error('model down'));
+      mockLiveActivityEnd.mockClear();
+      await expect(run()).rejects.toThrow('model down');
+      expect(mockLiveActivityEnd.mock.calls).toEqual([['failed']]);
+    }, 120_000);
+  });
 });

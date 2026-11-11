@@ -3,7 +3,7 @@ import type { IUserDocument } from '@bike4mind/common';
 import { isAccountDeletionPending } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { isMfaEnrollmentOwed } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { logOAuthError } from '@server/auth/oauthErrorLog';
-import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
+import { resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRouteTemplate';
 
 export interface OAuthRoutePolicy {
   /**

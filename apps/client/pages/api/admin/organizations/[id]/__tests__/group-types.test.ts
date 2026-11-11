@@ -3,7 +3,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ put: (fn: unknown) => fn }),
+  baseApi: () => ({
+    use() {
+      return this;
+    },
+    put: (fn: unknown) => fn,
+  }),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 

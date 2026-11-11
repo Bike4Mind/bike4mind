@@ -2,7 +2,7 @@ import { RequestHandler } from 'express';
 import { ApiKeyAlertService, AnomalyDetectionRequest } from '@server/managers/apiKeyAlertService';
 import { isApiKeyAuth } from './apiKeyAuth';
 import { ApiKeyScope, type ApiKeyScopeValue } from '@bike4mind/common';
-import { resolveRequestPathname, resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
+import { resolveRequestPathname, resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRouteTemplate';
 
 const EPHEMERAL_IP_SCOPES: ReadonlySet<ApiKeyScopeValue> = new Set<ApiKeyScopeValue>([
   ApiKeyScope.OVERWATCH_INGEST_WRITE,

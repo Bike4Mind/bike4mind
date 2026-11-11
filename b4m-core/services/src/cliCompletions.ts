@@ -256,15 +256,39 @@ export function boundedToolNames(names: Iterable<string>): string[] {
 }
 
 /**
+ * Pre-flight tokens for one image, whatever its byte size. Providers bill an image by its pixel
+ * dimensions after their own downscale, not by its encoding: about 1.6K tokens at Anthropic's
+ * standard resolution and under 5K at the largest high-resolution size, with OpenAI's high
+ * detail below that. Sized at that ceiling so the hold stays conservative.
+ */
+export const IMAGE_INPUT_TOKEN_ESTIMATE = 5_000;
+
+// Every dialect normalizeMultimodalMessages accepts; a tool result can nest them too.
+const IMAGE_PART_TYPES: ReadonlySet<unknown> = new Set(['image', 'image_url', 'input_image']);
+
+function isImagePart(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && IMAGE_PART_TYPES.has((value as { type?: unknown }).type);
+}
+
+/**
  * Estimate input tokens from messages. Conservative pre-flight estimate at
  * 2.5 chars/token (code, JSON, and non-English tokenize less efficiently).
+ * Images count IMAGE_INPUT_TOKEN_ESTIMATE each: their base64 read as text would
+ * price a 1 MB screenshot at about 400K tokens.
  */
 export function estimateInputTokens(messages: IMessage[]): number {
+  let imageCount = 0;
+  const withoutImageBytes = (_key: string, value: unknown) => {
+    if (!isImagePart(value)) return value;
+    imageCount++;
+    return null;
+  };
   const totalChars = messages.reduce((sum, msg) => {
-    const contentLength = typeof msg.content === 'string' ? msg.content.length : JSON.stringify(msg.content).length;
+    const contentLength =
+      typeof msg.content === 'string' ? msg.content.length : JSON.stringify(msg.content, withoutImageBytes).length;
     return sum + contentLength;
   }, 0);
-  return Math.ceil(totalChars / 2.5);
+  return Math.ceil(totalChars / 2.5) + imageCount * IMAGE_INPUT_TOKEN_ESTIMATE;
 }
 
 /**
@@ -804,6 +828,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     temperature: options?.temperature,
     maxTokens,
     stream: options?.stream ?? true,
+    // No fallback loop here, so a refusal reaches the caller as finish_reason 'refusal'.
+    settleRefusal: true,
     tools: requestTools,
     ...(cacheStrategy ? { cacheStrategy } : {}),
     ...(wireTools.providerTools.length > 0 ? { providerTools: wireTools.providerTools } : {}),

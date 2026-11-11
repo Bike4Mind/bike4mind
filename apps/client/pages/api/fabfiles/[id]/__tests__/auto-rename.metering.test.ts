@@ -83,7 +83,7 @@ vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
   createModelAdmission: () => ({ admits: async () => true, assert: async () => undefined }),
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: async () => 'https://s/x' }),
 }));
@@ -212,4 +212,21 @@ it.each(['success', 'failure'] as const)('keeps a timed-out provider slot throug
     settle();
     vi.useRealTimers();
   }
+});
+
+it.each([false, true])('releases a failed storage response (cancellation rejects: %s)', async cancelFails => {
+  const response = new Response('private upstream payload', { status: 403 });
+  const cancel = vi.spyOn(response.body!, 'cancel');
+  if (cancelFails) cancel.mockRejectedValue(new Error('stream cancellation failed'));
+  const read = vi.spyOn(response, 'text');
+  vi.stubGlobal('fetch', async () => response);
+
+  await expect(call()).rejects.toMatchObject({
+    statusCode: 400,
+    message: 'Failed to fetch file content from storage',
+  });
+
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(read).not.toHaveBeenCalled();
+  expect(m.complete).not.toHaveBeenCalled();
 });

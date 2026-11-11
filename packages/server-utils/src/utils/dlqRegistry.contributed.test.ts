@@ -42,7 +42,7 @@ describe('contributed DLQ registry', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.doMock('@bike4mind/observability', () => ({ Logger: { warn: vi.fn() } }));
     baseline = (await load([])).getDlqRegistry().map(d => d.label);
     vi.resetModules();
   });
@@ -68,6 +68,13 @@ describe('contributed DLQ registry', () => {
     expect(registry.getSourceQueueUrl(registry.contributedSourceQueueName('exampleJobQueue'))).toBe(
       SOURCE_URLS.exampleJobQueue
     );
+  });
+
+  it('registers a contributed entry without queue help', async () => {
+    const entry = (await load([QUEUE])).getDlqByLabel('example-job');
+    expect(entry).toBeDefined();
+    expect(entry!.description).toBeUndefined();
+    expect(entry!.replay).toBeUndefined();
   });
 
   it('appends contributed entries and leaves the core labels and order alone', async () => {

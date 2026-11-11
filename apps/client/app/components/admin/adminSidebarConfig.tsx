@@ -1,4 +1,5 @@
 import type { ElementType } from 'react';
+import type { AdminActionCountKey } from './adminActionCounts';
 import {
   Activity,
   AppWindow,
@@ -22,6 +23,7 @@ import {
   FileText,
   Fingerprint,
   Gauge,
+  GraduationCap,
   Gavel,
   GitBranch,
   GitPullRequest,
@@ -77,20 +79,18 @@ export enum AdminTab {
   AdminSettings = 1,
   Feedback = 2,
   Analytics = 3,
-  Accounts = 4,
+  // 4, 11 and 17 were tabs with no panel; never reuse them.
   RegistrationInvites = 5,
   Migrate = 6,
   Modals = 7,
   Files = 8,
   Documentation = 9,
   WorldTime = 10,
-  Analysts = 11,
   Waitlist = 12,
   Subscriptions = 13,
   Organizations = 14,
   CreditAnalytics = 15,
   SecretsRotation = 16,
-  BulkImport = 17,
   ModelLogs = 18,
   ModelMetrics = 19,
   EventMetrics = 20,
@@ -148,6 +148,7 @@ export enum AdminTab {
   ModerationIncidents = 74,
   StripeDisputes = 75,
   Approvals = 76,
+  Tutorials = 77,
 }
 
 /**
@@ -156,8 +157,11 @@ export enum AdminTab {
  */
 export type SidebarGate = 'userMigration' | 'liveOpsTriage';
 
-/** Special-cased end decorators (e.g. the waiting-subscribers badge). */
-export type SidebarBadge = 'waitingSubscribers' | 'newSubscriptions' | 'unreviewedAudit';
+/**
+ * An item's end marker: the count of its queue (an AdminActionCountKey), or the Subscriptions
+ * "new since your last visit" dot. See "Sidebar badges" in DESIGN_GUIDE.md.
+ */
+export type SidebarBadge = AdminActionCountKey | 'newSubscriptions';
 
 export type SidebarItem = {
   /** A lucide stroke icon; the sidebar renders it at 16 px with a 2 px stroke. */
@@ -218,15 +222,16 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Megaphone, tab: AdminTab.EmailMarketing, label: 'Email marketing' },
       { Icon: UsersRound, tab: AdminTab.Team, label: 'Team' },
       { Icon: UserPlus, tab: AdminTab.RegistrationInvites, label: 'Invites', testid: 'admin-invite-center-tab-btn' },
-      { Icon: MessageSquare, tab: AdminTab.Feedback, label: 'Feedback' },
+      { Icon: MessageSquare, tab: AdminTab.Feedback, label: 'Feedback', badge: 'feedback' },
       { Icon: MailCheck, tab: AdminTab.EmailVerification, label: 'Email verification' },
       { Icon: Handshake, tab: AdminTab.PartnerSignupRules, label: 'Partner signups' },
-      { Icon: Handshake, tab: AdminTab.SignupDomainHolds, label: 'Signup domain holds' },
+      { Icon: Handshake, tab: AdminTab.SignupDomainHolds, label: 'Signup domain holds', badge: 'signupDomainHolds' },
       {
         Icon: UserSearch,
         tab: AdminTab.SignupRiskReview,
         label: 'Risk review',
         testid: 'admin-signup-risk-review-btn',
+        badge: 'signupRiskReview',
       },
       {
         Icon: Crosshair,
@@ -239,8 +244,9 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         tab: AdminTab.StripeDisputes,
         label: 'Disputes',
         testid: 'admin-stripe-disputes-btn',
+        badge: 'stripeDisputes',
       },
-      { Icon: HandCoins, tab: AdminTab.HeldSignupGrants, label: 'Held signup grants' },
+      { Icon: HandCoins, tab: AdminTab.HeldSignupGrants, label: 'Held signup grants', badge: 'heldSignupGrants' },
       { Icon: ArrowRightLeft, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
     ],
   },
@@ -267,6 +273,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         tab: AdminTab.ModerationIncidents,
         label: 'Moderation review',
         testid: 'admin-moderation-incidents-btn',
+        badge: 'moderationReview',
       },
       {
         Icon: ScrollText,
@@ -275,13 +282,25 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         testid: 'admin-audit-log-btn',
         badge: 'unreviewedAudit',
       },
-      { Icon: ClipboardCheck, tab: AdminTab.Approvals, label: 'Approvals', testid: 'admin-approvals-btn' },
+      {
+        Icon: ClipboardCheck,
+        tab: AdminTab.Approvals,
+        label: 'Approvals',
+        testid: 'admin-approvals-btn',
+        badge: 'approvals',
+      },
       { Icon: Fingerprint, tab: AdminTab.IdentityProviders, label: 'Identity providers' },
       { Icon: KeyRound, tab: AdminTab.OAuthClients, label: 'OAuth clients', testid: 'admin-oauth-clients-btn' },
       { Icon: Key, tab: AdminTab.ApiKeyScopePreflight, label: 'API key scopes', testid: 'admin-scope-preflight-btn' },
       { Icon: Lock, tab: AdminTab.SystemSecrets, label: 'System secrets' },
-      { Icon: RotateCcw, tab: AdminTab.SecretsRotation, label: 'Secrets rotation' },
-      { Icon: Globe, tab: AdminTab.PublishedPages, label: 'Published pages', testid: 'admin-published-pages-btn' },
+      { Icon: RotateCcw, tab: AdminTab.SecretsRotation, label: 'Secrets rotation', badge: 'secretRotation' },
+      {
+        Icon: Globe,
+        tab: AdminTab.PublishedPages,
+        label: 'Published pages',
+        testid: 'admin-published-pages-btn',
+        badge: 'publishedPages',
+      },
     ],
   },
   {
@@ -296,7 +315,13 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Settings, tab: AdminTab.ManageGears, label: 'Gears' },
       { Icon: ChartColumn, tab: AdminTab.ModelMetrics, label: 'Model metrics' },
       { Icon: Scale, tab: AdminTab.PreferenceArena, label: 'Preference arena', testid: 'admin-preference-arena-btn' },
-      { Icon: CalendarX, tab: AdminTab.ModelLifecycle, label: 'Model lifecycle', testid: 'admin-model-lifecycle-btn' },
+      {
+        Icon: CalendarX,
+        tab: AdminTab.ModelLifecycle,
+        label: 'Model lifecycle',
+        testid: 'admin-model-lifecycle-btn',
+        badge: 'modelLifecycle',
+      },
       { Icon: ScanSearch, tab: AdminTab.RetrievalRate, label: 'Retrieval', testid: 'admin-retrieval-rate-btn' },
       {
         Icon: Layers,
@@ -316,9 +341,15 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     label: 'Platform',
     items: [
       { Icon: Siren, tab: AdminTab.LiveOpsTriage, label: 'LiveOps triage', gate: 'liveOpsTriage' },
-      { Icon: Radar, tab: AdminTab.SreAgent, label: 'SRE agent', testid: 'admin-sre-agent-btn' },
+      { Icon: Radar, tab: AdminTab.SreAgent, label: 'SRE agent', testid: 'admin-sre-agent-btn', badge: 'sreAgent' },
       { Icon: Plug, tab: AdminTab.IntegrationHealth, label: 'Integrations', testid: 'admin-integration-health-btn' },
-      { Icon: Database, tab: AdminTab.DlqReplay, label: 'Dead letters', testid: 'admin-dlq-replay-btn' },
+      {
+        Icon: Database,
+        tab: AdminTab.DlqReplay,
+        label: 'Dead letters',
+        testid: 'admin-dlq-replay-btn',
+        badge: 'deadLetters',
+      },
       { Icon: Gauge, tab: AdminTab.RateLimits, label: 'Rate limits', testid: 'admin-rate-limits-btn' },
       { Icon: Hash, tab: AdminTab.SlackWorkspaces, label: 'Slack workspaces' },
       { Icon: GitBranch, tab: AdminTab.GitHubConnection, label: 'GitHub', testid: 'admin-github-connection-btn' },
@@ -341,6 +372,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Settings, tab: AdminTab.AdminSettings, label: 'General', testid: 'admin-settings-btn' },
       { Icon: AppWindow, tab: AdminTab.Modals, label: 'Modals', testid: 'admin-modals-tab-btn' },
       { Icon: Newspaper, tab: AdminTab.WhatsNewModals, label: "What's new" },
+      { Icon: GraduationCap, tab: AdminTab.Tutorials, label: 'Tutorials', testid: 'admin-tutorials-btn' },
       { Icon: NotebookText, tab: AdminTab.ReleaseNotes, label: 'Release notes', testid: 'admin-release-notes-btn' },
       { Icon: BookOpen, tab: AdminTab.Documentation, label: 'Docs' },
       { Icon: SquareTerminal, tab: AdminTab.ApiReference, label: 'API reference' },
@@ -366,18 +398,20 @@ export const SIDEBAR_MORE_THRESHOLD = 7;
 export const SIDEBAR_MORE_VISIBLE = 5;
 
 /**
- * The items a section shows and how many sit behind its "More" row. The active item is never
- * hidden: when it falls past the cut it is shown under the visible ones.
+ * The items a section shows and how many sit behind its "More" row. The active item and any item
+ * with work waiting are never hidden: past the cut they are shown under the visible ones, in order.
  */
 export const splitSectionItems = (
   items: SidebarItem[],
   activeTab: AdminTab | string | null,
-  expanded: boolean
+  expanded: boolean,
+  hasWaitingWork: (item: SidebarItem) => boolean = () => false
 ): { shown: SidebarItem[]; hiddenCount: number } => {
   if (expanded || items.length <= SIDEBAR_MORE_THRESHOLD) return { shown: items, hiddenCount: 0 };
   const head = items.slice(0, SIDEBAR_MORE_VISIBLE);
-  const activeInTail = items.slice(SIDEBAR_MORE_VISIBLE).find(item => item.tab === activeTab);
-  const shown = activeInTail ? [...head, activeInTail] : head;
+  // A queue with work waiting must not hide under "More", or its badge is never seen.
+  const keptTail = items.slice(SIDEBAR_MORE_VISIBLE).filter(item => item.tab === activeTab || hasWaitingWork(item));
+  const shown = [...head, ...keptTail];
   return { shown, hiddenCount: items.length - shown.length };
 };
 

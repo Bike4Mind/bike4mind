@@ -59,6 +59,12 @@ export const adminSignupGrantPendingSchema = z.object({
   }),
   /** UTC day (YYYY-MM-DD) of the latest activity drip payout. */
   lastActivityCreditDay: z.string().nullable(),
+  /**
+   * The invite the account signed up through, or null without one. `bonusPaid`: null while the invite bonus
+   * may still be paid, 0 once settled with nothing paid or when the account can no longer earn it (no grant, a
+   * forfeited unlock, a reduced tranche), otherwise the credits paid.
+   */
+  invite: z.object({ source: z.enum(['referral', 'organization']), bonusPaid: z.number().nullable() }).nullable(),
   actions: z.object({
     releaseHeld: adminSignupGrantActionStateSchema,
     releaseRemaining: adminSignupGrantActionStateSchema,
@@ -74,6 +80,8 @@ export const adminSignupGrantPendingRowSchema = z.object({
   email: z.string().nullable(),
   createdAt: z.string().nullable(),
   source: z.enum(['default', 'package']).nullable(),
+  /** How the account was invited (signupInvite), or null when it signed up without an invite. */
+  inviteSource: z.enum(['referral', 'organization']).nullable(),
   stage: z.enum(['pending_email', 'signup', 'unlocked']).nullable(),
   /** `locked`: credits remain but nothing pays them without an unlock or an admin. */
   status: z.enum(['held', 'dripping', 'locked', 'blocked']),
@@ -100,7 +108,7 @@ export type AdminSignupGrantPendingRow = z.infer<typeof adminSignupGrantPendingR
 export const adminSignupGrantPendingListSchema = z.object({
   data: z.array(adminSignupGrantPendingRowSchema),
   nextCursor: z.string().nullable(),
-  /** Bulk release is full-admin only; delegated credit admins can list and block. */
+  /** Whether the viewer holds `credits:adjust`, which bulk release needs on top of listing. */
   viewer: z.object({ canRelease: z.boolean() }),
 });
 export type AdminSignupGrantPendingList = z.infer<typeof adminSignupGrantPendingListSchema>;
@@ -110,6 +118,10 @@ export const adminSignupGrantPendingSummarySchema = z.object({
   exposure: z
     .object({ accountsWithRemaining: z.number(), totalRemaining: z.number(), totalDripRemaining: z.number() })
     .nullable(),
+  /** Payable accounts with credits to come that were active in the last `days` days. */
+  activity: z.object({ days: z.number(), accounts: z.number(), remaining: z.number() }).nullable(),
+  /** Upper bound on today's (UTC `day`) drip: a drip pays only on activity and behind the trickle pool. */
+  drip: z.object({ day: z.string(), committed: z.number(), accounts: z.number() }).nullable(),
   trickle: z.object({ day: z.string(), spentToday: z.number(), limit: z.number(), missing: z.boolean() }).nullable(),
   queue: z.object({ held: z.number(), oldestHeldAt: z.string().nullable() }).nullable(),
 });

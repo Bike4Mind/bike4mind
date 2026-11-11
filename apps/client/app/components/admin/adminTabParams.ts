@@ -3,7 +3,7 @@ import { INTEGRATION_DEMAND_TAB_PARAMS } from './integrationDemandSearch';
 import { SIGNUP_RISK_REVIEW_TAB_PARAMS } from './signupRiskReviewSearch';
 import { ANALYTICS_TAB_PARAMS } from './Analytics/analyticsTabSearch';
 import { EVENTS_TAB_PARAMS } from './EventMetrics/eventsTabSearch';
-import { SHADOW_DETECTION_TAB_PARAMS } from './shadowDetectionSearch';
+import { CAMPAIGN_WATCH_SEARCH_PARAM, SHADOW_DETECTION_TAB_PARAMS } from './shadowDetectionSearch';
 import { STRIPE_DISPUTE_TAB_PARAMS } from './stripeDisputeSearch';
 import { MODEL_METRICS_TAB_PARAMS } from './ModelMetrics/modelMetricsSearch';
 import { SIGNUP_DOMAIN_HOLDS_TAB_PARAMS } from './signupDomainHoldsSearch';
@@ -113,6 +113,7 @@ type AdminSearchParam = (typeof ADMIN_GLOBAL_PARAMS)[number] | AdminTabParam;
 const RECORD_ID_SEARCH_PARSERS = {
   [AUDIT_ENTRY_ID_PARAM]: parseObjectId,
   [MODERATION_INCIDENT_ID_PARAM]: parseObjectId,
+  [CAMPAIGN_WATCH_SEARCH_PARAM]: parseObjectId,
 } as const;
 
 type TypedAdminSearch = UsersSearch &

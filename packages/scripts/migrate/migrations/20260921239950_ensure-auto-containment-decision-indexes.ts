@@ -5,7 +5,7 @@ import { type MigrationFile } from './index';
  * Ensure the AutoContainmentDecision indexes exist before the first decision is written.
  *
  * The unique `detectionId` index is load-bearing: it is the only thing keeping automated
- * containment (apps/client/server/security/autoContainment/executor.ts) from deciding, and in
+ * containment (apps/workers/src/security/autoContainment/executor.ts) from deciding, and in
  * enforce mode acting, twice on one detection. autoIndex builds are fire-and-forget, so a silent
  * build failure would leave that guard missing; this migration builds it in the deploy instead.
  * The collection is new, so the build is cheap.

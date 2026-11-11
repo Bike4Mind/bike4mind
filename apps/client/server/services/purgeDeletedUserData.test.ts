@@ -12,6 +12,7 @@ const {
   deleteAuthEventsMock,
   retainTracesMock,
   removeFromDetectionsMock,
+  removeFromWatchesMock,
   deleteLimitEventsMock,
 } = vi.hoisted(() => ({
   deleteEmbedMock: vi.fn(),
@@ -25,6 +26,7 @@ const {
   deleteAuthEventsMock: vi.fn(),
   retainTracesMock: vi.fn(),
   removeFromDetectionsMock: vi.fn(),
+  removeFromWatchesMock: vi.fn(),
   deleteLimitEventsMock: vi.fn(),
 }));
 
@@ -35,10 +37,11 @@ vi.mock('@bike4mind/database', () => ({
   integrationRequestRepository: { deleteAllForUser: deleteRequestsMock },
   hideDeletedAuthorAnnotations: hideAnnotationsMock,
   shadowDetectionRepository: { removeUser: removeFromDetectionsMock },
+  campaignWatchRepository: { removeUser: removeFromWatchesMock },
   userLimitEventRepository: { deleteAllForUser: deleteLimitEventsMock },
 }));
-vi.mock('@server/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: retainTracesMock }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: retainTracesMock }));
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   purgeUserPublishedArtifacts: purgePublishedMock,
 }));
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: withdrawListingsMock }));
@@ -46,10 +49,12 @@ vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
   revokeDriveGrant: revokeDriveMock,
   decryptStoredToken: (v: string | undefined) => (v ? `plain-${v}` : null),
 }));
-vi.mock('@server/integrations/google/drive/flagConnectionsStoppedByDisconnect', () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/flagConnectionsStoppedByDisconnect', () => ({
   flagConnectionsStoppedByDisconnect: flagConnectionsMock,
 }));
-vi.mock('@server/integrations/jira/revokeAtlassianGrant', () => ({ revokeAtlassianGrant: revokeAtlassianMock }));
+vi.mock('@bike4mind/server-utils/integrations/jira/revokeAtlassianGrant', () => ({
+  revokeAtlassianGrant: revokeAtlassianMock,
+}));
 
 import { purgeDeletedUserData } from './purgeDeletedUserData';
 
@@ -63,6 +68,7 @@ beforeEach(() => {
   withdrawListingsMock.mockReset().mockResolvedValue(0);
   deleteAuthEventsMock.mockReset().mockResolvedValue(0);
   removeFromDetectionsMock.mockReset().mockResolvedValue(0);
+  removeFromWatchesMock.mockReset().mockResolvedValue(undefined);
   retainTracesMock.mockReset().mockResolvedValue(0);
   revokeDriveMock.mockReset().mockResolvedValue('revoked');
   revokeAtlassianMock.mockReset().mockResolvedValue('revoked');
@@ -81,6 +87,7 @@ describe('purgeDeletedUserData', () => {
     expect(withdrawListingsMock).toHaveBeenCalledWith('u1');
     expect(deleteAuthEventsMock).toHaveBeenCalledWith('u1');
     expect(removeFromDetectionsMock).toHaveBeenCalledWith('u1');
+    expect(removeFromWatchesMock).toHaveBeenCalledWith('u1');
     expect(deleteLimitEventsMock).toHaveBeenCalledWith('u1');
     expect(logger.error).not.toHaveBeenCalled();
   });

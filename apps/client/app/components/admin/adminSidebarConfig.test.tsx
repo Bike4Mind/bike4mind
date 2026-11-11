@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ADMIN_ACTION_COUNT_KEYS } from './adminActionCounts';
 import {
   AdminTab,
   SIDEBAR_COLLAPSED_STORAGE_KEY,
@@ -92,13 +93,10 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(labelOf(AdminTab.HelpAnalytics)).toBe('Help analytics');
   });
 
-  it('only badges the Waitlist, Subscriptions and Audit log tabs', () => {
-    const badged = allItems.filter(i => i.badge).map(i => [i.tab, i.badge]);
-    expect(badged).toEqual([
-      [AdminTab.Waitlist, 'waitingSubscribers'],
-      [AdminTab.Subscriptions, 'newSubscriptions'],
-      [AdminTab.AuditLog, 'unreviewedAudit'],
-    ]);
+  it('badges each counted queue once, and Subscriptions with its dot', () => {
+    const badges = allItems.flatMap(item => (item.badge ? [item.badge] : []));
+    expect(badges.sort()).toEqual([...ADMIN_ACTION_COUNT_KEYS, 'newSubscriptions'].sort());
+    expect(allItems.find(item => item.badge === 'newSubscriptions')?.tab).toBe(AdminTab.Subscriptions);
   });
 });
 
@@ -122,9 +120,8 @@ describe('findSectionKeyForTab', () => {
   });
 
   it('returns undefined for a tab with no sidebar entry', () => {
-    // Files/Accounts/ModelLogs exist in the enum but have no sidebar button.
+    // Files/ModelLogs exist in the enum but have no sidebar button.
     expect(findSectionKeyForTab(AdminTab.Files)).toBeUndefined();
-    expect(findSectionKeyForTab(AdminTab.Accounts)).toBeUndefined();
     expect(findSectionKeyForTab(AdminTab.ModelLogs)).toBeUndefined();
   });
 
@@ -176,6 +173,19 @@ describe('splitSectionItems', () => {
     const { shown } = splitSectionItems(people, people[0].tab, false);
 
     expect(shown).toHaveLength(SIDEBAR_MORE_VISIBLE);
+  });
+
+  it('keeps items with work waiting past the cut, in section order, alongside the active one', () => {
+    const [first, second, third] = people.slice(SIDEBAR_MORE_VISIBLE);
+    const { shown, hiddenCount } = splitSectionItems(
+      people,
+      second.tab,
+      false,
+      item => item.tab === third.tab || item.tab === first.tab
+    );
+
+    expect(shown).toEqual([...people.slice(0, SIDEBAR_MORE_VISIBLE), first, second, third]);
+    expect(hiddenCount).toBe(people.length - SIDEBAR_MORE_VISIBLE - 3);
   });
 });
 

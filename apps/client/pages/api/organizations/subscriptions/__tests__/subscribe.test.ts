@@ -768,3 +768,47 @@ describe('POST /api/organizations/subscriptions/subscribe - 3-D Secure on first 
     expect(mockSessionsCreate.mock.calls[0][0]).not.toHaveProperty('payment_method_options');
   });
 });
+
+describe('POST /api/organizations/subscriptions/subscribe - checkout terms consent', () => {
+  const settings = (termsConsent: boolean) =>
+    mockGetSettingsValue.mockImplementation(async (key: string) =>
+      key === 'requireCheckoutTermsConsent' ? termsConsent : true
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
+    mockVerifyOrgOwner.mockResolvedValue({
+      id: 'org_1',
+      name: 'Org One',
+      billingContact: 'billing@example.com',
+      users: [{ userId: 'user_1' }],
+    });
+    mockAttachOrgStripeCustomer.mockResolvedValue('cus_org');
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  it('requires terms on the session and names the buyer while the setting is on', async () => {
+    settings(true);
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockSessionsCreate.mock.calls[0][0]).toMatchObject({
+      consent_collection: { terms_of_service: 'required' },
+      client_reference_id: 'user_1',
+    });
+  });
+
+  it('leaves consent collection off while the setting is off', async () => {
+    settings(false);
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    const args = mockSessionsCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(args).not.toHaveProperty('consent_collection');
+    expect(args).not.toHaveProperty('client_reference_id');
+  });
+});

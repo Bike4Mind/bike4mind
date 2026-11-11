@@ -47,6 +47,13 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (select: (s: unknown) => unknown) =>
     select({ currentUser: user.current, isAdmin: false, avatarVersion: user.avatarVersion }),
 }));
+const userSettings = vi.hoisted(() => ({ updatePreferences: vi.fn(), showHelp: false }));
+vi.mock('@client/app/contexts/UserSettingsContext', () => ({
+  useUserSettings: () => ({
+    updatePreferences: userSettings.updatePreferences,
+    settings: { showHelp: userSettings.showHelp },
+  }),
+}));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: analytics.mutate }) }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: () => billing.creditsEnabled,
@@ -259,7 +266,7 @@ describe('ProfileMenu - Admin entry', () => {
   it.each([
     ['an admin', { isAdmin: true }, true],
     ['a delegate with a tab to open', { isAdmin: false, adminPermissions: ['settings:manage'] }, true],
-    ['a delegate whose permissions open no tab', { isAdmin: false, adminPermissions: ['support:read'] }, false],
+    ['a delegate whose permissions open no tab', { isAdmin: false, adminPermissions: ['users:impersonate'] }, false],
     ['a user with no admin role', { isAdmin: false }, false],
   ])('is shown to %s', (_case, role, shown) => {
     user.current = { id: 'u1', name: 'Jane', ...role };
@@ -394,6 +401,56 @@ describe('ProfileMenu - billing rows open URL-addressable views', () => {
     fireEvent.click(screen.getByTestId('profile-menu-billing'));
     expect(billing.openView).toHaveBeenCalledWith('credits', { focusSection: false });
     expect(analytics.mutate).toHaveBeenCalledWith({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });
+  });
+});
+
+describe('ProfileMenu - Send feedback', () => {
+  beforeEach(() => {
+    userSettings.updatePreferences.mockClear();
+    userSettings.showHelp = false;
+    billing.creditsEnabled = false;
+  });
+
+  const openMenu = () => {
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    const trigger = screen.getByTestId('profile-menu-card');
+    fireEvent.click(trigger);
+    return trigger;
+  };
+
+  it('shows a top-level Send feedback row even when credits are disabled', () => {
+    openMenu();
+    expect(screen.getByTestId('profile-menu-send-feedback')).toHaveTextContent('Send Feedback');
+  });
+
+  it('sits directly after Billing when credits are enabled', () => {
+    billing.creditsEnabled = true;
+    openMenu();
+    expect(screen.getByTestId('profile-menu-billing').nextElementSibling).toBe(
+      screen.getByTestId('profile-menu-send-feedback')
+    );
+    billing.creditsEnabled = false;
+  });
+
+  it('opens the feedback form (set, never toggle) and closes the menu', () => {
+    const trigger = openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-send-feedback'));
+    expect(userSettings.updatePreferences).toHaveBeenCalledTimes(1);
+    expect(userSettings.updatePreferences).toHaveBeenCalledWith({ showHelp: true });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('still sets showHelp true when the feedback form is already open', () => {
+    userSettings.showHelp = true;
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-send-feedback'));
+    expect(userSettings.updatePreferences).toHaveBeenCalledTimes(1);
+    expect(userSettings.updatePreferences).toHaveBeenCalledWith({ showHelp: true });
   });
 });
 

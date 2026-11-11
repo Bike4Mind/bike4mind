@@ -156,6 +156,8 @@ export type PaidStandingSubject = Pick<IUser, 'isAdmin' | 'apiKeyTrustApproved' 
 /**
  * The signals assessApiKeyTrust accepts other than account age: platform admin, admin approval,
  * a purchase, or an active plan. Also the paid tier for thinking visibility (thinkingVisibility.ts).
+ * Wider than entitlement paid standing (packages/server-utils/src/entitlements/paidStanding.ts): admins and
+ * admin-approved key owners pass here, where that predicate treats them as exemptions, not paid.
  */
 export const hasPaidStanding = async (
   user: PaidStandingSubject,

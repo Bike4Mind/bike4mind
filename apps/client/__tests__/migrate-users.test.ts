@@ -44,9 +44,18 @@ vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    post: (handler: (...args: unknown[]) => unknown) => handler,
-  }),
+  baseApi: () => {
+    type Handler = (req: unknown, res: unknown, next?: () => void) => unknown;
+    let guard: Handler;
+    const chain = {
+      use: (middleware: Handler) => ((guard = middleware), chain),
+      post: (handler: Handler) => async (req: unknown, res: unknown) => {
+        guard({ method: 'POST', ...(req as object) }, res, () => {});
+        return handler(req, res);
+      },
+    };
+    return chain;
+  },
 }));
 
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
@@ -86,7 +95,8 @@ vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async () => ({
     logoUrl ? `<img src="${logoUrl}" alt="${brand} Logo" class="logo" />` : '',
 }));
 
-vi.mock('@bike4mind/common', async () => ({
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
   RegInviteEvents: {
     MIGRATE_REGINVITE: 'Migration Email Sent',
   },
@@ -126,7 +136,7 @@ describe('/api/reg-invites/migrate', () => {
     mockReq.user = { id: 'user-1', isAdmin: false };
     mockReq.body = { usersData: [{ email: 'test@test.com', name: 'Test' }], sendEmail: true };
 
-    await expect(handler(mockReq, mockRes)).rejects.toThrow('Only admins can perform user migration');
+    await expect(handler(mockReq, mockRes)).rejects.toThrow('Missing permission: settings:manage');
   });
 
   it('creates a new user when email does not exist', async () => {

@@ -6,6 +6,7 @@ import {
   IOrganizationDocument,
   isOrgMember,
   isOrgOwnerOrCurrentAdmin,
+  isOrgOwnerOrPlatformAdmin,
   IUserDocument,
   Permission,
 } from '@bike4mind/common';
@@ -117,7 +118,10 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         ...u,
         status: 'accepted' as const,
         permissions: organization.users.find(m => m.userId === u.id)?.permissions || [],
-        creditUsage: getMemberCreditUsage(organization, u.id),
+        creditUsage:
+          currentUser && canManageMemberCreditBudgets(currentUser, organization)
+            ? getMemberCreditUsage(organization, u.id)
+            : null,
       })) || [];
     result.push(
       ...(pendingUsers
@@ -135,7 +139,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     }
 
     return result.sort((a, b) => (sortOrder === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)));
-  }, [users, search, sortOrder, pendingUsers, pendingInvites, organization]);
+  }, [users, search, sortOrder, pendingUsers, pendingInvites, organization, currentUser]);
 
   // Each roster control mirrors the server predicate behind its own endpoint; only the owner may
   // revoke a manager.
@@ -149,6 +153,10 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
 
   // Mirrors the server gate on the credit-budget routes.
   const canManageCreditBudgets = !!currentUser && canManageMemberCreditBudgets(currentUser, organization);
+
+  // Mirrors the owner-only gate on the manager route (organizationService.setOrganizationManager).
+  const canManageManagers =
+    !!currentUser && !organization.personal && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
   // Owner ID, falling back to the current user.
   const ownerId = useMemo(() => {
@@ -533,6 +541,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
               canInviteMembers={canInviteMembers}
               canRevokeMembers={!!currentUser && canRevokeOrgMember(currentUser, organization, user.id)}
               canManageCreditBudgets={canManageCreditBudgets}
+              canManageManagers={canManageManagers}
             />
           </Fragment>
         ))}

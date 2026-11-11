@@ -15,7 +15,8 @@ import { recomputeStatsForLakeTags } from '@bike4mind/server-utils/dataLakes/rec
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
+import { getGeneratedCopyStore } from '@bike4mind/server-utils/files/generatedCopyStore';
+import { createCdnInvalidationBatch } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { FileEvents, storageOwnerOf, sumStorageDeltaByOwner, type StorageOwner } from '@bike4mind/common';
@@ -54,6 +55,9 @@ export async function bulkDeleteFilesForUser(req: Request, fileIds: string[]): P
   // Collected across the whole batch and recomputed once at the end, so deleting N files out of
   // one lake costs one aggregation rather than N identical ones.
   const deletedFileTagNames: (string | undefined)[] = [];
+
+  // Flushed after the loop whatever each transaction's outcome: a deleted copy's bytes do not come back on a rollback.
+  const generatedCdn = createCdnInvalidationBatch('bulk-delete-files', req.logger);
 
   // Process each file deletion sequentially
   for (const fileId of fileIds) {
@@ -94,7 +98,7 @@ export async function bulkDeleteFilesForUser(req: Request, fileIds: string[]): P
               ...lakeMembershipAuditDb,
             },
             storage: getFilesStorage(),
-            generatedCopies: getGeneratedCopyStore(),
+            generatedCopies: getGeneratedCopyStore({ batch: generatedCdn }),
             onDeleteComplete: async (deleted, sizeToDeduct) => {
               refunds.push({ owner: storageOwnerOf(deleted), bytes: -sizeToDeduct });
             },
@@ -137,6 +141,7 @@ export async function bulkDeleteFilesForUser(req: Request, fileIds: string[]): P
       results.failed.push({ id: fileId, error: errorMessage });
     }
   }
+  await generatedCdn.flush();
 
   // One system-file/project unlink per group of files with the SAME holders, after every
   // transaction has resolved and outside all of them (see cleanUpDeletedFileReferences). Grouped

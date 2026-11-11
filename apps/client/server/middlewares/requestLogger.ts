@@ -5,6 +5,7 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { LEGACY_REQUEST_ID_HEADER, REQUEST_ID_HEADER, resolveRequestId } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { requestLogUrl } from './requestLogUrl';
 
 // Makes static Logger.* calls resolve to the current request's logger instead of the process-wide one.
 const requestLoggerStore = new AsyncLocalStorage<Logger>();
@@ -41,7 +42,7 @@ export function withRequestLogger(handler: NextApiHandler): NextApiHandler {
       req.headers[REQUEST_ID_HEADER.toLowerCase()],
       req.headers[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
     );
-    const path = (req.url ?? '').split('?')[0];
+    const path = requestLogUrl((req.url ?? '').split('?')[0]);
     return runWithRequestLogger(createRequestLogger(req, { requestId, path }), () => handler(req, res));
   };
 }

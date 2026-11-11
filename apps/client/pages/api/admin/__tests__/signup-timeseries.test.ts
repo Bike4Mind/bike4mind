@@ -18,7 +18,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/users/signupTimeseries', () => ({ getSignupTimeseries: mocks.timeseries }));
+vi.mock('@bike4mind/server-utils/users/signupTimeseries', () => ({ getSignupTimeseries: mocks.timeseries }));
 import handler from '../signup-timeseries';
 
 describe('signup time-series route', () => {

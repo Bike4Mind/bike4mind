@@ -1422,6 +1422,8 @@ export interface ChatSession extends ChatSessionMeta {
 export interface ChatSessionExportResult {
   saved: boolean;
   path?: string;
+  /** Items left out of a local data export. */
+  warnings?: string[];
 }
 
 /** A worktree being cut ahead of a session's first turn. `since` is epoch ms. */

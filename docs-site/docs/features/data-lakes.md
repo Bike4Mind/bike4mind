@@ -85,7 +85,7 @@ budget -- and they skip documents whose embeddings came from a different model t
 the query. When any of that applies, the reply carries a warning banner, and expanding it lists the
 specific reasons. The important consequence is what the answer does *not* prove: a "nothing found"
 on a partial scan is not evidence that the library holds nothing relevant. Narrow the question, or
-wait if the banner says documents are still being re-indexed.
+wait if the banner says documents are still being indexed.
 
 **I got "this data lake moved to '...' while it was being archived/deleted/restored". What happened?**
 Two lifecycle actions ran on the same lake at once -- for example Archive and Delete were both
@@ -95,7 +95,7 @@ that state and is safe to act on from there. Re-run the action you wanted if it 
 
 **I saved a research configuration and nothing new appeared in the lake's History tab. Why?**
 The History tab records a research-configuration edit only when a setting meaningfully changes.
-Saving the same values again, or reordering the same entries in **Only these sites**, **Never these
+Saving the same values again, or reordering the same entries in **Sites to review**, **Never these
 sites** or **Tags to propose**, does not add a row.
 
 **Who can connect a Google Drive folder to a Data Lake?**
@@ -119,6 +119,16 @@ files to it. It is made only when the connection can actually start, so if it ca
 the lake is archived) the lake stays curated and nothing changes. The
 switch is recorded in the lake's History tab. If you leave GitHub's page without finishing, the lake
 stays connector-fed; switch it back in its settings if you no longer want that.
+
+**What happens when I disconnect a GitHub repository?**
+Every file the connection synced into the Data Lake is permanently deleted, the same way a Google
+Drive disconnect works, and the confirmation dialog shows how many files that is before you
+confirm. There is one extra consequence GitHub does not share with Drive: the GitHub App is
+installed on the whole account, so if this Data Lake is the last one bound to that installation,
+disconnecting also uninstalls the App from the account. The confirmation says so when that is the
+case. To reconnect afterwards, the account owner - an organization owner for an organization
+account - has to reinstall the App on GitHub first; **Refresh list** in the repository picker
+cannot bring back an uninstalled App.
 
 **What happens when I disconnect a Google Drive folder?**
 Every file the connection brought into the Data Lake is permanently deleted, along with its

@@ -43,6 +43,8 @@ export default defineConfig({
     'src/videoProviders/index.ts',
     // Music provider interface, registry and adapters, isolated the same way as videoProviders.
     'src/musicProviders/index.ts',
+    // Image provider interface, registry and adapters for the image job kind, isolated the same way.
+    'src/imageProviders/index.ts',
     // Decision provider interface, registry, retry policy and adapters. Same isolation as videoProviders.
     'src/decisionProviders/index.ts',
     // Batch-first embedding provider interface, registry and adapters. Same isolation as videoProviders.

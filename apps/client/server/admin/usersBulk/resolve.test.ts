@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ADMIN_USERS_BULK_MAX, ADMIN_USERS_BULK_MAX_CREDIT_TOTAL } from '@client/app/utils/adminUsersBulk';
+import {
+  ADMIN_USERS_BULK_MAX,
+  ADMIN_USERS_BULK_MAX_CREDIT_TOTAL,
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import {
   RESOLVE_MAX_PAGES,
   RESOLVE_PAGE_SIZE,
@@ -57,6 +60,22 @@ describe('resolveAdminUsersBulk', () => {
     expect(deps.findUsersByIds).toHaveBeenCalledWith([hexId(1), hexId(2), SELF]);
     expect(cohort).toMatchObject({ matched: 3, excluded: { self: 1, admins: 1 }, overCap: false });
     expect(cohort.eligible.map(row => row.id)).toEqual([hexId(1)]);
+  });
+
+  it('excludes delegated admins only for an actor that is not a full admin', async () => {
+    const deps: ResolveDeps = {
+      findUsersByIds: vi.fn(async () => [user(1), user(2, { adminPermissions: ['support:read'] })]),
+      openFilterPages: vi.fn(),
+    };
+    const target = { kind: 'ids' as const, userIds: [hexId(1), hexId(2)] };
+
+    const delegated = await resolveAdminUsersBulk(target, [SELF], deps, NOW);
+    expect(delegated.excluded).toEqual({ self: 0, admins: 1 });
+    expect(delegated.eligible.map(row => row.id)).toEqual([hexId(1)]);
+
+    const full = await resolveAdminUsersBulk(target, [SELF], deps, NOW, { actorIsFullAdmin: true });
+    expect(full.excluded).toEqual({ self: 0, admins: 0 });
+    expect(full.eligible.map(row => row.id)).toEqual([hexId(1), hexId(2)]);
   });
 
   it('pages a filter in id order and stops at a short page', async () => {

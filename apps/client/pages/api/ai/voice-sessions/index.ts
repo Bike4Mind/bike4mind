@@ -40,8 +40,8 @@ import axios from 'axios';
 import { z } from 'zod';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
-import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
-import { recordVoiceRefusal } from '@server/billing/userLimitEvents';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
+import { recordVoiceRefusal } from '@bike4mind/server-utils/billing/userLimitEvents';
 
 const CreateSessionBodySchema = z.object({
   sessionId: z.string().optional(),
@@ -170,7 +170,9 @@ const handler = baseApi().post(async (req, res) => {
         // follow the creator-identity widening an organization lake uses. Request-free variant: this
         // call site has a user but no request. See resolveRetrievalLakeScopeForUser.
         resolveLakeAccess: async () =>
-          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(req.user!),
+          (
+            await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')
+          ).resolveRetrievalLakeScopeForUser(req.user!),
       },
       { origin: resolveSessionOrigin(req) }
     );

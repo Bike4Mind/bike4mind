@@ -1,5 +1,6 @@
 import { Jimp } from 'jimp';
 import { imagePixelCount, MAX_IMAGE_PIXELS } from '@bike4mind/utils/imageResize';
+import { Logger } from '@bike4mind/observability';
 
 export interface ImageProcessRequest {
   imageBuffer: string; // base64 encoded buffer
@@ -21,10 +22,10 @@ export const handler = async (event: ImageProcessRequest): Promise<ImageProcessR
   try {
     const { imageBuffer: imageBufferBase64, maxSizeMB = 4 } = event;
 
-    console.log(`[ImageProcessor] Starting image processing with max size ${maxSizeMB}MB...`);
+    Logger.info(`[ImageProcessor] Starting image processing with max size ${maxSizeMB}MB...`);
 
     const imageBuffer = Buffer.from(imageBufferBase64, 'base64');
-    console.log(`[ImageProcessor] Input buffer size: ${(imageBuffer.length / (1024 * 1024)).toFixed(2)}MB`);
+    Logger.info(`[ImageProcessor] Input buffer size: ${(imageBuffer.length / (1024 * 1024)).toFixed(2)}MB`);
 
     // Reject a decompression bomb before jimp decodes it: a small file can declare a huge
     // canvas whose RGBA bitmap (width*height*4) would exhaust the Lambda's memory.
@@ -34,7 +35,7 @@ export const handler = async (event: ImageProcessRequest): Promise<ImageProcessR
     }
 
     const baseImage: any = await Jimp.read(imageBuffer);
-    console.log(`[ImageProcessor] Image loaded: ${baseImage.bitmap.width}x${baseImage.bitmap.height}`);
+    Logger.info(`[ImageProcessor] Image loaded: ${baseImage.bitmap.width}x${baseImage.bitmap.height}`);
 
     const originalWidth = baseImage.bitmap.width;
     const originalHeight = baseImage.bitmap.height;
@@ -48,20 +49,20 @@ export const handler = async (event: ImageProcessRequest): Promise<ImageProcessR
       const targetWidth = Math.floor(originalWidth * scaleFactor);
       const targetHeight = Math.floor(originalHeight * scaleFactor);
 
-      console.log(
+      Logger.info(
         `[ImageProcessor] Large image detected (est. ${estimatedSizeMB.toFixed(2)}MB), pre-resizing to ${targetWidth}x${targetHeight}...`
       );
       workingImage = baseImage.clone().resize({ w: targetWidth, h: targetHeight });
-      console.log(`[ImageProcessor] Pre-resize complete`);
+      Logger.info(`[ImageProcessor] Pre-resize complete`);
     }
 
     let processedBuffer = await workingImage.getBuffer('image/png');
     let currentSizeMB = processedBuffer.length / (1024 * 1024);
-    console.log(`[ImageProcessor] PNG conversion size: ${currentSizeMB.toFixed(2)}MB`);
+    Logger.info(`[ImageProcessor] PNG conversion size: ${currentSizeMB.toFixed(2)}MB`);
 
     // Fine-tune resize if still too large
     if (currentSizeMB > maxSizeMB) {
-      console.log(`[ImageProcessor] Image size ${currentSizeMB.toFixed(2)}MB exceeds ${maxSizeMB}MB, fine-tuning...`);
+      Logger.info(`[ImageProcessor] Image size ${currentSizeMB.toFixed(2)}MB exceeds ${maxSizeMB}MB, fine-tuning...`);
 
       let scaleFactor = Math.sqrt(maxSizeMB / currentSizeMB) * 0.95; // 0.95 for safety margin
 
@@ -72,7 +73,7 @@ export const handler = async (event: ImageProcessRequest): Promise<ImageProcessR
         const newWidth = Math.floor(workingImage.bitmap.width * scaleFactor);
         const newHeight = Math.floor(workingImage.bitmap.height * scaleFactor);
 
-        console.log(
+        Logger.info(
           `[ImageProcessor] Attempt ${attempts + 1}: Resizing to ${newWidth}x${newHeight} (scale: ${scaleFactor.toFixed(2)})...`
         );
 
@@ -80,7 +81,7 @@ export const handler = async (event: ImageProcessRequest): Promise<ImageProcessR
         processedBuffer = await resizedImage.getBuffer('image/png');
         currentSizeMB = processedBuffer.length / (1024 * 1024);
 
-        console.log(`[ImageProcessor] New size: ${currentSizeMB.toFixed(2)}MB`);
+        Logger.info(`[ImageProcessor] New size: ${currentSizeMB.toFixed(2)}MB`);
 
         if (currentSizeMB > maxSizeMB) {
           scaleFactor *= 0.85;
@@ -97,7 +98,7 @@ export const handler = async (event: ImageProcessRequest): Promise<ImageProcessR
         );
       }
 
-      console.log(`[ImageProcessor] Image successfully resized to ${currentSizeMB.toFixed(2)}MB`);
+      Logger.info(`[ImageProcessor] Image successfully resized to ${currentSizeMB.toFixed(2)}MB`);
     }
 
     return {
@@ -106,7 +107,7 @@ export const handler = async (event: ImageProcessRequest): Promise<ImageProcessR
       isPng: true,
     };
   } catch (error) {
-    console.error(`[ImageProcessor] Error processing image:`, error);
+    Logger.error(`[ImageProcessor] Error processing image`, { error });
     if (error instanceof Error && error.message.includes('Could not find MIME')) {
       throw new Error(
         `Invalid image format. Please ensure the image is a valid JPEG, PNG, WebP, GIF, or other supported format.`

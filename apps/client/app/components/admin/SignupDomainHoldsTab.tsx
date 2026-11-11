@@ -5,6 +5,7 @@ import {
   Button,
   Dropdown,
   IconButton,
+  Link,
   Menu,
   MenuButton,
   MenuItem,
@@ -28,6 +29,7 @@ import {
   type SignupDomainReview,
 } from '@bike4mind/common';
 import { PENDING_GRANTS_QUERY_KEY } from '@client/app/hooks/data/adminSignupGrant';
+import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCounts';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import {
@@ -41,6 +43,8 @@ import {
   ViewTabs,
   useAdminListUrlState,
 } from './shared';
+import { useMissingAdminPermission } from './shared/MissingPermission';
+import { RelativeTime } from './shared/EntityHeader';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { SIGNUP_DOMAIN_HOLDS_SEARCH_KEYS } from './signupDomainHoldsSearch';
@@ -48,6 +52,7 @@ import { SIGNUP_DOMAIN_HOLDS_SEARCH_KEYS } from './signupDomainHoldsSearch';
 const QUERY_KEY = ['signup-domain-holds'];
 const ENDPOINT = '/api/admin/signup-domain-holds';
 const PAGE_SIZE = 25;
+const STALE_HOLD_MS = 24 * 60 * 60 * 1000;
 const STATUS_LABELS: Record<SignupDomainHoldStatusFilter, string> = {
   pending: 'Pending',
   blocked: 'Blocked',
@@ -73,6 +78,27 @@ const EMPTY_LABELS: Record<SignupDomainHoldStatusFilter, string> = {
   all: 'No signup domains are held.',
 };
 
+type DecisionInput = {
+  domain: string;
+  action: 'confirm' | 'release';
+  afterUserId?: string;
+  // Only the explicit Release dialog sends this, so a payout retry never takes over an automated release.
+  overrideAutoDecision?: boolean;
+};
+
+// An automated release stays open to an admin's Confirm or Release (a takeover) and can retry its own payout;
+// an admin's own release is final and only offers to retry its pending grants.
+const isAdminReleased = (review: SignupDomainReview) => review.status === 'released' && !review.autoDecision;
+const isAutoReleased = (review: SignupDomainReview) => review.status === 'released' && !!review.autoDecision;
+const canConfirm = (review: SignupDomainReview) =>
+  review.status === 'held_pending_review' || (review.status === 'released' && Boolean(review.autoDecision));
+type DecisionResult = {
+  status: 'blocked' | 'released';
+  creditsReleased: number;
+  remaining: number;
+  nextCursor: string | null;
+};
+
 type HoldsResponse = {
   data: SignupDomainReview[];
   total: number;
@@ -86,10 +112,12 @@ const isStatusFilter = (value: string): value is SignupDomainHoldStatusFilter =>
   (SIGNUP_DOMAIN_HOLD_STATUS_FILTERS as readonly string[]).includes(value);
 const isReasonFilter = (value: string): value is SignupDomainHoldReasonFilter =>
   (SIGNUP_DOMAIN_HOLD_REASON_FILTER_KEYS as readonly string[]).includes(value);
-const AUTO_POLICY_LABELS: Record<SignupDomainHoldAutoPolicy, string> = {
-  'disposable-aggregate-rule': 'Auto-confirmed by the disposable list rule',
-  'advisory-decision': 'Auto-confirmed by the advisory assessment',
+const AUTO_POLICY_SOURCES: Record<SignupDomainHoldAutoPolicy, string> = {
+  'disposable-aggregate-rule': 'the disposable list rule',
+  'advisory-decision': 'the advisory assessment',
 };
+const autoDecisionLabel = (status: SignupDomainReview['status'], policy: SignupDomainHoldAutoPolicy) =>
+  `${status === 'released' ? 'Auto-released' : 'Auto-confirmed'} by ${AUTO_POLICY_SOURCES[policy]}`;
 const JUDGMENT_LABELS: Record<SignupDomainHoldJudgment, string> = {
   abuse: 'abuse',
   legitimate: 'legitimate',
@@ -100,6 +128,30 @@ const assessmentCaption = (assessment: SignupDomainHoldAssessment): string =>
   assessment.outcome === 'judged'
     ? `Advisory verdict: ${JUDGMENT_LABELS[assessment.judgment]} (${Math.round(assessment.confidence * 100)}% confidence)`
     : `Advisory assessment failed (${assessment.failure.replace(/_/g, ' ')}, attempt ${assessment.attempts})`;
+
+// The hold's signupCount is fixed when it is created, so it is not the number of accounts a release pays.
+const releaseMessage = ({ creditsReleased, remaining, nextCursor }: DecisionResult): string =>
+  remaining > 0 || nextCursor
+    ? `Released ${creditsReleased.toLocaleString()} credits. ${remaining.toLocaleString()} pending grants remain; switch the status filter to Released and use Retry pending grants to continue or retry failures.`
+    : `Released ${creditsReleased.toLocaleString()} credits.`;
+
+const isJudgedAbuse = (assessment: SignupDomainHoldAssessment | undefined): boolean =>
+  assessment?.outcome === 'judged' && assessment.judgment === 'abuse';
+
+function HoldWait({ review }: { review: SignupDomainReview }) {
+  const [now] = useState(Date.now);
+  const stale = review.status === 'held_pending_review' && now - new Date(review.triggeredAt).getTime() > STALE_HOLD_MS;
+  return (
+    <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
+      <RelativeTime prefix="Held" at={review.triggeredAt} data-testid={`signup-domain-held-at-${review.domain}`} />
+      {stale && (
+        <span data-testid={`signup-domain-stale-${review.domain}`}>
+          <StatusChip tone="warn" label="Waiting over 24h" />
+        </span>
+      )}
+    </Stack>
+  );
+}
 
 export default function SignupDomainHoldsTab() {
   const [view, updateView] = useAdminListUrlState(SIGNUP_DOMAIN_HOLDS_SEARCH_KEYS);
@@ -118,6 +170,8 @@ export default function SignupDomainHoldsTab() {
   const [cursors, setCursors] = useState<Record<string, string | undefined>>({});
   // isPending only flips after a re-render, so a double-click would otherwise send two decisions.
   const decisionInFlight = useRef(false);
+  const [releaseTarget, setReleaseTarget] = useState<SignupDomainReview | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: [...QUERY_KEY, status, reason, includeOlder, page],
@@ -133,15 +187,7 @@ export default function SignupDomainHoldsTab() {
   if (!query.isPlaceholderData && total !== undefined && page > 1 && (page - 1) * PAGE_SIZE >= total)
     setPage(Math.max(1, Math.ceil(total / PAGE_SIZE)));
   const decision = useMutation({
-    mutationFn: async (input: { domain: string; action: 'confirm' | 'release'; afterUserId?: string }) =>
-      (
-        await api.post<{
-          status: 'blocked' | 'released';
-          creditsReleased: number;
-          remaining: number;
-          nextCursor: string | null;
-        }>(ENDPOINT, input)
-      ).data,
+    mutationFn: async (body: DecisionInput) => (await api.post<DecisionResult>(ENDPOINT, body)).data,
     onSuccess: (result, input) => {
       if (result.status === 'released')
         setCursors(current => ({ ...current, [input.domain]: result.nextCursor ?? undefined }));
@@ -150,12 +196,13 @@ export default function SignupDomainHoldsTab() {
       decisionInFlight.current = false;
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
         ...(input.action === 'release' ? [queryClient.invalidateQueries({ queryKey: PENDING_GRANTS_QUERY_KEY })] : []),
       ]);
     },
   });
   // A failure shows in the Alert below (decision.error), so the promise never rejects.
-  const decide = async (input: { domain: string; action: 'confirm' | 'release'; afterUserId?: string }) => {
+  const decide = async (input: DecisionInput) => {
     if (decisionInFlight.current) return;
     decisionInFlight.current = true;
     try {
@@ -164,8 +211,15 @@ export default function SignupDomainHoldsTab() {
       /* reported through decision.error */
     }
   };
-  const release = (review: SignupDomainReview) =>
-    decide({ domain: review.domain, action: 'release', afterUserId: cursors[review.domain] });
+  const release = (review: SignupDomainReview, overrideAutoDecision?: boolean) =>
+    decide({
+      domain: review.domain,
+      action: 'release',
+      afterUserId: cursors[review.domain],
+      ...(overrideAutoDecision ? { overrideAutoDecision } : {}),
+    });
+  const missingModerate = useMissingAdminPermission('users:moderate');
+  const missingRelease = useMissingAdminPermission({ allOf: ['users:moderate', 'credits:adjust'] });
   // Release and Confirm change what free credits pay out, so they ask first; Retry re-posts a decided release.
   const [reviewing, setReviewing] = useState<{ review: SignupDomainReview; action: 'confirm' | 'release' } | null>(
     null
@@ -194,11 +248,16 @@ export default function SignupDomainHoldsTab() {
                   from domains only on the aggregate disposable list are confirmed automatically on stages that run
                   scheduled jobs unless that is turned off in Users settings; each is recorded in the Admin Audit Log as
                   a system action and can still be released here. When the advisory assessment is on, a model judges
-                  young-domain holds from counts and flags; a confident abuse verdict confirms the hold the same way,
-                  and any other verdict leaves it for you. Young-domain holds are rechecked, and one whose domain has
-                  since passed the age threshold is marked so you can release it. Nothing automated ever releases a
-                  hold. Settled holds older than {query.data?.settledVisibleDays ?? 90} days are hidden, never deleted;
-                  turn on Include older to see them.
+                  young-domain holds from counts and flags; a confident abuse verdict confirms the hold the same way. A
+                  confident legitimate verdict releases the hold only when auto-release is turned on and the hold passes
+                  every guard (a real site, Google or Microsoft mail, no disposable-mail wording, known residential
+                  networks, few waiting accounts), up to a daily cap; each auto-release is recorded in the Admin Audit
+                  Log and pays only the accounts it judged. Its domain stays watched: a burst, or a later signup while
+                  the domain is still young, puts it back in this queue. Retry pending grants on an auto-released row
+                  pays only those judged accounts; Release takes the release over and exempts the domain for good. Any
+                  other verdict leaves it for you. Young-domain holds are rechecked, and one whose domain has since
+                  passed the age threshold is marked. Settled holds older than {query.data?.settledVisibleDays ?? 90}{' '}
+                  days are hidden, never deleted; turn on Include older to see them.
                 </Typography>
               }
             >
@@ -263,9 +322,8 @@ export default function SignupDomainHoldsTab() {
         <Alert color="success">Domain confirmed; pending credits remain held.</Alert>
       )}
       {decision.data?.status === 'released' && (
-        <Alert color="success">
-          Released {decision.data.creditsReleased} credits. {decision.data.remaining} pending grants remain; switch the
-          status filter to Released and use Retry pending grants to continue or retry failures.
+        <Alert color="success" data-testid="signup-domain-holds-release-result">
+          {releaseMessage(decision.data)}
         </Alert>
       )}
       <DataTable<SignupDomainReview>
@@ -322,9 +380,19 @@ export default function SignupDomainHoldsTab() {
               <MoreHorizontal size={16} />
             </MenuButton>
             <Menu placement="bottom-end">
-              {review.status === 'released' ? (
+              {isAutoReleased(review) && (
+                // Pays only the accounts the automated release judged, within budget, and keeps its decision.
                 <MenuItem
-                  disabled={decision.isPending}
+                  disabled={!!missingRelease || decision.isPending}
+                  data-testid={`signup-domain-retry-${review.domain}`}
+                  onClick={() => void decide({ domain: review.domain, action: 'release' })}
+                >
+                  Retry pending grants
+                </MenuItem>
+              )}
+              {isAdminReleased(review) ? (
+                <MenuItem
+                  disabled={!!missingRelease || decision.isPending}
                   data-testid={`signup-domain-release-${review.domain}`}
                   onClick={() => void release(review)}
                 >
@@ -332,7 +400,7 @@ export default function SignupDomainHoldsTab() {
                 </MenuItem>
               ) : (
                 <MenuItem
-                  disabled={decision.isPending}
+                  disabled={!!missingRelease || decision.isPending}
                   data-testid={`signup-domain-release-${review.domain}`}
                   onClick={() => setReviewing({ review, action: 'release' })}
                 >
@@ -341,15 +409,15 @@ export default function SignupDomainHoldsTab() {
               )}
               <MenuItem
                 color="danger"
-                disabled={decision.isPending || review.status !== 'held_pending_review'}
+                disabled={!!missingModerate || decision.isPending || !canConfirm(review)}
                 data-testid={`signup-domain-confirm-${review.domain}`}
                 onClick={() => setReviewing({ review, action: 'confirm' })}
               >
                 <div>
                   Confirm hold
-                  {review.status !== 'held_pending_review' && (
+                  {(missingModerate || !canConfirm(review)) && (
                     <Typography level="body-xs" data-testid={`signup-domain-confirm-hint-${review.domain}`}>
-                      Only pending holds can be confirmed
+                      {missingModerate ?? 'Only pending or auto-released holds can be confirmed'}
                     </Typography>
                   )}
                 </div>
@@ -363,8 +431,16 @@ export default function SignupDomainHoldsTab() {
             label: 'Domain / reason',
             render: review => (
               <>
-                {review.domain}
+                <Link
+                  href={`https://${review.domain}`}
+                  target="_blank"
+                  rel="noopener noreferrer nofollow"
+                  data-testid={`signup-domain-open-${review.domain}`}
+                >
+                  {review.domain}
+                </Link>
                 <Typography level="body-sm">{review.reason}</Typography>
+                <HoldWait review={review} />
               </>
             ),
           },
@@ -389,24 +465,26 @@ export default function SignupDomainHoldsTab() {
                 />
                 {review.autoDecision && (
                   <Typography level="body-sm" data-testid={`signup-domain-auto-decision-${review.domain}`}>
-                    {AUTO_POLICY_LABELS[review.autoDecision.policy]}{' '}
+                    {autoDecisionLabel(review.status, review.autoDecision.policy)}{' '}
                     {new Date(review.autoDecision.decidedAt).toLocaleString()}
                   </Typography>
                 )}
-                {review.status === 'held_pending_review' && review.domainAgedAt && (
-                  <Stack gap={0.5} sx={{ mt: 0.5 }} data-testid={`signup-domain-aged-${review.domain}`}>
-                    <Box>
-                      <StatusChip tone="good" label="Domain now aged" />
-                    </Box>
-                    <Typography level="body-sm">
-                      Past the young-domain threshold
-                      {review.domainRegisteredAt
-                        ? ` (registered ${new Date(review.domainRegisteredAt).toLocaleDateString()})`
-                        : ''}
-                      . Release if nothing else looks wrong.
-                    </Typography>
-                  </Stack>
-                )}
+                {review.status === 'held_pending_review' &&
+                  review.domainAgedAt &&
+                  !isJudgedAbuse(review.assessment) && (
+                    <Stack gap={0.5} sx={{ mt: 0.5 }} data-testid={`signup-domain-aged-${review.domain}`}>
+                      <Box>
+                        <StatusChip tone="neutral" label="Domain now aged" />
+                      </Box>
+                      <Typography level="body-sm">
+                        Past the young-domain threshold
+                        {review.domainRegisteredAt
+                          ? ` (registered ${new Date(review.domainRegisteredAt).toLocaleDateString()})`
+                          : ''}
+                        .
+                      </Typography>
+                    </Stack>
+                  )}
                 {review.assessment && (
                   <Typography level="body-sm" data-testid={`signup-domain-assessment-${review.domain}`}>
                     {assessmentCaption(review.assessment)}
@@ -515,7 +593,7 @@ export default function SignupDomainHoldsTab() {
           if (!reviewing) return;
           const { review, action } = reviewing;
           setReviewing(null);
-          await (action === 'release' ? release(review) : decide({ domain: review.domain, action }));
+          await (action === 'release' ? release(review, true) : decide({ domain: review.domain, action }));
         }}
         data-testid="signup-domain-decision-dialog"
       />

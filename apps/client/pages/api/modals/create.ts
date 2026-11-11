@@ -4,10 +4,11 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { createModalVideoSchema } from '@bike4mind/common';
-import { modalAuditTitle } from '@client/server/tools/modalOperations';
+import { modalAuditTitle, storableModalImageUrl } from '@client/server/tools/modalOperations';
 import { recordModalChanges } from '@client/server/tools/recordModalChanges';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
-import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
+import { withSignedModalImage } from '@client/server/tools/modalImageUrls';
+import { cacheExternalImages } from '@server/utils/cacheExternalImage';
 
 const ModalVideoSchema = createModalVideoSchema({ extraOrigins: deploymentMediaOrigins() });
 
@@ -60,7 +61,7 @@ const handler = baseApi().post(
     if (!req.ability.can('create', ModalModel)) throw new ForbiddenError('Permission denied');
 
     if (newModalData.imageUrl) {
-      newModalData.imageUrl = await cacheExternalImage(newModalData.imageUrl);
+      newModalData.imageUrl = await storableModalImageUrl(newModalData.imageUrl);
     }
 
     if (newModalData.images && newModalData.images.length > 0) {
@@ -75,7 +76,7 @@ const handler = baseApi().post(
       [{ kind: 'created', id: String(newModal._id), title: modalAuditTitle(newModal) }],
       'admin-modals'
     );
-    return res.status(201).send(newModal);
+    return res.status(201).send(await withSignedModalImage(newModal.toObject()));
   })
 );
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 const mocks = vi.hoisted(() => ({
   expirePreviousKey: vi.fn(),
@@ -69,8 +70,8 @@ describe('secretRotationNotifier', () => {
     mocks.resolveSlackWebhookUrl.mockReturnValue('https://hooks.example/liveops');
     mocks.sendAccessReviewReminder.mockResolvedValue('2027-Q1');
     mocks.postMessageToSlack.mockResolvedValue(true);
-    vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(Logger, 'info').mockImplementation(() => undefined);
+    vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
@@ -154,7 +155,7 @@ describe('secretRotationNotifier', () => {
 
     await expect(handler()).resolves.toEqual({ status: 'OK', notified: 1 });
     expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(1);
-    expect(console.error).toHaveBeenCalledWith('Access review reminder failed:', expect.any(Error));
+    expect(Logger.error).toHaveBeenCalledWith('Access review reminder failed', { error: expect.any(Error) });
   });
 
   it('reports a failed Slack delivery without marking the quarter notified or blocking due secrets', async () => {
@@ -163,16 +164,17 @@ describe('secretRotationNotifier', () => {
     mocks.rotationConfig.mockReturnValue({ JWT_SECRET: {} });
     mocks.find.mockResolvedValue([secret('JWT_SECRET', 1)]);
     mocks.postMessageToSlack.mockResolvedValueOnce(false);
-    mocks.sendAccessReviewReminder.mockImplementationOnce(async (_now: Date, post: (text: string) => Promise<unknown>) => {
-      await post('reminder text');
-      return '2027-Q1';
-    });
+    mocks.sendAccessReviewReminder.mockImplementationOnce(
+      async (_now: Date, post: (text: string) => Promise<unknown>) => {
+        await post('reminder text');
+        return '2027-Q1';
+      }
+    );
 
     await expect(handler()).resolves.toEqual({ status: 'OK', notified: 1 });
-    expect(console.error).toHaveBeenCalledWith(
-      'Access review reminder failed:',
-      expect.objectContaining({ message: 'Access review reminder was not accepted by Slack' })
-    );
+    expect(Logger.error).toHaveBeenCalledWith('Access review reminder failed', {
+      error: expect.objectContaining({ message: 'Access review reminder was not accepted by Slack' }),
+    });
     expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(2);
     expect(mocks.postMessageToSlack).toHaveBeenLastCalledWith(
       'https://hooks.example/liveops',
@@ -191,6 +193,6 @@ describe('secretRotationNotifier', () => {
     mocks.expirePreviousKey.mockRejectedValue(new Error('db down'));
 
     await expect(handler()).rejects.toThrow('db down');
-    expect(console.error).toHaveBeenCalledWith('Error in secret rotation notifier:', expect.any(Error));
+    expect(Logger.error).toHaveBeenCalledWith('Error in secret rotation notifier', { error: expect.any(Error) });
   });
 });

@@ -16,7 +16,7 @@ import { resolveApiKeyTrust } from '@bike4mind/server-utils/utils/apiKeyTrust';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
-import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
+import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 
 const RedeemRequestSchema = z.object({
   pairingToken: z.string().min(16).max(200),
@@ -143,9 +143,7 @@ const handler = baseApi({ auth: false })
         return res.status(409).json({ error: 'Pairing token already redeemed' });
       }
 
-      req.logger.info(
-        `[CC_BRIDGE] Redeemed token ${tokenPrefix} for user ${record.userId}, device ${device._id} ("${deviceLabel}")`
-      );
+      req.logger.info(`[CC_BRIDGE] Redeemed token ${tokenPrefix} for user ${record.userId}, device ${device._id}`);
 
       return res.status(201).json({
         deviceId: device._id,

@@ -26,11 +26,11 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (value?: string | null) => (value ? `enc:${value}` : null),
   decryptToken: (value?: string | null) => (value ? value.replace(/^enc:/, '') : null),
 }));
-vi.mock('./clientIdentity', () => ({
+vi.mock('@bike4mind/server-utils/mcpConnections/oauth/clientIdentity', () => ({
   loadConnectionClient: h.loadClient,
   dropRejectedRegistration: h.dropRegistration,
 }));
-vi.mock('./oauthFetch', () => ({
+vi.mock('@bike4mind/server-utils/mcpConnections/oauth/oauthFetch', () => ({
   withOAuthFetch: (_n: unknown, _o: unknown, fn: (f: unknown) => Promise<unknown>) => fn(vi.fn()),
 }));
 

@@ -214,6 +214,127 @@ describe('FallbackLlmBackend', () => {
     expect(models).toEqual([{ id: 'model-a', name: 'Model A' }]);
   });
 
+  describe('a refusal settled by the server', () => {
+    // The final frame of a declined turn: whatever text it carries, plus stopReason 'refusal'.
+    const refusingThen = (inner: ICompletionBackend, answer: (model: string) => boolean) =>
+      (inner.complete as ReturnType<typeof vi.fn>).mockImplementation(async (model, _msgs, _opts, cb) => {
+        if (answer(model)) await cb(['answer'], { stopReason: 'end_turn' });
+        else await cb(['partial'], { stopReason: 'refusal' });
+      });
+
+    it('falls back to the next model without delivering the refused turn', async () => {
+      const inner = createMockBackend();
+      refusingThen(inner, model => model === 'model-b');
+      const fallback = new FallbackLlmBackend(inner, ['model-b'], onFallback);
+
+      await fallback.complete('model-a', makeMessages(), makeOptions(), callback);
+
+      expect(inner.complete).toHaveBeenCalledTimes(2);
+      expect(onFallback).toHaveBeenCalledWith(
+        'model-a',
+        'model-b',
+        expect.objectContaining({ kind: 'refused', message: 'The model declined this request' })
+      );
+      expect(callback).toHaveBeenCalledOnce();
+      expect(callback).toHaveBeenCalledWith(['answer'], { stopReason: 'end_turn' });
+    });
+
+    it('delivers the last model refusal to the caller', async () => {
+      const inner = createMockBackend();
+      refusingThen(inner, () => false);
+      const fallback = new FallbackLlmBackend(inner, ['model-b'], onFallback);
+
+      await fallback.complete('model-a', makeMessages(), makeOptions(), callback);
+
+      expect(inner.complete).toHaveBeenCalledTimes(2);
+      expect(callback).toHaveBeenCalledOnce();
+      expect(callback).toHaveBeenCalledWith(['partial'], { stopReason: 'refusal' });
+    });
+
+    it('includes charged refusals in the fallback model cumulative accounting', async () => {
+      const inner = createMockBackend();
+      const refusedUsage: CompletionInfo = {
+        inputTokens: 10,
+        outputTokens: 2,
+        reasoningTokens: 1,
+        cacheReadInputTokens: 4,
+        cacheCreationInputTokens: 6,
+        cacheWrite1hInputTokens: 3,
+        creditsUsed: 3,
+        usdCost: 0.03,
+      };
+      (inner.complete as ReturnType<typeof vi.fn>).mockImplementation(async (model, _msgs, _opts, cb) => {
+        if (model === 'model-a') {
+          await cb(['refused text'], { ...refusedUsage, stopReason: 'refusal' });
+          // Settlement follows the refusal frame, carrying the same cumulative totals.
+          await cb([], { ...refusedUsage, creditsUsed: 3 });
+          return;
+        }
+        await cb(['answer'], { inputTokens: 20, outputTokens: 1 });
+        await cb([' continued'], {
+          inputTokens: 20,
+          outputTokens: 5,
+          reasoningTokens: 2,
+          cacheReadInputTokens: 7,
+          cacheCreationInputTokens: 8,
+          cacheWrite1hInputTokens: 4,
+          creditsUsed: 2,
+          usdCost: 0.02,
+          stopReason: 'end_turn',
+        });
+      });
+      const fallback = new FallbackLlmBackend(inner, ['model-b'], onFallback);
+
+      await fallback.complete('model-a', makeMessages(), makeOptions(), callback);
+
+      expect(callback).toHaveBeenCalledTimes(2);
+      expect(callback).toHaveBeenNthCalledWith(
+        1,
+        ['answer'],
+        expect.objectContaining({ inputTokens: 30, outputTokens: 3, creditsUsed: 3 })
+      );
+      expect(callback).toHaveBeenLastCalledWith([' continued'], {
+        inputTokens: 30,
+        outputTokens: 7,
+        reasoningTokens: 3,
+        cacheReadInputTokens: 11,
+        cacheCreationInputTokens: 14,
+        cacheWrite1hInputTokens: 7,
+        creditsUsed: 5,
+        usdCost: 0.05,
+        stopReason: 'end_turn',
+      });
+    });
+
+    it('includes each refused model once when the final model also refuses', async () => {
+      const inner = createMockBackend();
+      (inner.complete as ReturnType<typeof vi.fn>).mockImplementation(async (model, _msgs, _opts, cb) => {
+        await cb([''], { creditsUsed: model === 'model-a' ? 3 : 2, stopReason: 'refusal' });
+      });
+      const fallback = new FallbackLlmBackend(inner, ['model-b', 'model-c'], onFallback);
+
+      await fallback.complete('model-a', makeMessages(), makeOptions(), callback);
+
+      expect(callback).toHaveBeenCalledOnce();
+      expect(callback).toHaveBeenCalledWith([''], { creditsUsed: 7, stopReason: 'refusal' });
+    });
+
+    it('does not fall back once text already reached the caller', async () => {
+      const inner = createMockBackend();
+      (inner.complete as ReturnType<typeof vi.fn>).mockImplementation(async (_model, _msgs, _opts, cb) => {
+        await cb(['streamed ']);
+        await cb([''], { stopReason: 'refusal' });
+      });
+      const fallback = new FallbackLlmBackend(inner, ['model-b'], onFallback);
+
+      await fallback.complete('model-a', makeMessages(), makeOptions(), callback);
+
+      expect(inner.complete).toHaveBeenCalledOnce();
+      expect(onFallback).not.toHaveBeenCalled();
+      expect(callback).toHaveBeenLastCalledWith([''], { stopReason: 'refusal' });
+    });
+  });
+
   it('proxies currentModel get/set to inner backend', () => {
     const inner = createMockBackend();
     inner.currentModel = 'initial';

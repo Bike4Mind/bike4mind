@@ -12,23 +12,31 @@ import { SCOPE_STAGING_ENV_VAR } from '@bike4mind/server-utils/middlewares/apiKe
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 
-const { validateUserApiKeyMock, findByIdMock, resolveUntrustedKeyLimitsMock, isApiKeyAccessAllowedMock } = vi.hoisted(
-  () => ({
-    validateUserApiKeyMock: vi.fn(),
-    findByIdMock: vi.fn(),
-    resolveUntrustedKeyLimitsMock: vi.fn(async (_owner: unknown, key: { rateLimit: unknown }) => ({
-      rateLimit: key.rateLimit,
-      ownerUntrusted: false,
-    })),
-    isApiKeyAccessAllowedMock: vi.fn(async (_user: unknown, _billing?: unknown, _req?: unknown) => true),
-  })
-);
+const {
+  validateUserApiKeyMock,
+  findOwnerOfDisabledUserApiKeyMock,
+  findByIdMock,
+  resolveUntrustedKeyLimitsMock,
+  isApiKeyAccessAllowedMock,
+} = vi.hoisted(() => ({
+  validateUserApiKeyMock: vi.fn(),
+  findOwnerOfDisabledUserApiKeyMock: vi.fn(),
+  findByIdMock: vi.fn(),
+  resolveUntrustedKeyLimitsMock: vi.fn(async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  })),
+  isApiKeyAccessAllowedMock: vi.fn(async (_user: unknown, _billing?: unknown, _req?: unknown) => true),
+}));
 
 vi.mock('@bike4mind/services', async importOriginal => ({
   // Real `userService.accountBlockReasons` drives the account-state gate; the rest of the barrel
   // loads alongside it (its db deps are mocked here).
   ...(await importOriginal<typeof import('@bike4mind/services')>()),
-  userApiKeyService: { validateUserApiKey: validateUserApiKeyMock },
+  userApiKeyService: {
+    validateUserApiKey: validateUserApiKeyMock,
+    findOwnerOfDisabledUserApiKey: findOwnerOfDisabledUserApiKeyMock,
+  },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database', () => ({ User: { findById: findByIdMock } }));
@@ -36,7 +44,7 @@ vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: () => ({}) }))
 vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
   resolveUntrustedKeyLimits: resolveUntrustedKeyLimitsMock,
 }));
-vi.mock('@server/utils/apiKeyAccessGate', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
   API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
   isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
 }));
@@ -357,7 +365,7 @@ describe('apiKeyAuth blocked owner log', () => {
   });
 
   it.each([
-    ['banned', { id: 'user-1', isBanned: true }, 'User not found or banned'],
+    ['banned', { id: 'user-1', isBanned: true }, 'This account is suspended'],
     [
       'suspended',
       { id: 'user-1', moderation: { status: 'suspended' } },
@@ -592,5 +600,55 @@ describe('apiKeyAuth paid-only access switch', () => {
     const { passed, error } = await run(undefined, makeReq());
     expect(passed).toBe(false);
     expect(error).toBeInstanceOf(InternalServerError);
+  });
+});
+
+describe('apiKeyAuth suspended owner', () => {
+  const ownerQuery = (owner: unknown) => ({ select: () => ({ lean: () => Promise.resolve(owner) }) });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    validateUserApiKeyMock.mockResolvedValue({ isValid: false, reason: 'not_found' });
+  });
+
+  it('answers a key that suspension disabled with the owner account_suspended notice', async () => {
+    findOwnerOfDisabledUserApiKeyMock.mockResolvedValue('user-1');
+    findByIdMock.mockReturnValue(ownerQuery({ isBanned: true, suspensionReasonCategory: 'automated_misuse' }));
+
+    const { passed, error } = await run([ApiKeyScope.AI_CHAT], makeReq());
+
+    expect(passed).toBe(false);
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect((error as ForbiddenError).additionalInfo).toMatchObject({
+      errorCode: 'account_suspended',
+      suspension: { reason_category: 'automated_misuse' },
+    });
+  });
+
+  it('keeps the plain 401 when the disabled key belongs to an account in good standing', async () => {
+    findOwnerOfDisabledUserApiKeyMock.mockResolvedValue('user-1');
+    findByIdMock.mockReturnValue(ownerQuery({ isBanned: false }));
+
+    const { error } = await run([ApiKeyScope.AI_CHAT], makeReq());
+
+    expect(error).toBeInstanceOf(UnauthorizedError);
+    expect(error?.message).toBe('Invalid API key');
+  });
+
+  it('keeps the plain 401 when no disabled key matches or the lookup fails', async () => {
+    findOwnerOfDisabledUserApiKeyMock.mockResolvedValueOnce(null);
+    expect((await run([ApiKeyScope.AI_CHAT], makeReq())).error?.message).toBe('Invalid API key');
+
+    findOwnerOfDisabledUserApiKeyMock.mockRejectedValueOnce(new Error('db down'));
+    expect((await run([ApiKeyScope.AI_CHAT], makeReq())).error?.message).toBe('Invalid API key');
+    expect(findByIdMock).not.toHaveBeenCalled();
+  });
+
+  it('does not look up an owner for a key refused for another reason', async () => {
+    validateUserApiKeyMock.mockResolvedValue({ isValid: false, reason: 'expired' });
+
+    await run([ApiKeyScope.AI_CHAT], makeReq());
+
+    expect(findOwnerOfDisabledUserApiKeyMock).not.toHaveBeenCalled();
   });
 });

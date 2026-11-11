@@ -41,4 +41,13 @@ describe('useArenaVote', () => {
     });
     expect(invalidate).not.toHaveBeenCalled();
   });
+
+  it('leaves the credits balance alone when the award is only queued', async () => {
+    postMock.mockResolvedValue({ data: { creditsAwarded: 2, queued: true } });
+    const { result, invalidate } = setup();
+    await act(async () => {
+      await result.current.mutateAsync(vote);
+    });
+    expect(invalidate).not.toHaveBeenCalled();
+  });
 });
