@@ -46,7 +46,7 @@ function exportAdapters(): AgentConfigurationExportAdapters {
           description: 'Notes',
           sessionIds: ['session-old', 'foreign-session'],
           fileIds: ['file-old', 'foreign-file'],
-          systemPrompts: [{ fileId: 'file-old', enabled: true }],
+          systemPrompts: [{ fileId: 'file-old', enabled: true, internalNote: 'hidden-project-value' }],
           users: [{ userId: 'other' }],
         },
       ]),
@@ -80,19 +80,17 @@ function exportAdapters(): AgentConfigurationExportAdapters {
     },
     favorites: { find: find([{ userId: 'source', documentId: 'project-old', documentType: 'projects' }]) },
     users: {
-      findById: vi
-        .fn()
-        .mockResolvedValue({
-          name: 'Owner',
-          preferences: {
-            agentModeDefault: 'auto',
-            optiSessionId: 'other-session',
-            experimentalFeatures: { adminOnly: true },
-            docxTemplateFileId: 'foreign-file',
-          },
-          oauthCredentials: { accessToken: 'oauth-secret' },
-          password: 'password-secret',
-        }),
+      findById: vi.fn().mockResolvedValue({
+        name: 'Owner',
+        preferences: {
+          agentModeDefault: 'auto',
+          optiSessionId: 'other-session',
+          experimentalFeatures: { adminOnly: true },
+          docxTemplateFileId: 'foreign-file',
+        },
+        oauthCredentials: { accessToken: 'oauth-secret' },
+        password: 'password-secret',
+      }),
     },
   } as unknown as AgentConfigurationExportAdapters;
 }
@@ -158,6 +156,7 @@ describe('agent configuration egress', () => {
       'password-secret',
       'adminOnly',
       'API_KEY',
+      'hidden-project-value',
     ]) {
       expect(json).not.toContain(secret);
     }

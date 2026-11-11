@@ -253,9 +253,9 @@ export async function exportAgentConfiguration(
         id: row.id,
         name: row.name,
         description: row.description,
-        sessionIds: row.sessionIds,
-        fileIds: row.fileIds,
-        systemPrompts: row.systemPrompts,
+        sessionIds: row.sessionIds ?? [],
+        fileIds: row.fileIds ?? [],
+        systemPrompts: (row.systemPrompts ?? []).map(prompt => ({ fileId: prompt.fileId, enabled: prompt.enabled })),
       })),
     prompts: prompts.filter(row => row.userId === userId && !row.deletedAt).map(promptOf),
     mcpServers: mcpServers
