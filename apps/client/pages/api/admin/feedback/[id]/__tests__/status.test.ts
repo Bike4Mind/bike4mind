@@ -66,6 +66,7 @@ beforeEach(() => {
     id: 'audit1',
     action: 'feedback.status_changed',
     details: { feedbackId: FEEDBACK_ID },
+    changes: [{ field: 'status', before: 'New', after: 'Closed' }],
   });
 });
 
@@ -139,6 +140,20 @@ describe('PATCH /api/admin/feedback/[id]/status', () => {
       statusCode: 400,
     });
     expect(mocks.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('refuses an undo with 409 when the report no longer sits where the named change left it', async () => {
+    stored('InProgress');
+    await expect(call({ status: 'New', undoOf: 'audit1' })).rejects.toMatchObject({ statusCode: 409 });
+    stored('Closed');
+    await expect(call({ status: 'InProgress', undoOf: 'audit1' })).rejects.toMatchObject({ statusCode: 409 });
+    expect(mocks.updateOne).not.toHaveBeenCalled();
+    expect(mocks.audit).not.toHaveBeenCalled();
+  });
+
+  it('does not report success when the Admin log write fails', async () => {
+    mocks.audit.mockRejectedValue(new Error('audit write failed'));
+    await expect(call({ status: 'Closed' })).rejects.toThrow('audit write failed');
   });
 
   it('refuses with 409 when the report moved since the admin saw it', async () => {

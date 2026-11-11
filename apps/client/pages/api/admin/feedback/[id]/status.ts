@@ -26,8 +26,8 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:mo
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'Invalid status');
     const { status, expectedStatus, undoOf } = parsed.data;
 
+    const undone = undoOf ? await adminAuditLogRepository.findById(undoOf) : null;
     if (undoOf) {
-      const undone = await adminAuditLogRepository.findById(undoOf);
       if (undone?.action !== 'feedback.status_changed' || undone.details?.feedbackId !== id) {
         throw new BadRequestError('undoOf must name a status change on this report');
       }
@@ -45,6 +45,11 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:mo
       }
       if (previousStatus === status) {
         return { previousStatus, handledBy: current.handledBy, handledAt: current.handledAt, auditEntryId: null };
+      }
+      // An undo only reverses the change it names, and only while the report still sits where that change left it.
+      const reversed = undone?.changes?.[0];
+      if (undone && (reversed?.after !== previousStatus || reversed?.before !== status)) {
+        throw new ConflictError('This status change is no longer the latest one. Refresh and try again.');
       }
 
       const handledAt = new Date();
