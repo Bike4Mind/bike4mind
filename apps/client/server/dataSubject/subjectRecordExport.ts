@@ -1,6 +1,6 @@
 import { FabFile, mongoose } from '@bike4mind/database';
 import { findPersonalOrganizationIds, personalFilter } from '../users/purgeAccountContent';
-import { isOrganizationFile } from '../users/purgeAccountFiles';
+import { findOrganizationFileIds } from '../users/purgeAccountFiles';
 import { holderExportScope, viaParentExportScope, type ExportScope, type ReferenceMatch } from './exportScope';
 import { DATA_HOLDER_REGISTRY, findUnclassifiedModels } from './registry';
 import { matchingArrayElements, omitPath, setPath, valuesAt } from './documentPaths';
@@ -22,6 +22,14 @@ type LeanDocument = Record<string, unknown> & { _id?: unknown };
 const QUERY_MAX_TIME_MS = 60_000;
 // Parent keys per `$in` batch when collecting `viaParent` children.
 const PARENT_KEY_BATCH = 500;
+// Documents matched together, so the organization-file check reads its lakes and workspaces once per batch.
+const MATCH_BATCH = 200;
+// Sizing only orders the walk, so a collection that cannot be sized quickly is just walked last in its tier.
+const SIZE_MAX_TIME_MS = 2_000;
+const SIZE_CONCURRENCY = 8;
+
+/** A reference whose own query failed; the model's other references are still exported. */
+export type FailedReference = { path: string; error: unknown };
 
 /** A model registered in this process that the registry does not classify fails the export loudly. */
 export function assertEveryModelClassified(modelNames: readonly string[]): void {
@@ -59,6 +67,7 @@ export class SubjectRecordExport {
   private readonly keyPathsByParent = new Map<string, Set<string>>();
   private readonly parentScopes = new Map<string, ParentScopes>();
   private readonly completed = new Set<string>();
+  private readonly failures = new Map<string, FailedReference[]>();
   private personalOrganizationIds: Promise<string[]> | undefined;
 
   constructor(
@@ -71,7 +80,35 @@ export class SubjectRecordExport {
       paths.add(holder.parentKey ?? '_id');
       this.keyPathsByParent.set(holder.parent, paths);
     }
-    this.models = orderParentsFirst(registry);
+    this.models = orderForWalk(registry);
+  }
+
+  /**
+   * `models`, with the models of each tier (own record, holders, `viaParent` children) walked
+   * smallest collection first, so a few large collections cannot spend the time small ones need.
+   */
+  async walkOrder(): Promise<readonly string[]> {
+    const sizes = new Map<string, number>();
+    const pending = [...this.models];
+    const sizeNext = async (): Promise<void> => {
+      for (let model = pending.shift(); model; model = pending.shift()) {
+        try {
+          sizes.set(
+            model,
+            await mongoose.model(model).collection.estimatedDocumentCount({ maxTimeMS: SIZE_MAX_TIME_MS })
+          );
+        } catch {
+          sizes.set(model, Number.MAX_SAFE_INTEGER);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: SIZE_CONCURRENCY }, sizeNext));
+    return orderForWalk(this.registry, model => sizes.get(model) ?? Number.MAX_SAFE_INTEGER);
+  }
+
+  /** The references of `model` whose query failed while its records were read. */
+  failedReferences(model: string): readonly FailedReference[] {
+    return this.failures.get(model) ?? [];
   }
 
   /** The model's records. A `viaParent` model must come after its parent has been fully read. */
@@ -87,6 +124,7 @@ export class SubjectRecordExport {
             ? this.childRecords(model, holder)
             : null;
     if (!source) return;
+    this.failures.delete(model);
     const withheld = withheldPathsOf(holder);
     for await (const record of source) {
       for (const path of withheld) omitPath(record, path);
@@ -105,14 +143,89 @@ export class SubjectRecordExport {
   }
 
   private async *holderRecords(model: string, references: readonly UserReference[]): AsyncGenerator<ExportedRecord> {
-    const clauses = references.flatMap(reference => this.filterFor(reference) ?? []);
-    if (clauses.length === 0) return;
     const personal = await this.personalDocumentIds(model, references);
-    for await (const document of this.query(model, { $or: clauses })) {
-      const matches = await this.matchesOn(model, document, references, personal);
+    let batch: LeanDocument[] = [];
+    for await (const document of this.referenceMatches(model, references)) {
+      batch.push(document);
+      if (batch.length < MATCH_BATCH) continue;
+      yield* this.holderBatch(model, batch, references, personal);
+      batch = [];
+    }
+    yield* this.holderBatch(model, batch, references, personal);
+  }
+
+  private async *holderBatch(
+    model: string,
+    documents: readonly LeanDocument[],
+    references: readonly UserReference[],
+    personal: PersonalIds
+  ): AsyncGenerator<ExportedRecord> {
+    const organizationFiles = await this.organizationFileIds(model, documents, references, personal);
+    for (const document of documents) {
+      const matches = this.matchesOn(document, references, personal, organizationFiles);
       const record = this.recordFor(model, document, holderExportScope(matches), matches, references);
       if (record) yield record;
     }
+  }
+
+  /**
+   * Every document any reference matches, each once. Each reference is its own query, so one that
+   * is slow (an unindexed path) or rejected by the server is recorded in `failedReferences` and the
+   * others still export.
+   */
+  private async *referenceMatches(
+    model: string,
+    references: readonly UserReference[],
+    seen = new Set<string>()
+  ): AsyncGenerator<LeanDocument> {
+    const queried = new Set<string>();
+    for (const reference of references) {
+      const filter = this.filterFor(reference);
+      if (!filter) continue;
+      const key = JSON.stringify(filter);
+      if (queried.has(key)) continue;
+      queried.add(key);
+      try {
+        for await (const document of this.query(model, filter)) {
+          const id = String(document._id);
+          if (seen.has(id)) continue;
+          seen.add(id);
+          yield document;
+        }
+      } catch (error) {
+        if (!isServerQueryFailure(error)) throw error;
+        this.recordFailure(model, reference.path, error);
+      }
+    }
+  }
+
+  private recordFailure(model: string, path: string, error: unknown): void {
+    const failures = this.failures.get(model) ?? [];
+    if (!failures.some(failure => failure.path === path)) failures.push({ path, error });
+    this.failures.set(model, failures);
+  }
+
+  /** Of the documents a personal reference matches, the FabFiles an organization keeps. */
+  private async organizationFileIds(
+    model: string,
+    documents: readonly LeanDocument[],
+    references: readonly UserReference[],
+    personal: PersonalIds
+  ): Promise<ReadonlySet<string>> {
+    if (model !== FabFile.modelName) return new Set();
+    const candidates = documents.filter(document =>
+      references.some(
+        reference =>
+          reference.scope === 'personal' &&
+          personal.get(reference)?.has(String(document._id)) &&
+          this.matches(document, reference)
+      )
+    );
+    if (candidates.length === 0) return new Set();
+    return findOrganizationFileIds(
+      candidates.map(document => FabFile.hydrate(document)),
+      this.subject.userId
+    );
   }
 
   private async *childRecords(
@@ -122,6 +235,8 @@ export class SubjectRecordExport {
     if (!this.completed.has(holder.parent)) {
       throw new Error(`"${model}" needs its parent "${holder.parent}" exported first`);
     }
+    // Children of parent documents the parent's failed references missed are missed too.
+    for (const { error } of this.failedReferences(holder.parent)) this.recordFailure(model, holder.foreignKey, error);
     const attribution = holder.attribution ?? [];
     const parents: ParentKeys = this.parentScopes.get(holder.parent)?.get(holder.parentKey ?? '_id') ?? new Map();
     // Only parents that bring their children along on their own; the rest can only reach a child
@@ -140,17 +255,14 @@ export class SubjectRecordExport {
       const batch = parentValues.slice(start, start + PARENT_KEY_BATCH);
       for await (const document of this.query(model, { [holder.foreignKey]: { $in: batch } })) {
         seen.add(String(document._id));
-        const matches = await this.matchesOn(model, document, attribution);
+        const matches = this.matchesOn(document, attribution);
         const scope = viaParentExportScope(holder, parentScopeOf(document), matches);
         const record = this.recordFor(model, document, scope, matches, attribution);
         if (record) yield record;
       }
     }
-    const clauses = attribution.flatMap(reference => this.filterFor(reference) ?? []);
-    if (clauses.length === 0) return;
-    for await (const document of this.query(model, { $or: clauses })) {
-      if (seen.has(String(document._id))) continue;
-      const matches = await this.matchesOn(model, document, attribution);
+    for await (const document of this.referenceMatches(model, attribution, seen)) {
+      const matches = this.matchesOn(document, attribution);
       const record = this.recordFor(
         model,
         document,
@@ -198,10 +310,7 @@ export class SubjectRecordExport {
    * Ids of the documents each `scope: 'personal'` reference may match, selected with the account
    * purge's own predicate so the export and the purge agree on what is the person's.
    */
-  private async personalDocumentIds(
-    model: string,
-    references: readonly UserReference[]
-  ): Promise<Map<UserReference, Set<string>>> {
+  private async personalDocumentIds(model: string, references: readonly UserReference[]): Promise<PersonalIds> {
     const personal = new Map<UserReference, Set<string>>();
     for (const reference of references) {
       if (reference.scope !== 'personal') continue;
@@ -219,22 +328,30 @@ export class SubjectRecordExport {
         .model(model)
         .collection.find(scoped, { projection: { _id: 1 } })
         .maxTimeMS(QUERY_MAX_TIME_MS);
-      for await (const document of cursor) ids.add(String(document._id));
+      try {
+        for await (const document of cursor) ids.add(String(document._id));
+      } catch (error) {
+        if (!isServerQueryFailure(error)) throw error;
+        // Unknown ids would let none of this reference's matches count as personal; none at all is safer.
+        ids.clear();
+        this.recordFailure(model, reference.path, error);
+      }
     }
     return personal;
   }
 
   /** The references that verifiably name this person on the document, whatever the query matched. */
-  private async matchesOn(
-    model: string,
+  private matchesOn(
     document: LeanDocument,
     references: readonly UserReference[],
-    personal: ReadonlyMap<UserReference, ReadonlySet<string>> = new Map()
-  ): Promise<ReferenceMatch[]> {
+    personal: PersonalIds = new Map(),
+    organizationFiles: ReadonlySet<string> = new Set()
+  ): ReferenceMatch[] {
     const matches: ReferenceMatch[] = [];
     for (const reference of references) {
       if (!this.matches(document, reference)) continue;
-      if (reference.scope === 'personal' && !(await this.isPersonal(model, document, personal.get(reference)))) {
+      const id = String(document._id);
+      if (reference.scope === 'personal' && (!personal.get(reference)?.has(id) || organizationFiles.has(id))) {
         continue;
       }
       const isSubject = this.isSubject(reference);
@@ -242,12 +359,6 @@ export class SubjectRecordExport {
       matches.push({ reference, throughArray: matchingArrayElements(document, reference.path, isSubject) !== null });
     }
     return matches;
-  }
-
-  private async isPersonal(model: string, document: LeanDocument, ids: ReadonlySet<string> | undefined) {
-    if (!ids?.has(String(document._id))) return false;
-    if (model !== FabFile.modelName) return true;
-    return !(await isOrganizationFile(FabFile.hydrate(document), this.subject.userId));
   }
 
   private matches(document: LeanDocument, reference: UserReference): boolean {
@@ -381,7 +492,24 @@ export class SubjectRecordExport {
   }
 }
 
-function orderParentsFirst(registry: DataHolderRegistry): string[] {
+type PersonalIds = ReadonlyMap<UserReference, ReadonlySet<string>>;
+
+const MAX_TIME_MS_EXPIRED = 50;
+
+/**
+ * A query the server stopped for running past `maxTimeMS`. Anything else (a network failure, a
+ * replica set election) fails the model, so the job is retried rather than exported incomplete.
+ */
+const isServerQueryFailure = (error: unknown): boolean =>
+  error instanceof mongoose.mongo.MongoServerError && error.code === MAX_TIME_MS_EXPIRED;
+
+const WALK_TIER: Partial<Record<DataHolder['kind'], number>> = { subject: 0, holder: 1, viaParent: 2 };
+
+/**
+ * Exported models by tier (the subject's own record, holders, then `viaParent` children), within a
+ * tier by `sizeOf` then name, with every `viaParent` child after its parent.
+ */
+function orderForWalk(registry: DataHolderRegistry, sizeOf: (model: string) => number = () => 0): string[] {
   const ordered: string[] = [];
   const visiting = new Set<string>();
   const visit = (model: string) => {
@@ -393,8 +521,10 @@ function orderParentsFirst(registry: DataHolderRegistry): string[] {
     visiting.delete(model);
     ordered.push(model);
   };
-  for (const [model, holder] of Object.entries(registry).sort(([a], [b]) => a.localeCompare(b))) {
-    if (isExported(holder)) visit(model);
-  }
+  const exported = Object.entries(registry)
+    .filter(([, holder]) => isExported(holder))
+    .map(([model, holder]) => ({ model, tier: WALK_TIER[holder.kind] ?? 0, size: sizeOf(model) }))
+    .sort((a, b) => a.tier - b.tier || a.size - b.size || a.model.localeCompare(b.model));
+  for (const { model } of exported) visit(model);
   return ordered;
 }
