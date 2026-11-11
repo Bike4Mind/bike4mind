@@ -9,6 +9,13 @@ export const infraHolders = {
     foreignKey: 'detectionId',
     attribution: [{ path: 'requestedBy', matchBy: 'userId', action: 'anonymize' }],
   },
+  // Advisory model verdict on an admin queue item. `entityId` is that item (a detection, a ticket), not a
+  // person, and evidence is pseudonymised before it is stored; the deciding admin is the only reference.
+  // `overrideReason` is the admin's free text and is not scanned.
+  AdminAiSuggestion: {
+    kind: 'holder',
+    references: [{ path: 'decidedBy.userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['decidedBy.name'] }],
+  },
   // An admin's request for a second admin's sign-off on a privileged action, kept with the audit trail.
   // `summary` and `paramsJson` (which may name the target account) are free text and not scanned.
   AdminApproval: {

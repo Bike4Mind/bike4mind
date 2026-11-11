@@ -55,7 +55,7 @@ export type PlatformDecisionFailureCode =
 /** Per consumer: `keyPrefix` namespaces its cache keys, so its budget and caps are its own. */
 export type PlatformDecisionLimits = { keyPrefix: string; dailyBudgetUsd: number; maxCallsPerDay: number };
 
-const toMicroUsd = (usd: number) => Math.ceil(usd * 1_000_000);
+export const toMicroUsd = (usd: number) => Math.ceil(usd * 1_000_000);
 
 /**
  * Platform keys only, and a call cap and USD budget per fixed 24h window. The budget is metered at each
