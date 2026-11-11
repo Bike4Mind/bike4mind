@@ -91,18 +91,14 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
     return clauses.length === 0 ? '' : ` - ${clauses.join('; ')}`;
   };
 
-  const handleReset = async () => {
+  const handleReset = async (reason: string) => {
     if (!resettingKey || resetBlocked) return;
     const key = resettingKey;
-    try {
-      const response = await resetMutation.mutateAsync(key.id);
-      toast.success(
-        `Rate limit reset for "${key.name}"${response.lockout ? describeLockoutCause(response.lockout) : ''}`
-      );
-      setResettingKey(null);
-    } catch {
-      // The mutation hook reports the request error; keep the dialog open for a retry.
-    }
+    const response = await resetMutation.mutateAsync({ keyId: key.id, reason });
+    toast.success(
+      `Rate limit reset for "${key.name}"${response.lockout ? describeLockoutCause(response.lockout) : ''}`
+    );
+    setResettingKey(null);
   };
 
   const columns: DataColumn<IUserApiKeyDocument>[] = [
@@ -208,7 +204,6 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
         title="Reset rate limit"
         description={`Reset the minute and day rate-limit counters for "${resettingKey?.name ?? ''}"? The next request opens a fresh window. This reset cannot be undone.`}
         reasonPresets={['Support request', 'Key locked out', 'Counter correction']}
-        reasonAudited={false}
         confirmLabel="Reset rate limit"
         onConfirm={handleReset}
         pending={resetMutation.isPending}
