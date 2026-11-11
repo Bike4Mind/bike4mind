@@ -5,6 +5,7 @@ import {
   type AbuseAssessmentFailureCode,
   type AbuseAssessmentResult,
   type AbuseAssessmentSkipReason,
+  type ShadowDetectionVerdict,
 } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
@@ -14,7 +15,7 @@ import {
 } from '@client/app/hooks/data/shadowDetections';
 import { getErrorMessage } from '@client/app/utils/error';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
-import { StatusChip, formatUtc } from './shared';
+import { AiSuggestion, StatusChip, formatUtc, type AiSuggestionData } from './shared';
 
 const muted = { color: 'admin.inkMuted' } as const;
 
@@ -58,49 +59,89 @@ const ResultChip: React.FC<{ item: AbuseAssessmentRow; testId?: string }> = ({ i
   <StatusChip tone={RESULT_DISPLAY[item.result].tone} label={RESULT_DISPLAY[item.result].label} data-testid={testId} />
 );
 
-const LatestAssessment: React.FC<{ item: AbuseAssessmentRow }> = ({ item }) => (
-  <Stack gap={0.75} data-testid="shadow-detection-assessment-latest">
-    <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-      <ResultChip item={item} testId="shadow-detection-assessment-result" />
-      {item.confidence !== null && (
-        <Typography level="body-sm" data-testid="shadow-detection-assessment-confidence">
-          Confidence {percent(item.confidence)}
+// The verdict an admin would record to agree with the model; `unknown` proposes nothing.
+const RESULT_VERDICT: Partial<Record<AbuseAssessmentResult, { verdict: ShadowDetectionVerdict; label: string }>> = {
+  abuse: { verdict: 'confirmed_abuse', label: 'Confirmed abuse' },
+  legitimate_automation: { verdict: 'legitimate_automation', label: 'Legitimate automation' },
+  insufficient_evidence: { verdict: 'insufficient_evidence', label: 'Insufficient evidence' },
+};
+
+/** The assessment as an AI suggestion, or null when it proposes no verdict. */
+export const assessmentToSuggestion = (
+  item: AbuseAssessmentRow
+): { verdict: ShadowDetectionVerdict; suggestion: AiSuggestionData } | null => {
+  const proposal = RESULT_VERDICT[item.result];
+  if (!proposal) return null;
+  return {
+    verdict: proposal.verdict,
+    // Assessments carry no reasons; the probabilities and evidence below stand in for them.
+    suggestion: { id: item.id, proposal: proposal.label, probability: item.confidence, createdAt: item.assessedAt },
+  };
+};
+
+type DecisionProps = {
+  /** Fills the host's verdict control with the proposed verdict; the host records it. */
+  onAccept?: (verdict: ShadowDetectionVerdict) => void;
+  /** Leaves the verdict to the admin. */
+  onOverride?: () => void;
+};
+
+const LatestAssessment: React.FC<{ item: AbuseAssessmentRow } & DecisionProps> = ({ item, onAccept, onOverride }) => {
+  const proposed = assessmentToSuggestion(item);
+  return (
+    <Stack gap={0.75} data-testid="shadow-detection-assessment-latest">
+      {proposed ? (
+        <AiSuggestion
+          variant="detail"
+          suggestion={proposed.suggestion}
+          onAccept={onAccept && (() => onAccept(proposed.verdict))}
+          onOverride={onOverride && (() => onOverride())}
+          data-testid="shadow-detection-assessment-suggestion"
+        />
+      ) : (
+        <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+          <ResultChip item={item} testId="shadow-detection-assessment-result" />
+          {item.confidence !== null && (
+            <Typography level="body-sm" data-testid="shadow-detection-assessment-confidence">
+              Confidence {percent(item.confidence)}
+            </Typography>
+          )}
+        </Stack>
+      )}
+      {item.result === 'unknown' && (
+        <Typography level="body-sm" data-testid="shadow-detection-assessment-failure">
+          {item.failure ? FAILURE_MESSAGES[item.failure] : 'No usable answer came back.'}
         </Typography>
       )}
-    </Stack>
-    {item.result === 'unknown' && (
-      <Typography level="body-sm" data-testid="shadow-detection-assessment-failure">
-        {item.failure ? FAILURE_MESSAGES[item.failure] : 'No usable answer came back.'}
+      {item.probabilities.length > 0 && (
+        <Box component="ul" sx={{ m: 0, pl: 2.5 }} data-testid="shadow-detection-assessment-probabilities">
+          {item.probabilities.map(entry => (
+            <Typography key={entry.value} component="li" level="body-sm">
+              {RESULT_DISPLAY[entry.value].label}: {percent(entry.probability)}
+            </Typography>
+          ))}
+        </Box>
+      )}
+      <Typography level="body-xs" sx={muted}>
+        {item.model}
+        {item.modelVersion ? ` (${item.modelVersion})` : ''} / policy v{item.policyVersion} / evidence v
+        {item.evidenceVersion} / {item.trigger === 'sweep' ? 'automatic sweep' : 'requested by an admin'} /{' '}
+        {formatDate(item.assessedAt)}
       </Typography>
-    )}
-    {item.probabilities.length > 0 && (
-      <Box component="ul" sx={{ m: 0, pl: 2.5 }} data-testid="shadow-detection-assessment-probabilities">
-        {item.probabilities.map(entry => (
-          <Typography key={entry.value} component="li" level="body-sm">
-            {RESULT_DISPLAY[entry.value].label}: {percent(entry.probability)}
-          </Typography>
-        ))}
+      <Box component="details" data-testid="shadow-detection-assessment-evidence">
+        <Box component="summary" sx={{ cursor: 'pointer', typography: 'body-sm' }}>
+          What the model saw
+        </Box>
+        <Box
+          component="pre"
+          sx={{ m: 0, mt: 0.5, p: 1, fontSize: 'xs', overflow: 'auto', maxHeight: '20rem', bgcolor: 'admin.canvas' }}
+        >
+          {JSON.stringify(item.featureSummary, null, 2)}
+        </Box>
       </Box>
-    )}
-    <Typography level="body-xs" sx={muted}>
-      {item.model}
-      {item.modelVersion ? ` (${item.modelVersion})` : ''} / policy v{item.policyVersion} / evidence v
-      {item.evidenceVersion} / {item.trigger === 'sweep' ? 'automatic sweep' : 'requested by an admin'} /{' '}
-      {formatDate(item.assessedAt)}
-    </Typography>
-    <Box component="details" data-testid="shadow-detection-assessment-evidence">
-      <Box component="summary" sx={{ cursor: 'pointer', typography: 'body-sm' }}>
-        What the model saw
-      </Box>
-      <Box
-        component="pre"
-        sx={{ m: 0, mt: 0.5, p: 1, fontSize: 'xs', overflow: 'auto', maxHeight: '20rem', bgcolor: 'admin.canvas' }}
-      >
-        {JSON.stringify(item.featureSummary, null, 2)}
-      </Box>
-    </Box>
-  </Stack>
-);
+    </Stack>
+  );
+};
 
 const EarlierAssessments: React.FC<{ items: AbuseAssessmentRow[] }> = ({ items }) => (
   <Stack gap={0.25} data-testid="shadow-detection-assessment-earlier">
@@ -119,10 +160,10 @@ const EarlierAssessments: React.FC<{ items: AbuseAssessmentRow[] }> = ({ items }
   </Stack>
 );
 
-type Props = { detectionId: string; enabled: boolean };
+type Props = { detectionId: string; enabled: boolean } & DecisionProps;
 
 /** An advisory model assessment of one detection, shown beside the facts it was made from. */
-export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({ detectionId, enabled }) => {
+export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({ detectionId, enabled, onAccept, onOverride }) => {
   const assessments = useAbuseAssessments(detectionId, { enabled });
   const request = useRequestAbuseAssessment();
   const { currentUser } = useUser();
@@ -162,7 +203,7 @@ export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({ detectionId, e
           {getErrorMessage(assessments.error)}
         </Alert>
       ) : latest ? (
-        <LatestAssessment item={latest} />
+        <LatestAssessment item={latest} onAccept={onAccept} onOverride={onOverride} />
       ) : (
         <Typography level="body-sm" sx={muted} data-testid="shadow-detection-assessment-empty">
           Not assessed yet.
