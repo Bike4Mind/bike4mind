@@ -38,7 +38,7 @@ curl https://app.bike4mind.com/api/agents \
 
 ## Bulk notebook actions
 
-Each list of notebook ids sent to `/api/sessions/bulk` holds at most 100 ids, whether you call it with a JWT or an API key. `DELETE` reads the ids from `sessionIds` and returns `400` with `At most 100 sessions can be deleted per request` above that; `POST` also returns `400` for a longer list. To act on more notebooks, split the ids into batches of 100 and send one request per batch.
+A request to `/api/sessions/bulk` acts on at most 100 notebooks, whether you call it with a JWT or an API key. `DELETE` reads the ids from `sessionIds` and returns `400` with `At most 100 sessions can be deleted per request` above that. `POST` also returns `400` past 100 ids; for the `favorite` action the limit counts the distinct ids in `add` and `remove` together. To act on more notebooks, split the ids into batches of 100 and send one request per batch.
 
 ## Errors
 

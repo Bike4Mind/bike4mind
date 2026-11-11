@@ -157,7 +157,7 @@ export const DEFAULT_MANIFEST = {
   questExportQueue: { kind: 'queue', optional: true },
   accountDataExportQueue: { kind: 'queue', optional: true },
   dataLakeCleanupQueue: { kind: 'queue', optional: true },
-  // Leftovers of a notebook delete's media purge; with no URL they are logged and dropped.
+  // Leftovers of a notebook or message delete's media purge; with no URL they are logged and dropped.
   generatedMediaPurgeQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },
   // Queue name -> URL map read by getSourceQueueUrl (dlqRegistry). Hosted links this as a

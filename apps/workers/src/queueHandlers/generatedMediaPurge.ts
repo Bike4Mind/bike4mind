@@ -1,7 +1,9 @@
+import { GENERATED_CONTENT_KEY_RE } from '@bike4mind/common';
 import { Session } from '@bike4mind/database';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   MAX_PURGE_KEYS,
+  MAX_PURGE_OWNER_IDS,
   MAX_PURGE_SESSION_IDS,
   enqueueGeneratedMediaPurge,
 } from '@server/sessions/generatedMediaPurgeQueue';
@@ -19,14 +21,19 @@ const Payload = z.discriminatedUnion('kind', [
       .min(1)
       .max(MAX_PURGE_SESSION_IDS),
   }),
-  z.object({ kind: z.literal('keys'), keys: z.array(z.string().min(1)).min(1).max(MAX_PURGE_KEYS) }),
+  z.object({
+    kind: z.literal('keys'),
+    keys: z.array(z.string().regex(GENERATED_CONTENT_KEY_RE)).min(1).max(MAX_PURGE_KEYS),
+    ownerIds: z.array(z.string().min(1)).min(1).max(MAX_PURGE_OWNER_IDS),
+  }),
 ]);
 
 /**
- * Finishes a generated media purge a notebook delete handed off (producer:
+ * Finishes a generated media purge a notebook or message delete handed off (producer:
  * apps/client/server/sessions/generatedMediaPurgeQueue.ts). Only notebooks that are soft-deleted are
- * looked up; a live id is dropped. What this run does not reach is re-enqueued when it made progress;
- * otherwise, and when storage or the re-enqueue fails, it throws so SQS retries and then dead-letters it.
+ * looked up; a live id is dropped. Keys are re-checked against live references and their owners
+ * before any delete. What this run does not reach is re-enqueued when it made progress; otherwise,
+ * and when storage or the re-enqueue fails, it throws so SQS retries and then dead-letters it.
  */
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const record = event.Records[0];
@@ -45,7 +52,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     throw err;
   }
 
-  let input: { sessionIds?: string[]; keys?: string[] };
+  let input: { sessionIds?: string[]; keys?: string[]; ownerIds?: string[] };
   let deletedSessionIds = new Set<string>();
   if (payload.kind === 'sessions') {
     const deleted = await Session.find({ _id: { $in: payload.sessionIds }, deletedAt: { $ne: null } }, { _id: 1 })
@@ -57,10 +64,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     if (deletedSessionIds.size === 0) return;
     input = { sessionIds: [...deletedSessionIds] };
   } else {
-    input = { keys: payload.keys };
+    input = { keys: payload.keys, ownerIds: payload.ownerIds };
   }
 
-  const { leftoverSessionIds, leftoverKeys } = await runGeneratedMediaPurge(input, {
+  const { leftoverSessionIds, leftoverKeys, ownerIds } = await runGeneratedMediaPurge(input, {
     deadline: Date.now() + WORKER_PURGE_BUDGET_MS,
     deletedSessionIds,
     logger,
@@ -73,6 +80,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       ? leftoverSessionIds.length < deletedSessionIds.size
       : leftoverKeys.length < payload.keys.length;
   if (!progressed) throw new Error(`generated media purge made no progress on ${left} items`);
-  const sent = await enqueueGeneratedMediaPurge({ sessionIds: leftoverSessionIds, keys: leftoverKeys }, logger);
+  const sent = await enqueueGeneratedMediaPurge(
+    { sessionIds: leftoverSessionIds, keys: leftoverKeys, ownerIds },
+    logger
+  );
   if (!sent) throw new Error(`could not re-enqueue ${left} generated media purge items`);
 });

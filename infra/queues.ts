@@ -1106,8 +1106,8 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// Generated media a notebook delete could not purge within its request budget
-// (apps/client/server/sessions/purgeDeletedNotebookMedia.ts) finishes here.
+// Generated media a notebook or message delete could not purge within its request budget
+// (apps/client/server/sessions/purgeDeletedNotebookMedia.ts, purgeDeletedMessageMedia.ts) finishes here.
 const generatedMediaPurgeQueueDLQ = new sst.aws.Queue('generatedMediaPurgeQueueDLQ', {});
 const generatedMediaPurgeQueue = new sst.aws.Queue('generatedMediaPurgeQueue', {
   visibilityTimeout: '6 minutes',
@@ -1124,6 +1124,9 @@ const generatedMediaPurgeQueueSubscription = generatedMediaPurgeQueue.subscribe(
     vpc: lambdaVpc,
     // Links its own queue: a run that hits its deadline re-enqueues what it did not reach.
     link: [...allSecrets, generatedImagesBucket, routerDistributionId, generatedMediaPurgeQueue],
+    // One run at a time: each flushes up to 1,000 exact CDN paths, a third of the distribution's
+    // in-flight quota shared with publish takedowns (apps/client/server/services/cdn/invalidateRouterCdn.ts).
+    concurrency: ['production', 'dev'].includes($app.stage) ? { reserved: 1 } : undefined,
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },

@@ -1466,6 +1466,27 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return new Map([...byKey].map(([key, ids]) => [key, [...ids]]));
   }
 
+  // key -> session id of the earliest-created quest (soft-deleted included) whose `images` or `videos`
+  // holds it: where the key was produced, since import, fork and clone copy keys into newer quests.
+  // createdAt, not _id, orders them: a notebook import may keep the exported message ids.
+  async findOriginSessionIdsByMediaKeys(keys: string[]): Promise<Map<string, string>> {
+    const wanted = new Set(keys.filter(Boolean));
+    const origin = new Map<string, string>();
+    if (wanted.size === 0) return origin;
+    const list = [...wanted];
+    const docs = await this.model
+      .find({ $or: [{ images: { $in: list } }, { videos: { $in: list } }] }, { sessionId: 1, images: 1, videos: 1 })
+      .sort({ createdAt: 1, _id: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    for (const doc of docs) {
+      for (const key of [...(doc.images ?? []), ...(doc.videos ?? [])]) {
+        if (wanted.has(key) && !origin.has(key)) origin.set(key, String(doc.sessionId));
+      }
+    }
+    return origin;
+  }
+
   // findSessionIdsByMediaKeys over live quests only, minus `excludeQuestId`: when one message is
   // deleted its notebook is still live, so only another live quest's reference may retain a key.
   async findLiveSessionIdsByMediaKeys(

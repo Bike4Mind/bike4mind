@@ -7,7 +7,7 @@ vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
 const h = vi.hoisted(() => ({
   deletedIds: [] as string[],
   sessionFilter: undefined as unknown,
-  sessionResult: undefined as { leftoverSessionIds: string[]; leftoverKeys: string[] } | undefined,
+  sessionResult: undefined as { leftoverSessionIds: string[]; leftoverKeys: string[]; ownerIds: string[] } | undefined,
   runPurge: vi.fn(),
   deleteGenerated: vi.fn(),
   cdnSend: vi.fn(),
@@ -37,17 +37,20 @@ vi.mock('@server/sessions/generatedMediaPurgeQueue', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/sessions/generatedMediaPurgeQueue')>()),
   enqueueGeneratedMediaPurge: h.enqueue,
 }));
-// Keys messages run the real purge (storage and CDN mocked); notebook lookups are stubbed.
+// The purge itself (retention and ownership checks included) is covered by purgeDeletedNotebookMedia.e2e.test.ts.
 vi.mock('@server/sessions/purgeDeletedNotebookMedia', async importOriginal => {
   const real = await importOriginal<typeof import('@server/sessions/purgeDeletedNotebookMedia')>();
   return {
     ...real,
     runGeneratedMediaPurge: (...args: Parameters<typeof real.runGeneratedMediaPurge>) => {
       h.runPurge(...args);
-      return args[0].sessionIds ? Promise.resolve(h.sessionResult) : real.runGeneratedMediaPurge(...args);
+      return Promise.resolve(h.sessionResult);
     },
   };
 });
+
+const KEY_A = '00000000-0000-4000-8000-00000000000a.png';
+const KEY_B = '00000000-0000-4000-8000-00000000000b.png';
 
 import { dispatch, WORKER_PURGE_BUDGET_MS } from './generatedMediaPurge';
 
@@ -65,7 +68,7 @@ const DEAD2 = 'cccccccccccccccccccccccc';
 beforeEach(() => {
   vi.clearAllMocks();
   h.deletedIds = [];
-  h.sessionResult = { leftoverSessionIds: [], leftoverKeys: [] };
+  h.sessionResult = { leftoverSessionIds: [], leftoverKeys: [], ownerIds: [] };
   h.deleteGenerated.mockResolvedValue(undefined);
   h.cdnSend.mockResolvedValue(undefined);
   h.enqueue.mockResolvedValue(true);
@@ -88,31 +91,41 @@ describe('generatedMediaPurge', () => {
     expect(h.runPurge).not.toHaveBeenCalled();
   });
 
-  it('deletes and invalidates the keys of a keys message', async () => {
-    await run({ kind: 'keys', keys: ['a.png', 'b.png'] });
-    expect(h.deleteGenerated.mock.calls.map(([k]) => k).sort()).toEqual(['a.png', 'b.png']);
-    expect(h.cdnSend).toHaveBeenCalledTimes(1);
-    expect([...h.cdnSend.mock.calls[0][0]].sort()).toEqual(['/generated/a.png', '/generated/b.png']);
+  it('purges the keys of a keys message against the owners it carries', async () => {
+    h.sessionResult = { leftoverSessionIds: [], leftoverKeys: [], ownerIds: ['u1'] };
+    await run({ kind: 'keys', keys: [KEY_A, KEY_B], ownerIds: ['u1'] });
+    expect(h.runPurge).toHaveBeenCalledWith(
+      { keys: [KEY_A, KEY_B], ownerIds: ['u1'] },
+      expect.objectContaining({ deletedSessionIds: new Set() })
+    );
     expect(h.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('drops a keys message with a key outside the generated-content shape or no owners', async () => {
+    await expect(run({ kind: 'keys', keys: ['../other/object'], ownerIds: ['u1'] })).resolves.toBeUndefined();
+    await expect(run({ kind: 'keys', keys: ['avatars/u2.png'], ownerIds: ['u1'] })).resolves.toBeUndefined();
+    await expect(run({ kind: 'keys', keys: [KEY_A] })).resolves.toBeUndefined();
+    await expect(run({ kind: 'keys', keys: [KEY_A], ownerIds: [] })).resolves.toBeUndefined();
+    expect(h.runPurge).not.toHaveBeenCalled();
   });
 
   it('re-enqueues what a run that made progress did not reach', async () => {
     h.deletedIds = [DEAD, DEAD2];
-    h.sessionResult = { leftoverSessionIds: [DEAD2], leftoverKeys: ['k.png'] };
+    h.sessionResult = { leftoverSessionIds: [DEAD2], leftoverKeys: [KEY_A], ownerIds: ['u1'] };
     await run({ kind: 'sessions', sessionIds: [DEAD, DEAD2] });
-    expect(h.enqueue).toHaveBeenCalledWith({ sessionIds: [DEAD2], keys: ['k.png'] }, logger);
+    expect(h.enqueue).toHaveBeenCalledWith({ sessionIds: [DEAD2], keys: [KEY_A], ownerIds: ['u1'] }, logger);
   });
 
   it('throws instead of re-enqueueing when a run made no progress', async () => {
     h.deletedIds = [DEAD];
-    h.sessionResult = { leftoverSessionIds: [DEAD], leftoverKeys: [] };
+    h.sessionResult = { leftoverSessionIds: [DEAD], leftoverKeys: [], ownerIds: [] };
     await expect(run({ kind: 'sessions', sessionIds: [DEAD] })).rejects.toThrow(/no progress/);
     expect(h.enqueue).not.toHaveBeenCalled();
   });
 
   it('throws when the re-enqueue fails so SQS retries the message', async () => {
     h.deletedIds = [DEAD, DEAD2];
-    h.sessionResult = { leftoverSessionIds: [DEAD2], leftoverKeys: [] };
+    h.sessionResult = { leftoverSessionIds: [DEAD2], leftoverKeys: [], ownerIds: [] };
     h.enqueue.mockResolvedValue(false);
     await expect(run({ kind: 'sessions', sessionIds: [DEAD, DEAD2] })).rejects.toThrow(/re-enqueue/);
   });

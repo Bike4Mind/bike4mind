@@ -14,9 +14,10 @@ import type { MinimalLogger } from '../publish/minimalLogger';
 const cfClient = new CloudFrontClient({});
 
 // CloudFront takes at most 1,000 paths per request and 3,000 exact paths in flight per
-// distribution across all callers; its rejection (TooManyInvalidationsInProgress) is only logged.
+// distribution across all callers (publish takedowns included), and its rejection
+// (TooManyInvalidationsInProgress) is only logged here. One request stays at a third of that; a
+// larger set is coalesced into per-prefix wildcards instead (see invalidateRouterPaths).
 export const MAX_PATHS_PER_BATCH = 1000;
-export const MAX_IN_PROGRESS_EXACT_PATHS = 3000;
 const MAX_LOGGED_PATHS = 10;
 
 export interface InvalidationLogOptions {
@@ -66,11 +67,11 @@ export async function sendInvalidation(
 }
 
 /**
- * Invalidate exact Router paths, MAX_PATHS_PER_BATCH per request, sent in sequence. Caller wildcards
- * are dropped: CloudFront allows only a handful in flight per distribution, shared with publish
- * takedowns. Only a set larger than the whole in-flight exact-path quota is coalesced into one
- * `/<first segment>/*` wildcard per prefix. A failed request is logged and the rest still go out.
- * Never throws.
+ * Invalidate exact Router paths in one request. Caller wildcards are dropped: CloudFront allows only
+ * a handful in flight per distribution, shared with publish takedowns. A set over
+ * MAX_PATHS_PER_BATCH becomes one `/<first segment>/*` wildcard per prefix, so a large purge spends
+ * a few wildcard slots rather than the shared exact-path quota; callers that need exact paths keep
+ * each flush within MAX_PATHS_PER_BATCH. Never throws.
  */
 export async function invalidateRouterPaths(
   paths: string[],
@@ -81,20 +82,14 @@ export async function invalidateRouterPaths(
   const logTag = '[CDN]';
   const distributionId = getRouterDistributionId(logTag, logger);
   if (!distributionId) return;
-  const options = { logTag, referencePrefix: 'media', logger };
-  if (exact.length > MAX_IN_PROGRESS_EXACT_PATHS) {
-    const wildcards = [...new Set(exact.map(p => `/${p.split('/')[1]}/*`))];
+  let batch = exact;
+  if (exact.length > MAX_PATHS_PER_BATCH) {
+    batch = [...new Set(exact.map(p => `/${p.split('/')[1]}/*`))];
     logger?.warn(
-      `${logTag} ${exact.length} paths exceed the ${MAX_IN_PROGRESS_EXACT_PATHS} exact-path quota for ${label}; invalidating ${wildcards.join(', ')}`
+      `${logTag} ${exact.length} paths exceed one ${MAX_PATHS_PER_BATCH}-path request for ${label}; invalidating ${batch.join(', ')}`
     );
-    await sendInvalidation(distributionId, label, wildcards, options);
-    return;
   }
-  const chunks = Math.ceil(exact.length / MAX_PATHS_PER_BATCH);
-  for (let i = 0; i < chunks; i++) {
-    const chunk = exact.slice(i * MAX_PATHS_PER_BATCH, (i + 1) * MAX_PATHS_PER_BATCH);
-    await sendInvalidation(distributionId, chunks === 1 ? label : `${label}-${i + 1}of${chunks}`, chunk, options);
-  }
+  await sendInvalidation(distributionId, label, batch, { logTag, referencePrefix: 'media', logger });
 }
 
 export interface CdnInvalidationBatch {
