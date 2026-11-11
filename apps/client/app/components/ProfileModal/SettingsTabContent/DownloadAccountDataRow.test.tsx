@@ -33,6 +33,7 @@ beforeEach(() => {
   toast.success.mockReset();
   toast.error.mockReset();
   websocket.subscribeToAction.mockClear();
+  Object.assign(exportMutation, { data: undefined });
 });
 
 describe('DownloadAccountDataRow', () => {
@@ -70,6 +71,5 @@ describe('DownloadAccountDataRow', () => {
     expect(toast.success).not.toHaveBeenCalled();
     await callback({ action: 'account_data_export_ready', exportJobId: 'job-1' });
     expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('archive is ready'));
-    Object.assign(exportMutation, { data: undefined });
   });
 });
