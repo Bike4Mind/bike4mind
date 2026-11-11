@@ -1468,7 +1468,6 @@ describe('shell approval in a project with a large node_modules', () => {
     ["true && bash -c 'echo x > .git/config' && git st", 'yrepo'],
     ["true && sh -c 'echo x; git st' && git st", 'yrepo'],
     ["true && sh -c 'echo $(touch x)' && git st", 'yrepo'],
-    ["eval 'echo x' && git st", 'yrepo'],
     ['rm -rf emb/.git && git st', 'yrepo'],
     ['cp -r src/. . && git st', 'yrepo'],
     ['git cleen -fdx', 'zrepo'],
@@ -1498,6 +1497,13 @@ describe('shell approval in a project with a large node_modules', () => {
     'asks in every mode for %s (in proj/%s), whose git alias the scan cannot read as git runs it',
     async (command, folder) => {
       expect(await judge(command, folder)).toMatchObject(asks);
+    }
+  );
+
+  it.each(["eval 'echo x' && git st", 'cd nosuchdir; git st'])(
+    'asks in auto mode only for %s (in proj/yrepo), as the folder and PATH git runs with are not known',
+    async command => {
+      expect(await judge(command, 'yrepo')).toMatchObject({ auto: false, full: true });
     }
   );
 

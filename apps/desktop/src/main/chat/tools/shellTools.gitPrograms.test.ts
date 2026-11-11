@@ -56,9 +56,52 @@ const ROWS: [string, string, string][] = [
   ['cp -r tpl2/. dist/ && git st', '', 'rrrr'],
   ['rsync -a -e ssh src/ dist/ && git st', '', 'aaaa'],
   ['cp -r -t dist src && git st', '', 'rrrr'],
-  ['cp -r lrepo dist2 && git st', '', 'aaaa'],
+  ['cp -r lrepo dist2 && git st', '', 'rrrr'],
   ['cp -r lrepo/* dist2/ && git st', '', 'rrrr'],
-  ['cp -r lrepo/. dist2/ && git st', '', 'aaaa'],
+  ['cp -r lrepo/. dist2/ && git st', '', 'rrrr'],
+  ['cp -r evil/.git sub/ && git -C sub st', '', 'aaaa'],
+  ['mv tpl/.git src/ && git -C src st', '', 'aaaa'],
+  ['cp -r tpl/.git . && git st', '', 'aaaa'],
+  ['cp -r lrepo dist && git -C dist/lrepo st', '', 'aaaa'],
+  ['cp -r tpl/. src && git -C src st', '', 'aaaa'],
+  ['rsync -a --exclude .git lrepo/ dist3/ && git -C dist3 st', '', 'rrar'],
+  ['rsync -a --exclude=.git lrepo/ dist3/ && git -C dist3 st', '', 'rrrr'],
+  ['rsync -a --exclude=.git/ lrepo/ dist3/ && git -C dist3 st', '', 'rrrr'],
+  ["rsync -a --exclude='.git' lrepo/ dist3/ && git -C dist3 st", '', 'rrrr'],
+  ['rsync -aC lrepo/ dist3/ && git -C dist3 st', '', 'rrrr'],
+  ['rsync -a --cvs-exclude lrepo/ dist3/ && git -C dist3 st', '', 'rrrr'],
+  ['rsync -a --exclude .git --include .git lrepo/ dist3/ && git -C dist3 st', '', 'aaaa'],
+  ['rsync -a --exclude node_modules lrepo/ dist3/ && git -C dist3 st', '', 'aaaa'],
+  ['git init && git st', '', 'rrrr'],
+  ['mkdir nr && cd nr && git init && git st', '', 'rrrr'],
+  ['cd src && git init && git st', '', 'rrrr'],
+  ['git clone origin.git cl && cd cl && pnpm install && git st', '', 'rrrr'],
+  ['git clone origin.git cl && cd cl && npm test && git st', '', 'rrrr'],
+  ['git worktree add wt4 -b y4 && cd wt4 && pnpm install && git st', '', 'rrrr'],
+  ['export PATH="$PWD/newtools:$PATH" && git clone srcrepo newtools && git hello', '', 'aaaa'],
+  ['git clone srcrepo ctools && git hello', '', 'rrrr'],
+  ["eval 'echo hi' && git st", '', 'aaar'],
+  ['cd nosuchdir; git st', '', 'raar'],
+  ['git bang', '', 'aaaa'],
+  ['source ./env1.sh && git bang', '', 'aaaa'],
+  ['cd nosuchdir; git bang', '', 'aaaa'],
+  ['git constructor -x', '', 'rrrr'],
+  ['git toString -q', '', 'rrrr'],
+  ['git __proto__ -q', '', 'rrrr'],
+  ['git -c safe.bareRepository=all -C origin.git log', '', 'aaaa'],
+  ['git -c SAFE.BareRepository=explicit log', '', 'aaaa'],
+  ['git --config-env=safe.bareRepository=X log', '', 'aaaa'],
+  ['git --config-env safe.bareRepository=X log', '', 'aaaa'],
+  ['git -c core.abbrev=8 log', '', 'arrr'],
+  ['env -i PATH="$PATH" git -C origin.git log', '', 'aaaa'],
+  ['env - git log', '', 'aaaa'],
+  ['env --ignore-environment git log', '', 'aaaa'],
+  ['env -u GIT_CONFIG_PARAMETERS git log', '', 'aaaa'],
+  ['env -u GIT_CONFIG_COUNT git log', '', 'aaaa'],
+  ['env -u GIT_CONFIG_KEY_0 git log', '', 'aaaa'],
+  ['env -u FOO git log', '', 'arrr'],
+  ['env -i PATH="$PATH" node x.js', '', 'arrr'],
+  ['cp -r lrepo/* dist2/ && git -C dist2 st', '', 'rrrr'],
   ['git merge -s foo other', '', 'aaaa'],
   ['git pull -s foo origin main', '', 'aaaa'],
   ['git rebase --strategy=foo main', '', 'aaaa'],
@@ -198,6 +241,7 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
         ['lg', 'log --oneline'],
         ['co', 'checkout'],
         ['p', 'push'],
+        ['bang', '!echo hi'],
       ]) {
         git(dir, 'config', `alias.${name}`, value);
       }
@@ -205,6 +249,10 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     repository(proj, { 'src/a.ts': 'a', 'a.ts': 'a', '.gitignore': 'node_modules\ndist\n', 'dist/x.js': 'x' });
     git(proj, 'branch', 'other');
     repository(join(proj, 'lrepo'), { 'x.ts': 'x' });
+    repository(join(proj, 'tpl'), { 'x.ts': 'x' });
+    repository(join(proj, 'evil'), { 'x.ts': 'x' });
+    repository(join(proj, 'srcrepo'), { 'git-st': '#!/bin/sh\n', 'git-hello': '#!/bin/sh\n' });
+    mkdirSync(join(proj, 'sub'), { recursive: true });
     file(join(proj, 'env1.sh'), 'export FOO=1\n');
     file(join(proj, 'env3.sh'), 'X=1\nY=2\n');
     file(join(proj, 'env5.sh'), 'X=1\n\\cd ..\n');
@@ -263,6 +311,7 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     rmSync(base, { recursive: true, force: true });
   });
 
+  let sessions = 0;
   const cells = async (command: string, folder: string): Promise<string> => {
     const cwd = join(proj, folder);
     const context = (sessionId?: string): ToolContext =>
@@ -275,7 +324,8 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
         ...(sessionId ? { sessionId } : {}),
       }) as ToolContext;
     const prompt = await shellApproval('bash_execute', { command, cwd }, context());
-    const withSession = await shellApproval('bash_execute', { command, cwd }, context('s1'));
+    // A session of its own per command, as one that wrote a `.git` makes git ask in every later command of it.
+    const withSession = await shellApproval('bash_execute', { command, cwd }, context(`s${++sessions}`));
     const subject = await resolveSubject(
       permissionSubject({ name: 'bash_execute', input: { command } }, prompt, context())
     ).catch(() => null);
@@ -292,5 +342,58 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
 
   it.each(ROWS)('decides %s (in proj/%s) as %s', async (command, folder, expected) => {
     expect(await cells(command, folder)).toBe(expected);
+  });
+
+  describe('with a project folder on PATH that the command fills', () => {
+    let before: string | undefined;
+    beforeAll(() => {
+      before = process.env.PATH;
+      vi.stubEnv('PATH', `ntools:${before}`);
+    });
+    afterAll(() => {
+      vi.stubEnv('PATH', before);
+    });
+
+    it.each([
+      'git clone srcrepo ntools && git hello',
+      'git worktree add ntools -b y5 && git hello',
+      'git clone srcrepo ntools && cd ntools && git st',
+    ])('asks in every mode for %s', async command => {
+      expect(await cells(command, '')).toBe('aaaa');
+    });
+  });
+
+  describe('with a global init.templateDir', () => {
+    const globalConfig = (): string => join(dirname(proj), '.gitconfig');
+
+    it.each([
+      ['a template config holding a ! alias', '[alias]\n\tst = !touch MARK\n', 'aaaa'],
+      ['a template config holding a plain alias', '[alias]\n\tst = status\n', 'rrrr'],
+      ['a template config without aliases', '[core]\n\tfilemode = true\n', 'rrrr'],
+      ['no template config', null, 'rrrr'],
+    ])('decides a clone then git st with %s as %s', async (_name, config, expected) => {
+      const template = join(base, 'template');
+      rmSync(template, { recursive: true, force: true });
+      mkdirSync(template, { recursive: true });
+      if (config !== null) file(join(template, 'config'), config);
+      file(globalConfig(), `[init]\n\ttemplateDir = ${template}\n`);
+      try {
+        expect(await cells('git clone origin.git clt && git -C clt st', '')).toBe(expected);
+      } finally {
+        rmSync(globalConfig(), { force: true });
+      }
+    });
+
+    it.skipIf(process.getuid?.() === 0)('asks for a template config it cannot read', async () => {
+      const template = join(base, 'template-locked');
+      mkdirSync(template, { recursive: true });
+      file(join(template, 'config'), '[core]\n\tfilemode = true\n', 0o000);
+      file(globalConfig(), `[init]\n\ttemplateDir = ${template}\n`);
+      try {
+        expect(await cells('git clone origin.git clt && git -C clt st', '')).toBe('aaaa');
+      } finally {
+        rmSync(globalConfig(), { force: true });
+      }
+    });
   });
 });

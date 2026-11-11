@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstat, readFile, readlink, realpath, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, lstat, readFile, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { Node } from 'web-tree-sitter';
@@ -935,10 +936,11 @@ const SHOWS_GUESS = /^(0|false|off|no|show|never)$/i;
 
 /**
  * What git reads of aliases, help.autocorrect and includes in `directory`, or with `user` only the system and global
- * config (for a repository not yet made); null when git could not tell.
+ * config plus the `config` of the init.templateDir they name (for a repository not yet made); null when git could not
+ * tell.
  */
 export async function gitAliases(directory: string, user = false): Promise<GitAliases | null> {
-  const keys = String.raw`^alias\.|^help\.autocorrect$|^include\.path$|^includeif\..*\.path$`;
+  const keys = String.raw`^alias\.|^help\.autocorrect$|^include\.path$|^includeif\..*\.path$|^init\.templatedir$`;
   const lists = await Promise.all(
     (user
       ? [
@@ -956,18 +958,39 @@ export async function gitAliases(directory: string, user = false): Promise<GitAl
   }
   const aliases = new Map<string, string | null>();
   let autocorrect = false;
+  let templateDir = null as string | null;
   const included: { origin: string; path: string }[] = [];
-  // `-z --show-origin` prints `origin\0key\nvalue\0` per entry.
-  const fields = stdout.split('\0');
-  for (let at = 0; at + 1 < fields.length; at += 2) {
-    const origin = fields[at] as string;
-    const entry = fields[at + 1] as string;
-    const newline = entry.indexOf('\n');
-    const key = (newline === -1 ? entry : entry.slice(0, newline)).toLowerCase();
-    const value = newline === -1 ? null : entry.slice(newline + 1);
-    if (key === 'help.autocorrect') autocorrect = value === null || !SHOWS_GUESS.test(value.trim());
-    else if (key.startsWith('alias.')) aliases.set(key.slice('alias.'.length), value);
-    else if (value) included.push({ origin, path: value });
+  const absorb = (text: string): void => {
+    // `-z --show-origin` prints `origin\0key\nvalue\0` per entry.
+    const fields = text.split('\0');
+    for (let at = 0; at + 1 < fields.length; at += 2) {
+      const origin = fields[at] as string;
+      const entry = fields[at + 1] as string;
+      const newline = entry.indexOf('\n');
+      const key = (newline === -1 ? entry : entry.slice(0, newline)).toLowerCase();
+      const value = newline === -1 ? null : entry.slice(newline + 1);
+      if (key === 'help.autocorrect') autocorrect = value === null || !SHOWS_GUESS.test(value.trim());
+      else if (key === 'init.templatedir') templateDir = value || null;
+      else if (key.startsWith('alias.')) aliases.set(key.slice('alias.'.length), value);
+      else if (value) included.push({ origin, path: value });
+    }
+  };
+  absorb(stdout);
+  if (user && templateDir !== null) {
+    // git copies the template's config into the repository it makes, where its aliases apply.
+    const home = templateDir === '~' || templateDir.startsWith('~/');
+    const file = join(home ? join(homedir(), templateDir.slice(1)) : resolve(directory, templateDir), 'config');
+    // git only warns about a config file it cannot read, so readability is checked here.
+    const present = await access(file, constants.R_OK).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => (error.code === 'ENOENT' || error.code === 'ENOTDIR' ? false : null)
+    );
+    if (present === null) return null;
+    if (present) {
+      const listed = await gitRun(directory, ['config', '--file', file, '-z', '--show-origin', '--get-regexp', keys]);
+      if (listed === null || (listed.code !== 0 && (listed.code !== 1 || listed.stdout !== ''))) return null;
+      absorb(listed.stdout);
+    }
   }
   return { aliases, autocorrect, includes: await includeTargets(directory, included) };
 }
