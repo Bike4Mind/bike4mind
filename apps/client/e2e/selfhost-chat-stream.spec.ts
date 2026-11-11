@@ -15,6 +15,8 @@ import { NavigationPage } from './pages/NavigationPage';
  * Environment:
  *   SELFHOST_EMAIL        (required) account to sign in as. On a fresh install use the
  *                         B4M_BOOTSTRAP_ADMIN_EMAIL address; the check registers it on first run.
+ *                         Its domain must accept mail: the app sends no code to a domain without a
+ *                         mail host (example.com), even though Mailpit would catch it.
  *   SELFHOST_URL          app origin, default http://localhost:3000
  *   SELFHOST_MAILPIT_URL  Mailpit origin the sign-in code is read from, default http://localhost:8025
  *   SELFHOST_USERNAME     username used only when the account does not exist yet
@@ -31,6 +33,8 @@ const OTC_CODE_PATTERN = /\b\d{8}\b/;
 // Mailpit stamps `Created` from its own clock; tolerate a little drift from the runner's.
 const MAIL_CLOCK_SKEW_MS = 5_000;
 const SOCKET_OPEN_TIMEOUT_MS = 30_000;
+// A CPU-only local model can spend minutes on the prompt before its first token.
+const REPLY_TIMEOUT_MS = 4 * 60_000;
 const MIN_PARTIAL_FRAMES = 2;
 
 // Long enough to span many stream frames, plain enough that the rendered text carries no markdown.
@@ -152,6 +156,15 @@ test('a chat reply streams over the WebSocket and survives a reload', async ({ p
   if (!email) throw new Error('SELFHOST_EMAIL must be set (see the header of selfhost-chat-stream.spec.ts)');
 
   const probe = watchSockets(page);
+  // The consent banner's fixed bar covers the composer controls. Same seed as prepareAppPage in
+  // fixtures.ts; the key must stay in sync with CONSENT_KEY in app/utils/consentRegion.ts.
+  await page.addInitScript(() => {
+    try {
+      if (!localStorage.getItem('cookie_consent')) localStorage.setItem('cookie_consent', 'denied');
+    } catch {
+      // Opaque origins (about:blank) have no localStorage.
+    }
+  });
   const basePage = new BasePage(page);
   const chat = new ChatPage(page);
 
@@ -197,7 +210,7 @@ test('a chat reply streams over the WebSocket and survives a reload', async ({ p
       }
     })().catch(() => {});
     try {
-      await chat.sendMessageAndWaitForResponse(PROMPT, TIMEOUTS.AI_RESPONSE);
+      await chat.sendMessageAndWaitForResponse(PROMPT, REPLY_TIMEOUT_MS);
     } finally {
       sampling = false;
       await sampler;

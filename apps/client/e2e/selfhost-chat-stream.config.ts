@@ -12,8 +12,9 @@ export default defineConfig({
   // No retries: a second attempt would send a second prompt and could hide a dropped stream.
   retries: 0,
   workers: 1,
-  // Sign-in, one model reply and a reload; a cold local model is the slow case.
-  timeout: 6 * 60_000,
+  // Sign-in, one model reply (resent once after a server timeout) and a reload; a cold local model
+  // is the slow case.
+  timeout: 10 * 60_000,
   outputDir: 'test-results/selfhost-chat-stream',
   reporter: [['list']],
   use: {
