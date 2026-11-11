@@ -208,6 +208,7 @@ const api: DesktopApi = {
     setSessionArchived: (sessionId: string, archived: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
     exportSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatExportSession, sessionId),
+    exportLocalData: () => ipcRenderer.invoke(IPC_CHANNELS.chatExportLocalData),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
     createSession: (request?: CreateSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession, request),
     createCodeSession: (request: CreateCodeSessionRequest) =>

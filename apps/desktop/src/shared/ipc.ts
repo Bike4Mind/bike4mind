@@ -211,6 +211,7 @@ export const IPC_CHANNELS = {
   chatSetApprovalMode: 'chat:set-approval-mode',
   chatSetSessionArchived: 'chat:set-session-archived',
   chatExportSession: 'chat:export-session',
+  chatExportLocalData: 'chat:export-local-data',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
   chatCreateCodeSession: 'chat:create-code-session',
@@ -853,6 +854,8 @@ export interface DesktopApi {
     setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
     /** Save a conversation as Markdown or JSON, by the extension picked in the save dialog. Rejects on a write failure. */
     exportSession(sessionId: string): Promise<ChatSessionExportResult>;
+    /** Export this account's local conversations, their files, and project memories into a selected folder. */
+    exportLocalData(): Promise<ChatSessionExportResult>;
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(request?: CreateSessionRequest): Promise<CreatedSession>;

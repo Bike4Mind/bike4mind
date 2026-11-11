@@ -74,6 +74,7 @@ import { findOnPath, resolveUserPath } from './tools/userPath';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionExportIpc } from './sessionExportIpc';
+import { registerLocalDataExportIpc } from './localDataExportIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
@@ -1252,6 +1253,14 @@ export function registerChat(
     },
     writeFile: (path, content) => writeFile(path, content, 'utf8'),
     downloadsDirectory: () => app.getPath('downloads'),
+  });
+
+  registerLocalDataExportIpc(ipcMain, {
+    sessions: store,
+    attachments,
+    media,
+    userData,
+    pickFolder: sender => pickDirectory(sender),
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListArtifacts, () => artifactLibrary.list());

@@ -1,5 +1,5 @@
 import { OrchestrationSettings } from './OrchestrationSettings';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
@@ -269,6 +269,68 @@ function localHistoryEntry(): ConfigEntry {
   };
 }
 
+function LocalDataExport() {
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  const run = async () => {
+    if (pending) return;
+    setPending(true);
+    setMessage(null);
+    try {
+      const result = await window.b4m.chat.exportLocalData();
+      if (result.saved) {
+        setFailed(false);
+        setMessage(`Export saved to ${result.path}`);
+      }
+    } catch (error) {
+      setFailed(true);
+      setMessage(`Could not export local data: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <Stack spacing={1}>
+      <Typography level="body-xs" textColor="text.tertiary">
+        Save conversations, attachments, generated media, and project memories to a folder you choose. Credentials and
+        server settings are not included.
+      </Typography>
+      <Button
+        size="sm"
+        variant="outlined"
+        loading={pending}
+        onClick={() => void run()}
+        data-testid="settings-export-local-btn"
+      >
+        Export local data...
+      </Button>
+      {message && (
+        <Typography
+          level="body-xs"
+          color={failed ? 'danger' : 'success'}
+          role="status"
+          data-testid="settings-export-local-status"
+        >
+          {message}
+        </Typography>
+      )}
+    </Stack>
+  );
+}
+
+function localDataExportEntry(): ConfigEntry {
+  return {
+    id: 'local-data-export',
+    icon: <DownloadIcon />,
+    label: 'Export local data',
+    summary: 'Save your local conversations and project memories in a portable bundle.',
+    control: <LocalDataExport />,
+  };
+}
+
 function worktreesEntry(): ConfigEntry {
   return {
     id: 'worktrees',
@@ -451,6 +513,7 @@ function useSettingsEntries(
         curatedList.saving
       ),
       localHistoryEntry(),
+      localDataExportEntry(),
       ...(import.meta.env.DEV ? [dollarCostsEntry(showDollarCosts, setShowDollarCosts)] : []),
       ...(auth ? [serverEntry(auth)] : []),
       updatesEntry(update),
