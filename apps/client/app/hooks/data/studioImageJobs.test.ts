@@ -8,6 +8,8 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({ ReadyState: { OPEN: 1 
 import {
   describeStudioImageJobError,
   patchStudioImageJob,
+  prependStudioImageJobs,
+  shouldPollStudioImageJobs,
   studioImageJobKeys,
   type StudioImageJob,
 } from './studioImageJobs';
@@ -20,6 +22,16 @@ const refusal = (status: number, data: unknown) =>
     headers: {},
     config: { headers: new AxiosHeaders() },
   });
+
+const job = (state: StudioImageJob['state'], id = 'img-1'): StudioImageJob => ({
+  id,
+  groupId: null,
+  state,
+  request: { model: 'gpt-image-1.5', mode: 'generate', prompt: 'p' } as StudioImageJob['request'],
+  error: null,
+  output: null,
+  createdAt: '2026-11-01T00:00:00.000Z',
+});
 
 describe('describeStudioImageJobError', () => {
   it('joins the why-not reasons of a 422', () => {
@@ -49,15 +61,6 @@ describe('describeStudioImageJobError', () => {
 });
 
 describe('patchStudioImageJob', () => {
-  const job = (state: StudioImageJob['state']): StudioImageJob => ({
-    id: 'img-1',
-    groupId: null,
-    state,
-    request: { model: 'gpt-image-1.5', mode: 'generate', prompt: 'p' } as StudioImageJob['request'],
-    error: null,
-    output: null,
-    createdAt: '2026-11-01T00:00:00.000Z',
-  });
   const seeded = (state: StudioImageJob['state']) => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(studioImageJobKeys.list, {
@@ -85,5 +88,41 @@ describe('patchStudioImageJob', () => {
   it('reports a job it does not hold, and leaves an unloaded list alone', () => {
     expect(patchStudioImageJob(seeded('pending'), { id: 'other', state: 'running' })).toBe(false);
     expect(patchStudioImageJob(new QueryClient(), { id: 'img-1', state: 'running' })).toBe(false);
+  });
+});
+
+describe('shouldPollStudioImageJobs', () => {
+  const list = (...states: StudioImageJob['state'][]) => ({
+    pages: [{ data: states.map((state, index) => job(state, `img-${index}`)), next_cursor: null }],
+    pageParams: [],
+  });
+
+  it('polls only while the socket is down and a job is live', () => {
+    expect(shouldPollStudioImageJobs(false, list('succeeded', 'running'))).toBe(true);
+    expect(shouldPollStudioImageJobs(true, list('running'))).toBe(false);
+    expect(shouldPollStudioImageJobs(false, list('succeeded', 'failed'))).toBe(false);
+    expect(shouldPollStudioImageJobs(false, undefined)).toBe(false);
+  });
+});
+
+describe('prependStudioImageJobs', () => {
+  it('puts new jobs on top and skips ones the list already holds', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(studioImageJobKeys.list, {
+      pages: [{ data: [job('pending')], next_cursor: null }],
+      pageParams: [],
+    });
+    prependStudioImageJobs(queryClient, [job('pending', 'img-2'), job('pending')]);
+    const ids = queryClient
+      .getQueryData<{ pages: { data: StudioImageJob[] }[] }>(studioImageJobKeys.list)
+      ?.pages[0]?.data.map(row => row.id);
+    expect(ids).toEqual(['img-2', 'img-1']);
+  });
+
+  it('refetches a gallery that has not loaded, whose first page may predate the jobs', () => {
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    prependStudioImageJobs(queryClient, [job('pending')]);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: studioImageJobKeys.list });
   });
 });

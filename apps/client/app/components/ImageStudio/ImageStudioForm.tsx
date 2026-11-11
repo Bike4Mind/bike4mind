@@ -40,12 +40,22 @@ type ImageStudioFormProps = {
  */
 const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProps) => {
   const [prompt, setPrompt] = useState('');
-  const [intent, setIntent] = useState<ImageIntent>({ count: 1 });
+  const [count, setCount] = useState(1);
+  const [intent, setIntent] = useState<ImageIntent>({});
   const options = useMemo(() => buildImageModelOptions(models, intent), [models, intent]);
-  // Picked once, against the opening intent; after that the user's pick stands.
-  const [model, setModel] = useState<ImageModels | undefined>(() =>
-    pickDefaultImageModel(buildImageModelOptions(models, { count: 1 }))
-  );
+  const [pickedModel, setPickedModel] = useState<ImageModels | undefined>();
+  // The user's pick stands while it is still listed; until then, and if a models refetch drops it, the default.
+  const model = options.some(option => option.model === pickedModel) ? pickedModel : pickDefaultImageModel(options);
+
+  // A size or ratio the new model does not list would leave its Select blank, so it falls back to the default.
+  const pickModel = (next: ImageModels) => {
+    setPickedModel(next);
+    setIntent(current => ({
+      ...(current.size && imageSizeOptions(next).includes(current.size) && { size: current.size }),
+      ...(current.aspectRatio &&
+        imageAspectRatioOptions(next).includes(current.aspectRatio) && { aspectRatio: current.aspectRatio }),
+    }));
+  };
 
   if (model === undefined) {
     return (
@@ -64,7 +74,7 @@ const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProp
   const submit = () => {
     if (!canSubmit) return;
     onSubmit({
-      count: intent.count,
+      count,
       request: {
         model,
         mode: 'generate',
@@ -96,7 +106,7 @@ const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProp
           <Select
             value={model}
             onChange={(_event, value) => {
-              if (value) setModel(value);
+              if (value) pickModel(value);
             }}
             // The options carry a reason line; the closed picker shows the model name alone.
             renderValue={() => selected?.label ?? model}
@@ -163,15 +173,15 @@ const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProp
         <FormControl>
           <FormLabel>Images</FormLabel>
           <ToggleButtonGroup
-            value={String(intent.count)}
+            value={String(count)}
             onChange={(_event, value) => {
-              if (value) setIntent(current => ({ ...current, count: Number(value) }));
+              if (value) setCount(Number(value));
             }}
             aria-label="Number of images"
           >
-            {COUNTS.map(count => (
-              <Button key={count} value={String(count)} data-testid={`image-studio-count-${count}`}>
-                {count}
+            {COUNTS.map(option => (
+              <Button key={option} value={String(option)} data-testid={`image-studio-count-${option}`}>
+                {option}
               </Button>
             ))}
           </ToggleButtonGroup>
@@ -189,7 +199,7 @@ const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProp
         sx={{ alignSelf: 'flex-start' }}
         data-testid="image-studio-generate-btn"
       >
-        {intent.count === 1 ? 'Generate image' : `Generate ${intent.count} images`}
+        {count === 1 ? 'Generate image' : `Generate ${count} images`}
       </Button>
     </Stack>
   );

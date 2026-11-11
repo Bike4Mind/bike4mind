@@ -30,8 +30,9 @@ const JobBody = ({ job }: { job: StudioImageJob }) => {
     return job.output?.fileId ? (
       <ImageJobPreview fileId={job.output.fileId} prompt={job.request.prompt} />
     ) : (
-      <Typography level="body-sm" data-testid="image-job-finishing">
-        Finishing
+      // Final: the worker kept the image outside Files (imageJobHandler's fallback), so there is no file to show.
+      <Typography level="body-sm" textAlign="center" sx={{ px: 2 }} data-testid="image-job-unviewable">
+        The image was made but could not be added to your Files.
       </Typography>
     );
   }

@@ -11,7 +11,7 @@ import {
 } from '@bike4mind/common';
 
 /** What the form asks for besides the model; size and aspect ratio are absent when left on the model's default. */
-export type ImageIntent = { count: number; size?: string; aspectRatio?: string };
+export type ImageIntent = { size?: string; aspectRatio?: string };
 
 export type ImageModelOption = {
   model: ImageModels;
@@ -33,9 +33,10 @@ const DEFAULT_MODEL_PREFERENCE: readonly ImageModels[] = [
 
 export const isCatalogImageModel = (id: string): id is ImageModels => Object.hasOwn(IMAGE_MODEL_CATALOG, id);
 
-const toCapabilityRequest = ({ count, size, aspectRatio }: ImageIntent): ImageCapabilityRequest => ({
+// Count 1, as createImageJobs validates: "make N" is N one-image jobs, bounded by STUDIO_IMAGE_COUNT_MAX.
+const toCapabilityRequest = ({ size, aspectRatio }: ImageIntent): ImageCapabilityRequest => ({
   mode: 'generate',
-  count,
+  count: 1,
   ...(size && { size }),
   ...(aspectRatio && { aspectRatio }),
 });
@@ -74,5 +75,5 @@ export const imageAspectRatioOptions = (model: ImageModels): readonly string[] =
   const ratios = getImageModelCatalogEntry(model).modes.generate?.aspectRatios;
   if (!ratios) return [];
   if (ratios.kind === 'discrete') return ratios.values;
-  return COMMON_ASPECT_RATIOS.filter(aspectRatio => imageModelWhyNot(model, { count: 1, aspectRatio }) === null);
+  return COMMON_ASPECT_RATIOS.filter(aspectRatio => imageModelWhyNot(model, { aspectRatio }) === null);
 };

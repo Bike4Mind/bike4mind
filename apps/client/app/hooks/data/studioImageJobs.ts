@@ -30,7 +30,7 @@ export type StudioImageJob = {
 };
 
 export type StudioImageJobPage = { data: StudioImageJob[]; next_cursor: string | null };
-type StudioImageJobList = { pages: StudioImageJobPage[]; pageParams: unknown[] };
+export type StudioImageJobList = { pages: StudioImageJobPage[]; pageParams: unknown[] };
 
 export type CreateStudioImageJobsBody = { count: number; request: ImageJobRequest };
 
@@ -53,15 +53,21 @@ export function useStudioImageJobs() {
       ).data,
     initialPageParam: undefined as string | undefined,
     getNextPageParam: lastPage => lastPage.next_cursor ?? undefined,
-    refetchInterval: query =>
-      !socketOpen && query.state.data?.pages.some(page => page.data.some(job => !isTerminalGenerationState(job.state)))
-        ? SOCKET_DOWN_POLL_MS
-        : false,
+    refetchInterval: query => (shouldPollStudioImageJobs(socketOpen, query.state.data) ? SOCKET_DOWN_POLL_MS : false),
   });
 }
 
+/** The socket brings job updates; the gallery polls only while it is down and some job can still change. */
+export const shouldPollStudioImageJobs = (socketOpen: boolean, list: StudioImageJobList | undefined): boolean =>
+  !socketOpen && (list?.pages.some(page => page.data.some(job => !isTerminalGenerationState(job.state))) ?? false);
+
 /** Puts a new batch at the top of page 1, skipping any job the list already holds (an idempotent replay). */
-const prependStudioImageJobs = (queryClient: QueryClient, jobs: readonly StudioImageJob[]): void => {
+export const prependStudioImageJobs = (queryClient: QueryClient, jobs: readonly StudioImageJob[]): void => {
+  // A gallery still loading may have read its page before these jobs existed, so it refetches instead.
+  if (!queryClient.getQueryData(studioImageJobKeys.list)) {
+    void queryClient.invalidateQueries({ queryKey: studioImageJobKeys.list });
+    return;
+  }
   queryClient.setQueryData<StudioImageJobList>(studioImageJobKeys.list, list => {
     if (!list) return list;
     const known = new Set(list.pages.flatMap(page => page.data.map(job => job.id)));

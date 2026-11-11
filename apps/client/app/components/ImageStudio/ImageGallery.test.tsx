@@ -80,4 +80,11 @@ describe('ImageGallery', () => {
     render(<ImageGallery />, { wrapper: TestWrapper });
     expect(screen.getByTestId('image-job-image-loading')).toBeInTheDocument();
   });
+
+  it('settles a finished image kept outside Files instead of waiting on it', () => {
+    h.jobs = [job({ id: 'done', state: 'succeeded', output: { fileId: null, contentType: 'image/png', bytes: 1 } })];
+    render(<ImageGallery />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('image-job-unviewable')).toHaveTextContent('could not be added to your Files');
+    expect(screen.queryByTestId('image-job-image-loading')).not.toBeInTheDocument();
+  });
 });

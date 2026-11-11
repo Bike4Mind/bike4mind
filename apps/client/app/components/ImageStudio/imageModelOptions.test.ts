@@ -17,7 +17,7 @@ const available = [
 
 describe('buildImageModelOptions', () => {
   it('keeps catalog models only, labelled by the model list', () => {
-    const options = buildImageModelOptions(available, { count: 1 });
+    const options = buildImageModelOptions(available, {});
     expect(options.map(option => option.model)).toEqual([
       ImageModels.FLUX_KONTEXT_PRO,
       ImageModels.GEMINI_3_1_FLASH_IMAGE,
@@ -27,22 +27,20 @@ describe('buildImageModelOptions', () => {
   });
 
   it('disables an edit-only model with its why-not reason', () => {
-    const [kontext] = buildImageModelOptions(available, { count: 1 });
+    const [kontext] = buildImageModelOptions(available, {});
     expect(kontext?.disabledReason).toEqual(expect.any(String));
     expect(kontext?.disabledReason).not.toBe('');
   });
 
   it('disables a model that cannot honour the chosen size', () => {
-    expect(imageModelWhyNot(ImageModels.GEMINI_3_1_FLASH_IMAGE, { count: 1, size: '1024x1536' })).toEqual(
-      expect.any(String)
-    );
-    expect(imageModelWhyNot(ImageModels.GPT_IMAGE_1_5, { count: 1, size: '1024x1536' })).toBeNull();
+    expect(imageModelWhyNot(ImageModels.GEMINI_3_1_FLASH_IMAGE, { size: '1024x1536' })).toEqual(expect.any(String));
+    expect(imageModelWhyNot(ImageModels.GPT_IMAGE_1_5, { size: '1024x1536' })).toBeNull();
   });
 });
 
 describe('pickDefaultImageModel', () => {
   it('opens on the first preferred model that can generate', () => {
-    expect(pickDefaultImageModel(buildImageModelOptions(available, { count: 1 }))).toBe(ImageModels.GPT_IMAGE_1_5);
+    expect(pickDefaultImageModel(buildImageModelOptions(available, {}))).toBe(ImageModels.GPT_IMAGE_1_5);
   });
 
   it('falls back to the first usable model, and to none when nothing can generate', () => {
@@ -51,7 +49,7 @@ describe('pickDefaultImageModel', () => {
         { id: ImageModels.FLUX_KONTEXT_PRO, name: 'Kontext' },
         { id: ImageModels.FLUX_PRO_ULTRA, name: 'Ultra' },
       ],
-      { count: 1 }
+      {}
     );
     expect(pickDefaultImageModel(fluxOnly)).toBe(ImageModels.FLUX_PRO_ULTRA);
     expect(pickDefaultImageModel(fluxOnly.slice(0, 1))).toBeUndefined();
