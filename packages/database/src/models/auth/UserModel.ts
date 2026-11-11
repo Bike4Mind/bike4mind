@@ -929,7 +929,9 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     const excluded = convertIds(input.excludeIds.filter(id => mongoose.Types.ObjectId.isValid(id)));
     const docs = await this.model
       .find({ createdAt: { $gte: input.from, $lte: input.to }, _id: { $nin: excluded }, $or: criteria })
-      .select('name email createdAt isBanned disputePending moderation.status signupMeta.ip signupMeta.ja4')
+      .select(
+        'name email createdAt isBanned disputePending moderation.status signupMeta.ip signupMeta.ja4 currentCredits'
+      )
       .limit(input.limit)
       .maxTimeMS(2000)
       .lean();
@@ -943,6 +945,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       moderation: d.moderation?.status ? { status: d.moderation.status } : null,
       signupIp: d.signupMeta?.ip ?? null,
       signupJa4: d.signupMeta?.ja4 ?? null,
+      currentCredits: d.currentCredits ?? 0,
     }));
   }
 
