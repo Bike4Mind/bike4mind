@@ -9,7 +9,13 @@ import {
   stripeDisputeRepository,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { CreditHolderType, CreditPurchaseEvents, CreditPurchaseStatus, isPlaceholderValue } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  CreditPurchaseEvents,
+  CreditPurchaseStatus,
+  CURRENT_POLICY_VERSION,
+  isPlaceholderValue,
+} from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
@@ -307,8 +313,18 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
     // Subscription events
 
-    case 'checkout.session.completed':
+    case 'checkout.session.completed': {
+      const session = event.data.object;
+      // Set only while requireCheckoutTermsConsent was on; see server/integrations/stripe/termsConsent.ts.
+      if (session.consent?.terms_of_service === 'accepted' && session.client_reference_id) {
+        await userRepository.update({
+          id: session.client_reference_id,
+          checkoutTermsAcceptedVersion: CURRENT_POLICY_VERSION,
+          checkoutTermsAcceptedAt: new Date(event.created * 1000),
+        });
+      }
       break;
+    }
 
     case 'invoice.payment_succeeded': {
       const invoice = event.data.object;

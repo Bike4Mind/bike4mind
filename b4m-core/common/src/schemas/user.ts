@@ -194,6 +194,8 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   aupAcceptedVersion: true,
   aupAcceptedAt: true,
   ageAttestedAdult: true,
+  checkoutTermsAcceptedVersion: true,
+  checkoutTermsAcceptedAt: true,
   emailVerified: true,
   emailVerifiedAt: true,
   emailVerificationUsed: true,
