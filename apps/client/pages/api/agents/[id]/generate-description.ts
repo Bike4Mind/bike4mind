@@ -36,7 +36,8 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
       const description = await generateAgentDescription(
         agent,
         req.logger,
-        createRequestCompletionMeter(req, 'agent description', { systemModel: true })
+        createRequestCompletionMeter(req, 'agent description', { systemModel: true }),
+        userId
       );
 
       res.json({ description });
