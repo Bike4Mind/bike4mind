@@ -36,6 +36,8 @@ interface RotateUserApiKeyAdapters {
    * nothing from a rotation. See the no-escalation rule below.
    */
   callerScopes?: ApiKeyScopeValue[];
+  /** See resolveOwnedApiKey: only the org key rotate route passes it. */
+  includeOrgOwned?: boolean;
 }
 
 export interface RotateUserApiKeyResult {
@@ -93,7 +95,7 @@ export const rotateUserApiKey = async (
   const { db } = adapters;
   const params = secureParameters(parameters, rotateUserApiKeySchema);
 
-  const apiKey = await resolveOwnedApiKey(userId, params.keyId, { db });
+  const apiKey = await resolveOwnedApiKey(userId, params.keyId, { db, includeOrgOwned: adapters.includeOrgOwned });
   if (!apiKey) {
     throw new NotFoundError('API key not found');
   }

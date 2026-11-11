@@ -1,10 +1,13 @@
-import { IUserDocument, isOrgServiceAccountOf, orgServiceAccountEmail } from '@bike4mind/common';
+import { IOrganization, IUserDocument, isOrgServiceAccountOf, orgServiceAccountEmail } from '@bike4mind/common';
 
 interface OrgServiceAccountAdapters {
   db: {
     users: {
       findByEmail: (email: string) => Promise<IUserDocument | null>;
       findOrCreateByEmail: (email: string, defaults: Partial<IUserDocument>) => Promise<IUserDocument>;
+    };
+    organizations: {
+      update: (data: Partial<IOrganization> & { id: string }) => Promise<unknown>;
     };
   };
 }
@@ -15,7 +18,7 @@ interface OrgServiceAccountAdapters {
  * Stripe customer) a human account gets. Never added to the org's roster.
  */
 export const getOrCreateOrgServiceAccount = async (
-  organization: { id: string; name?: string },
+  organization: { id: string; name?: string; serviceAccountUserId?: string | null },
   adapters: OrgServiceAccountAdapters
 ): Promise<IUserDocument> => {
   const user = await adapters.db.users.findOrCreateByEmail(orgServiceAccountEmail(organization.id), {
@@ -31,6 +34,10 @@ export const getOrCreateOrgServiceAccount = async (
     throw new Error(
       `Account at the service-account address of organization ${organization.id} is not its service account`
     );
+  }
+  // The per-member credit cap reads this to exempt the account (creditService/memberCreditCap.ts).
+  if (organization.serviceAccountUserId !== user.id) {
+    await adapters.db.organizations.update({ id: organization.id, serviceAccountUserId: user.id });
   }
   return user;
 };

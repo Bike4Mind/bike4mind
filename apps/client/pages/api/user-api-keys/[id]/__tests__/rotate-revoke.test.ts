@@ -291,3 +291,19 @@ describe('rotation billing policy wiring', () => {
     expect(rotateUserApiKey).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('rotate / revoke - org service account', () => {
+  it('refuses both before reaching the service', async () => {
+    rotateUserApiKey.mockClear();
+    revokeUserApiKey.mockClear();
+    resolveOwnedApiKey.mockClear();
+    for (const handler of [mockRefs.rotateHandler!, mockRefs.revokeHandler!]) {
+      const { req, res } = post('key-1');
+      Object.assign(req, { user: { id: 'sa1', isSystem: true, serviceAccountOrganizationId: 'org-1' } });
+      await expect(handler(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    }
+    expect(resolveOwnedApiKey).not.toHaveBeenCalled();
+    expect(rotateUserApiKey).not.toHaveBeenCalled();
+    expect(revokeUserApiKey).not.toHaveBeenCalled();
+  });
+});
