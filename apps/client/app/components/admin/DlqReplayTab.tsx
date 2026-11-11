@@ -488,11 +488,12 @@ const DlqReplayTab: React.FC = () => {
       {/* Messages Table */}
       {selectedQueue && (
         <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto', mb: 3 }}>
-          <Table stickyHeader hoverRow data-testid="dlq-messages-table">
+          {/* fixed table layout ignores th min-width; the floor keeps Body Preview >= 160px */}
+          <Table stickyHeader hoverRow data-testid="dlq-messages-table" sx={{ minWidth: 880 }}>
             <thead>
               <tr>
                 <th style={{ width: 200 }}>Message ID</th>
-                <th style={{ minWidth: 160 }}>Body Preview</th>
+                <th>Body Preview</th>
                 <th style={{ width: 160 }}>Sent At</th>
                 <th style={{ width: 80 }}>Age</th>
                 <th style={{ width: 100 }}>Expires in</th>
