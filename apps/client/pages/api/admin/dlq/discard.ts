@@ -39,41 +39,69 @@ const handler = adminApi({
   if (!entry) throw new BadRequestError(`Unknown DLQ: ${queueLabel}`);
   const dlqUrl = getDlqUrl(entry.label);
 
-  const results: Array<{ messageId: string; status: 'discarded' | 'failed'; reason?: string }> = [];
+  const results: Array<{
+    messageId: string;
+    status: 'discarded' | 'failed';
+    reason?: string;
+    historyPending?: boolean;
+  }> = [];
   for (const message of messages) {
-    let logId: string | undefined;
+    let logId: string;
     try {
       const log = await dlqReplayLogRepository.logReplay({
         queueLabel,
         messageId: message.messageId,
         messageBody: message.body,
         sourceQueue: entry.displayName,
-        status: 'discarded',
+        operation: 'discard',
+        status: 'pending',
         reason,
         replayedBy: adminUserId,
       });
       logId = log.id;
-      await deleteFromQueue(dlqUrl, message.receiptHandle);
-      results.push({ messageId: message.messageId, status: 'discarded' });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      if (logId) {
-        try {
-          await dlqReplayLogRepository.markDiscardFailed(logId, errorMessage);
-        } catch (logError) {
-          Logger.error('[DLQ Discard] Failed to mark delete failure', {
-            messageId: message.messageId,
-            error: logError instanceof Error ? logError.message : String(logError),
-          });
-        }
-      }
-      Logger.error('[DLQ Discard] Failed to discard message', {
+      Logger.error('[DLQ Discard] Failed to retain message before deletion', {
         messageId: message.messageId,
         queueLabel,
         error: errorMessage,
       });
       results.push({ messageId: message.messageId, status: 'failed', reason: errorMessage });
+      continue;
     }
+
+    let deleteError: string | undefined;
+    try {
+      await deleteFromQueue(dlqUrl, message.receiptHandle);
+    } catch (error) {
+      deleteError = error instanceof Error ? error.message : String(error);
+      Logger.error('[DLQ Discard] Delete request failed', {
+        messageId: message.messageId,
+        queueLabel,
+        error: deleteError,
+      });
+    }
+
+    // An acknowledged deletion remains acknowledged even if the terminal history write fails.
+    const status = deleteError === undefined ? 'discarded' : 'failed';
+    let historyPending = false;
+    try {
+      await dlqReplayLogRepository.finalizeDiscard(logId, status, deleteError);
+    } catch (error) {
+      historyPending = true;
+      Logger.error('[DLQ Discard] History finalization is unconfirmed', {
+        messageId: message.messageId,
+        queueLabel,
+        observedStatus: status,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    results.push({
+      messageId: message.messageId,
+      status,
+      ...(deleteError !== undefined ? { reason: deleteError } : {}),
+      ...(historyPending ? { historyPending: true } : {}),
+    });
   }
 
   const discardedIds = results.filter(result => result.status === 'discarded').map(result => result.messageId);
@@ -87,6 +115,7 @@ const handler = adminApi({
       messageCount: discardedIds.length,
       failed: results.length - discardedIds.length,
       discardedMessageIds: discardedIds,
+      historyPendingMessageIds: results.filter(result => result.historyPending).map(result => result.messageId),
     },
   });
   return res.json({ discarded: discardedIds.length, failed: results.length - discardedIds.length, results });

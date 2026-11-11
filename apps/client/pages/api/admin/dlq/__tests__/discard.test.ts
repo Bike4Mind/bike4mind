@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
   post: undefined as ((req: unknown, res: unknown) => Promise<void>) | undefined,
   routeOptions: undefined as unknown,
   logReplay: vi.fn(),
-  markDiscardFailed: vi.fn(),
+  finalizeDiscard: vi.fn(),
   deleteFromQueue: vi.fn(),
   audit: vi.fn(),
 }));
@@ -28,7 +28,7 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ deleteFromQueue: h.deleteFromQueue }));
 vi.mock('@bike4mind/database', () => ({
-  dlqReplayLogRepository: { logReplay: h.logReplay, markDiscardFailed: h.markDiscardFailed },
+  dlqReplayLogRepository: { logReplay: h.logReplay, finalizeDiscard: h.finalizeDiscard },
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   parseAdminActionReason: (value: unknown) => {
@@ -52,7 +52,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.logReplay.mockResolvedValue({ id: 'log-1' });
   h.deleteFromQueue.mockResolvedValue(undefined);
-  h.markDiscardFailed.mockResolvedValue(undefined);
+  h.finalizeDiscard.mockResolvedValue(undefined);
 });
 
 describe('POST /api/admin/dlq/discard', () => {
@@ -92,13 +92,16 @@ describe('POST /api/admin/dlq/discard', () => {
     expect(JSON.parse(res._getData())).toMatchObject({ discarded: 1, failed: 0 });
     expect(h.logReplay).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: 'discarded',
+        status: 'pending',
+        operation: 'discard',
         reason: 'Job obsolete',
         messageBody: message.body,
         replayedBy: 'admin-1',
       })
     );
     expect(h.logReplay.mock.invocationCallOrder[0]).toBeLessThan(h.deleteFromQueue.mock.invocationCallOrder[0]);
+    expect(h.deleteFromQueue.mock.invocationCallOrder[0]).toBeLessThan(h.finalizeDiscard.mock.invocationCallOrder[0]);
+    expect(h.finalizeDiscard).toHaveBeenCalledWith('log-1', 'discarded', undefined);
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'ops.dlq.discarded',
       reason: 'Job obsolete',
@@ -116,18 +119,67 @@ describe('POST /api/admin/dlq/discard', () => {
     expect(h.deleteFromQueue).not.toHaveBeenCalled();
   });
 
+  it('keeps an acknowledged deletion successful when terminal history cannot be confirmed', async () => {
+    h.finalizeDiscard.mockRejectedValue(new Error('database unavailable'));
+    const { req, res } = request({ queueLabel: 'quest', messages: [message], reason: 'Bad payload' });
+    await h.post!(req, res);
+    expect(JSON.parse(res._getData())).toMatchObject({
+      discarded: 1,
+      failed: 0,
+      results: [{ messageId: 'm1', status: 'discarded', historyPending: true }],
+    });
+    expect(h.finalizeDiscard).toHaveBeenCalledTimes(1);
+    expect(h.finalizeDiscard).toHaveBeenCalledWith('log-1', 'discarded', undefined);
+    expect(h.audit.mock.calls[0][1].details).toMatchObject({
+      discardedMessageIds: ['m1'],
+      historyPendingMessageIds: ['m1'],
+    });
+  });
+
+  it('reports unconfirmed history when both deletion and failure finalization fail', async () => {
+    h.deleteFromQueue.mockRejectedValue(new Error('expired receipt'));
+    h.finalizeDiscard.mockRejectedValue(new Error('database unavailable'));
+    const { req, res } = request({ queueLabel: 'quest', messages: [message], reason: 'Bad payload' });
+    await h.post!(req, res);
+    expect(JSON.parse(res._getData())).toMatchObject({
+      discarded: 0,
+      failed: 1,
+      results: [{ status: 'failed', reason: 'expired receipt', historyPending: true }],
+    });
+    expect(h.finalizeDiscard).toHaveBeenCalledWith('log-1', 'failed', 'expired receipt');
+  });
+
+  it('keeps mixed-batch counters tied to deletion acknowledgements', async () => {
+    h.logReplay
+      .mockReset()
+      .mockResolvedValueOnce({ id: 'first' })
+      .mockResolvedValueOnce({ id: 'second' })
+      .mockRejectedValueOnce(new Error('cannot retain'));
+    h.deleteFromQueue.mockReset().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('expired receipt'));
+    const { req, res } = request({
+      queueLabel: 'quest',
+      reason: 'Bad payload',
+      messages: [message, { ...message, messageId: 'm2' }, { ...message, messageId: 'm3' }],
+    });
+    await h.post!(req, res);
+    expect(JSON.parse(res._getData())).toMatchObject({ discarded: 1, failed: 2 });
+    expect(h.deleteFromQueue).toHaveBeenCalledTimes(2);
+    expect(h.audit.mock.calls[0][1].details).toMatchObject({ messageCount: 1, failed: 2, discardedMessageIds: ['m1'] });
+    expect(JSON.stringify(h.audit.mock.calls[0][1].details)).not.toContain('payload');
+  });
+
   it('marks a failed delete as failed and does not audit it as discarded', async () => {
     h.deleteFromQueue.mockRejectedValue(new Error('expired receipt'));
     const { req, res } = request({ queueLabel: 'quest', messages: [message], reason: 'Bad payload' });
     await h.post!(req, res);
     expect(JSON.parse(res._getData())).toMatchObject({ discarded: 0, failed: 1 });
-    expect(h.markDiscardFailed).toHaveBeenCalledWith('log-1', 'expired receipt');
+    expect(h.finalizeDiscard).toHaveBeenCalledWith('log-1', 'failed', 'expired receipt');
     expect(h.audit.mock.calls[0][1].details.discardedMessageIds).toEqual([]);
   });
 
   it('still reports the failure and audits when marking the failed delete also fails', async () => {
     h.deleteFromQueue.mockRejectedValue(new Error('expired receipt'));
-    h.markDiscardFailed.mockRejectedValue(new Error('database unavailable'));
+    h.finalizeDiscard.mockRejectedValue(new Error('database unavailable'));
     const { req, res } = request({ queueLabel: 'quest', messages: [message], reason: 'Bad payload' });
     await h.post!(req, res);
     expect(JSON.parse(res._getData())).toMatchObject({ discarded: 0, failed: 1 });

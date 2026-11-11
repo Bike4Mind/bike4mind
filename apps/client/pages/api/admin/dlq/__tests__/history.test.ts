@@ -83,6 +83,26 @@ describe('GET /api/admin/dlq/history', () => {
     expect(body.history[0]).toHaveProperty('sourceQueue', 'Quest queue');
   });
 
+  it('accepts pending history and returns its operation without recovery bodies', async () => {
+    h.findRecent.mockResolvedValue([
+      {
+        id: 'pending-1',
+        queueLabel: 'quest',
+        messageId: 'm1',
+        sourceQueue: 'Quest queue',
+        status: 'pending',
+        operation: 'discard',
+        replayedBy: 'admin-1',
+      },
+    ]);
+    const { req, res } = createMocks({ method: 'GET', query: { status: 'pending' } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+    await h.get!(req, res);
+    expect(h.findRecent).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending', includeBody: false }));
+    expect(JSON.parse(res._getData()).history[0]).toMatchObject({ status: 'pending', operation: 'discard' });
+    expect(JSON.parse(res._getData()).history[0]).not.toHaveProperty('messageBody');
+  });
+
   it('forwards search, status, and date filters to findRecent', async () => {
     h.findRecent.mockResolvedValue([]);
 

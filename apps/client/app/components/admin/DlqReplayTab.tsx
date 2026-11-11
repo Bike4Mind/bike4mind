@@ -79,17 +79,26 @@ const QueueHint: React.FC<{ queue: DlqQueueInfo }> = ({ queue }) => {
   );
 };
 
-const StatusChip: React.FC<{ status: 'success' | 'failed' | 'skipped' | 'discarded' }> = ({ status }) => {
+const StatusChip: React.FC<Pick<DlqReplayLogEntry, 'status' | 'operation'>> = ({ status, operation }) => {
   const config = {
-    success: { color: 'success' as const, icon: <CheckCircleIcon fontSize="small" /> },
-    failed: { color: 'danger' as const, icon: <ErrorIcon fontSize="small" /> },
-    skipped: { color: 'warning' as const, icon: <WarningIcon fontSize="small" /> },
-    discarded: { color: 'neutral' as const, icon: <DeleteOutlineIcon fontSize="small" /> },
+    success: { color: 'success' as const, icon: <CheckCircleIcon fontSize="small" />, label: 'success' },
+    failed: {
+      color: 'danger' as const,
+      icon: <ErrorIcon fontSize="small" />,
+      label: operation === 'discard' ? 'Discard request failed' : 'failed',
+    },
+    skipped: { color: 'warning' as const, icon: <WarningIcon fontSize="small" />, label: 'skipped' },
+    discarded: { color: 'neutral' as const, icon: <DeleteOutlineIcon fontSize="small" />, label: 'discarded' },
+    pending: {
+      color: 'warning' as const,
+      icon: <WarningIcon fontSize="small" />,
+      label: 'Discard outcome unconfirmed',
+    },
   };
-  const { color, icon } = config[status];
+  const { color, icon, label } = config[status];
   return (
     <Chip size="sm" color={color} startDecorator={icon} variant="soft">
-      {status}
+      {label}
     </Chip>
   );
 };
@@ -273,7 +282,7 @@ const DlqReplayTab: React.FC = () => {
   const [singleReplayConfirm, setSingleReplayConfirm] = useState<DlqMessage | null>(null);
   const [discardConfirm, setDiscardConfirm] = useState<DlqMessage | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [historyStatus, setHistoryStatus] = useState<'success' | 'failed' | 'skipped' | 'discarded' | ''>('');
+  const [historyStatus, setHistoryStatus] = useState<DlqReplayLogEntry['status'] | ''>('');
   const [historyDateRange, setHistoryDateRange] = useState<'24h' | '7d' | '30d' | 'all'>('7d');
   const [historySearch, setHistorySearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -402,11 +411,19 @@ const DlqReplayTab: React.FC = () => {
         ],
       });
       if (result.failed) {
-        toast.error(`Discard failed: ${result.results[0]?.reason ?? 'Unknown error'}`);
+        toast.error(
+          `Discard failed: ${result.results[0]?.reason ?? 'Unknown error'}${result.results[0]?.historyPending ? '. History outcome is unconfirmed.' : ''}`
+        );
         return;
       }
       setDiscardConfirm(null);
-      toast.success('Message discarded. Its body is kept for 30 days for manual recovery.');
+      if (result.results.some(message => message.historyPending)) {
+        toast.warning(
+          'Deletion acknowledged. History outcome is unconfirmed; the body is kept for 30 days for manual recovery.'
+        );
+      } else {
+        toast.success('Message discarded. Its body is kept for 30 days for manual recovery.');
+      }
     } catch (error) {
       toast.error(`Discard failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -737,6 +754,7 @@ const DlqReplayTab: React.FC = () => {
                 <Option value="failed">Failed</Option>
                 <Option value="skipped">Skipped</Option>
                 <Option value="discarded">Discarded</Option>
+                <Option value="pending">Discard outcome unconfirmed</Option>
               </Select>
             </FormControl>
             <FormControl size="sm">
@@ -791,7 +809,7 @@ const DlqReplayTab: React.FC = () => {
                   <th style={{ width: 80 }}>Status</th>
                   <th>Error</th>
                   <th style={{ width: 120 }}>By</th>
-                  <th style={{ width: 160 }}>Replayed At</th>
+                  <th style={{ width: 160 }}>Recorded at</th>
                 </tr>
               </thead>
               <tbody>
@@ -831,13 +849,17 @@ const DlqReplayTab: React.FC = () => {
                       </Typography>
                     </td>
                     <td>
-                      <StatusChip status={entry.status} />
+                      <StatusChip status={entry.status} operation={entry.operation} />
                     </td>
                     <td>
                       <Typography level="body-xs" noWrap sx={{ maxWidth: 200 }}>
-                        {(entry.status === 'failed'
-                          ? entry.errorMessage || entry.reason
-                          : entry.reason || entry.errorMessage) || '-'}
+                        {entry.errorMessage || entry.reason || '-'}
+                        {entry.errorMessage && entry.reason && (
+                          <>
+                            <br />
+                            Reason: {entry.reason}
+                          </>
+                        )}
                       </Typography>
                     </td>
                     <td>

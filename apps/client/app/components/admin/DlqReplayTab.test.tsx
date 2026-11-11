@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   retentionSeconds: undefined as number | undefined,
   messages: [] as Array<{
     messageId: string;
+    receiptHandle?: string;
     body: string;
     sentTimestamp: string;
     approximateReceiveCount: string;
@@ -21,7 +22,8 @@ const state = vi.hoisted(() => ({
     queueLabel: string;
     messageId: string;
     sourceQueue: string;
-    status: 'success' | 'failed' | 'skipped' | 'discarded';
+    status: 'success' | 'failed' | 'skipped' | 'discarded' | 'pending';
+    operation?: 'replay' | 'discard';
     errorMessage?: string;
     reason?: string;
     replayedBy: string;
@@ -100,7 +102,16 @@ const renderWithQueueSelected = async (name = /Queue One/) => {
 };
 
 beforeEach(() => {
-  state.messages = [{ messageId: 'm1', body: '{}', sentTimestamp: '1700000000000', approximateReceiveCount: '1' }];
+  vi.clearAllMocks();
+  state.messages = [
+    {
+      messageId: 'm1',
+      receiptHandle: 'receipt-1',
+      body: '{}',
+      sentTimestamp: '1700000000000',
+      approximateReceiveCount: '1',
+    },
+  ];
   state.history = [];
   state.queues = [QUEUE_ONE];
   state.retentionSeconds = undefined;
@@ -208,6 +219,38 @@ describe('DlqReplayTab history table', () => {
     expect(headerTexts).not.toContain('Message Body');
   });
 
+  it('distinguishes unconfirmed and failed discards and preserves operational errors beside the reason', () => {
+    const base = {
+      queueLabel: 'q1',
+      sourceQueue: 'Queue One',
+      messageId: 'm1',
+      replayedBy: 'admin-1',
+      replayedByName: 'admin',
+      createdAt: '2026-11-03T10:00:00.000Z',
+    };
+    state.history = [
+      { ...base, id: 'pending-1', status: 'pending', operation: 'discard', reason: 'Job obsolete' },
+      {
+        ...base,
+        id: 'failed-1',
+        status: 'failed',
+        operation: 'discard',
+        reason: 'Job obsolete',
+        errorMessage: 'expired receipt',
+      },
+      { ...base, id: 'legacy-1', status: 'failed', errorMessage: 'replay failed' },
+    ];
+    renderTab();
+    expect(
+      within(screen.getByTestId('dlq-history-row-pending-1')).getByText('Discard outcome unconfirmed')
+    ).toBeTruthy();
+    const failed = within(screen.getByTestId('dlq-history-row-failed-1'));
+    expect(failed.getByText('Discard request failed')).toBeTruthy();
+    expect(failed.getByText(/expired receipt/)).toHaveTextContent('Job obsolete');
+    expect(within(screen.getByTestId('dlq-history-row-legacy-1')).getByText('failed')).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: 'Recorded at' })).toBeTruthy();
+  });
+
   it('shows discarded history with its reason', () => {
     state.history = [
       {
@@ -245,6 +288,37 @@ describe('DlqReplayTab replay permission', () => {
     expect(screen.getByTestId('dlq-replay-all')).toBeEnabled();
     expect(screen.getByTestId('dlq-replay-single-m1')).toBeEnabled();
     expect(screen.getByTestId('dlq-discard-single-m1')).toBeEnabled();
+  });
+
+  it('closes after an acknowledged deletion but warns when history is unconfirmed', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    h.discard.mockResolvedValue({
+      discarded: 1,
+      failed: 0,
+      results: [{ messageId: 'm1', status: 'discarded', historyPending: true }],
+    });
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-discard-single-m1'));
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-reason-input-preset-1'));
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-confirm-btn'));
+    await waitFor(() => expect(screen.queryByTestId('dlq-discard-dialog-confirm-btn')).not.toBeInTheDocument());
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('History outcome is unconfirmed'));
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps the dialog open after a failed deletion request', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    h.discard.mockResolvedValue({
+      discarded: 0,
+      failed: 1,
+      results: [{ messageId: 'm1', status: 'failed', reason: 'expired receipt', historyPending: true }],
+    });
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-discard-single-m1'));
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-reason-input-preset-1'));
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-confirm-btn'));
+    expect(screen.getByTestId('dlq-discard-dialog-confirm-btn')).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('History outcome is unconfirmed'));
   });
 
   it('requires a reason and submits the selected message for discard', async () => {

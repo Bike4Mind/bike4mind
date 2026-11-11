@@ -48,7 +48,8 @@ export interface DlqReplayLogEntry {
   queueLabel: string;
   messageId: string;
   sourceQueue: string;
-  status: 'success' | 'failed' | 'skipped' | 'discarded';
+  status: 'success' | 'failed' | 'skipped' | 'discarded' | 'pending';
+  operation?: 'replay' | 'discard';
   errorMessage?: string;
   reason?: string;
   replayedBy: string;
@@ -127,7 +128,12 @@ export const useDlqDiscard = () => {
       const response = await api.post<{
         discarded: number;
         failed: number;
-        results: Array<{ messageId: string; status: 'discarded' | 'failed'; reason?: string }>;
+        results: Array<{
+          messageId: string;
+          status: 'discarded' | 'failed';
+          reason?: string;
+          historyPending?: boolean;
+        }>;
       }>('/api/admin/dlq/discard', params);
       return response.data;
     },
@@ -141,7 +147,7 @@ export const useDlqDiscard = () => {
 
 export interface DlqHistoryFilters {
   queueLabel?: string;
-  status?: 'success' | 'failed' | 'skipped' | 'discarded';
+  status?: 'success' | 'failed' | 'skipped' | 'discarded' | 'pending';
   startDate?: string;
   endDate?: string;
   search?: string;

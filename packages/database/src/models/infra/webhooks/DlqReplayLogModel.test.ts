@@ -79,6 +79,70 @@ describe('DlqReplayLogRepository.findRecent', () => {
     expect(await dlqReplayLogRepository.countAttempts('msg-discarded')).toBe(0);
   });
 
+  it('excludes failed discards from the replay budget while preserving legacy replay failures', async () => {
+    const base = {
+      queueLabel: 'quest',
+      messageId: 'budget-message',
+      messageBody: 'retained',
+      sourceQueue: 'Quest Export',
+      replayedBy: 'admin-1',
+      status: 'failed',
+    };
+    await DlqReplayLogModel.create(Array.from({ length: 3 }, () => ({ ...base, operation: 'discard' })));
+    expect(await dlqReplayLogRepository.countAttempts(base.messageId)).toBe(0);
+    await DlqReplayLogModel.create(Array.from({ length: 3 }, () => base));
+    expect(await dlqReplayLogRepository.countAttempts(base.messageId)).toBe(3);
+  });
+
+  it.each(['discarded', 'failed'] as const)(
+    'finalizes a pending discard as %s without consuming replay attempts',
+    async status => {
+      const pending = await dlqReplayLogRepository.logReplay({
+        queueLabel: 'quest',
+        messageId: 'pending-discard',
+        messageBody: 'RECOVERY-BODY',
+        sourceQueue: 'Quest Export',
+        replayedBy: 'admin-1',
+        reason: 'Job obsolete',
+        operation: 'discard',
+        status: 'pending',
+      });
+      expect(await dlqReplayLogRepository.countAttempts(pending.messageId)).toBe(0);
+      const [history] = await dlqReplayLogRepository.findRecent({ status: 'pending', includeBody: false });
+      expect(history).toMatchObject({ operation: 'discard', status: 'pending', reason: 'Job obsolete' });
+      expect(history).not.toHaveProperty('messageBody');
+      await dlqReplayLogRepository.finalizeDiscard(
+        pending.id,
+        status,
+        status === 'failed' ? 'expired receipt' : undefined
+      );
+      expect(await DlqReplayLogModel.findById(pending.id).lean()).toMatchObject({
+        status,
+        operation: 'discard',
+        messageBody: 'RECOVERY-BODY',
+        reason: 'Job obsolete',
+      });
+      expect(await dlqReplayLogRepository.countAttempts(pending.messageId)).toBe(0);
+      await expect(dlqReplayLogRepository.finalizeDiscard(pending.id, 'failed', 'late failure')).rejects.toThrow(
+        'pending attempt'
+      );
+      expect((await DlqReplayLogModel.findById(pending.id))?.status).toBe(status);
+    }
+  );
+
+  it('refuses to finalize a replay record or a missing discard', async () => {
+    const replay = await DlqReplayLogModel.findOne({ status: 'success' });
+    expect(replay).not.toBeNull();
+    await expect(
+      dlqReplayLogRepository.finalizeDiscard(String(replay!._id), 'failed', 'wrong operation')
+    ).rejects.toThrow('pending attempt');
+    await expect(
+      dlqReplayLogRepository.finalizeDiscard(new mongoose.Types.ObjectId().toString(), 'discarded')
+    ).rejects.toThrow('pending attempt');
+    expect((await DlqReplayLogModel.findById(replay!._id))?.status).toBe('success');
+    expect(await dlqReplayLogRepository.countAttempts('msg-beta-2')).toBe(1);
+  });
+
   it('searches messageId and errorMessage case-insensitively', async () => {
     const byId = await dlqReplayLogRepository.findRecent({ search: 'BETA' });
     const byError = await dlqReplayLogRepository.findRecent({ search: 'timeout' });
@@ -102,20 +166,21 @@ describe('DlqReplayLogRepository.findRecent', () => {
       messageId: 'msg-discard-failed',
       messageBody: 'BODY',
       sourceQueue: 'Quest Export',
-      status: 'discarded',
+      status: 'pending',
+      operation: 'discard',
       reason: 'Job obsolete',
       replayedBy: 'admin-1',
     });
-    await dlqReplayLogRepository.markDiscardFailed(log.id, 'expired receipt');
+    await dlqReplayLogRepository.finalizeDiscard(log.id, 'failed', 'expired receipt');
 
     const [row] = await dlqReplayLogRepository.findRecent({ search: 'msg-discard-failed' });
     expect(row).toMatchObject({ status: 'failed', errorMessage: 'expired receipt', reason: 'Job obsolete' });
     expect(await dlqReplayLogRepository.countAttempts('msg-discard-failed')).toBe(0);
   });
 
-  it('markDiscardFailed leaves a row that is not a discard untouched', async () => {
+  it('finalization leaves a row that is not a discard untouched', async () => {
     const [ok] = await dlqReplayLogRepository.findRecent({ search: 'msg-beta-2' });
-    await dlqReplayLogRepository.markDiscardFailed(ok.id, 'nope');
+    await expect(dlqReplayLogRepository.finalizeDiscard(ok.id, 'failed', 'nope')).rejects.toThrow('pending attempt');
     const [after] = await dlqReplayLogRepository.findRecent({ search: 'msg-beta-2' });
     expect(after.status).toBe('success');
   });
