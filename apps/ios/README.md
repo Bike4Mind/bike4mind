@@ -84,6 +84,23 @@ Trip planning settles a few seconds after the session is first opened. Media ite
 audio and one video clip; `FixtureMediaFiles.swift`). A fixture capture send steps through queued, uploading, registering and done so the
 Sessions upload chip can be watched; the first send to the Receipts lake fails once ("No connection.") so Retry can be tried.
 
+## Sign-in callback
+
+The web sign-in sheet (`ASWebAuthenticationSession`, PKCE) returns to the app on a redirect URI that is fixed per build
+configuration (`OAuthConfiguration`, chosen in `Bike4MindApp`), never per server:
+
+| Build | redirect_uri | Needs |
+|---|---|---|
+| Release | `https://app.bike4mind.com/ios/auth-callback` (claimed universal link) | signed build, `webcredentials:` associated domain, AASA on app.bike4mind.com |
+| DEBUG | `com.bike4mind.app://auth-callback` (private-use scheme, RFC 8252) | nothing; works on unsigned simulator builds |
+
+The claimed https link stays the production path: only the app holding the associated domain can receive it. DEBUG uses the
+custom scheme because an unsigned build has no entitlements, so the https form fails before the sheet opens. PKCE binds the
+code to the verifier this app generated, so another app that registers the same scheme cannot redeem an intercepted code.
+The scheme is deliberately not in `CFBundleURLTypes`: the session intercepts the redirect itself, and registering it would
+let any app or page open Bike4Mind with that URL. Both URIs must be in the server-side `b4m-ios-app` client's
+`redirectUris` (exact match).
+
 ## Push notifications and universal links
 
 - `Bike4Mind.entitlements` declares `aps-environment` (`development`; Xcode rewrites it to `production` when

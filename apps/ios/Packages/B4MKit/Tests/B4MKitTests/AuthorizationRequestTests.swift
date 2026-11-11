@@ -61,4 +61,37 @@ final class AuthorizationRequestTests: XCTestCase {
       XCTAssertEqual($0 as? AuthError, .invalidCallback)
     }
   }
+
+  private func makeDevelopmentRequest() -> AuthorizationRequest {
+    AuthorizationRequest(
+      baseURL: URL(string: "https://staging.example.com")!, configuration: .iosAppDevelopment, pkce: pkce,
+      state: "state-123")
+  }
+
+  func testDevelopmentRequestSendsTheCustomSchemeRedirectToTheSameClient() throws {
+    let components = try XCTUnwrap(URLComponents(url: makeDevelopmentRequest().url, resolvingAgainstBaseURL: false))
+    let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+    XCTAssertEqual(query["client_id"], "b4m-ios-app")
+    XCTAssertEqual(query["redirect_uri"], "com.bike4mind.app://auth-callback")
+  }
+
+  func testCustomSchemeCallbackYieldsCode() throws {
+    let callback = URL(string: "com.bike4mind.app://auth-callback?code=abc&state=state-123")!
+    XCTAssertEqual(try makeDevelopmentRequest().authorizationCode(from: callback), "abc")
+  }
+
+  func testCallbackRejectsASchemeOtherThanTheRegisteredOne() {
+    let foreignScheme = URL(string: "evil.app://auth-callback?code=abc&state=state-123")!
+    let httpsForDevelopment = URL(string: "https://auth-callback?code=abc&state=state-123")!
+    let customForRelease = URL(
+      string: "com.bike4mind.app://app.bike4mind.com/ios/auth-callback?code=abc&state=state-123")!
+    for (request, callback) in [
+      (makeDevelopmentRequest(), foreignScheme), (makeDevelopmentRequest(), httpsForDevelopment),
+      (makeRequest(), customForRelease),
+    ] {
+      XCTAssertThrowsError(try request.authorizationCode(from: callback), "\(callback)") {
+        XCTAssertEqual($0 as? AuthError, .invalidCallback)
+      }
+    }
+  }
 }

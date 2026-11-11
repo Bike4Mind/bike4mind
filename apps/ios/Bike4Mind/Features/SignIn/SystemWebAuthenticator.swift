@@ -3,16 +3,17 @@ import B4MKit
 import SwiftUI
 
 /// Adapts SwiftUI's `WebAuthenticationSession` (backed by `ASWebAuthenticationSession`) to B4MKit.
-/// The https callback form needs iOS 17.4 and the `webcredentials:` associated domain.
+/// The https callback form needs iOS 17.4 and the `webcredentials:` associated domain; a custom scheme
+/// needs neither (and no CFBundleURLTypes entry: the session intercepts the redirect itself).
 struct SystemWebAuthenticator: WebAuthenticating {
   let session: WebAuthenticationSession
 
   func authenticate(url: URL, callbackURL: URL) async throws -> URL {
-    guard let host = callbackURL.host() else { throw AuthError.invalidCallback }
+    let callback = try Self.callback(for: callbackURL)
     do {
       return try await session.authenticate(
         using: url,
-        callback: .https(host: host, path: callbackURL.path()),
+        callback: callback,
         // Shared session so an existing web SSO login on this device is reused.
         preferredBrowserSession: .shared,
         additionalHeaderFields: [:]
@@ -23,5 +24,12 @@ struct SystemWebAuthenticator: WebAuthenticating {
       // presentationContextNotProvided / presentationContextInvalid: the sheet never appeared.
       throw AuthError.webSessionFailedToStart
     }
+  }
+
+  private static func callback(for callbackURL: URL) throws -> ASWebAuthenticationSession.Callback {
+    guard let scheme = callbackURL.scheme?.lowercased() else { throw AuthError.invalidCallback }
+    guard scheme == "https" else { return .customScheme(scheme) }
+    guard let host = callbackURL.host() else { throw AuthError.invalidCallback }
+    return .https(host: host, path: callbackURL.path())
   }
 }

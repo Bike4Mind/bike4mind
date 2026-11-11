@@ -41,6 +41,7 @@ public struct AuthorizationRequest: Sendable {
   public func authorizationCode(from callbackURL: URL) throws -> String {
     guard
       let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
+      callbackURL.scheme?.lowercased() == configuration.redirectURI.scheme?.lowercased(),
       callbackURL.host() == configuration.redirectURI.host(),
       callbackURL.path() == configuration.redirectURI.path()
     else {

@@ -14,6 +14,8 @@ CI. Work through it before the first TestFlight build and again before each rele
       `/sessions/*` and `/notebooks/*` under `applinks`, and the app id under `webcredentials.apps` (the entitlement declares
       both `applinks:` and `webcredentials:app.bike4mind.com`).
 - [ ] APNs auth key uploaded to the backend; Live Activity push (`liveactivity` push type) enabled for it.
+- [ ] The `b4m-ios-app` OAuth client lists both redirect URIs: `https://app.bike4mind.com/ios/auth-callback` (Release) and
+      `com.bike4mind.app://auth-callback` (DEBUG; see the README "Sign-in callback" table).
 - [ ] Backend deployed with the iOS OAuth client, push-token routes, Live Activity token kind, agent-run route and the
       account-deletion routes (see Account deletion below).
 
@@ -41,6 +43,17 @@ CI. Work through it before the first TestFlight build and again before each rele
 - [ ] Relaunch adopts activities that were running when the app was killed.
 - [ ] Agent run against staging: the composer toggle sends `202`, the app polls, a second run while one is in flight gets `409`
       (in-flight cap) with a readable message, and a user without the admin `EnableAgentMode` setting does not see the toggle.
+
+## Sign-in against staging (simulator)
+
+A DEBUG build signs in through the `com.bike4mind.app://` scheme, so this runs on an unsigned simulator build. Needs the
+staging `b4m-ios-app` client to list `com.bike4mind.app://auth-callback`.
+
+- [ ] On the welcome screen tap **Server** and pick staging, then **Sign in with Bike4Mind**: the system "wants to use ... to
+      Sign In" prompt appears and the staging login page opens in the sheet (no instant "cancelled").
+- [ ] Sign in with a staging test account: the sheet closes on its own and the app lands on the start-of-chat home.
+- [ ] Real data loads: the drawer lists the account's notebooks, Settings shows its name, email and credit balance.
+- [ ] Close the sheet with its X instead: the app stays on the welcome screen with no error banner.
 
 ## Universal links
 
@@ -107,7 +120,7 @@ Against a backend that has the deletion routes deployed:
 
 Run on the first TestFlight build and every release candidate:
 
-- [ ] Install, launch, welcome screens, sign in (PKCE; Sign in with Apple once the server side is deployed).
+- [ ] Install, launch, welcome screens, sign in (PKCE over the https universal link; Sign in with Apple once the server side is deployed).
 - [ ] Chat: send, stream, reply settles, credits update.
 - [ ] Navigation: the app opens on the start-of-chat home with no tab bar. The top-left menu button opens the drawer, and so
       does a drag from the left edge (it follows the finger); a scrim tap or a leftward swipe closes it, and the keyboard
