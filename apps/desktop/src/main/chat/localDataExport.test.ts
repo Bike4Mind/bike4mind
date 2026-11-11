@@ -140,12 +140,46 @@ describe('writeLocalDataExport', () => {
     expect((await writeLocalDataExport(deps.base, deps)).path).toContain('bike4mind-export-');
   });
 
+  it('keeps the rest of the export when an attachment is missing or not a regular file', async () => {
+    const deps = await setup();
+    const missing = {
+      id: 'missing',
+      kind: 'text',
+      name: 'lost.txt',
+      mediaType: 'text/plain',
+      byteSize: 10,
+      sourceBytes: 10,
+    } as const;
+    const notRegular = { ...missing, id: 'directory', name: 'folder.txt' };
+    deps.session.messages[0].attachments?.push(missing, notRegular);
+    const locate = deps.attachments.locate.bind(deps.attachments);
+    deps.attachments.locate = vi.fn(async (sessionId, id) =>
+      id === 'missing' ? null : id === 'directory' ? deps.destination : locate(sessionId, id)
+    );
+    const { path, warnings } = await writeLocalDataExport(deps.destination, deps);
+    const rows = (await readFile(join(path, 'collections/knowledge.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line));
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toMatchObject({ name: 'notes.txt', contentPath: expect.stringMatching(/^files\//) });
+    for (const row of rows.slice(1)) {
+      expect(row).toMatchObject({ metadata: { missing: true } });
+      expect(row).not.toHaveProperty('contentPath');
+    }
+    expect(warnings).toHaveLength(2);
+    expect(JSON.parse(await readFile(join(path, 'manifest.json'), 'utf8')).warnings).toEqual(warnings);
+    expect(await readFile(join(path, 'collections/media.jsonl'), 'utf8')).toContain(deps.image.name);
+  });
+
   it('requires a scope and removes incomplete bundles on failure', async () => {
     const deps = await setup();
     deps.sessions.scopeKey.mockReturnValueOnce(null);
     await expect(writeLocalDataExport(deps.destination, deps)).rejects.toThrow('Choose an account');
-    deps.attachments.locate = vi.fn(async () => null);
-    await expect(writeLocalDataExport(deps.destination, deps)).rejects.toThrow('Missing attachment');
+    deps.attachments.locate = vi.fn(async () => {
+      throw new Error('disk failed');
+    });
+    await expect(writeLocalDataExport(deps.destination, deps)).rejects.toThrow('disk failed');
     expect(await readdir(deps.destination)).toEqual([]);
   });
 
@@ -166,6 +200,18 @@ describe('writeLocalDataExport', () => {
     names.push(...(await readdir(join(path, 'files'))).map(n => `files/${n}`));
     for (const name of names)
       expect((await readFile(join(path, name))).toString('latin1')).not.toContain('OUTSIDE_SECRET');
+  });
+
+  it('warns once for linked project memory used by multiple sessions', async () => {
+    const deps = await setup();
+    const outside = join(deps.base, 'outside-memory');
+    await mkdir(outside);
+    const memory = join(deps.memoryRoot, 'projects', projectSlug(join(deps.base, 'project')), 'memory');
+    await rename(memory, `${memory}.old`);
+    await symlink(outside, memory);
+    deps.sessions.list.mockResolvedValueOnce([{ id: deps.session.id }, { id: deps.session.id }]);
+    const { warnings } = await writeLocalDataExport(deps.destination, deps);
+    expect(warnings).toHaveLength(1);
   });
 
   it('aborts and leaves nothing behind when the account changes mid-export', async () => {

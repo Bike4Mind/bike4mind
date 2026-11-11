@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createWriteStream, type Dirent, type WriteStream } from 'node:fs';
 import { lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
+import { finished } from 'node:stream/promises';
 import type { ChatSession } from '@shared/chat';
 import { isValidSessionId } from './SessionStore';
 import { defaultUserInstructionsRoot } from './project/instructions';
@@ -38,6 +39,7 @@ interface RowWriter {
   hash: ReturnType<typeof createHash>;
   bytes: number;
   count: number;
+  error?: Error;
 }
 const COLLECTIONS: readonly Collection[] = [
   'notebooks',
@@ -150,7 +152,11 @@ export async function writeLocalDataExport(
       },
     ])
   );
-  for (const { stream } of writers.values()) stream.on('error', () => {});
+  for (const writer of writers.values()) {
+    writer.stream.on('error', error => {
+      writer.error ??= error;
+    });
+  }
   const addBlob = async (bytes: Buffer): Promise<string> => {
     const hash = sha256(bytes);
     const path = `files/${hash}`;
@@ -163,30 +169,40 @@ export async function writeLocalDataExport(
   };
   const emit = async (name: Collection, row: Row): Promise<void> => {
     const writer = writers.get(name)!;
+    if (writer.error) throw writer.error;
     const line = Buffer.from(`${JSON.stringify(row)}\n`);
+    if (!writer.stream.write(line)) {
+      await new Promise<void>((resolve, reject) => {
+        const drained = () => {
+          writer.stream.off('error', failed);
+          resolve();
+        };
+        const failed = (error: Error) => {
+          writer.stream.off('drain', drained);
+          reject(error);
+        };
+        writer.stream.once('drain', drained);
+        writer.stream.once('error', failed);
+      });
+    }
+    if (writer.error) throw writer.error;
     writer.hash.update(line);
     writer.bytes += line.length;
     writer.count += 1;
-    if (!writer.stream.write(line)) {
-      await new Promise<void>((resolve, reject) => {
-        writer.stream.once('drain', resolve);
-        writer.stream.once('error', reject);
-      });
-    }
   };
   const closeWriters = () =>
     Promise.all(
-      [...writers.values()].map(
-        ({ stream }) =>
-          new Promise<void>((resolve, reject) => {
-            stream.once('error', reject);
-            stream.end(resolve);
-          })
-      )
+      [...writers.values()].map(async writer => {
+        if (writer.error) throw writer.error;
+        writer.stream.end();
+        await finished(writer.stream);
+        if (writer.error) throw writer.error;
+      })
     );
 
   try {
     const seenMemory = new Set<string>();
+    const skippedMemory = new Set<string>();
     for (const summary of await deps.sessions.list()) {
       if (deps.sessions.scopeKey() !== scope) throw new Error('Account changed during export.');
       if (!isValidSessionId(summary.id)) continue;
@@ -229,17 +245,23 @@ export async function writeLocalDataExport(
         }
         for (const attachment of message.attachments ?? []) {
           const source = await deps.attachments.locate(session.id, attachment.id);
-          if (!source) throw new Error(`Missing attachment in ${session.id}.`);
-          if (!(await lstat(source)).isFile()) throw new Error(`Invalid attachment in ${session.id}.`);
-          const bytes = await readFile(source);
+          let bytes: Buffer | undefined;
+          if (source) {
+            try {
+              if ((await lstat(source)).isFile()) bytes = await readFile(source);
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            }
+          }
+          if (!bytes) warnings.push(`Missing attachment ${attachment.name} in ${session.id}.`);
           await emit('knowledge', {
             notebookId: session.id,
             id: attachment.id,
             name: attachment.name,
             mimeType: attachment.mediaType,
-            size: bytes.length,
+            size: bytes?.length ?? attachment.byteSize,
             uploadedAt: message.createdAt,
-            contentPath: await addBlob(bytes),
+            ...(bytes ? { contentPath: await addBlob(bytes) } : { metadata: { missing: true } }),
           });
         }
         for (const artifact of message.artifacts ?? [])
@@ -276,7 +298,10 @@ export async function writeLocalDataExport(
         const memoryRoot = deps.memoryRoot ?? defaultUserInstructionsRoot();
         const found = await memoryFiles(session, memoryRoot);
         if (found === null) {
-          warnings.push(`Skipped project memory for ${session.project.directory}: it resolves outside its folder.`);
+          if (!skippedMemory.has(session.project.directory)) {
+            skippedMemory.add(session.project.directory);
+            warnings.push(`Skipped project memory for ${session.project.directory}: it resolves outside its folder.`);
+          }
           continue;
         }
         for (const memory of found) {
