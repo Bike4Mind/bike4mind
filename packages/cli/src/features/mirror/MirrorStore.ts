@@ -67,8 +67,9 @@ export class MirrorStore {
           await held.assertHeld();
           await fs.rename(temp, target);
           await fs.chmod(target, 0o600);
-        } finally {
+        } catch (error) {
           await fs.rm(temp, { force: true });
+          throw error;
         }
       },
       { waitMs: 15_000, staleMs: 10_000, pollMs: 10, heldMessage: 'Mirror registry is busy' }
@@ -81,8 +82,8 @@ export class MirrorStore {
       const fields = [...new Set(parsed.error.issues.map(issue => String(issue.path[0] ?? 'value')))];
       throw new Error(fields.includes('name') ? DESTINATION_NAME_ERROR : `Invalid destination: ${fields.join(', ')}`);
     }
-    const entry = parsed.data;
-    if (!path.isAbsolute(entry.directory)) throw new Error('Destination directory must be an absolute path');
+    if (!path.isAbsolute(parsed.data.directory)) throw new Error('Destination directory must be an absolute path');
+    const entry = { ...parsed.data, directory: path.resolve(parsed.data.directory) };
     await this.change(destinations => {
       if (destinations.some(existing => existing.name === entry.name)) throw new Error('Destination already exists');
       return [...destinations, entry];

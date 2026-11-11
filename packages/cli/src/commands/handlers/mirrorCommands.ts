@@ -4,7 +4,7 @@ import { sanitizeTerminalText } from '../../utils/sanitizeTerminalText.js';
 import type { CommandHandler, CommandContext } from '../types.js';
 
 const usage =
-  'Usage: /mirror add <name> <absolute-directory> | status | pause <name> | resume <name> | revoke <name> | pull <name>';
+  'Usage: /mirror add <name> <absolute-directory-without-spaces> | status | pause <name> | resume <name> | revoke <name> | pull <name>';
 
 export async function runMirrorCommand(
   args: string[],
