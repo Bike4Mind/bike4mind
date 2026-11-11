@@ -98,6 +98,8 @@ const handler = baseApi().post(async (req, res) => {
 handler.get(async (req, res) => {
   const ownerUserId = req.user?.id;
   if (!ownerUserId) return res.status(401).json({ error: 'Authentication required' });
+  // Default baseApi() auth stays because POST on this handler accepts API keys, so GET rejects them itself
+  // (same effect as auth: 'jwtOnly' on the sibling routes).
   if (req.apiKeyInfo) return res.status(403).json({ error: 'A signed-in session is required to read the ledger.' });
   if (req.query.kind !== 'user') return res.status(400).json({ error: 'Only user ledger exports are supported.' });
   if (req.query.id !== ownerUserId) return res.status(403).json({ error: 'You can only read your own user ledger.' });

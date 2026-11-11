@@ -24,6 +24,7 @@ export interface ExportedMemento extends Omit<IMemento, 'metadata' | 'embedding'
   updatedAt?: Date;
 }
 
+// Event and belief `subject` values are HMACs: the export is verifiable but cannot be read by subject.
 export interface PrincipalMemoryExport {
   formatVersion: number;
   activation: ActivationConfig;
