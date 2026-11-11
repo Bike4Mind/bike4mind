@@ -68,6 +68,8 @@ function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+// Drops tool inputs/previews/errors/approvals, sent request payloads and opaque provider `thinking` blocks
+// (replay data, not readable content); readable `rounds[].reasoning` is the user's own text and is kept.
 function safeSession(session: ChatSession): ChatSession {
   return {
     ...session,
