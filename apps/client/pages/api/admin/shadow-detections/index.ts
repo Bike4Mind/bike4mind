@@ -17,7 +17,7 @@ export const SHADOW_DETECTIONS_RATE_LIMIT = 60;
 /**
  * The admin Detections page: what the abuse detectors would have done (shadow detections), newest
  * first, with per-detector, per-policy verdict counts and the current state of the accounts they name.
- * Read-only; grading is POST ./verdict (one) or ./verdicts (several).
+ * Read-only; grading is POST ./verdict (one) or ./bulk-verdict (several).
  */
 const handler = adminApi({
   auth: 'jwtOnly',

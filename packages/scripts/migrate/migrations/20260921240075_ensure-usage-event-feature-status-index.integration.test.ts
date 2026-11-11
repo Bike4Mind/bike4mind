@@ -6,7 +6,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/
 // Mirror the sibling ensure-*-index tests' guard against SST config evaluation.
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260921240070_ensure-usage-event-feature-status-index';
+import migration from './20260921240075_ensure-usage-event-feature-status-index';
 
 // Boots a real mongod (see MONGO_TEST_TIMEOUT_MS for why the default budget is not enough).
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

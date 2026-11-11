@@ -303,7 +303,7 @@ import EnsureStripeDisputeIndexes from './20260921239980_ensure-stripe-dispute-i
 import EnsureAdminSearchIndexes from './20260921239987_ensure-admin-search-indexes';
 import EnsureAdminActionCountIndexes from './20260921240050_ensure-admin-action-count-indexes';
 import EnsureGeneratedMediaPurgeIndexes from './20260921240060_ensure-generated-media-purge-indexes';
-import EnsureUsageEventFeatureStatusIndex from './20260921240070_ensure-usage-event-feature-status-index';
+import EnsureUsageEventFeatureStatusIndex from './20260921240075_ensure-usage-event-feature-status-index';
 import EnsureSessionGroupReadIndex from './20260921240080_ensure-session-group-read-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import ResearchConfigSourceTiers from './20260921240100_research-config-source-tiers';

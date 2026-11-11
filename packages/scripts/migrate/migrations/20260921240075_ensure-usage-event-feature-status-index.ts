@@ -14,7 +14,7 @@ import { type MigrationFile } from './index';
  * the model's other declared indexes an environment happens to be missing.
  */
 const migration: MigrationFile = {
-  id: 20260921240070,
+  id: 20260921240075,
   name: 'ensure usage event feature status index',
 
   up: async () => {
