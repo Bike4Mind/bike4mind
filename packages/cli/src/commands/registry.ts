@@ -9,8 +9,9 @@
 import type { CommandContext, CommandHandler } from './types';
 import { infoCommands } from './handlers/infoCommands';
 import { workflowViewCommands } from './handlers/workflowViews';
+import { mirrorCommands } from './handlers/mirrorCommands';
 
-export const builtinCommands: CommandHandler[] = [...infoCommands, ...workflowViewCommands];
+export const builtinCommands: CommandHandler[] = [...infoCommands, ...workflowViewCommands, ...mirrorCommands];
 
 const commandMap = new Map<string, CommandHandler>();
 for (const handler of builtinCommands) {

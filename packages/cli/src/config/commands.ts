@@ -72,6 +72,11 @@ export const COMMANDS: CommandDefinition[] = [
     description: 'Show current API configuration',
   },
   {
+    name: 'mirror',
+    description: 'Manage local pull destinations (sync waits for the complete account feed)',
+    args: '<add|status|pause|resume|revoke|pull> [name] [directory]',
+  },
+  {
     name: 'trust',
     description: "Trust a tool, or `folder` to trust this project's repo config/agents/skills/MCP",
     args: '<tool-name|folder>',

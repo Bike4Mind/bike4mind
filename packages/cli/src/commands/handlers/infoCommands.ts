@@ -37,6 +37,12 @@ API Configuration:
   /reset-api - Clear the custom API URL (falls back to the default, or prompts you to pick one)
   /api-info - Show current API configuration
 
+Local Data Mirror:
+  /mirror add <name> <absolute-directory> - Configure a local pull destination
+  /mirror status - Show destinations and current lag availability
+  /mirror pause|resume|revoke <name> - Manage a destination locally
+  /mirror pull <name> - Unavailable until bootstrap and full-account cursor feed ship
+
 Tool Permissions:
   /trust <tool-name> - Trust a tool (won't ask permission again)
   /untrust <tool-name> - Remove tool from trusted list
