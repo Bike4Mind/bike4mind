@@ -22,6 +22,12 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
   partnerSignupGrantForEmail: () => Promise.resolve({ matched: false }),
 }));
+const settingsValues = vi.hoisted(() => ({ values: {} as Record<string, unknown> }));
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsMap: () => Promise.resolve({}),
+  getSettingsValue: (name: string, _map: unknown, fallback: unknown) =>
+    name in settingsValues.values ? settingsValues.values[name] : fallback,
+}));
 vi.mock('@bike4mind/services', () => ({
   adminAuditService: { recordAdminAction: h.recordAdminAction },
   userService: { revokeUserSessions: h.revokeUserSessions },
@@ -31,6 +37,7 @@ import {
   MintPersonaBodySchema,
   personaEmailDomainRefusal,
   disableExpiredPersonas,
+  readPersonaMintEnabled,
   isPersonaAccount,
   personaCapRefusal,
   personaIdentity,
@@ -41,6 +48,7 @@ const NOW = new Date('2026-11-10T12:00:00.000Z');
 
 beforeEach(() => {
   vi.clearAllMocks();
+  settingsValues.values = {};
 });
 
 describe('personaEmailDomainRefusal', () => {
@@ -164,6 +172,27 @@ describe('disableExpiredPersonas', () => {
     );
   });
 
+  it('with all, drops the expiry filter so a live persona is banned too', async () => {
+    h.find.mockResolvedValue([{ _id: 'u1', username: 'persona-a-1', email: 'a@x.test' }]);
+    h.updateOne.mockResolvedValue({ modifiedCount: 1 });
+
+    expect(await disableExpiredPersonas({ now: NOW, all: true })).toEqual({ disabled: 1 });
+    expect(h.find).toHaveBeenCalledWith({ isPersona: true, isBanned: { $ne: true } }, expect.anything());
+    expect(h.recordAdminAction).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: expect.stringContaining('minting turned off') }),
+      expect.anything()
+    );
+  });
+
+  it('with all, still skips a persona another run already disabled', async () => {
+    h.find.mockResolvedValue([{ _id: 'u1', username: 'persona-a-1' }]);
+    h.updateOne.mockResolvedValue({ modifiedCount: 0 });
+
+    expect(await disableExpiredPersonas({ now: NOW, all: true })).toEqual({ disabled: 0 });
+    expect(h.revokeUserSessions).not.toHaveBeenCalled();
+    expect(h.recordAdminAction).not.toHaveBeenCalled();
+  });
+
   it('suspends, signs out and audits each expired persona', async () => {
     h.find.mockResolvedValue([{ _id: 'u1', username: 'persona-a-1', email: 'a@x.test' }]);
     h.updateOne.mockResolvedValue({ modifiedCount: 1 });
@@ -187,5 +216,16 @@ describe('disableExpiredPersonas', () => {
     expect(await disableExpiredPersonas({ now: NOW })).toEqual({ disabled: 0 });
     expect(h.revokeUserSessions).not.toHaveBeenCalled();
     expect(h.recordAdminAction).not.toHaveBeenCalled();
+  });
+});
+
+describe('readPersonaMintEnabled', () => {
+  it('is false by default', async () => {
+    expect(await readPersonaMintEnabled()).toBe(false);
+  });
+
+  it('is true when the setting is true', async () => {
+    settingsValues.values = { PersonaMintEnabled: true };
+    expect(await readPersonaMintEnabled()).toBe(true);
   });
 });

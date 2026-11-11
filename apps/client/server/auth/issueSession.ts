@@ -1,6 +1,7 @@
 import { AuthSessionCreatedVia, IAuthSessionDevice } from '@bike4mind/common';
-import { authSessionRepository } from '@bike4mind/database';
+import { User, authSessionRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
+import { PERSONA_EXPIRED_MESSAGE, isPersonaExpired } from '@bike4mind/services/userService/accountState';
 import { Logger } from '@bike4mind/observability';
 import type { Response } from 'express';
 import { authTokenGenerator } from './tokenGenerator';
@@ -8,6 +9,7 @@ import { buildSessionDevice } from './sessionDevice';
 import { recordLoginEvent } from './networkMeta';
 import { withAccountNotPurging } from './withAccountNotPurging';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 interface RequestLike {
   headers: Record<string, string | string[] | undefined>;
@@ -19,6 +21,22 @@ interface RequestLike {
 // Sessions that are not the user signing in: an admin acting as them, a legacy token swapped
 // on refresh, or enrolling MFA from an existing session. They mint a session but log no login AuthEvent.
 const NOT_A_LOGIN: ReadonlySet<AuthSessionCreatedVia> = new Set(['impersonation', 'legacy-migration', 'mfa-setup']);
+
+// A test persona signs in only through the mint route (or an admin impersonating it). Its address is
+// server-owned and pre-verified, so OTC, SSO or OAuth sign-in would hand it to whoever reads that mailbox.
+const PERSONA_SESSION_ORIGINS: ReadonlySet<AuthSessionCreatedVia> = new Set(['persona-mint', 'impersonation']);
+
+async function assertPersonaSessionAllowed(userId: string, createdVia: AuthSessionCreatedVia): Promise<void> {
+  const user = (await User.findById(userId).select('isPersona personaExpiresAt').lean()) as {
+    isPersona?: boolean;
+    personaExpiresAt?: Date | null;
+  } | null;
+  if (user?.isPersona !== true) return;
+  if (!PERSONA_SESSION_ORIGINS.has(createdVia)) {
+    throw new ForbiddenError('Test personas can only sign in through the persona mint endpoint.');
+  }
+  if (createdVia !== 'impersonation' && isPersonaExpired(user)) throw new ForbiddenError(PERSONA_EXPIRED_MESSAGE);
+}
 
 /**
  * Server-side convenience wrapper over authSessionService.issueSession: binds the AuthSession
@@ -40,6 +58,7 @@ export async function issueSessionForRequest(
     refreshTtlMs?: number;
   }
 ): Promise<{ accessToken: string; refreshToken: string; sid: string }> {
+  await assertPersonaSessionAllowed(userId, params.createdVia);
   const session = await withAccountNotPurging(userId, () =>
     authSessionService.issueSession(
       userId,

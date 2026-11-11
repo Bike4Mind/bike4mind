@@ -46,6 +46,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const SWEEP_BATCH = 200;
 
 export type PersonaSettings = {
+  /** PersonaMintEnabled: off (the default) refuses every mint, whatever the key. */
+  enabled: boolean;
   dailyLimit: number;
   maxLive: number;
   ttlDays: number;
@@ -80,7 +82,9 @@ export async function personaEmailDomainRefusal(domain: string): Promise<string 
 export async function loadPersonaSettings(logger?: Logger): Promise<PersonaSettings> {
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
-    { names: ['PersonaMintDailyLimit', 'PersonaMaxLive', 'PersonaTtlDays', 'PersonaEmailDomain'] }
+    {
+      names: ['PersonaMintEnabled', 'PersonaMintDailyLimit', 'PersonaMaxLive', 'PersonaTtlDays', 'PersonaEmailDomain'],
+    }
   );
   const domain = String(getSettingsValue('PersonaEmailDomain', settings, '') ?? '')
     .trim()
@@ -94,6 +98,7 @@ export async function loadPersonaSettings(logger?: Logger): Promise<PersonaSetti
     }
   }
   return {
+    enabled: getSettingsValue('PersonaMintEnabled', settings, false) === true,
     dailyLimit: getSettingsValue('PersonaMintDailyLimit', settings, PERSONA_MINT_DAILY_LIMIT_DEFAULT),
     maxLive: getSettingsValue('PersonaMaxLive', settings, PERSONA_MAX_LIVE_DEFAULT),
     ttlDays: getSettingsValue('PersonaTtlDays', settings, PERSONA_TTL_DAYS_DEFAULT),
@@ -199,18 +204,29 @@ export async function revokePersonaSessions(userId: string, logger?: Logger): Pr
   });
 }
 
+/** PersonaMintEnabled alone, for the sweep: it needs no domain check. */
+export async function readPersonaMintEnabled(): Promise<boolean> {
+  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['PersonaMintEnabled'] });
+  return getSettingsValue('PersonaMintEnabled', settings, false) === true;
+}
+
 /**
- * Disables every persona whose `personaExpiresAt` has passed: suspends it and signs it out
- * everywhere. Idempotent; the update is conditioned on the persona flag, so it can never suspend
- * an ordinary account. Run by the persona mint route before it counts the caps, and by the
+ * Disables every persona whose `personaExpiresAt` has passed (or, with `all`, every live persona,
+ * which is what turning PersonaMintEnabled off does): suspends it and signs it out everywhere.
+ * Idempotent; the update is conditioned on the persona flag, so it can never suspend an ordinary
+ * account. Run by the persona mint route before it counts the caps, and by the hourly
  * personaExpirySweep cron (apps/workers/src/cron/personaExpirySweep.ts).
  */
 export async function disableExpiredPersonas(
-  options: { now?: Date; logger?: Logger; context?: StoredAuditContext } = {}
+  options: { now?: Date; all?: boolean; logger?: Logger; context?: StoredAuditContext } = {}
 ): Promise<{ disabled: number }> {
   const now = options.now ?? new Date();
   const expired = await User.find(
-    { isPersona: true, isBanned: { $ne: true }, personaExpiresAt: { $lte: now } },
+    {
+      isPersona: true,
+      isBanned: { $ne: true },
+      ...(options.all ? {} : { personaExpiresAt: { $lte: now } }),
+    },
     { _id: 1, username: 1, email: 1 }
   )
     .limit(SWEEP_BATCH)
@@ -236,7 +252,9 @@ export async function disableExpiredPersonas(
         action: 'user.persona.expired',
         actor: PERSONA_SWEEP_ACTOR,
         target: personaAuditTarget({ id, username: doc.username, email: doc.email }),
-        summary: `disabled expired test persona ${doc.username}`,
+        summary: options.all
+          ? `disabled test persona ${doc.username} (persona minting turned off)`
+          : `disabled expired test persona ${doc.username}`,
         context: options.context ?? { source: 'worker' },
       },
       { db: { adminAuditLog: adminAuditLogRepository }, logger: options.logger }

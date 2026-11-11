@@ -43,7 +43,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({ isProduction: () => h.p
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.9' }));
 vi.mock('@bike4mind/server-utils/lib/entitlements/registry', () => ({
   entitlementsForEmail: (email: string) =>
-    h.domainGrants.has(email.slice(email.lastIndexOf('@') + 1)) ? new Set(['optihashi:pro']) : new Set(),
+    h.domainGrants.has(email.slice(email.lastIndexOf('@') + 1)) ? new Set(['example:pro']) : new Set(),
 }));
 vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
   partnerSignupGrantForEmail: () =>
@@ -119,7 +119,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.secret = { value: KEY };
   h.production = false;
-  h.settings = {};
+  h.settings = { PersonaMintEnabled: true };
   h.mintedLast24h = 0;
   h.live = 0;
   h.domainGrants = new Set();
@@ -144,6 +144,14 @@ describe('POST /api/personas', () => {
       ['the placeholder', { value: 'not-configured' }],
     ])('answers 404 when the stage secret is %s, so the endpoint does not exist', async (_label, secret) => {
       h.secret = secret;
+      const { status, json } = await post();
+      expect(status).toHaveBeenCalledWith(404);
+      expect(json).toHaveBeenCalledWith({ error: 'Not found', code: 'persona_endpoint_off' });
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 while PersonaMintEnabled is off, even with the right key', async () => {
+      h.settings = {};
       const { status, json } = await post();
       expect(status).toHaveBeenCalledWith(404);
       expect(json).toHaveBeenCalledWith({ error: 'Not found', code: 'persona_endpoint_off' });
@@ -206,7 +214,7 @@ describe('POST /api/personas', () => {
     ])('refuses on production when PersonaEmailDomain is %s', async (_label, domain, arrange) => {
       arrange();
       h.production = true;
-      h.settings = { PersonaEmailDomain: domain };
+      h.settings = { PersonaMintEnabled: true, PersonaEmailDomain: domain };
       const { status } = await post();
       expect(status).toHaveBeenCalledWith(503);
       expect(h.createUser).not.toHaveBeenCalled();
@@ -229,7 +237,7 @@ describe('POST /api/personas', () => {
     });
 
     it('refuses once the live persona cap is reached', async () => {
-      h.settings = { PersonaMaxLive: 3 };
+      h.settings = { PersonaMintEnabled: true, PersonaMaxLive: 3 };
       h.live = 3;
       const { status } = await post();
       expect(status).toHaveBeenCalledWith(429);
@@ -265,7 +273,7 @@ describe('POST /api/personas', () => {
 
     it('uses the configured domain on production', async () => {
       h.production = true;
-      h.settings = { PersonaEmailDomain: 'Personas.Example.com' };
+      h.settings = { PersonaMintEnabled: true, PersonaEmailDomain: 'Personas.Example.com' };
       await post();
       expect(h.createUser.mock.calls[0][0].email).toBe('alpha@personas.example.com');
     });
@@ -298,6 +306,15 @@ describe('POST /api/personas', () => {
           user: expect.objectContaining({ id: '64b000000000000000000001', isPersona: true }),
         })
       );
+    });
+
+    it('caps the refresh token at the persona expiry when that is sooner than the idle TTL', async () => {
+      h.settings = { PersonaMintEnabled: true, PersonaTtlDays: 1 / 48 };
+      await post();
+      const [, , params] = h.issueSessionForRequest.mock.calls[0];
+      const expiresAt = h.createUser.mock.calls[0][0].record.personaExpiresAt as Date;
+      expect(params.refreshTtlMs).toBeLessThanOrEqual(expiresAt.getTime() - Date.now());
+      expect(params.refreshTtlMs).toBeLessThan(24 * 60 * 60 * 1000);
     });
 
     it('answers 409 when a concurrent mint wins the unique index', async () => {

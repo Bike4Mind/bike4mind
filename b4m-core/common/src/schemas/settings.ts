@@ -667,6 +667,7 @@ export const SettingKeySchema = z.enum([
   'AdminAuditDailyGrantCredits',
 
   // Test personas minted with the persona key
+  'PersonaMintEnabled',
   'PersonaMintDailyLimit',
   'PersonaMaxLive',
   'PersonaTtlDays',
@@ -1176,12 +1177,12 @@ export interface BaseSetting {
   changesCustomerPrice?: boolean;
 }
 
-/** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
 /** Defaults for the persona-key caps (PersonaMintDailyLimit, PersonaMaxLive, PersonaTtlDays). */
 export const PERSONA_MINT_DAILY_LIMIT_DEFAULT = 20;
 export const PERSONA_MAX_LIVE_DEFAULT = 40;
 export const PERSONA_TTL_DAYS_DEFAULT = 14;
 
+/** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
 export const LOW_CREDITS_THRESHOLD_DEFAULT = 1000;
 
 /**
@@ -4702,6 +4703,14 @@ export const settingsMap = {
     int: true,
     description:
       'A grant that takes one admin past this many credits granted in the last 24 hours is recorded as critical in the Admin Audit Log and alerts the security channel.',
+    category: 'SecOps',
+  }),
+  PersonaMintEnabled: makeBooleanSetting({
+    key: 'PersonaMintEnabled',
+    name: 'Test Persona Minting',
+    defaultValue: false,
+    description:
+      'Lets the persona key create test persona accounts on this stage. Off by default. Turning it off stops minting, and the hourly persona sweep then disables every live test persona and signs it out everywhere.',
     category: 'SecOps',
   }),
   PersonaMintDailyLimit: makeNumberSetting({

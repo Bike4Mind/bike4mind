@@ -70,6 +70,9 @@ const handler = baseApi({ auth: false, allowedMethods: ['POST'] })
       const { name } = parsed.data;
 
       const settings = await loadPersonaSettings(req.logger);
+      if (!settings.enabled) {
+        return res.status(404).json({ error: 'Not found', code: PERSONA_ENDPOINT_OFF_CODE });
+      }
       const now = new Date();
       const identity = personaIdentity(name, { production: isProduction(), emailDomain: settings.emailDomain, now });
       if (!identity) {
