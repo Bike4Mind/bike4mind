@@ -908,7 +908,8 @@ export async function regenerateShareToken(publicId: string, expiresAt?: string)
  * be shared with two audiences and either link revoked on its own. Unlike
  * `createOrGetShareToken` this is not idempotent - each call is another link. Rejected with
  * 400 `SHARE_LINK_LIMIT` at 20 live links (also when a concurrent add took the last slot), and
- * 409 `SHARE_LINK_RACED` when the links changed mid-request and a retry may succeed.
+ * 409 `SHARE_LINK_RACED` when the links changed mid-request and a retry may succeed. A 404
+ * means the artifact is gone, including one deleted while the request was in flight.
  */
 export async function createAdditionalShareToken(publicId: string, expiresAt?: string): Promise<MintedShareLink> {
   const { data } = await api.post<MintedShareLink>(`/api/publish/${publicId}/share-token`, {
