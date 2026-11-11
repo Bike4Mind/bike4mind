@@ -22,7 +22,7 @@ The Models section is the model list. The section, view, search, filters, sort, 
 | Needs review | Models waiting for a decision: no price, a price only quoted by an aggregator, waiting for a discovery run, waiting for approval, or a pending lifecycle suggestion |
 | All | Every model |
 | Listed | Models users can pick, including Limited ones |
-| Hidden | Models no user can pick, for a reason other than a pending review |
+| Hidden | Models with the Hidden status: no user can pick them, for a reason other than a pending review or retirement |
 | Retiring | Models deprecated, retired, or with a deprecation or retirement date that has passed or falls within 90 days |
 
 Each view shows its count. A model can be in more than one view, for example a hidden model that retires within 90 days is in both **Hidden** and **Retiring**, so the counts do not add up to **All**. The page opens on **Needs review** while it holds any model, and on **All** otherwise.
@@ -58,7 +58,7 @@ Select a column header to sort by it; select it again to reverse the order. Sort
 | Needs review | It waits for a decision before users can pick it |
 | Hidden | No user can pick it. The reason is shown, for example the model is turned off or its provider has no API key configured |
 | Retiring | Its lifecycle status is deprecated or retired, or the earlier of its deprecation date and retirement date is within 90 days or already passed. A model still served after its retirement date, with no deprecation date that has arrived, shows as Retiring. It does not apply to a model that is Retired, Hidden or Needs review |
-| Retired | Its deprecation date is today or earlier (UTC), or its provider has retired it, unless an operator override disabled it, or this deployment does not serve it and its lifecycle status is legacy, deprecated or retired. A passed retirement date alone does not make it Retired |
+| Retired | Its deprecation date is today or earlier (UTC), or its provider has retired it (a catalog override that disables the model, set outside this console, makes it Hidden instead), or this deployment does not serve it and its lifecycle status is legacy, deprecated or retired. A passed retirement date alone does not make it Retired. Retired takes precedence over every other status |
 
 A fix action next to the reason takes you to the change that resolves it: **Turn on**, **Add price**, **Run discovery**, **Review suggestion**, or **Open key settings**.
 
