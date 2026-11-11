@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
 import {
+  ApiKeyScope,
   ArtifactTypeSchema,
   CreateArtifactRequestSchema,
   DEFAULT_TTS_PROVIDER,
@@ -652,6 +653,13 @@ export async function uploadFile(
   }
   if (!bytes.length) throw new Error('File bytes must be nonempty and valid base64');
   const mimeType = args.contentType ?? (mime.lookup(fileName) || 'application/octet-stream');
+  if (args.projectId) {
+    // A failed lookup must not block the upload; the project route still enforces the scope.
+    const scopes = await client.getOwnKeyScopes().catch(() => undefined);
+    if (scopes && !scopes.includes(ApiKeyScope.WRITE_PROJECTS)) {
+      throw new Error('projectId requires an API key with the projects:write scope');
+    }
+  }
   const response = await client.requestFileUpload({ fileName, fileSize: bytes.length, mimeType });
   const upload = response.files[0];
   if (!upload?.fileId || !upload.url) throw new Error('File upload request returned no upload URL');

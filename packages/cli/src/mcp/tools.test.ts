@@ -139,7 +139,13 @@ describe('tool handlers', () => {
     const attachFileToNotebook = vi.fn().mockResolvedValue(undefined);
     const attachFileToProject = vi.fn().mockResolvedValue(undefined);
     const result = await uploadFile(
-      mockClient({ requestFileUpload, uploadFileBytes, attachFileToNotebook, attachFileToProject }),
+      mockClient({
+        requestFileUpload,
+        uploadFileBytes,
+        attachFileToNotebook,
+        attachFileToProject,
+        getOwnKeyScopes: vi.fn().mockResolvedValue(undefined),
+      }),
       { base64: 'YWJj', name: 'note.txt', notebookId: '64b7f0c2a1e4d5f6a7b8c9d0', projectId: 'p1' }
     );
     expect(requestFileUpload).toHaveBeenCalledWith({ fileName: 'note.txt', fileSize: 3, mimeType: 'text/plain' });
@@ -162,6 +168,7 @@ describe('tool handlers', () => {
       requestFileUpload: vi.fn().mockResolvedValue({ files: [{ fileId: 'f1', url: 'https://s3.example/put' }] }),
       uploadFileBytes: vi.fn().mockResolvedValue(undefined),
       attachFileToProject: vi.fn().mockRejectedValue(new Error('not permitted')),
+      getOwnKeyScopes: vi.fn().mockResolvedValue(undefined),
     });
     await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
       'File f1 was uploaded but association failed: not permitted'
