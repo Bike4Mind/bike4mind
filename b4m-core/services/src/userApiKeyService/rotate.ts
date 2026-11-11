@@ -83,7 +83,7 @@ function generateNewApiKey(): { key: string; keyPrefix: string; keyDigest: strin
  * as a superset of the target key's scopes.
  *
  * Callers should surface `previousOwnerUserId` so the original minter can be told
- * their key changed hands.
+ * their key changed hands. An org-owned key (`orgOwned`) is the exception: it is never re-owned.
  */
 export const rotateUserApiKey = async (
   userId: string,
@@ -109,7 +109,9 @@ export const rotateUserApiKey = async (
   );
 
   const previousOwnerUserId = apiKey.userId?.toString();
-  const reOwned = !!previousOwnerUserId && previousOwnerUserId !== userId;
+  // An org-owned key stays with the org's service account: re-owning it to the rotating admin
+  // would tie it to a member again, which is exactly what an org-owned key exists to avoid.
+  const reOwned = !apiKey.orgOwned && !!previousOwnerUserId && previousOwnerUserId !== userId;
 
   // An embed key's userId is not just an owner label: the embed runtime resolves the
   // bound agent's ownership, the owner's BYOK LLM keys, tool availability and KB access

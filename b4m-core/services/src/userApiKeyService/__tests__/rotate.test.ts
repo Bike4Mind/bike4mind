@@ -239,6 +239,34 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
       expect(repo.setCallbackSigningSecret).not.toHaveBeenCalled();
     });
 
+    it('never re-owns an org-owned key: it stays with the org service account', async () => {
+      const stored = {
+        id: 'key-1',
+        name: 'Org-owned key',
+        userId: 'org-service-account',
+        keyPrefix: 'b4m_live_orig000',
+        orgOwned: { createdByUserId: 'creator' },
+      } as unknown as IUserApiKeyDocument;
+      const repo = {
+        findByUserIdAndId: vi.fn().mockResolvedValue(null),
+        findByOrganizationIdsAndId: vi.fn().mockResolvedValue(stored),
+        update: vi.fn().mockResolvedValue(undefined),
+        setCallbackSigningSecret: vi.fn().mockResolvedValue(undefined),
+      };
+      const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue(['org-1']) };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any } };
+
+      const result = await rotateUserApiKey('admin-user', { keyId: 'key-1' }, adapters);
+
+      expect(stored.userId).toBe('org-service-account');
+      expect(result.previousOwnerUserId).toBeUndefined();
+      expect(repo.update).toHaveBeenCalledWith(
+        { id: 'key-1', keyDigest: expect.any(String), keyPrefix: expect.any(String) },
+        { unset: ['keyHash'] }
+      );
+    });
+
     it('throws NotFound when the caller neither minted nor administers the key', async () => {
       const repo = {
         findByUserIdAndId: vi.fn().mockResolvedValue(null),

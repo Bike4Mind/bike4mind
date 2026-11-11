@@ -4,6 +4,7 @@ export * from './delete';
 export * from './getSystemUser';
 export * from './list';
 export * from './notifyApiKeyReowned';
+export * from './orgServiceAccount';
 export * from './rateLimit';
 export * from './resolveOwnedApiKey';
 export * from './revoke';
