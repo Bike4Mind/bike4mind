@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -119,5 +119,23 @@ describe('gitCommandKind answers kept across scans', () => {
     } finally {
       vi.mocked(resolveUserPath).mockImplementation(async () => process.env.PATH ?? '');
     }
+  });
+
+  it('starts no second git for a builtin outside the own list, though git exits 128 for the deprecated listing', async () => {
+    const fake = join(base, 'fake');
+    const calls = join(base, 'calls.log');
+    await mkdir(fake);
+    await writeFile(
+      join(fake, 'git'),
+      `#!/bin/sh\necho "$@" >> "${calls}"\ncase "$*" in\n*--list-cmds=builtins,main*) echo sparse-checkout;;\n*--list-cmds=deprecated*) echo "unsupported command listing type" >&2; exit 128;;\nesac\n`
+    );
+    await chmod(join(fake, 'git'), 0o755);
+    await writeFile(calls, '');
+    vi.stubEnv('PATH', fake);
+    expect(await kind([], 'sparse-checkout')).toBe('own');
+    const first = (await readFile(calls, 'utf8')).split('\n').filter(Boolean).length;
+    expect(first).toBeGreaterThan(0);
+    expect(await kind([], 'sparse-checkout')).toBe('own');
+    expect((await readFile(calls, 'utf8')).split('\n').filter(Boolean).length).toBe(first);
   });
 });

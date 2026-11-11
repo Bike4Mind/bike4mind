@@ -798,9 +798,9 @@ function cachedGit(directory: string, label: string, args: readonly string[]): P
   if (listed === undefined) {
     listed = gitLaunch(directory, args).then(launch => launch && gitExec(launch));
     commandListings.set(key, listed);
-    // A failed or timed-out query is asked again next time.
+    // A timed-out or unstarted query is asked again next time; an exit code is an answer.
     void listed.then(result => {
-      if (result?.code !== 0 && commandListings.get(key) === listed) commandListings.delete(key);
+      if (result === null && commandListings.get(key) === listed) commandListings.delete(key);
     });
   }
   return listed;

@@ -294,6 +294,60 @@ const ROWS: [string, string, string][] = [
   ['find . -maxdepth 0 -exec git merge -s foo other \\;', '', 'aaaa'],
   ['pnpm exec git status', '', 'rrrr'],
   ['npx git log -1', '', 'rrrr'],
+  ['pnpm --filter x exec git bang', '', 'aaaa'],
+  ['pnpm -F x exec git bang', '', 'aaaa'],
+  ['pnpm --filter=x exec git bang', '', 'aaaa'],
+  ['pnpm -C . exec git bang', '', 'aaaa'],
+  ['pnpm --dir . exec git bang', '', 'aaaa'],
+  ['pnpm -w exec git bang', '', 'aaaa'],
+  ['pnpm -r exec git bang', '', 'aaaa'],
+  ['pnpm -rw exec git bang', '', 'aaaa'],
+  ['pnpm recursive exec git bang', '', 'aaaa'],
+  ['pnpm --filter x --filter y exec git bang', '', 'aaaa'],
+  ['pnpm --unknown-option exec git bang', '', 'aaaa'],
+  ['pnpm -Z x exec git bang', '', 'aaaa'],
+  ['npm x git bang', '', 'aaaa'],
+  ['npm x -- git bang', '', 'aaaa'],
+  ['npm --prefix . exec git bang', '', 'aaaa'],
+  ['npm --prefix . x git bang', '', 'aaaa'],
+  ['npm -w a exec -- git bang', '', 'aaaa'],
+  ['npm --workspace=a exec -- git bang', '', 'aaaa'],
+  ['npm --unknown-option exec -- git bang', '', 'aaaa'],
+  ['yarn --cwd . exec git bang', '', 'aaaa'],
+  ['pnpm --filter x exec git fetch --upload-pack="touch M" origin', '', 'aaaa'],
+  ['pnpm -C . exec git fetch --upload-pack="touch M" origin', '', 'aaaa'],
+  ['npm x git fetch --upload-pack="touch M" origin', '', 'aaaa'],
+  ['pnpm --filter x exec git merge -s foo other', '', 'aaaa'],
+  ['pnpm --filter x exec git status', '', 'rrrr'],
+  ['pnpm -C . exec git log -1', '', 'rrrr'],
+  ['npm x git status', '', 'rrrr'],
+  ['npm --prefix . exec -- git status', '', 'rrrr'],
+  ['git branch --unset-upstream "$B"', '', 'rrrr'],
+  ['git log --grep=unset "$X"', '', 'rrrr'],
+  ['git log --format="%H unset $x"', '', 'rrrr'],
+  ['unset -v GIT_CONFIG_COUNT; git log', '', 'aaaa'],
+  ['unset GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; git log', '', 'aaaa'],
+  ['unset "$X"; git log', '', 'aaaa'],
+  ['export -n GIT_CONFIG_PARAMETERS; git log', '', 'aaaa'],
+  ['export -n "$X"; git log', '', 'aaaa'],
+  ['command unset GIT_CONFIG_COUNT; git log', '', 'aaaa'],
+  ['builtin unset GIT_CONFIG_COUNT; git log', '', 'aaaa'],
+  ['f() { unset GIT_CONFIG_COUNT; }; f; git log', '', 'aaaa'],
+  ['( unset GIT_CONFIG_COUNT ); git log', '', 'aaaa'],
+  ['if true; then unset GIT_CONFIG_COUNT; fi; git log', '', 'aaaa'],
+  ['eval "unset GIT_CONFIG_COUNT"; git log', '', 'aaaa'],
+  ["eval 'export -n GIT_CONFIG_COUNT'; git log", '', 'aaaa'],
+  ['pnpm exec git fetch --upload-pack="touch M" origin', '', 'aaaa'],
+  ["trap 'unset GIT_CONFIG_COUNT' EXIT; git log", '', 'aaaa'],
+  ["alias u='unset GIT_CONFIG_COUNT'; u; git log", '', 'aaaa'],
+  ['git stage a.ts', '', 'rrrr'],
+  ['source env1.sh && git stage a.ts', '', 'rrrr'],
+  ['cd nosuchdir; git stage a.ts', '', 'rrrr'],
+  ['source env1.sh && git sparse-checkout list', '', 'rrrr'],
+  ['cd nosuchdir; git sparse-checkout list', '', 'rrrr'],
+  ['source env1.sh && git st', '', 'raar'],
+  ['source env1.sh && git bang', '', 'aaaa'],
+  ['source env1.sh && git nosuchprogram', '', 'raar'],
   ["find . -name '*.ts' -exec git add {} +", '', 'arrr'],
   ['git pull -ts foo origin main', '', 'aaaa'],
   ['git pull -ps foo origin main', '', 'aaaa'],
@@ -680,5 +734,49 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
         rmSync(globalConfig(), { force: true });
       }
     });
+  });
+
+  describe.each(['deny', 'ask'] as const)('with a %s rule on git push and a push alias', list => {
+    const decided = async (command: string): Promise<string | null> => {
+      const parsed = parseRule('Bash(git push:*)', { native: true });
+      if (!parsed.ok) throw new Error(parsed.reason);
+      const home = dirname(proj);
+      const rule = compileRule(parsed.rule, list, { id: 't', label: 'T' }, { home, root: proj, cwd: proj });
+      const set = new PermissionRuleSet(rule ? [rule] : [], () => roots);
+      const context = {
+        roots: [proj],
+        workingDirectory: proj,
+        signal: new AbortController().signal,
+        protectedPaths: [userData],
+        uncoverablePaths: roots,
+      } as ToolContext;
+      const prompt = await shellApproval('bash_execute', { command, cwd: proj }, context);
+      const subject = await resolveSubject(
+        permissionSubject({ name: 'bash_execute', input: { command } }, prompt, context)
+      );
+      return set.evaluate(subject).decision;
+    };
+
+    it.each([
+      'git push origin main',
+      'git push origin main > push.log',
+      'FOO=1 git push origin main',
+      'git p origin main',
+      'git p origin main > push.log',
+      'git p origin main 2> err.txt',
+      'git p origin main >> push.log 2>&1',
+      'FOO=1 git p origin main',
+      'FOO=1 git p origin main > push.log',
+      'git p',
+    ])('matches %s', async command => {
+      expect(await decided(command)).toBe(list);
+    });
+
+    it.each(['git st > status.log', 'FOO=1 git st', 'git st 2> err.txt', 'git lg -3 > log.txt'])(
+      'does not match %s',
+      async command => {
+        expect(await decided(command)).toBeNull();
+      }
+    );
   });
 });

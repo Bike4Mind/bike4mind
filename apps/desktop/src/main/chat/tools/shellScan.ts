@@ -2628,6 +2628,31 @@ const ALIAS_VARIABLE =
 /** A script text that unsets or unexports the variables carrying the shell's own git config, or names them by expansion. */
 const UNSETS_GIT_CONFIG = /\b(unset|export\s+-n)\b[^;&|\n]*(GIT_CONFIG|[$`])/;
 
+/** Programs, besides the shells, that read a string as shell code. */
+const READS_SHELL_CODE = new Set(['eval', 'trap', 'source', '.', 'alias']);
+
+/**
+ * Whether the script runs `unset` or `export -n` on a variable of the shell's git config (or one it cannot name),
+ * read from the parsed commands; code a shell reads from a string, or from stdin, is matched as text.
+ */
+function unsetsGitConfig(root: Node, gateText: string): boolean {
+  let readsCode = false;
+  for (const node of root.descendantsOfType(['command', 'declaration_command', 'unset_command'])) {
+    if (node === null) continue;
+    const list = (node.type === 'command' ? words(node) : declarationWords(node)).map(wordValue);
+    let rest = withoutWrappers(list);
+    while (rest[0] === 'builtin' || rest[0] === 'command') rest = withoutWrappers(rest.slice(1));
+    const [program = '', ...args] = rest;
+    const names = args.some(arg => /GIT_CONFIG|[$`]/.test(arg));
+    if (program === 'unset' && names) return true;
+    if (program === 'export' && names && args.some(arg => /^-[A-Za-z]*n/.test(arg))) return true;
+    readsCode ||=
+      READS_SHELL_CODE.has(program) ||
+      list.some(word => XARGS_SHELLS.has(programName(word)) || programName(word) === 'eval');
+  }
+  return readsCode && UNSETS_GIT_CONFIG.test(gateText);
+}
+
 /** Programs that run their command with a fresh environment (and so without the shell's git config). */
 const RESETS_ENVIRONMENT = new Set(['sudo', 'doas', 'su', 'pkexec', 'runuser']);
 
@@ -2683,28 +2708,35 @@ function dropsBareRepositoryBehind(tokens: readonly string[]): boolean {
 }
 
 /** The words of each git command `tokens` launch behind a tool launcher (`pnpm exec git`, `npx git`) or `find -exec`. */
-function launchedGitCommands(tokens: readonly string[]): string[][] {
+function launchedGitCommands(tokens: readonly string[]): { runs: string[][]; unread: boolean } {
+  const none = { runs: [], unread: false };
   const [wrapped, ...rest] = withoutWrappers(tokens);
-  if (wrapped === undefined) return [];
+  if (wrapped === undefined) return none;
   const name = programName(unquote(wrapped)).replace(/[\d.]+$/, '');
   const runsGit = (words: readonly string[]): boolean => {
     const [program] = withoutWrappers(words);
     return program !== undefined && programName(unquote(program)) === 'git';
   };
   if (name === 'find') {
-    return findActions(rest).runs.flatMap(run => (runsGit(run) ? [run] : launchedGitCommands(run)));
+    const found = findActions(rest).runs.map(run =>
+      runsGit(run) ? { runs: [run], unread: false } : launchedGitCommands(run)
+    );
+    return { runs: found.flatMap(each => each.runs), unread: found.some(each => each.unread) };
   }
   const launcher = TOOL_LAUNCHERS.get(name);
-  if (launcher === undefined) return [];
-  const first = unquote(rest[0] ?? '');
+  if (launcher === undefined) return none;
+  const { at: operand, unread } = launcherOperand(name, rest);
+  // An option the scan does not know hides the subcommand; a git word after it may be what the launcher runs.
+  if (unread) return { runs: [], unread: rest.some(word => programName(unquote(word)) === 'git') };
+  const first = unquote(rest[operand] ?? '');
   const builtins = BUILTIN_COMMANDS.get(name);
   const bare = builtins !== undefined && first !== '' && !first.startsWith('-') && !builtins.has(first);
-  if (!(launcher.length === 0 || launcher.includes(first) || bare)) return [];
-  const from = launcher.length === 0 || (bare && !launcher.includes(first)) ? 0 : 1;
+  if (!(launcher.length === 0 || launcher.includes(first) || bare)) return none;
+  const from = operand + (launcher.length === 0 || (bare && !launcher.includes(first)) ? 0 : 1);
   for (let at = from; at < rest.length; at++) {
-    if (runsGit(rest.slice(at))) return [rest.slice(at)];
+    if (runsGit(rest.slice(at))) return { runs: [rest.slice(at)], unread: false };
   }
-  return [];
+  return none;
 }
 
 /**
@@ -5298,10 +5330,86 @@ const TOOL_LAUNCHERS = new Map<string, readonly string[]>([
   ['bunx', []],
   ['pnpx', []],
   ['pnpm', ['exec', 'dlx']],
-  ['npm', ['exec']],
+  ['npm', ['exec', 'x']],
   ['yarn', ['exec', 'dlx']],
   ['bun', ['x']],
 ]);
+
+/** The options a launcher with subcommands takes before its subcommand: those that take no value, and those that take one. */
+const LAUNCHER_OPTIONS = new Map<string, { flags: ReadonlySet<string>; valued: ReadonlySet<string> }>([
+  [
+    'pnpm',
+    {
+      flags: new Set(
+        '-w --workspace-root -r --recursive -s --silent --stream --no-color --color --parallel --ignore-workspace --offline --prefer-offline --if-present --bail --no-bail --sort --no-sort --aggregate-output --fail-if-no-match --report-summary --shell-emulator --use-stderr --workspace-packages'.split(
+          ' '
+        )
+      ),
+      valued: new Set(
+        '-C --dir -F --filter --filter-prod --workspace-concurrency --reporter --loglevel --test-pattern --changed-files-ignore-pattern --resume-from --store-dir --virtual-store-dir --modules-dir --lockfile-dir --registry --userconfig --prefix --cache-dir --state-dir --network-concurrency --fetch-timeout'.split(
+          ' '
+        )
+      ),
+    },
+  ],
+  [
+    'npm',
+    {
+      flags: new Set(
+        '-ws --workspaces --no-workspaces --include-workspace-root -g --global -y --yes -n --no -q --quiet -s --silent -d -dd -ddd --verbose --ignore-scripts --offline --prefer-offline --no-color --color --no-progress --no-audit --no-fund --legacy-peer-deps --force -f'.split(
+          ' '
+        )
+      ),
+      valued: new Set(
+        '--prefix -w --workspace --userconfig --globalconfig --cache --registry --loglevel --location --node-options'.split(
+          ' '
+        )
+      ),
+    },
+  ],
+  [
+    'yarn',
+    {
+      flags: new Set(
+        '-s --silent --verbose --json --offline --prefer-offline --non-interactive --frozen-lockfile --ignore-scripts --no-progress --no-default-rc --disable-pnp'.split(
+          ' '
+        )
+      ),
+      valued: new Set(
+        '--cwd --registry --cache-folder --modules-folder --network-timeout --mutex --use-yarnrc'.split(' ')
+      ),
+    },
+  ],
+  [
+    'bun',
+    {
+      flags: new Set('--bun -b --silent --no-install --no-cache'.split(' ')),
+      valued: new Set('--cwd --config -c --env-file'.split(' ')),
+    },
+  ],
+]);
+
+/**
+ * Where `name`'s own subcommand sits in `args`, past the options it takes before one (pnpm's `recursive` too);
+ * `unread` when an option there is not one the scan knows, so the subcommand cannot be told.
+ */
+function launcherOperand(name: string, args: readonly string[]): { at: number; unread: boolean } {
+  const options = LAUNCHER_OPTIONS.get(name);
+  let at = 0;
+  while (options !== undefined && at < args.length) {
+    const word = unquote(args[at] as string);
+    if (word === '--') return { at, unread: true };
+    if (!word.startsWith('-') || word === '-') {
+      if (name !== 'pnpm' || !['recursive', 'multi', 'm'].includes(word)) break;
+      at++;
+    } else if (word.startsWith('--') && word.includes('=')) at++;
+    else if (options.valued.has(word)) at += 2;
+    else if (options.flags.has(word)) at++;
+    else if (/^-[A-Za-z]{2,}$/.test(word) && [...word.slice(1)].every(letter => options.flags.has(`-${letter}`))) at++;
+    else return { at, unread: true };
+  }
+  return { at, unread: false };
+}
 
 /** `git clone`, `init` and `worktree add` options that take no value, and those that take one (as the next word or after `=`). */
 const FRESH_FLAGS = new Map<string, { flags: ReadonlySet<string>; valued: ReadonlySet<string> }>([
@@ -5425,12 +5533,16 @@ const BUILTIN_COMMANDS = new Map<string, ReadonlySet<string>>([
 function runsInlineCode(program: string, args: readonly string[], node: Node): boolean {
   const name = program.replace(/[\d.]+$/, '');
   const launcher = TOOL_LAUNCHERS.get(name);
-  const first = args[0] ?? '';
+  const { at: operand, unread } = launcherOperand(name, args);
+  const first = args[operand] ?? '';
   const builtins = BUILTIN_COMMANDS.get(name);
+  if (launcher !== undefined && unread && args.some(arg => isInlineProgram(programName(arg).replace(/[\d.]+$/, '')))) {
+    return true;
+  }
   // `pnpm tsx -e` and `yarn node -e` run the tool named, unless the word is one of the manager's own commands.
   const bare = builtins !== undefined && first !== '' && !first.startsWith('-') && !builtins.has(first);
   if (launcher !== undefined && (launcher.length === 0 || launcher.includes(first) || bare)) {
-    const from = launcher.length === 0 || (bare && !launcher.includes(first)) ? 0 : 1;
+    const from = operand + (launcher.length === 0 || (bare && !launcher.includes(first)) ? 0 : 1);
     const at = args.findIndex(
       (arg, index) => index >= from && isInlineProgram(programName(arg).replace(/[\d.]+$/, ''))
     );
@@ -6068,10 +6180,11 @@ export async function scanShell(
     // The aliases git reads, by folder; see gitAliasExpansion.
     const gitAliasLists = new Map<string, Promise<GitAliases | null>>();
     // Settings that move which config git reads aliases from, or drop the shell's safe.bareRepository, away from the scan's.
+    const unsetsConfig = unsetsGitConfig(tree.rootNode, gateText);
     const aliasEnvironment =
       anyName ||
       variables.set.some(({ name }) => variableNames(ALIAS_VARIABLE).test(name.replace(/\[[^]*$/, ''))) ||
-      UNSETS_GIT_CONFIG.test(gateText) ||
+      unsetsConfig ||
       ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(name => process.env[name] !== undefined) ||
       Object.keys(process.env).some(name => /^GIT_CONFIG/i.test(name));
     // Every folder the scan has been in, which `$PWD` in a PATH entry may name; filled in as commands are read.
@@ -6920,12 +7033,12 @@ export async function scanShell(
         const { folder, user, from } = await aliasSource(git.cwd);
         if (sourced || state.lost) {
           // Where git runs and which PATH it searches are not known; a `!` alias runs a shell wherever it is read.
-          pathUnplaced = true;
           let root = folder;
           while ((await stat(root).catch(() => null))?.isDirectory() !== true && dirname(root) !== root) {
             root = dirname(root);
           }
           const kind = await gitCommandKind(root, git.sub);
+          if (kind !== 'own') pathUnplaced = true;
           // An earlier write may have changed the config, which is not checked against a folder the scan lost.
           if (kind === null || configWrites.some(write => write.id !== node.id && mayChangeConfig(write))) return null;
           const alias =
@@ -7141,9 +7254,11 @@ export async function scanShell(
     ): Promise<ShellCommand | null> => {
       const expanded = await gitAliasExpansion(node, written);
       if (expanded === null) unreadOperands++;
-      for (const launched of launchedGitCommands(written)) {
+      const launches = launchedGitCommands(written);
+      if (launches.unread) unreadOperands++;
+      for (const launched of launches.runs) {
         const words = withoutWrappers(launched).slice(1);
-        if ((await gitAliasExpansion(node, launched)) === null) unreadOperands++;
+        if ((await gitAliasExpansion(node, launched)) === null || untrackableCommand(launched)) unreadOperands++;
         const git = gitSubcommand(words.map(unquote), state.cwd);
         if (git !== null && !git.unread) await checkGitPrograms(node, git);
       }
@@ -7236,7 +7351,7 @@ export async function scanShell(
       if (LAUNCHES_COMMANDS.has(inner) && dropsBareRepositoryBehind(tokens)) unreadOperands++;
       if (inner === 'git') {
         gitCommands.add(node.id);
-        if (dropsBareRepository(tokens) || setsBareRepository(wrappedRest) || UNSETS_GIT_CONFIG.test(gateText)) {
+        if (dropsBareRepository(tokens) || setsBareRepository(wrappedRest) || unsetsConfig) {
           unreadOperands++;
         }
         const git = gitSubcommand(wrappedRest.map(unquote), state.cwd);
@@ -7375,7 +7490,8 @@ export async function scanShell(
       // would let `Bash(git status)` cover `GIT_CONFIG_PARAMETERS=... git status` or a file write.
       const original = node.parent?.type === 'redirected_statement' ? node.parent.text : node.text;
       const entry: ShellCommand = {
-        text: normalised.join(' '),
+        // Allow rules match `words` alone for a command that is not coverable; deny and ask also see the alias expansion here.
+        text: (coverable || expanded === null ? normalised : commandTokens(expanded)).join(' '),
         always: `${arityPrefix(normalised).join(' ')} *`,
         coverable,
         // A harmless assignment stays in `words` so a deny or ask rule naming it still matches.
