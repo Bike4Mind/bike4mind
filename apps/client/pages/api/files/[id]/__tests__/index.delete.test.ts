@@ -23,7 +23,7 @@ const h = vi.hoisted(() => ({
   unpublish: vi.fn(),
 }));
 
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: h.unpublish,
 }));
 

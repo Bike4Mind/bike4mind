@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { User } from '@bike4mind/database';
-import { adminUsersSort } from './adminUsersQuery';
+import { adminUsersSort } from '@bike4mind/server-utils/admin/usersList/adminUsersQuery';
 
 // A sort can only walk an index whose key it prefixes, so the _id tiebreak in adminUsersSort
 // needs compound indexes. `name` is deliberately unindexed.

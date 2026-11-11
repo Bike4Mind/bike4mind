@@ -1,4 +1,4 @@
-import type { UserFunnelStep } from './adminUsersFilter';
+import type { UserFunnelStep } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { analyticsOverviewQuerySchema, type AnalyticsSignupsMode } from './analyticsOverview';
 
 /**

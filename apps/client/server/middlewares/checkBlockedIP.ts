@@ -5,7 +5,7 @@ import { RequestHandler } from 'express';
 import { getClientIp, type ClientIpRequest } from '@bike4mind/server-utils/utils/ip';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { alertFraudBlock } from '@server/billing/fraudBlockAlert';
+import { alertFraudBlock } from '@bike4mind/server-utils/billing/fraudBlockAlert';
 
 /** Shown for a failed-login lockout (scope `login`). */
 export const LOGIN_LOCKOUT_MESSAGE =

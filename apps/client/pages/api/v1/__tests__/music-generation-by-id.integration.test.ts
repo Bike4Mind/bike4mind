@@ -29,7 +29,7 @@ vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig =>
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async () =>
   (await import('@server/generations/__test__/routeHarness')).rateLimitMiddlewareMock()
 );
-vi.mock('@server/utils/userRateTier', async () =>
+vi.mock('@bike4mind/server-utils/utils/userRateTier', async () =>
   (await import('@server/generations/__test__/routeHarness')).userRateTierMock()
 );
 vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig =>

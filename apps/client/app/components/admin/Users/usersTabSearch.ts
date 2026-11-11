@@ -13,9 +13,9 @@ import {
   YES_NO_FILTERS,
   type AdminUsersFilter,
   type AdminUsersSortField,
-} from '@client/app/utils/adminUsersFilter';
+} from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { oneOf, parseObjectId, parsePage, parseStringList, toNumber } from '../adminSearchValues';
-import { USER_AI_VERDICT_FILTERS } from '@client/app/utils/aiAdvisory';
+import { USER_AI_VERDICT_FILTERS } from '@bike4mind/server-utils/app/utils/aiAdvisory';
 
 /**
  * The Users tab's `/admin` search params and their coercion. Pure and React-free: adminTabParams.ts

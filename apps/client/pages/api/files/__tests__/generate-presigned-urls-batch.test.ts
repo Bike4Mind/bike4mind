@@ -59,7 +59,7 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: vi.fn(async () =
 // The assertion point: whatever tags reach here are what gets persisted on the FabFile.
 vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@server/utils/browserUploadUrl', () => ({ resolveBrowserUploadUrl: (_id: string, url: string) => url }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, userTags: [], entitlementKeys: [] })),
 }));
 

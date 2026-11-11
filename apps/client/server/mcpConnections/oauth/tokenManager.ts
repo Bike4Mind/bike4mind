@@ -12,9 +12,12 @@ import {
 } from '@bike4mind/mcp/remote';
 import { decryptToken, encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { RemoteMcpNetworkOptions } from '../customMcpAccess';
-import { dropRejectedRegistration, loadConnectionClient } from './clientIdentity';
-import { withOAuthFetch } from './oauthFetch';
+import type { RemoteMcpNetworkOptions } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
+import {
+  dropRejectedRegistration,
+  loadConnectionClient,
+} from '@bike4mind/server-utils/mcpConnections/oauth/clientIdentity';
+import { withOAuthFetch } from '@bike4mind/server-utils/mcpConnections/oauth/oauthFetch';
 
 /** A token that expires within this window is refreshed before use. */
 export const OAUTH_EXPIRY_SKEW_MS = 60_000;

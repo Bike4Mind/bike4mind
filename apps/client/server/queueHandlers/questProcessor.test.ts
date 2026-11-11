@@ -89,8 +89,8 @@ vi.mock('./questProcessor.push', async importOriginal => ({
 
 vi.mock('@server/analytics/funnel', () => ({ recordFirstChatValue: mockRecordFirstChatValue }));
 
-vi.mock('@server/billing/freeTierDailyCapGate', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/billing/freeTierDailyCapGate')>()),
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/freeTierDailyCapGate')>()),
   checkFreeTierDailySpendCap: mockCapCheck,
 }));
 

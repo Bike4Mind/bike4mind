@@ -6,7 +6,7 @@ import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { toPublicSkillSummary } from '@server/skills/publicView';
-import { publicAppUrl } from '@server/utils/validators';
+import { publicAppUrl } from '@bike4mind/server-utils/utils/validators';
 
 const CURSOR_SCOPE = 'v1.skills.mine';
 // Bounds the skip a hand-made cursor can ask for (the cursor is unsigned).

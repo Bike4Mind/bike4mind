@@ -13,7 +13,7 @@ import { recomputeStatsForUploadedFile } from '@bike4mind/server-utils/dataLakes
 import { dispatch as historyUploadComplete } from '@bike4mind/server-utils/s3/historyUploadComplete';
 import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
 import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
-import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
+import { buildKnowledgeModerationDeps } from '@bike4mind/server-utils/s3/knowledgeModerationDeps';
 import { Resource } from 'sst';
 import type { Context, S3Event } from 'aws-lambda';
 import crypto from 'crypto';

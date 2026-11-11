@@ -29,14 +29,14 @@ import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import * as z from 'zod';
 import { requireStepUp } from '@server/auth/stepUp';
-import { propagateAccountRisk } from '@server/billing/linkedAccounts';
+import { propagateAccountRisk } from '@bike4mind/server-utils/billing/linkedAccounts';
 import {
   cancelAccountSubscriptions,
   SINGLE_USER_CANCEL_BUDGET_MS,
   subscriptionCancellationAudit,
   subscriptionCancellationResponse,
   type AccountSubscriptionCancellation,
-} from '@server/billing/cancelAccountSubscriptions';
+} from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 import {
   diffProfileFields,
   profileFieldsSent,

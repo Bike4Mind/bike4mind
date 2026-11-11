@@ -21,11 +21,11 @@ import { adminSettingsRepository, agentExecutionRepository, sessionToolApprovalR
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 import { endAgentRunLiveActivity } from '@server/utils/liveActivityPush';
-import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { reopenLowConfidenceAnswer } from '@bike4mind/server-utils/utils/reopenLowConfidenceAnswer';
 import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
-import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
+import { resolveAndPublishMementoCompletion } from '@bike4mind/server-utils/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 import {
   verifyJwtToken,

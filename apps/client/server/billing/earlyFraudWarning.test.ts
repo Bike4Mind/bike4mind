@@ -53,7 +53,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
 }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
 vi.mock('@server/billing/refundClawback', () => ({ clawbackRefundCredits: mocks.clawbackRefundCredits }));
-vi.mock('@server/billing/linkedAccounts', () => ({
+vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({
   lockAccountForPaymentRisk: mocks.lockAccountForPaymentRisk,
   propagateAccountRisk: mocks.propagateAccountRisk,
 }));

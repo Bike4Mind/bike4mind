@@ -118,8 +118,8 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
 }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
 // The real event builders run; the post itself (stage gate, wording) is covered in subscriptionLifecycle.test.ts.
-vi.mock('@server/integrations/slack/subscriptionLifecycle', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/integrations/slack/subscriptionLifecycle')>()),
+vi.mock('@bike4mind/server-utils/integrations/slack/subscriptionLifecycle', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/integrations/slack/subscriptionLifecycle')>()),
   postSubscriptionLifecycleToSlack: mocks.postSubscriptionLifecycleToSlack,
 }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: mocks.sendToClient }));
@@ -137,7 +137,7 @@ vi.mock('@server/billing/paymentRisk', () => ({
   screenPaymentOutcome: vi.fn(),
 }));
 vi.mock('@server/billing/earlyFraudWarning', () => ({ respondToEarlyFraudWarning: vi.fn() }));
-vi.mock('@server/billing/linkedAccounts', () => ({ propagateAccountRisk: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({ propagateAccountRisk: vi.fn() }));
 vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({
   emitPurchaseEvents: vi.fn(),
   emitBillingEvent: mocks.emitBillingEvent,

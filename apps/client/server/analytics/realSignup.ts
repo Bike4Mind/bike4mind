@@ -7,7 +7,7 @@ import {
   USER_FLAG_FIELDS,
   type CountingContext,
   type UserFlags,
-} from './signupCohort';
+} from '@bike4mind/server-utils/analytics/signupCohort';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const USER_BATCH = 1000;

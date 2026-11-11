@@ -82,10 +82,10 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
     return (_req: unknown, _res: unknown, next: () => void) => next();
   },
 }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 // Two DISTINCT contexts so a test can tell which builder the route actually called: the admin
 // context bypasses lake access and must never reach the service on this member-scoped route.
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: async () => ({ userId: 'u1', isAdmin: true, userTags: [], organizationIds: [] }),
   toMemberAccessContext: async () => ({ userId: 'u1', isAdmin: false, userTags: [], organizationIds: [] }),
 }));

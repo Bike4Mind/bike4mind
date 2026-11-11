@@ -14,7 +14,7 @@ import {
   setOrgCustomMcpPolicy,
 } from '@server/mcpConnections/orgPolicy';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import type { Request } from 'express';
 
 type OrgRequest = Request<{}, unknown, unknown, { id?: string }>;

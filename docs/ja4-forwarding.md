@@ -26,7 +26,7 @@ Shared development routers must receive this change through their owning stage.
 Real ASN values also switch on signup checks that were dormant while
 `network.asn` was always null on deployed stages. On these routes, email-code
 and self-serve OAuth signups enforce the admin `maxSignupsPerAsnPerHour` cap
-(`apps/client/server/auth/signupNetworkLimits.ts`), which refuses signups with a
+(`packages/server-utils/src/auth/signupNetworkLimits.ts`), which refuses signups with a
 429 once a non-zero cap is exceeded. Datacenter networks add `datacenterNetwork`
 risk points (`b4m-core/services/src/userService/signupRiskScore.ts`), and signup
 clustering gains `asn` keys. Check that setting in each environment before

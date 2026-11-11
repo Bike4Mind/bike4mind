@@ -1256,7 +1256,7 @@ export const PENDING_UPLOAD_LIMIT = 250;
 
 /**
  * Default daily uploaded-image moderation allowances, in detector calls. The free one is also the
- * floor that apps/client/server/s3/imageModerationBudget.ts applies when the setting cannot be read.
+ * floor that packages/server-utils/src/s3/imageModerationBudget.ts applies when the setting cannot be read.
  */
 export const IMAGE_MODERATION_LIMIT_FREE_PER_DAY = 200;
 export const IMAGE_MODERATION_LIMIT_PAID_PER_DAY = 2000;
@@ -1618,7 +1618,7 @@ export const AUTO_CONTAINMENT_MODES = ['off', 'shadow', 'enforce'] as const;
 export type AutoContainmentMode = (typeof AUTO_CONTAINMENT_MODES)[number];
 
 /**
- * Automated containment from abuse assessments (apps/client/server/security/autoContainment). Acts
+ * Automated containment from abuse assessments (apps/workers/src/security/autoContainment). Acts
  * only on an `abuse` judgment at or above minConfidence, through the admin bulk Contain path.
  */
 export const AutoContainmentConfigSchema = z.object({
@@ -1655,7 +1655,7 @@ export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
 
 /**
  * Operator limits for the advisory assessment of young-domain signup holds
- * (apps/client/server/security/signupDomainHoldAssessment). Every default spends nothing: no model and
+ * (apps/workers/src/security/signupDomainHoldAssessment). Every default spends nothing: no model and
  * a zero budget. `signupDomainHoldAssessmentEnabled` gates all provider egress on top of this.
  */
 export const SignupDomainHoldAssessmentConfigSchema = z.object({
@@ -1758,7 +1758,7 @@ export type SignupRiskScoring = z.infer<typeof SignupRiskScoringSchema>;
 
 /**
  * Rules that approve a pending signup risk review without an admin
- * (apps/client/server/security/riskReviewAutoApproval.ts). Both only move pending to approved, which
+ * (packages/server-utils/src/security/riskReviewAutoApproval.ts). Both only move pending to approved, which
  * an admin can reopen; a model verdict never approves.
  */
 export const SignupRiskAutoApprovalSchema = z
@@ -4034,7 +4034,7 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 9,
   }),
-  // Both read by apps/client/server/s3/imageModerationBudget.ts.
+  // Both read by packages/server-utils/src/s3/imageModerationBudget.ts.
   imageModerationLimitFreePerDay: makeNumberSetting({
     key: 'imageModerationLimitFreePerDay',
     name: 'Uploaded Image Moderation Limit - Free (scans/day)',

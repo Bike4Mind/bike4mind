@@ -37,16 +37,18 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   }),
   getAppFilesStorage: () => ({ delete: effects.deleteFile, deletePermanently: effects.deleteFile }),
 }));
-vi.mock('@server/services/cdn/invalidateRouterCdn', async importActual => ({
-  ...(await importActual<typeof import('@server/services/cdn/invalidateRouterCdn')>()),
+vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
   createCdnInvalidationBatch: () => ({ add: effects.cdnAdd, flush: effects.cdnFlush }),
 }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({ purgeUserPublishedArtifacts: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
+  purgeUserPublishedArtifacts: vi.fn(),
+}));
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: vi.fn() }));
-vi.mock('@server/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: vi.fn() }));
 vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: vi.fn() }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: effects.sendCompleteEmail }));
-vi.mock('@server/billing/cancelAccountSubscriptions', () => ({
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   cancelAccountSubscriptions: vi.fn(async () => ({ canceled: [], failed: [] })),
   readAccountSubscriptionCustomerIds: vi.fn(async () => []),
   SINGLE_USER_CANCEL_BUDGET_MS: 1000,

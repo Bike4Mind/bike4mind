@@ -63,7 +63,7 @@ const {
 });
 
 // ---- Side-effect boundary: spy on composition, not real implementations ----
-vi.mock('./sessionSideEffects', () => sideEffects);
+vi.mock('@bike4mind/server-utils/managers/sessionSideEffects', () => sideEffects);
 
 vi.mock('@bike4mind/services', () => ({
   sessionService: { createSession: createSessionService, updateSession: updateSessionService },
@@ -124,7 +124,7 @@ import {
   logSessionCreatedEvent,
   logProjectSessionAddedEvent,
   recordNotebookAddedToProjectActivity,
-} from './sessionSideEffects';
+} from '@bike4mind/server-utils/managers/sessionSideEffects';
 import type { IUserDocument } from '@bike4mind/common';
 import type { Ability } from '@bike4mind/server-utils/auth/ability';
 import type { Logger } from '@bike4mind/observability';

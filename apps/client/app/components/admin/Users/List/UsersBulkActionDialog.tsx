@@ -11,7 +11,7 @@ import {
   type AdminUsersBulkEmailDomains,
   type AdminUsersBulkPreview,
   type AdminUsersBulkTarget,
-} from '@client/app/utils/adminUsersBulk';
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { getErrorMessage } from '@client/app/utils/error';
 import { ActionDialog } from '../../shared/ActionDialog';
 import { ADMIN_REASON_PRESETS } from '../../shared/adminReason';

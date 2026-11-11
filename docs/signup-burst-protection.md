@@ -90,7 +90,7 @@ marker. Other reasons are left for an admin. Admin Confirm and Release write str
 confirmation names the policy it overrode.
 
 After the rule, the same job runs the advisory assessment of pending `young-domain` holds
-(`apps/client/server/security/signupDomainHoldAssessment`) while **Advisory Assessment of Young-Domain Holds** is on
+(`apps/workers/src/security/signupDomainHoldAssessment`) while **Advisory Assessment of Young-Domain Holds** is on
 (default off). For each hold without a current verdict it asks one Decisions question (`abuse`, `legitimate` or
 `insufficient_evidence`) over a summary of counts and flags only: domain age, mail provider class, whether
 `https://<domain>/` answers with real content and whether that page describes a temporary or disposable mail

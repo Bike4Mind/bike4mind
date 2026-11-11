@@ -19,7 +19,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap: mocks.getSettingsMap,
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ isDevelopment: mocks.isDevelopment }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateTier: mocks.resolveUserRateTier }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateTier: mocks.resolveUserRateTier }));
 
 import { PENDING_UPLOAD_LIMIT, TooManyRequestsError } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';

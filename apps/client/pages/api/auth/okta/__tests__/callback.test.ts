@@ -84,7 +84,7 @@ vi.mock('@server/auth/signInSecondFactor', () => ({
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/auth/requireNonSystemUser', () => ({ requireNonSystemUser: vi.fn() }));
-vi.mock('@server/utils/validators', () => ({
+vi.mock('@bike4mind/server-utils/utils/validators', () => ({
   validateAppUrl: () => 'http://localhost:3000',
   // The route now shares one localhost predicate with csrfProtection; the real
   // implementation is pure, so mirror it rather than stubbing a boolean.
