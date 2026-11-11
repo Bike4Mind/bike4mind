@@ -806,7 +806,7 @@ const accountDataExportQueueSubscription = accountDataExportQueue.subscribe(
     // The zip is written to /tmp before upload; sized for MAX_FILE_BYTES in accountDataExport.ts.
     storage: '5 GB',
     vpc: lambdaVpc,
-    link: [...allSecrets, fabFileBucket, generatedImagesBucket, eventBus, websocketApi],
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, eventBus, websocketApi, accountDataExportQueue],
     permissions: [
       {
         actions: ['s3:ListBucketVersions', 's3:DeleteObjectVersion'],

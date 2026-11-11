@@ -22,7 +22,9 @@ import { denySelfAdminAction, isSelfOrImpersonator } from '@bike4mind/server-uti
  * is the request record, and the object under `adminDataExportKey` is the result.
  */
 
-// The worker's retries (two, at a 16-minute visibility timeout: infra/queues.ts) end well inside this.
+// Covers a job that waits out another export's lease (re-sent for up to 30 minutes: MAX_LEASE_WAITS in
+// apps/workers/src/queueHandlers/accountDataExport.ts) and then builds. Only a job that also uses its two
+// 16-minute retries (infra/queues.ts) can still finish past this.
 export const ADMIN_DATA_EXPORT_GIVE_UP_MS = 60 * 60 * 1000;
 const LISTED_EXPORTS = 20;
 

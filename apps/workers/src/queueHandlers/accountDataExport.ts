@@ -5,6 +5,7 @@ import path from 'path';
 import { Readable, Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import archiver from 'archiver';
+import { Resource } from 'sst';
 import { z } from 'zod';
 import {
   User,
@@ -28,6 +29,7 @@ import { secureParameters } from '@bike4mind/utils';
 import { notebookExportService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import {
   ACCOUNT_DATA_EXPORT_TTL_MS,
@@ -50,6 +52,11 @@ import { accountArchiveAdapters, type AccountArchiveCollection } from './account
 
 const { NotebookExportService } = notebookExportService;
 
+// A job that finds the account lease held is re-sent this much later, at most MAX_LEASE_WAITS times
+// (30 minutes, past a full 15-minute build), instead of spending its SQS retries on the wait.
+export const LEASE_WAIT_DELAY_SECONDS = 120;
+export const MAX_LEASE_WAITS = 15;
+
 const AccountDataExportPayload = z.object({
   exportJobId: z.uuid(),
   userId: z.string().min(1),
@@ -59,6 +66,8 @@ const AccountDataExportPayload = z.object({
    * is fetched from the admin profile, so the subject is not emailed.
    */
   requestedBy: z.string().min(1).optional(),
+  /** How many times this job has been re-sent while another export held the account lease. */
+  leaseWaits: z.number().int().min(1).max(MAX_LEASE_WAITS).optional(),
 });
 
 // Original file bytes past this total are listed in files/index.json but not copied, so the zip
@@ -739,11 +748,13 @@ async function existingExport(storage: Storage, key: string) {
 }
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
-  const { exportJobId, userId, requestedBy } = secureParameters(
-    JSON.parse(event.Records[0].body),
-    AccountDataExportPayload
-  );
-  logger.updateMetadata({ exportJobId, userId, requestedBy });
+  const {
+    exportJobId,
+    userId,
+    requestedBy,
+    leaseWaits = 0,
+  } = secureParameters(JSON.parse(event.Records[0].body), AccountDataExportPayload);
+  logger.updateMetadata({ exportJobId, userId, requestedBy, leaseWaits });
   const forAdmin = requestedBy !== undefined;
   const key = forAdmin ? adminDataExportKey(userId, exportJobId) : accountDataExportKey(userId, exportJobId);
   const removeSkippedExport = () => getFilesStorage().deletePermanently(key);
@@ -798,8 +809,19 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await removeSkippedExport();
       return;
     }
-    // Admin and self-serve exports share this one lease, so an overlapping job waits on SQS redelivery
-    // (infra/queues.ts: 16-minute visibility, 2 retries) and a long build can use up the other's retries.
+    // Admin and self-serve exports share this one lease. The overlapping job is re-sent with a delay and
+    // this message is acked, so the wait does not use up its SQS retries (infra/queues.ts); past the cap,
+    // or with no queue to re-send to, it falls back to SQS redelivery and then the DLQ.
+    const queueUrl = Resource.accountDataExportQueue?.url;
+    if (leaseWaits < MAX_LEASE_WAITS && queueUrl) {
+      await sendToQueue(
+        queueUrl,
+        { exportJobId, userId, ...(forAdmin && { requestedBy }), leaseWaits: leaseWaits + 1 },
+        LEASE_WAIT_DELAY_SECONDS
+      );
+      logger.info('Account data export deferred: another export holds the account lease');
+      return;
+    }
     throw new Error('Another account data export holds the account lease');
   }
   const leaseFilter = () => ({
