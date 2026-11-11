@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { Cache } from '@bike4mind/database';
@@ -6,6 +6,8 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 import { AdminAiSkip } from './adminAiSkip';
 import {
   adminAiDecisionAccounting,
@@ -23,7 +25,7 @@ beforeAll(async () => {
   await mongoose.connect(mongoServer.getUri());
   // The fixed-window claim relies on the unique key index to refuse a second live window.
   await Cache.syncIndexes();
-}, MONGO_TEST_TIMEOUT_MS);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();

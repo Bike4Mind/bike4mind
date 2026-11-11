@@ -19,6 +19,8 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 import { adminAiTextOutputSchema, runAdminAi, type AdminAiRunInput, type RunAdminAiDeps } from './runAdminAi';
 
 let mongoServer: MongoMemoryServer;
@@ -28,7 +30,7 @@ beforeAll(async () => {
   await mongoose.connect(mongoServer.getUri());
   await Cache.syncIndexes();
   await AdminAiSuggestionModel.syncIndexes();
-}, MONGO_TEST_TIMEOUT_MS);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();

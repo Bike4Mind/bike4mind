@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { ADMIN_AI_FEATURES } from '@bike4mind/common';
@@ -8,6 +8,8 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 import {
   ADMIN_AI_SYSTEM_ACTORS,
   adminAiSystemActor,
@@ -77,7 +79,7 @@ describe('recordAiDecision', () => {
     mongoServer = await createMongoServer();
     await mongoose.connect(mongoServer.getUri());
     await AdminAiSuggestionModel.syncIndexes();
-  }, MONGO_TEST_TIMEOUT_MS);
+  });
   afterAll(async () => {
     await mongoose.disconnect();
     await mongoServer?.stop();
