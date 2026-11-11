@@ -6,6 +6,7 @@ import type {
   IUserDocument,
   WorkspaceTurnReply,
 } from '@bike4mind/common';
+import { sessionRepository } from '@bike4mind/database';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { CORE_TUTORIAL_SETTING } from './settingName';
 import { resolveCoreTutorial } from './registry';
@@ -24,7 +25,16 @@ async function turnsFor(ctx: Omit<CoreTutorialTurnContext, 'quest'>) {
   const { modules } = await coreContent.resolve();
   const { tutorialTurnService } = await import('./service');
   // The one module the marker names: a stale marker never reaches another walk.
-  return tutorialTurnService({ modules: modules.filter(m => m.id === moduleId), models: coreModels });
+  return tutorialTurnService({
+    modules: modules.filter(m => m.id === moduleId),
+    models: coreModels,
+    // Clears the marker when the script ends the walk, so later turns skip this check.
+    setSessionMarker: async (sessionId, userId) => {
+      if (!(await sessionRepository.findByIdAndUserId(sessionId, userId))) return;
+      await sessionRepository.update({ id: sessionId, tutorial: null });
+    },
+    warn: message => ctx.logger?.warn(message),
+  });
 }
 
 export const coreTutorialTurns: CoreTutorialTurnHook = {

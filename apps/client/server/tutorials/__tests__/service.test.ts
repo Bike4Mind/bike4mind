@@ -740,6 +740,7 @@ describe('the session marker', () => {
     expect(marks).toEqual([
       [sessions[0].id, 'demo'],
       [sessions[1].id, 'demo'],
+      [sessions[0].id, null],
     ]);
   });
 
@@ -770,5 +771,60 @@ describe('the session marker', () => {
     const r = await recordPosition(deps, 'u1', { moduleId: 'demo', stepId: 'finish', status: 'finished' });
     expect(r.ok).toBe(true);
     expect(warnings.some(w => w.includes('could not unmark'))).toBe(true);
+  });
+
+  it('is written again when a left walk resumes, and a failed write fails the resume', async () => {
+    const { deps, marks, sessions } = withMarker();
+    await startModule(deps, 'u1', 'demo');
+    await recordPosition(deps, 'u1', { moduleId: 'demo', stepId: 'attach-sheet', status: 'left' });
+    marks.length = 0;
+    const resumed = await resumeModule(deps, 'u1', 'demo');
+    expect(resumed.ok).toBe(true);
+    expect(marks).toEqual([[sessions[0].id, 'demo']]);
+
+    await recordPosition(deps, 'u1', { moduleId: 'demo', stepId: 'attach-sheet', status: 'left' });
+    deps.setSessionMarker = async () => {
+      throw new Error('db down');
+    };
+    await expect(resumeModule(deps, 'u1', 'demo')).rejects.toThrow('db down');
+  });
+
+  it('leaves progress unchanged when the start cannot mark the session', async () => {
+    const { deps, progressOf } = (() => {
+      const made = makeDeps();
+      return { ...made, progressOf: () => made.progress.get('u1')?.demo };
+    })();
+    await startModule(deps, 'u1', 'demo');
+    const before = progressOf();
+    deps.setSessionMarker = async () => {
+      throw new Error('db down');
+    };
+    await expect(startModule(deps, 'u1', 'demo')).rejects.toThrow('db down');
+    expect(progressOf()).toEqual(before);
+  });
+
+  it('clears the marker when the walk ends server-side, and only warns if that fails', async () => {
+    const { deps, marks, sessions } = withMarker();
+    await startModule(deps, 'u1', 'demo');
+    marks.length = 0;
+    deps.modules = [{ ...MODULE, version: 2 }];
+    await answerTurn(deps, 'u1', sessions[0].id, { id: 'm0', prompt: 'open' });
+    expect(marks).toEqual([[sessions[0].id, null]]);
+
+    deps.modules = [MODULE];
+    await startModule(deps, 'u1', 'demo');
+    marks.length = 0;
+    deps.setSessionMarker = async () => {
+      throw new Error('db down');
+    };
+    await expect(answerTurn(deps, 'u1', sessions[1].id, { id: 'm0', prompt: 'something else' })).resolves.toBeNull();
+  });
+
+  it("clears the prior walk's session marker on a restart", async () => {
+    const { deps, marks, sessions } = withMarker();
+    await startModule(deps, 'u1', 'demo');
+    marks.length = 0;
+    await startModule(deps, 'u1', 'demo');
+    expect(marks).toContainEqual([sessions[0].id, null]);
   });
 });

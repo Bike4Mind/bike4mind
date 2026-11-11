@@ -79,6 +79,12 @@ export interface TutorialTurnDeps {
     ): Promise<void>;
   };
   now(): Date;
+  /**
+   * Marks the session as walking this module, or clears the mark with null. Absent for an owner whose
+   * turns are answered by a workspace hook instead of the session marker.
+   */
+  setSessionMarker?(sessionId: string, userId: string, moduleId: string | null): Promise<void>;
+  warn?(message: string): void;
 }
 
 export interface TutorialDeps extends TutorialTurnDeps {
@@ -88,11 +94,6 @@ export interface TutorialDeps extends TutorialTurnDeps {
   /** Deletes the user's session; false when it holds work of the user's own and was kept. */
   deleteSession(sessionId: string, userId: string): Promise<boolean>;
   warn(message: string): void;
-  /**
-   * Marks the session as walking this module, or clears the mark with null. Absent for an owner whose
-   * turns are answered by a workspace hook instead of the session marker.
-   */
-  setSessionMarker?(sessionId: string, userId: string, moduleId: string | null): Promise<void>;
 }
 
 /** A recorded reply, written onto the user's own quest in place of a model's. */
@@ -111,11 +112,11 @@ export const TUTORIAL_UPDATED_REPLY = 'This tutorial was updated. Start it again
 /** The one reply a walk gets after its module was switched off under it; the panel no longer lists it. */
 export const TUTORIAL_OFF_REPLY = 'This tutorial was switched off for now. Your conversation carries on.';
 
-async function markSession(deps: TutorialDeps, sessionId: string, userId: string, moduleId: string | null) {
+async function markSession(deps: TutorialTurnDeps, sessionId: string, userId: string, moduleId: string | null) {
   try {
     await deps.setSessionMarker?.(sessionId, userId, moduleId);
   } catch (error) {
-    deps.warn(`tutorial: could not ${moduleId ? 'mark' : 'unmark'} session ${sessionId}: ${String(error)}`);
+    deps.warn?.(`tutorial: could not ${moduleId ? 'mark' : 'unmark'} session ${sessionId}: ${String(error)}`);
   }
 }
 
@@ -231,6 +232,9 @@ export async function startModule(
   const prior = await deps.progress.read(userId, moduleId);
   const session = await deps.createSession(mod);
   const at = deps.now();
+  // Not best effort: an unmarked session would be answered by the model, so a failed mark fails the start,
+  // and marking first leaves no progress pointing at an unmarked session.
+  await deps.setSessionMarker?.(session.id, userId, moduleId);
   await deps.progress.begin(userId, moduleId, {
     status: 'in_progress',
     sessionId: session.id,
@@ -240,8 +244,8 @@ export async function startModule(
     turnClaimedAt: at,
     updatedAt: at,
   });
-  // Not best effort: an unmarked session would be answered by the model, so a failed mark fails the start.
-  await deps.setSessionMarker?.(session.id, userId, moduleId);
+  // A kept prior session (it holds the user's own messages) must stop being answered by the script.
+  if (prior && prior.sessionId !== session.id) await markSession(deps, prior.sessionId, userId, null);
   await discardUntouchedSession(deps, userId, moduleId, prior, session.id);
   return { ok: true, sessionId: session.id, turn: -1, version: mod.version, revision: mod.revision };
 }
@@ -271,6 +275,8 @@ export async function resumeModule(
     }
   }
   const stepId = entry.stepId && mod.steps.some(s => s.id === entry.stepId) ? entry.stepId : mod.steps[0].id;
+  // Leaving cleared the marker. Not best effort, as in startModule; marked first so a failure changes nothing.
+  await deps.setSessionMarker?.(entry.sessionId, userId, moduleId);
   if (!(await deps.progress.setPosition(userId, moduleId, stepId, 'in_progress', deps.now()))) {
     return fail(404, 'No tutorial to resume', 'NOT_STARTED');
   }
@@ -387,12 +393,14 @@ export async function answerTurn(
   if (scripted.stale) {
     // Said once: the walk is left, so the next message is the model's. No marker, so no turn is spent.
     await deps.progress.setPosition(userId, scripted.moduleId, scripted.entry.stepId ?? '', 'left', deps.now());
+    await markSession(deps, sessionId, userId, null);
     return { replies: [scripted.off ? TUTORIAL_OFF_REPLY : TUTORIAL_UPDATED_REPLY], uiSideEffects: [] };
   }
   const { mod, entry, from, turn } = scripted;
   if (!samePrompt(quest.prompt, mod.transcript[turn].prompt)) {
     // Recorded here as well as by the page, which may be closed, so agent runs stop being refused.
     await deps.progress.setPosition(userId, mod.id, entry.stepId ?? '', 'left', deps.now());
+    await markSession(deps, sessionId, userId, null);
     return null;
   }
   const questId = quest.id;
@@ -480,23 +488,29 @@ export interface TutorialServiceOptions {
   deps: TutorialServiceDeps;
 }
 
-/** What the chat path needs: the turn answers, with no sheet, session or marker deps. */
+/** What the chat path needs: the turn answers, with no sheet or session deps. */
 export function tutorialTurnService({
   modules,
   models,
   quests,
   now,
+  setSessionMarker,
+  warn,
 }: {
   modules: readonly TutorialModule[];
   models: Pick<TutorialModels, 'Progress'>;
   quests?: TutorialServiceDeps['quests'];
   now?: () => Date;
+  setSessionMarker?: TutorialTurnDeps['setSessionMarker'];
+  warn?: TutorialTurnDeps['warn'];
 }) {
   const deps: TutorialTurnDeps = {
     modules,
     progress: progressStoreFor(models.Progress),
     quests: quests ?? defaultQuests,
     now: now ?? (() => new Date()),
+    setSessionMarker,
+    warn,
   };
   return {
     answerTurn: (userId: string, sessionId: string, quest: { id: string; prompt: string }) =>

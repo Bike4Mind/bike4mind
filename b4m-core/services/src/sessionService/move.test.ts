@@ -25,6 +25,18 @@ describe('moveSession', () => {
     expect(result.surface).toBe(OPTI_SURFACE);
   });
 
+  it('clears a tutorial marker when the session moves into a workspace', async () => {
+    const { sessions, ...adapters } = makeAdapters({
+      id: 's1',
+      userId: 'u1',
+      tutorial: { owner: 'core', moduleId: 'demo' },
+    });
+
+    await moveSession('u1', { id: 's1', targetSurface: OPTI_SURFACE }, adapters);
+
+    expect(sessions.update).toHaveBeenCalledWith({ id: 's1', surface: OPTI_SURFACE, tutorial: null });
+  });
+
   // The main list is "no surface", so the field is removed rather than written as null.
   it('unsets surface when moving back to the main list', async () => {
     const { sessions, ...adapters } = makeAdapters({ id: 's1', userId: 'u1', surface: OPTI_SURFACE }, NO_ACCESS);
