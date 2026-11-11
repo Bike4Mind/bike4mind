@@ -33,12 +33,16 @@ const h = vi.hoisted(() => ({
   exportSubject: vi.fn(),
   recordModels: [] as string[],
   records: vi.fn(),
+  sendToQueue: vi.fn(),
+  resource: { accountDataExportQueue: { url: 'https://sqs.example/account-data-export' } as { url?: string } },
   notebooks: [] as Array<{ id: string; name: string; chatHistory?: Array<{ images?: string[] }> }>,
 }));
 
 vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
+vi.mock('sst', () => ({ Resource: h.resource }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/utils', () => ({
   secureParameters: (obj: unknown, schema: { parse: (value: unknown) => unknown }) => schema.parse(obj),
 }));
@@ -106,7 +110,7 @@ vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 
 import { ACCOUNT_DATA_EXPORT_TTL_MS } from '@bike4mind/server-utils/utils/accountDataExport';
-import { dispatch, MAX_FILE_BYTES } from './accountDataExport';
+import { dispatch, LEASE_WAIT_DELAY_SECONDS, MAX_FILE_BYTES, MAX_LEASE_WAITS } from './accountDataExport';
 
 const logger = { updateMetadata: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const FULL_BUDGET_MS = 15 * 60 * 1000;
@@ -570,11 +574,73 @@ describe('account data export worker', () => {
     expect(h.leaseRelease).toHaveBeenCalledOnce();
   });
 
-  it('retries a concurrent-export admission failure without releasing the other invocation lease', async () => {
-    h.leaseClaim.mockResolvedValue(null);
-    await expect(run()).rejects.toThrow('Another account data export');
-    expect(h.leaseRelease).not.toHaveBeenCalled();
-    expect(h.getMetadata).not.toHaveBeenCalled();
+  describe('when another export holds the account lease', () => {
+    beforeEach(() => {
+      h.leaseClaim.mockResolvedValue(null);
+      h.sendToQueue.mockResolvedValue('message-id');
+      h.resource.accountDataExportQueue = { url: 'https://sqs.example/account-data-export' };
+    });
+
+    it('re-sends the job with a delay and acks it, without touching the other lease', async () => {
+      await expect(run()).resolves.toBeUndefined();
+      expect(h.sendToQueue).toHaveBeenCalledOnce();
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        'https://sqs.example/account-data-export',
+        { exportJobId: JOB_ID, userId: USER_ID, leaseWaits: 1 },
+        LEASE_WAIT_DELAY_SECONDS
+      );
+      expect(LEASE_WAIT_DELAY_SECONDS).toBeGreaterThan(0);
+      expect(h.leaseRelease).not.toHaveBeenCalled();
+      expect(h.getMetadata).not.toHaveBeenCalled();
+      expect(h.uploadFile).not.toHaveBeenCalled();
+      expect(h.permanentDelete).not.toHaveBeenCalled();
+    });
+
+    it('keeps the requesting admin and counts the wait on an admin export', async () => {
+      await run({ exportJobId: JOB_ID, userId: USER_ID, requestedBy: 'admin-1', leaseWaits: 3 });
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        expect.any(String),
+        { exportJobId: JOB_ID, userId: USER_ID, requestedBy: 'admin-1', leaseWaits: 4 },
+        LEASE_WAIT_DELAY_SECONDS
+      );
+    });
+
+    it('falls back to SQS retries at the wait cap', async () => {
+      await expect(run({ exportJobId: JOB_ID, userId: USER_ID, leaseWaits: MAX_LEASE_WAITS })).rejects.toThrow(
+        'Another account data export'
+      );
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.leaseRelease).not.toHaveBeenCalled();
+    });
+
+    it('falls back to SQS retries with no queue to re-send to', async () => {
+      h.resource.accountDataExportQueue = {};
+      await expect(run()).rejects.toThrow('Another account data export');
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
+
+    it('lets a failed re-send propagate so SQS redelivers the job', async () => {
+      h.sendToQueue.mockRejectedValue(new Error('send failed'));
+      await expect(run()).rejects.toThrow('send failed');
+      expect(h.leaseRelease).not.toHaveBeenCalled();
+    });
+
+    it('skips a re-sent job whose account deletion became due while it waited', async () => {
+      h.userFindById.mockResolvedValue({
+        email: 'ada@example.com',
+        deletion: { scheduledFor: new Date(Date.now() - 1) },
+      });
+      await run({ exportJobId: JOB_ID, userId: USER_ID, leaseWaits: 2 });
+      expect(h.leaseClaim).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.permanentDelete).toHaveBeenCalledWith(KEY);
+    });
+
+    it.each([0, -1, 1.5, MAX_LEASE_WAITS + 1, '2'])('rejects a malformed wait count %s', async leaseWaits => {
+      await expect(run({ exportJobId: JOB_ID, userId: USER_ID, leaseWaits })).rejects.toThrow();
+      expect(h.userFindById).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
   });
 
   it('renews the same unexpired account lease immediately before a hard-bounded upload', async () => {
