@@ -434,6 +434,15 @@ describe('listPrincipalLedger', () => {
     });
   });
 
+  it('rejects live ciphertext when the decryption key is gone', async () => {
+    const { repo } = await seedTwo();
+    const keyless = { ...makeKeys().provider, getDek: async () => null };
+    await expect(list(repo, keyless)).rejects.toMatchObject({
+      message: 'Memory ledger failed integrity checks.',
+      cause: { message: 'Memory ledger contains live ciphertext without its decryption key' },
+    });
+  });
+
   it('rejects a returned row owned by a different principal', async () => {
     const { repo, provider } = await seedTwo();
     const mismatched = {
