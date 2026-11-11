@@ -11,11 +11,15 @@ import type { IExtendedFeedbackDocument } from './types';
 const mocks = vi.hoisted(() => ({
   getFeedbackByIdFromServer: vi.fn(),
   openHelpPanel: vi.fn(),
+  helpPanelOpen: false,
   copyTextWithToast: vi.fn(),
 }));
 
 vi.mock('@client/app/utils/feedbackAPICalls', () => ({ getFeedbackByIdFromServer: mocks.getFeedbackByIdFromServer }));
-vi.mock('@client/app/hooks/useHelpPanel', () => ({ openHelpPanel: mocks.openHelpPanel }));
+vi.mock('@client/app/hooks/useHelpPanel', () => ({
+  openHelpPanel: mocks.openHelpPanel,
+  useHelpPanel: <T,>(selector: (state: { open: boolean }) => T) => selector({ open: mocks.helpPanelOpen }),
+}));
 vi.mock('@client/app/utils/copyToClipboard', () => ({ copyTextWithToast: mocks.copyTextWithToast }));
 
 import FeedbackDetailDrawer, { type FeedbackDetailDrawerProps } from './FeedbackDetailDrawer';

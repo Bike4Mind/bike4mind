@@ -24,7 +24,7 @@ import { useQuery } from '@tanstack/react-query';
 import { adminUserProfilePath, FeedbackStatus } from '@bike4mind/common';
 import { getFeedbackByIdFromServer } from '@client/app/utils/feedbackAPICalls';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
-import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
+import { openHelpPanel, useHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { Fact, SectionCard, StatusChip } from '../shared';
 import { adminFocus, adminFocusScope } from '../shared/adminStyles';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
@@ -90,6 +90,8 @@ const FeedbackDetailDrawer = ({
     placeholderData: listRow && listRow._id === feedbackId ? listRow : undefined,
   });
 
+  const helpPanelOpen = useHelpPanel(state => state.open);
+
   const record = recordQuery.data ?? undefined;
   const missing = recordQuery.isError || (recordQuery.isSuccess && !recordQuery.data);
 
@@ -102,8 +104,8 @@ const FeedbackDetailDrawer = ({
       // before opening is no longer the one being read.
       disableRestoreFocus
       // "Open the help article" opens the help panel beside the drawer; a trapped focus would make
-      // that panel unusable while the drawer is open.
-      disableEnforceFocus
+      // that panel unusable, so focus is only trapped while the panel is closed.
+      disableEnforceFocus={helpPanelOpen}
       slotProps={{
         content: {
           'aria-labelledby': 'feedback-detail-title',
@@ -355,7 +357,9 @@ const FeedbackDetailBody = ({
           <Select
             size="sm"
             value={record.status}
-            onChange={(_, value) => void onStatusChange(record, value)}
+            onChange={(_, value) => {
+              if (value) void onStatusChange(record, value);
+            }}
             slotProps={{
               button: { 'aria-label': 'Status of this report', 'data-testid': 'feedback-detail-status-select' },
               listbox: { sx: { zIndex: 1400 } },
