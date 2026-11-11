@@ -1,8 +1,8 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { User } from '@bike4mind/database';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { z } from 'zod';
 
@@ -18,12 +18,16 @@ const QuerySchema = z.object({
  * GET /api/admin/users/by-provider-id?id=<64 hex>: the account behind the end-user identifier an LLM
  * provider names in a safety notice (OpenAI `safety_identifier`, Anthropic `metadata.user_id`).
  * The value is toProviderEndUserId(user id), stored on the User model as `providerEndUserId`.
+ * `support:read` is what already opens a user's profile, so a support delegate can resolve a notice too.
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: 'support:read' },
+})
   .use(rateLimit({ limit: 60, windowMs: 60_000, bucket: 'admin-users-by-provider-id' }))
   .get(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
       const parsed = QuerySchema.safeParse(req.query);
       if (!parsed.success) {
         return res.status(400).json({

@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => handlers[req.method ?? 'GET']?.(req, res), {
       use: () => chain,
@@ -42,16 +42,12 @@ describe('GET /api/admin/users/by-provider-id', () => {
     mockFindOne.mockResolvedValue(null);
   });
 
-  it('requires JWT auth with admin scope', () => {
+  it('gates through adminApi with JWT auth, admin scope and support:read for GET', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: 'support:read' },
     });
-  });
-
-  it('refuses a non-admin before reading anything', async () => {
-    await expect(call({ id: DIGEST }, { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
-    expect(mockFindOne).not.toHaveBeenCalled();
   });
 
   it.each([{}, { id: 'not-hex' }, { id: 'ab'.repeat(12) }, { id: 'g'.repeat(64) }])(
