@@ -2491,6 +2491,9 @@ export type ResearchConfigInput = {
   maxResults?: number;
   maxProposals?: number;
   recencyDays?: number | null;
+  trustedDomains?: string[];
+  autoAdmitTrusted?: boolean;
+  maxAutoAdmits?: number;
   reviewDomains?: string[];
   unlistedSources?: ResearchUnlistedSources;
   blockedDomains?: string[];

@@ -13,6 +13,7 @@ import {
   Option,
   Select,
   Stack,
+  Switch,
   Textarea,
   ToggleButtonGroup,
   Typography,
@@ -34,6 +35,8 @@ import {
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
   RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
+  RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
+  RESEARCH_MAX_AUTO_ADMITS_LIMIT,
   RESEARCH_MAX_PROPOSALS_DEFAULT,
   RESEARCH_MAX_PROPOSALS_LIMIT,
   RESEARCH_MAX_RESULTS_DEFAULT,
@@ -89,6 +92,9 @@ interface ConfigDraft {
   recencyDays: string;
   minRelevance: string;
   costCeilingUsd: string;
+  trustedDomains: string;
+  autoAdmitTrusted: boolean;
+  maxAutoAdmits: string;
   reviewDomains: string;
   unlistedSources: ResearchUnlistedSources;
   blockedDomains: string;
@@ -132,6 +138,9 @@ const emptyDraft = (): ConfigDraft => ({
   recencyDays: '',
   minRelevance: String(RESEARCH_MIN_RELEVANCE_DEFAULT),
   costCeilingUsd: microUsdToUsdInput(RESEARCH_COST_CEILING_MICRO_USD_DEFAULT),
+  trustedDomains: '',
+  autoAdmitTrusted: false,
+  maxAutoAdmits: String(RESEARCH_MAX_AUTO_ADMITS_DEFAULT),
   reviewDomains: '',
   unlistedSources: 'review',
   blockedDomains: '',
@@ -143,7 +152,8 @@ const emptyDraft = (): ConfigDraft => ({
 const draftFromConfig = (config: IDataLakeResearchConfigDocument): ConfigDraft => {
   // A response from a server that predates the tiers carries only `allowedDomains`; the upgrader
   // applies the same mapping the migration does, so the form shows the restriction that is in force.
-  const { reviewDomains, unlistedSources } = upgradeLegacyResearchLevers(config);
+  const { trustedDomains, reviewDomains, unlistedSources, autoAdmitTrusted, maxAutoAdmits } =
+    upgradeLegacyResearchLevers(config);
   return {
     name: config.name,
     query: config.query,
@@ -153,6 +163,9 @@ const draftFromConfig = (config: IDataLakeResearchConfigDocument): ConfigDraft =
     recencyDays: config.recencyDays == null ? '' : String(config.recencyDays),
     minRelevance: String(config.minRelevance),
     costCeilingUsd: microUsdToUsdDraftInput(config.costCeilingMicroUsd),
+    trustedDomains: trustedDomains.join('\n'),
+    autoAdmitTrusted,
+    maxAutoAdmits: String(maxAutoAdmits),
     reviewDomains: reviewDomains.join('\n'),
     unlistedSources,
     blockedDomains: config.blockedDomains.join('\n'),
@@ -246,6 +259,14 @@ const validateDraft = (draft: ConfigDraft): DraftErrors => {
       integer: false,
       message: `Enter an amount above $0 and up to $${microUsdToUsdInput(RESEARCH_COST_CEILING_MICRO_USD_LIMIT)}.`,
     }),
+    maxAutoAdmits: draft.autoAdmitTrusted
+      ? rangeError(draft.maxAutoAdmits, {
+          min: 1,
+          max: RESEARCH_MAX_AUTO_ADMITS_LIMIT,
+          integer: true,
+          message: `Enter a whole number from 1 to ${RESEARCH_MAX_AUTO_ADMITS_LIMIT}.`,
+        })
+      : undefined,
     reviewBacklogLimit: rangeError(draft.reviewBacklogLimit, {
       min: 1,
       max: RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
@@ -271,6 +292,10 @@ const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
   costCeilingMicroUsd: Math.round(
     parseNumber(draft.costCeilingUsd, RESEARCH_COST_CEILING_MICRO_USD_DEFAULT / 1_000_000) * 1_000_000
   ),
+  trustedDomains: parseList(draft.trustedDomains),
+  // An empty trusted list leaves nothing to trust, so the switch cannot be on with it.
+  autoAdmitTrusted: draft.autoAdmitTrusted && parseList(draft.trustedDomains).length > 0,
+  maxAutoAdmits: parseNumber(draft.maxAutoAdmits, RESEARCH_MAX_AUTO_ADMITS_DEFAULT),
   reviewDomains: parseList(draft.reviewDomains),
   unlistedSources: draft.unlistedSources,
   blockedDomains: parseList(draft.blockedDomains),
@@ -278,6 +303,15 @@ const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
   cadence: draft.cadence,
   reviewBacklogLimit: parseNumber(draft.reviewBacklogLimit, RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
+
+/** The proposal limit also bounds auto-admits (they are proposals first), so the lower number wins. */
+const autoAdmitCapHint = (cap: string, proposalLimit: string): string => {
+  const capValue = parseNumber(cap, RESEARCH_MAX_AUTO_ADMITS_DEFAULT);
+  const limitValue = parseNumber(proposalLimit, RESEARCH_MAX_PROPOSALS_DEFAULT);
+  return capValue > limitValue
+    ? `Up to ${limitValue} per run; the proposal limit applies.`
+    : `Up to ${capValue} per run.`;
+};
 
 const PRESET_LABEL: Record<ResearchPresetId, string> = {
   quick: 'Quick',
@@ -343,6 +377,9 @@ const hasNonPresetLeverSet = (draft: ConfigDraft): boolean => {
   const pick = ({
     recencyDays,
     minRelevance,
+    trustedDomains,
+    autoAdmitTrusted,
+    maxAutoAdmits,
     reviewDomains,
     unlistedSources,
     blockedDomains,
@@ -353,6 +390,9 @@ const hasNonPresetLeverSet = (draft: ConfigDraft): boolean => {
     JSON.stringify([
       recencyDays,
       minRelevance,
+      trustedDomains,
+      autoAdmitTrusted,
+      autoAdmitTrusted ? maxAutoAdmits : null,
       reviewDomains,
       unlistedSources,
       blockedDomains,
@@ -497,7 +537,10 @@ const runStateLabel = (run: IDataLakeResearchRunDocument): keyof typeof RUN_STAT
  * new drop bucket to the shared type fails THIS file to compile rather than silently vanishing from
  * the only place a manager can see it.
  */
-const DROP_REASON_LABEL: Record<Exclude<keyof ResearchRunTotals, 'searchHits' | 'proposed'>, string> = {
+const DROP_REASON_LABEL: Record<
+  Exclude<keyof ResearchRunTotals, 'searchHits' | 'proposed' | 'autoAdmitted' | 'autoAdmitSkipped'>,
+  string
+> = {
   filteredBySource: 'blocked by source rules',
   belowRelevance: 'below the relevance floor',
   judgeFailed: 'could not be judged (the model call failed)',
@@ -528,6 +571,9 @@ const runConfigLabel = (
 const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
   const { totals } = run;
   const parts: string[] = [`${totals.searchHits} found`, `${totals.proposed} proposed`];
+  // Sub-counts of "proposed", not drops: the rule's own result, shown so a manager sees what it did.
+  if (totals.autoAdmitted > 0) parts.push(`${totals.autoAdmitted} added automatically`);
+  if (totals.autoAdmitSkipped > 0) parts.push(`${totals.autoAdmitSkipped} trusted but left for review`);
   for (const [key, label] of Object.entries(DROP_REASON_LABEL)) {
     const count = totals[key as keyof ResearchRunTotals];
     if (count > 0) parts.push(`${count} ${label}`);
@@ -542,7 +588,10 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
  * placed here or excluded.
  */
 const JUDGED_BUCKETS: Record<
-  Exclude<keyof ResearchRunTotals, 'searchHits' | 'filteredBySource' | 'judgeFailed' | 'notJudged'>,
+  Exclude<
+    keyof ResearchRunTotals,
+    'searchHits' | 'filteredBySource' | 'judgeFailed' | 'notJudged' | 'autoAdmitted' | 'autoAdmitSkipped'
+  >,
   true
 > = {
   belowRelevance: true,
@@ -705,8 +754,9 @@ export function DataLakeResearchPanel({
   return (
     <Stack spacing={2} data-testid="datalake-research-panel">
       <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-help">
-        A research run searches the web with the settings below and puts what it finds in the Proposals queue. Nothing
-        reaches this lake until you approve it.
+        A research run searches the web with the settings below and puts what it finds in the Proposals queue. Results
+        wait there for your approval, unless a site you list as trusted is set to be added automatically. Nothing is
+        ever added because of a relevance score.
       </Typography>
 
       {!configs?.length && !formOpen && (
@@ -745,6 +795,11 @@ export function DataLakeResearchPanel({
               <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap' }} data-testid="datalake-research-config-query">
                 {config.query}
               </Typography>
+              {config.autoAdmitTrusted === true && (
+                <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-auto-admit">
+                  {`Adds trusted results automatically, up to ${config.maxAutoAdmits ?? RESEARCH_MAX_AUTO_ADMITS_DEFAULT} per run`}
+                </Typography>
+              )}
               <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-model">
                 {`Model: ${config.model ? (modelLabelById.get(config.model) ?? config.model) : defaultModelLabel}`}
               </Typography>
@@ -1100,6 +1155,21 @@ export function DataLakeResearchPanel({
 
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
                 <FormControl size="sm" sx={{ flex: 1 }}>
+                  <FormLabel>Trusted sites</FormLabel>
+                  <Textarea
+                    minRows={2}
+                    placeholder="example.com"
+                    value={draft.trustedDomains}
+                    onChange={e => setField('trustedDomains')(e.target.value)}
+                    slotProps={{ textarea: { 'data-testid': 'datalake-research-trusted-input' } }}
+                  />
+                  <FormHelperText>
+                    One per line, subdomains included. List only sites whose content you control or vouch for, never
+                    hosts where anyone can publish.
+                  </FormHelperText>
+                </FormControl>
+
+                <FormControl size="sm" sx={{ flex: 1 }}>
                   <FormLabel>Sites to review</FormLabel>
                   <Textarea
                     minRows={2}
@@ -1125,6 +1195,42 @@ export function DataLakeResearchPanel({
                   <FormHelperText>One per line, subdomains included. Wins over every other setting.</FormHelperText>
                 </FormControl>
               </Stack>
+
+              <FormControl size="sm" error={!!errors.maxAutoAdmits}>
+                <Switch
+                  checked={draft.autoAdmitTrusted && parseList(draft.trustedDomains).length > 0}
+                  disabled={parseList(draft.trustedDomains).length === 0}
+                  onChange={e => setDraft(prev => ({ ...prev, autoAdmitTrusted: e.target.checked }))}
+                  endDecorator="Add trusted results automatically"
+                  slotProps={{ input: { 'data-testid': 'datalake-research-auto-admit-toggle' } }}
+                />
+                <FormHelperText>
+                  A first-time result from a trusted site joins the lake without your approval. Anything you declined
+                  before, and every other site, still waits for review. Pages are checked again after the fetch, and the
+                  lake owner is recorded as the owner of the file.
+                </FormHelperText>
+              </FormControl>
+
+              {draft.autoAdmitTrusted && parseList(draft.trustedDomains).length > 0 && (
+                <FormControl size="sm" error={!!errors.maxAutoAdmits}>
+                  <FormLabel>Added automatically per run</FormLabel>
+                  <Input
+                    type="number"
+                    value={draft.maxAutoAdmits}
+                    onChange={e => setField('maxAutoAdmits')(e.target.value)}
+                    slotProps={{
+                      input: {
+                        'data-testid': 'datalake-research-auto-admit-cap',
+                        min: 1,
+                        max: RESEARCH_MAX_AUTO_ADMITS_LIMIT,
+                      },
+                    }}
+                  />
+                  <FormHelperText>
+                    {errors.maxAutoAdmits ?? autoAdmitCapHint(draft.maxAutoAdmits, draft.maxProposals)}
+                  </FormHelperText>
+                </FormControl>
+              )}
 
               <FormControl size="sm" error={!!errors.unlistedSources}>
                 <FormLabel>Other sites</FormLabel>
