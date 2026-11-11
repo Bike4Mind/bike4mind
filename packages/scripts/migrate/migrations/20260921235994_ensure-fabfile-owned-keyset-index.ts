@@ -17,7 +17,11 @@ import { type MigrationFile } from './index';
  * happens to be missing.
  *
  * Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001) to keep that
- * migration's id the highest on disk - its own test asserts that invariant.
+ * migration's id the highest on disk.
+ *
+ * Deploy note: renumbered from 20260921235999. An environment that ran it under that id will skip
+ * UnsetStoredDefaultForcedRetrievalFloor, which now owns it; delete that environment's stale
+ * `20260921235999` row from the migrations collection so the $unset runs.
  */
 const migration: MigrationFile = {
   id: 20260921235994,

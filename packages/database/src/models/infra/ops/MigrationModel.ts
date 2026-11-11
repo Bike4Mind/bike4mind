@@ -21,6 +21,12 @@ export interface MigrationFile {
   /** `startedAt` is when the migrator run began, for migrations that budget against its timeout. */
   up: (ctx?: { startedAt: Date }) => Promise<void | MigrationIncomplete>;
   down: () => Promise<void>;
+  /**
+   * The migration's `up()` may throw on purpose until an operator acts (e.g. an opt-in gate). The
+   * runner then leaves it pending, keeps running the remaining migrations, and fails the run at the
+   * end. Without it, the first throw stops the run.
+   */
+  failClosed?: boolean;
 }
 
 export interface IMigration {
