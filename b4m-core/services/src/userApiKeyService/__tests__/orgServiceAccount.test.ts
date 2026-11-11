@@ -9,9 +9,10 @@ describe('getOrCreateOrgServiceAccount', () => {
     const findOrCreateByEmail = vi.fn(async (_email: string, defaults: Partial<IUserDocument>) =>
       asUser({ id: 'sa1', ...defaults })
     );
+    const update = vi.fn();
     const user = await getOrCreateOrgServiceAccount(
       { id: 'org1', name: 'Acme' },
-      { db: { users: { findByEmail: vi.fn(), findOrCreateByEmail } } }
+      { db: { users: { findByEmail: vi.fn(), findOrCreateByEmail }, organizations: { update } } }
     );
 
     expect(findOrCreateByEmail).toHaveBeenCalledWith(
@@ -19,12 +20,28 @@ describe('getOrCreateOrgServiceAccount', () => {
       expect.objectContaining({ isSystem: true, isAdmin: false, serviceAccountOrganizationId: 'org1' })
     );
     expect(user.id).toBe('sa1');
+    expect(update).toHaveBeenCalledWith({ id: 'org1', serviceAccountUserId: 'sa1' });
+  });
+
+  it('leaves the org alone when it already records this service account', async () => {
+    const findOrCreateByEmail = vi.fn(async (_email: string, defaults: Partial<IUserDocument>) =>
+      asUser({ id: 'sa1', ...defaults })
+    );
+    const update = vi.fn();
+    await getOrCreateOrgServiceAccount(
+      { id: 'org1', serviceAccountUserId: 'sa1' },
+      { db: { users: { findByEmail: vi.fn(), findOrCreateByEmail }, organizations: { update } } }
+    );
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('refuses an account at that address that is not the org service account', async () => {
     const findOrCreateByEmail = vi.fn(async () => asUser({ id: 'u1', isSystem: false }));
     await expect(
-      getOrCreateOrgServiceAccount({ id: 'org1' }, { db: { users: { findByEmail: vi.fn(), findOrCreateByEmail } } })
+      getOrCreateOrgServiceAccount(
+        { id: 'org1' },
+        { db: { users: { findByEmail: vi.fn(), findOrCreateByEmail }, organizations: { update: vi.fn() } } }
+      )
     ).rejects.toThrow(/not its service account/);
   });
 });

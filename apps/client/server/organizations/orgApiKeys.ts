@@ -1,8 +1,7 @@
 import { type IOrgApiKeyView, type IUserApiKeyDocument, type IUserDocument } from '@bike4mind/common';
-import { userRepository } from '@bike4mind/database';
+import { organizationRepository, userRepository } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userApiKeyService } from '@bike4mind/services';
-import { GENERIC_MODAL_API_KEY_SCOPES } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 /**
@@ -11,19 +10,17 @@ import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
  * pages/api/organizations/[id]/api-keys/*, which authorize the caller (verifyOrgAccess) first.
  */
 
-/**
- * The scopes an org key may carry: the generic New-Key set (useGenericApiKeyScopes on the client), so
- * never a dedicated-flow scope (embed, bridge, ingest, ...), which has its own mint flow.
- */
-export const ORG_API_KEY_SCOPE_VALUES: readonly string[] = GENERIC_MODAL_API_KEY_SCOPES.map(scope => scope.value);
-
-const serviceAccountAdapters = { db: { users: userRepository } };
-
-export const getOrCreateServiceAccount = (organization: { id: string; name?: string }): Promise<IUserDocument> =>
-  userApiKeyService.getOrCreateOrgServiceAccount(organization, serviceAccountAdapters);
+export const getOrCreateServiceAccount = (organization: {
+  id: string;
+  name?: string;
+  serviceAccountUserId?: string | null;
+}): Promise<IUserDocument> =>
+  userApiKeyService.getOrCreateOrgServiceAccount(organization, {
+    db: { users: userRepository, organizations: organizationRepository },
+  });
 
 export const findServiceAccount = (organizationId: string): Promise<IUserDocument | null> =>
-  userApiKeyService.findOrgServiceAccount(organizationId, serviceAccountAdapters);
+  userApiKeyService.findOrgServiceAccount(organizationId, { db: { users: userRepository } });
 
 /** The org's service account plus one of its keys; NotFound for anything else, including another org's key. */
 export async function loadOrgOwnedKey(
@@ -38,12 +35,16 @@ export async function loadOrgOwnedKey(
   return { serviceAccount, apiKey };
 }
 
+/** How a key's creator is shown in the org key list. */
+export const creatorDisplayName = (user: Pick<IUserDocument, 'id' | 'name' | 'username' | 'email'>): string =>
+  user.name || user.username || user.email || user.id;
+
 /** Display names for the members who created these keys, one query for the lot. */
 export async function resolveCreatorNames(keys: Pick<IUserApiKeyDocument, 'orgOwned'>[]): Promise<Map<string, string>> {
   const ids = [...new Set(keys.flatMap(key => (key.orgOwned ? [key.orgOwned.createdByUserId] : [])))];
   if (ids.length === 0) return new Map();
   const users = await userRepository.findByIds(ids);
-  return new Map(users.map(user => [user.id, user.name || user.username || user.email || user.id]));
+  return new Map(users.map(user => [user.id, creatorDisplayName(user)]));
 }
 
 export function toOrgApiKeyView(key: IUserApiKeyDocument, creatorNames: Map<string, string>): IOrgApiKeyView {

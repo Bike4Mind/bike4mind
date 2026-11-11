@@ -1497,11 +1497,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             // Self-heal a member with no `userDetails` row (added before grant-point seeding existed):
             // the positional $inc in updateUserDetails cannot create the row it positions on, so without
             // this their org-billed usage is never tracked and `maxCreditsPerMember` never trips. Only
-            // pays the extra read/write when the row is actually absent.
+            // pays the extra read/write when the row is actually absent. The org's service account is
+            // not a member and gets no row (deductCreditsWithOrgSupport does the same), so the $inc
+            // below is a no-op for it.
             const member = organization!.userDetails?.find(u => u.id === userId);
             if (!member) {
               const actingUser = await db.users.findById(userId);
-              if (actingUser) {
+              if (actingUser && !isOrgServiceAccountOf(actingUser, holderId)) {
                 await db.organizations!.ensureUserDetails(holderId, {
                   id: userId,
                   email: actingUser.email ?? actingUser.username,

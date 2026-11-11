@@ -4,17 +4,16 @@
 // (verifyOrgAccess). POST returns the key's secret once.
 
 import { CreditHolderType, type IOrgApiKeySecretResponse, type IOrgApiKeyView } from '@bike4mind/common';
-import { agentRepository } from '@bike4mind/database';
+import { agentRepository, withTransaction } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userApiKeyService } from '@bike4mind/services';
-import { isApiKeyScopeOffered, isKnownApiKeyScope } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import { isKnownApiKeyScope, isOrgApiKeyScope } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { ForbiddenError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
-import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
+import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
-  ORG_API_KEY_SCOPE_VALUES,
+  creatorDisplayName,
   findServiceAccount,
   getOrCreateServiceAccount,
   resolveCreatorNames,
@@ -29,7 +28,7 @@ const CreateOrgApiKeyBodySchema = z.object({
   scopes: z
     .array(z.string())
     .min(1)
-    .refine(scopes => scopes.every(scope => ORG_API_KEY_SCOPE_VALUES.includes(scope)), {
+    .refine(scopes => scopes.every(isOrgApiKeyScope), {
       message: 'Scope not allowed on an organization key',
     }),
   expiresAt: z.iso
@@ -61,17 +60,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
     })
   )
   .post(
-    asyncHandler<{}, IOrgApiKeySecretResponse, unknown, { id?: string }>(async (req, res) => {
+    asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const user = req.user!;
       const org = await verifyOrgAccess(user, orgIdOf(req.query));
       const body = parseOrBadRequest(CreateOrgApiKeyBodySchema, req.body);
-
-      // Product and contributed scopes still need the entitlement, judged on the admin creating the key.
-      const scopeAccess = await resolveApiKeyScopeAccess(req);
-      const unentitled = body.scopes.filter(scope => !isApiKeyScopeOffered(scope, scopeAccess));
-      if (unentitled.length > 0) {
-        throw new ForbiddenError(`Scope not available on your account: ${unentitled.join(', ')}`);
-      }
 
       // The admin paid-only switch, judged on the org this key bills. apiKeyAuth re-runs it on every use.
       await assertApiKeyAccessAllowed(
@@ -80,36 +72,42 @@ const handler = baseApi({ auth: 'jwtOnly' })
         req
       );
 
+      // Idempotent upsert, so it stays outside the transaction: a rolled-back mint leaves only the account.
       const serviceAccount = await getOrCreateServiceAccount(org);
-      const created = await userApiKeyService.createUserApiKey(
-        serviceAccount.id,
-        {
-          name: body.name,
-          scopes: body.scopes,
-          expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
-          metadata: { createdFrom: 'dashboard' },
-          billingOwnerType: CreditHolderType.Organization,
-          organizationId: org.id,
-          orgOwned: { createdByUserId: user.id },
-        },
-        {
-          db: { userApiKeys: userApiKeyRepository, agents: agentRepository },
-          isKnownScope: isKnownApiKeyScope,
-        }
-      );
-
-      await recordAdminActionFromRequest(req, {
-        action: 'org.api_key.created',
-        actorScope: 'organization',
-        target: { kind: 'organization', id: org.id, displayName: org.name },
-        summary: `created organization API key "${created.name}"`,
-        details: { keyId: created.id, keyPrefix: created.keyPrefix, scopes: created.scopes },
+      // The key and its strict audit row commit together, so a failed audit leaves no live key behind.
+      const created = await withTransaction(async () => {
+        const minted = await userApiKeyService.createUserApiKey(
+          serviceAccount.id,
+          {
+            name: body.name,
+            scopes: body.scopes,
+            expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
+            metadata: { createdFrom: 'dashboard' },
+            billingOwnerType: CreditHolderType.Organization,
+            organizationId: org.id,
+            orgOwned: { createdByUserId: user.id },
+          },
+          {
+            db: { userApiKeys: userApiKeyRepository, agents: agentRepository },
+            isKnownScope: isKnownApiKeyScope,
+          }
+        );
+        await recordAdminActionFromRequest(req, {
+          action: 'org.api_key.created',
+          actorScope: 'organization',
+          target: { kind: 'organization', id: org.id, displayName: org.name },
+          summary: `created organization API key "${minted.name}"`,
+          details: { keyId: minted.id, keyPrefix: minted.keyPrefix, scopes: minted.scopes },
+        });
+        return minted;
       });
 
       const apiKey = await userApiKeyRepository.findByUserIdAndId(serviceAccount.id, created.id);
       if (!apiKey) throw new Error('Created organization API key could not be read back');
-      const creatorNames = new Map([[user.id, user.name || user.username || user.id]]);
-      return res.status(201).json({ apiKey: toOrgApiKeyView(apiKey, creatorNames), key: created.key });
+      const creatorNames = new Map([[user.id, creatorDisplayName(user)]]);
+      return res
+        .status(201)
+        .json({ apiKey: toOrgApiKeyView(apiKey, creatorNames), key: created.key } satisfies IOrgApiKeySecretResponse);
     })
   );
 

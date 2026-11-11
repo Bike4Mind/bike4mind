@@ -24,7 +24,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import AddIcon from '@mui/icons-material/Add';
 import { ApiKeyStatus, type IOrgApiKeyView } from '@bike4mind/common';
 import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
-import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
+import { ORG_API_KEY_SCOPES } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import {
   useCreateOrgApiKey,
   useOrgApiKeys,
@@ -38,6 +38,25 @@ interface OrgApiKeysSectionProps {
 }
 
 const formatDate = (value?: Date | string): string => (value ? new Date(value).toLocaleDateString() : '\u2014');
+
+const todayLocal = (): string => {
+  const now = new Date();
+  const pad = (part: number) => String(part).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+};
+
+const STATUS_LABEL: Readonly<Record<ApiKeyStatus, { label: string; color: 'success' | 'neutral' | 'warning' }>> = {
+  [ApiKeyStatus.ACTIVE]: { label: 'Active', color: 'success' },
+  [ApiKeyStatus.DISABLED]: { label: 'Revoked', color: 'neutral' },
+  [ApiKeyStatus.EXPIRED]: { label: 'Expired', color: 'neutral' },
+  [ApiKeyStatus.RATE_LIMITED]: { label: 'Rate limited', color: 'warning' },
+};
+
+// Expiry is checked at request time and never written back to status, so derive it here.
+const effectiveStatus = (key: IOrgApiKeyView): ApiKeyStatus =>
+  key.status === ApiKeyStatus.ACTIVE && key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now()
+    ? ApiKeyStatus.EXPIRED
+    : key.status;
 
 /** Shown once, right after a create or rotate: the server never returns the secret again. */
 const SecretModal: FC<{ secret: { name: string; key: string } | null; onClose: () => void }> = ({
@@ -55,9 +74,10 @@ const SecretModal: FC<{ secret: { name: string; key: string } | null; onClose: (
   };
 
   return (
-    <Modal open={!!secret} onClose={onClose}>
+    // Only Done or the close button dismiss it: a stray Escape or backdrop click would lose the secret.
+    <Modal open={!!secret}>
       <ModalDialog sx={{ maxWidth: 560 }} data-testid="org-api-key-secret-modal">
-        <ModalClose />
+        <ModalClose onClick={onClose} />
         <DialogTitle>Copy your API key</DialogTitle>
         <DialogContent>
           <Stack spacing={1.5}>
@@ -98,7 +118,6 @@ const CreateKeyModal: FC<{
   organizationId: string;
   onCreated: (secret: { name: string; key: string }) => void;
 }> = ({ open, onClose, organizationId, onCreated }) => {
-  const scopeOptions = useGenericApiKeyScopes();
   const createKey = useCreateOrgApiKey(organizationId);
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<string[]>([]);
@@ -113,6 +132,11 @@ const CreateKeyModal: FC<{
   const toggleScope = (value: string) =>
     setScopes(current => (current.includes(value) ? current.filter(scope => scope !== value) : [...current, value]));
 
+  const close = () => {
+    reset();
+    onClose();
+  };
+
   const submit = async () => {
     const created = await createKey
       .mutateAsync({
@@ -122,13 +146,14 @@ const CreateKeyModal: FC<{
       })
       .catch(() => null);
     if (!created) return;
-    reset();
-    onClose();
+    // Hand the secret to the show-once modal and drop it from the mutation cache.
+    createKey.reset();
+    close();
     onCreated({ name: created.apiKey.name, key: created.key });
   };
 
   return (
-    <Modal open={open} onClose={onClose}>
+    <Modal open={open} onClose={close}>
       <ModalDialog sx={{ maxWidth: 560, width: '100%' }} data-testid="org-api-key-create-modal">
         <ModalClose />
         <DialogTitle>New organization API key</DialogTitle>
@@ -147,7 +172,7 @@ const CreateKeyModal: FC<{
               <FormLabel>Scopes</FormLabel>
               <Sheet variant="outlined" sx={{ borderRadius: 'sm', p: 1.5, maxHeight: 240, overflow: 'auto' }}>
                 <Stack spacing={1}>
-                  {scopeOptions.map(option => (
+                  {ORG_API_KEY_SCOPES.map(option => (
                     <Checkbox
                       key={option.value}
                       size="sm"
@@ -166,12 +191,12 @@ const CreateKeyModal: FC<{
                 type="date"
                 value={expiresOn}
                 onChange={event => setExpiresOn(event.target.value)}
-                slotProps={{ input: { 'data-testid': 'org-api-key-expiry-input' } }}
+                slotProps={{ input: { min: todayLocal(), 'data-testid': 'org-api-key-expiry-input' } }}
               />
               <FormHelperText>Optional. Leave empty for a key that does not expire.</FormHelperText>
             </FormControl>
             <Box display="flex" justifyContent="flex-end" gap={1}>
-              <Button variant="plain" color="neutral" onClick={onClose}>
+              <Button variant="plain" color="neutral" onClick={close}>
                 Cancel
               </Button>
               <Button
@@ -208,6 +233,7 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
     if (action === 'rotate') {
       const rotated = await rotateKey.mutateAsync(key.id).catch(() => null);
       setPending(null);
+      rotateKey.reset();
       if (rotated) setSecret({ name: rotated.apiKey.name, key: rotated.key });
       return;
     }
@@ -249,7 +275,7 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
       )}
       {keys && keys.length > 0 && (
         <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
-          <Table size="sm" data-testid="org-api-keys-table" sx={{ minWidth: 760 }}>
+          <Table size="sm" data-testid="org-api-keys-table" sx={{ minWidth: 840 }}>
             <thead>
               <tr>
                 <th>Name</th>
@@ -258,13 +284,16 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
                 <th>Created by</th>
                 <th>Created</th>
                 <th>Last used</th>
+                <th>Expires</th>
                 <th>Status</th>
                 <th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
               {keys.map(key => {
-                const active = key.status === ApiKeyStatus.ACTIVE;
+                const status = effectiveStatus(key);
+                const active = status === ApiKeyStatus.ACTIVE;
+                const revocable = active || status === ApiKeyStatus.EXPIRED;
                 return (
                   <tr key={key.id} data-testid={`org-api-key-row-${key.id}`}>
                     <td>{key.name}</td>
@@ -285,22 +314,25 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
                     <td>{key.createdBy ? (key.createdBy.name ?? 'Deleted user') : '\u2014'}</td>
                     <td>{formatDate(key.createdAt)}</td>
                     <td>{key.lastUsedAt ? formatDate(key.lastUsedAt) : 'Never'}</td>
+                    <td>{key.expiresAt ? formatDate(key.expiresAt) : 'Never'}</td>
                     <td>
-                      <Chip size="sm" variant="soft" color={active ? 'success' : 'neutral'}>
-                        {active ? 'Active' : 'Revoked'}
+                      <Chip size="sm" variant="soft" color={STATUS_LABEL[status].color}>
+                        {STATUS_LABEL[status].label}
                       </Chip>
                     </td>
                     <td>
-                      {active && (
+                      {revocable && (
                         <Stack direction="row" gap={0.5} justifyContent="flex-end">
-                          <Button
-                            size="sm"
-                            variant="plain"
-                            onClick={() => setPending({ action: 'rotate', key })}
-                            data-testid={`org-api-key-rotate-btn-${key.id}`}
-                          >
-                            Rotate
-                          </Button>
+                          {active && (
+                            <Button
+                              size="sm"
+                              variant="plain"
+                              onClick={() => setPending({ action: 'rotate', key })}
+                              data-testid={`org-api-key-rotate-btn-${key.id}`}
+                            >
+                              Rotate
+                            </Button>
+                          )}
                           <Button
                             size="sm"
                             variant="plain"
