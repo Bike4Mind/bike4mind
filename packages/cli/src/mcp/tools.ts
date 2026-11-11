@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 import mime from 'mime-types';
 import { z } from 'zod';
@@ -142,7 +142,7 @@ export const TOOL_META: ToolMeta[] = [
     name: 'upload_file',
     title: 'Upload file',
     description:
-      'Upload a local file or base64 bytes to the file browser. Returns its id and pending ingestion state; indexing runs asynchronously. Optional notebookId or projectId attaches it after upload (projectId also requires projects:write).',
+      'Upload a local file or base64 bytes to the file browser. path reads any file the MCP server process can access; files over 100 MB are refused. Returns its id and pending ingestion state; indexing runs asynchronously. Optional notebookId or projectId attaches it after upload (projectId also requires projects:write).',
     scope: 'files:write',
   },
   {
@@ -621,6 +621,9 @@ export async function getFile(client: B4mApiClient, args: { fileId: string }) {
   return client.getFile(args.fileId);
 }
 
+// Local memory guard; the server still enforces its own admin MaxFileSize.
+const UPLOAD_FILE_MAX_BYTES = 100 * 1024 * 1024;
+
 export async function uploadFile(
   client: B4mApiClient,
   args: { path?: string; base64?: string; name?: string; contentType?: string; notebookId?: string; projectId?: string }
@@ -628,6 +631,14 @@ export async function uploadFile(
   if (Boolean(args.path) === Boolean(args.base64)) throw new Error('Provide exactly one of path or base64');
   const fileName = args.name ?? (args.path ? basename(args.path) : undefined);
   if (!fileName || fileName === '.' || fileName === '..') throw new Error('A file name is required');
+  const tooLarge = () => new Error(`File exceeds the ${UPLOAD_FILE_MAX_BYTES / (1024 * 1024)} MB upload limit`);
+  if (args.path) {
+    const info = await stat(args.path);
+    if (!info.isFile()) throw new Error(`${args.path} is not a regular file`);
+    if (info.size > UPLOAD_FILE_MAX_BYTES) throw tooLarge();
+  } else if (Math.floor((args.base64!.replace(/\s/g, '').length * 3) / 4) > UPLOAD_FILE_MAX_BYTES) {
+    throw tooLarge();
+  }
   const bytes = args.path ? await readFile(args.path) : Buffer.from(args.base64!, 'base64');
   if (
     !bytes.length ||
