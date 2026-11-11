@@ -129,7 +129,7 @@ describe('purgeDeletedNotebookMedia', () => {
     }
     const deleted = deletedKeys();
     expect(deleted.length).toBeLessThan(40);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Time budget spent'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('time budget spent'));
     expect(invalidatedPaths()).toEqual([deleted.map(key => `/generated/${key}`).sort()]);
     expect(effects.enqueue).toHaveBeenCalledTimes(1);
     const [handoff] = effects.enqueue.mock.calls[0];
@@ -266,7 +266,7 @@ describe('runGeneratedMediaPurge', () => {
     expect(deletedKeys()).toEqual(
       [...ids.slice(0, SESSION_PAGE).map((_, i) => gk(`own${i}.png`)), gk('shared.png')].sort()
     );
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Time budget spent'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('time budget spent'));
   });
 
   it('hands the notebooks a delete request did not reach to the purge queue', async () => {

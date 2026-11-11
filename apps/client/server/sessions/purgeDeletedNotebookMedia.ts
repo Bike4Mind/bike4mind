@@ -24,7 +24,9 @@ export const KEY_CHUNK = 500;
 export const PURGE_BUDGET_MS = 20_000;
 
 // Deletes per run, so its CDN flush is one exact-path request; the rest goes to the purge queue.
-export const MAX_DELETES_PER_RUN = MAX_PATHS_PER_BATCH;
+// Half a request so the purge worker at its concurrency cap (infra/queues.ts) holds at most a third of
+// the distribution's in-flight path quota, which publish takedowns share.
+export const MAX_DELETES_PER_RUN = MAX_PATHS_PER_BATCH / 2;
 
 const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
 
@@ -212,8 +214,14 @@ export async function runGeneratedMediaPurge(
   try {
     const directKeys = [...new Set(input.keys ?? [])].filter(isGeneratedContentKey);
     for (const key of directKeys) seen.add(key);
-    const { doomed: directDoomed, unchecked } = await resolveDirectDoomedKeys(directKeys, owners, deadline);
-    leftoverKeys.push(...unchecked, ...(await deleteKeys(directDoomed)));
+    let direct: Awaited<ReturnType<typeof resolveDirectDoomedKeys>>;
+    try {
+      direct = await resolveDirectDoomedKeys(directKeys, owners, deadline);
+    } catch (err) {
+      logger.warn(`[NOTEBOOK_MEDIA] Could not resolve generated media keys: ${errorMessage(err)}`);
+      direct = { doomed: [], unchecked: directKeys };
+    }
+    leftoverKeys.push(...direct.unchecked, ...(await deleteKeys(direct.doomed)));
 
     for (let p = 0; p < sessionIds.length; p += SESSION_PAGE) {
       const page = sessionIds.slice(p, p + SESSION_PAGE);
@@ -237,12 +245,12 @@ export async function runGeneratedMediaPurge(
     await batch.flush();
   }
   if (leftoverKeys.length > 0 || leftoverSessionIds.length > 0) {
-    const reason =
-      Date.now() >= deadline
-        ? 'Time budget spent'
-        : failedDeletes > 0
-          ? `${failedDeletes} storage deletes failed`
-          : 'Per-run delete cap reached';
+    const reasons = [
+      ...(Date.now() >= deadline ? ['time budget spent'] : []),
+      ...(failedDeletes > 0 ? [`${failedDeletes} storage deletes failed`] : []),
+      ...(deletesLeft <= 0 ? ['per-run delete cap reached'] : []),
+    ];
+    const reason = reasons.length > 0 ? reasons.join(', ') : 'lookups failed';
     logger.warn(
       `[NOTEBOOK_MEDIA] ${reason}; left ${leftoverKeys.length} generated media keys and ${leftoverSessionIds.length} notebooks unpurged`
     );
@@ -278,7 +286,7 @@ export async function purgeDeletedNotebookMedia(
     // A request cannot retry, so a failed hand-off leaves this media in storage until someone acts.
     if (!sent) {
       logger.error(
-        `[NOTEBOOK_MEDIA] Generated media purge not handed off: ${leftovers.leftoverKeys.length} keys and ${leftovers.leftoverSessionIds.length} notebooks left in storage`
+        `[NOTEBOOK_MEDIA] Generated media purge hand-off failed in part: up to ${leftovers.leftoverKeys.length} keys and ${leftovers.leftoverSessionIds.length} notebooks left in storage`
       );
     }
   } catch (err) {

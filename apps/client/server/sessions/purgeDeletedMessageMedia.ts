@@ -37,7 +37,7 @@ export async function purgeDeletedMessageMedia(
     );
     if (!sent) {
       logger.error(
-        `[MESSAGE_MEDIA] Generated media purge not handed off: ${leftovers.leftoverKeys.length} keys left in storage`
+        `[MESSAGE_MEDIA] Generated media purge hand-off failed in part: up to ${leftovers.leftoverKeys.length} keys left in storage`
       );
     }
   } catch (err) {

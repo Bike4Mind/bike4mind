@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { FabFile, Quest, Session } from '@bike4mind/database';
+import { FabFile, Quest, Session, questRepository } from '@bike4mind/database';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -27,6 +27,7 @@ vi.mock('@bike4mind/server-utils/security/wafSharedHelpers', () => ({
 }));
 
 import { purgeDeletedMessageMedia } from './purgeDeletedMessageMedia';
+import { MAX_DELETES_PER_RUN } from './purgeDeletedNotebookMedia';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -169,6 +170,22 @@ describe('purgeDeletedMessageMedia', () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it('hands every key to the queue when the retention lookup fails', async () => {
+    const sessionId = await notebook();
+    const deleted = await message(sessionId, { images: [gk('a.png'), gk('b.png')] }, true);
+    const find = vi.spyOn(questRepository, 'findLiveSessionIdsByMediaKeys').mockRejectedValue(new Error('Mongo down'));
+
+    try {
+      await expect(purgeDeletedMessageMedia(deleted, { logger })).resolves.toBeUndefined();
+    } finally {
+      find.mockRestore();
+    }
+
+    expect(effects.deleteGenerated).not.toHaveBeenCalled();
+    expect(effects.enqueue.mock.calls[0][0].keys.sort()).toEqual([gk('a.png'), gk('b.png')].sort());
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
   it('logs an error naming the keys left in storage when the hand-off to the queue fails', async () => {
     const sessionId = await notebook();
     const deleted = await message(sessionId, { images: [gk('bad.png')] }, true);
@@ -203,7 +220,7 @@ describe('purgeDeletedMessageMedia', () => {
 
     const sent = invalidatedPaths();
     expect(sent.flat()).not.toContain('/generated/*');
-    expect(sent.map(paths => paths.length)).toEqual([1000]);
-    expect(effects.enqueue.mock.calls[0][0].keys).toHaveLength(500);
+    expect(sent.map(paths => paths.length)).toEqual([MAX_DELETES_PER_RUN]);
+    expect(effects.enqueue.mock.calls[0][0].keys).toHaveLength(1500 - MAX_DELETES_PER_RUN);
   });
 });
