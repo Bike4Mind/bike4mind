@@ -24,7 +24,7 @@ const confirmButton = () => screen.getByTestId('adjust-credits-dialog-confirm-bt
 describe('AdjustCreditsDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.update.mockResolvedValue(undefined);
+    mocks.update.mockResolvedValue({ appliedCreditDelta: 300, currentCredits: 800 });
   });
 
   it('opens in Set-to mode previewing the current balance', () => {
@@ -174,6 +174,45 @@ describe('AdjustCreditsDialog', () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
+  it('undoes only the committed delta when a concurrent balance change clamps a deduction', async () => {
+    mocks.update.mockResolvedValueOnce({ appliedCreditDelta: -40, currentCredits: 0 });
+    setup();
+    fireEvent.click(screen.getByTestId('adjust-credits-mode-subtract'));
+    typeAmount('100');
+    pickReason();
+
+    fireEvent.click(confirmButton());
+
+    expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent(`${MINUS}40`);
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await waitFor(() =>
+      expect(mocks.update).toHaveBeenLastCalledWith({ creditDelta: 40, creditReason: 'Undo: Goodwill credit' })
+    );
+  });
+
+  it('does not offer unsafe undo without a committed delta', async () => {
+    mocks.update.mockResolvedValueOnce({ currentCredits: 800 });
+    const { onClose } = setup();
+    typeAmount('800');
+    pickReason();
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
+  });
+
+  it('does not claim a balance when only the committed delta is returned', async () => {
+    mocks.update.mockResolvedValueOnce({ appliedCreditDelta: 75 });
+    setup();
+    fireEvent.click(screen.getByTestId('adjust-credits-mode-add'));
+    typeAmount('75');
+    pickReason();
+    fireEvent.click(confirmButton());
+
+    expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent('Credits adjusted (+75)');
+    expect(screen.getByTestId('undo-toast-message')).not.toHaveTextContent('Balance set to');
+  });
+
   it('stays open without a toast when the write fails', async () => {
     mocks.update.mockRejectedValue(new Error('nope'));
     const { onClose } = setup();
@@ -188,6 +227,7 @@ describe('AdjustCreditsDialog', () => {
   });
 
   it('refetches the balance on open and previews, sets and undoes from the fresh figure', async () => {
+    mocks.update.mockResolvedValueOnce({ appliedCreditDelta: 150, currentCredits: 800 });
     let resolveRefetch: (credits: number) => void = () => undefined;
     const fetchCredits = vi
       .fn<() => Promise<number>>()

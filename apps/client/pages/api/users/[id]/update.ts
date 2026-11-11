@@ -56,6 +56,7 @@ import { gradeDetectionsForStatusChange } from '@server/admin/shadowDetectionSta
 const idParamSchema = z.object({ id: z.string() });
 
 const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
+  appliedCreditDelta: z.number().int().optional(),
   ignoredFields: z.array(z.string()).optional(),
   subscriptionCancellation: z
     .object({
@@ -318,7 +319,11 @@ const handler = baseApi().put(
       const profileBefore = profileFields.length > 0 ? await readProfileSnapshot(userId, profileFields) : null;
 
       req.logger.updateMetadata({ updatedFields: Object.keys(body) });
-      const { snapshot: blockSnapshot, updated: blockUpdated } = await commitWithSessionEnd(
+      const {
+        snapshot: blockSnapshot,
+        updated: blockUpdated,
+        appliedCreditDelta,
+      } = await commitWithSessionEnd(
         req,
         async () => {
           // Read inside the transaction so the reason sees the state the write saw; an
@@ -405,7 +410,7 @@ const handler = baseApi().put(
               });
             }
           }
-          return { snapshot, updated };
+          return { snapshot, updated, appliedCreditDelta: creditAdjustment?.credits };
         },
         // adminUpdateUser returns the user as written, read inside the same transaction.
         ({ snapshot, updated }) => {
@@ -494,17 +499,15 @@ const handler = baseApi().put(
       });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.
-      return respond(
-        res,
-        updateUserResponseSchema.nullable(),
-        safeUser && (ignoredFields.length > 0 || subscriptionCancellationBody.subscriptionCancellation)
-          ? {
-              ...safeUser,
-              ...(ignoredFields.length > 0 && { ignoredFields }),
-              ...subscriptionCancellationBody,
-            }
-          : safeUser
-      );
+      const responseBody = safeUser
+        ? {
+            ...safeUser,
+            ...(appliedCreditDelta !== undefined && { appliedCreditDelta }),
+            ...(ignoredFields.length > 0 && { ignoredFields }),
+            ...subscriptionCancellationBody,
+          }
+        : null;
+      return respond(res, updateUserResponseSchema.nullable(), responseBody);
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.

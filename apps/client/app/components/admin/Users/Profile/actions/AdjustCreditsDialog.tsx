@@ -56,11 +56,18 @@ export const AdjustCreditsDialog: React.FC<ProfileDialogProps> = ({ user, onClos
 
   const handleConfirm = async (reason: string) => {
     if (amount === null || !adjustment) return;
-    await update({ ...creditAdjustmentPayload(mode, amount), creditReason: reason });
+    const result: unknown = await update({ ...creditAdjustmentPayload(mode, amount), creditReason: reason });
     onClose();
-    const { delta, after } = adjustment;
+    if (!result || typeof result !== 'object' || !('appliedCreditDelta' in result)) return;
+    const delta = result.appliedCreditDelta;
+    if (typeof delta !== 'number' || !Number.isSafeInteger(delta) || delta === 0) return;
+    const after =
+      'currentCredits' in result && typeof result.currentCredits === 'number' ? result.currentCredits : null;
     showUndo({
-      message: `Balance set to ${formatCredits(after)} (${formatCreditDelta(delta)})`,
+      message:
+        after === null
+          ? `Credits adjusted (${formatCreditDelta(delta)})`
+          : `Balance set to ${formatCredits(after)} (${formatCreditDelta(delta)})`,
       onUndo: () => update({ creditDelta: -delta, creditReason: undoAdminReason(reason) }),
       onViewAudit: onAudit,
     });
