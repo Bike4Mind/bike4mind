@@ -236,7 +236,7 @@ describe('ShadowDetectionAssessmentPanel', () => {
       error: null,
     });
     renderPanel();
-    expect(screen.getByTestId('shadow-detection-assessment-result')).toBeTruthy();
+    expect(screen.getByTestId('shadow-detection-assessment-latest')).toBeTruthy();
     expect(screen.queryByTestId('abuse-assessment-reasons')).toBeNull();
     expect(screen.queryByTestId('shadow-detection-assessment-profiles')).toBeNull();
   });
