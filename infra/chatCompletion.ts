@@ -117,7 +117,6 @@ const ecsSecretNames = [
   'OPTIHASHI_WEBHOOK_SECRET_PREVIOUS',
   'OPTIHASHI_INSTANCE_SERVICE_TOKEN_PREVIOUS',
   'OVERWATCH_INGEST_KEY',
-  'OVERWATCH_PRODUCT_INGEST_KEYS',
 ] as const;
 const ecsSecretResources: sst.Secret[] = [
   ...ecsSecretNames.map(n => secrets[n]),
