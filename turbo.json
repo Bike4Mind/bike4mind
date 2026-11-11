@@ -151,6 +151,7 @@
         "$TURBO_DEFAULT$",
         "../client/**/*.ts",
         "../client/tsconfig.json",
+        "$TURBO_ROOT$/infra/queues.ts",
         "../../packages/scripts/help/**/*.ts",
         "../../packages/server-utils/**",
         "!../../packages/server-utils/node_modules/**"

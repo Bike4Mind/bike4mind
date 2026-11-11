@@ -24,10 +24,11 @@ import { denySelfAdminAction, isSelfOrImpersonator } from '@bike4mind/server-uti
  * is the request record, and the object under `adminDataExportKey` is the result.
  */
 
-// Covers a job that waits out another export's lease (re-sent for up to 30 minutes: MAX_LEASE_WAITS in
-// apps/workers/src/queueHandlers/accountDataExport.ts) and then builds. Only a job that also uses its two
-// 16-minute retries (infra/queues.ts) can still finish past this.
-export const ADMIN_DATA_EXPORT_GIVE_UP_MS = 60 * 60 * 1000;
+// Past the latest a job that waits out another export's lease can still succeed: 30 minutes of re-sends
+// (apps/workers/src/queueHandlers/accountDataExport.ts), every redelivery of the last copy, then one full
+// run. That is 61 minutes on AWS (infra/queues.ts) and 70 on the self-host runner
+// (apps/workers/src/selfhost/registerRedrivenQueue.ts); accountDataExport.test.ts checks the sum.
+export const ADMIN_DATA_EXPORT_GIVE_UP_MS = 80 * 60 * 1000;
 const LISTED_EXPORTS = 20;
 
 type AdminActor = Parameters<typeof assertCanActOnAdminTarget>[0];
