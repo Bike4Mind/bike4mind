@@ -222,6 +222,14 @@ describe('DlqReplayTab queue hint', () => {
     expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveAttribute('data-tone', 'good');
   });
 
+  it('shows an unsafe chip for a replay class this client does not know', async () => {
+    state.queues = [{ ...webhooks, replay: 'needs-review' }];
+    await renderWithQueueSelected(/Webhook Delivery/);
+
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveTextContent('Replay safety unknown');
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveAttribute('data-tone', 'bad');
+  });
+
   it('shows no hint when no queue is selected', () => {
     state.queues = [webhooks];
     render(

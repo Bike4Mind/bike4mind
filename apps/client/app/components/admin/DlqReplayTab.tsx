@@ -56,22 +56,24 @@ const REPLAY_CHIP: Record<DlqReplaySafety, { tone: AdminStatusTone; label: strin
   unsafe: { tone: 'bad', label: 'Unsafe to replay' },
 };
 
-const QueueHint: React.FC<{ queue: DlqQueueInfo }> = ({ queue }) => (
-  <Stack spacing={0.5} sx={{ mt: 1.5 }} data-testid="dlq-queue-hint">
-    <Typography level="body-sm">{queue.description}</Typography>
-    {queue.replay && (
-      <Stack direction="row" spacing={1} alignItems="center">
-        <AdminStatusChip
-          tone={REPLAY_CHIP[queue.replay].tone}
-          label={REPLAY_CHIP[queue.replay].label}
-          data-testid="dlq-queue-hint-replay"
-        />
-        {queue.replayNote && <Typography level="body-sm">{queue.replayNote}</Typography>}
-      </Stack>
-    )}
-    {queue.owner && <Typography level="body-xs">Owner: {queue.owner}</Typography>}
-  </Stack>
-);
+// A class the server knows but this bundle does not (e.g. deployed ahead of the client) reads as unsafe.
+const UNKNOWN_REPLAY_CHIP = { tone: 'bad', label: 'Replay safety unknown' } as const;
+
+const QueueHint: React.FC<{ queue: DlqQueueInfo }> = ({ queue }) => {
+  const chip = queue.replay ? (REPLAY_CHIP[queue.replay] ?? UNKNOWN_REPLAY_CHIP) : undefined;
+  return (
+    <Stack spacing={0.5} sx={{ mt: 1.5 }} data-testid="dlq-queue-hint">
+      <Typography level="body-sm">{queue.description}</Typography>
+      {chip && (
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          <AdminStatusChip tone={chip.tone} label={chip.label} data-testid="dlq-queue-hint-replay" />
+          {queue.replayNote && <Typography level="body-sm">{queue.replayNote}</Typography>}
+        </Stack>
+      )}
+      {queue.owner && <Typography level="body-xs">Owner: {queue.owner}</Typography>}
+    </Stack>
+  );
+};
 
 const StatusChip: React.FC<{ status: 'success' | 'failed' | 'skipped' }> = ({ status }) => {
   const config = {
