@@ -328,4 +328,82 @@ describe('agent configuration egress', () => {
     expect((failure.cause as Error).message).toBe('db down');
     expect(db.prompts.create).not.toHaveBeenCalled();
   });
+
+  it('refuses to export when the account is missing', async () => {
+    const db = exportAdapters();
+    vi.mocked(db.users.findById).mockResolvedValue(null);
+
+    await expect(exportAgentConfiguration('source', db)).rejects.toThrow('Account not found');
+  });
+
+  it('remaps session and file favorites through references and drops unmapped ones', async () => {
+    const db = exportAdapters();
+    vi.mocked(db.favorites.find).mockResolvedValue([
+      { userId: 'source', documentId: 'session-old', documentType: 'sessions' },
+      { userId: 'source', documentId: 'file-old', documentType: 'files' },
+      { userId: 'source', documentId: 'session-unmapped', documentType: 'sessions' },
+      { userId: 'source', documentId: 'file-unmapped', documentType: 'files' },
+    ] as never);
+    const archive = await exportAgentConfiguration('source', db);
+    expect(archive.favorites).toHaveLength(4);
+
+    const importDb = importAdapters();
+    await importAgentConfiguration('target', archive, importDb, {
+      sessions: new Map([['session-old', 'session-new']]),
+      files: new Map([['file-old', 'file-new']]),
+    });
+
+    const calls = vi.mocked(importDb.favorites.create).mock.calls.map(([favorite]) => favorite);
+    expect(calls).toEqual([
+      { userId: 'target', documentId: 'session-new', documentType: 'sessions' },
+      { userId: 'target', documentId: 'file-new', documentType: 'files' },
+    ]);
+  });
+
+  it('round-trips identity, capabilities and skill files unchanged', async () => {
+    const identity = {
+      gender: 'other',
+      pronouns: {
+        subject: 'they',
+        object: 'them',
+        possessive: 'their',
+        possessiveAdjective: 'theirs',
+        reflexive: 'themself',
+      },
+    };
+    const files = [
+      { path: 'scripts/run.sh', content: 'echo hi' },
+      { path: 'references/notes.md', content: 'notes' },
+    ];
+    const db = exportAdapters();
+    vi.mocked(db.agents.find).mockResolvedValue([{ ...agent, identity, capabilities: ['research', 'code'] }] as never);
+    vi.mocked(db.skills.find).mockResolvedValue([
+      { id: 'skill-old', userId: 'source', name: 'Search', description: 'Look up', body: 'Search safely', files },
+    ] as never);
+    const archive = await exportAgentConfiguration('source', db);
+    expect(archive.agents[0]).toMatchObject({ identity, capabilities: ['research', 'code'] });
+    expect(archive.skills[0].files).toEqual(files);
+
+    const importDb = importAdapters();
+    await importAgentConfiguration('target', archive, importDb);
+    expect(importDb.agents.create).toHaveBeenCalledWith(
+      expect.objectContaining({ identity, capabilities: ['research', 'code'] })
+    );
+    expect(importDb.skills.create).toHaveBeenCalledWith(expect.objectContaining({ files }));
+  });
+
+  it('round-trips push notification preferences', async () => {
+    const pushNotifications = { enabled: true, categories: { mentions: false } };
+    const db = exportAdapters();
+    vi.mocked(db.users.findById).mockResolvedValue({ name: 'Owner', preferences: { pushNotifications } } as never);
+    const archive = await exportAgentConfiguration('source', db);
+    expect(archive.profile.preferences.pushNotifications).toEqual(pushNotifications);
+
+    const importDb = importAdapters();
+    await importAgentConfiguration('target', archive, importDb);
+    expect(importDb.users.updateById).toHaveBeenCalledWith(
+      'target',
+      expect.objectContaining({ preferences: expect.objectContaining({ pushNotifications }) })
+    );
+  });
 });
