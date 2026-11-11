@@ -5,6 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
+import type { BillingEntry } from './BillingModal';
 import type { BillingView } from '@client/app/utils/billingDeepLink';
 
 const state = vi.hoisted(() => ({
@@ -24,6 +25,7 @@ const state = vi.hoisted(() => ({
   teamQueryOwner: undefined as { ownerId: string; enabled?: boolean } | undefined,
 }));
 const logEvent = vi.hoisted(() => vi.fn());
+const trackUpsell = vi.hoisted(() => vi.fn());
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -64,6 +66,7 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
   useSelectedAccount: () => ({ selectedAccount: state.account }),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
+vi.mock('@client/app/utils/funnelEvents', () => ({ trackUpsell }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 vi.mock('./CreditsExplanation', () => ({
   default: () => <div data-testid="credits-explanation" />,
@@ -114,10 +117,10 @@ const subRow = (overrides: Partial<IUserSubscription> = {}) =>
     ...overrides,
   }) as unknown as IUserSubscription;
 
-const renderModal = (focus?: BillingView) =>
+const renderModal = (focus?: BillingView, entry?: BillingEntry) =>
   render(
     <TestWrapper>
-      <BillingModal open focus={focus} onClose={vi.fn()} />
+      <BillingModal open focus={focus} entry={entry} onClose={vi.fn()} />
     </TestWrapper>
   );
 
@@ -152,6 +155,7 @@ describe('BillingModal', () => {
     state.teamRefetch.mockClear();
     state.teamQueryOwner = undefined;
     logEvent.mockClear();
+    trackUpsell.mockClear();
   });
 
   it('logs the open context and a close without purchase', () => {
@@ -481,5 +485,69 @@ describe('BillingModal', () => {
     expect(sectionOrder()).toEqual(['billing-section-credits']);
     expect(screen.queryByTestId('plans-section-skeleton')).not.toBeInTheDocument();
     expect(screen.getByTestId('billing-low-balance-action')).toHaveTextContent('Top up');
+  });
+
+  describe('plans upsell impression', () => {
+    const plansImpression = { surface: 'billing_plans', trigger: 'credits_chip', plan: 'Professional' };
+
+    it('reports the plans paywall to a free user, with the entry that opened it', () => {
+      renderModal(undefined, 'credits_chip');
+      expect(trackUpsell).toHaveBeenCalledTimes(1);
+      expect(trackUpsell).toHaveBeenCalledWith('impression', plansImpression);
+    });
+
+    it('reports nothing to a subscriber', () => {
+      state.subscriptions = [subRow()];
+      renderModal(undefined, 'credits_chip');
+      expect(trackUpsell).not.toHaveBeenCalled();
+    });
+
+    it('waits for the subscription lookup, then reports a free user once', () => {
+      state.subscriptionsPending = true;
+      const { rerender } = renderModal(undefined, 'credits_chip');
+      expect(trackUpsell).not.toHaveBeenCalled();
+
+      state.subscriptionsPending = false;
+      rerender(
+        <TestWrapper>
+          <BillingModal open entry="credits_chip" onClose={vi.fn()} />
+        </TestWrapper>
+      );
+      expect(trackUpsell).toHaveBeenCalledTimes(1);
+      expect(trackUpsell).toHaveBeenCalledWith('impression', plansImpression);
+    });
+
+    it('waits for the plan prices too', () => {
+      state.plansLoading = true;
+      renderModal(undefined, 'credits_chip');
+      expect(trackUpsell).not.toHaveBeenCalled();
+    });
+
+    it('reports nothing when the plan read failed, since the plan is unknown', () => {
+      state.subscriptionsError = true;
+      renderModal(undefined, 'credits_chip');
+      expect(trackUpsell).not.toHaveBeenCalled();
+    });
+
+    it('reports nothing for an org account, which cannot buy these plans', () => {
+      state.account = { id: 'org_1', personal: false };
+      renderModal(undefined, 'credits_chip');
+      expect(trackUpsell).not.toHaveBeenCalled();
+    });
+
+    it('reports nothing when plans are not offered (enforceCredits off)', () => {
+      state.plansDisabled = true;
+      renderModal(undefined, 'credits_chip');
+      expect(trackUpsell).not.toHaveBeenCalled();
+    });
+
+    it('reports nothing while the modal is closed', () => {
+      render(
+        <TestWrapper>
+          <BillingModal open={false} entry="credits_chip" onClose={vi.fn()} />
+        </TestWrapper>
+      );
+      expect(trackUpsell).not.toHaveBeenCalled();
+    });
   });
 });

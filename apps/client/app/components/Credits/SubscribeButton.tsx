@@ -1,6 +1,7 @@
 import { useCancelSubscription, useChangeSubscription, useSubscribePlan } from '@client/app/hooks/data/subscriptions';
 import { pickSubscriptionByPrice } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
+import { trackUpsell, type UpsellSurface } from '@client/app/utils/funnelEvents';
 import { Button } from '@mui/joy';
 import dayjs from 'dayjs';
 import { ComponentProps, useMemo } from 'react';
@@ -16,6 +17,10 @@ interface SubscribeButtonProps {
   cancellableSubscriptions: IUserSubscription[];
   /** Names the plan in the accessible name, so a screen reader hears which plan each button acts on. */
   planName?: string;
+  /** Where the button lives: reports a Subscribe click as `upsell_click` and tags the checkout with it. */
+  surface?: UpsellSurface;
+  /** What raised the prompt, reported with the click. */
+  trigger?: string;
 }
 
 const SubscribeButton = ({
@@ -23,6 +28,8 @@ const SubscribeButton = ({
   cancellableSubscriptions,
   planName,
   onSubscriptionChanged,
+  surface,
+  trigger,
 }: SubscribeButtonProps) => {
   const subscribe = useSubscribePlan();
   const cancelSubscription = useCancelSubscription();
@@ -52,8 +59,9 @@ const SubscribeButton = ({
   const handleClick = () => {
     switch (type) {
       case 'subscribe':
+        if (surface) trackUpsell('click', { surface, trigger, plan: planName });
         return subscribe.mutate(
-          { priceId, callbackUrl: window.location.href },
+          { priceId, callbackUrl: window.location.href, surface },
           {
             onSuccess: data => {
               window.location.href = data.sessionUrl;

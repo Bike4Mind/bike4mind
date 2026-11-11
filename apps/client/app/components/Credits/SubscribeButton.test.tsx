@@ -9,9 +9,13 @@ import SubscribeButton from './SubscribeButton';
 
 const cancelMutate = vi.fn();
 const changeMutate = vi.fn();
+const subscribeMutate = vi.fn();
+const trackUpsell = vi.hoisted(() => vi.fn());
+
+vi.mock('@client/app/utils/funnelEvents', () => ({ trackUpsell }));
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
-  useSubscribePlan: () => ({ mutate: vi.fn(), isPending: false }),
+  useSubscribePlan: () => ({ mutate: (...args: unknown[]) => subscribeMutate(...args), isPending: false }),
   useCancelSubscription: () => ({ mutate: (...args: unknown[]) => cancelMutate(...args), isPending: false }),
   useChangeSubscription: () => ({ mutate: (...args: unknown[]) => changeMutate(...args), isPending: false }),
 }));
@@ -50,6 +54,52 @@ describe('SubscribeButton', () => {
   beforeEach(() => {
     cancelMutate.mockReset();
     changeMutate.mockReset();
+    subscribeMutate.mockReset();
+    trackUpsell.mockClear();
+  });
+
+  describe('upsell reporting', () => {
+    const renderWithSurface = (subs: IUserSubscription[]) =>
+      render(
+        <TestWrapper>
+          <SubscribeButton
+            priceId="price_pro"
+            cancellableSubscriptions={subs}
+            planName="Professional"
+            surface="billing_plans"
+            trigger="credits_chip"
+          />
+        </TestWrapper>
+      );
+
+    it('reports a Subscribe click and tags the checkout with the surface', async () => {
+      renderWithSurface([]);
+      await userEvent.click(screen.getByRole('button', { name: 'Subscribe to Professional' }));
+
+      expect(trackUpsell).toHaveBeenCalledWith('click', {
+        surface: 'billing_plans',
+        trigger: 'credits_chip',
+        plan: 'Professional',
+      });
+      expect(subscribeMutate.mock.calls[0][0]).toMatchObject({ priceId: 'price_pro', surface: 'billing_plans' });
+    });
+
+    it('does not report cancel or change clicks as upsell clicks', async () => {
+      const { unmount } = renderWithSurface([subRow()]);
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel Professional subscription' }));
+      unmount();
+      renderWithSurface([subRow({ priceId: 'price_other' })]);
+      await userEvent.click(screen.getByRole('button', { name: 'Change subscription to Professional' }));
+
+      expect(trackUpsell).not.toHaveBeenCalled();
+    });
+
+    it('reports nothing without a surface', async () => {
+      renderButton([], 'price_pro', 'Professional');
+      await userEvent.click(screen.getByRole('button', { name: 'Subscribe to Professional' }));
+
+      expect(trackUpsell).not.toHaveBeenCalled();
+    });
   });
 
   it.each([

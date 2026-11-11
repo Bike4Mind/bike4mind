@@ -203,7 +203,7 @@ const OrganizationListPage: FC = () => {
             <Button
               startDecorator={<AddIcon />}
               color="primary"
-              onClick={openCreateTeamModal}
+              onClick={() => openCreateTeamModal()}
               disabled={!teamPlanAvailable}
               data-testid="organizations-create-team-btn"
             >

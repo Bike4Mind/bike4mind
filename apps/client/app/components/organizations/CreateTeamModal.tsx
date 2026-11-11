@@ -21,22 +21,25 @@ import { create } from 'zustand';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useMemo } from 'react';
 import SeatCountInput from './SeatCountInput';
+import type { UpsellSurface } from '@client/app/utils/funnelEvents';
 import ContactSalesNote from './ContactSalesNote';
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 
 export const useCreateTeamModal = create<{
   isOpen: boolean;
-  open: () => void;
+  /** The UI that opened the modal, carried onto the team checkout. */
+  surface?: UpsellSurface;
+  open: (surface?: UpsellSurface) => void;
   close: () => void;
 }>(set => ({
   isOpen: false,
-  open: () => set({ isOpen: true }),
-  close: () => set({ isOpen: false }),
+  open: surface => set({ isOpen: true, surface }),
+  close: () => set({ isOpen: false, surface: undefined }),
 }));
 
 const CreateTeamModal = () => {
-  const { isOpen, close } = useCreateTeamModal();
+  const { isOpen, close, surface } = useCreateTeamModal();
   const [teamName, setTeamName] = useState('');
   const { minSeats, maxSeats } = useTeamSeatLimits();
   // Mounted app-wide before settings load, so the initial pick can fall outside a range that arrives
@@ -87,6 +90,7 @@ const CreateTeamModal = () => {
             name: teamName,
           },
           callbackUrl: window.location.href,
+          surface,
         });
         window.location.href = sessionUrl;
       }

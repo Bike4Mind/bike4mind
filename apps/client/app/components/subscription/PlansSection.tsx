@@ -23,7 +23,9 @@ import { SubscriptionPlanDetail } from '@bike4mind/server-utils/lib/userSubscrip
 import { Box, Button, Skeleton, Stack, Tab, tabClasses, TabList, Tabs, Tooltip, Typography } from '@mui/joy';
 import { useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { trackUpsell } from '@client/app/utils/funnelEvents';
 import SubscribeButton from '../Credits/SubscribeButton';
+import { BILLING_UPSELL_PLANS, BILLING_UPSELL_SURFACES } from './billingUpsell';
 import ManageSubscriptionButton from './ManageSubscriptionButton';
 import PayNowButton from './PayNowButton';
 import PlanCard from './PlanCard';
@@ -59,7 +61,14 @@ export const PlansSectionSkeleton = () => (
 );
 
 /** Plan cards for the Billing modal: Professional for individuals, Team for businesses. */
-export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?: () => void }) => {
+export const PlansSection = ({
+  onSubscriptionChanged,
+  trigger,
+}: {
+  onSubscriptionChanged?: () => void;
+  /** What opened the Billing modal; reported with plan clicks. */
+  trigger?: string;
+}) => {
   const { t } = useTranslation();
   const [audience, setAudience] = useState<PlanAudience>(PlanAudience.Personal);
   // The starter-credits line is only true while sign-ups are actually granted something.
@@ -245,6 +254,8 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
                     <SubscribeButton
                       priceId={plan.priceId}
                       planName={plan.name}
+                      surface={BILLING_UPSELL_SURFACES.plans}
+                      trigger={trigger}
                       onSubscriptionChanged={onSubscriptionChanged}
                       cancellableSubscriptions={cancellableSubscriptions}
                     />
@@ -287,7 +298,14 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
                 color="primary"
                 fullWidth
                 disabled={teamSeatPrice === undefined}
-                onClick={openCreateTeamModal}
+                onClick={() => {
+                  trackUpsell('click', {
+                    surface: BILLING_UPSELL_SURFACES.plans,
+                    trigger,
+                    plan: BILLING_UPSELL_PLANS.team,
+                  });
+                  openCreateTeamModal(BILLING_UPSELL_SURFACES.plans);
+                }}
                 data-testid="subscription-modal-create-team-btn"
               >
                 Create Team

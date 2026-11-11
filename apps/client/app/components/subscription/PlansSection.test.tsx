@@ -23,6 +23,8 @@ process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD = PRICE_ID;
 
 const cancelMutate = vi.fn();
 const subscribeMutate = vi.fn();
+const openCreateTeam = vi.hoisted(() => vi.fn());
+const trackUpsell = vi.hoisted(() => vi.fn());
 const changeMutate = vi.fn();
 const portalMutate = vi.fn();
 const USER_ID = 'user_1';
@@ -81,8 +83,9 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 }));
 
 vi.mock('@client/app/components/organizations/CreateTeamModal', () => ({
-  useCreateTeamModal: (selector: (state: { open: () => void }) => unknown) => selector({ open: vi.fn() }),
+  useCreateTeamModal: (selector: (state: { open: () => void }) => unknown) => selector({ open: openCreateTeam }),
 }));
+vi.mock('@client/app/utils/funnelEvents', () => ({ trackUpsell }));
 
 vi.mock('@client/app/hooks/useSelectedModelAnswerCost', () => ({
   useSelectedModelAnswerCost: () => answerCost,
@@ -256,6 +259,8 @@ describe('PlansSection', () => {
     settingValues = { enableTeamPlan: true };
     cancelMutate.mockReset();
     subscribeMutate.mockReset();
+    openCreateTeam.mockReset();
+    trackUpsell.mockReset();
     changeMutate.mockReset();
     portalMutate.mockReset();
     payInvoice.mockReset();
@@ -519,6 +524,41 @@ describe('PlansSection', () => {
       renderSection();
 
       expect(payNowButton()).not.toBeInTheDocument();
+    });
+  });
+
+  describe('upsell clicks', () => {
+    it('reports a Professional subscribe click and tags its checkout with the billing surface', async () => {
+      render(
+        <TestWrapper>
+          <PlansSection trigger="credits_cta" />
+        </TestWrapper>
+      );
+      await userEvent.click(screen.getByRole('button', { name: /Subscribe to Professional/ }));
+
+      expect(trackUpsell).toHaveBeenCalledWith('click', {
+        surface: 'billing_plans',
+        trigger: 'credits_cta',
+        plan: 'Professional',
+      });
+      expect(subscribeMutate.mock.calls[0][0]).toMatchObject({ surface: 'billing_plans' });
+    });
+
+    it('reports a Create Team click and hands the surface to the team checkout', async () => {
+      render(
+        <TestWrapper>
+          <PlansSection trigger="credits_cta" />
+        </TestWrapper>
+      );
+      await userEvent.click(screen.getByTestId('subscription-modal-business-tab'));
+      await userEvent.click(screen.getByTestId('subscription-modal-create-team-btn'));
+
+      expect(trackUpsell).toHaveBeenCalledWith('click', {
+        surface: 'billing_plans',
+        trigger: 'credits_cta',
+        plan: 'team',
+      });
+      expect(openCreateTeam).toHaveBeenCalledWith('billing_plans');
     });
   });
 });

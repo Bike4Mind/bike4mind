@@ -13,7 +13,9 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserOrganizations } from '@client/app/hooks/data/organizations';
 import { canViewOrgUsage, OrganizationTabs } from '@client/app/routes/organizations/orgTabAccess';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
+import { trackUpsell } from '@client/app/utils/funnelEvents';
 import PaymentButton from '../Credits/PaymentButton';
+import { BILLING_UPSELL_PLANS, BILLING_UPSELL_SURFACES } from './billingUpsell';
 import { formatPlanPrice, pricePerThousandCredits, sharedPackRate } from './billingFormat';
 
 const creditPackages = Object.values(CREDIT_PACKAGES);
@@ -28,6 +30,8 @@ interface CreditsSectionProps {
   onClose: () => void;
   onPurchase?: () => void;
   onPaymentPending?: () => void;
+  /** What opened the Billing modal; reported with pack clicks. */
+  trigger?: string;
 }
 
 type PurchaseTransaction = Extract<ICreditTransaction, { type: 'purchase' }>;
@@ -50,6 +54,7 @@ export const CreditsSection = ({
   onClose,
   onPurchase,
   onPaymentPending,
+  trigger,
 }: CreditsSectionProps) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -234,6 +239,13 @@ export const CreditsSection = ({
               ariaLabel={purchaseCreditsAriaLabel(selected.credits, selected.price)}
               onPayment={handlePaymentComplete}
               onPaymentPending={onPaymentPending}
+              onClick={() =>
+                trackUpsell('click', {
+                  surface: BILLING_UPSELL_SURFACES.credits,
+                  trigger,
+                  plan: BILLING_UPSELL_PLANS.creditPack,
+                })
+              }
             />
           </Box>
         </Box>

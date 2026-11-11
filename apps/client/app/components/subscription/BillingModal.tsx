@@ -23,6 +23,8 @@ import { PlansSection, PlansSectionSkeleton } from './PlansSection';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
+import { trackUpsell } from '@client/app/utils/funnelEvents';
+import { BILLING_UPSELL_PLANS, BILLING_UPSELL_SURFACES } from './billingUpsell';
 
 export type BillingEntry = 'credits_chip' | 'credits_cta' | 'deep_link' | 'profile_menu' | 'unknown';
 
@@ -179,6 +181,18 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   const plansOffered = !(plans.isPending && plans.fetchStatus === 'idle');
   const nudgeToCredits = !!currentSubscription || planUnknown || !plansOffered;
 
+  // The plans pitch Professional to a personal account with no plan. An org account cannot buy it here, a
+  // failed plan read says nothing about the plan, and `ready` holds the lookup so a subscriber is never counted.
+  const plansUpsellShown = open && ready && plansOffered && !planUnknown && !currentSubscription && !isOrgAccount;
+  useEffect(() => {
+    if (!plansUpsellShown) return;
+    trackUpsell('impression', {
+      surface: BILLING_UPSELL_SURFACES.plans,
+      trigger: entry,
+      plan: BILLING_UPSELL_PLANS.professional,
+    });
+  }, [plansUpsellShown, entry]);
+
   const plansHeadingRef = useRef<HTMLHeadingElement>(null);
   const creditsHeadingRef = useRef<HTMLHeadingElement>(null);
 
@@ -240,6 +254,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
       }
     >
       <PlansSection
+        trigger={entry}
         onSubscriptionChanged={() => {
           purchasedRef.current = true;
         }}
@@ -260,6 +275,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
       }
     >
       <CreditsSection
+        trigger={entry}
         transactions={transactions.data ?? []}
         transactionsLoading={transactions.isPending}
         onClose={() => {

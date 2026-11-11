@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ICreditTransaction } from '@bike4mind/common';
@@ -15,6 +16,8 @@ const { navigate, account, purchaseToast, user, orgs } = vi.hoisted(() => ({
   orgs: { list: undefined as undefined | { id: string; userId: string }[] },
 }));
 
+const trackUpsell = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/utils/funnelEvents', () => ({ trackUpsell }));
 vi.mock('sonner', () => ({ toast: { success: purchaseToast } }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 vi.mock('react-i18next', () => ({
@@ -38,14 +41,16 @@ vi.mock('../Credits/PaymentButton', () => ({
     packageId,
     onPayment,
     onPaymentPending,
+    onClick,
   }: {
+    onClick?: () => void;
     label: ReactNode;
     packageId: string;
     onPayment: (credits: number) => void;
     onPaymentPending?: () => void;
   }) => (
     <>
-      <button type="button" data-testid="credits-purchase-btn" data-package={packageId}>
+      <button type="button" data-testid="credits-purchase-btn" data-package={packageId} onClick={onClick}>
         {label}
       </button>
       <button type="button" data-testid="payment-success" onClick={() => onPayment(33333)} />
@@ -71,6 +76,7 @@ const renderSection = (props: Partial<Parameters<typeof CreditsSection>[0]> = {}
 describe('CreditsSection', () => {
   beforeEach(() => {
     navigate.mockClear();
+    trackUpsell.mockClear();
     purchaseToast.mockClear();
     account.selectedAccount = null;
     user.current = { id: 'u1', isAdmin: false };
@@ -263,5 +269,16 @@ describe('CreditsSection', () => {
 
     renderSection({ transactionsLoading: true });
     expect(screen.queryByText('credits_modal.no_transactions')).not.toBeInTheDocument();
+  });
+
+  it('reports a pack purchase click as a credit_pack upsell click', async () => {
+    renderSection({ trigger: 'credits_chip' });
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+
+    expect(trackUpsell).toHaveBeenCalledWith('click', {
+      surface: 'billing_credits',
+      trigger: 'credits_chip',
+      plan: 'credit_pack',
+    });
   });
 });

@@ -23,6 +23,8 @@ interface IPaymentButtonProps {
   /** Visible label; presentation only, the checkout is driven by the payload. */
   label?: ReactNode;
   size?: 'sm' | 'md' | 'lg';
+  /** Runs as checkout starts, once per Buy click. */
+  onClick?: () => void;
 }
 
 // The payload is copied at click time so a prop change (e.g. a pack radio switched mid-checkout)
@@ -49,6 +51,7 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({
   ariaLabel,
   label,
   size,
+  onClick,
   ...rest
 }) => {
   const [purchase, setPurchase] = useState<PaymentPayload | null>(null);
@@ -74,6 +77,7 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({
   }, [purchase]);
 
   const handleStart = useCallback(() => {
+    onClick?.();
     const snapshot = snapshotPurchase(rest);
     logEvent({
       type: CreditPurchaseEvents.CHECKOUT_REQUESTED,
@@ -84,7 +88,7 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({
       },
     });
     setPurchase(snapshot);
-  }, [logEvent, rest]);
+  }, [logEvent, onClick, rest]);
 
   const handlePayment = useCallback(() => {
     lastOutcomeRef.current = 'succeeded';
