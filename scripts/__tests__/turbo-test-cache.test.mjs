@@ -30,7 +30,7 @@ function testTaskEntries(turbo) {
   return Object.entries(turbo.tasks).filter(([name]) => TEST_TASKS.includes(name.split('#').at(-1)));
 }
 
-function workspacePackages() {
+function allWorkspacePackages() {
   return execFileSync(
     'git',
     ['ls-files', 'apps/*/package.json', 'b4m-core/*/package.json', 'packages/*/package.json'],
@@ -44,13 +44,19 @@ function workspacePackages() {
     .map(file => ({
       dir: path.dirname(file),
       manifest: JSON.parse(fs.readFileSync(path.join(repoRoot, file), 'utf8')),
-    }))
-    .filter(({ manifest }) => TEST_TASKS.some(task => manifest.scripts?.[task]));
+    }));
+}
+
+function workspacePackages() {
+  return allWorkspacePackages().filter(({ manifest }) => TEST_TASKS.some(task => manifest.scripts?.[task]));
+}
+
+function trackedFiles(dir) {
+  return execFileSync('git', ['ls-files', dir], { cwd: repoRoot, encoding: 'utf8' }).split('\n').filter(Boolean);
 }
 
 function testFiles(dir) {
-  return execFileSync('git', ['ls-files', dir], { cwd: repoRoot, encoding: 'utf8' })
-    .split('\n')
+  return trackedFiles(dir)
     .filter(file => /\.(test|spec)\.[cm]?[jt]sx?$/.test(file) || /\/(__tests__|test-utils?|testUtils)\//.test(file))
     .filter(file => /\.[cm]?[jt]sx?$/.test(file));
 }
@@ -80,12 +86,50 @@ function escapedPaths(dir, files) {
   return [...escaped];
 }
 
-// A declared workspace dependency's build inputs are already in the hash through ^build.
+// A declared workspace dependency's build inputs are already in the hash through ^build. One
+// with no build script contributes nothing there: see sourceOnlyDependencyReads.
 function dependencySources(manifest, packages) {
   const declared = new Set(
     Object.keys({ ...manifest.dependencies, ...manifest.devDependencies, ...manifest.peerDependencies })
   );
-  return packages.filter(pkg => declared.has(pkg.manifest.name)).map(pkg => `${pkg.dir}/src/**`);
+  return packages
+    .filter(pkg => declared.has(pkg.manifest.name) && pkg.manifest.scripts?.build)
+    .map(pkg => `${pkg.dir}/src/**`);
+}
+
+/** Tracked files a package's `exports` (or `main`) resolve to; `*` in a subpath target spans `/`. */
+function entryFiles(pkg) {
+  const targets = [];
+  const collect = value => {
+    if (typeof value === 'string') targets.push(value);
+    else if (value && typeof value === 'object') Object.values(value).forEach(collect);
+  };
+  collect(pkg.manifest.exports ?? pkg.manifest.main);
+  const patterns = targets.map(
+    target =>
+      new RegExp(
+        `^${path.posix
+          .join(pkg.dir, target)
+          .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+          .replaceAll('*', '.*')}$`
+      )
+  );
+  return trackedFiles(pkg.dir).filter(file => patterns.some(pattern => pattern.test(file)));
+}
+
+// A runtime dependency with no build script ships its source straight to the consumer, so ^build
+// hashes none of it: its entry files, and the outside paths they name with a `..` literal (a
+// helper-owned root such as loadHelpArticles' DOCS_ROOT), have to be in the consumer's own
+// inputs. Entry files only, not what they import. devDependencies are skipped: the source-only
+// ones are lint/tsconfig presets no test imports.
+function sourceOnlyDependencyReads(manifest, allPackages) {
+  const runtime = new Set(Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies }));
+  return allPackages
+    .filter(dep => runtime.has(dep.manifest.name) && !dep.manifest.scripts?.build)
+    .flatMap(dep => {
+      const files = entryFiles(dep);
+      return [...files, ...escapedPaths(dep.dir, files)];
+    });
 }
 
 function inputCovers(dir, inputs, target) {
@@ -135,6 +179,7 @@ describe('turbo.json test tasks', () => {
 // keyed on the whole tree; a `..` literal that leaves the package needs an input covering it.
 describe('test reads outside the package', () => {
   const turbo = readTurboJson();
+  const allPackages = allWorkspacePackages();
   const packages = workspacePackages().map(pkg => ({ ...pkg, files: testFiles(pkg.dir) }));
 
   it('finds the test files it scans', () => {
@@ -165,9 +210,24 @@ describe('test reads outside the package', () => {
     ).toBeDefined();
   });
 
-  it('runs every test:repo script in CI', () => {
+  // Line-anchored, so a commented-out step, a disabled `if:` or the command left in a comment
+  // all fail here instead of the repo lane silently running nowhere.
+  it('runs every test:repo script in CI, once, on the misc leg', () => {
     const workflow = fs.readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8');
-    expect(workflow).toContain('pnpm --recursive --if-present run test:repo');
+    const lines = workflow.split('\n');
+    const start = lines.findIndex(line => /^\s*- name: Run repo-scan tests\s*$/.test(line));
+    expect(start, 'the "Run repo-scan tests" step is missing from ci.yml').toBeGreaterThan(-1);
+    const indent = lines[start].indexOf('-');
+    const end = lines.findIndex(
+      (line, index) => index > start && line.trim() !== '' && line.search(/\S/) <= indent && !line.trim().startsWith('#')
+    );
+    const step = lines.slice(start + 1, end === -1 ? undefined : end).filter(line => !line.trim().startsWith('#'));
+    expect(step).toContainEqual(expect.stringMatching(/^\s*run: pnpm --recursive --if-present run test:repo\s*$/));
+    const condition = step.find(line => /^\s*if:/.test(line));
+    expect(condition, 'the step needs an if: pinning it to one leg').toBeDefined();
+    expect(condition).toContain("matrix.shard.name == 'misc'");
+    expect(condition).not.toMatch(/\bfalse\b/);
+    expect(workflow).toMatch(/^\s*- name: misc\s*$/m);
   });
 
   it.each(packages.map(pkg => [pkg.manifest.name, pkg]))(
@@ -177,7 +237,7 @@ describe('test reads outside the package', () => {
       const inputs = [
         ...TEST_TASKS.flatMap(task => turbo.tasks[`${name}#${task}`]?.inputs ?? []),
         ...(turbo.globalDependencies ?? []).map(file => `$TURBO_ROOT$/${file}`),
-        ...dependencySources(pkg.manifest, packages).map(glob => `$TURBO_ROOT$/${glob}`),
+        ...dependencySources(pkg.manifest, allPackages).map(glob => `$TURBO_ROOT$/${glob}`),
       ];
       const ownInputs = TEST_TASKS.flatMap(task => turbo.tasks[`${name}#${task}`]?.inputs ?? []);
       // A literal that resolves to the repo root itself is a base the test joins its real path onto
@@ -185,7 +245,8 @@ describe('test reads outside the package', () => {
       // where the package's own entry already names files from the root.
       const rootCovered = ownInputs.some(glob => glob.startsWith('$TURBO_ROOT$/'));
       const cachedFiles = pkg.files.filter(file => !REPO_LANE_FILE.test(file));
-      const uncovered = escapedPaths(pkg.dir, cachedFiles).filter(
+      const reads = [...escapedPaths(pkg.dir, cachedFiles), ...sourceOnlyDependencyReads(pkg.manifest, allPackages)];
+      const uncovered = [...new Set(reads)].filter(
         target => !(target === '.' ? rootCovered : inputCovers(pkg.dir, inputs, target))
       );
       expect(

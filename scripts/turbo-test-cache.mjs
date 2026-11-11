@@ -8,8 +8,9 @@
 //     artifact). But --only also drops those dependency tasks from the hash, so an edit to
 //     b4m-core/common would replay a cached pass for every package that imports it. This
 //     writes, per package, `.turbo/test-context` (an explicit input of every test task in
-//     turbo.json, pinned by turboTestCache.test.ts) holding what --only cannot see: the
-//     full-graph hash of each task the test depends on, the Node version and platform, and
+//     turbo.json, pinned by scripts/__tests__/turbo-test-cache.test.mjs) holding what --only
+//     cannot see: the full-graph hash of each task the test depends on, the Node version and
+//     platform, and
 //     the env that changes how a suite runs; for WHOLE_REPO_TEST_PACKAGES, the git tree too.
 //
 //   node scripts/turbo-test-cache.mjs report <runs dir>
