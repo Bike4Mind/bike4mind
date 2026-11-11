@@ -40,6 +40,7 @@ const PROMPT =
 
 interface StreamFrame {
   questId: string;
+  sessionId: string;
   reply: string;
   status?: string;
   type?: string;
@@ -76,6 +77,7 @@ function watchSockets(page: Page): SocketProbe {
       if (action !== 'streamed_chat_completion' || !quest || typeof quest.id !== 'string') return;
       probe.frames.push({
         questId: quest.id,
+        sessionId: typeof quest.sessionId === 'string' ? quest.sessionId : '',
         reply: typeof quest.reply === 'string' ? quest.reply : '',
         status: typeof quest.status === 'string' ? quest.status : undefined,
         type: typeof quest.type === 'string' ? quest.type : undefined,
@@ -182,16 +184,18 @@ test('a chat reply streams over the WebSocket and survives a reload', async ({ p
   const framesBeforeSend = probe.frames.length;
   const renderedWhileStreaming = new Set<string>();
   let streamedText = '';
+  let sessionId = '';
 
   await test.step('send a prompt and watch the reply stream', async () => {
     let sampling = true;
+    // Errors are swallowed so a page that closes mid-send reports the send's failure, not this loop's.
     const sampler = (async () => {
       while (sampling && !page.isClosed()) {
         const text = collapseWhitespace(await newestAnswerText(page));
         if (text) renderedWhileStreaming.add(text);
         await page.waitForTimeout(100);
       }
-    })();
+    })().catch(() => {});
     try {
       await chat.sendMessageAndWaitForResponse(PROMPT, TIMEOUTS.AI_RESPONSE);
     } finally {
@@ -210,16 +214,21 @@ test('a chat reply streams over the WebSocket and survives a reload', async ({ p
       'no streamed_chat_completion frame reached the browser: the reply did not stream over the WebSocket'
     ).toBeGreaterThan(0);
 
-    // The newest quest: sendMessageAndWaitForResponse resends once after a server timeout.
-    const questId = sent[sent.length - 1].questId;
     // The terminal frame can trail the stop button hiding by a beat.
     await expect
-      .poll(() => probe.frames.some(f => f.questId === questId && f.status === 'done'), {
+      .poll(() => probe.frames.slice(framesBeforeSend).some(f => f.status === 'done'), {
         timeout: TIMEOUTS.VISIBLE,
         message: 'the stream never delivered a frame with status "done"',
       })
       .toBe(true);
 
+    // The quest with the longest reply: a resend after a server timeout, or any other stream in the
+    // session, leaves shorter ones behind.
+    const longest = probe.frames
+      .slice(framesBeforeSend)
+      .reduce((best, frame) => (frame.reply.length > best.reply.length ? frame : best));
+    const questId = longest.questId;
+    sessionId = longest.sessionId;
     const frames = probe.frames.slice(framesBeforeSend).filter(f => f.questId === questId);
     expect(
       frames.filter(f => f.type === 'error').map(f => f.reply),
@@ -227,6 +236,7 @@ test('a chat reply streams over the WebSocket and survives a reload', async ({ p
     ).toEqual([]);
 
     const doneIndex = frames.findIndex(f => f.status === 'done');
+    expect(doneIndex, 'the reply stream never delivered a frame with status "done"').toBeGreaterThanOrEqual(0);
     const finalLength = Math.max(...frames.map(f => f.reply.length));
     const partialLengths: number[] = [];
     for (const frame of frames.slice(0, doneIndex)) {
@@ -247,6 +257,12 @@ test('a chat reply streams over the WebSocket and survives a reload', async ({ p
   });
 
   await test.step('the reloaded history shows the same reply', async () => {
+    // A first message opens on an optimistic id and swaps in the persisted one later (useSendMessage);
+    // reloading before that lands would load a session the server does not know.
+    await expect(page, 'the chat URL never moved to the persisted session').toHaveURL(
+      new RegExp(`/notebooks/${sessionId}(?:[/?#]|$)`),
+      { timeout: TIMEOUTS.NAVIGATION }
+    );
     await page.reload({ waitUntil: 'domcontentloaded' });
     await basePage.dismissModals();
     await expect
