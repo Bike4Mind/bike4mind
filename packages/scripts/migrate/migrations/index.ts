@@ -20,6 +20,12 @@ import { premiumMigrations } from './premium.generated';
 import type { MigrationFile } from '@bike4mind/database';
 export type { MigrationFile };
 
+// The generator writes an empty list if it ever runs against a migrations directory with no
+// migration files in it. Refuse to start rather than report "nothing pending" against a real DB.
+if (coreMigrations.length === 0) {
+  throw new Error('core.generated.ts registers no core migrations; rerun `pnpm codegen`');
+}
+
 export const AvailableMigrations: MigrationFile[] = [...coreMigrations, ...premiumMigrations];
 
 // Core ids are timestamps assigned by hand; overlay ids are timestamps assigned independently
