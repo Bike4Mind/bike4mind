@@ -1,10 +1,16 @@
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { buildFileLinkUrl } from '@bike4mind/server-utils/files/fileLinkToken';
 import { v4 as uuid } from 'uuid';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
 
 // EventBridge has a 256 KB limit per event
 // Leave some margin for JSON overhead and other fields
 const EVENTBRIDGE_SAFE_LIMIT = 230 * 1024;
+
+// The fab-file bucket's expire-shared-email-files lifecycle rule (infra/buckets.ts) reaps this prefix,
+// so it must outlive the link TTL; infra/__tests__/fabFileBucketLifecycle.test.ts pins both.
+export const SHARED_EMAIL_FILES_PREFIX = 'shared-email-files/';
+export const SHARED_EMAIL_FILE_LINK_TTL_DAYS = 7;
 
 interface EmailAttachment {
   filename: string;
@@ -52,35 +58,27 @@ function calculateEventBridgeSize(emailBody: string, attachments: EmailAttachmen
   return bodySize + attachmentsSize + metadataOverhead;
 }
 
-/**
- * Upload files to S3 and generate pre-signed download URLs
- * URLs are valid for 7 days
- */
-async function uploadFilesAndGenerateLinks(
-  attachments: EmailAttachment[],
-  userEmail: string
-): Promise<SharedFileInfo[]> {
+/** Upload files to S3 and link each through the app's file-link route, valid for the link TTL. */
+async function uploadFilesAndGenerateLinks(attachments: EmailAttachment[], userId: string): Promise<SharedFileInfo[]> {
   const uploadPromises = attachments.map(async att => {
     const timestamp = Date.now();
     const randomId = uuid().slice(0, 8);
     const sanitizedFilename = att.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const s3Path = `shared-email-files/${userEmail}/${timestamp}-${randomId}/${sanitizedFilename}`;
+    const s3Path = `${SHARED_EMAIL_FILES_PREFIX}${userId}/${timestamp}-${randomId}/${sanitizedFilename}`;
 
     await getFilesStorage().upload(att.content, s3Path, {
       ContentType: att.contentType,
       ContentDisposition: `attachment; filename="${att.filename}"`,
     });
 
-    const expiresIn = 7 * 24 * 60 * 60; // 7 days in seconds
-    const downloadUrl = await getFilesStorage().getSignedUrl(s3Path, 'get', {
-      expiresIn,
-      ResponseContentDisposition: `attachment; filename="${att.filename}"`,
-    });
-
     return {
       filename: att.filename,
-      downloadUrl,
-      expiresIn: '7 days',
+      downloadUrl: buildFileLinkUrl(
+        { kind: 'filesKey', key: s3Path },
+        userId,
+        SHARED_EMAIL_FILE_LINK_TTL_DAYS * 24 * 60 * 60
+      ),
+      expiresIn: `${SHARED_EMAIL_FILE_LINK_TTL_DAYS} days`,
       size: att.content.length,
     };
   });
@@ -178,7 +176,7 @@ function generateDownloadLinksEmail(originalBody: string, sharedFiles: SharedFil
             ${filesList}
           </ul>
           <div class="alert">
-            <strong>Note:</strong> Download links expire in 7 days.
+            <strong>Note:</strong> Download links expire in ${SHARED_EMAIL_FILE_LINK_TTL_DAYS} days.
           </div>
         </div>
 
@@ -198,7 +196,7 @@ function generateDownloadLinksEmail(originalBody: string, sharedFiles: SharedFil
  */
 export async function sendEmailWithAttachments(
   options: EmailOptions,
-  userEmail: string,
+  userId: string,
   userName: string
 ): Promise<{ method: 'direct-attachment' | 'download-links'; filesUploaded?: boolean }> {
   const { to, subject, body, attachments } = options;
@@ -223,7 +221,7 @@ export async function sendEmailWithAttachments(
     return { method: 'direct-attachment' };
   }
 
-  const sharedFiles = await uploadFilesAndGenerateLinks(attachments, userEmail);
+  const sharedFiles = await uploadFilesAndGenerateLinks(attachments, userId);
   const emailBodyWithLinks = generateDownloadLinksEmail(body, sharedFiles, userName);
 
   await EmailEvents.Send.publish({

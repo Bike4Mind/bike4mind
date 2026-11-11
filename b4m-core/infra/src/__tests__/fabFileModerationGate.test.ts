@@ -135,6 +135,8 @@ const referencesGate = (source: string): boolean => /isImageServeable\s*\(/.test
  * be provably safe, not merely inconvenient to fix.
  */
 const ALLOWLIST: Record<string, string> = {
+  'apps/client/server/tutorials/sheet.ts':
+    'writes a server-authored text/csv tutorial sheet, never an image or user upload',
   // --- The moderation scanner itself: downloads bytes to RUN Rekognition and PRODUCE
   // moderationStatus in the first place. It cannot gate on isImageServeable (that
   // would be circular - the field it's about to set is exactly what the predicate
@@ -211,6 +213,12 @@ const ALLOWLIST: Record<string, string> = {
   // --- Upload-only / delete-only: no read path. ---
   'apps/client/server/slack/dataLakeIngestDeps.ts':
     'DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
+
+  // --- Permanent modal copies: upload moderation runs before promotion. ---
+  'apps/client/pages/api/modal-images/[name].ts':
+    'signs only modal-images/<uuid>.<ext> keys referenced by a Modal row, not uploaded FabFile keys; ModalImageHandler checks isImageServeable before promoting an uploaded image into this prefix',
+  'apps/client/server/tools/modalImageUrls.ts':
+    'signs only the modal-images/ prefix of permanent modal copies, not uploaded FabFile keys; ModalImageHandler checks isImageServeable before promoting an uploaded image into this prefix',
 
   // --- Generated output: delivery and the saveGeneratedAsset passthrough. ---
   'apps/client/server/utils/generatedAudioDelivery.ts':

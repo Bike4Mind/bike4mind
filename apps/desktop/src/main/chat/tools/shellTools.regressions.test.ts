@@ -50,8 +50,8 @@ const PROGRAMS = [
 
 const REPLACEMENT = String.fromCharCode(0xfffd);
 
-/** Commands that ran unasked on main and must still run as the mode allows, in a repository with a large node_modules. */
-describe('commands main ran unasked', () => {
+/** Commands in a repository with a large node_modules: those that run as the mode allows, and those that ask. */
+describe('shell approval in a project with a large node_modules', () => {
   let base: string;
   let proj: string;
   let userData: string;
@@ -152,6 +152,9 @@ describe('commands main ran unasked', () => {
     });
     await mkdir(join(brepo, '.claude'));
     await writeFile(join(brepo, '.claude', 'settings.json'), '{}');
+    // An untracked folder holding its own settings, which `git clean` removes whole.
+    await mkdir(join(brepo, 'k', '.claude'), { recursive: true });
+    await writeFile(join(brepo, 'k', '.claude', 'settings.json'), '{}');
     // erepo has such a name changed in the work tree; mrepo changes its settings on a side branch.
     const erepo = await repository('erepo', { 'w/q .claude/settings.json': 'a', 'src/b.ts': 'b' });
     await mkdir(join(erepo, '.claude'));
@@ -284,7 +287,7 @@ describe('commands main ran unasked', () => {
   };
 
   const unasked = { auto: true, full: true, allowed: true };
-  // On main the rules floor already refused any command naming `.claude`; only auto and full ran it.
+  // The rules floor refuses any command naming `.claude`; auto and full run it.
   const unaskedNamingClaude = { auto: true, full: true, allowed: false };
   const asks = { auto: false, full: false };
 
@@ -386,15 +389,13 @@ describe('commands main ran unasked', () => {
     ['cp a .claude/commands/y.md', '', unaskedNamingClaude],
     ['git stash', 'crepo', unasked],
     ['git reset --hard', 'crepo', unasked],
-  ])('decides %s (in proj/%s) as main did', async (command, folder, expected) => {
+  ])('decides %s (in proj/%s) as the mode allows', async (command, folder, expected) => {
     expect(await judge(command, folder)).toEqual(expected);
   });
 
-  it('reads a glob of many stars against a long name in linear time', async () => {
-    const started = performance.now();
+  // shellScan.globWalk.test.ts bounds how often the matcher searches a name.
+  it('reads a glob of many stars against a long name', async () => {
     expect(await judge('git diff --name-only -- *a*a*a*a*a*a*a*a*b | xargs wc -l', 'nrepo')).toEqual(unasked);
-    // Room for the git runs on a loaded host; the matching alone took minutes when it backtracked.
-    expect(performance.now() - started).toBeLessThan(10000);
   });
 
   it.each([
@@ -516,6 +517,9 @@ describe('commands main ran unasked', () => {
     // bash 3.2 drops the padding, passing git the wider `*0*`.
     ["git diff --name-only -- '*'{00..0}'*' | xargs sed -i s/a/b/", 'srepo'],
     ['git diff --name-only x{1..1} -- | xargs sed -i s/a/b/', 'srepo'],
+    // bash pairs the `{` with the `}` after the comma, passing git `x}a` and `.c*/s*`.
+    ['git diff --name-only -- {x}a,.c*}/s* | xargs sed -i s/a/b/', 'srepo'],
+    ["git diff --name-only -- '*'{+1..1}'*' | xargs sed -i s/a/b/", 'srepo'],
     ['shopt -s nullglob; git diff --name-only -- src/*.ts | xargs sed -i s/a/b/', 'srepo'],
     // Under nullglob find gets no start point and walks `.`.
     ['shopt -s nullglob; find src/*.zz -delete', ''],
@@ -543,8 +547,344 @@ describe('commands main ran unasked', () => {
     'rg -l foo 2>>/dev/stdout | xargs sed -i s/a/b/',
     'echo "main --force" | xargs git branch -d',
     'pgrep --list-full node | xargs docker stop',
-  ])('asks for %s, which main ran unasked', async command => {
+    // bash pairs the `{` with the `}` after the comma, so each names `.claude`.
+    'rm -rf {x}a,.cl{a,a}ude}',
+    'cp a {x}a,.claude/settings.json}',
+    // tar reads its first word as an old-style cluster whatever bash makes of the braces, and `T` names a file list.
+    'tar cvfT{1..3..1} list',
+  ])('asks in every mode for %s', async command => {
     expect(await judge(command)).toMatchObject(asks);
+  });
+
+  // bash 4 and later pass each as `.claude`, the last beside `x}a`; bash 3.2 keeps a step as written.
+  const claudeBraceWords = [
+    '.clau{d..d..1}e',
+    '.claud{e..e..2}',
+    '.cl{a..a..1}ude',
+    '.clau{d..d..-1}e',
+    '{x}a,.claude}',
+  ];
+
+  it.each(claudeBraceWords)('reads %s as a word host bash 4 or later passes as .claude', word => {
+    const [major, ...printed] = execFileSync('bash', ['-c', `printf '%s\\n' "\${BASH_VERSINFO[0]}" ${word}`], {
+      encoding: 'utf8',
+    }).split('\n');
+    if (Number(major) >= 4) expect(printed).toContain('.claude');
+  });
+
+  it.each(
+    claudeBraceWords.flatMap(word =>
+      [
+        'git checkout --',
+        'git restore',
+        'git rm -r',
+        'git rm -rf --cached',
+        'git clean -fdx',
+        'git add',
+        'git reset --',
+        'npx prettier --write',
+      ].map(command => `${command} ${word}`)
+    )
+  )('asks in every mode for %s, whose braces the scan leaves unread', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each(
+    [
+      ['a step', '.clau{d..d..1}e', '.clau{d..d..1}e/settings.json'],
+      ['a signed step', '.clau{d..d..-1}e', '.clau{d..d..-1}e/settings.json'],
+      ['a signed bound', '.claude{+1..1}', '.claude/x{+1..1}'],
+      ['zero padding', '.claude{01..1}', '.claude/x{01..1}'],
+      ['a bound past 32 bits', '.claude{2147483648..2147483648}', '.claude/x{2147483648..2147483648}'],
+      ['a `..` that makes no sequence', '.clau{d..dd}e', '.clau{d..dd}e/settings.json'],
+      ['unbalanced braces around a comma', '{x}a,.claude}', '{x}a,.claude}/settings.json'],
+      ['unbalanced braces around a `..`', '.clau{d..d}e}', '.clau{d..d}e}/settings.json'],
+    ].flatMap(([form, bare, slashed]) =>
+      [
+        'git checkout --',
+        'git restore',
+        'git rm -r',
+        'git clean -fdx',
+        'git add',
+        'git reset --',
+        'npx prettier --write',
+        'npx eslint --fix',
+        'rm -rf',
+        'mv src/a.ts',
+        'cp src/a.ts',
+      ].flatMap(command => [
+        [`${command} ${bare}`, form],
+        [`${command} ${slashed}`, form],
+      ])
+    )
+  )('asks in every mode for %s, a word with %s', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each(
+    ['grep -R a', 'ls -L', 'ln -s src/a.ts', 'tar -xf clean.tar -C', 'cp -rL src'].map(
+      command => `${command} .clau{d..d..1}e`
+    )
+  )('asks in every mode for %s, whose walked, linked or unpacked tree the scan leaves unread', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    // Brace expansion ends the outer double quote at the inner `"`, so bash runs `rm -rf "x"` and `rm -rf ".claude"`.
+    'echo "`rm -rf "{x,.claude}"`"',
+    'echo "`rm -rf ".clau{d..d}e"`"',
+    // bash 3.2 does the same for a `$(` within double quotes.
+    'echo "$(rm -rf "{x,.claude}")"',
+    'npx prettier --write "${x:-"{x,.claude}"}"',
+    'for f in "`rm -rf "{x,.claude}"`"; do :; done',
+    'a=("`rm -rf "{x,.claude}"`")',
+    'export x="`rm -rf "{x,.claude}"`"',
+    'cat < "`rm -rf "{x,.claude}"`"',
+    // `[` and `unset` are builtins, whose words bash brace-expands as it does any command's.
+    '[ "`rm -rf "{x,.claude}"`" ]',
+    'if [ "`rm -rf "{x,.claude}"`" ]; then :; fi',
+    'while [ "`rm -rf "{x,.claude}"`" ]; do :; done',
+    '! [ "`rm -rf "{x,.claude}"`" ]',
+    '{ [ "`rm -rf "{x,.claude}"`" ]; }',
+    '[ -n x -a "`rm -rf "{x,.claude}"`" = y ]',
+    '[ "$(rm -rf "{x,.claude}")" ]',
+    'unset "`rm -rf "{x,.claude}"`"',
+    '[ "`cat "{x,../.config/Bike4Mind/value}"`" ]',
+    'f() { local x="`rm -rf "{x,.claude}"`"; }; f',
+    'rm -rf "${x:-$"{x,.claude}"}"',
+    'rm -rf {x,\\\n.claude}',
+    'echo $(( `rm -rf "{x,.claude}"` 1 ))',
+  ])('asks in every mode for %s, reading its braces by bash quote rules', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    // bash brace-expands no here-string, `case` word, `[[` test, assignment, comment or `$"..."` string.
+    'cat <<< "`rm -rf "{x,.claude}"`"',
+    'case "`rm -rf "{x,.claude}"`" in *) ;; esac',
+    '[[ "`rm -rf "{x,.claude}"`" ]]',
+    'x="`rm -rf "{x,.claude}"`"',
+    'rm -rf x #{x,.claude}',
+    'rm -rf $"{x,.claude}"',
+  ])('runs %s unasked, as bash passes its braces as written', async command => {
+    expect(await judge(command)).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
+    // bash expands the braces first, so each reads the empty `$PWD_` or `$HOME_` and names the path after it.
+    'cd src && cat $PWD{_,_}../../.config/Bike4Mind/value',
+    'cd src && cat {$PWD,x}_../../.config/Bike4Mind/value',
+    'rm -rf $PWD{_,_}.claude',
+    'rm -rf $HOME{_,_}.claude',
+    'npx prettier --write $PWD{_,_}.claude/settings.json',
+    'rm -rf $${a,b}',
+  ])('asks in every mode for %s, whose `$name` bash reads on into its braces', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    ['git clean -fdx $x', ''],
+    ['git clean -fdx ${x:+}.claude', ''],
+    ['git clean -fdx -- "$x"', ''],
+    ['git clean -fdx `echo .claude`', ''],
+    ['git clean -fdX -e $x', ''],
+    ['git clean -fdX --exclude=$x', ''],
+    ['git rm -r $x', ''],
+    ['git rm -r ${x:+}.claude', ''],
+    ['git rm -r --cached $x', ''],
+    ['git mv $x y', ''],
+    ['git mv -f src/a.ts $x', ''],
+    // brepo's `.claude` is untracked, so each exclude pattern makes it one more ignored folder `-X` removes.
+    ["git clean -fdX -e '.clau*'", 'brepo'],
+    ["git clean -fdX -e '.clau*' -e a", 'brepo'],
+    ["git clean -fdX -e a --exclude '.clau*' -e b", 'brepo'],
+    ["git clean -fdX -e'.clau*'", 'brepo'],
+    ["git clean -fdX -e.cl''au*", 'brepo'],
+    ['git clean -fdx', 'brepo'],
+    // A second `-f` removes the nested repositories too, each holding its own settings.
+    ['git clean -ffdx', ''],
+    ['git clean -f -f -dx', ''],
+    ['git clean -fdx --force', ''],
+    ['git clean -fd k', 'brepo'],
+    ['git clean -fdx k', 'brepo'],
+  ])('asks in every mode for %s (in proj/%s), whose paths git removes or moves', async (command, folder) => {
+    expect(await judge(command, folder)).toMatchObject(asks);
+  });
+
+  it.each(['\u00fcdir', ...(process.platform === 'win32' ? [] : ['line\ndir', 'back\\slash', '"quote'])])(
+    'asks when git quotes a removed folder named %j holding settings',
+    async name => {
+      const repository = join(proj, 'quoted-repo');
+      await mkdir(join(repository, name, '.claude'), { recursive: true });
+      try {
+        execFileSync('git', ['-C', repository, 'init', '-q']);
+        execFileSync('git', ['-C', repository, 'config', 'core.quotePath', 'true']);
+        await writeFile(join(repository, name, '.claude', 'settings.json'), '{}');
+        expect(execFileSync('git', ['-C', repository, 'clean', '-nfdx'], { encoding: 'utf8' })).toMatch(
+          /^Would remove "/
+        );
+
+        expect(await judge('git clean -fdx', 'quoted-repo')).toMatchObject(asks);
+      } finally {
+        await rm(repository, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it.each([
+    "git cle''an -fdx",
+    'git cle"an" -fdx',
+    'git c\\lean -fdx',
+    'git cl$x -fdx',
+    'git c{l,}ean -fdx',
+    'git cle?n -fdx',
+    "git -C . cle''an -fdx",
+    "env git cle''an -fdx",
+    "git pu''sh origin main",
+    'git cle[a]n -fdx',
+    'git cle\\an -fdx',
+    "git sta''tus",
+    'git "log"',
+    'git lo$x',
+    'git l{o,}g',
+    'git sta?us',
+    "git -c core.pager=cat cle''an -fdx",
+    "git --no-pager cle''an -fdx",
+    "git -C . -c a=b cle''an -fdx",
+    "git --git-dir=.git cle''an -fdx",
+    "command git cle''an -fdx",
+    "command -- git cle''an -fdx",
+    "nohup git cle''an -fdx",
+    "time git cle''an -fdx",
+    "sudo git cle''an -fdx",
+    "xargs git cle''an -fdx",
+    "echo | xargs git pu''sh",
+    "(git cle''an -fdx)",
+    "{ git cle''an -fdx; }",
+    "true && git cle''an -fdx",
+    "git status && git cle''an -fdx",
+    "git ''clean -fdx",
+    "git --no-pager ''status",
+    'git --shallow-file x "log"',
+    'git --shallow-file x "push" https://example.invalid/r main',
+    'git --attr-source x "log"',
+    'git -C . --super-prefix x "log"',
+  ])('asks in every mode for %s, whose git subcommand bash rewrites', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  const VALUED_GIT_OPTIONS = [
+    '--git-dir',
+    '--work-tree',
+    '--namespace',
+    '--config-env',
+    '--attr-source',
+    '--super-prefix',
+    '--shallow-file',
+  ];
+
+  it.each([
+    ...VALUED_GIT_OPTIONS.flatMap(option => [
+      `git ${option} main clean -fdx`,
+      `git ${option} HEAD clean -fdx`,
+      `git ${option}=main clean -fdx`,
+      `git -C . ${option} main clean -fdx`,
+      `git -c core.x=y ${option} main clean -fdx`,
+      `git ${option} main -C . clean -fdx`,
+    ]),
+    'git -C . clean -fdx',
+    'git -c core.x=y clean -fdx',
+    'git --no-pager --attr-source main clean -fdx',
+    'git --exec-path clean -fdx',
+    'git --exec-path=x clean -fdx',
+    'git --list-cmds=main clean -fdx',
+    'git --bare clean -fdx',
+    'git --future-option main clean -fdx',
+    'git --no-pager HEAD clean -fdx',
+    'git --no-pager ./x clean -fdx',
+  ])('asks in every mode for %s, which git reads past its global options', async command => {
+    expect(await judge(command, 'brepo')).toMatchObject(asks);
+  });
+
+  const SENDING_GIT = [
+    'push https://example.invalid/r main',
+    'remote add o https://example.invalid/r',
+    'remote set-url o https://example.invalid/r',
+    'send-email x',
+  ];
+
+  it.each([
+    ...['-C', '-c', ...VALUED_GIT_OPTIONS].flatMap(option => SENDING_GIT.map(sending => `git ${option} x ${sending}`)),
+    ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git ${option}=x ${sending}`)),
+    ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git -C . ${option} x ${sending}`)),
+    ...SENDING_GIT.map(sending => `git ${sending}`),
+  ])('asks in auto mode for %s, which sends data out', async command => {
+    expect((await judge(command)).auto).toBe(false);
+  });
+
+  it.each([
+    'git -c man.man.path=./x.sh --help clean',
+    'git -c man.man.path=./x.sh -h clean',
+    'git -c man.man.path=./x.sh help clean',
+    'git -c man.man.cmd=./x.sh --help clean',
+    'git -c man.x.cmd= --help clean',
+    'git -c core.pager= status',
+    'git -c help.format=web -c help.browser=firefox -c browser.firefox.path=./x.sh -c help.htmlPath=./docs --help clean',
+    'git -c help.format=web -c help.browser=firefox -c browser.firefox.path=./x.sh -c help.htmlPath=./docs help clean',
+    'git -c browser.firefox.cmd=./x.sh help clean',
+    'git -c difftool.x.path=./x.sh difftool',
+    'git -c mergetool.x.path=./x.sh mergetool',
+    'git --exec-path=./bin -c help.format=web -c help.htmlPath=./docs --help clean',
+    'git --exec-path=./bin mergetool',
+    'git --exec-path=./bin status',
+    'git --exec-path=./bin --help clean',
+    'git --exec-path=./bin --version',
+    'git -C . --exec-path=./bin log',
+  ])('asks in every mode for %s, which has git run a program the command names', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    'git help clean',
+    'git --help clean',
+    'git -h clean',
+    'git --version',
+    'git --exec-path',
+    'git --exec-path status',
+    'git -c core.x=y help clean',
+  ])('runs %s unasked, as no program is named', async command => {
+    expect(await judge(command)).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
+    'git --no-literal-pathspecs ls-files',
+    'git --no-literal-pathspecs status',
+    'git --literal-pathspecs ls-files',
+    'git --glob-pathspecs ls-files',
+    'git --noglob-pathspecs ls-files',
+    'git --icase-pathspecs ls-files',
+    'git --no-replace-objects log',
+    'git --no-lazy-fetch status',
+    'git --no-advice status',
+    'git --no-optional-locks status',
+    'git --version clean -fdx',
+    'git -v clean -fdx',
+    'git --help clean -fdx',
+    'git -h clean -fdx',
+    'git --version',
+    'git --help',
+  ])('runs %s unasked, as git reads it as a read-only command', async command => {
+    expect(await judge(command, 'brepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
+    ['git clean -fdx', ''],
+    ['git clean -fdx src', ''],
+    ['git clean -fdX -e a', 'brepo'],
+    ['git rm src/a.ts', ''],
+    ['git mv src/a.ts src/z.ts', ''],
+  ])('runs %s (in proj/%s) unasked, naming no protected path', async (command, folder) => {
+    expect(await judge(command, folder)).toMatchObject({ auto: true, full: true });
   });
 
   it.each([

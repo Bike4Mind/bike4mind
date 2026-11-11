@@ -156,6 +156,19 @@ describe('ActionDialog', () => {
     await waitFor(() => expect(screen.getByTestId('adjust-dialog-cancel-btn')).toBeEnabled());
   });
 
+  it('keeps Cancel enabled mid-write when the caller stops at close', async () => {
+    const onClose = vi.fn();
+    const onConfirm = vi.fn(() => new Promise<void>(() => {}));
+    const confirm = openDialog({ onConfirm, onClose, cancelStopsWrite: true });
+    fireEvent.click(screen.getByTestId('adjust-dialog-reason-input-preset-0'));
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(confirm).toHaveClass('MuiButton-loading'));
+    expect(screen.getByTestId('adjust-dialog-cancel-btn')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('adjust-dialog-cancel-btn'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the required star on the typed-confirm sentence instead of a line of its own', () => {
     openDialog({ typedConfirm: { expected: 'a-very-long-address-that-wraps@example.com', noun: 'email address' } });
 

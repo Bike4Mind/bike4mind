@@ -82,6 +82,9 @@ export async function resolveTopLevelProfile(args: ResolveTopLevelProfileArgs): 
         // composed from personality/identity fields. Same builder the classic
         // chat path uses, so the agent behaves identically in both paths.
         systemPrompt: buildAgentPersonaPrompt(agent),
+        confidenceGateThreshold: agent.confidenceGateThreshold ?? args.adminDefaults?.confidenceGateThreshold,
+        confidenceGateMode: agent.confidenceGateMode ?? args.adminDefaults?.confidenceGateMode,
+        confidenceGateSelfReport: agent.confidenceGateSelfReport ?? args.adminDefaults?.confidenceGateSelfReport,
       };
     }
     // Missing / unauthorized / soft-deleted agent - fall through to synthetic
@@ -99,6 +102,9 @@ export async function resolveTopLevelProfile(args: ResolveTopLevelProfileArgs): 
     defaultThoroughness: synthetic.defaultThoroughness,
     isSynthetic: true,
     allowedToolsFromDefaults: true,
+    confidenceGateThreshold: synthetic.confidenceGateThreshold,
+    confidenceGateMode: synthetic.confidenceGateMode,
+    confidenceGateSelfReport: synthetic.confidenceGateSelfReport,
   };
 }
 

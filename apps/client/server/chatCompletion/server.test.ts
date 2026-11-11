@@ -37,6 +37,12 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToConnection: mo
 const mockProcessQuest = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/queueHandlers/questProcessor', () => ({ processQuest: mockProcessQuest }));
 
+// Scale-in protection is driven by the drain set's in-flight count (unit-tested in taskProtection.test.ts).
+const mockProtectionUpdate = vi.hoisted(() => vi.fn());
+vi.mock('./taskProtection', () => ({
+  createTaskProtection: () => ({ update: mockProtectionUpdate, idle: async () => undefined }),
+}));
+
 // questRepository.settleIfUnfinished - the error path's status-guarded terminal write.
 // connectDB/mongoose unused by /process. The remaining repos are pulled in by the completions
 // route (executeCompletion + credit attribution); stubbed so importing the route doesn't drag
@@ -341,6 +347,18 @@ describe('ChatCompletion /process', () => {
     const res = await post(VALID_BODY, { authorization: AUTH });
     expect(res.status).toBe(202);
     await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
+  });
+
+  it('holds scale-in protection while a quest is in flight and releases it when the task is idle', async () => {
+    let finishQuest: () => void = () => undefined;
+    mockProcessQuest.mockImplementationOnce(() => new Promise<void>(resolve => (finishQuest = resolve)));
+
+    await post(VALID_BODY, { authorization: AUTH });
+    await vi.waitFor(() => expect(mockProcessQuest).toHaveBeenCalledTimes(1));
+    expect(mockProtectionUpdate).toHaveBeenLastCalledWith(1);
+
+    finishQuest();
+    await vi.waitFor(() => expect(mockProtectionUpdate).toHaveBeenLastCalledWith(0));
   });
 });
 

@@ -112,7 +112,7 @@ export function buildCreatePayload(form: CreateForm): CreateOAuthClientInput {
   };
 }
 
-type EditForm = { redirectUris: string; scopes: string[]; federated: FederatedForm };
+type EditForm = { redirectUris: string; scopes: string[]; federated: FederatedForm; overwatchProductId: string };
 
 // A stored trust config without subjectSource is the 'identities' shape (see resolveOAuthFederatedIdp).
 export function federatedFormFromClient(client: OAuthClientView): FederatedForm {
@@ -131,6 +131,7 @@ export const editFormFromClient = (client: OAuthClientView): EditForm => ({
   redirectUris: client.redirectUris.join('\n'),
   scopes: client.allowedScopes,
   federated: federatedFormFromClient(client),
+  overwatchProductId: client.overwatchProductId ?? '',
 });
 
 /** Only the fields the admin changed, so an unrelated save never trips the server's concurrent-edit guards. */
@@ -154,6 +155,9 @@ export function buildEditPayload(client: OAuthClientView, form: EditForm): Updat
   if (after.enabled !== before.enabled || (after.enabled && JSON.stringify(after) !== JSON.stringify(before))) {
     payload.federatedIdp = after.enabled ? federatedInput(after) : null;
   }
+
+  const product = form.overwatchProductId.trim();
+  if (product !== (client.overwatchProductId ?? '')) payload.overwatchProductId = product || null;
   return payload;
 }
 
@@ -819,6 +823,20 @@ export default function OAuthClientsTab() {
                   audiencePlaceholder="Defaults to this client_id"
                 />
               )}
+
+              <FormControl>
+                <FormLabel>Overwatch product</FormLabel>
+                <Input
+                  value={editForm.overwatchProductId}
+                  placeholder="None"
+                  onChange={e => setEditForm(f => f && { ...f, overwatchProductId: e.target.value })}
+                  slotProps={{ input: { 'data-testid': 'oauth-client-edit-overwatch-product-input' } }}
+                />
+                <FormHelperText>
+                  An account created to sign in to this client is credited to this Overwatch product, and so are its
+                  payments. Empty credits no product.
+                </FormHelperText>
+              </FormControl>
             </Stack>
           )}
           {formError && (

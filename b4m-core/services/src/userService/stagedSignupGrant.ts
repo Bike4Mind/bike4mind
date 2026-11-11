@@ -139,6 +139,21 @@ function ineligibleResult(
     : noGrant();
 }
 
+/**
+ * Every release after the first tranche waits while an unreviewed or abusive accountCampaign detection names
+ * the account; grading it legitimate lifts the hold for the next drip or held payment unlock. An admin
+ * release is itself a review, so it is never held. Grant sizes are untouched.
+ */
+async function isHeldForAccountCampaign(
+  userId: string,
+  expected: SignupGrant['stage'],
+  reason: SignupGrantUnlockReason | undefined,
+  db: GrantAdapters['db']
+): Promise<boolean> {
+  if (expected === 'pending_email' || reason === 'admin') return false;
+  return (await db.signupProtection?.hasOpenAccountCampaign?.(userId)) ?? false;
+}
+
 /** A refunded, disputed or fraud-warned payment closes every signup release except an admin's. */
 const isForfeitedRelease = (grant: SignupGrant, reason: SignupGrantUnlockReason | undefined) =>
   !!grant.unlockForfeited && reason !== 'admin';
@@ -185,6 +200,7 @@ async function releaseStage(
       if (expected === 'pending_email') throw new Error('Email verification required for signup grant');
       return noGrant();
     }
+    if (await isHeldForAccountCampaign(userId, expected, reason, db)) return { ...noGrant(), withheld: true };
     // Detection may notify reviewers; keep it outside the retried payout transaction.
     if (await protectSignupCredits(userId, db)) {
       if (expected === 'pending_email') await db.users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
@@ -508,6 +524,9 @@ export const releaseSignupTranche = (userId: string, adapters: GrantAdapters) =>
     adapters
   );
 
+/** A campaign-held payment unlock is rechecked this long after its due time, so it cannot occupy every hourly run. */
+const CAMPAIGN_HOLD_RECHECK_MS = 6 * 3_600_000;
+
 type UnlockAdapters = GrantAdapters & {
   validators: Partial<Record<SignupGrantUnlockReason, SignupGrantValidator>>;
   /** Held-release job only: pays a payment unlock whose hold has reached `releaseAt` by this time. */
@@ -537,8 +556,26 @@ export const unlockSignupGrant = (userId: string, reason: SignupGrantUnlockReaso
     if (releaseAt && !(grant.heldUnlock && new Date(grant.heldUnlock.releaseAt) <= releaseAt)) return false;
     return validator(user);
   };
+  const deferHeldUnlock = async (due: Date): Promise<GrantFreeCreditsResult> => {
+    const { users } = adapters.db;
+    await withTransaction(async () => {
+      const grant = (await users.findById(userId))?.signupGrant;
+      if (!grant?.heldUnlock) return;
+      const heldUnlock = { ...grant.heldUnlock, releaseAt: new Date(due.getTime() + CAMPAIGN_HOLD_RECHECK_MS) };
+      if (!(await users.update({ id: userId, signupGrant: { ...grant, heldUnlock } })))
+        throw new Error('Staged grant account update failed');
+    });
+    return { ...noGrant(), withheld: true };
+  };
   const unlock = async () => {
-    if (releaseAt || (await resolvePaymentUnlockHoldHours(adapters.db.adminSettings)) === 0)
+    if (releaseAt && (await isHeldForAccountCampaign(userId, 'signup', reason, adapters.db)))
+      return deferHeldUnlock(releaseAt);
+    // A campaign hold records a held unlock even with no settling window, so the held-release job pays it later.
+    if (
+      releaseAt ||
+      ((await resolvePaymentUnlockHoldHours(adapters.db.adminSettings)) === 0 &&
+        !(await isHeldForAccountCampaign(userId, 'signup', reason, adapters.db)))
+    )
       return releaseStage(userId, 'signup', reason, paymentValidator, adapters);
     return holdPaymentUnlock(userId, reason, paymentValidator, adapters);
   };

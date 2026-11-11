@@ -73,6 +73,7 @@ export function toOAuthClientView(doc: IOAuthClientDocument): OAuthClientView {
           },
         }
       : {}),
+    ...(doc.overwatchProductId ? { overwatchProductId: doc.overwatchProductId } : {}),
     createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : null,
     updatedAt: doc.updatedAt ? new Date(doc.updatedAt).toISOString() : null,
   };
@@ -191,8 +192,13 @@ export async function updateOAuthClient(
     ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
     ...(data.allowedScopes ? { allowedScopes: data.allowedScopes } : {}),
     ...(federatedIdp ? { federatedIdp } : {}),
+    ...(data.overwatchProductId ? { overwatchProductId: data.overwatchProductId } : {}),
   };
-  const update = { $set, ...(data.federatedIdp === null ? { $unset: { federatedIdp: '' } } : {}) };
+  const $unset: Record<string, ''> = {
+    ...(data.federatedIdp === null ? { federatedIdp: '' } : {}),
+    ...(data.overwatchProductId === null ? { overwatchProductId: '' } : {}),
+  };
+  const update = { $set, ...(Object.keys($unset).length > 0 ? { $unset } : {}) };
 
   // Exact-match the lists we validated against, so a concurrent edit cannot slip an unchecked value past them.
   const filter: Record<string, unknown> = { _id: id };

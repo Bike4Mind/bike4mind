@@ -17,6 +17,7 @@ import { CATEGORY_OPTIONS } from './ActivityTab';
 import type { ProfileAction } from '../actions/profileActions';
 import { RiskEvidenceCard } from '../RiskEvidenceCard';
 import { SignupClassificationCard } from '../SignupClassificationCard';
+import { DetectionLinkedAccountsCard } from '../DetectionLinkedAccountsCard';
 import { UserNotesCard } from './UserNotesCard';
 import { OrganizationsCard } from './OrganizationsCard';
 import { ClientsCard } from './ClientsCard';
@@ -253,42 +254,48 @@ type OverviewTabProps = {
   onAudit?: () => void;
 };
 
-/** Two columns of cards that collapse to one below ~700 px (DESIGN_GUIDE.md section 5). */
+/**
+ * Two columns of cards that collapse to one below ~700 px (DESIGN_GUIDE.md section 5), under a full-width
+ * card of detection-linked accounts when a cohort detection names the user.
+ */
 export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onViewActivity, onViewCredits, onAudit }) => (
-  <Box
-    sx={{
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(min(340px, 100%), 1fr))',
-      gap: 2,
-      alignItems: 'start',
-    }}
-    data-testid="user-profile-overview"
-  >
-    <Stack gap={2}>
-      <AccountCard user={user} onAction={onAction} />
-      <OrganizationsCard user={user} onAudit={onAudit} />
-      <AccessCard user={user} onAction={onAction} />
-      <ClientsCard user={user} />
-      <SignupClassificationCard key={user.id} userId={user.id} />
-      <RiskEvidenceCard userId={user.id} />
-      <SectionCard
-        title="Subscription"
-        body="custom"
-        action={
-          <HeaderAction onClick={() => onAction('subscription')} data-testid="user-profile-grant-subscription-btn">
-            Grant
-          </HeaderAction>
-        }
-        data-testid="user-profile-subscription-card"
-      >
-        <Box sx={{ p: 0.5 }}>
-          <SubscriptionSummaryList userId={user.id} />
-        </Box>
-      </SectionCard>
-    </Stack>
-    <Stack gap={2}>
-      <RecentActivityCard userId={user.id} onViewAll={onViewActivity} onOpenCredits={onViewCredits} />
-      <UserNotesCard user={user} />
-    </Stack>
-  </Box>
+  <Stack gap={2}>
+    <DetectionLinkedAccountsCard userId={user.id} />
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(340px, 100%), 1fr))',
+        gap: 2,
+        alignItems: 'start',
+      }}
+      data-testid="user-profile-overview"
+    >
+      <Stack gap={2}>
+        <AccountCard user={user} onAction={onAction} />
+        <OrganizationsCard user={user} onAudit={onAudit} />
+        <AccessCard user={user} onAction={onAction} />
+        <ClientsCard user={user} />
+        <SignupClassificationCard key={user.id} userId={user.id} />
+        <RiskEvidenceCard userId={user.id} />
+        <SectionCard
+          title="Subscription"
+          body="custom"
+          action={
+            <HeaderAction onClick={() => onAction('subscription')} data-testid="user-profile-grant-subscription-btn">
+              Grant
+            </HeaderAction>
+          }
+          data-testid="user-profile-subscription-card"
+        >
+          <Box sx={{ p: 0.5 }}>
+            <SubscriptionSummaryList userId={user.id} />
+          </Box>
+        </SectionCard>
+      </Stack>
+      <Stack gap={2}>
+        <RecentActivityCard userId={user.id} onViewAll={onViewActivity} onOpenCredits={onViewCredits} />
+        <UserNotesCard user={user} />
+      </Stack>
+    </Box>
+  </Stack>
 );

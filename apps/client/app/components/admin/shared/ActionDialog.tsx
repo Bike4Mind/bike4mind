@@ -52,6 +52,11 @@ export type ActionDialogProps = {
    * Its button id is `<id>-secondary-btn`; the reason draft is kept for the caller's next item.
    */
   secondaryAction?: { label: string; onConfirm: (reason: string) => void | Promise<void> };
+  /**
+   * Keeps Cancel enabled while the write is in flight, for a caller whose `onConfirm` stops at
+   * `onClose` (a run of writes that checks between them and leaves the rest unsent).
+   */
+  cancelStopsWrite?: boolean;
   /** Derived ids: `<id>-reason-input`, `<id>-confirm-btn`, `<id>-cancel-btn`, `<id>-hint`, `<id>-typed-input`. */
   'data-testid': string;
   /** Overrides individual derived ids where an existing test or page object depends on them. */
@@ -88,6 +93,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   typedConfirm,
   pending = false,
   secondaryAction,
+  cancelStopsWrite = false,
   'data-testid': testId,
   testIds = {},
 }) => {
@@ -185,8 +191,14 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
             <Kbd>Enter</Kbd> to apply
           </Typography>
         )}
-        {/* Held while the write is in flight: closing then would not cancel it. */}
-        <Button variant="plain" color="neutral" onClick={onClose} disabled={busy} data-testid={`${testId}-cancel-btn`}>
+        {/* Held while the write is in flight (closing would not cancel it) unless the caller stops at close. */}
+        <Button
+          variant="plain"
+          color="neutral"
+          onClick={onClose}
+          disabled={busy && !cancelStopsWrite}
+          data-testid={`${testId}-cancel-btn`}
+        >
           Cancel
         </Button>
         {secondaryAction && (

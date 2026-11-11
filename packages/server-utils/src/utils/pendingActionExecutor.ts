@@ -1,9 +1,9 @@
-import { getFilesStorage } from './storage/index';
 import { Logger } from '@bike4mind/observability';
 import { IUserDocument, isImageServeable } from '@bike4mind/common';
 import { Quest, Session, fabFileRepository } from '@bike4mind/database';
 import { SlackDevWorkspace, OrgSlackWorkspace } from '@bike4mind/database/infra';
 import { isValidObjectId } from './objectId';
+import { buildFileLinkUrl } from '../files/fileLinkToken';
 import { downloadAttachmentUrl } from './downloadAttachmentUrl';
 import { isFeatureEnabled } from '../middlewares/featureFlag';
 import { invokeMcpHandler } from './invokeMcpHandler';
@@ -144,9 +144,7 @@ export async function executePendingAction(
       return { success: false, message: 'This action has already been processed.' };
     }
     try {
-      const url = await getFilesStorage().getSignedUrl(file.filePath, 'get', {
-        expiresIn: CURATED_FILE_SHARE_EXPIRATION_SECONDS,
-      });
+      const url = buildFileLinkUrl({ kind: 'fabFile', fileId }, dbUser.id, CURATED_FILE_SHARE_EXPIRATION_SECONDS);
       return { success: true, message: `Shared curated file: <${url}|Download file>` };
     } catch (error) {
       logger.error('Failed to create a confirmed file share link', { questId, error });

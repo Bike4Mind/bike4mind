@@ -327,6 +327,42 @@ describe('CacheRepository.tryAddWithinLimitFixedWindow', () => {
   });
 });
 
+describe('CacheRepository.releaseFromFixedWindow', () => {
+  const windowMs = 60_000;
+  const countOf = async (key: string) => ((await cacheRepository.findByKey(key))?.result as { count: number }).count;
+
+  it('returns the live window to its prior count and keeps its expiry', async () => {
+    const key = `release:${Date.now()}-1`;
+    await cacheRepository.tryAddWithinLimitFixedWindow(key, 30, 100, windowMs);
+    const before = await cacheRepository.findByKey(key);
+    await cacheRepository.tryAddWithinLimitFixedWindow(key, 25, 100, windowMs);
+    await cacheRepository.releaseFromFixedWindow(key, 25);
+    expect(await countOf(key)).toBe(30);
+    expect((await cacheRepository.findByKey(key))?.expiresAt).toEqual(before?.expiresAt);
+  });
+
+  it('is a no-op for an absent key', async () => {
+    const key = `release:${Date.now()}-2`;
+    await cacheRepository.releaseFromFixedWindow(key, 10);
+    expect(await Cache.findOne({ key })).toBeNull();
+  });
+
+  it('never goes below zero', async () => {
+    const key = `release:${Date.now()}-3`;
+    await cacheRepository.tryAddWithinLimitFixedWindow(key, 10, 100, windowMs);
+    await cacheRepository.releaseFromFixedWindow(key, 50);
+    expect(await countOf(key)).toBe(0);
+  });
+
+  it('leaves an expired window untouched', async () => {
+    const key = `release:${Date.now()}-4`;
+    await cacheRepository.tryAddWithinLimitFixedWindow(key, 40, 100, windowMs);
+    await Cache.updateOne({ key }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+    await cacheRepository.releaseFromFixedWindow(key, 15);
+    expect(((await Cache.findOne({ key }))?.result as { count: number }).count).toBe(40);
+  });
+});
+
 describe('CacheRepository leases', () => {
   const KEY = 'test:semaphore';
 

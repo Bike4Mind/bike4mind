@@ -22,6 +22,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { respond } from '@server/utils/respond';
+import { isLakePlanAllowed } from '@server/entitlements/lakePlanGate';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import type { DataLakeCleanupMessage } from '@bike4mind/server-utils/dataLakes/dataLakeCleanupPayload';
@@ -96,6 +97,33 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo),
     };
 
+    // Unarchive and restore bring the lake back, but resume its Drive/GitHub sync only when the
+    // paid-plan gate (lakePlanGate) admits the caller; otherwise the connectors stay paused until
+    // they are reconnected through a gated connect door.
+    const connectorEnablePorts = async () => {
+      let allowed = false;
+      try {
+        allowed = await isLakePlanAllowed(req, lake.organizationId || undefined);
+      } catch (error) {
+        req.logger.warn('Data lake connector plan check failed; treating as not allowed', {
+          dataLakeId: lake.id,
+          error,
+        });
+      }
+      if (!allowed) {
+        req.logger.info('Data lake connectors stay paused', { dataLakeId: lake.id });
+        return {};
+      }
+      return {
+        enableDriveConnection: async ({ dataLakeId }: { dataLakeId: string }) => {
+          await enableDriveConnectionForLake(dataLakeId);
+        },
+        enableGitHubConnection: async ({ dataLakeId }: { dataLakeId: string }) => {
+          await enableGitHubConnectionForLake(dataLakeId);
+        },
+      };
+    };
+
     switch (action) {
       case 'archive': {
         const result = await dataLakeService.archiveDataLake(actor, lake.id, {
@@ -128,12 +156,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             organizations: organizationRepository,
             ...lakeConfigAuditDb,
           },
-          enableDriveConnection: async ({ dataLakeId }) => {
-            await enableDriveConnectionForLake(dataLakeId);
-          },
-          enableGitHubConnection: async ({ dataLakeId }) => {
-            await enableGitHubConnectionForLake(dataLakeId);
-          },
+          ...(await connectorEnablePorts()),
           logger: req.logger,
         });
         return respond(res, restoreResultResponseSchema, result);
@@ -180,12 +203,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             // join the change log has to carry - the delete side already logged their removals.
             ...lakeMembershipAuditDb,
           },
-          enableDriveConnection: async ({ dataLakeId }) => {
-            await enableDriveConnectionForLake(dataLakeId);
-          },
-          enableGitHubConnection: async ({ dataLakeId }) => {
-            await enableGitHubConnectionForLake(dataLakeId);
-          },
+          ...(await connectorEnablePorts()),
           logger: req.logger,
         });
         return respond(res, restoreResultResponseSchema, result);

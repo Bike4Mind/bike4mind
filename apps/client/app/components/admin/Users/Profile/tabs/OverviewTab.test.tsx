@@ -21,6 +21,7 @@ vi.mock('../SignupClassificationCard', () => ({
   SignupClassificationCard: () => <div data-testid="signup-classification-stub" />,
 }));
 vi.mock('../actions/useAdminUserUpdate', () => ({ useAdminUserUpdate: () => vi.fn() }));
+vi.mock('../DetectionLinkedAccountsCard', () => ({ DetectionLinkedAccountsCard: () => null }));
 
 import { OverviewTab } from './OverviewTab';
 

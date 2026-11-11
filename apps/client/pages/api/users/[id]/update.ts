@@ -268,14 +268,17 @@ const handler = baseApi().put(
       }
 
       // Parse with the admin schema -- includes email, tags, credits, etc.
+      // Request flags, not user fields: deferLinkPropagation (see linked-suspend-propagation.ts) and
+      // undoSuspension (an Undo of the admin's own suspend; see gradeDetectionsForStatusChange).
+      const { deferLinkPropagation, undoSuspension, ...adminBody } = rawBody;
       // Zod strips unknown keys, so a misnamed admin field (the `adminNote` vs
       // `creditReason` mix-up in useUpdateUserCredits was exactly this) parses away
       // and the 200 reads as "fully applied" when a credit grant, tag, or role
       // change never happened. Report them instead. Mirrors the self-service branch.
       const adminKeys = new Set(Object.keys(userService.adminUpdateUserSchema.shape));
-      const ignoredFields = Object.keys(rawBody).filter(key => !adminKeys.has(key));
+      const ignoredFields = Object.keys(adminBody).filter(key => !adminKeys.has(key));
       if (moderator) {
-        const fullAdminFields = Object.keys(rawBody).filter(
+        const fullAdminFields = Object.keys(adminBody).filter(
           key => adminKeys.has(key) && !userService.MODERATION_UPDATE_FIELDS.has(key)
         );
         if (fullAdminFields.length > 0) {
@@ -286,7 +289,7 @@ const handler = baseApi().put(
       }
 
       // id comes from the route param; the spread ensures it wins over any id in the body.
-      const body = userService.adminUpdateUserSchema.parse({ ...rawBody, id: userId });
+      const body = userService.adminUpdateUserSchema.parse({ ...adminBody, id: userId });
 
       const targetBefore = (await User.findById(userId)
         .select('isAdmin adminPermissions isBanned isModerated currentCredits name username email')
@@ -413,7 +416,14 @@ const handler = baseApi().put(
 
       // A ban, suspension or dispute flag reaches accounts linked by card or network. After commit
       // and never throws, so it cannot undo the admin's change.
-      if (blockSnapshot && blockUpdated && userService.entersBlockedState(blockSnapshot, blockUpdated)) {
+      // A suspend that is one of several in an admin action defers this: the action propagates once for
+      // all of its accounts afterwards (pages/api/admin/users/linked-suspend-propagation.ts).
+      if (
+        !(deferLinkPropagation === true && !req.apiKeyInfo) &&
+        blockSnapshot &&
+        blockUpdated &&
+        userService.entersBlockedState(blockSnapshot, blockUpdated)
+      ) {
         await propagateAccountRisk(
           { sourceUserId: userId, trigger: 'blocked by an admin', key: `admin-block:${userId}:${Date.now()}` },
           req.logger
@@ -430,6 +440,7 @@ const handler = baseApi().put(
             wasSuspended: !!blockSnapshot.isBanned,
             isSuspended: !!blockUpdated.isBanned,
             reason: statusChangeReason,
+            undo: undoSuspension === true,
           },
           { writeAudit: requestAuditWriter(req), logger: req.logger }
         );
