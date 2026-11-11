@@ -21,6 +21,7 @@ import LoopActions from '@client/app/components/Loops/LoopActions';
 import LoopEventLog from '@client/app/components/Loops/LoopEventLog';
 import LoopTicketBoard from '@client/app/components/Loops/LoopTicketBoard';
 import LoopStatsPanel from '@client/app/components/Loops/LoopStatsPanel';
+import LoopCoach from '@client/app/components/Loops/LoopCoach';
 import LoopTicketRating from '@client/app/components/Loops/LoopTicketRating';
 import {
   formatCredits,
@@ -37,6 +38,7 @@ import {
 import {
   countNeedsYou,
   useLoop,
+  useLoopCoach,
   useLoopEvents,
   useLoopRunInfo,
   useLoops,
@@ -71,6 +73,10 @@ export default function LoopDetailPage() {
   const needsYou = countNeedsYou(events);
   // The stats are read only while their panel is open.
   const [statsOpen, setStatsOpen] = useState(false);
+  // Likewise the coach; its count shows in the header once it has been opened.
+  const [coachOpen, setCoachOpen] = useState(false);
+  const [coachSeen, setCoachSeen] = useState(false);
+  const { data: coach } = useLoopCoach(id, coachSeen);
   useDocumentTitle(loop?.name ?? 'Loop');
 
   if (isLoading) return <CircularProgress size="sm" sx={{ m: 2 }} />;
@@ -220,6 +226,18 @@ export default function LoopDetailPage() {
             <AccordionDetails>
               {statsOpen && <LoopStatsPanel loop={loop} tickets={tickets} loops={loops} onViewRun={setRun} />}
             </AccordionDetails>
+          </Accordion>
+          <Accordion
+            expanded={coachOpen}
+            onChange={(_, expanded) => {
+              setCoachOpen(expanded);
+              if (expanded) setCoachSeen(true);
+            }}
+          >
+            <AccordionSummary data-testid="loop-detail-coach-toggle">
+              Coach{coach ? ` (${coach.suggestions.length})` : ''}
+            </AccordionSummary>
+            <AccordionDetails>{coachOpen && <LoopCoach loopId={loop.id} />}</AccordionDetails>
           </Accordion>
         </AccordionGroup>
         <LoopTicketBoard loop={loop} data={tickets} onViewRun={setRun} />
