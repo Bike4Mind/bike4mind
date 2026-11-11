@@ -139,6 +139,9 @@ export interface LakeAccessHistoryEntry {
    * 0 therefore means "no recorded empty search", never "every search of this lake succeeded".
    */
   noResultCount: number;
+  /** Reads (and no-result searches) this principal could make only through the platform-admin
+   * bypass. A subset of the rows behind `readCount + noResultCount`, not an addition to them. */
+  adminBypassReadCount: number;
   /** Newest event of EITHER kind - a search that served nothing is still this principal touching
    * the lake, and a "last read" that ignored it would under-report recent activity. */
   lastAccessedAt: Date;

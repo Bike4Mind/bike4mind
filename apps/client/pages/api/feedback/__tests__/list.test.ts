@@ -271,6 +271,29 @@ describe('GET /api/feedback', () => {
     expect(res._getJSONData()).not.toHaveProperty('organizations');
   });
 
+  it('serves only the organization facet on facetsOnly, reading and auditing no rows', async () => {
+    mockDistinct.mockResolvedValue(['Beta', 'Acme']);
+
+    const { req, res } = buildRequest({ facetsOnly: 'true', page: '2', limit: '7' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ items: [], total: 0, page: 2, limit: 7, organizations: ['Acme', 'Beta'] });
+    expect(mockDistinct).toHaveBeenCalledTimes(1);
+    expect(mockFind).not.toHaveBeenCalled();
+    expect(mockCountDocuments).not.toHaveBeenCalled();
+    expect(mockRecordFeedbackRead).not.toHaveBeenCalled();
+  });
+
+  it('reads rows as usual when facetsOnly is false', async () => {
+    const { req, res } = buildRequest({ facetsOnly: 'false' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(mockFind).toHaveBeenCalledTimes(1);
+    expect(mockRecordFeedbackRead).toHaveBeenCalledTimes(1);
+    expect(mockDistinct).not.toHaveBeenCalled();
+  });
+
   it('computes the organization facet over the accessible set, not the org-filtered set', async () => {
     const { req, res } = buildRequest({ organization: 'acme', includeOrganizations: 'true' }, adminAbility());
     await runHandler(req, res);

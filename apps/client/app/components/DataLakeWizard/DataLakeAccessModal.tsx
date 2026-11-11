@@ -196,6 +196,11 @@ function HistoryRow({ entry }: { entry: LakeAccessHistoryEntry }) {
         <Typography level="body-xs" textColor="text.tertiary" noWrap title={readerKind}>
           {readerKind}
         </Typography>
+        {(entry.adminBypassReadCount ?? 0) > 0 && (
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-access-history-admin-bypass">
+            Platform admin access: {entry.adminBypassReadCount}
+          </Typography>
+        )}
       </td>
       <td>
         <Typography level="body-sm">{entry.readCount}</Typography>

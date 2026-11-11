@@ -142,6 +142,7 @@ describe('lakeAccessViewToCsv', () => {
             principalId: 'u1',
             readCount: 2,
             noResultCount: 0,
+            adminBypassReadCount: 0,
             firstAccessedAt: new Date('2026-08-01T00:00:00.000Z'),
             lastAccessedAt: new Date('2026-08-02T00:00:00.000Z'),
             surfaces: ['chat-kb-search'],
@@ -184,6 +185,7 @@ describe('lakeAccessViewToCsv', () => {
             principalName: 'Bob',
             readCount: 5,
             noResultCount: 0,
+            adminBypassReadCount: 0,
             firstAccessedAt: new Date('2026-08-01T00:00:00.000Z'),
             lastAccessedAt: new Date('2026-08-10T00:00:00.000Z'),
             surfaces: ['chat-kb-search', 'data-lake-semantic-search'],
@@ -235,6 +237,7 @@ describe('lakeAccessViewToCsv', () => {
             principalId: 'u3',
             readCount: 0,
             noResultCount: 4,
+            adminBypassReadCount: 3,
             firstAccessedAt: new Date('2026-08-01T00:00:00.000Z'),
             lastAccessedAt: new Date('2026-08-02T00:00:00.000Z'),
             surfaces: ['forced-retrieval'],
@@ -242,10 +245,13 @@ describe('lakeAccessViewToCsv', () => {
         ],
       })
     );
-    expect(csv).toContain('"readCount","noResultCount","firstAccessedAt"');
+    expect(csv).toContain('"readCount","noResultCount","adminBypassReadCount","firstAccessedAt"');
+    expect(csv).toContain('"user","u3","","","","0","4","3"');
+    expect(csv).toContain(
+      '# NOTE: adminBypassReadCount counts reads and no-result searches a platform admin could make only through the admin bypass'
+    );
     // readCount 0 with a nonzero noResultCount is the row this split exists to make representable:
     // someone queried the lake four times and it answered none of them.
-    expect(csv).toContain('"user","u3","","","","0","4"');
     // The note must NOT say "reads that returned content": a catalog browse row returns no ids and
     // still counts, so that phrasing would make the artifact lie about its own column.
     expect(csv).toContain('# NOTE: readCount counts every recorded read (a catalog browse included');

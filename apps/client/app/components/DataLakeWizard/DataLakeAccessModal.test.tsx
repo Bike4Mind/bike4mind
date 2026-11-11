@@ -75,6 +75,7 @@ const fullView: LakeAccessView = {
       principalName: 'Bob',
       readCount: 7,
       noResultCount: 2,
+      adminBypassReadCount: 0,
       firstAccessedAt: new Date('2026-08-01T00:00:00.000Z'),
       lastAccessedAt: new Date('2026-08-10T00:00:00.000Z'),
       surfaces: ['chat-kb-search'],
@@ -130,6 +131,17 @@ describe('DataLakeAccessModal', () => {
       'Acme (3 members with access)'
     );
     expect(screen.getByTestId('datalake-access-history-table')).toBeInTheDocument();
+  });
+
+  it('shows the platform admin access count only when it is non-zero', () => {
+    const entry = fullView.history[0];
+    viewState = loaded({ ...fullView, history: [{ ...entry, adminBypassReadCount: 2 }] });
+    const { rerender } = render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-history-admin-bypass')).toHaveTextContent('Platform admin access: 2');
+
+    viewState = loaded({ ...fullView, history: [{ ...entry, adminBypassReadCount: 0 }] });
+    rerender(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />);
+    expect(screen.queryByTestId('datalake-access-history-admin-bypass')).not.toBeInTheDocument();
   });
 
   it('qualifies access history as a lower bound whether or not it has rows', () => {

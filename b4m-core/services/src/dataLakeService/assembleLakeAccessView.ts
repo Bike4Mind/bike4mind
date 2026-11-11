@@ -67,14 +67,22 @@ export function deriveAccessChannels(
 export function aggregateAccessHistory(
   events: Pick<
     ILakeAccessEventDocument,
-    'principalKind' | 'principalId' | 'onBehalfOfUserId' | 'surface' | 'createdAt' | 'servedNothing'
-  >[]
+    | 'principalKind'
+    | 'principalId'
+    | 'onBehalfOfUserId'
+    | 'surface'
+    | 'createdAt'
+    | 'servedNothing'
+    | 'adminBypassLakeIds'
+  >[],
+  lakeId: string
 ): LakeAccessHistoryEntry[] {
   const byPrincipal = new Map<string, { entry: LakeAccessHistoryEntry; surfaces: Set<LakeAccessSurface> }>();
   for (const event of events) {
     const key = `${event.principalKind}:${event.principalId}`;
     const at = event.createdAt;
     const servedNothing = event.servedNothing === true;
+    const adminBypass = event.adminBypassLakeIds?.includes(lakeId) ? 1 : 0;
     const acc = byPrincipal.get(key);
     if (!acc) {
       byPrincipal.set(key, {
@@ -84,6 +92,7 @@ export function aggregateAccessHistory(
           onBehalfOfUserId: event.onBehalfOfUserId,
           readCount: servedNothing ? 0 : 1,
           noResultCount: servedNothing ? 1 : 0,
+          adminBypassReadCount: adminBypass,
           lastAccessedAt: at,
           firstAccessedAt: at,
           surfaces: [],
@@ -93,6 +102,7 @@ export function aggregateAccessHistory(
       continue;
     }
     const { entry } = acc;
+    entry.adminBypassReadCount += adminBypass;
     if (servedNothing) entry.noResultCount += 1;
     else entry.readCount += 1;
     if (at.getTime() > entry.lastAccessedAt.getTime()) entry.lastAccessedAt = at;
@@ -229,7 +239,7 @@ export async function assembleLakeAccessView(
   const historyTruncated = fetchedEvents.length > historyLimit;
   const events = historyTruncated ? fetchedEvents.slice(0, historyLimit) : fetchedEvents;
 
-  const history = aggregateAccessHistory(events);
+  const history = aggregateAccessHistory(events, lake.id);
   // Same already-sliced window as the history above - a projection of rows already in hand, never
   // a second listByLake read.
   const candidateCapPressure = aggregateCandidateCapPressure(events);

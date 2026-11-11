@@ -67,6 +67,8 @@ export type FeedbackListParams = FeedbackListFilterParams & {
    * - and only the org filter menu's dedicated query consumes it.
    */
   includeOrganizations?: boolean;
+  /** Return only the `organizations` facet; the server reads and audits no rows. */
+  facetsOnly?: boolean;
 };
 
 /** Response envelope of GET /api/feedback. */

@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockResolveAccessibleLakes, mockQueryDataLakeArticles, mockRecord } = vi.hoisted(() => ({
+const { mockResolveAccessibleLakes, mockQueryDataLakeArticles, mockRecord, mockAdminBypass } = vi.hoisted(() => ({
+  mockAdminBypass: vi.fn(),
   mockResolveAccessibleLakes: vi.fn(),
   mockQueryDataLakeArticles: vi.fn(),
   mockRecord: vi.fn().mockResolvedValue(undefined),
@@ -16,6 +17,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/dataLakes', async () => ({
+  adminBypassLakeIds: mockAdminBypass,
   resolveAccessibleLakes: mockResolveAccessibleLakes,
   queryDataLakeArticles: mockQueryDataLakeArticles,
   // Real implementation (already unit-tested on its own) so the deep-link attribution test below
@@ -66,6 +68,7 @@ const makeRes = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mockResolveAccessibleLakes.mockResolvedValue(LAKES);
+  mockAdminBypass.mockResolvedValue([]);
 });
 
 describe('GET /api/data-lakes/articles access-event audit', () => {
@@ -182,6 +185,37 @@ describe('GET /api/data-lakes/articles access-event audit', () => {
     await route(makeReq(), makeRes().res);
 
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('marks a bypass-only lake and fails the request when that audit write rejects', async () => {
+    mockQueryDataLakeArticles.mockResolvedValue({
+      data: [{ id: 'f1', tags: [{ name: 'datalake:lake1' }] }],
+      total: 1,
+      hasMore: false,
+    });
+    mockAdminBypass.mockResolvedValue(['lake1']);
+    const { res, json } = makeRes();
+
+    await route(makeReq(), res);
+    expect(mockAdminBypass).toHaveBeenCalledWith(expect.anything(), ['lake1']);
+    expect(mockRecord).toHaveBeenCalledWith(expect.objectContaining({ adminBypassLakeIds: ['lake1'] }));
+
+    mockRecord.mockRejectedValueOnce(new Error('mongo blip'));
+    json.mockClear();
+    await expect(route(makeReq(), res)).rejects.toThrow('mongo blip');
+    expect(json).not.toHaveBeenCalled();
+  });
+
+  it('leaves the marker off a member read', async () => {
+    mockQueryDataLakeArticles.mockResolvedValue({
+      data: [{ id: 'f1', tags: [{ name: 'datalake:lake1' }] }],
+      total: 1,
+      hasMore: false,
+    });
+
+    await route(makeReq(), makeRes().res);
+
+    expect(mockRecord.mock.calls[0][0]).not.toHaveProperty('adminBypassLakeIds');
   });
 
   it('still returns the response when the audit write rejects', async () => {
