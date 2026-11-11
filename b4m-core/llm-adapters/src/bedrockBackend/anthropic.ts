@@ -43,6 +43,7 @@ import {
   isAdaptiveThinkingByDefault,
   planReasoningEffort,
   resolveAnthropicEffort,
+  thinkingTurnedOff,
 } from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
 import { ensureToolPairingIntegrity } from '../toolPairingUtils';
@@ -1143,7 +1144,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       // cast locally for that one field (thinking is already declared on the type).
       const isQuestMaster = (options as { questMaster?: boolean }).questMaster === true;
       const reasoningEffort =
-        options.reasoningEffort ?? effortForComplexity(model, currentModelInfo, options.complexity);
+        options.reasoningEffort ??
+        (thinkingTurnedOff(model, currentModelInfo, options.thinking)
+          ? 'none'
+          : effortForComplexity(model, currentModelInfo, options.complexity));
       const userThinkingEnabled = options.thinking?.enabled === true;
 
       if (userThinkingEnabled || isQuestMaster) {

@@ -77,6 +77,7 @@ import {
   type AnthropicEffort,
   type ReasoningEffortPlan,
   type ThinkingConfig,
+  thinkingTurnedOff,
 } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
 import { logAnthropicLimitResponse, pickRateLimitHeaders } from './anthropicRateLimitLog';
@@ -1427,11 +1428,15 @@ export class AnthropicBackend implements ICompletionBackend {
       };
       const isQuestMaster = thinkingOptions.questMaster === true;
       // The API rejects thinking alongside a forced tool_choice, so a caller forcing one keeps
-      // no complexity default; an explicit reasoningEffort still goes through the plan below.
+      // no complexity default; an explicit reasoningEffort or thinking off still goes through the plan below.
       const forcedToolChoice = apiParams.tool_choice?.type === 'any' || apiParams.tool_choice?.type === 'tool';
       const reasoningEffort =
         options.reasoningEffort ??
-        (forcedToolChoice ? undefined : effortForComplexity(model, currentModelInfo, options.complexity));
+        (thinkingTurnedOff(model, currentModelInfo, thinkingOptions.thinking)
+          ? 'none'
+          : forcedToolChoice
+            ? undefined
+            : effortForComplexity(model, currentModelInfo, options.complexity));
       // The forced response_format tool cannot run alongside thinking, so an explicit request falls
       // through to the reasoningEffort plan below, which only keeps the off switch there.
       const userThinkingEnabled = thinkingOptions.thinking?.enabled === true && !usingResponseFormatToolUse;
