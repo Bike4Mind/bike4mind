@@ -134,6 +134,7 @@ describe('agent configuration egress', () => {
       projectId: 'project-old',
     });
     expect(archive.mcpServers).toEqual([{ name: 'github', envVariableKeys: ['GITHUB_TOKEN'] }]);
+    expect(archive.sessionToolApprovals).toEqual([{ sessionId: 'session-old', deniedTools: ['delete'] }]);
     expect(archive.projects[0]).toEqual({
       id: 'project-old',
       name: 'My project',

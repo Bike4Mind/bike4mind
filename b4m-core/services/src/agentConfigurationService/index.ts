@@ -56,7 +56,7 @@ type Prompt = Pick<
   'id' | 'type' | 'name' | 'description' | 'promptText' | 'tags' | 'executionMode' | 'requiredTools' | 'schemaVersion'
 >;
 type McpServer = Pick<IMcpServerDocument, 'name'> & { envVariableKeys: string[] };
-type Approval = Pick<ISessionToolApprovalDocument, 'sessionId' | 'approvedTools' | 'deniedTools'>;
+type Approval = Pick<ISessionToolApprovalDocument, 'sessionId' | 'deniedTools'>;
 type Favorite = Pick<IFavorite, 'documentId' | 'documentType'>;
 type Preferences = Pick<
   IUserPreferences,
@@ -120,7 +120,7 @@ export interface AgentConfigurationImportAdapters {
   projects: Writer<Omit<Project, 'id'> & { userId: string }>;
   prompts: Writer<Omit<Prompt, 'id'> & { userId: string }>;
   mcpServers: Writer<Pick<IMcpServerDocument, 'name' | 'userId' | 'enabled' | 'envVariables' | 'tools'>>;
-  sessionToolApprovals: Writer<Approval & { userId: string }>;
+  sessionToolApprovals: Writer<Approval & { userId: string; approvedTools: string[] }>;
   favorites: Writer<Favorite & { userId: string }>;
   users: { updateById(id: string, patch: { name: string; preferences: Preferences }): Promise<unknown> };
 }
@@ -263,7 +263,7 @@ export async function exportAgentConfiguration(
       .map(row => ({ name: row.name, envVariableKeys: row.envVariables.map(item => item.key) })),
     sessionToolApprovals: approvals
       .filter(row => row.userId === userId)
-      .map(row => ({ sessionId: row.sessionId, approvedTools: row.approvedTools, deniedTools: row.deniedTools })),
+      .map(row => ({ sessionId: row.sessionId, deniedTools: row.deniedTools })),
     favorites: favorites
       .filter(row => row.userId === userId)
       .map(row => ({ documentId: row.documentId, documentType: row.documentType })),
