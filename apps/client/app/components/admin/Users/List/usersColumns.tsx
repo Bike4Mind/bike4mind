@@ -5,7 +5,7 @@ import {
   RISK_BAND,
   type AdminUsersListRow,
   type AdminUsersSortField,
-} from '@client/app/utils/adminUsersFilter';
+} from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import {
   SIGNUP_SIGNAL_LABELS,
   SIGNUP_TIMESERIES_RANGE_LABELS as RANGE_LABELS,

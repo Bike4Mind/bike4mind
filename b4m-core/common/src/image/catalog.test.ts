@@ -3,6 +3,7 @@ import { IMAGE_MODELS, ImageModels } from '../models';
 import { getImageModelCapabilities } from '../utils/imageCapabilities';
 import {
   isFlux2ImageModel,
+  isFlux3ImageModel,
   isGeminiImageModel,
   isKontextModel,
   rejectsTransparentBackground,
@@ -101,6 +102,21 @@ describe('FLUX.2 edit mode', () => {
   });
 
   it.each(FLUX2_MODELS)('%s edits with no mask and one fewer reference than it generates with', model => {
+    const { edit, generate } = getImageModelCatalogEntry(model).modes;
+    expect(edit?.inputs.edit_source).toEqual({ max: 1 });
+    expect(edit?.inputs.mask).toBeUndefined();
+    expect(edit?.inputs.reference?.max).toBe((generate?.inputs.reference?.max ?? 0) - 1);
+  });
+});
+
+const FLUX3_MODELS = IMAGE_MODELS.filter(isFlux3ImageModel);
+
+describe('FLUX 3 edit mode', () => {
+  it('covers at least one model', () => {
+    expect(FLUX3_MODELS.length).toBeGreaterThan(0);
+  });
+
+  it.each(FLUX3_MODELS)('%s edits with no mask and one fewer reference than it generates with', model => {
     const { edit, generate } = getImageModelCatalogEntry(model).modes;
     expect(edit?.inputs.edit_source).toEqual({ max: 1 });
     expect(edit?.inputs.mask).toBeUndefined();

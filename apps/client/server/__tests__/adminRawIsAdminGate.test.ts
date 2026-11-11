@@ -53,20 +53,8 @@ const ADMIN_ROUTES_ELSEWHERE = [
 const RAW_GATE_ALLOWLIST = new Set<string>([
   'moderation-incidents/[id]/verdict.ts',
   'moderation-incidents/index.ts',
-  'users/[userId]/activity.ts',
-  'users/[userId]/compliance.ts',
-  'users/[userId]/linked-accounts.ts',
-  'users/[userId]/profile.ts',
-  'users/[userId]/risk-evidence.ts',
-  'users/[userId]/sessions.ts',
-  'users/[userId]/sign-ins.ts',
-  'users/[userId]/signup-cluster.ts',
-  'users/[userId]/timeline.ts',
   // Receipts stay full-admin only for now; the credit ledger and summary routes they sit beside are CREDITS_PAGE_READ.
   'users/[userId]/usage-receipt.ts',
-  'users/export.ts',
-  'users/index.ts',
-  'users/summary.ts',
 ]);
 
 // Helpers that gate on the raw flag internally, so a route calling them is raw-gated even

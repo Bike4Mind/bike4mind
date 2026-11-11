@@ -7,7 +7,7 @@ import { classifyRealSignups, signupVerdictUserIds } from './realSignup';
 import { reevaluateRecentSignups, rollupDay, runNightlyRollup } from './analyticsRollup';
 import { getAnalyticsOverview, loadLiveDay } from './analyticsOverview';
 import { UNCLASSIFIED_SOURCE } from '@bike4mind/common';
-import { TIMESERIES_SCAN_LIMIT } from '../users/signupTimeseries';
+import { TIMESERIES_SCAN_LIMIT } from '@bike4mind/server-utils/users/signupTimeseries';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

@@ -11,7 +11,7 @@ import {
 import { ComputeSyncDeltaRequestInput } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 

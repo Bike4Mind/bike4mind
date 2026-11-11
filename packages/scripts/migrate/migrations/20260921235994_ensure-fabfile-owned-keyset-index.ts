@@ -16,8 +16,12 @@ import { type MigrationFile } from './index';
  * schema declares, so it also backfills any of this model's other declared indexes an environment
  * happens to be missing.
  *
- * Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001) to keep that
- * migration's id the highest on disk - its own test asserts that invariant.
+ * Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001), which had to be
+ * the highest core id before the runner supported `failClosed`.
+ *
+ * Deploy note: renumbered from 20260921235999. An environment that ran it under that id will skip
+ * UnsetStoredDefaultForcedRetrievalFloor, which now owns it; delete that environment's stale
+ * `20260921235999` row from the migrations collection so the $unset runs.
  */
 const migration: MigrationFile = {
   id: 20260921235994,

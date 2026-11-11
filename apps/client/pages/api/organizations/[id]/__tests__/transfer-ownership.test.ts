@@ -43,10 +43,13 @@ const withTransaction = vi.hoisted(() =>
   })
 );
 vi.mock('@bike4mind/services', () => ({ organizationService: { transferOwnership } }));
+const findUserById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({
-  userRepository: {},
+  userRepository: { findById: findUserById },
   withTransaction,
 }));
+const sendOwnershipTransferEmails = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/mailer/ownershipTransferEmail', () => ({ sendOwnershipTransferEmails }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: { customers: { update: customersUpdate } },
@@ -80,9 +83,16 @@ const post = (body: unknown = { newOwnerId: 'admin1' }) => {
 
 describe('POST /api/organizations/[id]/transfer-ownership', () => {
   beforeEach(() => {
+    vi.stubEnv('APP_URL', 'https://app.example.com');
     vi.clearAllMocks();
     transferOwnership.mockResolvedValue(baseResult);
     customersUpdate.mockResolvedValue({});
+    findUserById.mockImplementation(async (id: string) => ({
+      id,
+      email: `${id}@example.com`,
+      name: id === 'owner1' ? 'Olivia Owner' : 'Adam Admin',
+    }));
+    sendOwnershipTransferEmails.mockResolvedValue(undefined);
   });
 
   it('refuses API keys: a key of any scope must not be able to hand off billing ownership', () => {
@@ -181,5 +191,39 @@ describe('POST /api/organizations/[id]/transfer-ownership', () => {
     await expect(post().run()).rejects.toThrow('refused');
     expect(customersUpdate).not.toHaveBeenCalled();
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('emails both parties after the transaction commits', async () => {
+    let sentInTx: boolean | null = null;
+    sendOwnershipTransferEmails.mockImplementation(async () => {
+      sentInTx = tx.active;
+    });
+    await post().run();
+
+    expect(sentInTx).toBe(false);
+    expect(sendOwnershipTransferEmails).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationName: 'Acme',
+        organizationUrl: 'https://app.example.com/organizations/org1',
+        previousOwner: { email: 'owner1@example.com', name: 'Olivia Owner' },
+        newOwner: { email: 'admin1@example.com', name: 'Adam Admin' },
+      }),
+      expect.anything()
+    );
+  });
+
+  it('still succeeds when notifying the parties fails, and logs a warning', async () => {
+    findUserById.mockRejectedValue(new Error('db down'));
+    const { req, res, run } = post();
+    await run();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('notify'), { error: 'db down' });
+  });
+
+  it('sends no email when the transfer is refused', async () => {
+    transferOwnership.mockRejectedValue(new Error('refused'));
+    await expect(post().run()).rejects.toThrow('refused');
+    expect(sendOwnershipTransferEmails).not.toHaveBeenCalled();
   });
 });

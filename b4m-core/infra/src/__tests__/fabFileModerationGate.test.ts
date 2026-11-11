@@ -145,7 +145,7 @@ const ALLOWLIST: Record<string, string> = {
     'the moderation scanner itself (objectCreated) — produces moderationStatus, does not consume it',
   'apps/client/server/s3/moderationScan.ts':
     'the moderation scanner wiring shared by objectCreated and the on-demand scan route - downloads bytes to RUN the scan and PRODUCE moderationStatus, never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
-  'apps/client/server/s3/knowledgeModerationDeps.ts':
+  'packages/server-utils/src/s3/knowledgeModerationDeps.ts':
     'the moderation scanner wiring - downloads bytes to RUN the scan and PRODUCE moderationStatus (its closures are handed to moderateImportedKnowledgeFiles / the rescue sweep), never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
 
   // --- The reviewer's own view of a blocked upload: the point is to see the image the scanner
@@ -207,8 +207,8 @@ const ALLOWLIST: Record<string, string> = {
 
   'apps/client/pages/api/files/createFabFile.ts':
     'DI passthrough to the already-gated fabFileService.createFabFile; browser response signing delegates to signBrowserFileResponse',
-  'apps/client/server/files/signBrowserFileResponse.ts':
-    'DI passthrough to fabFilesService.generateSignedUrl, which applies the shared moderation gate before request-local browser signing',
+  'apps/client/server/files/browserFileSigner.ts':
+    'DI passthrough - storage adapter consumed by fabFilesService.generateSignedUrl and the services that call it, which apply the moderation gate before using either the S3 signer or the content URL builder; the content URL itself redirects only after pages/api/files/[id]/content.ts calls isImageServeable',
 
   // --- Upload-only / delete-only: no read path. ---
   'apps/client/server/slack/dataLakeIngestDeps.ts':

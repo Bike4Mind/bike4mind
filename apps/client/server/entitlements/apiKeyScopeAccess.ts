@@ -3,7 +3,12 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingByName } from '@bike4mind/utils';
 import type { ApiKeyScopeAccess } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { getRequestEntitlements, getUserEntitlements, type EntitlementRequest, type EntitlementUser } from './index';
+import {
+  getRequestEntitlements,
+  getUserEntitlements,
+  type EntitlementRequest,
+  type EntitlementUser,
+} from '@bike4mind/server-utils/entitlements/index';
 
 /**
  * Server half of useApiKeyScopeAccess: the same product gates the scoped routes apply to a key's

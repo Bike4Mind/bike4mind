@@ -9,7 +9,13 @@ import {
   stripeDisputeRepository,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { CreditHolderType, CreditPurchaseEvents, CreditPurchaseStatus, isPlaceholderValue } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  CreditPurchaseEvents,
+  CreditPurchaseStatus,
+  CURRENT_POLICY_VERSION,
+  isPlaceholderValue,
+} from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
@@ -31,13 +37,13 @@ import {
   endedLifecycleEvent,
   paymentFailedLifecycleEvent,
   postSubscriptionLifecycleToSlack,
-} from '@server/integrations/slack/subscriptionLifecycle';
+} from '@bike4mind/server-utils/integrations/slack/subscriptionLifecycle';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 import { unlockSignupGrantFromCreditPurchase } from '@server/credits/creditPurchaseUnlock';
 import { alertStripeRiskEvent, radarRiskLine, screenPaymentOutcome } from '@server/billing/paymentRisk';
-import { autoApproveRiskReviewAfterPayment } from '@server/security/riskReviewAutoApproval';
+import { autoApproveRiskReviewAfterPayment } from '@bike4mind/server-utils/security/riskReviewAutoApproval';
 import {
   forfeitHeldUnlockForFraudWarning,
   forfeitHeldUnlockForRefund,
@@ -46,7 +52,7 @@ import {
 import { clawbackRefundCredits } from '@server/billing/refundClawback';
 import { reversePurchaseStanding } from '@server/billing/purchaseReversal';
 import { respondToEarlyFraudWarning } from '@server/billing/earlyFraudWarning';
-import { propagateAccountRisk } from '@server/billing/linkedAccounts';
+import { propagateAccountRisk } from '@bike4mind/server-utils/billing/linkedAccounts';
 import { disputeFacts, resolveLostUserDispute, resolveWonDispute } from '@server/billing/stripeDisputes';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
 import { recordBillingEvent, type BillingEventHints } from '@server/billing/billingEventStore';
@@ -61,7 +67,7 @@ import {
   rowTimestamps,
   subscriptionEventUser,
   wholeDaysBetween,
-} from '@server/analytics/billingEventDetails';
+} from '@bike4mind/server-utils/analytics/billingEventDetails';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
 
@@ -189,6 +195,15 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         break;
       }
 
+      // The version the buyer was shown at start-payment, not the one current now.
+      if (intent.metadata.termsAcceptedVersion) {
+        await userRepository.update({
+          id: user.id,
+          checkoutTermsAcceptedVersion: intent.metadata.termsAcceptedVersion,
+          checkoutTermsAcceptedAt: new Date(event.created * 1000),
+        });
+      }
+
       const credits = Number(intent.metadata.credits);
       // Ledger row and balance commit together (grantCreditPurchase), so 'already_granted' means
       // the credits really landed and a redelivery can be acknowledged. Any other failure rolled
@@ -307,8 +322,18 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
     // Subscription events
 
-    case 'checkout.session.completed':
+    case 'checkout.session.completed': {
+      const session = event.data.object;
+      // Set only while requireCheckoutTermsConsent was on; see server/integrations/stripe/termsConsent.ts.
+      if (session.consent?.terms_of_service === 'accepted' && session.client_reference_id) {
+        await userRepository.update({
+          id: session.client_reference_id,
+          checkoutTermsAcceptedVersion: CURRENT_POLICY_VERSION,
+          checkoutTermsAcceptedAt: new Date(event.created * 1000),
+        });
+      }
       break;
+    }
 
     case 'invoice.payment_succeeded': {
       const invoice = event.data.object;

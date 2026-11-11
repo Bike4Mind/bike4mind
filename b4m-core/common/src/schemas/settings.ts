@@ -52,7 +52,7 @@ import {
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
   TEAM_PLAN_SEATS_HARD_LIMIT,
 } from '../constants/organization';
-import { CHAT_MODELS, ChatModels } from '../models';
+import { CHAT_MODELS, ChatModels, supportedChatModels } from '../models';
 import { DECISION_MODEL_IDS } from '../decisions/catalog';
 import {
   BedrockEmbeddingModel,
@@ -469,6 +469,7 @@ export const SettingKeySchema = z.enum([
   'apiKeyAccountAgeTrustsKeys',
   'requireThreeDSecureOnFirstPurchase',
   'threeDSecureNewAccountDays',
+  'requireCheckoutTermsConsent',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
   'apiKeyUntrustedRequestsPerDay',
@@ -481,6 +482,7 @@ export const SettingKeySchema = z.enum([
   'suspensionNoticeEmailEnabled',
   'abuseAssessmentConfig',
   'autoContainmentConfig',
+  'adminAiConfig',
   'thinkingVisibilityFree',
   'thinkingVisibilityPaid',
   'otcLimitSendPerEmailPerIp',
@@ -523,6 +525,7 @@ export const SettingKeySchema = z.enum([
   'signupNetworkAlertMaxPerHostingAsn',
   'signupNetworkAlertMaxPerAsn',
   'shadowDetectionRecordingEnabled',
+  'shadowDetectionAutoGradeAfterDays',
   'paymentRiskAutoRefundEnabled',
   'paymentRiskAutoRefundMinUnspentPercent',
   'paymentRiskCheckoutMaxBlockedAttempts',
@@ -1157,6 +1160,13 @@ export interface BaseSetting {
   clearDeletesRow?: boolean;
   /** What a `clearDeletesRow` setting resolves to while unset, shown by the admin UI in place of a value. */
   unsetLabel?: string;
+  /**
+   * Opt-in: the admin editor badges this field and confirms the before-and-after value instead of
+   * saving on one click. Tag it when a customer's bill or entitlement moves - NOT free grants or
+   * spend caps, which change only platform cost.
+   * Must stay in sync with the "Changes customer price" column of docs/pricing-settings-inventory.md.
+   */
+  changesCustomerPrice?: boolean;
 }
 
 /** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
@@ -1254,7 +1264,7 @@ export const PENDING_UPLOAD_LIMIT = 250;
 
 /**
  * Default daily uploaded-image moderation allowances, in detector calls. The free one is also the
- * floor that apps/client/server/s3/imageModerationBudget.ts applies when the setting cannot be read.
+ * floor that packages/server-utils/src/s3/imageModerationBudget.ts applies when the setting cannot be read.
  */
 export const IMAGE_MODERATION_LIMIT_FREE_PER_DAY = 200;
 export const IMAGE_MODERATION_LIMIT_PAID_PER_DAY = 2000;
@@ -1616,7 +1626,7 @@ export const AUTO_CONTAINMENT_MODES = ['off', 'shadow', 'enforce'] as const;
 export type AutoContainmentMode = (typeof AUTO_CONTAINMENT_MODES)[number];
 
 /**
- * Automated containment from abuse assessments (apps/client/server/security/autoContainment). Acts
+ * Automated containment from abuse assessments (apps/workers/src/security/autoContainment). Acts
  * only on an `abuse` judgment at or above minConfidence, through the admin bulk Contain path.
  */
 export const AutoContainmentConfigSchema = z.object({
@@ -1651,9 +1661,95 @@ export const AutoContainmentConfigSchema = z.object({
 });
 export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
 
+export const ADMIN_AI_MODES = ['off', 'shadow', 'recommend', 'act'] as const;
+export type AdminAiMode = (typeof ADMIN_AI_MODES)[number];
+
+const adminAiFeatureLimits = {
+  mode: z.enum(ADMIN_AI_MODES).prefault('off').meta({
+    title: 'Mode',
+    description:
+      'off: no calls. shadow: suggest and record, show nothing. recommend: show the suggestion to admins. act: apply it as the system.',
+  }),
+  confidenceThreshold: z.number().min(0).max(1).prefault(0.8).meta({
+    title: 'Confidence threshold',
+    description:
+      'Probability (0-1) below which the escalation model is asked, and below which act mode does not apply.',
+  }),
+  dailyBudgetUsd: z.number().min(0).max(100).prefault(0).meta({
+    title: 'Daily budget (USD)',
+    description: 'Spend per day for this feature. 0 makes no calls.',
+  }),
+  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(0).meta({
+    title: 'Calls per day',
+    description:
+      "Model requests per day for this feature. A repair or an escalation is another request; a decision model's automatic retry counts with the request it retries. 0 makes no calls.",
+  }),
+};
+
+const decisionFeatureConfig = (title: string) =>
+  z
+    .object({
+      ...adminAiFeatureLimits,
+      model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null).meta({
+        title: 'Model',
+        description: 'Decisions model to ask; it must have a platform key. None makes no calls.',
+      }),
+      escalationModel: z.enum(DECISION_MODEL_IDS).nullable().prefault(null).meta({
+        title: 'Escalation model',
+        description: 'Decisions model asked once more when confidence is below the threshold. None skips escalation.',
+      }),
+    })
+    .prefault({})
+    .meta({ title });
+
+const textFeatureConfig = (title: string) =>
+  z
+    .object({
+      ...adminAiFeatureLimits,
+      model: supportedChatModels.nullable().prefault(null).meta({
+        title: 'Model',
+        description: 'Model id to ask. None uses the operations model.',
+      }),
+      escalationModel: supportedChatModels.nullable().prefault(null).meta({
+        title: 'Escalation model',
+        description: 'Model id asked once more when confidence is below the threshold. None skips escalation.',
+      }),
+    })
+    .prefault({})
+    .meta({ title });
+
+/**
+ * Switches and spend limits for admin AI suggestions (contract in schemas/adminAi.ts). Every default
+ * spends nothing: disabled, a zero monthly cap, and every feature off with a zero budget. Feature keys
+ * are explicit (not a record) so the admin settings form renders each as its own group; they must stay
+ * in sync with ADMIN_AI_FEATURES and ADMIN_AI_FEATURE_ENGINE.
+ */
+export const AdminAiConfigSchema = z.object({
+  enabled: z.boolean().prefault(false).meta({
+    title: 'Enabled',
+    description: 'Master switch for every admin AI feature.',
+  }),
+  monthlyCapUsd: z.number().min(0).max(1000).prefault(0).meta({
+    title: 'Monthly cap (USD)',
+    description: 'Total spend per calendar month across all features. 0 makes no calls.',
+  }),
+  features: z
+    .object({
+      abuseAssessment: decisionFeatureConfig('Abuse assessment'),
+      domainHold: decisionFeatureConfig('Domain hold'),
+      detectionTriage: decisionFeatureConfig('Detection triage'),
+      feedbackTriage: textFeatureConfig('Feedback triage'),
+      dlqTriage: textFeatureConfig('DLQ triage'),
+      morningBrief: textFeatureConfig('Morning brief'),
+    })
+    .prefault({})
+    .meta({ title: 'Features' }),
+});
+export type AdminAiConfig = z.infer<typeof AdminAiConfigSchema>;
+
 /**
  * Operator limits for the advisory assessment of young-domain signup holds
- * (apps/client/server/security/signupDomainHoldAssessment). Every default spends nothing: no model and
+ * (apps/workers/src/security/signupDomainHoldAssessment). Every default spends nothing: no model and
  * a zero budget. `signupDomainHoldAssessmentEnabled` gates all provider egress on top of this.
  */
 export const SignupDomainHoldAssessmentConfigSchema = z.object({
@@ -1680,6 +1776,25 @@ export const SignupDomainHoldAssessmentConfigSchema = z.object({
   minConfirmConfidence: z.number().min(0.5).max(1).prefault(0.9).meta({
     title: 'Confirm confidence',
     description: 'Least confidence in an abuse verdict that confirms the hold; anything lower leaves it pending.',
+  }),
+  autoReleaseEnabled: z.boolean().prefault(false).meta({
+    title: 'Auto-release legitimate holds',
+    description:
+      'Release a hold, paying out its held free credits, when the model judges it legitimate and every guard passes: a site with real content, Google or Microsoft mail, no disposable-mail wording on the site, known residential signup networks, and few waiting accounts. An auto-released domain stays under burst detection.',
+  }),
+  minReleaseConfidence: z.number().min(0.8).max(1).prefault(0.95).meta({
+    title: 'Release confidence',
+    description: 'Least confidence in a legitimate verdict that releases the hold; anything lower leaves it pending.',
+  }),
+  maxAutoReleasesPerDay: z.number().int().min(0).max(50).prefault(5).meta({
+    title: 'Auto-releases per 24 hours',
+    description:
+      'Holds released automatically per 24h window (opened by the first release); further ones wait for an admin.',
+  }),
+  maxAutoReleaseSignups: z.number().int().min(1).max(10).prefault(2).meta({
+    title: 'Most accounts to auto-release',
+    description:
+      'A domain with more verified accounts waiting than this always waits for an admin; it also caps the payout.',
   }),
 });
 
@@ -1737,7 +1852,7 @@ export type SignupRiskScoring = z.infer<typeof SignupRiskScoringSchema>;
 
 /**
  * Rules that approve a pending signup risk review without an admin
- * (apps/client/server/security/riskReviewAutoApproval.ts). Both only move pending to approved, which
+ * (packages/server-utils/src/security/riskReviewAutoApproval.ts). Both only move pending to approved, which
  * an admin can reopen; a model verdict never approves.
  */
 export const SignupRiskAutoApprovalSchema = z
@@ -1883,6 +1998,7 @@ export type LogoSettings = z.infer<typeof LogoSettingsSchema>;
 
 // RapidReply Settings Schema
 export const RapidReplySettingsSchema = z.object({
+  /** @deprecated Nothing writes this; the global toggle is the `EnableRapidReply` setting. */
   enabled: z.boolean().prefault(false),
   allowedUserTags: z.array(z.string()).prefault([]),
   defaultMaxTokens: z.number().prefault(150),
@@ -2661,12 +2777,14 @@ export const API_SERVICE_GROUPS = {
       { key: 'paymentRiskFlagHostingNetwork', order: 37 },
       { key: 'requireThreeDSecureOnFirstPurchase', order: 38 },
       { key: 'threeDSecureNewAccountDays', order: 39 },
+      { key: 'requireCheckoutTermsConsent', order: 39.5 },
       { key: 'signupNetworkAlertsEnabled', order: 40 },
       { key: 'signupNetworkAlertWindowMinutes', order: 41 },
       { key: 'signupNetworkAlertMaxPerIp', order: 42 },
       { key: 'signupNetworkAlertMaxPerHostingAsn', order: 43 },
       { key: 'signupNetworkAlertMaxPerAsn', order: 44 },
       { key: 'shadowDetectionRecordingEnabled', order: 44.5 },
+      { key: 'shadowDetectionAutoGradeAfterDays', order: 44.6 },
       { key: 'paymentRiskAutoRefundEnabled', order: 45 },
       { key: 'paymentRiskAutoRefundMinUnspentPercent', order: 46 },
       { key: 'paymentRiskCheckoutMaxBlockedAttempts', order: 47 },
@@ -2940,6 +3058,13 @@ export const API_SERVICE_GROUPS = {
       { key: 'abuseAssessmentConfig', order: 2 },
       { key: 'autoContainmentConfig', order: 3 },
     ],
+  },
+  ADMIN_AI: {
+    id: 'adminAiService',
+    name: 'Admin AI Suggestions',
+    description: 'Model suggestions on admin queues (abuse, domain holds, triage, morning brief), with spend caps',
+    icon: 'Security',
+    settings: [{ key: 'adminAiConfig', order: 1 }],
   },
   API_CLIENTS: {
     id: 'apiClientsService',
@@ -3869,6 +3994,7 @@ export const settingsMap = {
   }),
   pricePerCredit: makeNumberSetting({
     key: 'pricePerCredit',
+    changesCustomerPrice: true,
     userReadable: true,
     name: 'Price Per Credit',
     defaultValue: 50,
@@ -4010,7 +4136,7 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 9,
   }),
-  // Both read by apps/client/server/s3/imageModerationBudget.ts.
+  // Both read by packages/server-utils/src/s3/imageModerationBudget.ts.
   imageModerationLimitFreePerDay: makeNumberSetting({
     key: 'imageModerationLimitFreePerDay',
     name: 'Uploaded Image Moderation Limit - Free (scans/day)',
@@ -4729,7 +4855,8 @@ export const settingsMap = {
     key: 'serverStatus',
     name: 'Server Status',
     defaultValue: ServerStatusEnum.Live,
-    description: 'The current status of the server.',
+    description:
+      'What non-admins see. live: the app. maintenance: the maintenance screen. offline: the coming-soon page with the waitlist form. Admins always get the app.',
     category: 'Admin',
     group: API_SERVICE_GROUPS.ADMIN.id,
     order: 1,
@@ -4737,6 +4864,7 @@ export const settingsMap = {
   }),
   enforceCredits: makeBooleanSetting({
     key: 'enforceCredits',
+    changesCustomerPrice: true,
     userReadable: true,
     name: 'Enforce Credits',
     // Self-host runs on the operator's own LLM keys with no billing stack (Stripe is
@@ -4749,6 +4877,7 @@ export const settingsMap = {
   }),
   billOperationalUsage: makeBooleanSetting({
     key: 'billOperationalUsage',
+    changesCustomerPrice: true,
     name: 'Bill Operational Usage',
     // Default OFF on hosted and self-host alike: free-tier accounts are billed for this spend
     // whenever Enforce Credits is on (isOperationalBillingEnabled), so the toggle only decides
@@ -4963,6 +5092,17 @@ export const settingsMap = {
     order: 3,
     dependsOn: 'abuseAssessmentEnabled',
     schema: AutoContainmentConfigSchema,
+  }),
+  adminAiConfig: makeObjectSetting({
+    key: 'adminAiConfig',
+    name: 'Admin AI Suggestions: Modes and Limits',
+    defaultValue: AdminAiConfigSchema.parse({}),
+    description:
+      'Master switch, a monthly USD cap across all features, and per feature: mode (off, shadow, recommend, act), model, escalation model, confidence threshold, daily USD budget and calls per day. The defaults make no calls. For text features (feedback triage, DLQ triage, morning brief) a model of None uses the operations model.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.ADMIN_AI.id,
+    order: 1,
+    schema: AdminAiConfigSchema,
   }),
   // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
   // the model picker (apps/client/server/utils/callerModelList.ts).
@@ -5758,6 +5898,7 @@ export const settingsMap = {
   }),
   teamPlanMinSeats: makeNumberSetting({
     key: 'teamPlanMinSeats',
+    changesCustomerPrice: true,
     // Read by the create-team and billing UIs for non-admin org owners.
     userReadable: true,
     name: 'Team Plan Minimum Seats',
@@ -5783,6 +5924,7 @@ export const settingsMap = {
   }),
   teamPlanCreditsPerSeat: makeNumberSetting({
     key: 'teamPlanCreditsPerSeat',
+    changesCustomerPrice: true,
     name: 'Team Plan Credits Per Seat',
     defaultValue: ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
     int: true,
@@ -5972,14 +6114,14 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
-      'Lets a Decisions model judge pending young-domain Signup Domain Holds (abuse, legitimate or insufficient evidence) from a summary of counts and flags: domain age, mail provider class, whether the site answers with content, signup timing and network spread. It never sees emails, IPs, the domain name or site text. It only ever confirms a hold (keeps free credits held) on a confident abuse verdict, recorded in the Admin Audit Log as a system action; it never releases one, and every other verdict leaves the hold for an admin. Paid from the platform key and budget. Off means no provider calls.',
+      'Lets a Decisions model judge pending young-domain Signup Domain Holds (abuse, legitimate or insufficient evidence) from a summary of counts and flags: domain age, mail provider class, whether the site answers with content, signup timing and network spread. It never sees emails, IPs, the domain name or site text. A confident abuse verdict confirms the hold (keeps free credits held). A confident legitimate verdict releases it only when auto-release is on and every code guard passes; an auto-released domain stays watched and is re-held on a new risk signal. Each decision is recorded in the Admin Audit Log as a system action, and every other verdict leaves the hold for an admin. Paid from the platform key and budget. Off means no provider calls.',
   }),
   signupDomainHoldAssessmentConfig: makeObjectSetting({
     key: 'signupDomainHoldAssessmentConfig',
     name: 'Advisory Assessment of Young-Domain Holds: Model and Limits',
     defaultValue: SignupDomainHoldAssessmentConfigSchema.parse({}),
     description:
-      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, holds per 10-minute run, and the least confidence in an abuse verdict that confirms a hold. The defaults make no calls. The assessment only ever confirms; it never releases a hold.',
+      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, holds per 10-minute run, the least confidence in an abuse verdict that confirms a hold, and the auto-release switch, confidence and caps. The defaults make no calls and never release.',
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     dependsOn: 'signupDomainHoldAssessmentEnabled',
@@ -6084,6 +6226,19 @@ export const settingsMap = {
     order: 39,
     dependsOn: 'requireThreeDSecureOnFirstPurchase',
   }),
+  // Read by apps/client/server/integrations/stripe/termsConsent.ts at checkout and credit purchase.
+  requireCheckoutTermsConsent: makeBooleanSetting({
+    key: 'requireCheckoutTermsConsent',
+    name: 'Require Terms of Service Acceptance at Checkout',
+    defaultValue: false,
+    description:
+      'Adds a required Terms of Service checkbox to Stripe Checkout for subscriptions and before one-time credit purchases (web and desktop), and records the acceptance on the account. Stripe rejects subscription checkout unless a Terms of Service URL is set in the Stripe dashboard (Settings > Public details), so set that first in every Stripe account this stage uses.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    order: 39.5,
+    // The web credit purchase button reads it to show the checkbox.
+    userReadable: true,
+  }),
   signupNetworkAlertsEnabled: makeBooleanSetting({
     key: 'signupNetworkAlertsEnabled',
     name: 'Signup Network Burst Alerts',
@@ -6150,6 +6305,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'Record what the abuse detectors (such as the signup network burst and payment risk alerts) would have done to an account, for admin review on the Detections page. Recording never acts: no access, credits or API keys change.',
+  }),
+  shadowDetectionAutoGradeAfterDays: makeNumberSetting({
+    key: 'shadowDetectionAutoGradeAfterDays',
+    name: 'Shadow Detections: Auto-grade Stale Signup Bursts After (days)',
+    defaultValue: 7,
+    int: true,
+    min: 0,
+    max: 365,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Ungraded signup network burst detections older than this are graded insufficient evidence by automation, unless an account in them was since suspended, reinstated or flagged by another detector, or the latest advisory assessment says anything but insufficient evidence. Automation verdicts are shown apart from admin verdicts. 0 turns it off.',
   }),
   paymentRiskAutoRefundEnabled: makeBooleanSetting({
     key: 'paymentRiskAutoRefundEnabled',
@@ -7873,6 +8040,7 @@ export const settingsMap = {
   }),
   HardwareComputeCreditsPerUsd: makeNumberSetting({
     key: 'HardwareComputeCreditsPerUsd',
+    changesCustomerPrice: true,
     name: 'Hardware Compute: Credits per USD',
     defaultValue: CREDITS_PER_USD_COST,
     min: 1,
@@ -7947,6 +8115,7 @@ export const settingsMap = {
   }),
   SimulatorComputeCreditsPerRound: makeNumberSetting({
     key: 'SimulatorComputeCreditsPerRound',
+    changesCustomerPrice: true,
     name: 'Simulator Compute: Credits per round',
     defaultValue: 50,
     min: 0,

@@ -64,7 +64,7 @@ vi.mock('@server/utils/auth/oauthStartTurnstile', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/auth/appleConfig', () => ({ getAppleConfig: () => h.getAppleConfig() }));
-vi.mock('@server/utils/validators', () => ({ isLocalAppUrl: () => false }));
+vi.mock('@bike4mind/server-utils/utils/validators', () => ({ isLocalAppUrl: () => false }));
 
 import '@pages/api/auth/[strategy]/index';
 

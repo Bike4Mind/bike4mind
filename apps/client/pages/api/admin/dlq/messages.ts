@@ -1,9 +1,15 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { getDlqByLabel, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import {
+  getDlqByLabel,
+  getDlqUrl,
+  getSourceQueueUrl,
+  type SourceQueueName,
+} from '@bike4mind/server-utils/utils/dlqRegistry';
 import { receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
+import { dlqFailureRepository } from '@bike4mind/database';
 import { z } from 'zod';
 
 const QuerySchema = z.object({
@@ -16,6 +22,22 @@ const QuerySchema = z.object({
       return Math.min(Math.max(parsed, 1), 10);
     }),
 });
+
+async function findFailures(queueLabel: string, sourceQueue: SourceQueueName | null, messageIds: string[]) {
+  if (!sourceQueue || !messageIds.length) return { failures: [], lookupFailed: false };
+  try {
+    const sourceQueueName = new URL(getSourceQueueUrl(sourceQueue)).pathname.split('/').pop();
+    if (!sourceQueueName) return { failures: [], lookupFailed: false };
+    const failures = await dlqFailureRepository.findForMessages(sourceQueueName, messageIds);
+    return { failures, lookupFailed: false };
+  } catch (error) {
+    Logger.warn('[DLQ Messages] Failure details unavailable', {
+      queueLabel,
+      errorName: error instanceof Error ? error.name : 'Unknown',
+    });
+    return { failures: [], lookupFailed: true };
+  }
+}
 
 /**
  * GET /api/admin/dlq/messages?queue=<label>&maxMessages=10
@@ -56,16 +78,27 @@ const handler = adminApi({
     if (!existing || receiveCount(msg) > receiveCount(existing)) byId.set(msg.MessageId, msg);
   }
   const messages = [...byId.values()];
+  const { failures, lookupFailed } = await findFailures(
+    queueLabel,
+    dlqEntry.sourceQueue,
+    messages.map(msg => msg.MessageId!)
+  );
+  const failureById = new Map(failures.map(failure => [failure.messageId, failure]));
 
   // receiptHandle is omitted: with VisibilityTimeout 0 the handle expires immediately,
   // so the frontend uses the messageIds replay path which receives with its own timeout.
-  const formatted = messages.map(msg => ({
-    messageId: msg.MessageId,
-    body: msg.Body,
-    sentTimestamp: msg.Attributes?.SentTimestamp,
-    approximateReceiveCount: msg.Attributes?.ApproximateReceiveCount,
-    approximateFirstReceiveTimestamp: msg.Attributes?.ApproximateFirstReceiveTimestamp,
-  }));
+  const formatted = messages.map(msg => {
+    const failure = failureById.get(msg.MessageId!);
+    return {
+      messageId: msg.MessageId,
+      body: msg.Body,
+      sentTimestamp: msg.Attributes?.SentTimestamp,
+      approximateReceiveCount: msg.Attributes?.ApproximateReceiveCount,
+      approximateFirstReceiveTimestamp: msg.Attributes?.ApproximateFirstReceiveTimestamp,
+      ...(lookupFailed ? { failureLookupFailed: true } : {}),
+      failure: failure ? { errorMessage: failure.errorMessage, category: failure.category } : undefined,
+    };
+  });
 
   Logger.info(`[DLQ Messages] Returned ${formatted.length} messages from ${queueLabel}`, { adminUserId });
 

@@ -185,6 +185,46 @@ describe('FeedbackTab', () => {
     });
   });
 
+  it('exports the captured client context as CSV columns, blank for older reports', async () => {
+    const withContext = {
+      ...helpFeedbackItem,
+      clientContext: {
+        platform: 'web' as const,
+        appVersion: '1.2.3',
+        path: '/notebooks',
+        viewport: { width: 1280, height: 720 },
+        model: 'some-model',
+        userAgent: 'agent/1.0',
+      },
+    };
+    const legacy = { ...helpFeedbackItem, clientContext: undefined };
+    mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([withContext]));
+    mocks.getAllFeedbackForExport.mockResolvedValue({ items: [withContext, legacy], truncated: false });
+
+    renderFeedbackTab();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+    await waitFor(() => expect(mocks.papaUnparse).toHaveBeenCalledTimes(1));
+
+    const [csvRows] = mocks.papaUnparse.mock.calls[0] as [Array<Record<string, unknown>>];
+    expect(csvRows[0]).toMatchObject({
+      Platform: 'web',
+      AppVersion: '1.2.3',
+      Page: '/notebooks',
+      Viewport: '1280x720',
+      Model: 'some-model',
+      UserAgent: 'agent/1.0',
+    });
+    expect(csvRows[1]).toMatchObject({
+      Platform: '',
+      AppVersion: '',
+      Page: '',
+      Viewport: '',
+      Model: '',
+      UserAgent: '',
+    });
+  });
+
   // The hook and the subject mapping are unit-tested on their own; what only a mounted render can
   // show is that the chip is actually wired to the setter, and that its options carry the subject
   // values rather than the labels an operator reads.

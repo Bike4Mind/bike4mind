@@ -4,6 +4,7 @@ import { transformBatchRepository, usageEventRepository } from '@bike4mind/datab
 import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
 import type { ModelInfo } from '@bike4mind/common';
 import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
+import { executedModelFields } from '@bike4mind/services/llm/shadowTier';
 import { anthropicBatchCost } from '@server/billing/anthropicBatchPricing';
 import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
 import { settleHeldCredits } from '@server/billing/reserveRequestCredits';
@@ -58,6 +59,15 @@ const handler = baseApi().get(async (req, res) => {
     return res.json({ batch_id: anthropicBatchId, status: 'in_progress', counts: status.counts });
   }
 
+  const mappings = new Map(batch.customIdMap.map(mapping => [mapping.customId, mapping]));
+  // Failed substituted items return a generic 'errored' (the raw one is logged); canceled/expired pass through.
+  const maskedError = (r: { customId: string; status: string; error?: string }) => {
+    const executedModel = mappings.get(r.customId)?.executedModel;
+    if (r.status !== 'failed' || !executedModel || r.error === 'canceled' || r.error === 'expired') return r.error;
+    req.logger.warn(`[transforms/batch] item ${r.customId} on ${executedModel} failed: ${r.error}`);
+    return 'errored';
+  };
+
   // First time we've seen it end - map, cache on the row, and return.
   const results = (status.results ?? []).map(r => ({
     client_ref: r.clientRef,
@@ -73,7 +83,7 @@ const handler = baseApi().get(async (req, res) => {
           cacheWrite1hInputTokens: r.tokenUsage.cacheWrite1hInputTokens,
         }
       : undefined,
-    error: r.error,
+    error: maskedError(r),
   }));
 
   // Best-effort: results over Mongo's 16MB document cap must not fail the poll; a completed row
@@ -95,12 +105,12 @@ const handler = baseApi().get(async (req, res) => {
   }
 
   // Load prices before claiming completion so a catalog outage leaves new work unclaimed.
-  const mappings = new Map(batch.customIdMap.map(mapping => [mapping.customId, mapping]));
   const needsCatalog =
     Boolean(batch.creditHold) &&
     succeededResults.some(result => !batch.billingModels?.[mappings.get(result.customId)?.model ?? '']);
   const catalog = needsCatalog ? await getAvailableModels({ anthropic: apiKey }) : [];
   const billedModels = new Map<string, ModelInfo>();
+  const costModels = new Map<string, ModelInfo>();
   if (batch.creditHold) {
     for (const result of succeededResults) {
       const modelId = mappings.get(result.customId)?.model;
@@ -111,6 +121,15 @@ const handler = baseApi().get(async (req, res) => {
         );
       }
       billedModels.set(result.customId, modelInfo);
+      const executedId = mappings.get(result.customId)?.executedModel;
+      const runInfo = executedId ? batch.billingModels?.[executedId] : undefined;
+      if (runInfo && !isUnpricedTextModel({ ...runInfo, type: 'text' })) {
+        costModels.set(result.customId, runInfo);
+      } else if (executedId) {
+        req.logger.warn(
+          `[transforms/batch] Cannot price executed model ${executedId} in batch ${anthropicBatchId}; costing at the requested model`
+        );
+      }
     }
   }
   // The first poll claims completion; later polls resume any durable unsettled hold. Concurrent
@@ -125,16 +144,23 @@ const handler = baseApi().get(async (req, res) => {
   if (claimed?.creditHold) {
     // Failed items are free. Each successful item uses the same batch/cache rates as its hold.
     let usd = 0;
+    let costUsd = 0;
     let inputTokens = 0;
     let outputTokens = 0;
     let cacheReadTokens = 0;
     let cacheWriteTokens = 0;
     const models = new Set<string>();
+    const executed = new Set<string>();
+    let substituted = false;
     for (const r of status.results ?? []) {
       const modelInfo = billedModels.get(r.customId);
       if (r.status !== 'done' || !r.tokenUsage || !modelInfo) continue;
       const u = r.tokenUsage;
       usd += anthropicBatchCost(modelInfo, u);
+      costUsd += anthropicBatchCost(costModels.get(r.customId) ?? modelInfo, u);
+      const executedId = mappings.get(r.customId)?.executedModel;
+      if (executedId) substituted = true;
+      executed.add(executedId ?? modelInfo.id);
       inputTokens += u.inputTokens;
       outputTokens += u.outputTokens;
       cacheReadTokens += u.cacheReadInputTokens ?? 0;
@@ -142,6 +168,7 @@ const handler = baseApi().get(async (req, res) => {
       models.add(modelInfo.id);
     }
     const model = [...models].join(',') || 'unknown';
+    const executedJoined = substituted ? [...executed].join(',') : undefined;
     const creditsCharged = await settleHeldCredits(
       claimed.creditHold,
       usdToCreditsStochastic(usd),
@@ -177,7 +204,11 @@ const handler = baseApi().get(async (req, res) => {
           cachedInputTokens: cacheReadTokens,
           cacheWriteTokens,
           settledBasis: 'local',
-          costUsd: usd,
+          costUsd,
+          ...executedModelFields(
+            { id: model, backend: 'anthropic' },
+            executedJoined ? { id: executedJoined, backend: 'anthropic' } : undefined
+          ),
           creditsCharged,
           status: 'ok',
           source: claimed.usageSource,

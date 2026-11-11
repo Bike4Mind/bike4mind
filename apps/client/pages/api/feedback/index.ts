@@ -7,6 +7,9 @@ import {
   FeedbackEvents,
   FeedbackStatus,
   FeedbackType,
+  hasFeedbackComment,
+  isFeedbackTriageNoise,
+  parseFeedbackClientContext,
   Permission,
   PromptMetaZodSchema,
   redactPromptMetaForViewer,
@@ -74,6 +77,7 @@ export const FEEDBACK_LIST_FIELDS = [
   'type',
   'subject',
   'helpContext',
+  'clientContext',
   'sessionId',
   'questId',
   'createdAt',
@@ -135,6 +139,9 @@ const CreateFeedbackRequestSchema = z.object({
   questId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
   contextQuestId: z.string().min(1).optional(),
+  // Left loose here on purpose: parseFeedbackClientContext validates and bounds it, and a malformed
+  // object must cost the report its context, not the report.
+  clientContext: z.unknown().optional(),
 });
 
 // Trim each address and drop blanks so 'a@x.com, b@x.com' doesn't leave a leading space on every
@@ -329,8 +336,20 @@ const handler = baseApi()
       console.log('Authenticated');
     }
 
-    const { userId, content, tags, username, userEmail, promptMeta, type, questId, sessionId, contextQuestId } =
-      newFeedbackData;
+    const {
+      userId,
+      content,
+      tags,
+      username,
+      userEmail,
+      promptMeta,
+      type,
+      questId,
+      sessionId,
+      contextQuestId,
+      clientContext: rawClientContext,
+    } = newFeedbackData;
+    const clientContext = parseFeedbackClientContext(rawClientContext, req.headers['user-agent']);
 
     // The org lookup must key off the resolved identity too, not the raw body userEmail -- otherwise
     // two authenticated submissions from the same account can be stamped with different organizations
@@ -371,7 +390,9 @@ const handler = baseApi()
       _id: feedbackId,
       userId: req.isAuthenticated() ? req.user.id : userId,
       tags,
-      status: FeedbackStatus.New,
+      status: isFeedbackTriageNoise({ type, hasContent: hasFeedbackComment(content), tags })
+        ? FeedbackStatus.Closed
+        : FeedbackStatus.New,
       username: req.isAuthenticated() ? req.user.username : username,
       userEmail: req.isAuthenticated() ? req.user.email : userEmail,
       organization: organization,
@@ -382,6 +403,7 @@ const handler = baseApi()
       contextQuestId: feedbackContext.contextQuestId,
       organizationId: feedbackContext.organizationId,
       subject: feedbackContext.subject,
+      clientContext,
       contentStored,
     });
     await saveFeedbackOrRollbackText({ feedback: newFeedback, contentStored, logger: req.logger });

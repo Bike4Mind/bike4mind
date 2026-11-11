@@ -17,7 +17,11 @@ vi.mock('@client/app/utils/sessionBootstrap', () => ({ bootstrapSession: mockBoo
 vi.mock('@client/app/hooks/useAccessToken', () => ({ useAccessToken: { getState: () => tokenState } }));
 
 import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
-import StripeCheckoutSuccessHandler, { checkoutConfirmation } from './StripeCheckoutSuccessHandler';
+import StripeCheckoutSuccessHandler, {
+  CHECKOUT_RETURN_DELAY_MS,
+  checkoutConfirmation,
+  checkoutReturnNavigator,
+} from './StripeCheckoutSuccessHandler';
 
 const SUMMARY = {
   transactionId: 'cs_test_1',
@@ -144,5 +148,53 @@ describe('checkoutConfirmation', () => {
 
   it('falls back to the generic message without a plan name', () => {
     expect(checkoutConfirmation({ credits: 100 })).toBe('Subscription completed successfully!');
+  });
+
+  describe('a checkout another Bike4Mind app started', () => {
+    const PAINTBOX = 'https://paintbox.bike4mind.com/';
+    const back = `checkout_return_to=${encodeURIComponent(PAINTBOX)}`;
+
+    beforeEach(() => {
+      vi.clearAllMocks();
+      window.sessionStorage.clear();
+      tokenState.accessToken = 'token';
+      mockBootstrapSession.mockResolvedValue(undefined);
+      mockGet.mockResolvedValue({ data: SUMMARY });
+    });
+
+    it('returns there only after the purchase is confirmed and reported', async () => {
+      const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        returnTo(`?${back}&subscription_success=true&checkout_session_id=cs_test_1`);
+        await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
+        expect(replace).not.toHaveBeenCalled();
+        expect(window.location.search).toBe('');
+        await vi.advanceTimersByTimeAsync(CHECKOUT_RETURN_DELAY_MS);
+        expect(replace).toHaveBeenCalledExactlyOnceWith(PAINTBOX);
+      } finally {
+        vi.useRealTimers();
+        replace.mockRestore();
+      }
+    });
+
+    it('returns there at once from a cancelled checkout', () => {
+      const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+      returnTo(`?${back}`);
+      expect(replace).toHaveBeenCalledExactlyOnceWith(PAINTBOX);
+      expect(mockToastSuccess).not.toHaveBeenCalled();
+      replace.mockRestore();
+    });
+
+    it('never follows a return target it does not allow', async () => {
+      const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+      for (const target of ['https://evil.example/', 'http://paintbox.bike4mind.com/', 'javascript:alert(1)']) {
+        returnTo(`?checkout_return_to=${encodeURIComponent(target)}`);
+        returnTo(`?checkout_return_to=${encodeURIComponent(target)}&subscription_success=true`);
+      }
+      await settle();
+      expect(replace).not.toHaveBeenCalled();
+      replace.mockRestore();
+    });
   });
 });

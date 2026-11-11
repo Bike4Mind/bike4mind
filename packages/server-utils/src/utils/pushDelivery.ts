@@ -2,7 +2,7 @@ import { Config } from './config';
 
 /**
  * Whether APNs push delivery to first-party native clients is configured, and its credentials.
- * Shared by the publishers (apps/client/server/utils/pushNotifications.ts and the workers that call
+ * Shared by the publishers (./pushNotifications.ts and the workers that call
  * it) and the consumer (apps/workers/src/events/sendPush.apns.ts), so both sides agree on "off".
  */
 

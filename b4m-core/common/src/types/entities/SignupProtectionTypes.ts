@@ -30,15 +30,16 @@ export const SIGNUP_DOMAIN_HOLD_REASON_FILTER_KEYS = Object.keys(SIGNUP_DOMAIN_H
 ];
 
 /**
- * The automated policies that may decide a hold. They only ever confirm (keep credits held); a
- * release always comes from an admin. See apps/workers/src/cron/signupDomainHoldTriage.ts and
- * apps/client/server/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts.
+ * The automated policies that may decide a hold. The disposable-list rule only confirms; the advisory
+ * assessment confirms, and releases only when an operator turns auto-release on and its code guards
+ * pass. See apps/workers/src/cron/signupDomainHoldTriage.ts and
+ * apps/workers/src/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts.
  */
 export const SIGNUP_DOMAIN_HOLD_AUTO_POLICIES = ['disposable-aggregate-rule', 'advisory-decision'] as const;
 export type SignupDomainHoldAutoPolicy = (typeof SIGNUP_DOMAIN_HOLD_AUTO_POLICIES)[number];
 
 /** Bumped when the assessment question or its feature summary changes, so older verdicts are redone. */
-export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_POLICY_VERSION = 1;
+export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_POLICY_VERSION = 2;
 export const SIGNUP_DOMAIN_HOLD_JUDGMENTS = ['abuse', 'legitimate', 'insufficient_evidence'] as const;
 export type SignupDomainHoldJudgment = (typeof SIGNUP_DOMAIN_HOLD_JUDGMENTS)[number];
 /**
@@ -137,6 +138,11 @@ export type SignupProtectionRepository = {
   recent: (domain: string, since: Date) => Promise<SignupObservation[]>;
   findReview: (domain: string) => Promise<SignupDomainReview | null>;
   createHold: (review: SignupDomainReview) => Promise<boolean>;
+  /**
+   * Re-holds a domain the advisory assessment auto-released, when a later signup burst shows it is being
+   * farmed. False when it is not (or no longer) an automated release, e.g. an admin decided it since.
+   */
+  reholdWatched?: (review: SignupDomainReview) => Promise<boolean>;
   isOrganizationDomain: (email: string) => Promise<boolean>;
   // Optional so consumers without the refreshed lists or intel cache keep the list-only behaviour.
   /** The union of refreshed-list sources over the given domain candidates. */

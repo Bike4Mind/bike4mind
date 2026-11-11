@@ -26,7 +26,7 @@ export type MutatingMethod = (typeof MUTATING_METHODS)[number];
  * method call (`adminAuditService.recordAdminAction(...)`). Helpers that wrap these (usersBulk/*,
  * adminUserNotes, ...) need no entry: the import walk finds the writer inside them.
  * Must stay in sync with the writers in packages/server-utils/src/utils/adminAudit.ts,
- * apps/client/server/utils/adminSettingsAudit.ts, apps/client/server/tools/recordModalChanges.ts and
+ * packages/server-utils/src/utils/adminSettingsAudit.ts, apps/client/server/tools/recordModalChanges.ts and
  * b4m-core/services/src/adminAuditService/recordAdminAction.ts.
  */
 export const AUDIT_WRITERS: ReadonlySet<string> = new Set([

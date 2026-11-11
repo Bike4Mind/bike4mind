@@ -1,6 +1,6 @@
 import { type AttachmentLakeAccess, type IUserDocument } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
-import { resolveRetrievalLakeScopeForUser } from '@server/dataLakes/resolveRetrievalLakeScope';
+import { resolveRetrievalLakeScopeForUser } from '@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope';
 import type { Logger } from '@bike4mind/observability';
 
 /**

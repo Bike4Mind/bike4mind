@@ -46,6 +46,8 @@ import {
   accountDataExportQueue,
   publishThumbnailQueue,
   publishThumbnailQueueDLQ,
+  generatedMediaPurgeQueue,
+  generatedMediaPurgeQueueDLQ,
   dataLakeCleanupQueue,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueue,
@@ -194,6 +196,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'github-lake-ingest': githubLakeIngestQueueDLQ.url,
     'github-lake-revoke': githubLakeRevokeQueueDLQ.url,
     'publish-thumbnail': publishThumbnailQueueDLQ.url,
+    'generated-media-purge': generatedMediaPurgeQueueDLQ.url,
   }),
 });
 
@@ -258,6 +261,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     githubLakeIngestQueue: githubLakeIngestQueue.url,
     githubLakeRevokeQueue: githubLakeRevokeQueue.url,
     publishThumbnailQueue: publishThumbnailQueue.url,
+    generatedMediaPurgeQueue: generatedMediaPurgeQueue.url,
   }),
 });
 

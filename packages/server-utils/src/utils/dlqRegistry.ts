@@ -9,6 +9,38 @@ import type { DlqDescriptor, DlqResolvers } from '@bike4mind/infra';
 import * as generatedInfraResources from '../premium-generated/infraResources.generated';
 import { Logger } from '@bike4mind/observability';
 
+// Mirrored by DlqReplaySafety in apps/client/app/hooks/data/dlqManagement.ts; keep both in sync.
+export const DLQ_REPLAY_SAFETY = ['safe', 'side-effects', 'unsafe'] as const;
+/**
+ * safe: recomputes or upserts, nothing billed or sent. side-effects: can spend credits or send a notice the failed attempt never sent.
+ * unsafe: can repeat a message already delivered to a person or outside system (Slack, email, webhook, chat), or the consumer is not in core.
+ */
+export type DlqReplaySafety = (typeof DLQ_REPLAY_SAFETY)[number];
+
+/** Operator help for a dead-letter queue, shown on the admin Dead letters page. */
+export interface DlqQueueHelp {
+  /** One line: what the consumer does for the user. */
+  description: string;
+  replay: DlqReplaySafety;
+  /** The guard (or its absence) that the replay classification rests on. */
+  replayNote: string;
+  /** An area name, never a person. */
+  owner: string;
+}
+
+export type CoreDlqDescriptor = DlqDescriptor & DlqQueueHelp;
+
+/** Names each DlqQueueHelp field that is missing, blank, or (for replay) outside DLQ_REPLAY_SAFETY. */
+export function missingQueueHelp(entry: Partial<Record<keyof DlqQueueHelp, unknown>>): string[] {
+  const missing: string[] = [];
+  for (const key of ['description', 'replayNote', 'owner'] as const) {
+    const value = entry[key];
+    if (typeof value !== 'string' || value.trim() === '') missing.push(key);
+  }
+  if (!(DLQ_REPLAY_SAFETY as readonly unknown[]).includes(entry.replay)) missing.push('replay');
+  return missing;
+}
+
 /**
  * SQS queue URLs are stored via sst.Linkable in resource.enc.
  * This avoids both IAM inline policy bloat (from SST queue links) and
@@ -30,254 +62,461 @@ const DLQ_REGISTRY = [
     displayName: 'FabFile Vectorize',
     application: 'FabFileProcessing',
     sourceQueue: 'fabFileVectorizeQueue',
+    description: "Embeds a file's chunks so it can be searched from chat and knowledge bases.",
+    replay: 'side-effects',
+    replayNote:
+      'A file that is already fully vectorized is skipped; an unfinished one embeds its remaining chunks, which reserves embedding credits.',
+    owner: 'Knowledge files',
   },
   {
     label: 'fab-file-chunk',
     displayName: 'FabFile Chunk',
     application: 'FabFileProcessing',
     sourceQueue: 'fabFileChunkQueue',
+    description: 'Splits an uploaded file into text chunks ahead of vectorizing.',
+    replay: 'safe',
+    replayNote: 'Chunking is claimed per file, so a duplicate delivery exits instead of chunking the file twice.',
+    owner: 'Knowledge files',
   },
   {
     label: 'image-generation',
     displayName: 'Image Generation',
     application: 'ImageGeneration',
     sourceQueue: 'imageGenerationQueue',
+    description: 'Generates the images for an image request in chat.',
+    replay: 'side-effects',
+    replayNote:
+      'No completion guard: a replay calls the image provider again and holds image credits for the new attempt.',
+    owner: 'Image generation',
   },
   {
     label: 'image-edit',
     displayName: 'Image Edit',
     application: 'ImageGeneration',
     sourceQueue: 'imageEditQueue',
+    description: 'Applies an image edit request from chat.',
+    replay: 'side-effects',
+    replayNote:
+      'No completion guard: a replay calls the image provider again and holds image credits for the new attempt.',
+    owner: 'Image generation',
   },
   {
     label: 'generation-callback',
     displayName: 'Generation Callback',
     application: 'ImageGeneration',
     sourceQueue: 'generationCallbackQueue',
+    description: 'Delivers a finished generation result to the callback URL the API caller registered.',
+    replay: 'side-effects',
+    replayNote:
+      'Sends only while the callback is dispatched or failed and its event id still matches, so a replay retries a failed callback once.',
+    owner: 'Public API',
   },
   {
     label: 'data-lake-research',
     displayName: 'Data Lake Research Run',
     application: 'DataLakeManagement',
     sourceQueue: 'dataLakeResearchQueue',
+    description: 'Runs a queued data lake research run.',
+    replay: 'side-effects',
+    replayNote:
+      'The run is claimed before it starts, so a run already claimed or settled is skipped; a run still queued runs now and makes its LLM calls.',
+    owner: 'Data lake',
   },
   {
     label: 'research-engine',
     displayName: 'Research Engine',
     application: 'ResearchEngine',
     sourceQueue: 'researchEngineQueue',
+    description: 'Runs a research task: scrapes its sources and stores the results.',
+    replay: 'side-effects',
+    replayNote: 'A replay re-runs the scrape and the LLM calls for the task, spending credits again.',
+    owner: 'Research',
   },
   {
     label: 'release-notes',
     displayName: 'Release Notes and Highlights',
     application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
+    description: 'Writes release notes or weekly highlights and announces them in Slack.',
+    replay: 'unsafe',
+    replayNote:
+      'Nothing records that the Slack announcement went out, so a replay regenerates the note and posts again. Only a human-edited note is left alone.',
+    owner: 'Release notes',
   },
   {
     label: 'whats-new-highlights',
     displayName: "What's New Highlights",
     application: 'WhatsNewGeneration',
     sourceQueue: 'whatsNewHighlightsQueue',
+    description: "Builds the weekly What's New highlights and posts them to Slack.",
+    replay: 'unsafe',
+    replayNote: 'Nothing records an earlier Slack post, so a replay posts the highlights again.',
+    owner: 'Release notes',
   },
   {
     label: 'notebook-curation',
     displayName: 'Notebook Curation',
     application: 'NotebookCuration',
     sourceQueue: 'notebookCurationQueue',
+    description: 'Curates a chat session into a notebook with an LLM.',
+    replay: 'side-effects',
+    replayNote:
+      'A curation job that already completed is skipped; a failed or unfinished one runs the LLM again and charges credits.',
+    owner: 'Notebooks',
   },
   {
     label: 'agent-proactive-message',
     displayName: 'Agent Proactive Message',
     application: 'AgentMessaging',
     sourceQueue: 'agentProactiveMessageQueue',
+    description: 'Has a session agent write and send a proactive message into the chat.',
+    replay: 'unsafe',
+    replayNote: 'No dedup on the message: a replay writes and sends another message to the user and spends credits.',
+    owner: 'Agents',
   },
   {
     label: 'github-webhook',
     displayName: 'GitHub Webhook',
     application: 'GitHubWebhooks',
     sourceQueue: 'githubWebhookQueue',
+    description: 'Processes a GitHub webhook event and notifies the subscribed users.',
+    replay: 'unsafe',
+    replayNote:
+      'Subscribers already recorded for this GitHub delivery id are skipped, but those records expire after 7 days, so a later replay notifies every subscriber again.',
+    owner: 'Integrations',
   },
   {
     label: 'webhook-delivery',
     displayName: 'Webhook Delivery',
     application: 'WebhookDelivery',
     sourceQueue: 'webhookDeliveryQueue',
+    description: "Sends an event to a customer's webhook endpoint.",
+    replay: 'unsafe',
+    replayNote:
+      'The 1-hour dedup cache has usually expired by replay time, so the POST is sent again; receivers can drop it by its stable eventId.',
+    owner: 'Integrations',
   },
   {
     label: 'slack-export',
     displayName: 'Slack Export',
     application: 'SlackExport',
     sourceQueue: 'slackExportQueue',
+    description: 'Exports Slack channel history to a downloadable file.',
+    replay: 'safe',
+    replayNote:
+      'A cancelled job is skipped; otherwise the export is rebuilt from Slack and uploaded again, with nothing sent outside.',
+    owner: 'Integrations',
   },
   {
     label: 'quest-export',
     displayName: 'Quest Export',
     application: 'QuestExport',
     sourceQueue: 'questExportQueue',
+    description: 'Builds a downloadable ZIP export of a quest.',
+    replay: 'side-effects',
+    replayNote:
+      'If the ZIP already exists only the completed event is re-sent; otherwise the ZIP is rebuilt, which can call the summary model again.',
+    owner: 'Chat',
   },
   {
     label: 'account-data-export',
     displayName: 'Account Data Export',
     application: 'AccountDataExport',
     sourceQueue: 'accountDataExportQueue',
+    description: "Builds a user's account data export and emails them the download link.",
+    replay: 'unsafe',
+    replayNote: 'An export that was already built is not rebuilt, but the ready email is sent again.',
+    owner: 'Accounts',
   },
   {
     label: 'generation-job',
     displayName: 'Generation Job',
     application: 'GenerationJob',
     sourceQueue: 'generationJobQueue',
+    description: 'Advances a long-running generation job by one step.',
+    replay: 'side-effects',
+    replayNote:
+      'Each step reads the stored job state, but a replay can call the model again. Only the step that claims the finished job sends the ready push.',
+    owner: 'Generation jobs',
   },
   {
     label: 'liveops-triage',
     displayName: 'LiveOps Triage',
     application: 'LiveOpsTriage',
     sourceQueue: 'liveOpsTriageQueue',
+    description: 'Triages recent Slack alerts into issue tracker tickets for a LiveOps config.',
+    replay: 'unsafe',
+    replayNote:
+      'A run within 5 minutes of the last one is skipped and duplicate issues are deduplicated, but a later replay runs a fresh triage and posts the Slack summary again.',
+    owner: 'Platform ops',
   },
   {
     label: 'sre-fix',
     displayName: 'SRE Fix',
     application: 'SreAgent',
     sourceQueue: 'sreFixQueue',
+    description: 'Dispatches the SRE agent to open a fix for a tracked error.',
+    replay: 'side-effects',
+    replayNote:
+      'Dispatch is claimed on the error record before GitHub is called, so a replay after a dispatch is skipped. If GitHub is unavailable at replay time, the fix is marked failed and a Slack failure notice is posted.',
+    owner: 'Platform ops',
   },
   {
     label: 'sre-job',
     displayName: 'SRE Job',
     application: 'SreAgent',
     sourceQueue: 'sreJobQueue',
+    description: 'Runs SRE agent analysis or revision for a tracked error.',
+    replay: 'side-effects',
+    replayNote:
+      'Analysis is claimed per error fingerprint and GitHub comments check for an existing marker, but a replay can still call the model again.',
+    owner: 'Platform ops',
   },
   {
     label: 'email-ingestion',
     displayName: 'Email Ingestion',
     application: 'EmailIngestion',
     sourceQueue: 'emailIngestionQueue',
+    description: 'Parses an inbound email from storage and files it for the user.',
+    replay: 'side-effects',
+    replayNote:
+      'Mail with a Message-ID that was already ingested for the user is not stored twice. Mail without one gets a new id, so a replay stores it again and queues another billed analysis.',
+    owner: 'Email ingestion',
   },
   {
     label: 'email-analysis',
     displayName: 'Email Analysis',
     application: 'EmailIngestion',
     sourceQueue: 'emailAnalysisQueue',
+    description: 'Analyzes an ingested email with an LLM and stores the result on it.',
+    replay: 'side-effects',
+    replayNote: 'An email that already has an analysis is skipped; otherwise the LLM runs again and is billed.',
+    owner: 'Email ingestion',
   },
   {
     label: 'email-batch',
     displayName: 'Email Batch',
     application: 'EmailMarketing',
     sourceQueue: 'emailBatchQueue',
+    description: 'Sends one batch of a marketing email campaign.',
+    replay: 'side-effects',
+    replayNote:
+      'Only recipients still marked pending are mailed, so a replay sends the rest of the batch without resending delivered mail.',
+    owner: 'Email marketing',
   },
   {
     label: 'email-job',
     displayName: 'Email Job',
     application: 'EmailMarketing',
     sourceQueue: 'emailJobQueue',
+    description: 'Starts a marketing email campaign: resolves its recipients and queues the send batches.',
+    replay: 'unsafe',
+    replayNote:
+      'No status guard: a replay creates new send attempts for every recipient and mails the whole campaign again.',
+    owner: 'Email marketing',
   },
   {
     label: 'tavern-heartbeat',
     displayName: 'Tavern Heartbeat',
     application: 'TavernHeartbeat',
     sourceQueue: 'tavernHeartbeatQueue',
+    description: 'Processes queued Tavern Heartbeat messages.',
+    replay: 'unsafe',
+    replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
+    owner: 'Premium integrations',
   },
   {
     label: 'deep-agent-wake',
     displayName: 'Deep Agent Wake',
     application: 'DeepAgent',
     sourceQueue: 'deepAgentWakeQueue',
+    description: "Runs one wake cycle for a deep agent's mission.",
+    replay: 'side-effects',
+    replayNote:
+      "No dedup on the wake: a replay runs one more cycle, calling the model and spending the mission's credits.",
+    owner: 'Agents',
   },
   {
     label: 'secops-triage',
     displayName: 'SecOps Triage',
     application: 'SecOpsTriage',
     sourceQueue: 'secopsTriageQueue',
+    description: 'Triages recent security alerts into issue tracker tickets.',
+    replay: 'unsafe',
+    replayNote:
+      'Matching open issues are updated rather than duplicated, but a replay runs a fresh triage and can post the Slack summary again.',
+    owner: 'Security ops',
   },
   {
     label: 'overwatch-analytics',
     displayName: 'Overwatch Analytics',
     application: 'OverwatchAnalytics',
     sourceQueue: 'overwatchAnalyticsQueue',
+    description: 'Processes queued Overwatch Analytics messages.',
+    replay: 'unsafe',
+    replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
+    owner: 'Premium integrations',
   },
   {
     label: 'agent-continuation',
     displayName: 'Agent Continuation',
     application: 'AgentExecutor',
     sourceQueue: 'agentContinuationQueue',
+    description: 'Resumes a long-running agent execution from its last checkpoint.',
+    replay: 'side-effects',
+    replayNote:
+      'The execution is claimed atomically from a resumable status, so a replay of a run that moved on exits; otherwise the agent resumes and spends credits.',
+    owner: 'Agents',
   },
   {
     label: 'optihashi-run-completion',
     displayName: 'OptiHashi Run Completion',
     application: 'OptiHashiIntegration',
     sourceQueue: 'optihashiRunCompletionQueue',
+    description: 'Processes queued OptiHashi Run Completion messages.',
+    replay: 'unsafe',
+    replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
+    owner: 'Premium integrations',
   },
   {
     label: 'bob-run',
     displayName: 'Bob Panel Run',
     application: 'BobIntegration',
     sourceQueue: 'bobRunQueue',
+    description: 'Processes queued Bob Panel Run messages.',
+    replay: 'unsafe',
+    replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
+    owner: 'Premium integrations',
   },
   {
     label: 'libreoncology-audio-render',
     displayName: 'LibreOncology Audio Render',
     application: 'LibreOncologyIntegration',
     sourceQueue: 'libreoncologyAudioRenderQueue',
+    description: 'Processes queued LibreOncology Audio Render messages.',
+    replay: 'unsafe',
+    replayNote: 'Handled by a premium module; confirm with the owner before replaying.',
+    owner: 'Premium integrations',
   },
   {
     label: 'data-lake-cleanup',
     displayName: 'Data Lake Cleanup',
     application: 'DataLakeManagement',
     sourceQueue: 'dataLakeCleanupQueue',
+    description: "Hard-deletes a deleted data lake's files, chunks and stored objects.",
+    replay: 'safe',
+    replayNote: 'The cleanup is guarded and idempotent, so a replay only removes what an earlier run left behind.',
+    owner: 'Data lake',
   },
   {
     label: 'data-lake-taxonomy',
     displayName: 'Data Lake Taxonomy Analysis',
     application: 'DataLakeManagement',
     sourceQueue: 'dataLakeTaxonomyQueue',
+    description: 'Infers an AI taxonomy for a newly ingested data lake batch.',
+    replay: 'side-effects',
+    replayNote:
+      'The batch is claimed first and a finalized batch is skipped; a batch still queued runs the model again and is billed.',
+    owner: 'Data lake',
   },
   {
     label: 'lake-memory',
     displayName: 'Lake Memory Extraction',
     application: 'DataLakeManagement',
     sourceQueue: 'lakeMemoryQueue',
+    description: "Extracts memory beliefs from a data lake's contents.",
+    replay: 'side-effects',
+    replayNote:
+      'The ledger de-duplicates beliefs so nothing is stored twice, but a replay re-scans the lake and bills the LLM again.',
+    owner: 'Data lake',
   },
   {
     label: 'risk-evidence',
     displayName: 'Account Risk Evidence',
     application: 'Signup',
     sourceQueue: 'riskEvidenceQueue',
+    description: "Rebuilds an account's activity evidence summary off the request path.",
+    replay: 'side-effects',
+    replayNote:
+      'The summary is recomputed from stored activity. A signup replay also runs the linked-account check the failed attempt skipped, which can contain the account; an account the check already recorded is skipped.',
+    owner: 'Account security',
   },
   {
     label: 'lake-inconsistency-model',
     displayName: 'Lake Model Inconsistency Detection',
     application: 'DataLakeManagement',
     sourceQueue: 'lakeInconsistencyModelQueue',
+    description: 'Runs model-based contradiction detection over a data lake and stores the findings for review.',
+    replay: 'side-effects',
+    replayNote: 'Runs under a per-lake lease; a replay makes the LLM calls again and charges the lake owner.',
+    owner: 'Data lake',
   },
   {
     label: 'drive-lake-ingest',
     displayName: 'Drive Lake Ingest',
     application: 'DataLakeManagement',
     sourceQueue: 'driveLakeIngestQueue',
+    description: 'Syncs a connected Google Drive folder into its data lake.',
+    replay: 'safe',
+    replayNote:
+      'The sync claims the connection first and skips files it already ingested, so a replay only picks up new or unfinished work.',
+    owner: 'Data lake',
   },
   {
     label: 'drive-disconnect-purge',
     displayName: 'Drive Disconnect Purge',
     application: 'DataLakeManagement',
     sourceQueue: 'driveDisconnectPurgeQueue',
+    description: 'Removes the files a disconnected Google Drive folder ingested, then releases the connection.',
+    replay: 'safe',
+    replayNote:
+      'Each run re-reads what is left and a released connection is skipped, so a replay finishes the purge without double-counting.',
+    owner: 'Data lake',
   },
   {
     label: 'github-lake-ingest',
     displayName: 'GitHub Lake Ingest',
     application: 'DataLakeManagement',
     sourceQueue: 'githubLakeIngestQueue',
+    description: "Syncs a connected GitHub repository's default branch into its data lake.",
+    replay: 'safe',
+    replayNote:
+      'The sync claims the connection first and skips files it already ingested, so a replay only picks up new or unfinished work.',
+    owner: 'Data lake',
   },
   {
     label: 'github-lake-revoke',
     displayName: 'GitHub Lake Revoke',
     application: 'DataLakeManagement',
     sourceQueue: 'githubLakeRevokeQueue',
+    description: 'Removes what a GitHub lake connection ingested, then releases the connection.',
+    replay: 'safe',
+    replayNote: 'A retry finishes the purge even after the connection row is gone, so a replay only completes it.',
+    owner: 'Data lake',
   },
   {
     label: 'publish-thumbnail',
     displayName: 'Published Artifact Thumbnail',
     application: 'PublishedArtifacts',
     sourceQueue: 'publishThumbnailQueue',
+    description: 'Renders and stores the preview thumbnail for a published artifact.',
+    replay: 'safe',
+    replayNote:
+      'A job superseded by a newer version is dropped; otherwise the thumbnail is rendered and stored again, with nothing sent outside.',
+    owner: 'Published artifacts',
   },
-] as const satisfies readonly DlqDescriptor[];
+  {
+    label: 'generated-media-purge',
+    displayName: 'Generated Media Purge',
+    application: 'Notebooks',
+    sourceQueue: 'generatedMediaPurgeQueue',
+    description: 'Deletes generated images, audio and video left behind when a message or notebook is deleted.',
+    replay: 'safe',
+    replayNote:
+      'Each key is rechecked against live references and notebook ownership before it is deleted, and deleting a key that is already gone is a no-op.',
+    owner: 'Notebooks',
+  },
+] as const satisfies readonly CoreDlqDescriptor[];
 
 type CoreDlqLabel = (typeof DLQ_REGISTRY)[number]['label'];
 type CoreSourceQueueName = (typeof DLQ_REGISTRY)[number]['sourceQueue'];
@@ -293,7 +532,8 @@ export type DlqLabel = CoreDlqLabel | ContributedDlqLabel;
 export type SourceQueueName = CoreSourceQueueName | ContributedSourceQueueName;
 
 /** An entry the registry holds, whose label and source queue are therefore resolvable. */
-export type RegisteredDlqDescriptor = DlqDescriptor & { label: DlqLabel; sourceQueue: SourceQueueName };
+export type RegisteredDlqDescriptor = DlqDescriptor &
+  Partial<DlqQueueHelp> & { label: DlqLabel; sourceQueue: SourceQueueName };
 
 type LinkableQueues = {
   dlqUrls: Record<string, string>;
@@ -369,6 +609,11 @@ export function contributedSourceQueueName(name: string): ContributedSourceQueue
   getRegistry();
   if (!contributedSourceQueues.has(name)) throw new Error(`Contributed source queue not registered: ${name}`);
   return name as ContributedSourceQueueName;
+}
+
+/** The core entries only, without overlay contributions. */
+export function coreDlqDescriptors(): readonly CoreDlqDescriptor[] {
+  return DLQ_REGISTRY;
 }
 
 export function getDlqRegistry(): readonly RegisteredDlqDescriptor[] {

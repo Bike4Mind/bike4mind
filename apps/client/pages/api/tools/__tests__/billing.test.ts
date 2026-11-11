@@ -47,7 +47,7 @@ vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
   }),
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/billing/freeTierDailyCapGate', () => ({ checkFreeTierDailySpendCap: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', () => ({ checkFreeTierDailySpendCap: vi.fn() }));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();

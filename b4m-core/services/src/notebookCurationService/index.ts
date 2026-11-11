@@ -19,7 +19,7 @@ import {
 import { isAiAccessRefusal } from '../userService/accountState';
 import type { CurationTokenUsage, LLMContext } from './llmMarkdownGenerator';
 import type { CurationMessage } from './artifactExtractor';
-import { prepareFabFile, CreateFabFileAdapters } from '../fabFileService/create';
+import { prepareFabFile, stripSignedUrls, CreateFabFileAdapters } from '../fabFileService/create';
 import { FormatConverter } from './formatConverter';
 import { createHash } from 'crypto';
 
@@ -576,7 +576,7 @@ export class NotebookCurationService {
         }
       );
 
-      return prepared;
+      return stripSignedUrls(prepared).persistable;
     } catch (error) {
       this.adapters.logger.error(`Failed to create ${format} file`, {
         sessionId,

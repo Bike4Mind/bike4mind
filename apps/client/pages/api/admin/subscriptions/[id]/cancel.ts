@@ -5,7 +5,7 @@ import { runAdminStripeWrite } from '@server/admin/stripeWrite/adminStripeWrite'
 import { assertLiveStripeRow, cancelScheduleChanges } from '@server/admin/stripeWrite/cancelResumeShared';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 /**
  * POST /api/admin/subscriptions/[id]/cancel: schedules the Stripe subscription to cancel at the end of the paid

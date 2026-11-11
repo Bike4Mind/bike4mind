@@ -120,6 +120,16 @@ the lake is archived) the lake stays curated and nothing changes. The
 switch is recorded in the lake's History tab. If you leave GitHub's page without finishing, the lake
 stays connector-fed; switch it back in its settings if you no longer want that.
 
+**What happens when I disconnect a GitHub repository?**
+Every file the connection synced into the Data Lake is permanently deleted, the same way a Google
+Drive disconnect works, and the confirmation dialog shows how many files that is before you
+confirm. There is one extra consequence GitHub does not share with Drive: the GitHub App is
+installed on the whole account, so if this Data Lake is the last one bound to that installation,
+disconnecting also uninstalls the App from the account. The confirmation says so when that is the
+case. To reconnect afterwards, the account owner - an organization owner for an organization
+account - has to reinstall the App on GitHub first; **Refresh list** in the repository picker
+cannot bring back an uninstalled App.
+
 **What happens when I disconnect a Google Drive folder?**
 Every file the connection brought into the Data Lake is permanently deleted, along with its
 extracted text and search entries, and it is removed from any chat it was attached to. This cannot

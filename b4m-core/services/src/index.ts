@@ -1,6 +1,7 @@
 export * as referService from './referService';
 export * as userService from './userService';
 export * as abuseService from './abuseService';
+export * as accountArchiveHistoryService from './accountArchive/history';
 export * as authSessionService from './authSessionService';
 export * as userApiKeyService from './userApiKeyService';
 // Flat export: callers outside the service (the OAuth ai-token route) must recognize
@@ -30,6 +31,7 @@ export * as tagService from './tagService';
 export * as artifactService from './artifactService';
 export * as notebookExportService from './notebookExportService';
 export * as notebookImportService from './notebookImportService';
+export * as agentConfigurationService from './agentConfigurationService';
 export * as notebookCurationService from './notebookCurationService';
 export * as dataLakeService from './dataLakeService';
 export * as dataLakeResearchService from './dataLakeResearchService';

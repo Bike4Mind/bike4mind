@@ -4,7 +4,7 @@ import {
   ADMIN_USERS_SORT_FIELDS,
   AdminUsersFilterFieldsSchema,
   refineAdminUsersFilter,
-} from './adminUsersFilter';
+} from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 
 /**
  * The admin saved views contract, shared by the admin lists and /api/admin/saved-views. Pure and

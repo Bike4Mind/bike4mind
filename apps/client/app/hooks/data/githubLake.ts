@@ -28,6 +28,7 @@ export type LakeGitHubConnection = {
   syncStale: boolean;
   /** Files this connection has ingested into the lake - disconnecting deletes all of them. */
   fileCount: number;
+  isLastInstallationBinding: boolean;
   /** A disconnect was accepted and its file purge is running in the background. */
   disconnecting: boolean;
   /** The pending purge has made no progress for GITHUB_DISCONNECT_STALL_MS, so a retry may re-queue it. */

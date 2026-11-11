@@ -8,7 +8,7 @@ import {
   MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS,
 } from '@server/utils/oauth/deviceAuthHelpers';
 import { z } from 'zod';
-import { isLocalAppUrl } from '@server/utils/validators';
+import { isLocalAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 

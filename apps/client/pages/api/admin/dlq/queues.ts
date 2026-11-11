@@ -1,14 +1,27 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { getDlqRegistry, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { getDlqRegistry, getDlqUrl, type RegisteredDlqDescriptor } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { getQueueAttributes } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
+
+// Overlay-contributed entries carry no help fields, so those keys are left undefined.
+function queueMeta(entry: RegisteredDlqDescriptor) {
+  return {
+    label: entry.label,
+    displayName: entry.displayName,
+    application: entry.application,
+    description: entry.description,
+    replay: entry.replay,
+    replayNote: entry.replayNote,
+    owner: entry.owner,
+  };
+}
 
 /**
  * GET /api/admin/dlq/queues
  *
- * Returns all DLQs with their approximate message counts.
+ * Returns all DLQs with their approximate message counts, message retention and replay help.
  */
 const handler = adminApi({
   adminPermissions: { GET: 'support:read' },
@@ -26,11 +39,10 @@ const handler = adminApi({
       const dlqUrl = getDlqUrl(entry.label);
       const attrs = await getQueueAttributes(dlqUrl);
       return {
-        label: entry.label,
-        displayName: entry.displayName,
-        application: entry.application,
+        ...queueMeta(entry),
         approximateMessageCount: attrs.approximateMessageCount,
         approximateNotVisibleCount: attrs.approximateNotVisibleCount,
+        messageRetentionSeconds: attrs.messageRetentionSeconds,
       };
     })
   );
@@ -43,9 +55,7 @@ const handler = adminApi({
       error: result.reason instanceof Error ? result.reason.message : String(result.reason),
     });
     return {
-      label: registry[index].label,
-      displayName: registry[index].displayName,
-      application: registry[index].application,
+      ...queueMeta(registry[index]),
       approximateMessageCount: -1,
       approximateNotVisibleCount: -1,
     };

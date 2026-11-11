@@ -12,7 +12,7 @@ import {
 } from '@bike4mind/common';
 import { adminSettingsRepository, mcpConnectionRepository, scopedSettingsRepository } from '@bike4mind/database';
 import { scopedSettingsService } from '@bike4mind/services';
-import { isFeatureEnabled } from '@server/middlewares/featureFlag';
+import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 
 /**
  * The org admin side of custom MCP connectors (design #4845 section 8): an org owner or manager

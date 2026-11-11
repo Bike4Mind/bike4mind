@@ -17,7 +17,7 @@ import {
   bulkAbuseExecuteAdapters,
   denySelfInBulkAbuseTarget,
 } from '@server/admin/bulkAbuse/adapters';
-import { assertOwnedDomain } from '@server/admin/bulkAbuse/assertOwnedDomain';
+import { assertOwnedDomain } from '@bike4mind/server-utils/admin/bulkAbuse/assertOwnedDomain';
 import { verifyBulkAbusePreviewToken } from '@server/admin/bulkAbuse/previewToken';
 
 /**
