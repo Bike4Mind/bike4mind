@@ -196,7 +196,7 @@ function SuggestionMenu({
             <MenuItem onClick={onAccept} data-testid={`discovery-suggestion-accept-${item.modelId}`}>
               Accept change
             </MenuItem>
-            <MenuItem onClick={onDismiss} data-testid={`discovery-suggestion-dismiss-${item.modelId}`}>
+            <MenuItem color="danger" onClick={onDismiss} data-testid={`discovery-suggestion-dismiss-${item.modelId}`}>
               Dismiss suggestion
             </MenuItem>
           </Menu>
