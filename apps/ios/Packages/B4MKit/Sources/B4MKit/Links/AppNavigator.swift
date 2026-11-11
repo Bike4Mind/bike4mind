@@ -2,14 +2,15 @@ import Foundation
 import Observation
 
 /// App-wide navigation state that routes mutate: which tab is selected and what is pushed on the
-/// Sessions stack. Lives in B4MKit so route handling is testable without SwiftUI.
+/// Chat tab's stack. Lives in B4MKit so route handling is testable without SwiftUI.
 @MainActor
 @Observable
 public final class AppNavigator {
   public var selectedTab: AppTab = .sessions
-  public var sessionPath: [SessionSummary] = []
-  /// The composer an App Intent asked for. A new-conversation request is shown as a sheet until
-  /// `dismissNewConversation()`; a session request is taken by that session's screen via `takeComposeRequest`.
+  /// The Chat tab's stack above its root, the start-of-chat screen. Empty means the user is on that screen.
+  public var sessionPath: [SessionsDestination] = []
+  /// The composer an App Intent asked for. A new-conversation request is taken by the start-of-chat screen via
+  /// `takeNewConversationRequest()`; a session request by that session's screen via `takeComposeRequest`.
   public private(set) var composeRequest: ComposeRequest?
   /// A Safari fallback the view layer should open, then clear with `consumeExternalURL()`.
   public private(set) var externalURL: URL?
@@ -42,15 +43,18 @@ public final class AppNavigator {
   public func apply(_ route: Route) {
     if let tab = route.tab { selectedTab = tab }
     switch route {
+    case .home:
+      sessionPath = []
+    case .sessions:
+      sessionPath = [.sessionList]
     case .session(let id):
       // A deep link carries only the id; the detail screen loads the transcript and looks the name up.
-      if sessionPath.last?.id != id { sessionPath = [.placeholder(id: id)] }
-    case .sessions:
-      sessionPath = []
+      showSession(.placeholder(id: id))
     case .compose(let request):
       composeRequest = request
-      if case .session(let id) = request.target, sessionPath.last?.id != id {
-        sessionPath = [.placeholder(id: id, name: request.sessionName)]
+      switch request.target {
+      case .newConversation: sessionPath = []
+      case .session(let id): showSession(.placeholder(id: id, name: request.sessionName))
       }
     case .media, .settings:
       break
@@ -63,14 +67,23 @@ public final class AppNavigator {
     }
   }
 
+  /// Pushes the session straight onto the home screen, so back always lands on the start of a new chat.
+  private func showSession(_ session: SessionSummary) {
+    guard sessionPath.last?.sessionID != session.id else { return }
+    sessionPath = [.session(session)]
+  }
+
   /// The pending new-conversation request, if that is what an intent asked for.
   public var newConversationRequest: ComposeRequest? {
     guard let composeRequest, composeRequest.target == .newConversation else { return nil }
     return composeRequest
   }
 
-  public func dismissNewConversation() {
-    if newConversationRequest != nil { composeRequest = nil }
+  /// Hands a new-conversation request to the start-of-chat screen exactly once.
+  public func takeNewConversationRequest() -> ComposeRequest? {
+    guard let request = newConversationRequest else { return nil }
+    composeRequest = nil
+    return request
   }
 
   /// Hands the draft for `sessionID` to its screen exactly once.
@@ -97,11 +110,24 @@ public final class AppNavigator {
   public func isShowing(_ route: Route) -> Bool {
     guard let tab = route.tab, tab == selectedTab else { return false }
     switch route {
-    case .session(let id): return sessionPath.last?.id == id
-    case .sessions: return sessionPath.isEmpty
+    case .home: return sessionPath.isEmpty
+    case .sessions: return sessionPath.last == .sessionList
+    case .session(let id): return sessionPath.last?.sessionID == id
     case .media, .settings: return true
     case .lakes, .lake, .web, .compose: return false
     }
+  }
+}
+
+/// A screen pushed onto the Chat tab's stack.
+public enum SessionsDestination: Hashable, Sendable {
+  /// The conversation history list.
+  case sessionList
+  case session(SessionSummary)
+
+  public var sessionID: String? {
+    guard case .session(let session) = self else { return nil }
+    return session.id
   }
 }
 

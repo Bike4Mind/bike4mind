@@ -24,7 +24,8 @@ CI. Work through it before the first TestFlight build and again before each rele
 - [ ] First launch: provisional authorization, no system alert. Opening the first conversation shows the one system prompt.
 - [ ] A push for a finished quest arrives with the app backgrounded, killed and in the foreground (foreground policy: no banner
       for the screen you are already looking at).
-- [ ] Tapping the notification opens `/sessions/{id}` directly, including from a cold start (route queued until the shell is up).
+- [ ] Tapping the notification opens `/sessions/{id}` directly, including from a cold start (route queued until the shell is up),
+      and Back from that notebook lands on the Chat home.
 - [ ] Notification category toggles and the Settings master toggle (denied state opens iOS Settings).
 - [ ] Sign-out unregisters the token (server no longer pushes to the device).
 
@@ -70,7 +71,7 @@ CI. Work through it before the first TestFlight build and again before each rele
 
 - [ ] Video and audio play from the gallery; AirPlay routes; Picture in Picture works; presigned URL expiry recovers on its own.
 - [ ] Siri phrases for Ask, Start quest and Capture note are recognized; the actions appear in Shortcuts and Spotlight and only
-      open the composer with a draft (never send).
+      open the composer with a draft (never send): Ask and Capture note on the Chat home, Start quest in the chosen notebook.
 - [ ] Widgets: Credits (small), Latest generation (small, medium) and Running agents (small, medium) in the gallery,
       placeholder and signed-out appearance, dark mode, and a tap landing on the right screen.
 - [ ] Lock-screen accessory widgets render and refresh: Credits (circular, rectangular, inline) and Running agents (rectangular, inline).
@@ -107,11 +108,14 @@ Run on the first TestFlight build and every release candidate:
 
 - [ ] Install, launch, welcome screens, sign in (PKCE; Sign in with Apple once the server side is deployed).
 - [ ] Chat: send, stream, reply settles, credits update.
+- [ ] Navigation: the Chat tab opens on the start-of-chat home with the tab bar showing; the top-left Notebooks button pushes
+      the notebook list, and its New Conversation button pops back home. Sending from home pushes the new notebook; Back lands
+      on home with the draft cleared and the greeting back.
 - [ ] Push: register, receive, tap through.
 - [ ] Share: share a link and an image from another app.
 - [ ] Live Activity: start, update, end.
 - [ ] App Lock (Face ID), sign out, sign in again.
-- [ ] Dynamic Type at the largest accessibility size on Sessions, chat and Settings; VoiceOver through sign-in, a chat turn and Settings.
+- [ ] Dynamic Type at the largest accessibility size on the Chat home, Notebooks, chat and Settings; VoiceOver through sign-in, a chat turn and Settings.
 - [ ] Icon and launch screen show (the shipped icon is a placeholder, see the README).
 
 ## Things worth watching that are not in a feature list

@@ -163,7 +163,7 @@ final class ShareComposerModelTests: XCTestCase {
     let model = model(source: source, store: store)
     await model.load()
     XCTAssertEqual(model.destination, .session(id: "s9", name: "Elsewhere"))
-    XCTAssertEqual(model.loadWarning, "Couldn't load your sessions.")
+    XCTAssertEqual(model.loadWarning, "Couldn't load your notebooks.")
   }
 
   func testOneFailingListDoesNotHideTheOther() async {

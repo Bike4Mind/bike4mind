@@ -83,7 +83,7 @@ struct ShareComposerView: View {
         }
         .accessibilityIdentifier("share-destination-picker")
         if model.destination?.isLake == false {
-          Text("Sending to a session starts a chat turn for each item and uses credits.")
+          Text("Sending to a notebook starts a chat turn for each item and uses credits.")
             .font(.footnote).foregroundStyle(.secondary)
         }
       }
@@ -142,7 +142,7 @@ private struct DestinationPicker: View {
         }
       }
       if !model.sessions.isEmpty {
-        Section("Sessions") {
+        Section("Notebooks") {
           ForEach(model.sessions) { session in
             row(.session(id: session.id, name: session.name.isEmpty ? "Untitled" : session.name))
           }

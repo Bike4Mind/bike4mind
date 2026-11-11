@@ -55,8 +55,8 @@ final class DeepLinkRouterTests: XCTestCase {
   }
 
   func testTabRootsRoute() {
-    XCTAssertEqual(route("https://app.bike4mind.com/"), .sessions)
-    XCTAssertEqual(route("https://app.bike4mind.com"), .sessions)
+    XCTAssertEqual(route("https://app.bike4mind.com/"), .home)
+    XCTAssertEqual(route("https://app.bike4mind.com"), .home)
     XCTAssertEqual(route("https://app.bike4mind.com/sessions"), .sessions)
     XCTAssertEqual(route("https://app.bike4mind.com/lakes"), .lakes)
     let lakeURL = URL(string: "https://app.bike4mind.com/lakes/lake-1?tab=files")!
@@ -77,6 +77,7 @@ final class DeepLinkRouterTests: XCTestCase {
 
   func testRoutesKnowTheirTab() {
     XCTAssertEqual(Route.session(id: "a").tab, .sessions)
+    XCTAssertEqual(Route.home.tab, .sessions)
     XCTAssertNil(Route.lake(id: "a").tab)
     XCTAssertNil(Route.lakes.tab)
     XCTAssertEqual(Route.media.tab, .media)

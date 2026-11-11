@@ -44,7 +44,7 @@ struct CaptureNoteIntent: AppIntent {
 
 /// A session offered to Siri and Shortcuts as a choice.
 struct SessionEntity: AppEntity {
-  static let typeDisplayRepresentation: TypeDisplayRepresentation = "Session"
+  static let typeDisplayRepresentation: TypeDisplayRepresentation = "Notebook"
   static let defaultQuery = SessionEntityQuery()
 
   let id: String
@@ -80,10 +80,10 @@ struct SessionEntityQuery: EntityStringQuery {
 
 struct StartQuestIntent: AppIntent {
   static let title: LocalizedStringResource = "Start quest"
-  static let description = IntentDescription("Open a session with the composer ready.")
+  static let description = IntentDescription("Open a notebook with the composer ready.")
   static let openAppWhenRun = true
 
-  @Parameter(title: "Session")
+  @Parameter(title: "Notebook")
   var session: SessionEntity
 
   @MainActor

@@ -1,18 +1,13 @@
 import B4MKit
 import SwiftUI
 
-/// Entry point for the Sessions tab. Owns the view model so it survives pushes onto the stack.
+/// The notebook history, pushed on the Chat tab's home (`MainTabView` registers the destinations). Owns the
+/// view model so it survives pushes onto the stack.
 struct SessionsView: View {
   @Environment(AppServices.self) private var services
 
   var body: some View {
     SessionsListScreen(api: services.api, cache: services.sessionListCache, captureJobs: services.capture.jobs)
-      .navigationDestination(for: SessionSummary.self) { session in
-        SessionDetailView(session: session)
-          // Opening a conversation is the first moment the app has shown the user value, so this is
-          // when the one-time system notification prompt appears.
-          .task { await services.push.userDidReachValueMoment() }
-      }
   }
 }
 
@@ -30,7 +25,7 @@ private struct SessionsListScreen: View {
   var body: some View {
     content
       .background(Tokens.Palette.background)
-      .navigationTitle("Sessions")
+      .navigationTitle("Notebooks")
       .toolbar {
         if captureJobs.isVisible {
           ToolbarItem(placement: .topBarLeading) { CaptureJobsChip(model: captureJobs) }
@@ -51,12 +46,12 @@ private struct SessionsListScreen: View {
   private var content: some View {
     switch (model.state, model.sessions.isEmpty) {
     case (.idle, true), (.loading, true):
-      ProgressView("Loading sessions")
+      ProgressView("Loading notebooks")
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("sessions-loading")
     case (.failed(let error), true):
       ContentUnavailableView {
-        Label("Couldn't load sessions", systemImage: "wifi.exclamationmark")
+        Label("Couldn't load notebooks", systemImage: "wifi.exclamationmark")
       } description: {
         Text(error.message)
       } actions: {
@@ -66,7 +61,7 @@ private struct SessionsListScreen: View {
       }
     case (.loaded, true):
       ContentUnavailableView {
-        Label("No sessions yet", systemImage: "bubble.left.and.bubble.right")
+        Label("No notebooks yet", systemImage: "bubble.left.and.bubble.right")
       } description: {
         Text("Conversations you start in Bike4Mind will appear here.")
       } actions: {
@@ -87,6 +82,7 @@ private struct SessionsListScreen: View {
     .accessibilityIdentifier("sessions-new-conversation-btn")
   }
 
+  /// Pops back to the Chat home, which is where a new conversation starts.
   private func startConversation() {
     services.navigator.apply(.compose(ComposeRequest(target: .newConversation)))
   }
@@ -98,7 +94,7 @@ private struct SessionsListScreen: View {
           InlineErrorBanner(message: error.message) { Task { await model.refresh() } }
         }
         ForEach(model.sessions) { session in
-          NavigationLink(value: session) {
+          NavigationLink(value: SessionsDestination.session(session)) {
             SessionRow(session: session)
           }
           .task { await model.loadMoreIfNeeded(currentItem: session) }

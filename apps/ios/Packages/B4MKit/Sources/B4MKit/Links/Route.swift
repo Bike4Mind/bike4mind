@@ -4,7 +4,9 @@ import Foundation
 /// payloads, consumed by `AppNavigator`. Later milestones extend this enum (chat turns, agent
 /// approvals, media items); `AppNavigator.apply` is the one exhaustive switch to update.
 public enum Route: Hashable, Sendable {
-  /// The Sessions tab root.
+  /// The Chat tab root: the start-of-chat screen.
+  case home
+  /// The conversation history, pushed on the Chat tab's home.
   case sessions
   case session(id: String)
   /// The Lakes root. There is no Lakes tab, so `AppNavigator` opens it on the web and stays on the current tab.
@@ -24,7 +26,7 @@ public enum Route: Hashable, Sendable {
   /// The tab a route lives in; `nil` for what opens on the web.
   public var tab: AppTab? {
     switch self {
-    case .sessions, .session, .compose: .sessions
+    case .home, .sessions, .session, .compose: .sessions
     case .media: .media
     case .settings: .settings
     case .lakes, .lake, .web: nil
@@ -33,6 +35,7 @@ public enum Route: Hashable, Sendable {
 }
 
 public enum AppTab: Hashable, Sendable {
+  /// Labelled "Chat": its stack roots at the start-of-chat screen.
   case sessions, lakes, media, settings
 }
 

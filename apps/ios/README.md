@@ -10,7 +10,7 @@ needs a device or signing.
 |------|----------------|
 | Sign-in (PKCE, Keychain refresh token, App Lock) | `B4MKit/Auth`, `Bike4Mind/Features/SignIn` |
 | First-launch welcome | `B4MKit/Onboarding`, `Bike4Mind/Features/Onboarding` |
-| Sessions list and streaming chat over the realtime socket | `B4MKit/Sessions`, `Chat`, `Realtime`; `Features/Sessions` |
+| Chat home, Notebooks list and streaming chat over the realtime socket | `B4MKit/Sessions`, `Chat`, `Realtime`; `Features/Sessions` |
 | Push registration, deep links and universal links | `B4MKit/Push`, `Links` |
 | Live Activities and agent runs | `B4MKit/LiveActivity`, `Agents`; `Widgets/QuestLiveActivity.swift` |
 | Share extension, camera and voice capture | `B4MKit/Capture`, `CaptureUI`, `ShareExtension` |
@@ -99,7 +99,7 @@ Sessions upload chip can be watched; the first send to the Receipts lake fails o
 ## Widgets, App Intents and the media gallery
 
 - **Widgets** (`Widgets/`): the app writes a `WidgetSnapshot` JSON into the `group.com.bike4mind.app` container and the extension only reads it, with no network or auth in the widget process. The app calls `WidgetCenter.reloadTimelines` when a chat turn settles, credits load, or the latest image changes. A missing container degrades to placeholders. `Widgets/Bike4MindWidgets.swift` is the bundle entry point and registers the widgets plus `QuestLiveActivity`, which reuses `Widgets/Shared/`.
-- **App Intents** (`Bike4Mind/Features/Intents/`): Ask, Start quest and Capture note only open the composer with a draft (`AssistantRequest.route`); they never send.
+- **App Intents** (`Bike4Mind/Features/Intents/`): Ask, Start quest and Capture note only open the composer with a draft (`AssistantRequest.route`); they never send. Ask and Capture note land on the Chat home, the root of the Chat tab's stack.
 - **Media tab** (`Bike4Mind/Features/Media/`): a grid over the Files API via the hand-written `MediaClient`. Presigned URLs are re-fetched near expiry and at most twice after a playback failure. Under `B4M_UI_FIXTURES=1` the tab and the widgets show canned data.
 ## Share and capture
 

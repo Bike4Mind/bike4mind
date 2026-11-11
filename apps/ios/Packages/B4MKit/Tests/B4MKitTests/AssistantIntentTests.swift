@@ -45,20 +45,20 @@ final class AssistantIntentRoutingTests: XCTestCase {
 
 @MainActor
 final class ComposeNavigationTests: XCTestCase {
-  func testNewConversationRequestIsExposedForTheSheetAndDismissable() {
+  func testNewConversationRequestLandsOnHomeAndIsTakenOnce() {
     let navigator = AppNavigator()
     navigator.selectedTab = .settings
     navigator.apply(AssistantRequest.ask(prompt: "hi").route)
     XCTAssertEqual(navigator.selectedTab, .sessions)
-    XCTAssertEqual(navigator.newConversationRequest?.draft, "hi")
-    navigator.dismissNewConversation()
+    XCTAssertTrue(navigator.isShowing(.home))
+    XCTAssertEqual(navigator.takeNewConversationRequest()?.draft, "hi")
     XCTAssertNil(navigator.newConversationRequest)
   }
 
   func testSessionRequestPushesTheSessionAndIsTakenExactlyOnce() {
     let navigator = AppNavigator()
     navigator.apply(AssistantRequest.startQuest(sessionID: "s1").route)
-    XCTAssertEqual(navigator.sessionPath.map(\.id), ["s1"])
+    XCTAssertEqual(navigator.sessionPath.map(\.sessionID), ["s1"])
     XCTAssertNil(navigator.newConversationRequest)
     XCTAssertNil(navigator.takeComposeRequest(forSession: "other"))
     XCTAssertNotNil(navigator.takeComposeRequest(forSession: "s1"))
@@ -103,7 +103,7 @@ final class IntentDeliveryTests: XCTestCase {
     let navigator = AppNavigator()
     let handler = IncomingEventHandler(navigator: navigator, isShellReady: { true })
     handler.open(AssistantRequest.startQuest(sessionID: "s1").route)
-    XCTAssertEqual(navigator.sessionPath.map(\.id), ["s1"])
+    XCTAssertEqual(navigator.sessionPath.map(\.sessionID), ["s1"])
   }
 }
 

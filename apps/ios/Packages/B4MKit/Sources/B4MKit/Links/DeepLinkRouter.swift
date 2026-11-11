@@ -15,7 +15,7 @@ public enum DeepLinkRouter {
     else { return nil }
 
     let segments = url.pathComponents.filter { $0 != "/" }
-    guard let first = segments.first?.lowercased() else { return .sessions }
+    guard let first = segments.first?.lowercased() else { return .home }
     let identifier = segments.dropFirst().first
 
     switch first {

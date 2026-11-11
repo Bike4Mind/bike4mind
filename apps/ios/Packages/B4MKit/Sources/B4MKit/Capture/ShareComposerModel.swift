@@ -129,10 +129,10 @@ public final class ShareComposerModel {
     }
     switch sessionOutcome {
     case .success(let value): sessions = value
-    case .failure: warnings.append("sessions")
+    case .failure: warnings.append("notebooks")
     }
     loadWarning = warnings.isEmpty ? nil : "Couldn't load your \(warnings.joined(separator: " and "))."
-    dropStaleDestination(lakesLoaded: !warnings.contains("lakes"), sessionsLoaded: !warnings.contains("sessions"))
+    dropStaleDestination(lakesLoaded: !warnings.contains("lakes"), sessionsLoaded: !warnings.contains("notebooks"))
     phase = .ready
   }
 
