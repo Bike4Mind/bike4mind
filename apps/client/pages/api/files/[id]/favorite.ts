@@ -9,7 +9,7 @@ import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKe
  * Star (POST) or unstar (DELETE) a file for the caller. Stars are the shared `Favorite` entity with
  * documentType `files`. Both are idempotent, so a second tab with a stale star state never errors.
  */
-const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
+const handler = baseApi({ auth: 'jwtOnly', requiredScopes: FILES_WRITE_SCOPES })
   .post(async (req, res) => {
     const fileId = req.query.id as string;
     try {

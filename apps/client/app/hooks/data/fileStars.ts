@@ -1,9 +1,21 @@
 import { api } from '@client/app/contexts/ApiContext';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type Query } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { fabFileKeys } from './fabFileKeys';
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * A cached search narrowed to starred files. Only those lists change when a star does, so the grid
+ * the user is looking at is not refetched on every click while the Starred filter is off. The
+ * params sit last in every search key (search, searchInfinite, searchPaginated).
+ */
+function isStarredSearch(query: Query): boolean {
+  const params: unknown = query.queryKey.at(-1);
+  if (typeof params !== 'object' || params === null || !('filters' in params)) return false;
+  const { filters } = params;
+  return typeof filters === 'object' && filters !== null && 'starred' in filters && filters.starred === true;
+}
 
 /** The caller's starred files (stars are `Favorite` documents of type `files`), as one set for a whole grid. */
 export function useStarredFileIds({ enabled = true }: { enabled?: boolean } = {}) {
@@ -46,7 +58,7 @@ export function useToggleFileStar() {
     onSettled: () =>
       Promise.all([
         queryClient.invalidateQueries({ queryKey: fabFileKeys.starredIds }),
-        queryClient.invalidateQueries({ queryKey: fabFileKeys.searchAll }),
+        queryClient.invalidateQueries({ queryKey: fabFileKeys.searchAll, predicate: isStarredSearch }),
       ]),
   });
 }

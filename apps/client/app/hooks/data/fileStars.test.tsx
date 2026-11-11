@@ -31,16 +31,21 @@ describe('file stars', () => {
     apiGet.mockResolvedValue({ data: { fileIds: ['a'] } });
   });
 
-  it('stars a file through POST and refreshes the stars and every search', async () => {
+  it('stars a file through POST and refreshes the stars and only the starred-filtered searches', async () => {
     apiPost.mockResolvedValue({ data: {} });
-    const { result, invalidate } = setup();
+    const { result, invalidate, queryClient } = setup();
     await waitFor(() => expect(result.current.starred.has('a')).toBe(true));
+    const starredKey = fabFileKeys.searchInfinite({ filters: { starred: true } });
+    const plainKey = fabFileKeys.searchPaginated({ filters: { generated: true }, page: 1 });
+    queryClient.setQueryData(starredKey, { files: [] });
+    queryClient.setQueryData(plainKey, { files: [] });
 
     await act(() => result.current.toggle.mutateAsync({ fileId: 'b', starred: true }));
 
     expect(apiPost).toHaveBeenCalledWith('/api/files/b/favorite');
     expect(invalidate).toHaveBeenCalledWith({ queryKey: fabFileKeys.starredIds });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: fabFileKeys.searchAll });
+    expect(queryClient.getQueryState(starredKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(plainKey)?.isInvalidated).toBe(false);
   });
 
   it('unstars through DELETE', async () => {

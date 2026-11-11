@@ -45,8 +45,8 @@ describe('/api/files/[id]/favorite', () => {
     favoriteRepository.delete.mockReset();
   });
 
-  it('requires the write-files scope', () => {
-    expect(mockRefs.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
+  it('accepts a session only, and keeps the write-files scope behind it', () => {
+    expect(mockRefs.baseApiOptions).toEqual({ auth: 'jwtOnly', requiredScopes: ['files:write'] });
   });
 
   it('stars the file through the access-checked service', async () => {
