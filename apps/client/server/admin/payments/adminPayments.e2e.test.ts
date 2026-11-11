@@ -374,4 +374,42 @@ describe('adminPaymentsSummary', () => {
     const eurOnly = await adminPaymentsSummary({ ...RANGE, currency: 'eur' }, NOW);
     expect(eurOnly.current.totals.map(total => total.currency)).toEqual(['eur']);
   });
+
+  it('scopes refunds and disputes to the invoice or subscription a search names', async () => {
+    await seed(
+      [purchase({ ownerId: USER_A, stripePaymentIntentId: 'pi_credit', amount: 1000 })],
+      [
+        storeStarted(),
+        invoicePaid({ amount: 1900, subscriptionId: 'sub_a', data: { invoiceId: 'in_a', paymentIntentId: 'pi_in_a' } }),
+        invoicePaid({ amount: 2900, subscriptionId: 'sub_b', data: { invoiceId: 'in_b', paymentIntentId: 'pi_in_b' } }),
+        // Paid before the range and refunded inside it: still the searched subscription's refund.
+        invoicePaid({
+          amount: 1900,
+          subscriptionId: 'sub_a',
+          occurredAt: at('2026-10-05T00:00:00Z'),
+          data: { invoiceId: 'in_a_old', paymentIntentId: 'pi_in_a_old' },
+        }),
+        event('charge.refunded', { amount: 400, data: { chargeId: 'ch_a_old', paymentIntentId: 'pi_in_a_old' } }),
+        event('charge.refunded', { amount: 500, data: { chargeId: 'ch_b', paymentIntentId: 'pi_in_b' } }),
+        event('charge.refunded', { amount: 300, data: { chargeId: 'ch_credit', paymentIntentId: 'pi_credit' } }),
+        event('charge.dispute.closed', {
+          amount: 2900,
+          data: { disputeId: 'dp_b', paymentIntentId: 'pi_in_b', status: 'lost' },
+        }),
+      ]
+    );
+
+    const byInvoice = await adminPaymentsSummary({ ...RANGE, search: 'in_a' }, NOW);
+    expect(byInvoice.current.totals).toEqual([
+      expect.objectContaining({ subscriptionGross: 1900, creditGross: 0, refunds: 0, disputeLosses: 0, net: 1900 }),
+    ]);
+
+    const bySubscription = await adminPaymentsSummary({ ...RANGE, search: 'sub_a' }, NOW);
+    expect(bySubscription.current.totals).toEqual([
+      expect.objectContaining({ subscriptionGross: 1900, refunds: 400, disputeLosses: 0, net: 1500 }),
+    ]);
+
+    const unknownInvoice = await adminPaymentsSummary({ ...RANGE, search: 'in_missing' }, NOW);
+    expect(unknownInvoice.current.totals.every(total => total.refunds === 0 && total.disputeLosses === 0)).toBe(true);
+  });
 });

@@ -47,6 +47,11 @@ export type ResolvedPaymentsSearch = {
   paymentIntentId?: string;
   invoiceId?: string;
   subscriptionId?: string;
+  /**
+   * Set with `invoiceId` / `subscriptionId`: the payment intents of the referenced paid invoices, so refunds
+   * and disputes (which carry no invoice or subscription id) are scoped to them. Empty means none match.
+   */
+  invoicePaymentIntentIds?: string[];
   truncated: boolean;
 };
 
@@ -73,6 +78,15 @@ const organizationIdsMatching = async (query: Condition) =>
       .lean()
   );
 
+// Not windowed: a refund in the window can belong to an invoice paid long before it.
+const paidInvoiceIntents = async (reference: Condition): Promise<string[]> => {
+  const intents: unknown[] = await BillingEventModel.distinct('data.paymentIntentId', {
+    type: INVOICE_PAID,
+    ...reference,
+  }).maxTimeMS(PAYMENTS_READ_MAX_TIME_MS);
+  return intents.filter((intent): intent is string => typeof intent === 'string');
+};
+
 /**
  * Resolves the search before any payment read, so those reads stay on their date indexes. Stripe references
  * match exactly; anything else matches users by name, username or email and organizations by name or by
@@ -81,8 +95,20 @@ const organizationIdsMatching = async (query: Condition) =>
 export async function resolvePaymentsSearch(search: string | undefined): Promise<ResolvedPaymentsSearch> {
   if (!search) return { truncated: false };
   if (search.startsWith('pi_')) return { paymentIntentId: search, truncated: false };
-  if (search.startsWith('in_')) return { invoiceId: search, truncated: false };
-  if (search.startsWith('sub_')) return { subscriptionId: search, truncated: false };
+  if (search.startsWith('in_')) {
+    return {
+      invoiceId: search,
+      invoicePaymentIntentIds: await paidInvoiceIntents({ 'data.invoiceId': search }),
+      truncated: false,
+    };
+  }
+  if (search.startsWith('sub_')) {
+    return {
+      subscriptionId: search,
+      invoicePaymentIntentIds: await paidInvoiceIntents({ subscriptionId: search }),
+      truncated: false,
+    };
+  }
   if (OBJECT_ID.test(search)) {
     const id = search.toLowerCase();
     return { owners: { userIds: [id], organizationIds: [id] }, truncated: false };
@@ -192,6 +218,9 @@ export function followUpMatch(scope: PaymentsScope, window: PaymentsWindow, type
       ...ownerConditions(scope, ownerType => ownerType),
       ...(scope.currency ? [{ currency: scope.currency }] : []),
       ...(scope.search.paymentIntentId ? [{ 'data.paymentIntentId': scope.search.paymentIntentId }] : []),
+      ...(scope.search.invoicePaymentIntentIds
+        ? [{ 'data.paymentIntentId': { $in: scope.search.invoicePaymentIntentIds } }]
+        : []),
     ],
   };
 }
@@ -275,6 +304,8 @@ export async function aggregatePayments<T>(
   const withPurchases = includesCreditPurchases(scope);
   const withInvoices = includesSubscriptionPayments(scope);
   const invoices = invoiceStages(invoiceMatch(scope, window, options.invoiceTypes));
+  // Both branches sort the merged rows in memory; a two-year range can pass the 100 MB stage limit.
+  const readOptions = { maxTimeMS: PAYMENTS_READ_MAX_TIME_MS, allowDiskUse: true };
 
   if (withPurchases) {
     const pipeline: mongoose.PipelineStage[] = [
@@ -283,16 +314,10 @@ export async function aggregatePayments<T>(
       ...(withInvoices ? [{ $unionWith: { coll: billingEventCollection(), pipeline: invoices } }] : []),
       ...after,
     ];
-    return CreditTransaction.aggregate<T>(pipeline).option({
-      maxTimeMS: PAYMENTS_READ_MAX_TIME_MS,
-    });
+    return CreditTransaction.aggregate<T>(pipeline).option(readOptions);
   }
   if (!withInvoices) return [];
-  return BillingEventModel.aggregate<T>([...invoices, ...after]).option({
-    maxTimeMS: PAYMENTS_READ_MAX_TIME_MS,
-    // The merged rows are sorted in memory; a two-year range can pass the 100 MB stage limit.
-    allowDiskUse: true,
-  });
+  return BillingEventModel.aggregate<T>([...invoices, ...after]).option(readOptions);
 }
 
 /**
