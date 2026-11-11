@@ -82,6 +82,8 @@ const executions = vi.hoisted(() => ({
 }));
 const users = vi.hoisted(() => ({ findById: vi.fn(), setLoopsDailyCredits: vi.fn() }));
 const presence = vi.hoisted(() => ({ findByUserId: vi.fn() }));
+const agents = vi.hoisted(() => ({ findById: vi.fn() }));
+const skills = vi.hoisted(() => ({ findAccessibleByIdsForUser: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   loopRepository: repo,
   agentExecutionRepository: executions,
@@ -90,6 +92,8 @@ vi.mock('@bike4mind/database', () => ({
   loopDirectiveRepository: directives,
   userRepository: users,
   loopRunnerPresenceRepository: presence,
+  agentRepository: agents,
+  skillRepository: skills,
   adminSettingsRepository: {
     getSettingsValue: async (key: string) => settings[key as keyof typeof settings],
     findAll: async () => [],
@@ -1200,6 +1204,79 @@ describe('POST /api/loops/:id/events/:eventId/override', () => {
     await expect(override({ action: 'withdraw', note: 'x'.repeat(1001) }).result).rejects.toMatchObject({
       statusCode: 400,
     });
+  });
+});
+
+describe('agent and skill ownership', () => {
+  const stages = ['todo', 'review', 'done'];
+  const AGENTS: Record<string, Record<string, unknown>> = {
+    mine: { userId: 'u1' },
+    theirs: { userId: 'u2' },
+    org1: { organizationId: 'org1' },
+    org2: { organizationId: 'org2' },
+    system: { isSystem: true },
+    deleted: { userId: 'u1', deletedAt: new Date() },
+  };
+  const ACCESSIBLE_SKILLS = ['owned', 'shared', 'global'];
+  const post = (body: Record<string, unknown>) =>
+    call('collection', 'post', { body: { ...validBody, stages, ...body } }).result;
+  const patch = (body: Record<string, unknown>) => call('item', 'patch', { query: { id: OID }, body }).result;
+
+  beforeEach(() => {
+    agents.findById.mockImplementation(async (id: string) => AGENTS[id] ?? null);
+    skills.findAccessibleByIdsForUser.mockImplementation(async (_userId: string, ids: string[]) =>
+      ids.filter(id => ACCESSIBLE_SKILLS.includes(id)).map(id => ({ id }))
+    );
+    verifyOrgAccess.mockResolvedValue(undefined);
+  });
+
+  it.each([
+    [{ agentId: 'theirs' }, /^agentId is not available/],
+    [{ agentId: 'org2', organizationId: 'org1' }, /^agentId is not available/],
+    [{ agentId: 'org1' }, /^agentId is not available/],
+    [{ agentId: 'deleted' }, /^agentId is not available/],
+    [{ agentId: 'missing' }, /^agentId is not available/],
+    [{ stageConfig: [{ stage: 'review', agentId: 'theirs' }] }, /agentId for stage review is not available/],
+    [{ stageConfig: [{ stage: 'review', agentId: 'deleted' }] }, /agentId for stage review/],
+    [{ stageConfig: [{ stage: 'todo', skills: ['owned', 'private'] }] }, /skills for stage todo/],
+  ])('rejects an agent or skill the owner may not use on POST (%#)', async (body, message) => {
+    const result = post(body);
+    await expect(result).rejects.toMatchObject({ statusCode: 400 });
+    await expect(result).rejects.toThrow(message);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it("accepts the owner's, the loop org's and system agents, and accessible skills", async () => {
+    const stageConfig = [
+      { stage: 'todo', agentId: 'system', skills: ACCESSIBLE_SKILLS },
+      { stage: 'review', agentId: 'org1' },
+    ];
+    await post({ agentId: 'mine', organizationId: 'org1', stageConfig });
+    expect(repo.create.mock.calls[0][0]).toMatchObject({ agentId: 'mine', stageConfig });
+  });
+
+  it('checks only new or changed agents and skills on PATCH', async () => {
+    const saved = [{ stage: 'review', agentId: 'theirs', skills: ['private'] }];
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages, agentId: 'deleted', stageConfig: saved }));
+    await patch({ agentId: 'deleted', stageConfig: saved, name: 'Renamed' });
+    expect(agents.findById).not.toHaveBeenCalled();
+    expect(repo.updateForUser).toHaveBeenCalledTimes(1);
+
+    await expect(patch({ stageConfig: [{ ...saved[0], skills: ['private', 'other'] }] })).rejects.toThrow(
+      /skills for stage review/
+    );
+    expect(skills.findAccessibleByIdsForUser).toHaveBeenLastCalledWith('u1', ['other']);
+    await expect(patch({ agentId: 'theirs' })).rejects.toThrow(/^agentId is not available/);
+    await expect(patch({ stageConfig: [{ stage: 'todo', agentId: 'theirs' }] })).rejects.toThrow(
+      /agentId for stage todo/
+    );
+  });
+
+  it("checks a PATCH agent against the loop's org", async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages, organizationId: 'org1' }));
+    await patch({ agentId: 'org1' });
+    expect(repo.updateForUser).toHaveBeenCalledTimes(1);
+    await expect(patch({ agentId: 'org2' })).rejects.toMatchObject({ statusCode: 400 });
   });
 });
 

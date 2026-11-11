@@ -16,6 +16,7 @@ import {
   LOOP_RATE_LIMIT,
   LOOP_RATE_WINDOW_MS,
   validateLoopAgentId,
+  validateLoopAgentsAndSkills,
   validateLoopBudget,
   validateLoopMaxConcurrent,
   validateLoopGoal,
@@ -97,6 +98,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       body.slackChannelId === undefined
         ? null
         : await validateLoopSlackChannel(body.slackChannelId, organizationId, req.user!.id);
+    await validateLoopAgentsAndSkills({ userId: req.user!.id, organizationId }, agentId, stageConfig ?? []);
 
     // Same default as POST /api/v1/agent-executions, resolved once so every run uses the same model.
     let model = body.model === undefined ? undefined : validateLoopModel(body.model);

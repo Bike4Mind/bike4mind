@@ -4,9 +4,15 @@
  */
 
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { adminSettingsRepository, loopRepository } from '@bike4mind/database';
+import { adminSettingsRepository, agentRepository, loopRepository, skillRepository } from '@bike4mind/database';
 import { authorizeOrgChannelPost } from '@bike4mind/server-utils/integrations/slack/orgChannelPost';
-import { LOOP_TRIGGERS_MAX, SLACK_CHANNEL_ID_PATTERN, type ILoopTrigger } from '@bike4mind/common';
+import {
+  isAgentUsableBy,
+  LOOP_TRIGGERS_MAX,
+  SLACK_CHANNEL_ID_PATTERN,
+  type ILoopStageConfig,
+  type ILoopTrigger,
+} from '@bike4mind/common';
 import { ID_MAX, STAGE_NAME_MAX, validateString, validateStringList } from '@bike4mind/common/loops';
 
 export {
@@ -41,6 +47,35 @@ export async function assertLoopsEnabled(): Promise<void> {
   if ((await adminSettingsRepository.getSettingsValue('EnableLoops')) !== true) {
     throw new NotFoundError('Not found');
   }
+}
+
+/**
+ * The owner may use every agent and skill named: agents by the executor's rule (`isAgentUsableBy`, against the
+ * loop's org), skills when owned, shared or global-read. One message for a missing and a foreign id. The PATCH
+ * route passes only ids that changed.
+ */
+export async function validateLoopAgentsAndSkills(
+  owner: { userId: string; organizationId?: string },
+  agentId: string | null | undefined,
+  stageConfig: Pick<ILoopStageConfig, 'stage' | 'agentId' | 'skills'>[]
+): Promise<void> {
+  const agents = [
+    ...(agentId ? [{ id: agentId, field: 'agentId' }] : []),
+    ...stageConfig.flatMap(c => (c.agentId ? [{ id: c.agentId, field: `agentId for stage ${c.stage}` }] : [])),
+  ];
+  await Promise.all([
+    ...agents.map(async ({ id, field }) => {
+      // A malformed id throws a CastError: same 400 as a missing one.
+      const agent = await agentRepository.findById(id).catch(() => null);
+      if (!agent || !isAgentUsableBy(agent, owner)) throw new BadRequestError(`${field} is not available`);
+    }),
+    ...stageConfig.map(async ({ stage, skills }) => {
+      if (!skills?.length) return;
+      const found = await skillRepository.findAccessibleByIdsForUser(owner.userId, skills);
+      if (found.length !== skills.length)
+        throw new BadRequestError(`skills for stage ${stage} include one that is not available`);
+    }),
+  ]);
 }
 
 /**

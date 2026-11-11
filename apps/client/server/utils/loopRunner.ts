@@ -40,7 +40,13 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { loopAdmission, p2RunsLeft, PRIORITIES_OVER_P2_CAP } from './loopBudget';
-import { buildLoopQuery, LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES, parseLoopMemory } from './loopMemory';
+import {
+  buildLoopQuery,
+  LOOP_PROMPT_ANSWERS,
+  LOOP_PROMPT_DIRECTIVES,
+  parseLoopMemory,
+  renderLoopStageSkills,
+} from './loopMemory';
 import { advancePatch, makeDueIfReady, ticketRunLimit } from './loopTickets';
 import { pushLoopChanged, requestLoopDispatch } from './loopDispatch';
 import { fireStageTriggers } from './loopHandoff';
@@ -200,7 +206,7 @@ export async function claimRunnerTicket(
 
   const leaseUntil = leaseFrom(now);
   try {
-    const prompt = await loopPrompt(loop, claimed, stage);
+    const prompt = await loopPrompt(loop, claimed, stage, logger);
     await agentExecutionRepository.createRunnerRun(runId, {
       userId,
       ...(loop.organizationId && { organizationId: loop.organizationId }),
@@ -257,11 +263,17 @@ export async function claimRunnerTicket(
 }
 
 /** The prompt a cloud run of this ticket gets (dispatchLoop in apps/workers/src/cron/loopScheduler.ts). */
-async function loopPrompt(loop: ILoop, ticket: IWorkItem, stage: Omit<ILoopStageConfig, 'stage'>): Promise<string> {
-  const [directives, overseen, answered] = await Promise.all([
+async function loopPrompt(
+  loop: ILoop,
+  ticket: IWorkItem,
+  stage: Omit<ILoopStageConfig, 'stage'>,
+  logger: Logger
+): Promise<string> {
+  const [directives, overseen, answered, skills] = await Promise.all([
     loopDirectiveRepository.listOpenForLoop(loop.userId, loop.id, LOOP_PROMPT_DIRECTIVES),
     Promise.all((loop.oversees ?? []).map(id => loopRepository.findByIdAndUserId(id, loop.userId))),
     loopEventRepository.listAnsweredForTicket(loop.userId, ticket.id, LOOP_PROMPT_ANSWERS),
+    renderLoopStageSkills(loop.userId, stage.skills, logger),
   ]);
   return buildLoopQuery(
     loop.goal,
@@ -271,6 +283,7 @@ async function loopPrompt(loop: ILoop, ticket: IWorkItem, stage: Omit<ILoopStage
       stages: loop.stages,
       answers: answered.map(event => ({ question: event.reason, note: event.resolution?.note ?? '' })),
       instructions: stage.instructions,
+      skills,
     },
     { directives, overseen: overseen.filter((watched): watched is ILoop => !!watched) }
   );

@@ -61,6 +61,7 @@ import {
   LOOP_PROMPT_ANSWERS,
   LOOP_PROMPT_DIRECTIVES,
   parseLoopMemory,
+  renderLoopStageSkills,
 } from '@server/utils/loopMemory';
 import { syncLoopNotices, USER_BUDGET_PAUSE_REASON } from './loopNotices';
 import {
@@ -1033,12 +1034,14 @@ async function dispatchLoop(
     const { model, escalated } = ticket
       ? loopRunModel(loop, stage, ticket.runCount ?? 0, ticketRunLimit(loop.stages))
       : { model: loop.model, escalated: false };
-    const [directives, overseen, handoffTargets, answered] = await Promise.all([
+    const [directives, overseen, handoffTargets, answered, skills] = await Promise.all([
       loopDirectiveRepository.listOpenForLoop(loop.userId, loop.id, LOOP_PROMPT_DIRECTIVES),
       Promise.all((loop.oversees ?? []).map(id => loopRepository.findByIdAndUserId(id, loop.userId))),
       Promise.all((loop.handoffTargets ?? []).map(id => loopRepository.findByIdAndUserId(id, loop.userId))),
       ticket ? loopEventRepository.listAnsweredForTicket(loop.userId, ticket.id, LOOP_PROMPT_ANSWERS) : [],
+      renderLoopStageSkills(loop.userId, stage.skills, logger),
     ]);
+    const agentId = stage.agentId ?? loop.agentId;
     result = await startAgentExecution(
       {
         userId: loop.userId,
@@ -1053,6 +1056,7 @@ async function dispatchLoop(
                 stages: loop.stages,
                 answers: answered.map(event => ({ question: event.reason, note: event.resolution?.note ?? '' })),
                 instructions: stage.instructions,
+                skills,
               }
             : undefined,
           { directives, overseen: overseen.filter((watched): watched is ILoop => !!watched) },
@@ -1063,7 +1067,7 @@ async function dispatchLoop(
         connectionId: HEADLESS_CONNECTION_ID,
         apiKeyInfo: undefined,
         ...(loop.organizationId && { organizationId: loop.organizationId }),
-        ...(loop.agentId && { agentId: loop.agentId }),
+        ...(agentId && { agentId }),
         enabledTools: stage.tools?.length ? stage.tools : loop.tools,
         loopId: loop.id,
         ...(creditCap !== undefined && { creditCap }),

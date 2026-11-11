@@ -7,7 +7,7 @@ import {
   loopRepository,
   workItemRepository,
 } from '@bike4mind/database';
-import { ILoop, ILoopWithUsage, startOfUtcDay } from '@bike4mind/common';
+import { ILoop, ILoopStageConfig, ILoopWithUsage, startOfUtcDay } from '@bike4mind/common';
 import { ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { requestLoopDispatch } from '@server/utils/loopDispatch';
 import { makeDueIfReady } from '@server/utils/loopTickets';
@@ -21,6 +21,7 @@ import {
   pruneOwnTriggers,
   pruneStageConfig,
   validateLoopAgentId,
+  validateLoopAgentsAndSkills,
   validateLoopBudget,
   validateLoopMaxConcurrent,
   validateLoopGoal,
@@ -130,6 +131,22 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (body.slackChannelId !== undefined && body.slackChannelId !== existing.slackChannelId) {
       patch.slackChannelId = await validateLoopSlackChannel(body.slackChannelId, existing.organizationId, req.user!.id);
     }
+    // Only new or changed agents and skills are checked, as with slackChannelId: one deleted or unshared since
+    // the last save must not block unrelated edits (its run skips it).
+    const changedAgentId = patch.agentId && patch.agentId !== existing.agentId ? (patch.agentId as string) : undefined;
+    const changedStageConfig = ((patch.stageConfig as ILoopStageConfig[] | null | undefined) ?? []).map(config => {
+      const before = existing.stageConfig?.find(prior => prior.stage === config.stage);
+      return {
+        stage: config.stage,
+        agentId: config.agentId !== before?.agentId ? config.agentId : undefined,
+        skills: config.skills?.filter(skill => !before?.skills?.includes(skill)),
+      };
+    });
+    await validateLoopAgentsAndSkills(
+      { userId: req.user!.id, organizationId: existing.organizationId },
+      changedAgentId,
+      changedStageConfig
+    );
     Object.assign(patch, validateLoopPriorityPolicy(body as Record<string, unknown>));
     const now = new Date();
     const wakeMode =

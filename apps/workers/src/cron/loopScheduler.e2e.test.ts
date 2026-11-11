@@ -13,6 +13,7 @@ import {
   loopEventRepository,
   loopRepository,
   organizationRepository,
+  Skill,
   userRepository,
   WorkItem,
   workItemRepository,
@@ -1122,6 +1123,45 @@ describe('runLoopSchedulerTick - stage config', () => {
       enabledTools: ['web_search', 'mcp__srv__do_thing'],
     });
     expect(byLoop[todo.id].query).not.toContain('Instructions for the');
+  });
+
+  it("uses the ticket's stage agent and skills, the loop agent elsewhere and for triage", async () => {
+    const skill = await Skill.create({
+      userId: 'user-1',
+      name: 'review-checklist',
+      description: 'd',
+      body: 'CHECK IT',
+    });
+    const gone = new mongoose.Types.ObjectId().toString();
+    const stageConfig = [{ stage: 'review', agentId: 'stage-agent', skills: [String(skill._id), gone] }];
+    const reviewing = await createLoop({ stages: STAGES, stageConfig, agentId: 'loop-agent' });
+    await createTicket(reviewing.id, { stage: 'review' });
+    const todo = await createLoop({ stages: STAGES, stageConfig, agentId: 'loop-agent' });
+    await createTicket(todo.id, { stage: 'todo' });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    const byLoop = Object.fromEntries(h.startAgentExecution.mock.calls.map(([input]) => [input.loopId, input]));
+    expect(byLoop[reviewing.id].agentId).toBe('stage-agent');
+    const query: string = byLoop[reviewing.id].query;
+    expect(query).toContain('## Skill Invoked: /review-checklist\n\nCHECK IT');
+    expect(query.indexOf('CHECK IT')).toBeLessThan(query.indexOf('---'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Stage skills'), { skillIds: [gone] });
+    expect(byLoop[todo.id].agentId).toBe('loop-agent');
+    expect(byLoop[todo.id].query).not.toContain('Skill Invoked');
+  });
+
+  it("runs triage on the loop's agent, not a stage agent", async () => {
+    const loop = await createLoop({
+      stages: STAGES,
+      stageConfig: [{ stage: 'todo', agentId: 'stage-agent' }],
+      agentId: 'loop-agent',
+    });
+    await createTicket(loop.id, { priority: undefined });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ loopRunKind: 'triage', agentId: 'loop-agent' });
   });
 
   it("prices admission on the ticket's stage model and leaves the ticket unclaimed when it does not admit", async () => {

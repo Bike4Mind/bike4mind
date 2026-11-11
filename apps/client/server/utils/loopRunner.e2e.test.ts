@@ -7,6 +7,7 @@ import {
   agentExecutionRepository,
   Loop,
   organizationRepository,
+  Skill,
   userRepository,
   WorkItem,
 } from '@bike4mind/database';
@@ -234,6 +235,21 @@ describe('claimRunnerTicket', () => {
       runnerLeaseUntil: new Date(NOW.getTime() + 2 * 60_000),
     });
     expect((await loopOf(loop.id)).activeExecutionIds).toBeUndefined();
+  });
+
+  it("adds the stage's skills to the prompt, skipping one no longer available", async () => {
+    const skill = await Skill.create({ userId: USER, name: 'pr-checklist', description: 'd', body: 'CHECK IT' });
+    const gone = new mongoose.Types.ObjectId().toString();
+    const loop = await createLoop({
+      stageConfig: [{ stage: 'build', runner: 'desktop', skills: [gone, String(skill._id)] }],
+    });
+    const ticket = await createTicket(loop.id);
+
+    const result = await claim(ticket.id);
+
+    expect(result.prompt).toContain('## Skill Invoked: /pr-checklist\n\nCHECK IT');
+    expect(result.prompt.indexOf('CHECK IT')).toBeLessThan(result.prompt.indexOf('---'));
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'in_progress', executionId: result.runId });
   });
 
   it("serves green-ci as review when the loop's org turned it off", async () => {
