@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import {
   AI_ADVISORY_MARK,
@@ -17,6 +17,9 @@ import { ChangePreview } from './ChangePreview';
 const navigate = vi.fn();
 let routerMounted = true;
 vi.mock('@tanstack/react-router', () => ({ useRouter: () => (routerMounted ? { navigate } : undefined) }));
+afterEach(() => {
+  routerMounted = true;
+});
 
 const theme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -277,14 +280,10 @@ describe('AiSuggestion actions', () => {
   it('leaves evidence link clicks to the browser when no router is mounted', () => {
     navigate.mockClear();
     routerMounted = false;
-    try {
-      renderThemed(<AiSuggestion variant="detail" suggestion={suggestion()} data-testid="sug" />);
-      const link = screen.getByTestId('sug-reason-0').querySelector('a') as HTMLAnchorElement;
-      expect(fireEvent.click(link)).toBe(true);
-      expect(navigate).not.toHaveBeenCalled();
-    } finally {
-      routerMounted = true;
-    }
+    renderThemed(<AiSuggestion variant="detail" suggestion={suggestion()} data-testid="sug" />);
+    const link = screen.getByTestId('sug-reason-0').querySelector('a') as HTMLAnchorElement;
+    expect(fireEvent.click(link)).toBe(true);
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it('routes a plain click on an in-app evidence link and leaves modified clicks to the browser', () => {
