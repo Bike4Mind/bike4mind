@@ -244,8 +244,16 @@ const handler = adminApi({
     if (typeof history === 'string' && history.length > 0) {
       return res.json({ history: await modelPriceRepository.historyForModel(history) });
     }
-    const [rows, seed] = await Promise.all([modelPriceRepository.rowsInForce(), generateModelPriceSeed()]);
-    return res.json({ rows, seeded: seed.map(({ modelId, unit }) => ({ modelId, unit })) });
+    // The seed only decides where Revert is offered, so a failed seed read must not hide the prices in force.
+    const [rows, seed] = await Promise.allSettled([modelPriceRepository.rowsInForce(), generateModelPriceSeed()]);
+    if (rows.status === 'rejected') throw rows.reason;
+    if (seed.status === 'rejected') {
+      req.logger.warn('[model-prices] seed read failed; no row offers Revert', {
+        error: seed.reason instanceof Error ? seed.reason.message : String(seed.reason),
+      });
+    }
+    const seeded = seed.status === 'fulfilled' ? seed.value.map(({ modelId, unit }) => ({ modelId, unit })) : [];
+    return res.json({ rows: rows.value, seeded });
   })
   .post(async (req, res) => {
     requireFullAdmin(req);
