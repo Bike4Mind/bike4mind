@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/common';
 import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
-import { AdminPageHeader, DataTable, EmptyState, FilterBar } from '../../shared';
+import { AdminPageHeader, DataTable, EmptyState, ErrorState, FilterBar } from '../../shared';
 import { formatCredits } from '../utils/format';
 import { useTransactionLedger, LedgerFilters } from '../hooks/useTransactionLedger';
 import { SessionUsageDetailModal } from './SessionUsageDetailModal';
@@ -44,7 +44,13 @@ export const TransactionLedger: React.FC<{ organizationId?: string }> = ({ organ
 
   const { debouncedValue: orgSearch, setValue: setOrgSearch } = useDebounceValue('', 500);
   // Skipped in fixed-org mode - the picker is hidden and non-admins can't list orgs.
-  const { data: orgResult, isLoading: orgsLoading } = useSearchOrganizations(
+  const {
+    data: orgResult,
+    isLoading: orgsLoading,
+    isError: orgsError,
+    isFetching: orgsFetching,
+    refetch: refetchOrganizations,
+  } = useSearchOrganizations(
     {
       page: 1,
       limit: 20,
@@ -89,6 +95,13 @@ export const TransactionLedger: React.FC<{ organizationId?: string }> = ({ organ
           </Button>
         }
       />
+      {!fixedOrgId && orgsError && (
+        <ErrorState
+          message="Organizations could not be loaded."
+          onRetry={() => void refetchOrganizations()}
+          retrying={orgsFetching}
+        />
+      )}
       {!fixedOrgId && (
         <Autocomplete
           placeholder="Select an organization"

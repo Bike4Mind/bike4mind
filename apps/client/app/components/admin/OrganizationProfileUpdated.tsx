@@ -52,6 +52,7 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
   const [savedStorageLimit, setSavedStorageLimit] = useState(org.storageLimit ?? null);
   const parsedStorageLimit = parseStorageLimitInput(storageLimitInput);
   const [creditDialogOpen, setCreditDialogOpen] = useState(false);
+  const [creditInput, setCreditInput] = useState(String(org.currentCredits ?? 0));
   const [savedCredits, setSavedCredits] = useState(org.currentCredits ?? 0);
 
   const updateOrganizationMutation = useUpdateOrganization();
@@ -69,7 +70,7 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
   // The org's own managers, not members whose platform-wide `level` happens to be Manager/Admin.
   const managerNames = orgManagerNames(org);
 
-  const handleChange = (field: keyof IOrganizationDocument, value: any) => {
+  const handleChange = (field: 'name' | 'description' | 'billingContact', value: string) => {
     setEditedOrg(prev => ({ ...prev, [field]: value }));
   };
 
@@ -82,10 +83,11 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
     setStorageLimitInput(org.storageLimit?.toString() ?? '');
     setSavedStorageLimit(org.storageLimit ?? null);
     setSavedCredits(org.currentCredits ?? 0);
+    setCreditInput(String(org.currentCredits ?? 0));
   }, [org]);
 
   // The input holds a string while typing; an empty or non-numeric value ("1,000") is NaN.
-  const rawCredits = String(editedOrg.currentCredits ?? 0).trim();
+  const rawCredits = creditInput.trim();
   const editedCredits = rawCredits === '' ? NaN : Number(rawCredits);
   const creditsValid = Number.isSafeInteger(editedCredits) && editedCredits >= 0;
   const creditsChanged = editedCredits !== savedCredits;
@@ -114,11 +116,13 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
   const handleCreditsUpdate = async (reason: string) => {
     if (!creditsValid || !creditsChanged) return;
     try {
-      await updateOrganizationMutation.mutateAsync({
+      const saved = await updateOrganizationMutation.mutateAsync({
         orgId: org.id,
         data: { currentCredits: editedCredits, creditReason: reason },
       });
-      setSavedCredits(editedCredits);
+      const committedCredits = saved.currentCredits ?? editedCredits;
+      setSavedCredits(committedCredits);
+      setCreditInput(String(committedCredits));
       setCreditDialogOpen(false);
     } catch {
       // The mutation reports failures.
@@ -146,7 +150,7 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
       <StatStrip aria-label="Organization statistics">
         <StatTile label="Total users" value={totalUsers} />
         <StatTile label={`Active (${activeDays}d)`} value={activeUsers} />
-        <StatTile label="Credits" value={org.currentCredits ?? 0} />
+        <StatTile label="Credits" value={savedCredits} />
       </StatStrip>
       <Grid container spacing={2}>
         <Grid xs={12} sm={6}>
@@ -205,8 +209,8 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
                 <FormControl error={!creditsValid}>
                   <FormLabel>Current credits</FormLabel>
                   <Input
-                    value={editedOrg.currentCredits ?? 0}
-                    onChange={e => handleChange('currentCredits', e.target.value)}
+                    value={creditInput}
+                    onChange={e => setCreditInput(e.target.value)}
                     slotProps={{ input: { 'data-testid': 'org-profile-credits-input' } }}
                   />
                   {!creditsValid && (

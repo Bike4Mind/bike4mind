@@ -156,11 +156,17 @@ const OrganizationsTab: React.FC = () => {
 
   useOrganizationsTabUrlSync();
   const [params, setParams] = useOrganizationsParams();
+  const [debouncedSearch, setQuerySearch] = useState(params.search);
+  const querySearch = params.search === '' ? '' : debouncedSearch;
+  useEffect(() => {
+    const timeout = setTimeout(() => setQuerySearch(params.search), 300);
+    return () => clearTimeout(timeout);
+  }, [params.search]);
 
   const { data, isLoading, isFetching, isError, refetch } = useSearchOrganizations({
     page: params.page,
     limit: params.limit,
-    search: params.search,
+    search: querySearch,
     filters: { personal: params.personal },
     orderBy: { by: params.sortBy, direction: params.sortDirection },
   });
@@ -292,8 +298,13 @@ const OrganizationsTab: React.FC = () => {
       });
       setConvertOrg(null);
       if (checkoutUrl) {
-        await navigator.clipboard?.writeText(checkoutUrl).catch(() => undefined);
-        toast.success('Checkout URL copied to clipboard');
+        try {
+          if (!navigator.clipboard) throw new Error('Clipboard unavailable');
+          await navigator.clipboard.writeText(checkoutUrl);
+          toast.success('Checkout URL copied to clipboard');
+        } catch {
+          toast.info('Checkout link created. Copy the URL from the checkout tab.');
+        }
         openInNewTab(checkoutUrl);
       }
     } catch {

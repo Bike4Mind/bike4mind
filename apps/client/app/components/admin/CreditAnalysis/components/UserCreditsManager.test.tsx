@@ -29,7 +29,9 @@ vi.mock('../../Users/Profile/actions/AdjustCreditsDialog', () => ({
     <div data-testid="shared-adjust-credits-dialog">
       {user.id}
       <button onClick={onClose}>Close adjustment</button>
-      <button onClick={onAudit}>Audit credits</button>
+      <button data-testid="credits-audit-stub" onClick={onAudit}>
+        Audit credits
+      </button>
     </div>
   ),
 }));
@@ -56,7 +58,7 @@ const manager = (override: Record<string, unknown> = {}) => ({
   setSearchQuery: vi.fn(),
   sortDirection: 'desc',
   setSortDirection: vi.fn(),
-  pageSize: 20,
+  pageSize: 25,
   setPageSize: vi.fn(),
   currentPage: 1,
   setCurrentPage: vi.fn(),
@@ -83,7 +85,7 @@ describe('UserCreditsManager', () => {
     expect(mocks.useUsers.mock.results.at(-1)?.value.setCurrentPage).toHaveBeenCalledWith(2);
     fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'Ada' } });
     expect(mocks.useUsers.mock.results.at(-1)?.value.setSearchQuery).toHaveBeenCalledWith('Ada');
-    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    fireEvent.click(screen.getByTestId('credits-user-view-user-1'));
     expect(mocks.navigate).toHaveBeenCalledWith('user-1');
     expect(screen.queryByTestId('admin-table-sort-credits-btn')).toBeNull();
   });
@@ -100,10 +102,10 @@ describe('UserCreditsManager', () => {
 
   it('opens the shared action only after the user is loaded and links its audit trail', () => {
     renderManager();
-    fireEvent.click(screen.getByRole('button', { name: 'Adjust credits' }));
+    fireEvent.click(screen.getByTestId('credits-user-adjust-user-1'));
     expect(mocks.useUser).toHaveBeenLastCalledWith('user-1');
     expect(screen.getByTestId('shared-adjust-credits-dialog')).toHaveTextContent('user-1');
-    fireEvent.click(screen.getByRole('button', { name: 'Audit credits' }));
+    fireEvent.click(screen.getByTestId('credits-audit-stub'));
     expect(mocks.navigate).toHaveBeenCalledWith(
       expect.objectContaining({ to: '/admin', search: expect.objectContaining({ category: 'credits' }) })
     );
@@ -135,7 +137,7 @@ describe('UserCreditsManager', () => {
       </CssVarsProvider>
     );
     expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No users match this search');
-    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    fireEvent.click(screen.getByTestId('credits-user-empty-action'));
     expect(empty.setSearchQuery).toHaveBeenCalledWith('');
   });
 
@@ -144,9 +146,9 @@ describe('UserCreditsManager', () => {
       id ? { data: row, error: new Error('offline'), refetch: mocks.refetch } : { data: undefined, error: null }
     );
     renderManager();
-    fireEvent.click(screen.getByRole('button', { name: 'Adjust credits' }));
+    fireEvent.click(screen.getByTestId('credits-user-adjust-user-1'));
     expect(screen.queryByTestId('shared-adjust-credits-dialog')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByTestId('credits-user-retry-btn'));
     await waitFor(() => expect(mocks.refetch).toHaveBeenCalledOnce());
   });
 });

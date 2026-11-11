@@ -55,7 +55,13 @@ export const UsageDashboard: React.FC<{
 
   // Team orgs only: personal orgs are single-user and not the point of an org dashboard.
   // Skipped entirely unless the admin org picker is shown.
-  const { data: orgResult, isLoading: orgsLoading } = useSearchOrganizations(
+  const {
+    data: orgResult,
+    isLoading: orgsLoading,
+    isError: orgsError,
+    isFetching: orgsFetching,
+    refetch: refetchOrganizations,
+  } = useSearchOrganizations(
     {
       page: 1,
       limit: 20,
@@ -105,6 +111,13 @@ export const UsageDashboard: React.FC<{
           </Button>
         }
       />
+      {showOrgPicker && orgsError && (
+        <ErrorState
+          message="Organizations could not be loaded."
+          onRetry={() => void refetchOrganizations()}
+          retrying={orgsFetching}
+        />
+      )}
       {showOrgPicker ? (
         <Autocomplete
           placeholder="Select an organization"

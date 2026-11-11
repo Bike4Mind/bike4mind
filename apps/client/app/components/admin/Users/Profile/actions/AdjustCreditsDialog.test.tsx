@@ -190,8 +190,8 @@ describe('AdjustCreditsDialog', () => {
     );
   });
 
-  it('does not offer unsafe undo without a committed delta', async () => {
-    mocks.update.mockResolvedValueOnce({ currentCredits: 800 });
+  it.each([undefined, 0])('does not offer unsafe undo for committed delta %s', async delta => {
+    mocks.update.mockResolvedValueOnce({ currentCredits: 800, appliedCreditDelta: delta });
     const { onClose } = setup();
     typeAmount('800');
     pickReason();
@@ -211,6 +211,27 @@ describe('AdjustCreditsDialog', () => {
 
     expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent('Credits adjusted (+75)');
     expect(screen.getByTestId('undo-toast-message')).not.toHaveTextContent('Balance set to');
+  });
+
+  it('keeps a deferred write single-submit and trims a free-text reason', async () => {
+    let finish: (value: { appliedCreditDelta: number; currentCredits: number }) => void = () => {};
+    mocks.update.mockReturnValue(
+      new Promise(resolve => {
+        finish = resolve;
+      })
+    );
+    setup();
+    typeAmount('800');
+    fireEvent.change(screen.getByTestId('adjust-credits-dialog-reason-input'), {
+      target: { value: '  Support correction  ' },
+    });
+    fireEvent.click(confirmButton());
+    fireEvent.click(confirmButton());
+    expect(mocks.update).toHaveBeenCalledTimes(1);
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ creditReason: 'Support correction' }));
+    expect(confirmButton()).toBeDisabled();
+    finish({ appliedCreditDelta: 300, currentCredits: 800 });
+    expect(await screen.findByTestId('undo-toast')).toBeInTheDocument();
   });
 
   it('stays open without a toast when the write fails', async () => {

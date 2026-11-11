@@ -92,6 +92,18 @@ describe('MarginDashboard invoice reconciliation', () => {
     expect(screen.getByTestId('margin-invoice-chip-2026-06-openai')).toHaveTextContent('no invoice');
   });
 
+  it('retries an initial main request failure instead of presenting an empty dashboard', async () => {
+    const respond = mockGet.getMockImplementation()!;
+    mockGet.mockImplementation((url: string) =>
+      url.includes('view=model-day') ? Promise.reject(new Error('Initial load failed')) : respond(url)
+    );
+    renderDashboard();
+    expect(await screen.findByTestId('admin-error-state')).toHaveTextContent('Initial load failed');
+    mockGet.mockImplementation(respond);
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(await screen.findByTestId('margin-invoice-enter-2026-06-openai')).toBeEnabled();
+  });
+
   it('keeps loaded invoice rows visible when a refresh fails', async () => {
     renderDashboard();
     expect(await screen.findByTestId('margin-invoice-enter-2026-06-openai')).toBeEnabled();

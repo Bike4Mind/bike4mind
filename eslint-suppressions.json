@@ -549,11 +549,6 @@
       "count": 1
     }
   },
-  "apps/client/app/components/admin/OrganizationProfileUpdated.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/app/components/admin/SlackWorkspacesTab.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 4

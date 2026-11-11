@@ -1,3 +1,4 @@
+import { ADMIN_PAGE_SIZES } from './shared/adminPagination';
 import { ADMIN_TAB_PARAM } from '@bike4mind/common';
 import { oneOf, parseObjectId, parsePage, toNumber } from './adminSearchValues';
 
@@ -32,7 +33,7 @@ export const ORGS_TAB_PARAMS = [...ORGS_VIEW_PARAMS, ORGS_ORG_ID_PARAM, ORGS_BIL
 export const adminOrganizationHref = (orgId: string): string =>
   `/admin?${new URLSearchParams({ tab: ADMIN_ORGANIZATIONS_TAB_SLUG, [ORGS_ORG_ID_PARAM]: orgId })}`;
 
-export const ORGS_PAGE_LIMIT_OPTIONS = [5, 10, 20, 25, 50, 100];
+export const ORGS_PAGE_LIMIT_OPTIONS: readonly number[] = ADMIN_PAGE_SIZES;
 
 const ORGS_SORT_FIELDS = ['name', 'createdAt', 'updatedAt'] as const;
 const SORT_ORDERS = ['asc', 'desc'] as const;
@@ -55,7 +56,7 @@ export type OrganizationsView = Omit<OrganizationsTabParams, 'search'>;
 
 export const DEFAULT_ORGANIZATIONS_PARAMS: OrganizationsTabParams = {
   page: 1,
-  limit: 10,
+  limit: ADMIN_PAGE_SIZES[0],
   search: '',
   personal: undefined,
   sortBy: 'name',

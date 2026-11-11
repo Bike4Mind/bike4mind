@@ -172,6 +172,13 @@ describe('AdminApiKeysModal', () => {
     expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).not.toContain('resets in');
   });
 
+  it('retries a failed key list through the table action', () => {
+    h.error = new Error('Request failed');
+    renderModal();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(h.refetch).toHaveBeenCalledOnce();
+  });
+
   it('flags an active key whose live counter sits at its limit as rate limited', () => {
     h.keys = [KEY];
     h.liveUsage = { k1: { minute: 60, day: 500 } };
@@ -349,6 +356,17 @@ describe('AdminApiKeysModal', () => {
     expect(screen.queryByTestId('admin-api-key-row-k1')).toBeNull();
     fireEvent.click(screen.getByText('Try again'));
     expect(h.refetch).toHaveBeenCalled();
+  });
+
+  it('enables a users:moderate delegate to reset an ordinary target key', () => {
+    h.keys = [KEY];
+    useUser.setState({
+      currentUser: { id: 'delegate', isAdmin: false, adminPermissions: ['users:moderate'] } as never,
+    });
+    renderModal();
+    expect(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+    expect(screen.getByTestId('admin-api-keys-reset-dialog')).toBeInTheDocument();
   });
 
   it('disables reset without users:moderate or on a protected admin target', () => {

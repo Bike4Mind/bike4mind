@@ -1,3 +1,4 @@
+import { ADMIN_PAGE_SIZES } from '../../shared/adminPagination';
 import { useState } from 'react';
 import { useGetUsers } from '@client/app/hooks/data/user';
 import { api } from '@client/app/contexts/ApiContext';
@@ -7,7 +8,7 @@ import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 export function useUserCreditsManager(onRefresh?: () => void) {
   const { value: searchQuery, debouncedValue: debouncedSearch, setValue: setSearchValue } = useDebounceValue('');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState<number>(ADMIN_PAGE_SIZES[0]);
   const [currentPage, setCurrentPage] = useState(1);
 
   // Search + sort are pushed to the server so they span the full dataset, not just
@@ -20,7 +21,7 @@ export function useUserCreditsManager(onRefresh?: () => void) {
     sortField: 'currentCredits',
     sortOrder: sortDirection,
   } as const;
-  // Overrides the hook's default fetcher so the request carries exactly `params` (including the server-side sort).
+  // Propagate request failures so the table can show its retry state instead of an empty successful page.
   const allUsers = useGetUsers(params, {
     queryFn: async () => (await api.get<IGetUsersResponse>('/api/users', { params })).data,
   });

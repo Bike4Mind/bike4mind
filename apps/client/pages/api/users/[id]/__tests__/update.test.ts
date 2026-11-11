@@ -105,7 +105,7 @@ vi.mock('@bike4mind/services', async orig => ({
       tags: z.array(z.string()).nullable().optional(),
       currentCredits: z.number().optional(),
       creditReason: z.string().optional(),
-      creditDelta: z.number().optional(),
+      creditDelta: z.number().int().optional(),
       roleChangeReason: z.string().optional(),
       password: z.string().nullable().optional(),
       email: z.string().optional(),
@@ -1077,6 +1077,22 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
 
       expect(res._getJSONData().appliedCreditDelta).toBe(-40);
       expect(mockRecord.mock.calls[0][1].details.credits).toBe(-40);
+    });
+
+    it.each([0.5, '0.5', -0.5])('rejects fractional creditDelta %j at the route boundary', async creditDelta => {
+      mockUserFindById.mockReturnValue(target());
+      await expect(
+        run({ user: ADMIN, userId: 'other-user', body: { creditDelta, creditReason: CREDIT_REASON } }).promise
+      ).rejects.toThrow();
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('omits the applied delta for a non-credit response', async () => {
+      mockUserFindById.mockReturnValue(target());
+      const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { name: 'Renamed' } });
+      await promise;
+      expect(res._getJSONData()).not.toHaveProperty('appliedCreditDelta');
     });
 
     it('omits related when the adjustment carries no ledger transaction id', async () => {

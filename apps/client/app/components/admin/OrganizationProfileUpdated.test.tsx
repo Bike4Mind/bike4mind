@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument, WithId } from '@bike4mind/common';
@@ -137,6 +137,32 @@ describe('OrganizationProfileUpdated - storage limit', () => {
         data: { currentCredits: 0, creditReason: 'Goodwill credit' },
       })
     );
+  });
+
+  it('updates the summary from the committed credit response without replacing the open form', async () => {
+    mutateAsync.mockResolvedValue({ currentCredits: 800 });
+    renderModal(makeOrg({ currentCredits: 500 }));
+    fireEvent.change(screen.getByTestId('org-profile-credits-input'), { target: { value: '900' } });
+    fireEvent.click(screen.getByTestId('org-profile-adjust-credits-btn'));
+    fireEvent.click(screen.getByTestId('org-profile-credit-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('org-profile-credit-dialog-confirm-btn'));
+    const creditsTile = screen.getAllByTestId('admin-stat-tile').find(tile => tile.textContent?.startsWith('Credits'))!;
+    await waitFor(() => expect(within(creditsTile).getByText('800')).toBeInTheDocument());
+    expect(screen.getByTestId('org-profile-credits-input')).toHaveValue('800');
+  });
+
+  it('keeps the committed summary and draft when a credit save fails', async () => {
+    mutateAsync.mockRejectedValue(new Error('Save failed'));
+    renderModal(makeOrg({ currentCredits: 500 }));
+    fireEvent.change(screen.getByTestId('org-profile-credits-input'), { target: { value: '800' } });
+    fireEvent.click(screen.getByTestId('org-profile-adjust-credits-btn'));
+    fireEvent.click(screen.getByTestId('org-profile-credit-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('org-profile-credit-dialog-confirm-btn'));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+    const creditsTile = screen.getAllByTestId('admin-stat-tile').find(tile => tile.textContent?.startsWith('Credits'))!;
+    expect(within(creditsTile).getByText('500')).toBeInTheDocument();
+    expect(screen.getByTestId('org-profile-credits-input')).toHaveValue('800');
+    expect(screen.getByTestId('org-profile-credit-dialog')).toBeInTheDocument();
   });
 
   it('blocks fractional credits instead of sending a fractional ledger adjustment', () => {

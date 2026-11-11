@@ -3,12 +3,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    use() {
-      return this;
-    },
-    put: (fn: unknown) => fn,
-  }),
+  baseApi: () => {
+    const middlewares: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
+    const chain = {
+      use: (middleware: (req: unknown, res: unknown, next: () => void) => unknown) => {
+        middlewares.push(middleware);
+        return chain;
+      },
+      put: (handler: (req: unknown, res: unknown) => Promise<unknown>) => async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) await middleware(req, res, () => {});
+        return handler(req, res);
+      },
+    };
+    return chain;
+  },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 
@@ -51,6 +59,18 @@ describe('PUT /api/admin/organizations/[id]/group-types', () => {
     });
   });
 
+  it('refuses a delegate without settings:manage before writing', async () => {
+    const { req, res } = createMocks({
+      method: 'PUT',
+      query: { id: 'org-1' },
+      body: { allowedGroupTypes: ['team'], reason: 'Customer request' },
+    });
+    Object.assign(req, { user: { id: 'delegate', isAdmin: false, adminPermissions: ['support:read'] } });
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockSetGroupTypes).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
   it('records the reasoned org.group_types.updated inside the transaction', async () => {
     const { req, res } = createMocks({
       method: 'PUT',
@@ -87,6 +107,7 @@ describe('PUT /api/admin/organizations/[id]/group-types', () => {
       query: { id: 'org-1' },
       body: { allowedGroupTypes: ['team'], ...extra },
     });
+    Object.assign(req, { user: { id: 'admin-1', isAdmin: true } });
     await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({ statusCode: 400 });
     expect(mockTransaction).not.toHaveBeenCalled();
     expect(mockSetGroupTypes).not.toHaveBeenCalled();
@@ -99,6 +120,7 @@ describe('PUT /api/admin/organizations/[id]/group-types', () => {
       query: { id: 'org-1' },
       body: { allowedGroupTypes: ['team'], reason: 'Customer request' },
     });
+    Object.assign(req, { user: { id: 'admin-1', isAdmin: true } });
     vi.mocked(recordAdminActionFromRequest).mockRejectedValueOnce(new Error('audit unavailable'));
 
     await expect((handler as HandlerFn)(req, res)).rejects.toThrow('audit unavailable');

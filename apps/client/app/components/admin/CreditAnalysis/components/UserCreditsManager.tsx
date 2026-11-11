@@ -124,7 +124,11 @@ export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefres
             title={searchQuery ? 'No users match this search' : 'No users found'}
             description={searchQuery ? 'Try another name or email.' : undefined}
             action={
-              <Button variant="outlined" onClick={searchQuery ? () => setSearchQuery('') : handleRefresh}>
+              <Button
+                data-testid="credits-user-empty-action"
+                variant="outlined"
+                onClick={searchQuery ? () => setSearchQuery('') : handleRefresh}
+              >
                 {searchQuery ? 'Clear search' : 'Refresh users'}
               </Button>
             }
@@ -166,10 +170,21 @@ export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefres
             label: 'Actions',
             render: user => (
               <Stack direction="row" gap={1} flexWrap="wrap">
-                <Button size="sm" variant="outlined" color="neutral" onClick={() => void openUserProfile(user.id)}>
+                <Button
+                  data-testid={`credits-user-view-${user.id}`}
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  onClick={() => void openUserProfile(user.id)}
+                >
                   View
                 </Button>
-                <Button size="sm" variant="outlined" onClick={() => setSelectedUserId(user.id)}>
+                <Button
+                  data-testid={`credits-user-adjust-${user.id}`}
+                  size="sm"
+                  variant="outlined"
+                  onClick={() => setSelectedUserId(user.id)}
+                >
                   Adjust credits
                 </Button>
               </Stack>
@@ -181,7 +196,9 @@ export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefres
       {selectedUserId && selectedUser.error && (
         <Stack direction="row" gap={1} alignItems="center" role="alert">
           <Typography>Could not load the current balance.</Typography>
-          <Button onClick={() => void selectedUser.refetch()}>Retry</Button>
+          <Button data-testid="credits-user-retry-btn" onClick={() => void selectedUser.refetch()}>
+            Retry
+          </Button>
           <Button variant="plain" onClick={() => setSelectedUserId(null)}>
             Cancel
           </Button>

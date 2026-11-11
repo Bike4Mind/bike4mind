@@ -94,6 +94,26 @@ describe('OrganizationGroupTypesCard', () => {
     );
   });
 
+  it('keeps a failed group-type change open and retries the same selected types and reason', async () => {
+    setOrganizationGroupTypes
+      .mockRejectedValueOnce(new Error('Save failed'))
+      .mockResolvedValue({ added: ['sales'], removed: [] });
+    renderCard(makeOrg({ allowedGroupTypes: [] }));
+    const input = screen.getByTestId('org-group-types-input').querySelector('input')!;
+    fireEvent.focus(input);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.click((await screen.findAllByRole('option'))[0]);
+    fireEvent.click(screen.getByTestId('org-group-types-save-btn'));
+    fireEvent.click(screen.getByTestId('org-group-types-action-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('org-group-types-action-dialog-confirm-btn'));
+    await waitFor(() => expect(setOrganizationGroupTypes).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('org-group-types-action-dialog')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('org-group-types-action-dialog-confirm-btn')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('org-group-types-action-dialog-confirm-btn'));
+    await waitFor(() => expect(setOrganizationGroupTypes).toHaveBeenCalledTimes(2));
+    expect(setOrganizationGroupTypes.mock.calls[1]).toEqual(setOrganizationGroupTypes.mock.calls[0]);
+  });
+
   it('warns that revoking a type cannot restore member assignments', () => {
     renderCard(makeOrg({ allowedGroupTypes: ['sales'] }));
     const input = screen.getByTestId('org-group-types-input').querySelector('input')!;
