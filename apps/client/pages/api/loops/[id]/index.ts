@@ -30,7 +30,6 @@ import {
   validateLoopName,
   validateLoopOversees,
   validateLoopPriorityPolicy,
-  validateLoopSlackChannel,
   validateLoopStageConfig,
   validateLoopStages,
   validateLoopTools,
@@ -67,14 +66,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const body = req.body as Partial<
       Omit<
         ILoop,
-        | 'agentId'
-        | 'budgetCreditsPerDay'
-        | 'maxConcurrent'
-        | 'oversees'
-        | 'handoffTargets'
-        | 'triggers'
-        | 'wakeMode'
-        | 'slackChannelId'
+        'agentId' | 'budgetCreditsPerDay' | 'maxConcurrent' | 'oversees' | 'handoffTargets' | 'triggers' | 'wakeMode'
       >
     > & {
       agentId?: string | null;
@@ -84,7 +76,6 @@ const handler = baseApi({ auth: 'jwtOnly' })
       handoffTargets?: string[] | null;
       triggers?: unknown;
       wakeMode?: string | null;
-      slackChannelId?: string | null;
     };
 
     const existing = await loopRepository.findByIdAndUserId(id, req.user!.id);
@@ -125,11 +116,6 @@ const handler = baseApi({ auth: 'jwtOnly' })
       patch.triggers = pruneOwnTriggers(existing.triggers, stages);
     }
     if (body.wakeMode !== undefined) patch.wakeMode = validateLoopWakeMode(body.wakeMode);
-    // Unchanged (the form re-sends it) is not re-authorised: a later opt-out must not block unrelated edits; the
-    // post re-checks it anyway.
-    if (body.slackChannelId !== undefined && body.slackChannelId !== existing.slackChannelId) {
-      patch.slackChannelId = await validateLoopSlackChannel(body.slackChannelId, existing.organizationId, req.user!.id);
-    }
     Object.assign(patch, validateLoopPriorityPolicy(body as Record<string, unknown>));
     const now = new Date();
     const wakeMode =

@@ -136,7 +136,6 @@ export type LoopFormPayload = Pick<ILoop, 'name' | 'goal' | 'intervalMinutes' | 
   handoffTargets?: string[] | null;
   triggers?: ILoop['triggers'] | null;
   wakeMode?: ILoop['wakeMode'] | null;
-  slackChannelId?: string | null;
 };
 
 const LIST_POLL_MS = 30_000;

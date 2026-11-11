@@ -1,7 +1,6 @@
 /**
- * Posting to an org's opted-in Slack channel as the Bike4Mind bot, shared by POST /api/v1/slack/messages
- * (apps/client/pages/api/v1/slack/messages.ts) and the loop run's `loop_slack_post` tool
- * (apps/workers/src/queueHandlers/agentExecutor.loopSlackTools.ts). The org owner opts a channel in through
+ * Posting to an org's opted-in Slack channel as the Bike4Mind bot, for POST /api/v1/slack/messages
+ * (apps/client/pages/api/v1/slack/messages.ts). The org owner opts a channel in through
  * pages/api/organizations/[id]/integrations/slack/channels.ts.
  */
 import {
@@ -33,7 +32,7 @@ export type OrgChannelPostAuthorization =
 
 /**
  * Whether `userId` may post to `channelId`, in the route's order of checks: the channel is opted in (and, when it
- * lists allowed keys, for `keyId`; a caller with no key, like a loop, is then refused), its workspace is connected
+ * lists allowed keys, for `keyId`; a caller with no key is then refused), its workspace is connected
  * to the org that granted the opt-in, a key billing an org bills that org, and the user is a member of it (no admin
  * bypass). The bot token is returned still encrypted, so a caller spends its budget before decrypting.
  */

@@ -100,8 +100,6 @@ export interface LoopFormValues {
   /** '' in a field means not picked yet; `toStage` '' means this loop's first stage. */
   triggers: { fromLoopId: string; stage: string; toStage: string }[];
   wakeMode: 'interval' | 'tickets';
-  /** Undefined when the field is not shown (the loop bills no organization). '' means none. */
-  slackChannelId?: string;
 }
 
 /** A stage's settings as the form edits them: the smoke check and hold labels as the text typed. */
@@ -277,8 +275,6 @@ export function validateLoopForm(
         : undefined
     ),
     wakeMode: orClear(values.wakeMode === 'tickets' ? ('tickets' as const) : undefined),
-    // Not sent when the field is hidden, so saving never clears a channel the form cannot show.
-    ...(values.slackChannelId !== undefined && { slackChannelId: orClear(values.slackChannelId.trim() || undefined) }),
   };
   return {
     errors,
@@ -350,7 +346,6 @@ export function initialValues(
       toStage: toStage ?? '',
     })),
     wakeMode: loop.wakeMode ?? 'interval',
-    ...(loop.organizationId && { slackChannelId: loop.slackChannelId ?? '' }),
     stageConfig: Object.fromEntries(
       (loop.stageConfig ?? []).map(({ stage, smoke, holdLabels, ...settings }) => [
         stage,
@@ -909,21 +904,6 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
               capped run or a run that failed to start.
             </FormHelperText>
           </FormControl>
-          {values.slackChannelId !== undefined && (
-            <FormControl>
-              <FormLabel>Slack channel id</FormLabel>
-              <Input
-                placeholder="C0123ABCD"
-                value={values.slackChannelId}
-                onChange={e => set('slackChannelId', e.target.value)}
-                sx={{ width: 200 }}
-                slotProps={{ input: { 'data-testid': 'loop-form-slack-channel' } }}
-              />
-              <FormHelperText>
-                Optional. A channel your organization opted in for API posting; runs can post to it.
-              </FormHelperText>
-            </FormControl>
-          )}
           <FormControl error={!!errors.budget}>
             <FormLabel>Daily budget (credits)</FormLabel>
             <Input

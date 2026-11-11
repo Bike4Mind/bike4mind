@@ -108,12 +108,6 @@ describe('agentExecutor toolDeps wiring', () => {
     expect(source).toMatch(/externalTools: \{[^}]*\.\.\.loopTicketExternalTools,/);
   });
 
-  it('offers loop_slack_post the same way', () => {
-    expect(source).toMatch(/await resolveLoopSlackTools\(\{\s*loopId: execution\.loopId,/);
-    expect(source).toMatch(/toolNames: \[[^\]]*\.\.\.loopSlackEnabledTools,/);
-    expect(source).toMatch(/externalTools: \{[^}]*\.\.\.loopSlackExternalTools,/);
-  });
-
   // Same shape for the directive tools; the overseer pair is offered only when the loop has `oversees`
   // (agentExecutor.loopDirectiveTools.test.ts).
   it('offers the loop directive tools to loop runs after the profile, from the persisted execution', () => {

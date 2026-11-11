@@ -113,9 +113,6 @@ vi.mock('@server/utils/loopBudget', async importOriginal => ({
   p2RunsLeft,
 }));
 
-const authorizeOrgChannelPost = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/server-utils/integrations/slack/orgChannelPost', () => ({ authorizeOrgChannelPost }));
-
 const resolveDefaultChatModel = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/chatCompletionDefaults', () => ({ resolveDefaultChatModel }));
 
@@ -782,7 +779,7 @@ describe('oversees', () => {
   });
 });
 
-describe('hand-offs, triggers, wake mode and Slack channel', () => {
+describe('hand-offs, triggers and wake mode', () => {
   const OTHER = '507f1f77bcf86cd799439022';
   const ownLoops = (...ids: string[]) =>
     repo.findByIdAndUserId.mockImplementation(async (id: string) =>
@@ -882,37 +879,9 @@ describe('hand-offs, triggers, wake mode and Slack channel', () => {
     expect(repo.updateForUser.mock.calls[0][2]).toMatchObject({ status: 'live', nextRunAt: null });
   });
 
-  it('accepts a Slack channel only when its org opted it in for posting without a key list', async () => {
-    repo.findByIdAndUserId.mockResolvedValue(loop({ organizationId: 'org-1' }));
-    authorizeOrgChannelPost.mockResolvedValue({ ok: true, organizationId: 'org-1' });
-    await call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD' } }).result;
-    expect(authorizeOrgChannelPost).toHaveBeenCalledWith({ channelId: 'C0123ABCD', userId: 'u1' });
-    expect(repo.updateForUser.mock.calls[0][2]).toEqual({ slackChannelId: 'C0123ABCD' });
-
-    authorizeOrgChannelPost.mockResolvedValue({ ok: false, reason: 'key_not_allowlisted' });
-    await expect(
-      call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD' } }).result
-    ).rejects.toMatchObject({ statusCode: 400 });
-    authorizeOrgChannelPost.mockResolvedValue({ ok: true, organizationId: 'org-2' });
-    await expect(
-      call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD' } }).result
-    ).rejects.toMatchObject({ statusCode: 400 });
-    await expect(
-      call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'not a channel' } }).result
-    ).rejects.toMatchObject({ statusCode: 400 });
-
-    repo.findByIdAndUserId.mockResolvedValue(loop());
-    await expect(
-      call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD' } }).result
-    ).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/organization/) });
-  });
-
-  it('an unchanged Slack channel is saved without re-authorising it', async () => {
-    repo.findByIdAndUserId.mockResolvedValue(loop({ organizationId: 'org-1', slackChannelId: 'C0123ABCD' }));
-    authorizeOrgChannelPost.mockResolvedValue({ ok: false, reason: 'not_enabled' });
+  it('ignores a slackChannelId in the body', async () => {
     await call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD', name: 'Renamed' } }).result;
-    expect(authorizeOrgChannelPost).not.toHaveBeenCalled();
-    expect(repo.updateForUser.mock.calls[0][2]).toMatchObject({ name: 'Renamed' });
+    expect(repo.updateForUser.mock.calls[0][2]).toEqual({ name: 'Renamed' });
   });
 });
 
