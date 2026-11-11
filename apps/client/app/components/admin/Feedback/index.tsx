@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
   Button,
   Chip,
@@ -42,8 +42,9 @@ import { useFeedbackOperations } from './hooks/useFeedbackOperations';
 import { useFeedbackFilters } from './hooks/useFeedbackFilters';
 import { useFeedbackPagination } from './hooks/useFeedbackPagination';
 import { getFeedbackDisplayContent, type IExtendedFeedbackDocument } from './types';
-import FocusedFeedbackCard from './FocusedFeedbackCard';
-import { copyFeedbackRecordLink, feedbackConversationPath } from './FeedbackRowLinks';
+import FeedbackDetailDrawer from './FeedbackDetailDrawer';
+import { useFeedbackDetailNavigation } from './hooks/useFeedbackDetailNavigation';
+import { copyFeedbackRecordLink, feedbackConversationPath } from './feedbackLinks';
 import HelpContextChip from './HelpContextChip';
 import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER, FEEDBACK_SUBJECT_LABELS, toSubjectFilter } from './constants';
 import { checkedStatuses, toStatusFilters } from './feedbackTabSearch';
@@ -213,18 +214,49 @@ const FeedbackTab: React.FC = () => {
     if (totalSettled && currentPage > totalPages) handlePageChange(totalPages);
   }, [totalSettled, currentPage, totalPages, handlePageChange]);
 
-  // A deep link names one report. It is pinned above the list rather than highlighted in place:
-  // with server-side paging and filtering the linked report is usually not on the current page.
-  const { [FEEDBACK_ID_PARAM]: focusedFeedbackId } = useSearch({ strict: false }) as { feedbackId?: string };
+  // `?feedbackId=` is the drawer's open state, so a copied or Slack link opens the same report.
+  // Fetched by id inside the drawer: the linked report may not be on this page or match the filters.
+  const { [FEEDBACK_ID_PARAM]: openFeedbackId } = useSearch({ strict: false }) as { feedbackId?: string };
   const navigate = useNavigate();
 
-  const dismissFocusedFeedback = () => {
-    navigate({
-      to: '/admin',
-      search: previous => ({ ...previous, [FEEDBACK_ID_PARAM]: undefined }),
-      replace: true,
-    });
-  };
+  const setOpenFeedbackId = useCallback(
+    (feedbackId: string | undefined) => {
+      navigate({
+        to: '/admin',
+        search: previous => ({ ...previous, [FEEDBACK_ID_PARAM]: feedbackId }),
+        replace: true,
+      });
+    },
+    [navigate]
+  );
+  const openFeedback = useCallback((feedbackId: string) => setOpenFeedbackId(feedbackId), [setOpenFeedbackId]);
+  const closeFeedback = useCallback(() => setOpenFeedbackId(undefined), [setOpenFeedbackId]);
+
+  const detailNavigation = useFeedbackDetailNavigation({
+    rowIds: currentFeedback.map(row => row._id),
+    openId: openFeedbackId,
+    page: currentPage,
+    pageSize: itemsPerPage,
+    total,
+    settled: totalSettled,
+    onPageChange: handlePageChange,
+    open: openFeedback,
+  });
+
+  // Closing returns focus to the row of the report last shown, which after previous/next is not
+  // the row that opened the drawer. Ids are compared rather than put in a selector: a deep-linked
+  // id is arbitrary text.
+  const tableRegionRef = useRef<HTMLDivElement>(null);
+  const previousOpenId = useRef(openFeedbackId);
+  useEffect(() => {
+    const closedId = previousOpenId.current;
+    previousOpenId.current = openFeedbackId;
+    if (!closedId || openFeedbackId) return;
+    const rows = tableRegionRef.current?.querySelectorAll<HTMLElement>('[data-row-id]') ?? [];
+    Array.from(rows)
+      .find(row => row.dataset.rowId === closedId)
+      ?.focus();
+  }, [openFeedbackId]);
 
   // Pages through every match server-side. Exporting `currentFeedback` would silently emit one
   // page now that the list is paginated, which reads as a complete export of a much smaller
@@ -407,9 +439,7 @@ const FeedbackTab: React.FC = () => {
         )}
       </Stack>
 
-      {focusedFeedbackId && <FocusedFeedbackCard feedbackId={focusedFeedbackId} onDismiss={dismissFocusedFeedback} />}
-
-      <Stack gap={1} sx={{ minWidth: 0 }}>
+      <Stack ref={tableRegionRef} gap={1} sx={{ minWidth: 0 }}>
         <UpdatingBar active={loading && !firstLoad} testId="feedback-updating-bar" />
         <DataTable
           label="Feedback"
@@ -417,6 +447,8 @@ const FeedbackTab: React.FC = () => {
           rows={currentFeedback}
           columns={columns}
           getRowId={row => row._id}
+          onRowActivate={row => openFeedback(row._id)}
+          activeRowId={openFeedbackId}
           rowTestId={row => `feedback-row-${row._id}`}
           loading={firstLoad}
           error={isError ? 'Could not load feedback.' : undefined}
@@ -482,6 +514,16 @@ const FeedbackTab: React.FC = () => {
         tone="danger"
         onConfirm={() => confirmDeleteFeedback()}
         data-testid="feedback-delete-dialog"
+      />
+
+      <FeedbackDetailDrawer
+        feedbackId={openFeedbackId}
+        listRow={currentFeedback.find(row => row._id === openFeedbackId)}
+        position={detailNavigation.position}
+        onPrevious={detailNavigation.onPrevious}
+        onNext={detailNavigation.onNext}
+        onClose={closeFeedback}
+        onStatusChange={handleStatusChange}
       />
     </Stack>
   );

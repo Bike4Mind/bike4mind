@@ -86,8 +86,8 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: FEEDBACK_LIST_QUERY_KEY }),
       queryClient.invalidateQueries({ queryKey: FEEDBACK_ORGANIZATIONS_QUERY_KEY }),
-      // A deep-linked record is pinned above the list from its own query, so a delete that
-      // refreshed only the list would leave the card showing a report that no longer exists.
+      // The detail drawer reads its record from its own query, so a delete that refreshed only
+      // the list would leave the drawer showing a report that no longer exists.
       queryClient.invalidateQueries({ queryKey: FEEDBACK_RECORD_QUERY_KEY }),
     ]);
   }, [queryClient]);
@@ -97,11 +97,14 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
       const updatedStatus = newValue ?? getNextStatus(feedbackItem.status);
 
       try {
-        const response = await updateFeedbackOnServer(feedbackItem._id, { ...feedbackItem, status: updatedStatus });
+        // promptMeta is left out: the drawer's record carries it, the route never writes it, and it
+        // can be large enough to matter in a request body.
+        const { promptMeta: _promptMeta, ...statusUpdate } = feedbackItem;
+        const response = await updateFeedbackOnServer(feedbackItem._id, { ...statusUpdate, status: updatedStatus });
         if (!response) throw new Error('Failed to update feedback status');
 
         // Refetch rather than patch in place: the row may no longer match the active status
-        // filter, in which case it belongs off this page entirely. The focused card reads the
+        // filter, in which case it belongs off this page entirely. The detail drawer reads the
         // same record from a separate query and has to move with it. The organization facet does
         // not: a status change cannot add or remove an org from the set that has any feedback.
         await Promise.all([
