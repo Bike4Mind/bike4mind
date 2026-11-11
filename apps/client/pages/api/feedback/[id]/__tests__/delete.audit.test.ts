@@ -94,4 +94,11 @@ describe('DELETE /api/feedback/[id] - admin deletes are reasoned and audited', (
       expect.objectContaining({ action: 'feedback.deleted' })
     );
   });
+
+  it('fails the delete when the Admin log write fails', async () => {
+    mocks.audit.mockRejectedValue(new Error('audit write failed'));
+    await expect(call({ id: 'admin1', isAdmin: true }, { reason: 'Duplicate report' })).rejects.toThrow(
+      'audit write failed'
+    );
+  });
 });
