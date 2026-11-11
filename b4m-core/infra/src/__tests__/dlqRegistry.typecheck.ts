@@ -3,7 +3,7 @@ import {
   createInspectableDlqRegistry,
   type DlqDescriptor,
   type InspectableDlqDescriptor,
-} from './index.js';
+} from '../index.js';
 
 // Compile-only coverage for consumers of the published descriptor and const-inferred factory.
 function verifyDescriptorCompatibility(descriptor: DlqDescriptor): string {
