@@ -75,10 +75,27 @@ describe('issueSessionForRequest', () => {
       expect(issueSession).toHaveBeenCalled();
     });
 
-    it.each(['otc', 'oauth-token'] as const)('refuses a %s session for a persona', async createdVia => {
+    it.each(['otc', 'otc-registration', 'oauth', 'okta', 'saml', 'emergency', 'legacy-migration'] as const)(
+      'refuses a %s session for a persona',
+      async createdVia => {
+        userDoc.value = { isPersona: true, personaExpiresAt: future() };
+        await expect(issueSessionForRequest(req, 'u1', { createdVia, tokenVersion: 0 })).rejects.toThrow(
+          'Test personas can only sign in through the persona mint endpoint or an OAuth client.'
+        );
+        expect(issueSession).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(['oauth-token', 'ios', 'device'] as const)('issues a %s session for a live persona', async createdVia => {
       userDoc.value = { isPersona: true, personaExpiresAt: future() };
-      await expect(issueSessionForRequest(req, 'u1', { createdVia, tokenVersion: 0 })).rejects.toThrow(
-        'Test personas can only sign in through the persona mint endpoint.'
+      await issueSessionForRequest(req, 'u1', { createdVia, tokenVersion: 0 });
+      expect(issueSession).toHaveBeenCalled();
+    });
+
+    it('refuses an oauth-token session for an expired persona', async () => {
+      userDoc.value = { isPersona: true, personaExpiresAt: past() };
+      await expect(issueSessionForRequest(req, 'u1', { createdVia: 'oauth-token', tokenVersion: 0 })).rejects.toThrow(
+        'This test persona has expired.'
       );
       expect(issueSession).not.toHaveBeenCalled();
     });

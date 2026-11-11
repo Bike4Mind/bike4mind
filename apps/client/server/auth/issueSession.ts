@@ -22,9 +22,15 @@ interface RequestLike {
 // on refresh, or enrolling MFA from an existing session. They mint a session but log no login AuthEvent.
 const NOT_A_LOGIN: ReadonlySet<AuthSessionCreatedVia> = new Set(['impersonation', 'legacy-migration', 'mfa-setup']);
 
-// A test persona signs in only through the mint route (or an admin impersonating it). Its address is
-// server-owned and pre-verified, so OTC, SSO or OAuth sign-in would hand it to whoever reads that mailbox.
-const PERSONA_SESSION_ORIGINS: ReadonlySet<AuthSessionCreatedVia> = new Set(['persona-mint', 'impersonation']);
+// A persona's address is server-owned and pre-verified, so OTC, SSO or social sign-in would hand it to
+// whoever reads that mailbox. The OAuth grants are allowed: approving one needs an existing persona session.
+const PERSONA_SESSION_ORIGINS: ReadonlySet<AuthSessionCreatedVia> = new Set([
+  'persona-mint',
+  'impersonation',
+  'oauth-token',
+  'ios',
+  'device',
+]);
 
 async function assertPersonaSessionAllowed(userId: string, createdVia: AuthSessionCreatedVia): Promise<void> {
   const user = (await User.findById(userId).select('isPersona personaExpiresAt').lean()) as {
@@ -33,7 +39,7 @@ async function assertPersonaSessionAllowed(userId: string, createdVia: AuthSessi
   } | null;
   if (user?.isPersona !== true) return;
   if (!PERSONA_SESSION_ORIGINS.has(createdVia)) {
-    throw new ForbiddenError('Test personas can only sign in through the persona mint endpoint.');
+    throw new ForbiddenError('Test personas can only sign in through the persona mint endpoint or an OAuth client.');
   }
   if (createdVia !== 'impersonation' && isPersonaExpired(user)) throw new ForbiddenError(PERSONA_EXPIRED_MESSAGE);
 }
