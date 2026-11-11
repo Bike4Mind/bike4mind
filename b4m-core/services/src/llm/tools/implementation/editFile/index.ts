@@ -145,7 +145,7 @@ export const editFileTool: ToolDefinition = {
         }
 
         // Check if file has content
-        if (!fabFile || (!fabFile.fileUrl && !fabFile.filePath)) {
+        if (!fabFile || !fabFile.filePath) {
           throw new Error('File has no content to edit');
         }
 
@@ -157,19 +157,17 @@ export const editFileTool: ToolDefinition = {
         // Get the content to edit
         let contentToEdit = '';
 
-        // Fetch content from URL
-        if (fabFile.fileUrl) {
-          context.logger.info(`📝 Edit File Tool: Fetching content from URL for file ${fileId}`);
-          try {
-            const response = await fetch(fabFile.fileUrl);
-            if (!response.ok) {
-              throw new Error(`Failed to fetch file content: ${response.statusText}`);
-            }
-            contentToEdit = await response.text();
-          } catch (error) {
-            context.logger.error(`📝 Edit File Tool: Failed to fetch file content`, error);
-            throw new Error('Could not retrieve file content for editing');
+        // Fetch content through a URL signed now; the stored row carries none
+        context.logger.info(`📝 Edit File Tool: Fetching content from URL for file ${fileId}`);
+        try {
+          const response = await fetch(await context.storage.getSignedUrl(fabFile.filePath));
+          if (!response.ok) {
+            throw new Error(`Failed to fetch file content: ${response.statusText}`);
           }
+          contentToEdit = await response.text();
+        } catch (error) {
+          context.logger.error(`📝 Edit File Tool: Failed to fetch file content`, error);
+          throw new Error('Could not retrieve file content for editing');
         }
 
         // Extract selection if provided

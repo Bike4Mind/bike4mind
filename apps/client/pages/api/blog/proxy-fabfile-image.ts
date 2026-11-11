@@ -2,6 +2,7 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { BadGatewayError, BadRequestError, NotFoundError, isImageServeable } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import axios, { type AxiosResponse } from 'axios';
 
 interface ProxyFabFileImageRequest {
@@ -43,10 +44,11 @@ const handler = baseApi().post<Request<unknown, ProxyFabFileImageResponse, Proxy
       throw new BadRequestError('File is not an image');
     }
 
-    const fileUrl = fabFile.fileUrl;
-    if (!fileUrl) {
+    if (!fabFile.filePath) {
       throw new BadRequestError('File URL not available');
     }
+    // Fetched here on the server, so no browser audience.
+    const fileUrl = await getFilesStorage().getSignedUrl(fabFile.filePath, 'get', { expiresIn: 300 });
 
     req.logger.info(`[Proxy FabFile] Downloading image: ${fabFile.fileName}`);
     let imageResponse: AxiosResponse<ArrayBuffer>;

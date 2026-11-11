@@ -65,8 +65,17 @@ export async function protectSignupCredits(
   )
     return false;
 
-  if (existing) return (await repository.findReview(domain))?.status !== 'released';
-  if (protection.mode === 'enforce') return false;
+  // An admin release exempts a domain for good. An automated release pays only the accounts it judged, which it
+  // adds to the cohort (signupDomainHoldAssessment.ts), so those are paid here, the release's own payout included.
+  // Any other account on the domain stays watched: held in enforce mode, and re-held below when it trips a
+  // domain-intel hold (a still-young domain) or a burst.
+  const watched =
+    existing?.status === 'released' &&
+    existing.autoDecision?.policy === 'advisory-decision' &&
+    !!repository.reholdWatched;
+  if (watched && existing.cohortUserIds.includes(userId)) return false;
+  if (existing && !watched) return (await repository.findReview(domain))?.status !== 'released';
+  if (protection.mode === 'enforce') return watched;
 
   const threshold = settingsMap.signupBurstThreshold.schema.parse(valueOf('signupBurstThreshold') ?? 5);
   const hours = settingsMap.signupBurstWindowHours.schema.parse(valueOf('signupBurstWindowHours') ?? 6);
@@ -74,7 +83,9 @@ export async function protectSignupCredits(
   const since = new Date(now.getTime() - hours * 60 * 60 * 1000);
   // OTC proves ownership before persisting emailVerified; retries keep the original event time.
   const verifiedAt = user.emailVerifiedAt ?? now;
-  if (verifiedAt < since || (user.createdAt && user.createdAt < since)) return false;
+  const freshSignup = verifiedAt >= since && !(user.createdAt && user.createdAt < since);
+  // A watched domain is re-checked for a domain-intel hold however late the account verified.
+  if (!freshSignup && !watched) return false;
 
   const hold = async (reason: string, signupCount: number, signups: { userId: string; email: string }[]) => {
     const review = {
@@ -92,6 +103,22 @@ export async function protectSignupCredits(
     return (await repository.findReview(domain))?.status !== 'released';
   };
 
+  const rehold = async (reason: string, signupCount: number, signups: { userId: string; email: string }[]) => {
+    const review = {
+      domain,
+      status: 'held_pending_review' as const,
+      reason,
+      triggeredAt: now,
+      cohortUserIds: signups.map(signup => signup.userId),
+      sampleEmails: signups.slice(0, 5).map(signup => signup.email),
+      signupCount,
+    };
+    const reheld = (await repository.reholdWatched?.(review)) ?? false;
+    if (reheld && protection.notifyHold) await protection.notifyHold(review);
+    // An admin decision since the automated release wins, as with a fresh hold.
+    return (await repository.findReview(domain))?.status !== 'released';
+  };
+
   // Independent of signupBurstAutoHold, which only governs the burst detector below.
   if (settingsMap.enableDomainIntelligence.schema.parse(valueOf('enableDomainIntelligence') ?? true)) {
     const reason = await domainHoldReason(user.email, {
@@ -102,13 +129,15 @@ export async function protectSignupCredits(
       timeoutMs: settingsMap.domainIntelligenceTimeoutMs.schema.parse(valueOf('domainIntelligenceTimeoutMs') ?? 2000),
       adminBlockedDomains: blockedDomainsFrom(valueOf('blockedEmailDomains')),
     });
-    if (reason) return hold(reason, 1, [{ userId, email: user.email }]);
+    if (reason) return (watched ? rehold : hold)(reason, 1, [{ userId, email: user.email }]);
   }
 
-  if (!autoHold) return false;
+  // Bursts are judged on fresh signups only; a watched domain is checked whatever signupBurstAutoHold says.
+  if (!freshSignup || (!autoHold && !watched)) return false;
   await repository.observe({ userId, email: user.email, domain, verifiedAt });
   const cohort = await repository.recent(domain, since);
   const verdict = detectSignupBurst(cohort, { domain, threshold, since });
   if (!verdict.suspicious) return false;
+  if (watched) return rehold(verdict.reason, verdict.signupCount, cohort);
   return hold(verdict.reason, verdict.signupCount, cohort);
 }

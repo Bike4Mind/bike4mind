@@ -1801,6 +1801,30 @@ describe('publishArtifact', () => {
     expect(fns.requestPublishUpload).not.toHaveBeenCalled();
   });
 
+  it('republishes at the existing scope when the reader has no owner id', async () => {
+    const { userId: _omit, ...viewerShaped } = record.artifact;
+    const { client, fns } = publishClient({
+      getArtifact: vi.fn().mockResolvedValue({ ...record, artifact: viewerShaped }),
+      findPublishedArtifact: vi.fn().mockResolvedValue(existingPage),
+    });
+
+    await publishArtifact(client, { artifactId: ARTIFACT_ID });
+
+    expect(fns.requestPublishUpload).toHaveBeenCalledWith(expect.objectContaining({ scopeId: 'org1' }));
+  });
+
+  it('refuses to publish for the first time when the reader has no owner id', async () => {
+    const { userId: _omit, ...viewerShaped } = record.artifact;
+    const { client, fns } = publishClient({
+      getArtifact: vi.fn().mockResolvedValue({ ...record, artifact: viewerShaped }),
+    });
+
+    await expect(publishArtifact(client, { artifactId: ARTIFACT_ID })).rejects.toThrow(
+      'only be published by its owner'
+    );
+    expect(fns.requestPublishUpload).not.toHaveBeenCalled();
+  });
+
   it('refuses an artifact type the publish route cannot render', async () => {
     const { client } = publishClient({
       getArtifact: vi.fn().mockResolvedValue({ ...record, artifact: { ...record.artifact, type: 'hologram' } }),

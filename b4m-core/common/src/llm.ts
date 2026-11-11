@@ -113,6 +113,61 @@ export type GenerateImageIvokeParams = z.infer<typeof GenerateImageIvokeParamsSc
  * (`resolveBillingOrgInput`) rather than the schema, which a public request schema may not
  * `.transform()`. Same rules as `organizationId`: null bills personal, blank is a 422.
  */
+/** A FLUX 3 edit region, using normalized [y_min, x_min, y_max, x_max] coordinates. */
+const bflCoordinate = (axis: string) =>
+  z.number().min(0, `${axis} must be in [0, 1]`).max(1, `${axis} must be in [0, 1]`);
+
+export const BflEditRegionSchema = z.object({
+  prompt: z.string().min(1),
+  bbox: z
+    .tuple([bflCoordinate('y_min'), bflCoordinate('x_min'), bflCoordinate('y_max'), bflCoordinate('x_max')])
+    .superRefine(([yMin, xMin, yMax, xMax], context) => {
+      if (yMin >= yMax) context.addIssue({ code: 'custom', message: 'y_min must be less than y_max' });
+      else if (Math.round(yMin * 1000) >= Math.round(yMax * 1000))
+        context.addIssue({ code: 'custom', message: 'y_min and y_max must span at least one unit on the 0-1000 grid' });
+      if (xMin >= xMax) context.addIssue({ code: 'custom', message: 'x_min must be less than x_max' });
+      else if (Math.round(xMin * 1000) >= Math.round(xMax * 1000))
+        context.addIssue({ code: 'custom', message: 'x_min and x_max must span at least one unit on the 0-1000 grid' });
+    }),
+});
+export type BflEditRegion = z.infer<typeof BflEditRegionSchema>;
+export const MAX_BFL_EDIT_REGIONS = 8;
+export const BflEditRegionsSchema = z
+  .array(BflEditRegionSchema)
+  .max(MAX_BFL_EDIT_REGIONS, `At most ${MAX_BFL_EDIT_REGIONS} edit_regions are allowed`);
+
+export function validateBflEditRegions(regions: BflEditRegion[]): string[] {
+  const parsed = BflEditRegionsSchema.safeParse(regions);
+  if (parsed.success) return [];
+  return parsed.error.issues.map(issue => {
+    const [index, ...path] = issue.path;
+    const prefix = typeof index === 'number' ? `edit_regions[${index}]` : 'edit_regions';
+    const field = path.filter(part => typeof part === 'string').join('.');
+    return `${prefix}${field ? `.${field}` : ''}: ${issue.message}`;
+  });
+}
+
+/**
+ * FLUX 3's edit-with-boxes example uses prompt-inline entries with `from`, `src_bbox`, and
+ * `tgt_bbox`, rather than the `bbox` entries used for text-to-image layouts. Replacement regions
+ * have no copied source pixels; the source image is the first entry in `images` (`ref_image_0`).
+ * Coordinates use the documented 0-1000 integer grid, vertical axis first.
+ * https://docs.bfl.ai/api-reference/utility/generate-an-image-with-flux-3-klein
+ */
+export function formatBflEditRegionsPrompt(prompt: string, regions: BflEditRegion[]): string {
+  const validated = BflEditRegionsSchema.parse(regions);
+  if (validated.length === 0) return prompt;
+  const layout = validated.map((region, index) => ({
+    id: `region_${index}`,
+    from: null,
+    src_bbox: null,
+    tgt_bbox: region.bbox.map(coordinate => Math.round(coordinate * 1000)),
+    desc: region.prompt,
+  }));
+  const references = validated.map((_, index) => `<region_${index}>`).join(' ');
+  return `In <ref_image_0>, ${prompt} Edit ${references}. Keep everything outside the edited regions unchanged.\n\n${JSON.stringify(layout)}`;
+}
+
 const BillingOrgIdAliasSchema = BillingOrganizationIdSchema.describe(
   'Alias of `organizationId`, for callers used to the snake_case video and music bodies. Sending both ' +
     'with different values is a 422.'
@@ -207,8 +262,17 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   // `...rest` spread silently strips any client-sent output_format before it ever reaches
   // ImageEditBodySchema's own (narrower) field.
   output_format: ImageOutputFormatSchema.nullable().optional(),
-  // Same `...rest` strip as output_format. Only BFL edits honour it; gpt-image and Gemini ignore it.
+  // Same `...rest` strip as output_format. Supporting BFL models honour it; FLUX 3 Image, gpt-image and Gemini ignore it.
   seed: z.number().nullable().optional(),
+  /**
+   * BFL region-edit bounding boxes. Each entry carries a per-region prompt and a
+   * \`[y_min, x_min, y_max, x_max]\` box in normalised [0, 1] coordinates (BFL convention).
+   * Accepted on BFL FLUX 3 models only (others → 400). Schema-validated on ingress (422 on
+   * bad coordinates / degenerate boxes / over-cap count), then converted to BFL's prompt-inline
+   * JSON layout format (0-1000 integer grid) by {@link formatBflEditRegionsPrompt} before the
+   * request reaches the provider.
+   */
+  edit_regions: BflEditRegionsSchema.optional(),
   callbackUrl: GenerationCallbackUrlSchema.optional(),
 });
 

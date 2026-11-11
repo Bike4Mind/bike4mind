@@ -48,6 +48,7 @@ export * from './me';
 export * from './clientConfig';
 export * from './pushToken';
 export * from './pushNotification';
+export * from './liveActivityPush';
 export * from './creditBalance';
 export * from './creditTransaction';
 export * from './publicFile';

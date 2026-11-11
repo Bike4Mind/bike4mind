@@ -14,7 +14,6 @@ import {
   mcpConnectionRepository,
   oauthGrantRepository,
   oauthRefreshTokenRepository,
-  organizationRepository,
   userApiKeyRepository,
   withTransaction,
 } from '@bike4mind/database';
@@ -31,18 +30,16 @@ import {
 } from '@server/services/purgeDeletedUserData';
 import { purgeUserPublishedArtifacts } from '@server/services/publish/purgeUserPublishedArtifacts';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { classifyOwnedOrganizations, type OwnedOrganization } from './ownedOrganizations';
 import { sendAccountDeletionCancelledEmail, sendAccountDeletionScheduledEmail } from './accountDeletionEmail';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DeletionRequest = Request<unknown, unknown, unknown, unknown, Record<string, unknown>>;
 
-export type OwnedOrganization = { id: string; name: string };
-
-/** The organizations the user is billing owner of; each must be transferred or deleted first. */
+/** The owned organizations other people belong to; each must be transferred first. Sole-owner ones do not block. */
 export async function findOwnedOrganizations(userId: string): Promise<OwnedOrganization[]> {
-  const orgs = await organizationRepository.find({ userId, deletedAt: null, personal: { $ne: true } });
-  return orgs.map(org => ({ id: String(org.id), name: org.name }));
+  return (await classifyOwnedOrganizations(userId)).shared;
 }
 
 export type AccountDeletionLockdown = {
@@ -89,8 +86,8 @@ export async function scheduleAccountDeletion(
   if (ownedOrganizations.length > 0) {
     throw new ConflictError(
       source === 'self'
-        ? 'Transfer or delete the organizations you own before deleting your account.'
-        : 'Transfer or delete the organizations this user owns before scheduling deletion.',
+        ? 'Transfer ownership of the organizations you share with other people before deleting your account.'
+        : 'Transfer ownership of the organizations this user shares with other people before scheduling deletion.',
       { code: ACCOUNT_DELETION_ORG_OWNER_CODE, organizations: ownedOrganizations }
     );
   }

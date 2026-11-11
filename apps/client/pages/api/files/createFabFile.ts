@@ -244,7 +244,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
         result.presignedUrl = resolveBrowserUploadUrl(result.id, result.presignedUrl);
       }
 
-      const signed = await signBrowserFileResponse(result);
+      // A client upload has no bytes yet, so there is nothing to GET.
+      const signed = result.presignedUrl ? result : await signBrowserFileResponse(result);
       // Same URL the admin form builds (AdminModalVideoFields), so API-key callers need no bucket name.
       return respond(
         res,

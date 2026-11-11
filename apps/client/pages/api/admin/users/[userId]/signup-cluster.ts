@@ -1,15 +1,17 @@
 import { userRepository } from '@bike4mind/database';
-import { ApiKeyScope, type UserSignupCluster } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin, NotFoundError } from '@server/utils/errors';
+import { ApiKeyScope, MODERATION_PAGE_READ, type UserSignupCluster } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { findSignupCluster } from '@server/utils/userSignIns';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 
 /** Other accounts that signed up with this user's signup fingerprint around the same time. */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: MODERATION_PAGE_READ },
+}).get(async (req, res) => {
   const { userId } = req.query;
   if (typeof userId !== 'string' || !OBJECT_ID_PATTERN.test(userId)) throw new BadRequestError('Invalid user id');
 

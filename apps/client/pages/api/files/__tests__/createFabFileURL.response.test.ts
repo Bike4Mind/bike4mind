@@ -15,6 +15,8 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
+  fabFileRepository: {},
+  userRepository: {},
   adminSettingsRepository: {},
   scopedSettingsRepository: {},
   dataLakeRepository: {},

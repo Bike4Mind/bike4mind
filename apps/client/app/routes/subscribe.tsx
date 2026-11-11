@@ -5,6 +5,7 @@ import { useTheme } from '@mui/joy/styles';
 import Image from 'next/image';
 import useGetLogo from '@client/app/hooks/useGetLogo';
 import { useRouterState, useSearch } from '@tanstack/react-router';
+import { isSignupClosedSource } from '@bike4mind/common';
 
 const lines = [
   {
@@ -84,7 +85,7 @@ const SubscribePage = () => {
   const logoUrl = useGetLogo();
   const { source } = useSearch({ from: '/subscribe' });
   const waitlistEmail = useRouterState({ select: state => state.location.state.waitlistEmail });
-  const cameFromClosedSignup = source !== undefined && source !== 'subscribe_page';
+  const cameFromClosedSignup = source !== undefined && isSignupClosedSource(source);
 
   return (
     <Box
