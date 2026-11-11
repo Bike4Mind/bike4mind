@@ -193,9 +193,9 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
           runId: { type: String, required: true },
           role: { type: String, required: true, enum: [...COMPLETION_RUN_ROLES] },
           purpose: { type: String, required: false, enum: [...COMPLETION_RUN_PURPOSES] },
-          taskId: { type: String, required: false },
-          attemptId: { type: String, required: false },
-          parentSessionId: { type: String, required: false },
+          taskId: { type: String, required: false, maxlength: 128 },
+          attemptId: { type: String, required: false, maxlength: 128 },
+          parentSessionId: { type: String, required: false, maxlength: 128 },
           sessionId: { type: String, required: false, maxlength: 128 },
         },
         { _id: false }
