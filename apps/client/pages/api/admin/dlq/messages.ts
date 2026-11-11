@@ -9,8 +9,10 @@ import {
 } from '@bike4mind/server-utils/utils/dlqRegistry';
 import {
   buildLogsInsightsUrl,
+  CONSUMER_LOGS_BUDGET_MS,
   messageLogWindow,
   resolveConsumerLogsForSourceQueue,
+  settleWithinBudget,
   type ConsumerLogs,
 } from '@bike4mind/server-utils/utils/dlqConsumerLogs';
 import { receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
@@ -85,7 +87,9 @@ const handler = adminApi({
   const canReplay = meetsAdminPermissionRequirement(req.user, 'settings:manage');
   const [received, consumerLogs] = await Promise.all([
     receiveFromQueue(dlqUrl, maxMessages, canReplay ? 120 : 0),
-    resolveConsumerLogsForSourceQueue(dlqEntry.sourceQueue),
+    settleWithinBudget([resolveConsumerLogsForSourceQueue(dlqEntry.sourceQueue)], CONSUMER_LOGS_BUDGET_MS).then(
+      ([logs]) => logs
+    ),
   ]);
   // A visibility-0 receive can return the same message more than once; keep the latest copy.
   const receiveCount = (msg: (typeof received)[number]) =>

@@ -4,6 +4,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqRegistry, getDlqUrl, type RegisteredDlqDescriptor } from '@bike4mind/server-utils/utils/dlqRegistry';
 import {
   buildLogsInsightsUrl,
+  CONSUMER_LOGS_BUDGET_MS,
   resolveConsumerLogsForSourceQueue,
   settleWithinBudget,
 } from '@bike4mind/server-utils/utils/dlqConsumerLogs';
@@ -11,9 +12,6 @@ import { getQueueAttributes } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
 
 const QUEUE_LOGS_WINDOW_MS = 24 * 60 * 60_000;
-// Well under the web server's 60s Lambda timeout (infra/web.ts): a slow Lambda control plane drops
-// logs links instead of failing the whole queue list.
-const CONSUMER_LOGS_BUDGET_MS = 15_000;
 
 // Overlay-contributed entries carry no help fields, so those keys are left undefined.
 function queueMeta(entry: RegisteredDlqDescriptor) {

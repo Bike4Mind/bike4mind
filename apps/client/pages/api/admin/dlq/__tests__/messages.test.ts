@@ -32,6 +32,7 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ receiveFromQueue: h.receiv
 vi.mock('@bike4mind/database', () => ({ dlqFailureRepository: { findForMessages: h.findForMessages } }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), warn: vi.fn() } }));
 
+import { CONSUMER_LOGS_BUDGET_MS } from '@bike4mind/server-utils/utils/dlqConsumerLogs';
 import '../messages';
 
 const message = { MessageId: 'm1', Body: '{}', ReceiptHandle: 'handle-1', Attributes: {} };
@@ -133,6 +134,25 @@ describe('GET /api/admin/dlq/messages', () => {
     const body = await peek(['support:read']);
 
     expect(body.messages[0].logsUrl).toBeNull();
+  });
+
+  it('returns messages without logs links when the consumer lookup outlasts its budget', async () => {
+    vi.useFakeTimers();
+    try {
+      h.resolveConsumerLogsForSourceQueue.mockReturnValue(new Promise(() => {}));
+      h.receiveFromQueue.mockResolvedValue([
+        { MessageId: 'm1', Attributes: { SentTimestamp: String(1_767_322_800_000) } },
+      ]);
+
+      const pending = peek(['support:read']);
+      await vi.advanceTimersByTimeAsync(CONSUMER_LOGS_BUDGET_MS);
+      const body = await pending;
+
+      expect(body.messages).toHaveLength(1);
+      expect(body.messages[0].logsUrl).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects an unknown queue before any AWS call', async () => {

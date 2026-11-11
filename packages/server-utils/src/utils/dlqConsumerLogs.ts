@@ -43,7 +43,13 @@ export const DEFAULT_LOGS_QUERY =
   '| sort @timestamp desc\n' +
   '| limit 200';
 
+// Well under the web server's 60s Lambda timeout (infra/web.ts): a slow Lambda control plane drops
+// logs links instead of failing the admin request.
+export const CONSUMER_LOGS_BUDGET_MS = 15_000;
+
 const cache = new Map<string, { promise: Promise<ConsumerLogs | null>; expiresAt: number }>();
+let sqsClient: SQSClient | undefined;
+const lambdaClients = new Map<string, LambdaClient>();
 let activeLookups = 0;
 const waitingLookups: Array<() => void> = [];
 
@@ -117,7 +123,7 @@ export function resolveConsumerLogs(sourceQueueUrl: string): Promise<ConsumerLog
 async function lookupConsumerLogs(sourceQueueUrl: string): Promise<LookupResult> {
   const none: LookupResult = { logs: null, retryable: false };
   try {
-    const { Attributes: attrs = {} } = await new SQSClient({}).send(
+    const { Attributes: attrs = {} } = await (sqsClient ??= new SQSClient({})).send(
       new GetQueueAttributesCommand({
         QueueUrl: sourceQueueUrl,
         AttributeNames: ['QueueArn', 'VisibilityTimeout', 'RedrivePolicy'],
@@ -128,7 +134,11 @@ async function lookupConsumerLogs(sourceQueueUrl: string): Promise<LookupResult>
     const [, partition, , region] = queueArn.split(':');
     if (partition !== 'aws' || !region || !REGION_RE.test(region)) return none;
 
-    const lambda = new LambdaClient({ region });
+    let lambda = lambdaClients.get(region);
+    if (!lambda) {
+      lambda = new LambdaClient({ region });
+      lambdaClients.set(region, lambda);
+    }
     const functionArns = new Set<string>();
     let marker: string | undefined;
     do {
