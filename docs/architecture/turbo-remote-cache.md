@@ -83,13 +83,45 @@ Keep `remoteCache.preflight` enabled when using this endpoint.
 
 ## CI integration
 
+### Trust model
+
+The write token is the cache's integrity boundary. Anyone holding it can publish
+artifacts that CI trusts, so treat it as a deployment credential:
+
+- **`push` to `main` only**: store `TURBO_CACHE_TOKEN` in a GitHub Environment
+  restricted to `main` (`production` or a dedicated `turbo-cache` environment),
+  not as a repo-level Actions secret. Only jobs triggered by a merge to `main`
+  receive write access.
+- **Pull-request and merge-group jobs**: supply `TURBO_CACHE_READ_TOKEN` (or no
+  token) so untrusted code cannot poison the cache. `pull_request` workflows
+  from forks never receive either token.
+- **Release and deploy builds**: run with `--cache=local:rw` (no remote restore)
+  so production artifacts are built from source, not from a cache that any
+  `main`-push job could have written to. If a future deploy workflow restores
+  from the remote cache, document the reason and the rollback path here.
+
+Artifact signatures are not enabled by this transport (direct S3 downloads do
+not carry Turbo's signature header), so these workflow rules are the entire
+write-trust boundary.
+
+### Workflow setup
+
 Configure `TURBO_API` for the selected hosted endpoint and store the write token
-as the GitHub Actions secret `TURBO_TOKEN`. Trusted workflows can use:
+in the restricted GitHub Environment. Trusted workflows can use:
 
 ```yaml
 env:
   TURBO_API: ${{ secrets.TURBO_API }}
   TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: bike4mind
+```
+
+Read-only workflows (PR CI) use the read token instead:
+
+```yaml
+env:
+  TURBO_API: ${{ secrets.TURBO_API }}
+  TURBO_TOKEN: ${{ secrets.TURBO_CACHE_READ_TOKEN }}
   TURBO_TEAM: bike4mind
 ```
 
