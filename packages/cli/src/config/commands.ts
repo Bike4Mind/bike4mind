@@ -73,7 +73,7 @@ export const COMMANDS: CommandDefinition[] = [
   },
   {
     name: 'mirror',
-    description: 'Manage local pull destinations (sync waits for the complete account feed)',
+    description: 'Manage local mirror destinations (pulling is not available yet)',
     args: '<add|status|pause|resume|revoke|pull> [name] [directory]',
   },
   {

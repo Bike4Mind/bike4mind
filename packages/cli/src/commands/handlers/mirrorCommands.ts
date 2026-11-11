@@ -19,7 +19,7 @@ export async function runMirrorCommand(
       throw new Error('Sign in to a configured Bike4Mind service before adding a destination');
     }
     await store.add({ name, directory, accountId: config.auth.userId, apiUrl: endpoint.url });
-    return `Added local destination ${sanitizeTerminalText(name)}. No data has been copied; pull awaits a complete account change feed.`;
+    return `Added local destination ${sanitizeTerminalText(name)}. Nothing has been copied yet; pulling is not available yet.`;
   }
   if (action === 'status' && args.length === 1) {
     const destinations = await store.list();
@@ -29,7 +29,7 @@ export async function runMirrorCommand(
         destination =>
           `${sanitizeTerminalText(destination.name)}: ${destination.paused ? 'paused' : 'configured'}; ${sanitizeTerminalText(destination.directory)}; ` +
           `account ${sanitizeTerminalText(destination.accountId)}; ` +
-          'lag: unknown (no bootstrap cursor or complete change feed available)'
+          'lag: unknown (pulling is not available yet)'
       )
       .join('\n');
   }
@@ -53,9 +53,7 @@ export async function runMirrorCommand(
     ) {
       throw new Error('Destination belongs to a different account or service');
     }
-    throw new Error(
-      'Pull unavailable: a snapshot-consistent v2 bootstrap cursor and complete account mutation feed are required'
-    );
+    throw new Error('Pulling is not available yet.');
   }
   return usage;
 }

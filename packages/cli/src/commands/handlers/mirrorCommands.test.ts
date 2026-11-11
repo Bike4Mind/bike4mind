@@ -28,7 +28,7 @@ describe('/mirror', () => {
 
   it('reports unknown lag and refuses an unsafe pull', async () => {
     expect(await runMirrorCommand(['status'], ctx, store)).toContain('lag: unknown');
-    await expect(runMirrorCommand(['pull', 'local'], ctx, store)).rejects.toThrow('complete account mutation feed');
+    await expect(runMirrorCommand(['pull', 'local'], ctx, store)).rejects.toThrow('not available yet');
   });
 
   it('strips terminal control sequences from a configured path in status', async () => {

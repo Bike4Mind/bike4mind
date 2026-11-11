@@ -41,7 +41,7 @@ Local Data Mirror:
   /mirror add <name> <absolute-directory> - Configure a local pull destination
   /mirror status - Show destinations and current lag availability
   /mirror pause|resume|revoke <name> - Manage a destination locally
-  /mirror pull <name> - Unavailable until bootstrap and full-account cursor feed ship
+  /mirror pull <name> - Not available yet
 
 Tool Permissions:
   /trust <tool-name> - Trust a tool (won't ask permission again)
