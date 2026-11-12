@@ -82,7 +82,7 @@ describe('unvalidated update paths inventory', () => {
 
   beforeAll(() => {
     const constrained = collectConstrainedPaths();
-    scanned = scanUpdateWrites(MODELS_ROOT, MODELS_ROOT, constrained, resolveModels(barrel as Record<string, unknown>));
+    scanned = scanUpdateWrites(MODELS_ROOT, constrained, resolveModels(barrel as Record<string, unknown>));
     report = parseReport(REPORT);
   });
 

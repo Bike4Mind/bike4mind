@@ -96,8 +96,9 @@ export function collectConstrainedPaths(): ConstrainedPath[] {
   return out;
 }
 
+const REMOVAL_OPERATORS = new Set(['$unset', '$rename', '$currentDate', '$pull', '$pullAll', '$pop']);
 const UPDATE_METHODS = new Set(['updateOne', 'updateMany', 'findOneAndUpdate', 'findByIdAndUpdate']);
-const VALIDATED_OPTIONS = /\brunValidators\b|\bwithValidators\b/;
+const VALIDATED_OPTIONS = /\brunValidators\s*:\s*true\b|\bwithValidators\(/;
 
 function listSourceFiles(dir: string): string[] {
   const files: string[] = [];
@@ -143,32 +144,29 @@ interface WrittenKey {
 /** Literal keys the update document writes, as normalized dotted paths. */
 function writtenKeys(update: ts.Expression): WrittenKey[] {
   const keys: WrittenKey[] = [];
+  const isPipeline = ts.isArrayLiteralExpression(update);
   const fromObject = (obj: ts.ObjectLiteralExpression, operator?: string) => {
     for (const prop of obj.properties) {
       if (!ts.isPropertyAssignment(prop) && !ts.isShorthandPropertyAssignment(prop)) continue;
       const key = propertyKey(prop.name);
       if (!key) continue;
       if (key.startsWith('$')) {
-        // Operators that write a value at the path. `$unset`/`$inc`-style numeric ops still store a
-        // value the schema constrains (an `$inc` can push past `max`), so they count as writes.
-        if (key === '$unset' || key === '$rename' || key === '$currentDate') continue;
+        // These remove or move values, or store a server date: no caller-chosen value lands at the path.
+        if (REMOVAL_OPERATORS.has(key)) continue;
         if (ts.isPropertyAssignment(prop) && ts.isObjectLiteralExpression(prop.initializer)) {
           fromObject(prop.initializer, key);
         }
         continue;
       }
-      // `$inc: { n: 1 }` stores a computed total, not the literal.
-      const value =
-        operator === '$inc' || operator === '$mul'
-          ? NON_LITERAL
-          : ts.isPropertyAssignment(prop)
-            ? literalOf(prop.initializer)
-            : NON_LITERAL;
+      let value = ts.isPropertyAssignment(prop) ? literalOf(prop.initializer) : NON_LITERAL;
+      // `$inc: { n: 1 }` stores a computed total, and a pipeline `'$field'` is a field reference.
+      if (operator === '$inc' || operator === '$mul') value = NON_LITERAL;
+      if (isPipeline && typeof value === 'string' && value.startsWith('$')) value = NON_LITERAL;
       keys.push({ path: normalizePath(key), value });
     }
   };
   if (ts.isObjectLiteralExpression(update)) fromObject(update);
-  if (ts.isArrayLiteralExpression(update)) {
+  if (isPipeline) {
     for (const stage of update.elements) if (ts.isObjectLiteralExpression(stage)) fromObject(stage);
   }
   return keys;
@@ -235,12 +233,15 @@ const MODEL_REGISTRATION = /\bmodel(?:<[^>]*>)?\(\s*['"]([A-Za-z0-9_]+)['"]/g;
  */
 export function scanUpdateWrites(
   modelsRoot: string,
-  reportRoot: string,
   constrained: ConstrainedPath[],
   resolution: ModelResolution
 ): ScannedWrite[] {
   const byModel = new Map<string, ConstrainedPath[]>();
-  for (const entry of constrained) byModel.set(entry.model, [...(byModel.get(entry.model) ?? []), entry]);
+  for (const entry of constrained) {
+    const list = byModel.get(entry.model);
+    if (list) list.push(entry);
+    else byModel.set(entry.model, [entry]);
+  }
 
   const writes = new Map<string, ScannedWrite>();
   for (const file of listSourceFiles(modelsRoot)) {
@@ -248,7 +249,7 @@ export function scanUpdateWrites(
     const registered = [...text.matchAll(MODEL_REGISTRATION)].map(m => m[1]!);
     const fileModel = new Set(registered).size === 1 ? registered[0] : undefined;
     const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-    const rel = relative(reportRoot, file).split(sep).join('/');
+    const rel = relative(modelsRoot, file).split(sep).join('/');
 
     const visit = (node: ts.Node) => {
       if (

@@ -37,8 +37,9 @@ can silently turn it into `none`.
   with no validators, is not enumerated per path: it reaches every path of every model with a repository.
 - Writers under `packages/database/src/models` only. Direct model writes in `apps/*` and `b4m-core/*` are
   not scanned.
-- `$unset`, `$rename` and `$currentDate` are not writes of a value. `$inc` and `$mul` are, with a computed
-  (non-literal) result.
+- `$unset`, `$rename`, `$currentDate`, `$pull`, `$pullAll` and `$pop` store no caller-chosen value, so they
+  are not counted. `$inc` and `$mul` are, with a computed (non-literal) result, as is a pipeline `'$field'`
+  reference.
 
 ## Inventory
 
@@ -46,11 +47,7 @@ can silently turn it into `none`.
 |---|---|---|---|---|---|---|
 | AbuseAssessment | `decisionModel` | enum | `infra/security/AbuseAssessmentModel.ts#AbuseAssessmentRepository.save` | route-schema | `b4m-core/common/src/schemas/settings.ts#AbuseAssessmentConfigSchema` | Sole caller passes config.model, z.enum(DECISION_MODEL_IDS), plus registry check in callablePlatformModel |
 | AbuseAssessment | `reasons.key` | enum | `infra/security/AbuseAssessmentModel.ts#AbuseAssessmentRepository.save` | route-schema | `apps/client/server/security/abuseAssessment/abuseAssessment.ts#readReasons` | Keys come only from ABUSE_ASSESSMENT_REASON_KEYS constant, never from model text |
-| AbuseEvalSet | `examples.frozenLabel.label` | enum | `infra/security/AbuseEvalSetModel.ts#AbuseEvalSetRepository.removeUser` | repository-check | `packages/database/src/models/infra/security/AbuseEvalSetModel.ts#AbuseEvalSetRepository.removeUser` | Only $pull by userId; removes examples and writes no enum value |
-| AbuseEvalSet | `examples.kind` | enum | `infra/security/AbuseEvalSetModel.ts#AbuseEvalSetRepository.removeUser` | repository-check | `packages/database/src/models/infra/security/AbuseEvalSetModel.ts#AbuseEvalSetRepository.removeUser` | Only $pull by userId; removes examples and writes no enum value |
-| AbuseEvalSet | `examples.split` | enum | `infra/security/AbuseEvalSetModel.ts#AbuseEvalSetRepository.removeUser` | repository-check | `packages/database/src/models/infra/security/AbuseEvalSetModel.ts#AbuseEvalSetRepository.removeUser` | Only $pull by userId; removes examples and writes no enum value |
 | AbuseEvalSet | `examples.verdicts.verdict` | enum | `infra/security/AbuseEvalSetModel.ts#AbuseEvalSetRepository.addExampleVerdict` | route-schema | `apps/client/app/utils/verdictEvalSets.ts#evalSetExampleVerdictRequestSchema` | Only caller eval-sets/[id]/verdict.ts parses z.enum(SHADOW_DETECTION_VERDICTS) |
-| AbuseEvalSet | `examples.verdicts.verdict` | enum | `infra/security/AbuseEvalSetModel.ts#AbuseEvalSetRepository.removeUser` | repository-check | `packages/database/src/models/infra/security/AbuseEvalSetModel.ts#AbuseEvalSetRepository.removeUser` | Only $pull by userId; removes examples and writes no enum value |
 | ActiveCodeAgent | `capabilities` | enum | `ai/ActiveCodeAgentModel.ts#upsertOnRegister` | route-schema | `apps/client/server/websocket/ccAgentRegister.ts#normalizeSourceAndCapabilities` | Sole caller: zod CcAgentRegisterAction enum, then filtered by source allowlist |
 | ActiveCodeAgent | `source` | enum | `ai/ActiveCodeAgentModel.ts#upsertOnRegister` | route-schema | `b4m-core/common/src/schemas/actions.ts#CcAgentRegisterAction` | Sole caller parses source with zod CcAgentSource enum; writer defaults to claude |
 | ActiveCodeAgent | `status` | enum | `ai/ActiveCodeAgentModel.ts#upsertOnRegister` | repository-check | `literal` | writes "running" |
@@ -239,11 +236,9 @@ can silently turn it into `none`.
 | ShadowDetection | `verdicts.source` | enum | `infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.addAutomationVerdict` | repository-check | `packages/database/src/models/infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.addAutomationVerdict` | source is hardcoded as 'automation' |
 | ShadowDetection | `verdicts.source` | enum | `infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.addVerdict` | repository-check | `packages/database/src/models/infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.addVerdict` | source is hardcoded as 'review' |
 | ShadowDetection | `verdicts.source` | enum | `infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.appendStatusVerdicts` | repository-check | `packages/database/src/models/infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.gradeForReinstatement` | Private; callers pass the literals suspension or reinstatement |
-| ShadowDetection | `verdicts.source` | enum | `infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.revertSuspensionGrades` | repository-check | `packages/database/src/models/infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.revertSuspensionGrades` | Only $pop on verdicts; adds no entry |
 | ShadowDetection | `verdicts.verdict` | enum | `infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.addAutomationVerdict` | route-schema | `apps/client/server/security/shadowDetectionAutoGrade.ts#AUTO_GRADE_VERDICT` | Only caller passes the constant 'insufficient_evidence' |
 | ShadowDetection | `verdicts.verdict` | enum | `infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.addVerdict` | route-schema | `b4m-core/common/src/schemas/shadowDetection.ts#shadowDetectionVerdictRequestSchema` | verdict and bulk-verdict routes parse z.enum(SHADOW_DETECTION_VERDICTS) |
 | ShadowDetection | `verdicts.verdict` | enum | `infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.appendStatusVerdicts` | repository-check | `packages/database/src/models/infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.gradeForSuspension` | Private; callers pass the literals confirmed_abuse or legitimate_human |
-| ShadowDetection | `verdicts.verdict` | enum | `infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.revertSuspensionGrades` | repository-check | `packages/database/src/models/infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.revertSuspensionGrades` | Only $pop on verdicts; adds no entry |
 | ShadowDetection | `wouldAction` | enum | `infra/security/ShadowDetectionModel.ts#ShadowDetectionRepository.recordCampaignGroup` | route-schema | `b4m-core/services/src/userService/accountCampaigns.ts#accountCampaignDetection` | wouldAction is the literal 'contain' from the accountCampaigns builder |
 | SignupDomainReview | `assessment.failure` | enum | `auth/SignupProtectionModel.ts#recordAssessment` | route-schema | `apps/client/server/decisions/platformDecision.ts#decisionFailureCode` | Failures are literals from readAnswer, decisionFailureCode, summary_timeout |
 | SignupDomainReview | `assessment.judgment` | enum | `auth/SignupProtectionModel.ts#recordAssessment` | route-schema | `apps/workers/src/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts#readAnswer` | LLM choice accepted only if isJudgment guard passes, else failed |
