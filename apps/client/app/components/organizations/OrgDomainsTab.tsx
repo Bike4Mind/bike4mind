@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { IOrgDomainClaimView, OrgDomainJoinPolicy, OrgDomainDefaultRole } from '@bike4mind/common';
+import type { IOrgDomainClaimView, OrgDomainJoinPolicy } from '@bike4mind/common';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -33,11 +33,6 @@ const POLICY_LABELS: Record<OrgDomainJoinPolicy, string> = {
   off: 'Off',
   suggest: 'Suggest joining',
   'auto-join': 'Join automatically',
-};
-
-const ROLE_LABELS: Record<OrgDomainDefaultRole, string> = {
-  member: 'Member',
-  viewer: 'Viewer (read only)',
 };
 
 const copy = (text: string) => {
@@ -80,8 +75,7 @@ const DomainClaimRow: React.FC<{
   });
 
   const update = useMutation({
-    mutationFn: (change: { policy?: OrgDomainJoinPolicy; defaultRole?: OrgDomainDefaultRole }) =>
-      updateOrgDomainClaimPolicy(organizationId, claim.id, change),
+    mutationFn: (policy: OrgDomainJoinPolicy) => updateOrgDomainClaimPolicy(organizationId, claim.id, { policy }),
     onSuccess: onChanged,
   });
 
@@ -130,13 +124,13 @@ const DomainClaimRow: React.FC<{
         </Stack>
       )}
 
-      <Stack direction={{ xs: 'column', sm: 'row' }} gap={2} sx={{ mt: 2 }}>
-        <FormControl size="sm" sx={{ minWidth: 200 }}>
+      <Box sx={{ mt: 2 }}>
+        <FormControl size="sm" sx={{ minWidth: 200, maxWidth: 320 }}>
           <FormLabel>Who can join</FormLabel>
           <Select
             value={claim.policy}
             disabled={!verified || update.isPending}
-            onChange={(_e, value) => value && value !== claim.policy && update.mutate({ policy: value })}
+            onChange={(_e, value) => value && value !== claim.policy && update.mutate(value)}
             data-testid="org-domains-policy-select"
           >
             {(Object.keys(POLICY_LABELS) as OrgDomainJoinPolicy[]).map(policy => (
@@ -146,22 +140,7 @@ const DomainClaimRow: React.FC<{
             ))}
           </Select>
         </FormControl>
-        <FormControl size="sm" sx={{ minWidth: 200 }}>
-          <FormLabel>Role for people who join</FormLabel>
-          <Select
-            value={claim.defaultRole}
-            disabled={!verified || update.isPending}
-            onChange={(_e, value) => value && value !== claim.defaultRole && update.mutate({ defaultRole: value })}
-            data-testid="org-domains-role-select"
-          >
-            {(Object.keys(ROLE_LABELS) as OrgDomainDefaultRole[]).map(role => (
-              <Option key={role} value={role}>
-                {ROLE_LABELS[role]}
-              </Option>
-            ))}
-          </Select>
-        </FormControl>
-      </Stack>
+      </Box>
       {update.isError && (
         <Typography level="body-xs" color="danger" sx={{ mt: 1 }} data-testid="org-domains-update-error">
           {getErrorMessage(update.error)}

@@ -75,15 +75,17 @@ describe('addDomainClaim', () => {
     await expect(addDomainClaim(ORG, 'user1', 'acme.com')).rejects.toMatchObject({ statusCode: 409 });
   });
 
-  it('rejects a domain whose partner rule routes to another org', async () => {
-    partnerRules.findByDomain.mockResolvedValue({ organizationId: OTHER_ORG });
+  it('rejects a domain whose enabled partner rule routes to another org', async () => {
+    partnerRules.findByDomain.mockResolvedValue({ organizationId: OTHER_ORG, enabled: true });
     await expect(addDomainClaim(ORG, 'user1', 'acme.com')).rejects.toThrow(/platform signup rule/);
   });
 
-  it('allows a domain whose partner rule routes to the same org, or to no org', async () => {
-    partnerRules.findByDomain.mockResolvedValue({ organizationId: ORG });
+  it('allows a domain whose partner rule routes to the same org, to no org, or is disabled', async () => {
+    partnerRules.findByDomain.mockResolvedValue({ organizationId: ORG, enabled: true });
     await expect(addDomainClaim(ORG, 'user1', 'acme.com')).resolves.toBeTruthy();
-    partnerRules.findByDomain.mockResolvedValue({ organizationId: null });
+    partnerRules.findByDomain.mockResolvedValue({ organizationId: null, enabled: true });
+    await expect(addDomainClaim(ORG, 'user1', 'acme.com')).resolves.toBeTruthy();
+    partnerRules.findByDomain.mockResolvedValue({ organizationId: OTHER_ORG, enabled: false });
     await expect(addDomainClaim(ORG, 'user1', 'acme.com')).resolves.toBeTruthy();
   });
 
@@ -156,8 +158,11 @@ describe('verifyDomainClaim', () => {
     expect(resolver).not.toHaveBeenCalled();
 
     claims.findVerifiedByDomain.mockResolvedValue(null);
-    partnerRules.findByDomain.mockResolvedValue({ organizationId: OTHER_ORG });
+    partnerRules.findByDomain.mockResolvedValue({ organizationId: OTHER_ORG, enabled: true });
     await expect(verifyDomainClaim(ORG, 'claim1', resolver)).rejects.toMatchObject({ statusCode: 409 });
+
+    partnerRules.findByDomain.mockResolvedValue({ organizationId: OTHER_ORG, enabled: false });
+    await expect(verifyDomainClaim(ORG, 'claim1', resolver)).resolves.toMatchObject({ verified: true });
   });
 
   it('maps a lost verify race to a 409', async () => {

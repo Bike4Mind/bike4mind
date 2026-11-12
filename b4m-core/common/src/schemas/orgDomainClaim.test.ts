@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { addOrgDomainSchema, updateOrgDomainPolicySchema, ORG_DOMAIN_ROLE_PERMISSIONS } from './orgDomainClaim';
+import { addOrgDomainSchema, updateOrgDomainPolicySchema, ORG_DOMAIN_MEMBER_PERMISSIONS } from './orgDomainClaim';
 import { orgAclRowConfersMembership } from '../constants/organization';
 import { Permission } from '../types/entities/ShareableDocumentTypes';
 
@@ -30,30 +30,27 @@ describe('addOrgDomainSchema', () => {
 });
 
 describe('updateOrgDomainPolicySchema', () => {
-  it('accepts a policy and role', () => {
-    expect(updateOrgDomainPolicySchema.parse({ policy: 'auto-join', defaultRole: 'viewer' })).toEqual({
-      policy: 'auto-join',
-      defaultRole: 'viewer',
-    });
+  it('accepts a policy', () => {
+    expect(updateOrgDomainPolicySchema.parse({ policy: 'auto-join' })).toEqual({ policy: 'auto-join' });
   });
 
-  it.each([{}, { policy: 'everyone' }, { defaultRole: 'admin' }, { policy: 'off', verificationToken: 'x' }])(
-    'rejects %j',
-    body => {
-      expect(updateOrgDomainPolicySchema.safeParse(body).success).toBe(false);
-    }
-  );
+  it.each([
+    {},
+    { policy: 'everyone' },
+    { defaultRole: 'viewer' },
+    { policy: 'suggest', defaultRole: 'member' },
+    { policy: 'off', verificationToken: 'x' },
+  ])('rejects %j', body => {
+    expect(updateOrgDomainPolicySchema.safeParse(body).success).toBe(false);
+  });
 });
 
-describe('ORG_DOMAIN_ROLE_PERMISSIONS', () => {
-  it.each(Object.entries(ORG_DOMAIN_ROLE_PERMISSIONS))('%s confers membership', (_role, permissions) => {
-    expect(orgAclRowConfersMembership({ permissions })).toBe(true);
+describe('ORG_DOMAIN_MEMBER_PERMISSIONS', () => {
+  it('confers membership', () => {
+    expect(orgAclRowConfersMembership({ permissions: [...ORG_DOMAIN_MEMBER_PERMISSIONS] })).toBe(true);
   });
 
-  it.each(Object.entries(ORG_DOMAIN_ROLE_PERMISSIONS))(
-    '%s grants no edit, share or delete access',
-    (_role, permissions) => {
-      expect(permissions).toEqual([Permission.read]);
-    }
-  );
+  it('grants no edit, share or delete access', () => {
+    expect(ORG_DOMAIN_MEMBER_PERMISSIONS).toEqual([Permission.read]);
+  });
 });

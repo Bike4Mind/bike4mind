@@ -5,9 +5,6 @@ export type OrgDomainClaimStatus = 'pending' | 'verified';
 /** What a verified claim does for a verified-email user on the domain. */
 export type OrgDomainJoinPolicy = 'off' | 'suggest' | 'auto-join';
 
-/** Role a domain-joined user receives; maps to ACL permissions via `ORG_DOMAIN_ROLE_PERMISSIONS`. */
-export type OrgDomainDefaultRole = 'member' | 'viewer';
-
 /**
  * An organization's claim on an email domain. A claim is `pending` until the org proves DNS control
  * with a TXT record carrying `verificationToken`; at most one org holds a verified claim per domain
@@ -22,7 +19,6 @@ export interface IOrgDomainClaim {
   verificationToken: string;
   verifiedAt: Date | null;
   policy: OrgDomainJoinPolicy;
-  defaultRole: OrgDomainDefaultRole;
   createdBy: string | null;
   createdAt: Date;
 }
@@ -39,7 +35,6 @@ export interface IOrgDomainClaimView {
   status: OrgDomainClaimStatus;
   verifiedAt: Date | string | null;
   policy: OrgDomainJoinPolicy;
-  defaultRole: OrgDomainDefaultRole;
   createdAt: Date | string;
   recordName: string | null;
   recordValue: string | null;
@@ -59,7 +54,7 @@ export interface IOrgDomainClaimRepository extends IBaseRepository<IOrgDomainCla
   updatePolicy: (
     id: string,
     organizationId: string,
-    update: { policy?: OrgDomainJoinPolicy; defaultRole?: OrgDomainDefaultRole }
+    update: { policy: OrgDomainJoinPolicy }
   ) => Promise<IOrgDomainClaimDocument | null>;
   deleteForOrg: (id: string, organizationId: string) => Promise<boolean>;
   deleteByOrganization: (organizationId: string) => Promise<number>;

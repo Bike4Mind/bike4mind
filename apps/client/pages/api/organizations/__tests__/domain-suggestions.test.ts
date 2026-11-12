@@ -92,7 +92,7 @@ describe('GET /api/organizations/domain-suggestions', () => {
     ['a deleted org', () => orgs.findById.mockResolvedValue(null)],
     [
       'a partner rule routing the domain elsewhere',
-      () => partnerRules.findByDomain.mockResolvedValue({ domain: 'acme.com', organizationId: 'org2' }),
+      () => partnerRules.findByDomain.mockResolvedValue({ domain: 'acme.com', organizationId: 'org2', enabled: true }),
     ],
   ])('returns nothing for %s', async (_label, arrange) => {
     arrange();

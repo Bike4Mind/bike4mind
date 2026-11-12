@@ -3,10 +3,8 @@ import {
   IOrgDomainClaimDocument,
   IOrgDomainClaimRepository,
   MarkOrgDomainClaimVerifiedResult,
-  OrgDomainDefaultRole,
   OrgDomainJoinPolicy,
   normalizeSignupRuleDomain,
-  ORG_DOMAIN_DEFAULT_ROLES,
   ORG_DOMAIN_JOIN_POLICIES,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
@@ -55,6 +53,8 @@ export class OrgDomainClaimRepository
 
   async markVerified(id: string, organizationId: string): Promise<MarkOrgDomainClaimVerifiedResult> {
     if (!mongoose.isValidObjectId(id)) return null;
+    // autoIndex builds lazily; the partial unique index must exist before two verifies can race.
+    await this.model.init();
     try {
       // The pipeline keeps the first verifiedAt on a re-verify, so the call is idempotent.
       const doc = await this.model.findOneAndUpdate(
@@ -69,16 +69,13 @@ export class OrgDomainClaimRepository
     }
   }
 
-  async updatePolicy(
-    id: string,
-    organizationId: string,
-    update: { policy?: OrgDomainJoinPolicy; defaultRole?: OrgDomainDefaultRole }
-  ) {
+  async updatePolicy(id: string, organizationId: string, update: { policy: OrgDomainJoinPolicy }) {
     if (!mongoose.isValidObjectId(id)) return null;
-    const $set: Record<string, string> = {};
-    if (update.policy !== undefined) $set.policy = update.policy;
-    if (update.defaultRole !== undefined) $set.defaultRole = update.defaultRole;
-    const doc = await this.model.findOneAndUpdate({ _id: id, organizationId }, { $set }, { new: true });
+    const doc = await this.model.findOneAndUpdate(
+      { _id: id, organizationId },
+      { $set: { policy: update.policy } },
+      { new: true }
+    );
     return doc?.toJSON() ?? null;
   }
 
@@ -103,7 +100,6 @@ export const OrgDomainClaimSchema = new Schema<IOrgDomainClaimDocument, IOrgDoma
     verificationToken: { type: String, required: true },
     verifiedAt: { type: Date, default: null },
     policy: { type: String, enum: ORG_DOMAIN_JOIN_POLICIES, default: 'off' },
-    defaultRole: { type: String, enum: ORG_DOMAIN_DEFAULT_ROLES, default: 'member' },
     createdBy: { type: String, default: null },
   },
   {

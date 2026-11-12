@@ -1,21 +1,16 @@
 import { z } from 'zod';
 import { Permission } from '../types/entities/ShareableDocumentTypes';
-import type { OrgDomainDefaultRole } from '../types/entities/OrgDomainClaimTypes';
 
 export const ORG_DOMAIN_JOIN_POLICIES = ['off', 'suggest', 'auto-join'] as const;
-export const ORG_DOMAIN_DEFAULT_ROLES = ['member', 'viewer'] as const;
 
 /** Hard cap on domain claims (pending + verified) a single organization may hold. */
 export const MAX_ORG_DOMAIN_CLAIMS = 20;
 
 /**
  * ACL row written for a user joining through a domain claim: the same read-only row `addMember`
- * writes. 'update' on an org ACL row is org edit access (organizationService.update), so no role grants it.
+ * writes. 'update' on an org ACL row is org edit access (organizationService.update), so it is never granted.
  */
-export const ORG_DOMAIN_ROLE_PERMISSIONS: Readonly<Record<OrgDomainDefaultRole, readonly Permission[]>> = {
-  member: [Permission.read],
-  viewer: [Permission.read],
-};
+export const ORG_DOMAIN_MEMBER_PERMISSIONS: readonly Permission[] = [Permission.read];
 
 /**
  * Bare domain (trim + lowercase, the same normalization as `normalizeSignupRuleDomain`). Public mail
@@ -31,15 +26,7 @@ const orgDomainSchema = z
 
 export const addOrgDomainSchema = z.object({ domain: orgDomainSchema }).strict();
 
-export const updateOrgDomainPolicySchema = z
-  .object({
-    policy: z.enum(ORG_DOMAIN_JOIN_POLICIES).optional(),
-    defaultRole: z.enum(ORG_DOMAIN_DEFAULT_ROLES).optional(),
-  })
-  .strict()
-  .refine(value => value.policy !== undefined || value.defaultRole !== undefined, {
-    message: 'Nothing to update',
-  });
+export const updateOrgDomainPolicySchema = z.object({ policy: z.enum(ORG_DOMAIN_JOIN_POLICIES) }).strict();
 
 export type AddOrgDomainInput = z.infer<typeof addOrgDomainSchema>;
 export type UpdateOrgDomainPolicyInput = z.infer<typeof updateOrgDomainPolicySchema>;

@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { Organization, OrgDomainClaim, User } from '@bike4mind/database';
+import { Organization, OrgDomainClaim, PartnerSignupRule, User } from '@bike4mind/database';
 import { applyOrgDomainMembership, joinOrgViaDomain, listOrgDomainJoinSuggestions } from './orgDomainClaims';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -27,6 +27,7 @@ afterEach(async () => {
     Organization.deleteMany({}, { hardDelete: true }),
     User.deleteMany({}, { hardDelete: true }),
     OrgDomainClaim.deleteMany({}),
+    PartnerSignupRule.deleteMany({}),
   ]);
 });
 
@@ -37,7 +38,7 @@ const makeOrg = async (seats = 10) => Organization.create({ name: 'Example Org',
 
 const makeClaim = async (
   organizationId: string,
-  overrides: Partial<{ domain: string; status: string; policy: string; defaultRole: string }> = {}
+  overrides: Partial<{ domain: string; status: string; policy: string }> = {}
 ) =>
   OrgDomainClaim.create({
     organizationId,
@@ -46,26 +47,22 @@ const makeClaim = async (
     verificationToken: 'a'.repeat(32),
     verifiedAt: new Date(),
     policy: 'auto-join',
-    defaultRole: 'member',
     ...overrides,
   });
 
 const reload = async (orgId: string) => (await Organization.findById(orgId).lean())!;
 
 describe('applyOrgDomainMembership (real Mongo)', () => {
-  it.each([
-    ['member', ['read']],
-    ['viewer', ['read']],
-  ])('adds a verified user as %s, seeds userDetails, sets the org pointer, leaves seats alone', async (role, perms) => {
+  it('adds a verified user as a read-only member, seeds userDetails, sets the org pointer, leaves seats alone', async () => {
     const org = await makeOrg(5);
-    await makeClaim(org.id, { defaultRole: role });
+    await makeClaim(org.id);
     const user = await makeUser('dee@EXAMPLE.com');
 
     const outcome = await applyOrgDomainMembership(user.id, 'dee@EXAMPLE.com');
 
     expect(outcome).toEqual({ joined: true, organizationId: org.id });
     const after = await reload(org.id);
-    expect(after.users).toEqual([expect.objectContaining({ userId: user.id, permissions: perms })]);
+    expect(after.users).toEqual([expect.objectContaining({ userId: user.id, permissions: ['read'] })]);
     expect(after.userDetails?.map(d => d.id)).toEqual([user.id]);
     expect(after.seats).toBe(5);
     expect(String((await User.findById(user.id).lean())!.organizationId)).toBe(org.id);
@@ -81,6 +78,18 @@ describe('applyOrgDomainMembership (real Mongo)', () => {
 
     expect(second).toEqual({ joined: false, reason: 'already-member' });
     expect((await reload(org.id)).users).toHaveLength(1);
+  });
+
+  it('never adds a users[] row for the owner', async () => {
+    const owner = await makeUser('owner@example.com');
+    const org = await Organization.create({ name: 'Example Org', userId: owner.id, seats: 5 });
+    await makeClaim(org.id);
+
+    expect(await applyOrgDomainMembership(owner.id, 'owner@example.com')).toEqual({
+      joined: false,
+      reason: 'already-member',
+    });
+    expect((await reload(org.id)).users).toEqual([]);
   });
 
   it('does not join, or raise seats, when the org is full', async () => {
@@ -117,9 +126,9 @@ describe('applyOrgDomainMembership (real Mongo)', () => {
 });
 
 describe('suggest-join for an existing user (real Mongo)', () => {
-  it('suggests, then joins with the default role, and stops suggesting once a member', async () => {
+  it('suggests, then joins as a read-only member, and stops suggesting once a member', async () => {
     const org = await makeOrg(5);
-    const claim = await makeClaim(org.id, { policy: 'suggest', defaultRole: 'viewer' });
+    const claim = await makeClaim(org.id, { policy: 'suggest' });
     const user = await makeUser('dee@example.com');
 
     expect(await listOrgDomainJoinSuggestions(user.id)).toEqual([
@@ -144,6 +153,20 @@ describe('suggest-join for an existing user (real Mongo)', () => {
 
     expect(await listOrgDomainJoinSuggestions(owner.id)).toEqual([]);
     expect((await joinOrgViaDomain(owner.id, org.id)).joined).toBe(false);
+    expect((await reload(org.id)).users).toEqual([]);
+  });
+
+  it('yields to an enabled partner rule for another org, but not to a disabled one', async () => {
+    const org = await makeOrg(5);
+    await makeClaim(org.id, { policy: 'suggest' });
+    const user = await makeUser('dee@example.com');
+    const rule = await PartnerSignupRule.create({ domain: 'example.com', organizationId: 'other-org', enabled: false });
+
+    expect(await listOrgDomainJoinSuggestions(user.id)).toHaveLength(1);
+
+    await PartnerSignupRule.updateOne({ _id: rule._id }, { $set: { enabled: true } });
+    expect(await listOrgDomainJoinSuggestions(user.id)).toEqual([]);
+    await expect(joinOrgViaDomain(user.id, org.id)).rejects.toThrow(/does not grant/);
     expect((await reload(org.id)).users).toEqual([]);
   });
 

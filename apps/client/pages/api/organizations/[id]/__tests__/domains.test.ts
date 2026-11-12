@@ -75,7 +75,6 @@ const claim = (overrides: Record<string, unknown> = {}) => ({
   verificationToken: TOKEN,
   verifiedAt: null,
   policy: 'off',
-  defaultRole: 'member',
   createdBy: 'owner1',
   createdAt: new Date('2026-01-01T00:00:00Z'),
   ...overrides,
@@ -160,6 +159,17 @@ describe('org domain routes - access gate', () => {
     expect(claims.create).not.toHaveBeenCalled();
   });
 
+  it('refuses every verb on a personal organization before reading any claim', async () => {
+    orgs.findById.mockResolvedValue({ ...ORG, personal: true });
+    for (const handler of [collection.get, collection.post, item.patch, item.delete, verify.post]) {
+      const { run } = call(handler, { body: { domain: 'acme.com', policy: 'off' } });
+      await expect(run()).rejects.toThrow(/Personal organizations cannot claim domains/);
+    }
+    expect(claims.listByOrganization).not.toHaveBeenCalled();
+    expect(claims.findByIdForOrg).not.toHaveBeenCalled();
+    expect(claims.create).not.toHaveBeenCalled();
+  });
+
   it('404s an unknown organization', async () => {
     orgs.findById.mockResolvedValue(null);
     await expect(call(collection.get).run()).rejects.toThrow(NotFoundError);
@@ -221,24 +231,32 @@ describe('PATCH /api/organizations/[id]/domains/[claimId]', () => {
     expect(claims.updatePolicy).not.toHaveBeenCalled();
   });
 
-  it('sets the policy and role on a verified claim', async () => {
+  it('sets the policy on a verified claim and audits only the policy change', async () => {
     claims.findByIdForOrg.mockResolvedValue(claim({ status: 'verified' }));
-    claims.updatePolicy.mockResolvedValue(claim({ status: 'verified', policy: 'auto-join', defaultRole: 'viewer' }));
+    claims.updatePolicy.mockResolvedValue(claim({ status: 'verified', policy: 'auto-join' }));
 
-    const { res, run } = call(item.patch, { userId: 'mgr1', body: { policy: 'auto-join', defaultRole: 'viewer' } });
+    const { res, run } = call(item.patch, { userId: 'mgr1', body: { policy: 'auto-join' } });
     await run();
 
     expect(res._getStatusCode()).toBe(200);
-    expect(claims.updatePolicy).toHaveBeenCalledWith('c1', 'org1', { policy: 'auto-join', defaultRole: 'viewer' });
-    expect(res._getJSONData().claim).toMatchObject({ policy: 'auto-join', defaultRole: 'viewer' });
+    expect(claims.updatePolicy).toHaveBeenCalledWith('c1', 'org1', { policy: 'auto-join' });
+    expect(res._getJSONData().claim).toMatchObject({ policy: 'auto-join' });
+    expect(res._getJSONData().claim).not.toHaveProperty('defaultRole');
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ changes: [{ field: 'policy', before: 'off', after: 'auto-join' }] })
+    );
   });
 
-  it.each([[{}], [{ policy: 'everyone' }], [{ policy: 'off', status: 'verified' }]])(
-    'rejects %j with a ZodError (422)',
-    async body => {
-      await expect(call(item.patch, { body }).run()).rejects.toMatchObject({ name: 'ZodError' });
-    }
-  );
+  it.each([
+    [{}],
+    [{ policy: 'everyone' }],
+    [{ defaultRole: 'viewer' }],
+    [{ policy: 'auto-join', defaultRole: 'viewer' }],
+    [{ policy: 'off', status: 'verified' }],
+  ])('rejects %j with a ZodError (422)', async body => {
+    await expect(call(item.patch, { body }).run()).rejects.toMatchObject({ name: 'ZodError' });
+  });
 });
 
 describe('DELETE /api/organizations/[id]/domains/[claimId]', () => {

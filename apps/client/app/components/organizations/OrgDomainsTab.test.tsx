@@ -30,7 +30,6 @@ const PENDING = {
   status: 'pending',
   verifiedAt: null,
   policy: 'off',
-  defaultRole: 'member',
   createdAt: '2026-01-01T00:00:00Z',
   recordName: '_b4m-verify.acme.com',
   recordValue: 'b4m-domain-verification=abc',
@@ -91,7 +90,7 @@ describe('OrgDomainsTab', () => {
     await waitFor(() => expect(api.fetchClaims).toHaveBeenCalledTimes(2));
   });
 
-  it('offers policy and role controls on a verified claim and saves a change through PATCH', async () => {
+  it('offers the join policy control on a verified claim and saves a change through PATCH', async () => {
     api.fetchClaims.mockResolvedValue([VERIFIED]);
     api.update.mockResolvedValue({ ...VERIFIED, policy: 'auto-join' });
     renderTab();
@@ -101,10 +100,7 @@ describe('OrgDomainsTab', () => {
     fireEvent.click(within(within(row).getByTestId('org-domains-policy-select')).getByRole('combobox'));
     fireEvent.click(await screen.findByRole('option', { name: 'Join automatically' }));
     await waitFor(() => expect(api.update).toHaveBeenCalledWith('org1', 'c2', { policy: 'auto-join' }));
-
-    fireEvent.click(within(within(row).getByTestId('org-domains-role-select')).getByRole('combobox'));
-    fireEvent.click(await screen.findByRole('option', { name: 'Viewer (read only)' }));
-    await waitFor(() => expect(api.update).toHaveBeenCalledWith('org1', 'c2', { defaultRole: 'viewer' }));
+    expect(within(row).queryByTestId('org-domains-role-select')).not.toBeInTheDocument();
   });
 
   it('adds a domain and surfaces the server error for one already claimed elsewhere', async () => {

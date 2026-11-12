@@ -56,7 +56,6 @@ const CLAIM = {
   domain: 'acme.com',
   status: 'verified',
   policy: 'suggest',
-  defaultRole: 'viewer',
 };
 
 let join: Handler;
@@ -88,7 +87,7 @@ describe('POST /api/organizations/:id/domain-join', () => {
     for (const config of mockRefs.configs) expect(config).toMatchObject({ auth: 'jwtOnly' });
   });
 
-  it('adds the user with the claim default role, points the user at the org and seeds userDetails', async () => {
+  it('adds the user as a read-only member, points the user at the org and seeds userDetails', async () => {
     const { res, run } = call();
     await run();
 
@@ -148,7 +147,7 @@ describe('POST /api/organizations/:id/domain-join', () => {
     ],
     [
       'a partner rule routing the domain to another org',
-      () => partnerRules.findByDomain.mockResolvedValue({ domain: 'acme.com', organizationId: 'org2' }),
+      () => partnerRules.findByDomain.mockResolvedValue({ domain: 'acme.com', organizationId: 'org2', enabled: true }),
     ],
   ])('refuses %s with 403 before touching the roster', async (_label, arrange) => {
     arrange();
@@ -157,7 +156,7 @@ describe('POST /api/organizations/:id/domain-join', () => {
   });
 
   it('allows a partner rule that routes the domain to the same org', async () => {
-    partnerRules.findByDomain.mockResolvedValue({ domain: 'acme.com', organizationId: 'org1' });
+    partnerRules.findByDomain.mockResolvedValue({ domain: 'acme.com', organizationId: 'org1', enabled: true });
     const { res, run } = call();
     await run();
     expect(res._getJSONData().joined).toBe(true);

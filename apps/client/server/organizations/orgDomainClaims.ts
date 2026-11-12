@@ -9,7 +9,7 @@ import {
   MAX_ORG_DOMAIN_CLAIMS,
   NotFoundError,
   normalizeSignupRuleDomain,
-  ORG_DOMAIN_ROLE_PERMISSIONS,
+  ORG_DOMAIN_MEMBER_PERMISSIONS,
   organizationSeatUsage,
   type IOrgDomainClaimDocument,
   type IOrgDomainClaimView,
@@ -56,6 +56,12 @@ export function getTxtResolver(claim: Pick<IOrgDomainClaimDocument, 'verificatio
   return defaultTxtResolver;
 }
 
+/** A disabled partner rule routes nothing at signup (getRulesMap loads enabled rules only), so it reserves nothing. */
+async function enabledPartnerRule(domain: string) {
+  const rule = await partnerSignupRuleRepository.findByDomain(domain);
+  return rule?.enabled ? rule : null;
+}
+
 /** Rules every claim must pass on add, and again on verify (state can change in between). */
 async function assertDomainClaimable(organizationId: string, domain: string): Promise<void> {
   const verified = await orgDomainClaimRepository.findVerifiedByDomain(domain);
@@ -63,7 +69,7 @@ async function assertDomainClaimable(organizationId: string, domain: string): Pr
     throw new ConflictError('Domain already claimed by another organization');
   }
   // A platform partner rule that routes this domain into another org owns the domain's joins.
-  const partnerRule = await partnerSignupRuleRepository.findByDomain(domain);
+  const partnerRule = await enabledPartnerRule(domain);
   if (partnerRule?.organizationId && partnerRule.organizationId !== organizationId) {
     throw new ConflictError('Domain is reserved by a platform signup rule');
   }
@@ -95,7 +101,6 @@ export async function addDomainClaim(
       verificationToken: crypto.randomBytes(16).toString('hex'),
       verifiedAt: null,
       policy: 'off',
-      defaultRole: 'member',
       createdBy: actorId,
     });
   } catch (err) {
@@ -157,7 +162,6 @@ export function toOrgDomainClaimView(claim: IOrgDomainClaimDocument): IOrgDomain
     status: claim.status,
     verifiedAt: claim.verifiedAt ?? null,
     policy: claim.policy,
-    defaultRole: claim.defaultRole,
     createdAt: claim.createdAt,
     recordName: pending ? recordNameFor(claim.domain) : null,
     recordValue: pending ? recordValueFor(claim.verificationToken) : null,
@@ -174,10 +178,11 @@ export async function loadOrgForDomainAdmin(
   if (!canAdministerOrganization(actor, organization)) {
     throw new ForbiddenError('Only an organization owner or manager can manage domains');
   }
+  if (organization.personal) throw new BadRequestError('Personal organizations cannot claim domains');
   return organization;
 }
 
-/** A join policy other than 'off' needs a verified claim; the default role may be set any time. */
+/** A join policy other than 'off' needs a verified claim. */
 export async function updateDomainClaimPolicy(
   organizationId: string,
   claimId: string,
@@ -185,7 +190,7 @@ export async function updateDomainClaimPolicy(
 ): Promise<{ before: IOrgDomainClaimDocument; after: IOrgDomainClaimDocument }> {
   const before = await orgDomainClaimRepository.findByIdForOrg(claimId, organizationId);
   if (!before) throw new NotFoundError('Domain claim not found');
-  if (update.policy !== undefined && update.policy !== 'off' && before.status !== 'verified') {
+  if (update.policy !== 'off' && before.status !== 'verified') {
     throw new BadRequestError('Verify the domain before turning on a join policy');
   }
   const after = await orgDomainClaimRepository.updatePolicy(claimId, organizationId, update);
@@ -216,7 +221,7 @@ function emailDomain(email: string | null | undefined): string {
 type DomainJoinUser = { id: string; email?: string | null; username: string; name: string };
 
 /**
- * Adds the user to the claim's org with the claim's default role, never raising the seat ceiling.
+ * Adds the user to the claim's org as a read-only member, never raising the seat ceiling.
  * The membership shape (a `users[]` row, `user.organizationId`, a seeded `userDetails` row) must stay
  * in sync with applyPartnerRuleMembership (b4m-core/services organizationService).
  */
@@ -227,7 +232,7 @@ async function addMemberViaClaim(
   Exclude<OrgDomainMembershipOutcome, { reason: 'no-claim' | 'not-auto-join' | 'user-missing' | 'unverified' }>
 > {
   const { organizationId } = claim;
-  const permissions = [...ORG_DOMAIN_ROLE_PERMISSIONS[claim.defaultRole]];
+  const permissions = [...ORG_DOMAIN_MEMBER_PERMISSIONS];
   const pre = await organizationRepository.addMemberIfUnderCeiling(organizationId, { userId: user.id, permissions });
   if (!pre) {
     const fresh = await organizationRepository.findById(organizationId);
@@ -259,6 +264,11 @@ export async function applyOrgDomainMembership(userId: string, email: string): P
   if (!user) return { joined: false, reason: 'user-missing' };
   if (user.emailVerified !== true) return { joined: false, reason: 'unverified' };
 
+  const organization = await organizationRepository.findById(claim.organizationId);
+  if (!organization) return { joined: false, reason: 'org-missing' };
+  // Checked first: the owner holds no users[] row, so the atomic add alone would not see them.
+  if (organizationService.isCurrentOrgMember(organization, userId)) return { joined: false, reason: 'already-member' };
+
   return addMemberViaClaim(claim, user);
 }
 
@@ -271,7 +281,7 @@ async function joinableClaimForEmail(email: string | null | undefined): Promise<
   if (!domain) return null;
   const claim = await orgDomainClaimRepository.findVerifiedJoinableByDomain(domain);
   if (!claim) return null;
-  const partnerRule = await partnerSignupRuleRepository.findByDomain(domain);
+  const partnerRule = await enabledPartnerRule(domain);
   if (partnerRule?.organizationId && partnerRule.organizationId !== claim.organizationId) return null;
   return claim;
 }

@@ -1,4 +1,4 @@
-// PATCH  /api/organizations/:id/domains/:claimId - set { policy?, defaultRole? }
+// PATCH  /api/organizations/:id/domains/:claimId - set { policy }
 // DELETE /api/organizations/:id/domains/:claimId - remove the claim
 // Owner, manager or platform admin (canAdministerOrganization). Claims resolve only within :id.
 
@@ -35,10 +35,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         actorScope: 'organization',
         target: { kind: 'organization', id: organizationId, displayName: organization.name },
         summary: `updated join policy for ${after.domain}`,
-        changes: [
-          { field: 'policy', before: before.policy, after: after.policy },
-          { field: 'defaultRole', before: before.defaultRole, after: after.defaultRole },
-        ],
+        changes: [{ field: 'policy', before: before.policy, after: after.policy }],
       });
 
       return res.status(200).json({ claim: toOrgDomainClaimView(after) });

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { OrgDomainClaim, orgDomainClaimRepository } from './OrgDomainClaimModel';
 import { setupMongoTest } from '../../../__test__/utils';
 
@@ -13,7 +13,6 @@ const createClaim = (organizationId: string, domain = 'acme.com') =>
     verificationToken: `token-${organizationId}`,
     verifiedAt: null,
     policy: 'off',
-    defaultRole: 'member',
     createdBy: null,
   });
 
@@ -94,11 +93,24 @@ describe('OrgDomainClaimModel', () => {
     expect(await orgDomainClaimRepository.findVerifiedByDomain('ACME.COM')).toMatchObject({ organizationId: ORG_A });
     expect(await orgDomainClaimRepository.findVerifiedJoinableByDomain('acme.com')).toBeNull();
 
-    await orgDomainClaimRepository.updatePolicy(id, ORG_A, { policy: 'suggest', defaultRole: 'viewer' });
+    await orgDomainClaimRepository.updatePolicy(id, ORG_A, { policy: 'suggest' });
     expect(await orgDomainClaimRepository.findVerifiedJoinableByDomain('acme.com')).toMatchObject({
       policy: 'suggest',
-      defaultRole: 'viewer',
     });
+  });
+
+  it('ensures indexes are built before it marks a claim verified', async () => {
+    const claim = await createClaim(ORG_A);
+    const init = vi.spyOn(OrgDomainClaim, 'init');
+    const update = vi.spyOn(OrgDomainClaim, 'findOneAndUpdate');
+    try {
+      await orgDomainClaimRepository.markVerified(String(claim.id), ORG_A);
+      expect(init).toHaveBeenCalledTimes(1);
+      expect(init.mock.invocationCallOrder[0]).toBeLessThan(update.mock.invocationCallOrder[0]);
+    } finally {
+      init.mockRestore();
+      update.mockRestore();
+    }
   });
 
   it('deletes every claim of an organization', async () => {
