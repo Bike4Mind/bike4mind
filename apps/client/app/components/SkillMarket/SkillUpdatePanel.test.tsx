@@ -151,6 +151,14 @@ describe('SkillUpdatePanel notices and update wording', () => {
     expect(text).not.toContain('safety checks');
   });
 
+  it('says the author approved their own version rather than a reviewer', () => {
+    h.detail.data = { version: { ...latestDetail.version, reviewStatus: 'approved', selfApproved: true } };
+    renderWith(stale);
+    const text = screen.getByTestId('skill-market-update-panel').textContent;
+    expect(text).toContain('The author published and approved a new version.');
+    expect(text).not.toContain('a reviewer approved');
+  });
+
   it('says safety checks passed for an auto-approved version', () => {
     h.detail.data = withReview('auto_approved');
     renderWith(stale);

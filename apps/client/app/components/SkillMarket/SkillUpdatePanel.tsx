@@ -148,8 +148,10 @@ const SkillUpdatePanel: FC<{ skill: ISkillWithSharing }> = ({ skill }) => {
             Update available (v{status.importedVersion} {'->'} v{status.latestVersion})
           </Typography>
           <Typography level="body-sm">
-            {UPDATE_ORIGIN[data?.version?.reviewStatus ?? ''] ?? 'The author published a new version.'} Nothing changes
-            until you update.
+            {data?.version?.selfApproved
+              ? 'The author published and approved a new version.'
+              : (UPDATE_ORIGIN[data?.version?.reviewStatus ?? ''] ?? 'The author published a new version.')}{' '}
+            Nothing changes until you update.
           </Typography>
         </Box>
 

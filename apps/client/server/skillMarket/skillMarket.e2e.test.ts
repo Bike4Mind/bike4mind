@@ -782,9 +782,13 @@ describe('Skill Market (real mongod)', () => {
   });
 
   it('reports: the queue splits counting reports from the total, and an importer sees the hidden state', async () => {
-    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public');
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    const { listing } = await publish(source, 'public');
     const imported = await call(importHandler, 'POST', OTHER, { id: listing.id });
     const copy = (await skillRepository.findById(imported._getJSONData().skill.id))!;
+    // A newer version exists, so the copy is stale; the report hold must still win.
+    await skillRepository.update({ id: source.id, body: 'Rewrite as bullets v2.' });
+    await submitListingVersion(listing, (await skillRepository.findById(source.id))!, deps);
     for (const u of ['new-1', 'new-2']) {
       await call(reportHandler, 'POST', u, { id: listing.id }, { reason: 'spam' }, false, new Date());
     }
@@ -800,7 +804,7 @@ describe('Skill Market (real mongod)', () => {
     expect(status.marketStatus?.state).toBe('hidden');
     await call(moderateHandler, 'POST', ADMIN, { id: listing.id }, { action: 'restore' }, true);
     [status] = await attachMarketStatus([copy]);
-    expect(status.marketStatus?.state).toBe('current');
+    expect(status.marketStatus?.state).toBe('stale');
   });
 
   it('update: refuses to apply a version other than the one the importer reviewed', async () => {
