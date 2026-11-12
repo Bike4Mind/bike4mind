@@ -22,7 +22,8 @@ import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import PersonIcon from '@mui/icons-material/Person';
 import { useQuery } from '@tanstack/react-query';
-import { adminUserProfilePath, FeedbackStatus } from '@bike4mind/common';
+import { adminUserProfilePath, FeedbackStatus, FEEDBACK_RESOLUTION_LABELS } from '@bike4mind/common';
+import FeedbackHistory from './FeedbackHistory';
 import { getFeedbackByIdFromServer } from '@client/app/utils/feedbackAPICalls';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import { openHelpPanel, useHelpPanel } from '@client/app/hooks/useHelpPanel';
@@ -372,6 +373,12 @@ const FeedbackDetailBody = ({
       )}
 
       <SectionCard title="Status" data-testid="feedback-detail-status">
+        {record.resolution && (
+          <Fact label="Resolution">
+            {FEEDBACK_RESOLUTION_LABELS[record.resolution]}
+            {record.resolutionDuplicateId ? ` (${record.resolutionDuplicateId})` : ''}
+          </Fact>
+        )}
         <Fact label="Status">
           <Select
             size="sm"
@@ -399,6 +406,7 @@ const FeedbackDetailBody = ({
           {record.updatedAt ? formatDateTime(record.updatedAt) : undefined}
         </Fact>
       </SectionCard>
+      <FeedbackHistory key={record._id} id={record._id} />
     </Stack>
   );
 };
