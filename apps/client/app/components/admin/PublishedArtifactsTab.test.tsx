@@ -158,6 +158,42 @@ describe('PublishedArtifactsTab', () => {
     expect(screen.getByTestId('admin-published-takedown-dialog')).toBeInTheDocument();
   });
 
+  it("shows the server's reason when a restore conflicts with a re-published slug", async () => {
+    mocks.get.mockImplementation((url: string) =>
+      url.endsWith('/reports')
+        ? Promise.resolve({ data: { reports: [] } })
+        : Promise.resolve(listResponse([artifact('a3', { moderationStatus: 'taken_down' })]))
+    );
+    mocks.del.mockRejectedValue(
+      Object.assign(new Error('conflict'), {
+        isAxiosError: true,
+        response: { status: 409, data: { error: 'Another page now occupies this URL.' } },
+      })
+    );
+    renderTab();
+    fireEvent.click(await screen.findByTestId('admin-published-row-a3'));
+    fireEvent.click(await screen.findByTestId('admin-published-restore-a3'));
+    const dialog = await screen.findByTestId('admin-published-restore-dialog');
+    fireEvent.change(within(dialog).getByTestId('admin-published-restore-dialog-reason-input'), {
+      target: { value: 'Taken down in error' },
+    });
+    fireEvent.click(within(dialog).getByTestId('admin-published-restore-dialog-confirm-btn'));
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('Another page now occupies this URL.'));
+  });
+
+  it('steps back a page when the current page empties', async () => {
+    mocks.get.mockImplementation((url: string) =>
+      Promise.resolve(url.includes('skip=50') ? listResponse([], 50) : listResponse([artifact('a1')], 51))
+    );
+    renderTab();
+    await screen.findByTestId('admin-published-row-a1');
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    await waitFor(() =>
+      expect(mocks.get).toHaveBeenCalledWith('/api/admin/published-artifacts?status=reported&limit=50&skip=50')
+    );
+    expect(await screen.findByTestId('admin-published-row-a1')).toBeInTheDocument();
+  });
+
   it('shows an empty state when nothing is reported', async () => {
     mocks.get.mockResolvedValue(listResponse([]));
     renderTab();

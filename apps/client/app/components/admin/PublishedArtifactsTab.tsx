@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Box, Button, IconButton, Link, Skeleton, Stack, Tooltip, Typography } from '@mui/joy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import { isAxiosError } from 'axios';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
@@ -81,6 +82,13 @@ function publicPagePath(a: AdminArtifact): string {
 
 const LIST_KEY = 'admin-published-artifacts';
 
+/** A 404 (already taken down) or 409 (slug re-published) will not succeed on retry, so show the server's reason. */
+function writeFailureMessage(err: unknown, fallback: string): string {
+  if (!isAxiosError<{ error?: string }>(err)) return fallback;
+  const status = err.response?.status;
+  return (status === 404 || status === 409) && err.response?.data?.error ? err.response.data.error : fallback;
+}
+
 const OpenPageButton: React.FC<{ artifact: AdminArtifact }> = ({ artifact }) => (
   <Tooltip title="Open the public page">
     <IconButton
@@ -123,6 +131,11 @@ const PublishedArtifactsTab: React.FC = () => {
   const listed = artifacts.find(a => a.publicId === selectedId);
   if (listed && listed !== selected) setSelected(listed);
 
+  const total = data?.total ?? 0;
+  // Server paging is not clamped by DataTable, so a takedown that empties the last page would strand it.
+  const lastPage = Math.max(1, Math.ceil(total / pageSize));
+  if (data && !isPlaceholderData && page > lastPage) setPage(lastPage);
+
   const onWriteSuccess = () => queryClient.invalidateQueries({ queryKey: [LIST_KEY] });
 
   const takedown = useMutation({
@@ -148,8 +161,8 @@ const PublishedArtifactsTab: React.FC = () => {
       await takedown.mutateAsync({ publicId: selected.publicId, reason });
       toast.success('Page taken down');
       closeAll();
-    } catch {
-      toast.error('The page could not be taken down. Try again.');
+    } catch (err) {
+      toast.error(writeFailureMessage(err, 'The page could not be taken down. Try again.'));
     }
   };
 
@@ -159,8 +172,8 @@ const PublishedArtifactsTab: React.FC = () => {
       await restore.mutateAsync(selected.publicId);
       toast.success('Page restored');
       closeAll();
-    } catch {
-      toast.error('The page could not be restored. Try again.');
+    } catch (err) {
+      toast.error(writeFailureMessage(err, 'The page could not be restored. Try again.'));
     }
   };
 
@@ -224,8 +237,6 @@ const PublishedArtifactsTab: React.FC = () => {
       render: a => (a.publishedAt ? <RelativeTime at={a.publishedAt} /> : '-'),
     },
   ];
-
-  const total = data?.total ?? 0;
 
   return (
     <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="admin-published-pages">
