@@ -16,7 +16,7 @@ const fixture = () => {
     vectors: [Array.from({ length: 1536 }, () => 0.1)],
     inputTokens: 10,
   }));
-  return { settlement, reserve, embed, loadConfig: async () => config() };
+  return { settlement, reserve, embed, recordAttempt: vi.fn(async () => {}), loadConfig: async () => config() };
 };
 describe('budgeted admin embeddings', () => {
   it.each([
@@ -43,6 +43,9 @@ describe('budgeted admin embeddings', () => {
       })
     );
     expect(deps.settlement.settle).toHaveBeenCalledOnce();
+    expect(deps.recordAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ calls: 1, costUnknown: false, outcome: 'suggestion' })
+    );
   });
   it('refuses over budget before any provider work', async () => {
     const deps = fixture();
@@ -55,6 +58,9 @@ describe('budgeted admin embeddings', () => {
     deps.embed.mockRejectedValue(new Error('provider failed'));
     expect(await embedAdminAi('feedbackTriage', 'hello', deps)).toEqual({ ok: false, skip: 'provider_down' });
     expect(deps.settlement.fail).toHaveBeenCalledOnce();
+    expect(deps.recordAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ calls: 1, knownCostUsd: 0, costUnknown: true, skipReason: 'provider_down' })
+    );
     deps.embed.mockResolvedValue({ vectors: [[1]], inputTokens: 1 });
     expect(await embedAdminAi('feedbackTriage', 'hello', deps)).toEqual({ ok: false, skip: 'invalid_output' });
   });

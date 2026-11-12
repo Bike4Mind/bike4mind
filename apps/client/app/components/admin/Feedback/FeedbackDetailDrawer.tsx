@@ -317,7 +317,7 @@ const FeedbackDetailBody = ({
         </Stack>
       )}
 
-      <FeedbackAiPanel feedbackId={record._id} />
+      <FeedbackAiPanel key={record._id} feedbackId={record._id} />
 
       <SectionCard
         title="Reporter"

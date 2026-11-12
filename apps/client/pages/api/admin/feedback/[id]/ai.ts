@@ -66,7 +66,7 @@ const handler = adminApi({
         !row ||
         !suggestion ||
         suggestion.id !== suggestionId ||
-        suggestion.status !== 'pending' ||
+        !['pending', 'accepted', 'overridden'].includes(suggestion.status) ||
         suggestion.policyVersion !== FEEDBACK_AI_POLICY
       )
         throw new ConflictError('This suggestion changed. Refresh and try again.');
@@ -81,12 +81,13 @@ const handler = adminApi({
       );
       const decision = await adminAiSuggestionRepository.transition(
         suggestionId,
-        ['pending'],
+        [suggestion.status],
         accepted ? 'accepted' : 'overridden',
         {
           decidedBy: { userId: req.user!.impersonatedBy ?? req.user!.id, name: req.user!.username || 'Admin' },
           overrideAction: labels,
           overrideReason: reason,
+          overrideCostly: false,
         }
       );
       if (!decision) throw new ConflictError('This suggestion was already reviewed');

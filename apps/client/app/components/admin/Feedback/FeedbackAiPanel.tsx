@@ -11,6 +11,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { ActionDialog, AiSuggestion } from '../shared';
 import { FEEDBACK_LIST_QUERY_KEY } from './queryKeys';
 import { toast } from 'sonner';
+import { AdminPermissionAction } from '../shared/MissingPermission';
 
 export default function FeedbackAiPanel({ feedbackId }: { feedbackId: string }) {
   const client = useQueryClient();
@@ -36,10 +37,23 @@ export default function FeedbackAiPanel({ feedbackId }: { feedbackId: string }) 
           status: suggestion.status,
           reasons: [{ text: 'Advisory only. Review before acting.' }],
         }}
-        onAccept={suggestion.status === 'pending' ? () => setDraft(suggestion.labels) : undefined}
-        onOverride={suggestion.status === 'pending' ? () => setDraft(data.labels ?? suggestion.labels) : undefined}
         data-testid="feedback-ai-suggestion"
       />
+      {
+        <AdminPermissionAction requirement="users:moderate">
+          {disabled => (
+            <Button
+              disabled={disabled}
+              variant="outlined"
+              size="sm"
+              onClick={() => setDraft(data.labels ?? suggestion.labels)}
+              data-testid="feedback-ai-review-btn"
+            >
+              Review labels
+            </Button>
+          )}
+        </AdminPermissionAction>
+      }
       {data.labels && (
         <Typography level="body-sm">
           Labels: {data.labels.area}, {data.labels.severity}
