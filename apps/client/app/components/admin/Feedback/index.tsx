@@ -46,7 +46,7 @@ import { useFeedbackPagination } from './hooks/useFeedbackPagination';
 import { getFeedbackDisplayContent, type IExtendedFeedbackDocument } from './types';
 import FeedbackDetailDrawer from './FeedbackDetailDrawer';
 import { useFeedbackDetailNavigation } from './hooks/useFeedbackDetailNavigation';
-import { copyFeedbackRecordLink, feedbackConversationPath } from './feedbackLinks';
+import { copyFeedbackRecordLink, feedbackConversationPath, feedbackReporterMailto } from './feedbackLinks';
 import HelpContextChip from './HelpContextChip';
 import FeedbackTrendStrip from './FeedbackTrendStrip';
 import { FEEDBACK_RECEIVED_LABELS, FEEDBACK_RECEIVED_WINDOWS } from './feedbackTrends';
@@ -205,6 +205,7 @@ const ContentCell = ({ row }: { row: FeedbackRow }) => (
 
 const FeedbackRowMenu = ({ row, onDelete }: { row: FeedbackRow; onDelete: (row: FeedbackRow) => void }) => {
   const conversationPath = feedbackConversationPath(row);
+  const reporterMailto = feedbackReporterMailto(row);
   return (
     <Dropdown>
       <MenuButton
@@ -237,6 +238,11 @@ const FeedbackRowMenu = ({ row, onDelete }: { row: FeedbackRow; onDelete: (row: 
             data-testid={`feedback-row-open-conversation-${row._id}`}
           >
             {row.questId ? 'Open the conversation at this turn' : 'Open the conversation'}
+          </MenuItem>
+        )}
+        {reporterMailto && (
+          <MenuItem component="a" href={reporterMailto} data-testid={`feedback-row-email-reporter-${row._id}`}>
+            Email reporter
           </MenuItem>
         )}
         <ListDivider />
