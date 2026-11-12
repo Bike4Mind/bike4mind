@@ -27,3 +27,4 @@ export * from './events/overwatch';
 export * from './events/marketingReports';
 export * from './events/briefcase';
 export * from './events/firstRun';
+export * from './events/mfaEnrollment';
