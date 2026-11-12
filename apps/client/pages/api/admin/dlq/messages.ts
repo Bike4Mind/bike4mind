@@ -20,6 +20,9 @@ import { Logger } from '@bike4mind/observability';
 import { dlqFailureRepository } from '@bike4mind/database';
 import { z } from 'zod';
 
+// Short polling samples a subset of SQS servers and can return empty for a sparse queue; a brief wait queries them all.
+const RECEIVE_WAIT_SECONDS = 2;
+
 const QuerySchema = z.object({
   queue: z.string().min(1, 'queue label is required'),
   maxMessages: z
@@ -86,7 +89,7 @@ const handler = adminApi({
 
   const canReplay = meetsAdminPermissionRequirement(req.user, 'settings:manage');
   const [received, consumerLogs] = await Promise.all([
-    receiveFromQueue(dlqUrl, maxMessages, canReplay ? 120 : 0),
+    receiveFromQueue(dlqUrl, maxMessages, canReplay ? 120 : 0, RECEIVE_WAIT_SECONDS),
     settleWithinBudget([resolveConsumerLogsForSourceQueue(dlqEntry.sourceQueue)], CONSUMER_LOGS_BUDGET_MS).then(
       ([logs]) => logs
     ),
