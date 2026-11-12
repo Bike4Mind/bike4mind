@@ -954,8 +954,9 @@ export function ChatShell({
   const panelSpace = panelShown && panelLayout === 'push' ? SESSION_PANEL_SPACE : 0;
   // Unmeasured reads as too narrow, the reverse of the panel: a rail drawn before the width is
   // known could overhang the sidebar for a frame, where the footer it falls back to cannot.
-  // A pushing panel's reserved space narrows the scroller the column is centred in.
-  const statsRailFits = railFitsBesideThread(threadRegionWidth === null ? null : threadRegionWidth - panelSpace);
+  // A pushing panel's reserved space narrows the scroller; the orchestrator's thread dock is narrower still.
+  const statsRailFits =
+    !orchestratorShown && railFitsBesideThread(threadRegionWidth === null ? null : threadRegionWidth - panelSpace);
   const statsRailOn = useReplyStatsPrefs().rail;
   const bindingErrorHidden =
     !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));

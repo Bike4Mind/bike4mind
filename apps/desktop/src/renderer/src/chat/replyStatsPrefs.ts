@@ -12,9 +12,9 @@ export const REPLY_STATS_RAIL_INSET = 16;
 
 /**
  * Whether the stats rail fits left of the reading column without covering its text; the left-hand
- * counterpart of panelFitsBesideThread, read off the same measured width. That width is the thread
- * region's, which already leaves out the scrollbar the column is centred beside. Not until it has
- * been measured: a rail drawn on a guess would cover the text in a window that turns out narrow.
+ * counterpart of sessionPanelLayout's `beside`, read off the same measured width. That width is the
+ * thread region's, which already leaves out the scrollbar the column is centred beside. Not until it
+ * has been measured: a rail drawn on a guess would cover the text in a window that turns out narrow.
  */
 export function railFitsBesideThread(regionWidth: number | null): boolean {
   if (regionWidth === null) return false;

@@ -570,13 +570,23 @@ describe('the reply stats rail in the shell', () => {
     expect(escapingAbsolutes()).toEqual([]);
   });
 
-  it('leaves out the space a docked session panel reserves when deciding the rail fits', async () => {
+  it('leaves out the space a pushing session panel reserves when deciding the rail fits', async () => {
     paneWidth(1300);
     await open('bound');
 
     expect(find('session-panel')).not.toBeNull();
     expect(find('chat-reply-stats-rail')).toBeNull();
     expect(get('chat-message-cost').textContent).toContain('4.0s total');
+  });
+
+  it('keeps the rail beside a session panel that floats in the free margin', async () => {
+    paneWidth(1400);
+    await open('bound');
+
+    expect(get('session-panel').dataset.variant).toBe('docked');
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
+    expect(get('chat-thread').contains(get('chat-reply-stats-rail'))).toBe(true);
+    expect(find('chat-message-cost')).toBeNull();
   });
 
   it('drops the rail below the breakpoint, the stats going back to the hover footer, and keeps the toggle', async () => {
