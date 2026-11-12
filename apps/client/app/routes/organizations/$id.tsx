@@ -10,6 +10,7 @@ import OrganizationMembers from '@client/app/components/organizations/Member';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
 import OrganizationBillingSection from '@client/app/components/organizations/OrganizationBillingSection';
 import OrganizationSettingsSection from '@client/app/components/organizations/OrganizationSettingsSection';
+import OrganizationAuditSection from '@client/app/components/organizations/OrganizationAuditSection';
 import OrganizationUsageSection from '@client/app/components/organizations/OrganizationUsageSection';
 import OrganizationAnalysisSection from '@client/app/components/organizations/OrganizationAnalysisSection';
 import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIntegration';
@@ -63,6 +64,7 @@ import {
   canViewOrgAnalysis,
   canViewOrgBilling,
   canViewOrgUsage,
+  canViewOrgAudit,
   OrganizationTabs,
   resolveAccessibleTab,
 } from '@client/app/routes/organizations/orgTabAccess';
@@ -109,6 +111,7 @@ const OrganizationPage: FC = () => {
   // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs are owner-only;
   // Analysis is open to managers. None of them follows the permission set - see orgTabAccess.ts.
   const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
+  const canViewAudit = canViewOrgAudit(currentUser, organization);
   const canViewAnalysis = useMemo(() => canViewOrgAnalysis(currentUser, organization), [currentUser, organization]);
   const canManageIntegrations = useMemo(
     () => canManageOrgIntegrations(currentUser, organization),
@@ -145,6 +148,7 @@ const OrganizationPage: FC = () => {
   // would break the link for this caller the day they are granted access, and make one shared URL
   // mean different things to different people.
   const selectedTab = resolveAccessibleTab(requestedTab, {
+    canViewAudit,
     canManageOrg,
     canViewUsage,
     canViewAnalysis,
@@ -287,9 +291,19 @@ const OrganizationPage: FC = () => {
                 {t('organization.tabs.settings')}
               </Tab>
             )}
+            {canViewAudit && (
+              <Tab value={OrganizationTabs.Audit} data-testid="organization-audit-tab">
+                Audit
+              </Tab>
+            )}
           </TabList>
 
           <Box sx={{ p: 3, flex: 1, overflow: 'auto' }}>
+            {canViewAudit && selectedTab === OrganizationTabs.Audit && (
+              <TabPanel value={OrganizationTabs.Audit}>
+                <OrganizationAuditSection key={organization.id} organizationId={organization.id} />
+              </TabPanel>
+            )}
             <TabPanel value={OrganizationTabs.Overview}>
               <OrganizationOverviewSection organization={organization} />
             </TabPanel>
