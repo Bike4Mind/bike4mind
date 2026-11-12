@@ -105,8 +105,7 @@ const OrganizationPage: FC = () => {
     return userPermissions.includes(Permission.share) || userPermissions.includes(Permission.update);
   }, [userPermissions]);
 
-  // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs are owner-only;
-  // Analysis is open to managers. None of them follows the permission set - see orgTabAccess.ts.
+  // Usage and Analysis admit current managers; integrations stay owner-only (orgTabAccess.ts).
   const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
   const canViewAudit = canViewOrgAudit(currentUser, organization);
   const canViewAnalysis = useMemo(() => canViewOrgAnalysis(currentUser, organization), [currentUser, organization]);

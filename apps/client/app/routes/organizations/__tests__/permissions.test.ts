@@ -169,12 +169,19 @@ describe('Organization Permissions', () => {
     });
   });
 
-  // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs share the
-  // verifyOrgOwner tier: owner or platform admin, never a manager.
-  describe.each([
-    ['canViewOrgUsage', canViewOrgUsage],
-    ['canManageOrgIntegrations', canManageOrgIntegrations],
-  ])('%s', (_name, gate) => {
+  describe('canViewOrgUsage', () => {
+    const org = { userId: 'owner', adminUserIds: ['manager', 'lapsed'], users: [{ userId: 'manager' }] };
+    it('admits current managers to usage but not billing', () => {
+      expect(canViewOrgUsage({ id: 'manager' }, org)).toBe(true);
+      expect(canViewOrgBilling({ id: 'manager' }, org)).toBe(false);
+    });
+    it('denies former managers and unrelated users', () => {
+      expect(canViewOrgUsage({ id: 'lapsed' }, org)).toBe(false);
+      expect(canViewOrgUsage({ id: 'stranger' }, org)).toBe(false);
+    });
+  });
+
+  describe.each([['canManageOrgIntegrations', canManageOrgIntegrations]])('%s', (_name, gate) => {
     const org = {
       userId: 'owner123',
       adminUserIds: ['orgManager789'],
@@ -358,10 +365,10 @@ describe('resolveAccessibleTab', () => {
     );
   });
 
-  // A manager: Analysis is open to them, Usage (credit spend) is owner-only.
-  it('bounces Usage but keeps Analysis for a manager', () => {
-    const manager = { ...all, canViewUsage: false, canManageIntegrations: false, canViewBilling: false };
-    expect(resolveAccessibleTab(OrganizationTabs.Usage, manager)).toBe(OrganizationTabs.Overview);
+  it('keeps Usage and Analysis but bounces Billing for a manager', () => {
+    const manager = { ...all, canViewUsage: true, canManageIntegrations: false, canViewBilling: false };
+    expect(resolveAccessibleTab(OrganizationTabs.Usage, manager)).toBe(OrganizationTabs.Usage);
+    expect(resolveAccessibleTab(OrganizationTabs.Billing, manager)).toBe(OrganizationTabs.Overview);
     expect(resolveAccessibleTab(OrganizationTabs.Analysis, manager)).toBe(OrganizationTabs.Analysis);
   });
 

@@ -7469,6 +7469,55 @@ describe('ChatCompletionProcess', () => {
         logger: mockLogger,
       });
 
+    it.each([
+      ['org1', '665000000000000000000001'],
+      ['other-org', undefined],
+      [undefined, undefined],
+    ])(
+      'records only matching explicit org project context through completion settlement: %s',
+      async (binding, expected) => {
+        const { usageEventsRecord } = arrangeUsageEventScenario({
+          enforceCredits: true,
+          primaryComplete: async (_m, _ms, _o, cb) => {
+            await cb(['Hello'], { inputTokens: 100, outputTokens: 50 });
+          },
+        });
+        const projectId = '665000000000000000000001';
+        mockDb.projects = {
+          ...mockDb.projects,
+          shareable: {
+            findAccessibleById: vi.fn().mockResolvedValue({
+              id: projectId,
+              userId: 'user1',
+              organizationId: binding,
+              fileIds: [],
+              systemPrompts: [],
+              sessionIds: [],
+            }),
+          },
+        };
+        mockDb.organizations.findById.mockResolvedValue({
+          id: 'org1',
+          name: 'Team',
+          currentCredits: 100_000,
+          userDetails: [],
+        });
+        mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: 100_000 });
+        await service.process({
+          body: { ...startQuestParams, tools: [], projectId, organizationId: 'org1' },
+          logger: mockLogger,
+        });
+        expect(usageEventsRecord).toHaveBeenCalledWith(
+          expect.objectContaining({
+            projectId: expected,
+            feature: 'chat',
+            ownerId: 'org1',
+            ownerType: CreditHolderType.Organization,
+          })
+        );
+      }
+    );
+
     it('records no refusal row when the hop failed for a non-refusal reason', async () => {
       const { usageEventsRecord, fallbackModel } = arrangeUsageEventScenario({
         enforceCredits: true,

@@ -76,6 +76,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     ownerId: { type: String, required: true },
     ownerType: { type: String, required: true, enum: ['User', 'Organization', 'Agent'] as CreditHolderType[] },
     sessionId: { type: String, required: false },
+    projectId: { type: String, required: false },
     dataLakeId: { type: String, required: false },
     feature: { type: String, required: true, enum: [...USAGE_EVENT_FEATURES] },
     provider: { type: String, required: true },
@@ -806,6 +807,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     const [result] = await this.model.aggregate<{
       overTime: IOwnerSpendDay[];
       byMember: IOwnerSpendMember[];
+      byProject: IOwnerUsageSummary['byProject'];
       byModel: IOwnerSpendModel[];
       byFeature: IOwnerSpendFeature[];
       totals: IUsageSpendBucket[];
@@ -828,6 +830,11 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             { $project: { _id: 0, userId: '$_id', ...spendFields } },
             { $sort: { creditsCharged: -1 } },
           ],
+          byProject: [
+            { $group: { _id: { $ifNull: ['$projectId', null] }, ...spendSums } },
+            { $project: { _id: 0, projectId: '$_id', ...spendFields } },
+            { $sort: { creditsCharged: -1, projectId: 1 } },
+          ],
           byModel: [
             { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
             { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
@@ -847,6 +854,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     return {
       overTime: result?.overTime ?? [],
       byMember: result?.byMember ?? [],
+      byProject: result?.byProject ?? [],
       byModel: result?.byModel ?? [],
       byFeature: result?.byFeature ?? [],
       // $facet yields totals as a 0- or 1-element array; unwrap to a scalar bucket.
