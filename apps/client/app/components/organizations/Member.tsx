@@ -8,6 +8,8 @@ import {
   isOrgOwnerOrCurrentAdmin,
   isOrgOwnerOrPlatformAdmin,
   IUserDocument,
+  ORG_INVITE_ROLES,
+  OrgInviteRole,
   Permission,
 } from '@bike4mind/common';
 import GenericAddItemsModal from '@client/app/components/common/GenericAddItemsModal';
@@ -17,7 +19,20 @@ import { useCancelInvite, useShareDocument } from '@client/app/hooks/data/invite
 import { useGetOrganizationUsers, useGetPendingOrganizationUsers, useGetUsers } from '@client/app/hooks/data/user';
 import { IGetUsersParams } from '@client/app/utils/userAPICalls';
 import SearchIcon from '@mui/icons-material/Search';
-import { Box, Button, Card, Chip, IconButton, Input, Stack, Typography } from '@mui/joy';
+import {
+  Box,
+  Button,
+  Card,
+  Chip,
+  FormControl,
+  FormLabel,
+  IconButton,
+  Input,
+  Option,
+  Select,
+  Stack,
+  Typography,
+} from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import debounce from 'lodash/debounce';
 import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
@@ -65,10 +80,9 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
   );
   const { data: usersData, isFetching } = useGetUsers(params, { enabled: modalSearch.length >= 3 });
 
-  const [permissions] = useState<{ value: Permission[]; error?: string | null }>({
-    value: [Permission.read],
-    error: null,
-  });
+  const [role, setRole] = useState<OrgInviteRole>('viewer');
+  // Mirrors the server gate in sharingService.createInvite: only the owner tier may invite an admin.
+  const canGrantAdmin = !!currentUser && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
   const shareDocument = useShareDocument({
     onSuccess: () => {
@@ -128,7 +142,20 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         ?.filter(
           user => !pendingInvites || pendingInvites.some(invite => invite.recipients?.pending?.includes(user.id))
         )
-        .map(u => ({ ...u, status: 'pending' as const, permissions: [], creditUsage: null })) || [])
+        .map(u => {
+          const email = u.email?.toLowerCase();
+          const invite = pendingInvites?.find(candidate =>
+            candidate.recipients?.pending?.some(
+              recipient => recipient === u.id || (!!email && recipient.toLowerCase() === email)
+            )
+          );
+          return {
+            ...u,
+            status: 'pending' as const,
+            permissions: invite && 'permissions' in invite ? invite.permissions : [],
+            creditUsage: null,
+          };
+        }) || [])
     );
 
     if (search) {
@@ -174,11 +201,11 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
           recipients: [id],
           id: organization.id,
           type: InviteType.Organization,
-          permissions: permissions.value,
+          permissions: [...ORG_INVITE_ROLES[role]],
         });
       });
     },
-    [organization.id, permissions.value, shareDocument]
+    [organization.id, role, shareDocument]
   );
 
   const pendingEmails = useMemo(
@@ -213,7 +240,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
                   recipients: [email],
                   id: organization.id,
                   type: InviteType.Organization,
-                  permissions: permissions.value,
+                  permissions: [...ORG_INVITE_ROLES[role]],
                 })
               }
             >
@@ -232,7 +259,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
       hasAvailableSeats,
       shareDocument,
       organization.id,
-      permissions.value,
+      role,
     ]
   );
   const pendingEmailInvites = (pendingInvites ?? []).flatMap(invite =>
@@ -450,6 +477,20 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
                 renderNoResults={renderNoResults}
                 isLoadingMore={isFetching}
                 showButtonBadge={false}
+                leftGridContent={
+                  <FormControl size="sm">
+                    <FormLabel>{t('organizations.modals.members.role_label', 'Role')}</FormLabel>
+                    <Select
+                      data-testid="organization-members-role-select"
+                      value={role}
+                      onChange={(_event, value) => value && setRole(value)}
+                    >
+                      <Option value="viewer">Viewer</Option>
+                      <Option value="editor">Editor</Option>
+                      {canGrantAdmin && <Option value="admin">Admin</Option>}
+                    </Select>
+                  </FormControl>
+                }
               />
             ) : (
               <Button

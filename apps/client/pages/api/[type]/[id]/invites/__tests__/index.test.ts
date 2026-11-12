@@ -291,6 +291,29 @@ describe('POST /api/[type]/[id]/invites', () => {
     expect(decrementCounter).toHaveBeenCalledWith('rate-limit:u1:invite-recipients');
   });
 
+  it('surfaces an organization invite with no known role as a 400 and refunds the budget', async () => {
+    const { BadRequestError } = await import('@bike4mind/utils');
+    createInvite.mockRejectedValueOnce(new BadRequestError('Invalid role for organization invite'));
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'organizations', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['share'], recipients: ['new@example.com'] },
+    });
+    Object.assign(req, { user: { id: 'u1' } });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Invalid role for organization invite',
+    });
+    expect(createInvite).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: 'Organization', permissions: ['share'] }),
+      expect.anything()
+    );
+    expect(decrementCounter).toHaveBeenCalledWith('rate-limit:u1:invite-recipients');
+    expect(sendInviteNotificationEmails).not.toHaveBeenCalled();
+  });
+
   // No type this route accepts puts an address with no account in `pending` today; this pins the
   // shared mailer's fallback should the sharing service ever start to.
   it('emails an address with no account the fixed template only, and an account holder the message', async () => {

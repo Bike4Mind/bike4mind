@@ -588,7 +588,7 @@ describe('sharingService - createInvite (organization arm authority)', () => {
   const create = (user: IUserDocument) =>
     createInvite(
       user,
-      { id: ORG_ID, type: InviteType.Organization, permissions: [], recipients: [RECIPIENT_ID] } as any,
+      { id: ORG_ID, type: InviteType.Organization, permissions: [Permission.read], recipients: [RECIPIENT_ID] } as any,
       { db }
     );
 
@@ -596,7 +596,7 @@ describe('sharingService - createInvite (organization arm authority)', () => {
     db.users.findByIds.mockResolvedValue([]);
     const invite = await createInvite(
       asUser(OWNER_ID),
-      { id: ORG_ID, type: InviteType.Organization, permissions: [], recipients: [' New@Example.com '] },
+      { id: ORG_ID, type: InviteType.Organization, permissions: [Permission.read], recipients: [' New@Example.com '] },
       { db }
     );
     expect(invite.recipients?.pending).toEqual(['new@example.com']);
@@ -609,7 +609,7 @@ describe('sharingService - createInvite (organization arm authority)', () => {
     await expect(
       createInvite(
         asUser(OWNER_ID),
-        { id: ORG_ID, type: InviteType.Organization, permissions: [], recipients: ['unknown-user'] },
+        { id: ORG_ID, type: InviteType.Organization, permissions: [Permission.read], recipients: ['unknown-user'] },
         { db }
       )
     ).rejects.toThrow('Could not find a user');
@@ -636,7 +636,7 @@ describe('sharingService - createInvite (organization arm authority)', () => {
     await expect(
       createInvite(
         asUser(OWNER_ID),
-        { id: ORG_ID, type: InviteType.Organization, permissions: [], recipients: [recipient] },
+        { id: ORG_ID, type: InviteType.Organization, permissions: [Permission.read], recipients: [recipient] },
         { db }
       )
     ).rejects.toThrow(new BadRequestError('A recipient already has a pending organization invitation'));
@@ -656,7 +656,7 @@ describe('sharingService - createInvite (organization arm authority)', () => {
       {
         id: ORG_ID,
         type: InviteType.Organization,
-        permissions: [],
+        permissions: [Permission.read],
         recipients: [RECIPIENT_ID, 'new-user', ' NEW@example.com '],
       },
       { db }
@@ -745,6 +745,59 @@ describe('sharingService - createInvite (organization arm authority)', () => {
 
     await expect(create(asUser(OWNER_ID))).rejects.toThrow(BadRequestError);
     expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  describe('invite role', () => {
+    const createWith = (user: IUserDocument, permissions: Permission[]) =>
+      createInvite(
+        user,
+        { id: ORG_ID, type: InviteType.Organization, permissions, recipients: [RECIPIENT_ID] },
+        { db }
+      );
+
+    it.each([
+      ['viewer', [Permission.read]],
+      ['editor', [Permission.update, Permission.read]],
+    ])('lets a manager invite a %s and stores the canonical set', async (_role, permissions) => {
+      const invite = await createWith(asUser(MEMBER_ID), permissions);
+
+      expect([...invite.permissions].sort()).toEqual([...permissions].sort());
+    });
+
+    it('refuses an admin invite from a manager', async () => {
+      await expect(
+        createWith(asUser(MEMBER_ID), [Permission.read, Permission.update, Permission.share])
+      ).rejects.toThrow(ForbiddenError);
+      expect(db.invites.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['the owner', OWNER_ID, false],
+      ['a platform admin', 'platform-1', true],
+    ])('lets %s invite an admin', async (_who, id, isAdmin) => {
+      const invite = await createWith(asUser(id, isAdmin), [Permission.share, Permission.update, Permission.read]);
+
+      expect(invite.permissions).toEqual([Permission.read, Permission.update, Permission.share]);
+    });
+
+    it.each([
+      ['empty', []],
+      ['share alone', [Permission.share]],
+      ['delete', [Permission.read, Permission.delete]],
+      ['update without read', [Permission.update]],
+    ])('rejects a %s permission set as no known role', async (_label, permissions) => {
+      await expect(createWith(asUser(OWNER_ID), permissions as Permission[])).rejects.toThrow(
+        new BadRequestError('Invalid role for organization invite')
+      );
+      expect(db.invites.create).not.toHaveBeenCalled();
+    });
+
+    it('collapses duplicate permissions to the role set', async () => {
+      const invite = await createWith(asUser(OWNER_ID), [Permission.read, Permission.read]);
+
+      expect(invite.permissions).toEqual([Permission.read]);
+      expect(db.invites.create).toHaveBeenCalledWith(expect.objectContaining({ permissions: [Permission.read] }));
+    });
   });
 });
 

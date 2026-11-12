@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   share: vi.fn(),
   search: vi.fn(),
   cancel: vi.fn(),
-  invitations: [] as { id: string; recipients: { pending: string[] } }[],
+  invitations: [] as { id: string; recipients: { pending: string[] }; permissions?: string[] }[],
   viewerId: 'viewer',
   viewer: undefined as { id: string; isAdmin: boolean } | null | undefined,
   members: [] as { id: string; name: string }[],
@@ -45,7 +45,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('./UserCard', () => ({
   default: (p: {
-    user: { id: string; creditUsage: { used: number } | null };
+    user: { id: string; creditUsage: { used: number } | null; permissions: string[] };
     canInviteMembers: boolean;
     canRevokeMembers: boolean;
     canManageManagers: boolean;
@@ -56,6 +56,7 @@ vi.mock('./UserCard', () => ({
       data-revoke={String(p.canRevokeMembers)}
       data-manage-managers={String(p.canManageManagers)}
       data-credit-usage={p.user.creditUsage?.used ?? 'hidden'}
+      data-permissions={p.user.permissions.join(',')}
     />
   ),
 }));
@@ -63,6 +64,7 @@ vi.mock('@client/app/components/common/GenericAddItemsModal', () => ({
   default: (props: {
     onSearch: (term: string) => void;
     renderNoResults?: (term: string) => ReactNode;
+    leftGridContent?: ReactNode;
     items: { id: string; name: string; username: string }[];
     selectedIds: string[];
     onSelectIds: (ids: string[]) => void;
@@ -74,6 +76,7 @@ vi.mock('@client/app/components/common/GenericAddItemsModal', () => ({
     ) => ReactNode;
   }) => (
     <div data-testid="member-add-modal">
+      {props.leftGridContent}
       <button data-testid="search-email" onClick={() => props.onSearch('new@example.test')}>
         Search
       </button>
@@ -440,5 +443,80 @@ describe('OrganizationMembers manager controls', () => {
     mocks.viewerId = 'admin1';
     renderMembers(org());
     expect(screen.getByTestId('member-card-member1').getAttribute('data-manage-managers')).toBe('false');
+  });
+});
+
+describe('OrganizationMembers invite role', () => {
+  beforeEach(() => {
+    mocks.viewer = { id: 'owner1', isAdmin: false };
+    mocks.members = [];
+    mocks.pending = [];
+    mocks.searchUsers = [{ id: 'candidate1', name: 'Candidate', username: 'candidate' }];
+    mocks.invitations = [];
+    mocks.seats = { maxSeats: 5, currentSeats: 1, availableSeats: 4 };
+    mocks.share.mockClear();
+  });
+
+  const pickRole = async (label: string) => {
+    fireEvent.click(screen.getByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: label }));
+  };
+
+  it('defaults a search-added invite to viewer', () => {
+    renderMembers(buildOrg({}));
+    fireEvent.click(screen.getByTestId('candidate-candidate1'));
+    fireEvent.click(screen.getByTestId('add-selected'));
+    expect(mocks.share).toHaveBeenCalledWith(
+      expect.objectContaining({ recipients: ['candidate1'], permissions: [Permission.read] })
+    );
+  });
+
+  it('sends the picked role from the search-add path', async () => {
+    renderMembers(buildOrg({}));
+    await pickRole('Editor');
+    fireEvent.click(screen.getByTestId('candidate-candidate1'));
+    fireEvent.click(screen.getByTestId('add-selected'));
+    expect(mocks.share).toHaveBeenCalledWith(
+      expect.objectContaining({ recipients: ['candidate1'], permissions: [Permission.read, Permission.update] })
+    );
+  });
+
+  it('sends the picked role from the by-email path', async () => {
+    mocks.searchUsers = [];
+    renderMembers(buildOrg({}));
+    await pickRole('Editor');
+    fireEvent.click(screen.getByTestId('search-email'));
+    fireEvent.click(await screen.findByTestId('organization-invite-by-email-btn'));
+    expect(mocks.share).toHaveBeenCalledWith(
+      expect.objectContaining({ recipients: ['new@example.test'], permissions: [Permission.read, Permission.update] })
+    );
+  });
+
+  it('offers admin to the owner', async () => {
+    renderMembers(buildOrg({}));
+    fireEvent.click(screen.getByRole('combobox'));
+    expect(await screen.findByRole('option', { name: 'Admin' })).toBeTruthy();
+  });
+
+  it('withholds admin from a manager', async () => {
+    mocks.viewer = { id: 'manager1', isAdmin: false };
+    renderMembers(
+      buildOrg({
+        adminUserIds: ['manager1'],
+        users: [{ userId: 'manager1', permissions: [Permission.read] }] as IOrganizationDocument['users'],
+      })
+    );
+    fireEvent.click(screen.getByRole('combobox'));
+    expect(await screen.findByRole('option', { name: 'Editor' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Admin' })).toBeNull();
+  });
+
+  it('shows a pending member the role their invite carries', () => {
+    mocks.pending = [{ id: 'pending1', name: 'Pending' }];
+    mocks.invitations = [
+      { id: 'invite1', recipients: { pending: ['pending1'] }, permissions: [Permission.read, Permission.update] },
+    ];
+    renderMembers(buildOrg({}));
+    expect(screen.getByTestId('member-card-pending1').getAttribute('data-permissions')).toBe('read,update');
   });
 });

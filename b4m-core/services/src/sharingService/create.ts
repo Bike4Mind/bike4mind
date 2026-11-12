@@ -18,8 +18,11 @@ import {
   grantablePermissions,
   generateInviteToken,
   isOrgMember,
+  isOrgOwnerOrPlatformAdmin,
+  ORG_INVITE_ROLES,
+  roleForPermissions,
 } from '@bike4mind/common';
-import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { assertCanManageOrgGroups } from '../organizationService/groupMembership';
 
@@ -89,6 +92,14 @@ export const createInvite = async (
       doc = organizationForInvite;
       pendingOrganizationRecipients = organizationInvite.pendingRecipients;
       name = doc?.name;
+      // The invite's permissions become the member's users[] row on accept, so only a known role
+      // may be minted, and the manager-making admin role stays with the owner tier.
+      const role = roleForPermissions(rest.permissions);
+      if (!role) throw new BadRequestError('Invalid role for organization invite');
+      if (role === 'admin' && !isOrgOwnerOrPlatformAdmin(user, organizationForInvite)) {
+        throw new ForbiddenError('Only the organization owner can invite an admin');
+      }
+      rest.permissions = [...ORG_INVITE_ROLES[role]];
       break;
     }
     case InviteType.Group: {
