@@ -592,6 +592,14 @@ describe('validateUserApiKey - exchange key marker', () => {
     expect(result.oauthExchangeClientId).toBe('client-1');
   });
 
+  it.each([
+    ['missing', undefined],
+    ['empty', ''],
+  ])('refuses an exchange key whose client id is %s', async (_label, id) => {
+    const result = await validateWithMetadata({ createdFrom: 'oauth-exchange', oauthClientId: id });
+    expect(result).toEqual({ isValid: false, reason: 'disabled' });
+  });
+
   it('carries no marker for a personal key with a stray oauthClientId', async () => {
     const result = await validateWithMetadata({ createdFrom: 'api', oauthClientId: 'client-1' });
     expect(result.isValid).toBe(true);

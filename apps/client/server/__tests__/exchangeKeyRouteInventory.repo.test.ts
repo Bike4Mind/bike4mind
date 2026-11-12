@@ -5,14 +5,21 @@ import path from 'path';
 import { ApiKeyScope, CONTRACTS } from '@bike4mind/common';
 import { DERIVED_API_KEY_SCOPE_ENDPOINTS } from '@bike4mind/server-utils/app/constants/apiKeyScopeEndpoints.generated';
 import { FILES_READ_OR_WRITE_OR_GENERATE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
+import {
+  admitsNoApiKey,
+  doorSitesIn,
+  pageRouteFiles,
+  routePathOf,
+  stripComments,
+} from '../../scripts/apiKeyScopeRoutes';
 
 /**
  * Invariant: a key minted for a connected app (the federated AI-token exchange) reaches only the
  * routes that declare its scopes, and of those only the ones listed here.
  *
- * baseApi stack: apiKeyAuth treats an exchange key as confined, so a route reaches it only by
- * naming ai:generate or me:read. Every endpoint the generated scope registry lists for either scope
- * must be pinned below. Adding one fails this test until it is listed.
+ * Every baseApi door that resolves to ai:generate or me:read must be in the pinned registry list or
+ * DOOR_ONLY_ROUTES, and no door may resolve to an empty scope set, so the generator cannot drop a route
+ * silently. Adding a door for either scope fails this test until it is listed.
  * verifyApiKey stack: it refuses exchange keys unless the caller passes `allowExchangeKeys`, and
  * only the completion routes do.
  */
@@ -118,6 +125,9 @@ const ALLOWED_ENDPOINTS = [
 // Routes whose door admits ai:generate but whose per-method check narrows it, so the registry omits them.
 const DOOR_ONLY_ROUTES = ['files/[id]/index.ts'];
 
+// Doors whose scope list the generator cannot resolve. Each needs a reason.
+const UNRESOLVABLE_DOOR_ALLOWLIST: Record<string, string> = {};
+
 // Scoped routes that manage credentials: each refuses an exchange key in its handler.
 const REFUSING_ROUTES = ['user-api-keys/[id]/callback-secret.ts'];
 
@@ -173,6 +183,32 @@ describe('keys minted for a connected app reach only their scoped routes', () =>
       'these endpoints are reachable with an exchange key. Pin each in ALLOWED_ENDPOINTS, or refuse the key in the handler.'
     ).toEqual([]);
     expect(ALLOWED_ENDPOINTS.filter(e => !generated.includes(e))).toEqual([]);
+  });
+
+  it('finds every ai:generate or me:read door in the registry, and no door the generator cannot resolve', () => {
+    const registryRoutes = new Set(ALLOWED_ENDPOINTS.map(e => e.slice(e.indexOf(' ') + 1)));
+    const unlisted: string[] = [];
+    const unresolved: string[] = [];
+    for (const file of pageRouteFiles()) {
+      const routePath = routePathOf(file);
+      if (!routePath) continue;
+      const code = stripComments(readFileSync(file, 'utf8'));
+      if (admitsNoApiKey(code)) continue;
+      const rel = posixRel(API_DIR, file);
+      for (const { raw, scopes } of doorSitesIn(code)) {
+        if (scopes.size === 0 && !(rel in UNRESOLVABLE_DOOR_ALLOWLIST)) unresolved.push(`${rel}: ${raw}`);
+        const opensExchange = EXCHANGE_SCOPES.some(s => (scopes as ReadonlySet<string>).has(s));
+        if (opensExchange && !registryRoutes.has(routePath) && !DOOR_ONLY_ROUTES.includes(rel)) unlisted.push(rel);
+      }
+    }
+    expect(
+      unlisted,
+      'these doors admit an exchange scope but are in neither ALLOWED_ENDPOINTS nor DOOR_ONLY_ROUTES.'
+    ).toEqual([]);
+    expect(
+      unresolved,
+      'the generator cannot resolve these doors, so it would omit them. Name the scopes as ApiKeyScope.X.'
+    ).toEqual([]);
   });
 
   it.each(DOOR_ONLY_ROUTES)('%s is pinned for the exchange scope its door admits', route => {

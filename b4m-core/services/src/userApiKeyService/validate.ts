@@ -108,6 +108,10 @@ function finalizeApiKeyValidation(
   if (apiKey.status !== ApiKeyStatus.ACTIVE) {
     return { isValid: false, reason: 'disabled' };
   }
+  // An exchange key with no client id cannot be confined or attributed, so refuse it.
+  if (isExchangeKeyMetadata(apiKey.metadata) && !apiKey.metadata.oauthClientId) {
+    return { isValid: false, reason: 'disabled' };
+  }
 
   if (recordUse) recordUserApiKeyUse(apiKey.id, db);
 
