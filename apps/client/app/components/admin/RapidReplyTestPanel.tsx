@@ -36,6 +36,8 @@ export interface RapidReplyTestResult {
       latency?: number;
       responseLength?: number;
       maxConfiguredLatency?: number;
+      mainModelTtfvt?: number;
+      mainModelError?: string | null;
       estimatedCost?: number;
       tokensUsed?: number;
       latencyCheck?: { passed: boolean; message: string };
@@ -109,7 +111,7 @@ const TestResults: React.FC<{ result: RapidReplyTestResult }> = ({ result }) => 
       {performance && (
         <StatStrip aria-label="Test result">
           <StatTile label="Rapid reply latency" value={withMs(performance.latency) ?? '-'} />
-          <StatTile label="TTFVT" value={withMs(performance.ttfvt) ?? '-'} />
+          <StatTile label="Rapid reply TTFVT" value={withMs(performance.ttfvt) ?? '-'} />
           <StatTile label="Response length" value={performance.responseLength ?? 0} comparison="characters" />
         </StatStrip>
       )}
@@ -118,7 +120,8 @@ const TestResults: React.FC<{ result: RapidReplyTestResult }> = ({ result }) => 
         <SectionCard
           title="Performance"
           action={
-            performance.latencyCheck && (
+            performance.latencyCheck &&
+            rapidReplyTest?.response && (
               <StatusChip
                 tone={performance.latencyCheck.passed ? 'good' : 'bad'}
                 label={performance.latencyCheck.passed ? 'Within limit' : 'Over limit'}
@@ -128,6 +131,7 @@ const TestResults: React.FC<{ result: RapidReplyTestResult }> = ({ result }) => 
         >
           <Fact label="Latency limit">{withMs(performance.maxConfiguredLatency)}</Fact>
           <Fact label="Latency check">{performance.latencyCheck?.message}</Fact>
+          <Fact label="Main model TTFVT">{performance.mainModelError ?? withMs(performance.mainModelTtfvt)}</Fact>
           <Fact label="Tokens used">{performance.tokensUsed?.toLocaleString()}</Fact>
           <Fact label="Estimated cost">
             {performance.estimatedCost === undefined ? undefined : `$${performance.estimatedCost.toFixed(4)}`}
