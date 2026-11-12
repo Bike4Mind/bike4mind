@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { visibleReplyText } from '@bike4mind/common';
 import { TIMEOUTS } from './constants';
 import { BasePage } from './pages/BasePage';
 import { ChatPage } from './pages/ChatPage';
@@ -45,6 +46,7 @@ const PROMPT =
 type StreamFrame = {
   questId: string;
   sessionId: string;
+  /** Visible reply text carried by the frame, see frameReplyText. */
   reply: string;
   status?: string;
   type?: string;
@@ -55,6 +57,19 @@ type SocketProbe = {
   opened: boolean;
   frames: StreamFrame[];
 };
+
+/**
+ * The text a frame shows the user. A streamed answer arrives in `quest.replies` with `quest.reply`
+ * left null (ChatCompletionProcess); `reply` is filled only on the error and notice paths. Slots are
+ * reduced to their visible text and joined the way extractReplies
+ * (packages/server-utils/src/shared/replyUtils.ts) does, so a reasoning model's hidden thinking does
+ * not count as streamed text.
+ */
+function frameReplyText(quest: Record<string, unknown>): string {
+  const slots = Array.isArray(quest.replies) ? quest.replies.filter(slot => typeof slot === 'string') : [];
+  if (slots.length > 0) return slots.map(slot => visibleReplyText(slot)).join('');
+  return typeof quest.reply === 'string' ? visibleReplyText(quest.reply) : '';
+}
 
 /**
  * Records every `streamed_chat_completion` frame the page receives. Frames split into
@@ -82,7 +97,7 @@ function watchSockets(page: Page): SocketProbe {
       probe.frames.push({
         questId: quest.id,
         sessionId: typeof quest.sessionId === 'string' ? quest.sessionId : '',
-        reply: typeof quest.reply === 'string' ? quest.reply : '',
+        reply: frameReplyText(quest),
         status: typeof quest.status === 'string' ? quest.status : undefined,
         type: typeof quest.type === 'string' ? quest.type : undefined,
       });
