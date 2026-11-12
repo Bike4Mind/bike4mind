@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { usdToCredits, VideoModelSchema, type VideoProviderId } from '@bike4mind/common';
+import { usdToCredits, VIDEO_MODEL_STRENGTHS, VideoModelSchema, type VideoProviderId } from '@bike4mind/common';
 import { createVideoProviderRegistry, TestVideoProvider, type VideoProvider } from '@bike4mind/utils/videoProviders';
 import { hasUsableKey, listUsableVideoModels } from './listUsableVideoModels';
 
@@ -51,6 +51,10 @@ describe('listUsableVideoModels', () => {
     expect(VideoModelSchema.parse(models[0])).toEqual(models[0]);
     expect(models[0].credits_per_second).toEqual({ '720p': usdToCredits(0.1014) });
     expect(models[0].input_roles).toEqual([{ role: 'first_frame', max: 1 }]);
+    expect(models[0]).toMatchObject({
+      provider_label: 'Google',
+      blurb: VIDEO_MODEL_STRENGTHS['gemini-omni-1.1-flash'],
+    });
   });
 
   it('omits an unregistered provider, a disabled model and a provider without a key', async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   MUSIC_MODEL_CATALOG,
+  MUSIC_MODEL_STRENGTHS,
   PublicMusicModelSchema,
   usdToCredits,
   type MusicModelId,
@@ -83,6 +84,15 @@ describe('toPublicMusicModel', () => {
     const model = toPublicMusicModel('lyria-3.5');
     expect(model.output_formats).toEqual(['mp3']);
     expect(model.output_formats).not.toBe(MUSIC_MODEL_CATALOG['lyria-3.5'].outputFormats);
+  });
+});
+
+describe('toPublicMusicModel card copy', () => {
+  it('publishes the provider label and blurb from the music profiles', () => {
+    expect(toPublicMusicModel('music_v2_5')).toMatchObject({
+      provider_label: 'ElevenLabs',
+      blurb: MUSIC_MODEL_STRENGTHS.music_v2_5,
+    });
   });
 });
 

@@ -151,6 +151,17 @@ export const VideoModelSchema = z.object({
   object: z.literal('video_model'),
   display_name: z.string(),
   provider: z.string(),
+  // Optional so a client still parses a server from before these fields.
+  provider_label: z
+    .string()
+    .optional()
+    .describe(
+      'The provider as shown to people (`Google`, `Black Forest Labs`), where `provider` is the id. Display text.'
+    ),
+  blurb: z
+    .string()
+    .optional()
+    .describe('How Studio introduces the model on its card: one line on what it is best at. Display text; may change.'),
   modes: z.array(z.enum(VIDEO_MODES)),
   // Loose on purpose: clients parse this at runtime, so a role added later (or a server from before input_roles)
   // must not make an older client drop the whole model. Requests still take only the known roles.
