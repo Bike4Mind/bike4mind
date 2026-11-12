@@ -69,7 +69,6 @@ export function OverflowStack({
         style={{ left: `${point.x}%`, top: `${point.y}%` }}
         sx={{
           position: 'absolute',
-          // Above every seated sprite (zIndex is its y), so a sprite standing nearby never covers it.
           zIndex: STACK_Z,
           transform: 'translate(-50%, -100%)',
           display: 'flex',
