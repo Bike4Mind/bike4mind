@@ -8,6 +8,7 @@ import { fabFileKeys } from './fabFileKeys';
 import { dataLakeKeys } from './dataLakeKeys';
 import {
   useGetUserOrganizations,
+  useMemberOffboardingInventory,
   useRemoveMemberFromOrganization,
   useSearchOrganizations,
   useSearchUserOrganizations,
@@ -24,6 +25,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 
 const put = api.put as unknown as Mock;
 const del = api.delete as unknown as Mock;
+const get = api.get as unknown as Mock;
 const post = api.post as unknown as Mock;
 
 const renderWithClient = <T,>(useHook: () => T) => {
@@ -257,6 +259,51 @@ describe('member offboarding ownership caches', () => {
         '/api/organizations/org1/members/member',
         transferring ? { data: { reassignTo: 'owner' } } : undefined
       );
+    } finally {
+      view.unmount();
+      queryClient.clear();
+    }
+  });
+});
+
+describe('member offboarding inventory after removal', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    del.mockResolvedValue({ data: { id: 'org1', personalLakeSharesKept: 0 } });
+    get.mockResolvedValue({ data: { files: { count: 0, sample: [] } } });
+  });
+
+  it('does not refetch the removed member inventory, but still loads another member', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const view = renderHook(
+      ({ userId }: { userId: string }) => ({
+        inventory: useMemberOffboardingInventory('org1', userId),
+        removeMember: useRemoveMemberFromOrganization(),
+      }),
+      { wrapper, initialProps: { userId: 'member' } }
+    );
+    const inventoryUrl = (userId: string) => `/api/organizations/org1/members/${userId}/offboarding`;
+    const inventoryFetches = (userId: string) => get.mock.calls.filter(([url]) => url === inventoryUrl(userId)).length;
+    try {
+      await waitFor(() => expect(view.result.current.inventory.isSuccess).toBe(true));
+      expect(inventoryFetches('member')).toBe(1);
+
+      await act(async () => {
+        await view.result.current.removeMember.mutateAsync({ organizationId: 'org1', userId: 'member' });
+      });
+      view.rerender({ userId: 'member' });
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      });
+
+      expect(inventoryFetches('member')).toBe(1);
+      expect(view.result.current.inventory.fetchStatus).toBe('idle');
+
+      view.rerender({ userId: 'other' });
+      await waitFor(() => expect(inventoryFetches('other')).toBe(1));
     } finally {
       view.unmount();
       queryClient.clear();

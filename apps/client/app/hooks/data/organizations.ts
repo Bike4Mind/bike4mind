@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
+import { useMutation, useMutationState, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import {
   IOrganizationDocument,
@@ -327,7 +327,22 @@ export interface MemberOffboardingInventory {
 const memberOffboardingKey = (organizationId: string, userId: string) =>
   ['organizations', organizationId, 'members', userId, 'offboarding'] as const;
 
+const removeMemberKey = ['organizations', 'remove-member'] as const;
+
+interface RemoveMemberVariables {
+  organizationId: string;
+  userId: string;
+  /** Member who takes over the departing member's org content; omitted keeps it with them. */
+  reassignTo?: string;
+}
+
 export function useMemberOffboardingInventory(organizationId: string, userId: string | null) {
+  // Once the member is removed the route 404s, so a re-render must not rebuild and refetch the query.
+  const removed = useMutationState({
+    filters: { mutationKey: removeMemberKey, status: 'success' },
+    select: mutation => mutation.state.variables as RemoveMemberVariables | undefined,
+  }).some(variables => variables?.organizationId === organizationId && variables.userId === userId);
+
   return useQuery({
     queryKey: memberOffboardingKey(organizationId, userId ?? ''),
     queryFn: async () => {
@@ -336,7 +351,7 @@ export function useMemberOffboardingInventory(organizationId: string, userId: st
       );
       return data;
     },
-    enabled: !!userId,
+    enabled: !!userId && !removed,
     staleTime: 0,
   });
 }
@@ -345,16 +360,8 @@ export function useRemoveMemberFromOrganization() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({
-      organizationId,
-      userId,
-      reassignTo,
-    }: {
-      organizationId: string;
-      userId: string;
-      /** Member who takes over the departing member's org content; omitted keeps it with them. */
-      reassignTo?: string;
-    }) => {
+    mutationKey: removeMemberKey,
+    mutationFn: async ({ organizationId, userId, reassignTo }: RemoveMemberVariables) => {
       const response = await api.delete<
         WithId<IOrganizationDocument> & {
           personalLakeSharesKept?: number | null;
@@ -369,11 +376,14 @@ export function useRemoveMemberFromOrganization() {
       return personalLakeSharesKept;
     },
     onSuccess: (kept, variables) => {
+      // Drop the removed member's inventory before the ['organizations'] prefix invalidation can refetch it.
+      const offboardingKey = memberOffboardingKey(variables.organizationId, variables.userId);
+      void queryClient.cancelQueries({ queryKey: offboardingKey });
+      queryClient.removeQueries({ queryKey: offboardingKey });
       queryClient.invalidateQueries({ queryKey: ['users', 'organization', variables.organizationId] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       // Removing a member may hand their lakes to a successor, changing ownership-derived flags.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-      queryClient.removeQueries({ queryKey: memberOffboardingKey(variables.organizationId, variables.userId) });
       if (variables.reassignTo) {
         const contentQueryKeys = [
           fabFileKeys.all,
