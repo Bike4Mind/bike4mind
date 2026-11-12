@@ -108,7 +108,10 @@ describe('ChatCompletion ECS secrets', () => {
     );
     expect(chatCompletion).toContain('advanced: ecsAdvancedSecretNames,');
     const advanced = cut(chatCompletion, 'const ecsAdvancedSecretNames = [', '];');
-    expect([...advanced.matchAll(/'([A-Z0-9_]+)'/g)].map(m => m[1]).sort()).toEqual([...ADVANCED_NAMES].sort());
+    const advancedNames = [...advanced.matchAll(/'([A-Z0-9_]+)'/g)].map(m => m[1]);
+    expect([...advancedNames].sort()).toEqual([...ADVANCED_NAMES].sort());
+    const movedNames = [...nameList.matchAll(/'([A-Z0-9_]+)'/g)].map(m => m[1]);
+    expect(advancedNames.filter(n => !movedNames.includes(n))).toEqual([]);
     expect(chatCompletion).toContain(
       'const ecsSecretParameters = ecsSecretGroups && Object.assign({}, ...ecsSecretGroups.map(g => g.ssm));'
     );
