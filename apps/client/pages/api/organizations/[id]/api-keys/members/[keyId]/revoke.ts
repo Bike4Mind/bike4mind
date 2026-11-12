@@ -25,9 +25,14 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, unknown, unknown, { id?: string; keyId?: string }>(async (req, res) => {
     const user = req.user!;
     const org = await verifyOrgAccess(user, stringParam(req.query.id));
-    const reason = parseOrBadRequest(RevokeOrgMemberApiKeyBodySchema, req.body)?.reason;
+    // A bodyless POST without a JSON content type reaches here as '', as in pages/api/user-api-keys/[id]/revoke.ts.
+    const reason = parseOrBadRequest(RevokeOrgMemberApiKeyBodySchema, req.body || undefined)?.reason || undefined;
     const apiKey = await loadOrgMemberKey(org.id, stringParam(req.query.keyId));
-    if (apiKey.status === ApiKeyStatus.DISABLED) return res.status(200).json({ success: true });
+    if (apiKey.status === ApiKeyStatus.DISABLED) {
+      // Idempotent, and covers a revoke that committed before its teardown ran.
+      await endKeyRealtimeConnections(apiKey.id, req.logger);
+      return res.status(200).json({ success: true });
+    }
 
     // The revoke and its strict audit row commit together; a concurrent revoke makes this one a no-op.
     const revoked = await withTransaction(async () => {
@@ -47,9 +52,9 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       });
       return true;
     });
+    await endKeyRealtimeConnections(apiKey.id, req.logger);
     if (!revoked) return res.status(200).json({ success: true });
 
-    await endKeyRealtimeConnections(apiKey.id, req.logger);
     await logEventSafe(
       { userId: user.id, type: UserApiKeyEvents.REVOKED, metadata: { keyId: apiKey.id, name: apiKey.name, reason } },
       { ability: req.ability },
