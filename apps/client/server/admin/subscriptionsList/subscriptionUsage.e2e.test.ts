@@ -1,11 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { CreditTransaction, Organization, UsageEvent, User, mongoose } from '@bike4mind/database';
+import { AnalyticsDaily, CreditTransaction, Organization, UsageEvent, User, mongoose } from '@bike4mind/database';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
-import { loadSubscriptionUsage, matchesUsageCohort } from './subscriptionUsage';
+import { loadSubscriptionUsage, matchesUsageCohort, subscriptionUsageDetail } from './subscriptionUsage';
 import {
   adminSubscriptionsExportPage,
   adminSubscriptionsMatch,
@@ -30,7 +30,7 @@ beforeAll(async () => {
 });
 afterEach(async () => {
   await Promise.all(
-    [Subscription, UsageEvent, User, Organization, CreditTransaction].map(model => model.deleteMany({}))
+    [Subscription, UsageEvent, User, Organization, CreditTransaction, AnalyticsDaily].map(model => model.deleteMany({}))
   );
 });
 afterAll(async () => {
@@ -77,6 +77,12 @@ const event = async (ownerId: string, fields: Record<string, unknown> = {}) => {
 const coverage = async () => {
   await event('coverage-only', { createdAt: new Date(NOW.getTime() - 50 * DAY) });
   await event('coverage-only');
+  await AnalyticsDaily.collection.insertMany(
+    Array.from({ length: 28 }, (_, index) => ({
+      day: new Date(NOW.getTime() - (index + 1) * DAY).toISOString().slice(0, 10),
+      computedAt: NOW,
+    }))
+  );
 };
 
 describe('subscription usage observations', () => {
@@ -162,5 +168,16 @@ describe('subscription usage observations', () => {
     usage = (await loadSubscriptionUsage([row], NOW)).get(String(row._id))!;
     expect(usage).toMatchObject({ coverage: 'incomplete', firstPartyRequests: null, apiRequests: null });
     expect(matchesUsageCohort(row, usage, 'payingNoRecorded')).toBe(false);
+  });
+
+  it('requires every historical daily marker even when the store spans the window', async () => {
+    await coverage();
+    const owner = await user();
+    const row = await subscription(String(owner._id));
+    await AnalyticsDaily.deleteOne({ day: '2026-06-01' });
+    const usage = (await loadSubscriptionUsage([row], NOW)).get(String(row._id))!;
+    expect(usage).toMatchObject({ coverage: 'incomplete', firstPartyRequests: null });
+    expect(matchesUsageCohort(row, usage, 'payingNoRecorded')).toBe(false);
+    expect(await subscriptionUsageDetail(String(row._id).toUpperCase())).toBeDefined();
   });
 });

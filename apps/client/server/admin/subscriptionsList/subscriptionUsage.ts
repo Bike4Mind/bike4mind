@@ -1,5 +1,5 @@
 import { ACTIVE_SOURCES, NotFoundError } from '@bike4mind/common';
-import { Organization, UsageEvent, mongoose } from '@bike4mind/database';
+import { AnalyticsDaily, Organization, UsageEvent, mongoose } from '@bike4mind/database';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { isCountedUser, loadCountingContext, loadUserFlags } from '@bike4mind/server-utils/analytics/signupCohort';
 import {
@@ -43,7 +43,7 @@ export async function loadSubscriptionUsage(docs: SubscriptionDoc[], now = new D
   const owners = [
     ...new Map(docs.map(doc => [usageOwnerKey(doc), { ownerType: doc.ownerType, ownerId: doc.ownerId }])).values(),
   ];
-  const [first, latest, groups, organizations, ctx] = await Promise.all([
+  const [first, latest, groups, organizations, ctx, markers] = await Promise.all([
     UsageEvent.findOne({}, { createdAt: 1 }).sort({ createdAt: 1 }).maxTimeMS(DEADLINE).lean<{ createdAt: Date }>(),
     UsageEvent.findOne({ createdAt: { $lt: now } }, { createdAt: 1 })
       .sort({ createdAt: -1 })
@@ -108,7 +108,23 @@ export async function loadSubscriptionUsage(docs: SubscriptionDoc[], now = new D
       .maxTimeMS(DEADLINE)
       .lean<{ _id: unknown; userId?: string }[]>(),
     loadCountingContext(),
+    AnalyticsDaily.find(
+      { day: { $gte: from.toISOString().slice(0, 10), $lt: now.toISOString().slice(0, 10) } },
+      { day: 1, computedAt: 1 }
+    )
+      .limit(SUBSCRIPTION_USAGE_DAYS)
+      .maxTimeMS(DEADLINE)
+      .lean<{ day: string; computedAt?: Date }[]>(),
   ]);
+  // Daily rows are the rollup writer's completion markers, including days with zero usage.
+  const completeDays = new Set(
+    markers
+      .filter(marker => marker.computedAt && marker.computedAt >= new Date(`${marker.day}T00:00:00Z`))
+      .map(marker => marker.day)
+  );
+  const historyComplete = Array.from({ length: SUBSCRIPTION_USAGE_DAYS }, (_, index) =>
+    new Date(from.getTime() + index * DAY).toISOString().slice(0, 10)
+  ).every(day => completeDays.has(day));
   const orgOwners = new Map(organizations.map(org => [String(org._id), org.userId]));
   const flags = await loadUserFlags(
     docs.flatMap(doc => {
@@ -132,7 +148,7 @@ export async function loadSubscriptionUsage(docs: SubscriptionDoc[], now = new D
             ? 'new'
             : !first || !latest
               ? 'unknown'
-              : first.createdAt > from || latest.createdAt.getTime() < now.getTime() - DAY
+              : !historyComplete || first.createdAt > from || latest.createdAt.getTime() < now.getTime() - DAY
                 ? 'incomplete'
                 : 'observed';
     const known = coverage === 'observed';
@@ -180,5 +196,5 @@ export async function subscriptionUsageCondition(
 export async function subscriptionUsageDetail(id: string) {
   const doc = await Subscription.findById(new mongoose.Types.ObjectId(id)).maxTimeMS(DEADLINE).lean<SubscriptionDoc>();
   if (!doc) throw new NotFoundError('Subscription not found');
-  return (await loadSubscriptionUsage([doc])).get(id)!;
+  return (await loadSubscriptionUsage([doc])).get(String(doc._id))!;
 }
