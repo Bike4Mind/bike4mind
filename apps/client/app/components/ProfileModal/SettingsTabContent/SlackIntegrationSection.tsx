@@ -188,15 +188,24 @@ const SlackIntegrationSection = () => {
 
   const updateSlackSettings = useMutation({
     mutationFn: async (settings: SlackSettings) => {
-      const response = await api.patch(`/api/users/${currentUser?.id}/slack-settings`, settings);
-      return response.data as { slackSettings?: SlackSettings; removed?: Array<{ field: string; id: string }> };
+      const userId = currentUser?.id;
+      if (!userId) throw new Error('No user is signed in.');
+      const response = await api.patch(`/api/users/${userId}/slack-settings`, settings);
+      return {
+        userId,
+        settingsResponse: response.data as {
+          slackSettings?: SlackSettings;
+          removed?: Array<{ field: string; id: string }>;
+        },
+      };
     },
-    onSuccess: (data, variables) => {
+    onSuccess: ({ userId, settingsResponse: data }, variables) => {
+      const { currentUser: storedUser, setCurrentUser } = useUser.getState();
+      if (storedUser?.id !== userId) return;
       queryClient.invalidateQueries({ queryKey: ['user'] });
       // currentUser lives in the UserContext store, which the ['user'] invalidation does not refresh;
       // without this, ids the server dropped stay in the form and are resent on the next save.
-      const { currentUser: storedUser, setCurrentUser } = useUser.getState();
-      if (storedUser && data?.slackSettings) {
+      if (data?.slackSettings) {
         setCurrentUser({ ...storedUser, slackSettings: data.slackSettings });
       }
       // Update savedSlackUserId to reflect the saved value (for manual entry)
@@ -339,8 +348,13 @@ const SlackIntegrationSection = () => {
         <>
           {isLinked && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <span
+              <button
+                type="button"
+                disabled={updateSlackSettings.isPending}
                 style={{
+                  border: 0,
+                  background: 'transparent',
+                  padding: 0,
                   color: 'var(--joy-palette-text-primary)',
                   opacity: 0.5,
                   textDecoration: 'underline',
@@ -352,7 +366,7 @@ const SlackIntegrationSection = () => {
                 }}
               >
                 Unlink
-              </span>
+              </button>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <FieldTooltip
                   ariaLabel="Help: Auto-create Notebooks"
@@ -363,6 +377,8 @@ const SlackIntegrationSection = () => {
                   Auto-create Notebooks
                 </Typography>
                 <SquareSlideToggle
+                  disabled={updateSlackSettings.isPending}
+                  data-testid="slack-settings-auto-create-btn"
                   checked={autoCreateNotebook}
                   onChange={e => setAutoCreateNotebook(e.target.checked)}
                 />
@@ -443,7 +459,7 @@ const SlackIntegrationSection = () => {
                   placeholder="U0123456789"
                   value={slackUserId}
                   onChange={e => setSlackUserId(e.target.value)}
-                  disabled={isLinked}
+                  disabled={isLinked || updateSlackSettings.isPending}
                   sx={{
                     width: '100%',
                     overflow: 'hidden',
@@ -485,6 +501,7 @@ const SlackIntegrationSection = () => {
                 </FormLabel>
                 <Input
                   placeholder="Leave empty for auto-creation"
+                  disabled={updateSlackSettings.isPending}
                   value={defaultNotebookId}
                   onChange={e => setDefaultNotebookId(e.target.value)}
                   sx={{
@@ -526,7 +543,9 @@ const SlackIntegrationSection = () => {
                     Auto-created Notebook Name Prefix
                   </FormLabel>
                   <Input
+                    disabled={updateSlackSettings.isPending}
                     value={notebookNamePrefix}
+                    slotProps={{ input: { 'data-testid': 'slack-settings-prefix-input' } }}
                     onChange={e => setNotebookNamePrefix(e.target.value)}
                     sx={{
                       width: '100%',
@@ -566,6 +585,7 @@ const SlackIntegrationSection = () => {
             </Typography>
             <FormControl sx={{ maxWidth: 400 }}>
               <Select
+                disabled={updateSlackSettings.isPending}
                 placeholder="Select project (optional)"
                 value={defaultProjectId || null}
                 onChange={(_, newValue) => {
@@ -605,6 +625,7 @@ const SlackIntegrationSection = () => {
             </Typography>
             <FormControl sx={{ maxWidth: 400 }}>
               <Select
+                disabled={updateSlackSettings.isPending}
                 data-testid="slack-custom-agent-select"
                 placeholder="Use default general-purpose agent"
                 value={customAgentId || null}
@@ -652,6 +673,7 @@ const SlackIntegrationSection = () => {
                     {agent.emoji} {agent.label} - {agent.description}
                   </FormLabel>
                   <Select
+                    disabled={updateSlackSettings.isPending}
                     placeholder="Use default routing"
                     value={agentNotebookRouting[agent.key] || null}
                     onChange={(_, newValue) => {
@@ -710,13 +732,20 @@ const SlackIntegrationSection = () => {
                         </Typography>
                       </Stack>
                       <Stack direction="row" spacing={0.5}>
-                        <IconButton size="sm" variant="plain" color="neutral" onClick={() => openEditRuleModal(index)}>
+                        <IconButton
+                          size="sm"
+                          variant="plain"
+                          color="neutral"
+                          disabled={updateSlackSettings.isPending}
+                          onClick={() => openEditRuleModal(index)}
+                        >
                           <EditIcon />
                         </IconButton>
                         <IconButton
                           size="sm"
                           variant="plain"
                           color="danger"
+                          disabled={updateSlackSettings.isPending}
                           onClick={() => handleRemoveKeywordRule(index)}
                         >
                           <DeleteIcon />
@@ -734,7 +763,8 @@ const SlackIntegrationSection = () => {
               variant="outlined"
               startDecorator={<AddIcon />}
               onClick={openAddRuleModal}
-              disabled={keywordRouting.length >= 10}
+              data-testid="slack-settings-add-rule-btn"
+              disabled={updateSlackSettings.isPending || keywordRouting.length >= 10}
             >
               Add Rule
             </Button>
@@ -758,6 +788,7 @@ const SlackIntegrationSection = () => {
               <FormLabel>Keywords (comma-separated)</FormLabel>
               <Input
                 placeholder="lumina5, lumina, bike4mind"
+                disabled={updateSlackSettings.isPending}
                 value={ruleKeywords}
                 onChange={e => setRuleKeywords(e.target.value)}
               />
@@ -772,6 +803,7 @@ const SlackIntegrationSection = () => {
                 </Alert>
               ) : (
                 <Select
+                  disabled={updateSlackSettings.isPending}
                   value={ruleNotebookId}
                   onChange={(_, value) => setRuleNotebookId(value as string)}
                   placeholder="Select notebook..."
@@ -788,7 +820,7 @@ const SlackIntegrationSection = () => {
             <Button
               sx={{ mt: 2 }}
               onClick={handleSaveKeywordRule}
-              disabled={!ruleKeywords || !ruleNotebookId || notebooks.length === 0}
+              disabled={updateSlackSettings.isPending || !ruleKeywords || !ruleNotebookId || notebooks.length === 0}
             >
               {editingRuleIndex !== null ? 'Save Changes' : 'Add Rule'}
             </Button>
@@ -834,7 +866,12 @@ const SlackIntegrationSection = () => {
 
         {/* Save Button - hide when OAuth is available but user not linked (accordion has its own save) */}
         {(isLinked || !hasOAuthConfigured) && (
-          <Button onClick={handleSave} loading={updateSlackSettings.isPending} sx={{ alignSelf: 'flex-start' }}>
+          <Button
+            data-testid="slack-settings-save-btn"
+            onClick={handleSave}
+            loading={updateSlackSettings.isPending}
+            sx={{ alignSelf: 'flex-start' }}
+          >
             Save Slack Settings
           </Button>
         )}

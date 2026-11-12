@@ -333,6 +333,31 @@ describe('PATCH /api/users/:id/slack-settings - stale stored references', () => 
     expect(update().$set).not.toHaveProperty('slackSettings.keywordRouting');
   });
 
+  it('drops an unchanged malformed keyword target without querying it', async () => {
+    stored({ keywordRouting: [{ keywords: ['bug'], notebookId: 'legacy-invalid-id' }] });
+    mockSessionFind.mockImplementation(() => {
+      throw new Error('Cannot cast malformed notebook id');
+    });
+    const { res, promise } = run({ keywordRouting: [{ keywords: ['bug'], notebookId: 'legacy-invalid-id' }] });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSessionFind).not.toHaveBeenCalled();
+    expect(update().$unset).toHaveProperty('slackSettings.keywordRouting', 1);
+    expect(res._getJSONData().removed).toEqual([{ field: 'keywordRouting', id: 'legacy-invalid-id' }]);
+  });
+
+  it('rejects a new malformed keyword target without querying or saving', async () => {
+    stored({});
+    mockSessionFind.mockImplementation(() => {
+      throw new Error('Cannot cast malformed notebook id');
+    });
+    const { res, promise } = run({ keywordRouting: [{ keywords: ['bug'], notebookId: 'new-invalid-id' }] });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockSessionFind).not.toHaveBeenCalled();
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
   it('rejects a new keyword rule pointing at a notebook the caller does not own', async () => {
     stored({});
     mockSessionFind.mockReturnValue([]);

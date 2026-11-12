@@ -79,13 +79,17 @@ const handler = baseApi()
         if (slackSettings.keywordRouting && slackSettings.keywordRouting.length > 0) {
           const notebookIds = slackSettings.keywordRouting.map(rule => rule.notebookId);
           const uniqueNotebookIds = Array.from(new Set(notebookIds));
+          const queryableNotebookIds = uniqueNotebookIds.filter(id => isValidObjectId(id));
 
           // Verify all notebooks exist and belong to the user
-          const notebooks = await Session.find({
-            _id: { $in: uniqueNotebookIds },
-            userId: userId,
-            deletedAt: { $exists: false },
-          }).select('_id');
+          const notebooks =
+            queryableNotebookIds.length > 0
+              ? await Session.find({
+                  _id: { $in: queryableNotebookIds },
+                  userId: userId,
+                  deletedAt: { $exists: false },
+                }).select('_id')
+              : [];
 
           const validNotebookIds = new Set(notebooks.map((n: { _id: { toString: () => string } }) => n._id.toString()));
 
