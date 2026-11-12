@@ -177,7 +177,6 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   moderation: true,
   disputePending: true,
   isSystem: true,
-  serviceAccountOrganizationId: true,
   subscribedUntil: true,
   photoUrl: true,
   systemFiles: true,
