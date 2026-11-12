@@ -16,6 +16,8 @@ type Handler = (request: Request, response: Response) => Promise<unknown>;
 const mocks = vi.hoisted(() => ({
   patch: null as Handler | null,
   delete: null as Handler | null,
+  get: null as Handler | null,
+  post: null as Handler | null,
   audit: vi.fn(),
 }));
 vi.mock('@server/middlewares/baseApi', () => {
@@ -27,6 +29,14 @@ vi.mock('@server/middlewares/baseApi', () => {
     },
     delete: (handler: Handler) => {
       mocks.delete = handler;
+      return chain;
+    },
+    get: (handler: Handler) => {
+      mocks.get = handler;
+      return chain;
+    },
+    post: (handler: Handler) => {
+      mocks.post = handler;
       return chain;
     },
   };
@@ -41,6 +51,7 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
 
 await import('../status');
 await import('../../../../feedback/[id]/delete');
+await import('../history');
 let replicaSet: MongoMemoryReplSet;
 beforeAll(async () => {
   replicaSet = await createMongoReplSet();
@@ -77,11 +88,41 @@ const call = async (method: 'PATCH' | 'DELETE', id: string, body: Record<string,
 };
 
 describe('feedback status and deletion transactions', () => {
+  it('keeps notes out of reporter documents and reads audited notes through admin history', async () => {
+    const report = await createReport();
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { id: report.id },
+      body: { note: 'Private reproduction details' },
+    });
+    Object.assign(req, { user: { id: 'admin1', isAdmin: true } });
+    await mocks.post!(req as unknown as Request, res as unknown as Response);
+    expect(res._getStatusCode()).toBe(201);
+    const stored = await FeedbackModel.findById(report.id);
+    expect(JSON.stringify(stored?.toJSON())).not.toContain('Private reproduction details');
+    const read = createMocks({ method: 'GET', query: { id: report.id } });
+    await mocks.get!(read.req as unknown as Request, read.res as unknown as Response);
+    expect(read.res._getJSONData().items[0]).toMatchObject({ author: 'Admin', note: 'Private reproduction details' });
+  });
+
+  it('restores the closed resolution when undoing a reopen', async () => {
+    const report = await createReport();
+    await call('PATCH', report.id, { status: 'Closed', resolution: 'wont_fix' });
+    const reopened = await call('PATCH', report.id, { status: 'New' });
+    expect((await FeedbackModel.findById(report.id))?.resolution).toBeUndefined();
+    await call('PATCH', report.id, { status: 'Closed', undoOf: reopened.auditEntryId });
+    expect((await FeedbackModel.findById(report.id))?.resolution).toBe('wont_fix');
+  });
+
   it('rejects an old undo after the same admin cycles back to the same status', async () => {
     const report = await createReport();
-    const first = await call('PATCH', report.id, { status: 'Closed', expectedStatus: 'New' });
+    const first = await call('PATCH', report.id, { status: 'Closed', resolution: 'fixed', expectedStatus: 'New' });
     await call('PATCH', report.id, { status: 'InProgress', expectedStatus: 'Closed' });
-    const latest = await call('PATCH', report.id, { status: 'Closed', expectedStatus: 'InProgress' });
+    const latest = await call('PATCH', report.id, {
+      status: 'Closed',
+      resolution: 'wont_fix',
+      expectedStatus: 'InProgress',
+    });
     await expect(
       call('PATCH', report.id, { status: 'New', expectedStatus: 'Closed', undoOf: first.auditEntryId })
     ).rejects.toMatchObject({ statusCode: 409 });
@@ -93,7 +134,9 @@ describe('feedback status and deletion transactions', () => {
   it('rolls back the appended status audit if the report write fails', async () => {
     const report = await createReport();
     vi.spyOn(FeedbackModel, 'updateOne').mockRejectedValueOnce(new Error('report write failed'));
-    await expect(call('PATCH', report.id, { status: 'Closed' })).rejects.toThrow('report write failed');
+    await expect(call('PATCH', report.id, { status: 'Closed', resolution: 'fixed' })).rejects.toThrow(
+      'report write failed'
+    );
     expect((await FeedbackModel.findById(report.id))?.status).toBe('New');
     expect((await adminAuditLogRepository.list({}, { limit: 20 })).entries).toEqual([]);
   });

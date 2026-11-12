@@ -3,6 +3,7 @@ import {
   classifyStage,
   FEEDBACK_LIST_DEFAULT_LIMIT,
   FEEDBACK_LIST_MAX_LIMIT,
+  FEEDBACK_RESOLUTIONS,
   FEEDBACK_SUBJECTS,
   FEEDBACK_AI_AREAS,
   FEEDBACK_AI_SEVERITIES,
@@ -73,6 +74,8 @@ export const FEEDBACK_LIST_FIELDS = [
   'content',
   'contentStored',
   'status',
+  'resolution',
+  'resolutionDuplicateId',
   'tags',
   'username',
   'userEmail',
@@ -111,6 +114,7 @@ const ListFeedbackQuerySchema = z.object({
   // (rollups, deep links) should use.
   organization: z.union([z.string(), z.array(z.string())]).optional(),
   status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
+  resolution: z.enum(FEEDBACK_RESOLUTIONS).optional(),
   subject: z.enum(FEEDBACK_SUBJECTS).optional(),
   area: z.enum(FEEDBACK_AI_AREAS).optional(),
   severity: z.enum(FEEDBACK_AI_SEVERITIES).optional(),
@@ -293,6 +297,7 @@ const handler = baseApi()
         clauses.push({ _id: { $in: matches.map(row => row.feedbackId) } });
       }
     }
+    if (query.resolution) clauses.push({ status: FeedbackStatus.Closed, resolution: query.resolution });
 
     const organizations = toArray(query.organization);
     if (organizations.length > 0) clauses.push({ organization: { $in: organizations } });

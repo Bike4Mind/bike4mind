@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   updateOne: vi.fn(),
   audit: vi.fn(),
   findAuditEntry: vi.fn(),
+  exists: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -29,7 +30,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  FeedbackModel: { findById: mocks.findById, updateOne: mocks.updateOne },
+  FeedbackModel: { findById: mocks.findById, updateOne: mocks.updateOne, exists: mocks.exists },
   adminAuditLogRepository: { findById: mocks.findAuditEntry },
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
 }));
@@ -47,7 +48,12 @@ const call = async (
   user: Record<string, unknown> = { id: 'admin1', isAdmin: true },
   id: string = FEEDBACK_ID
 ) => {
-  const { req, res } = createMocks({ method: 'PATCH', body, query: { id } });
+  const data = body as Record<string, unknown>;
+  const { req, res } = createMocks({
+    method: 'PATCH',
+    body: { ...(data.status === 'Closed' ? { resolution: 'fixed' } : {}), ...data },
+    query: { id },
+  });
   const request = Object.assign(req, { user }) as unknown as Request;
   mocks.guard!(request, res as unknown as Response, () => {});
   await mocks.handler!(request, res as unknown as Response);
@@ -64,6 +70,7 @@ beforeEach(() => {
   stored('New');
   mocks.updateOne.mockResolvedValue({ matchedCount: 1 });
   mocks.audit.mockResolvedValue({ id: 'audit1' });
+  mocks.exists.mockResolvedValue({ _id: 'another' });
   mocks.findAuditEntry.mockResolvedValue({
     id: 'audit1',
     action: 'feedback.status_changed',
@@ -73,6 +80,47 @@ beforeEach(() => {
 });
 
 describe('PATCH /api/admin/feedback/[id]/status', () => {
+  it('requires a close resolution and validates duplicate targets before auditing', async () => {
+    await expect(call({ status: 'Closed', resolution: undefined })).rejects.toMatchObject({ statusCode: 400 });
+    await expect(call({ status: 'Closed', resolution: 'duplicate' })).rejects.toMatchObject({ statusCode: 400 });
+    await expect(
+      call({ status: 'Closed', resolution: 'duplicate', resolutionDuplicateId: FEEDBACK_ID })
+    ).rejects.toMatchObject({ statusCode: 400 });
+    mocks.exists.mockResolvedValue(null);
+    await expect(
+      call({ status: 'Closed', resolution: 'duplicate', resolutionDuplicateId: '507f1f77bcf86cd799439000' })
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(mocks.audit).not.toHaveBeenCalled();
+  });
+
+  it('records a duplicate resolution and link in the same audit entry', async () => {
+    await call({ status: 'Closed', resolution: 'duplicate', resolutionDuplicateId: '507f1f77bcf86cd799439000' });
+    expect(mocks.updateOne.mock.calls[0][1].$set).toMatchObject({
+      resolution: 'duplicate',
+      resolutionDuplicateId: '507f1f77bcf86cd799439000',
+    });
+    expect(mocks.audit.mock.calls[0][1].changes).toEqual(
+      expect.arrayContaining([
+        { field: 'resolution', before: null, after: 'duplicate' },
+        { field: 'resolutionDuplicateId', before: null, after: '507f1f77bcf86cd799439000' },
+      ])
+    );
+  });
+
+  it('restores the original resolution when undoing a reopen', async () => {
+    stored('New');
+    mocks.findAuditEntry.mockResolvedValue({
+      action: 'feedback.status_changed',
+      details: { feedbackId: FEEDBACK_ID },
+      changes: [
+        { field: 'status', before: 'Closed', after: 'New' },
+        { field: 'resolution', before: 'wont_fix', after: null },
+      ],
+    });
+    await call({ status: 'Closed', resolution: undefined, undoOf: 'audit1' });
+    expect(mocks.updateOne.mock.calls[0][1].$set.resolution).toBe('wont_fix');
+  });
+
   it('is first-party JWT only and denies a user without users:moderate', async () => {
     expect(mocks.options).toMatchObject({ auth: 'jwtOnly' });
     await expect(
@@ -93,14 +141,26 @@ describe('PATCH /api/admin/feedback/[id]/status', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.updateOne).toHaveBeenCalledWith(
       { _id: FEEDBACK_ID, status: 'New' },
-      { $set: { status: 'Closed', handledBy: 'admin1', handledAt: expect.any(Date), handledAuditEntryId: 'audit1' } }
+      {
+        $set: {
+          status: 'Closed',
+          resolution: 'fixed',
+          handledBy: 'admin1',
+          handledAt: expect.any(Date),
+          handledAuditEntryId: 'audit1',
+        },
+        $unset: { resolutionDuplicateId: '' },
+      }
     );
     expect(mocks.audit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         action: 'feedback.status_changed',
         target: { kind: 'user', id: 'reporter1', displayName: 'reporter1@example.com' },
-        changes: [{ field: 'status', before: 'New', after: 'Closed' }],
+        changes: [
+          { field: 'status', before: 'New', after: 'Closed' },
+          { field: 'resolution', before: null, after: 'fixed' },
+        ],
         details: { feedbackId: FEEDBACK_ID },
       })
     );
