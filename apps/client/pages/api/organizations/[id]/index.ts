@@ -30,7 +30,7 @@ const updateOrgBodySchema = z.object({
   // No bare coerce: it reads null (what JSON makes of NaN) and '' as 0, which would wipe the balance.
   currentCredits: z
     .union([z.number(), z.string().trim().min(1)])
-    .pipe(z.coerce.number<string | number>().min(0))
+    .pipe(z.coerce.number<string | number>().int().min(0))
     .optional(),
   systemPrompt: z.string().max(10000).optional(),
   redactPushContent: z.boolean().optional(),

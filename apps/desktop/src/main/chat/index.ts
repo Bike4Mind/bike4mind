@@ -74,6 +74,7 @@ import { findOnPath, resolveUserPath } from './tools/userPath';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionExportIpc } from './sessionExportIpc';
+import { registerLocalDataExportIpc } from './localDataExportIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
@@ -153,6 +154,7 @@ import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './rea
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { permissionProtectedLocations, toolProtectedLocations } from './protectedLocations';
 import { keepSessionWritesIn } from './tools/sessionScripts';
+import { mainCheckoutOf } from './tools/shellTools';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
 import { parsePaneInput, SimulatorLiveView } from './simulator/SimulatorLiveView';
@@ -477,6 +479,7 @@ export function registerChat(
     home,
     protectedRoots: () => permissionProtected.paths(),
     unresolvedProtected: () => permissionProtected.unresolved(),
+    mainCheckoutOf,
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
@@ -1252,6 +1255,14 @@ export function registerChat(
     },
     writeFile: (path, content) => writeFile(path, content, 'utf8'),
     downloadsDirectory: () => app.getPath('downloads'),
+  });
+
+  registerLocalDataExportIpc(ipcMain, {
+    sessions: store,
+    attachments,
+    media,
+    userData,
+    pickFolder: sender => pickDirectory(sender),
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListArtifacts, () => artifactLibrary.list());

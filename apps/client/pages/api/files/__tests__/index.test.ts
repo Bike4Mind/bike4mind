@@ -115,6 +115,7 @@ vi.mock('@bike4mind/database', () => {
       pullFileReferences: (...args: unknown[]) => mockRefs.pullFileReferences(...args),
     },
     adminSettingsRepository: { __repo: 'adminSettings' },
+    favoriteRepository: { __repo: 'favorites' },
     withTransaction: vi.fn((fn: (session: unknown) => unknown) => fn({ __fakeSession: true })),
   };
 });

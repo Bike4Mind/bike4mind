@@ -24,7 +24,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
       const fallbackName = fileType === 'image' ? `pasted-image-${Date.now()}` : `pasted-text-${Date.now()}`;
 
       try {
-        const operations = await OperationsModelService.getOperationsModel();
+        const operations = await OperationsModelService.getOperationsModel({ endUserId: req.user.id });
         const { modelId, modelInfo } = operations;
         const llm = meterCompletionBackend(
           operations.llm,

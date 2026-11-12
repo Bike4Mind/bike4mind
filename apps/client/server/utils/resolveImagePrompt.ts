@@ -170,7 +170,7 @@ export const resolveImagePrompt = async (args: {
   const fallback: PromptResolution = { rewrittenPrompt: originalPrompt, intent: 'continuation' };
 
   try {
-    const operationsModel = await OperationsModelService.getOperationsModel();
+    const operationsModel = await OperationsModelService.getOperationsModel({ endUserId });
     const operationsModelInfo = operationsModel.modelInfo;
     // Intent classification is a platform operation billed to the system key so quota stays
     // consistent with other operations callers (summarization, auto-naming). Provider abuse

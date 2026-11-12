@@ -2,6 +2,8 @@ import { useCallback, useMemo } from 'react';
 import { FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { FeedbackFilters, FeedbackListFilterParams, UseFeedbackFiltersReturn } from '../types';
+import { DEFAULT_FEEDBACK_VIEW } from '../feedbackTabSearch';
+import type { FeedbackReceivedWindow } from '../feedbackTrends';
 import { useFeedbackView } from './useFeedbackView';
 
 /**
@@ -21,9 +23,14 @@ import { useFeedbackView } from './useFeedbackView';
  * that nothing read. The dropdown's selection now reaches the query.
  */
 export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
-  const { value: searchTerm, debouncedValue: debouncedSearchTerm, setValue: setSearchTermValue } = useDebounceValue('');
+  const {
+    value: searchTerm,
+    debouncedValue: debouncedSearchTerm,
+    setValue: setSearchTermValue,
+    setValueImmediately: clearSearchTerm,
+  } = useDebounceValue('');
   const [view, updateView] = useFeedbackView();
-  const { statusFilters, organizations: selectedOrganizations, subject, types, sortAscending, page } = view;
+  const { statusFilters, organizations: selectedOrganizations, subject, types, received, sortAscending, page } = view;
 
   const setSearchTerm = useCallback(
     (term: string) => {
@@ -55,12 +62,41 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
 
   const setTypes = useCallback((next: FeedbackType[]) => updateView({ types: next, page: 1 }), [updateView]);
 
+  const setReceived = useCallback(
+    (next: FeedbackReceivedWindow | undefined) => updateView({ received: next, page: 1 }),
+    [updateView]
+  );
+
+  const showOnly = useCallback<UseFeedbackFiltersReturn['showOnly']>(
+    next => {
+      clearSearchTerm('');
+      updateView({
+        statusFilters: DEFAULT_FEEDBACK_VIEW.statusFilters,
+        subject: DEFAULT_FEEDBACK_VIEW.subject,
+        types: DEFAULT_FEEDBACK_VIEW.types,
+        organizations: DEFAULT_FEEDBACK_VIEW.organizations,
+        received: DEFAULT_FEEDBACK_VIEW.received,
+        ...next,
+        page: 1,
+      });
+    },
+    [clearSearchTerm, updateView]
+  );
+
   const toggleSortDirection = useCallback(
     () => updateView(current => ({ sortAscending: !current.sortAscending, page: 1 })),
     [updateView]
   );
 
-  const filters: FeedbackFilters = { searchTerm, statusFilters, selectedOrganizations, subject, types, sortAscending };
+  const filters: FeedbackFilters = {
+    searchTerm,
+    statusFilters,
+    selectedOrganizations,
+    subject,
+    types,
+    received,
+    sortAscending,
+  };
 
   const filterParams = useMemo<FeedbackListFilterParams>(() => {
     const statuses = Object.values(FeedbackStatus).filter(status => statusFilters[status]);
@@ -72,10 +108,11 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
       // Single-valued, unlike status/organization: the endpoint takes one subject or none.
       ...(subject ? { subject } : {}),
       ...(types.length > 0 ? { type: types } : {}),
+      ...(received ? { received } : {}),
       ...(debouncedSearchTerm.trim() ? { search: debouncedSearchTerm.trim() } : {}),
       sort: sortAscending ? 'asc' : 'desc',
     };
-  }, [statusFilters, selectedOrganizations, subject, types, debouncedSearchTerm, sortAscending]);
+  }, [statusFilters, selectedOrganizations, subject, types, received, debouncedSearchTerm, sortAscending]);
 
   return {
     filters,
@@ -84,6 +121,8 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     setSelectedOrganizations,
     setSubject,
     setTypes,
+    setReceived,
+    showOnly,
     toggleSortDirection,
     filterParams,
   };

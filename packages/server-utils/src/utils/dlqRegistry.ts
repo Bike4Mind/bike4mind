@@ -1,11 +1,11 @@
 import { Resource } from 'sst';
 import {
-  createDlqRegistry,
+  createInspectableDlqRegistry,
   describeDroppedContributions,
   partitionContributedQueues,
   reservedQueueNames,
 } from '@bike4mind/infra';
-import type { DlqDescriptor, DlqResolvers } from '@bike4mind/infra';
+import type { DlqDescriptor, InspectableDlqDescriptor, DlqResolvers } from '@bike4mind/infra';
 import * as generatedInfraResources from '../premium-generated/infraResources.generated';
 import { Logger } from '@bike4mind/observability';
 
@@ -28,7 +28,7 @@ export interface DlqQueueHelp {
   owner: string;
 }
 
-export type CoreDlqDescriptor = DlqDescriptor & DlqQueueHelp;
+export type CoreDlqDescriptor = InspectableDlqDescriptor & DlqQueueHelp;
 
 /** Names each DlqQueueHelp field that is missing, blank, or (for replay) outside DLQ_REPLAY_SAFETY. */
 export function missingQueueHelp(entry: Partial<Record<keyof DlqQueueHelp, unknown>>): string[] {
@@ -48,7 +48,7 @@ export function missingQueueHelp(entry: Partial<Record<keyof DlqQueueHelp, unkno
  */
 
 /**
- * Runtime registry of all DLQ->source queue pairs.
+ * Runtime registry of DLQs, including queues without an SQS replay destination.
  * Both DLQ and source queue URLs are resolved from sst.Linkable resources
  * (dlqUrls and sourceQueueUrls) stored in resource.enc. Zero IAM overhead.
  *
@@ -505,10 +505,201 @@ const DLQ_REGISTRY = [
       'A job superseded by a newer version is dropped; otherwise the thumbnail is rendered and stored again, with nothing sent outside.',
     owner: 'Published artifacts',
   },
+  {
+    label: 'young-account-spend-alert',
+    displayName: 'Young Account Spend Alert',
+    application: 'Signup',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed young-account spend alert invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'Account security',
+  },
+  {
+    label: 'api-probe-detector',
+    displayName: 'API Probe Detector',
+    application: 'Security',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed API probe detector invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'Security ops',
+  },
+  {
+    label: 'image-moderation-review-sweep',
+    displayName: 'Image Moderation Review Sweep',
+    application: 'Moderation',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed image moderation review sweep invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'Moderation',
+  },
+  {
+    label: 'spend-monitor',
+    displayName: 'Spend Monitor',
+    application: 'Billing',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed spend monitor invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'Billing',
+  },
+  {
+    label: 'signup-grant-held-release',
+    displayName: 'Signup Grant Held Release',
+    application: 'Signup',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed signup grant release invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'Accounts',
+  },
+  {
+    label: 'revenue-snapshot',
+    displayName: 'Revenue Snapshot',
+    application: 'Billing',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed revenue snapshot invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'Billing',
+  },
+  {
+    label: 'subscription-reconciliation',
+    displayName: 'Subscription Reconciliation',
+    application: 'Billing',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed subscription reconciliation invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'Billing',
+  },
+  {
+    label: 'account-deletion-sweep',
+    displayName: 'Account Deletion Sweep',
+    application: 'Account',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed account deletion sweep invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'Accounts',
+  },
+  {
+    label: 'fab-file-moderation',
+    displayName: 'FabFile Moderation',
+    application: 'FabFileProcessing',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed file upload moderation invocations for inspection.',
+    replayNote: 'S3 invokes the consumer directly; there is no SQS replay destination.',
+    owner: 'Knowledge files',
+  },
+  {
+    label: 'telemetry-alert-rule',
+    displayName: 'Telemetry Alert Rule',
+    application: 'TelemetryAlerts',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains telemetry alert events that could not be delivered or processed.',
+    replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
+    owner: 'Platform ops',
+  },
+  {
+    label: 'session-enrichment',
+    displayName: 'Session Enrichment',
+    application: 'SessionEnrichment',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains session enrichment events that could not be delivered or processed.',
+    replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
+    owner: 'Chat',
+  },
+  {
+    label: 'billing-events',
+    displayName: 'Billing Events',
+    application: 'Billing',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains billing events that could not be delivered or processed.',
+    replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
+    owner: 'Billing',
+  },
+  {
+    label: 'email-events',
+    displayName: 'Email Events',
+    application: 'Email',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains email events that could not be delivered or processed.',
+    replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
+    owner: 'Email',
+  },
+  {
+    label: 'push-events',
+    displayName: 'Push Events',
+    application: 'Notifications',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains push notification events that could not be delivered or processed.',
+    replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
+    owner: 'Notifications',
+  },
+  {
+    label: 'notebook-events',
+    displayName: 'Notebook Events',
+    application: 'NotebookCuration',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains notebook events that could not be delivered or processed.',
+    replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
+    owner: 'Notebooks',
+  },
+  {
+    label: 'completion-events',
+    displayName: 'Completion Events',
+    application: 'Completions',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains completion events that could not be delivered or processed.',
+    replayNote: 'No SQS replay destination; inspect the event before manual recovery.',
+    owner: 'Chat',
+  },
+  {
+    label: 'business-metric-alerts',
+    displayName: 'Business Metric Alerts',
+    application: 'Analytics',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed business metric alert invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'Analytics',
+  },
+  {
+    label: 'alarm-handler',
+    displayName: 'DLQ Alarm Handler',
+    application: 'AlarmPipeline',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains alarm notifications that could not reach the alarm handler.',
+    replayNote: 'SNS delivers notifications directly; there is no SQS replay destination.',
+    owner: 'Platform ops',
+  },
+  {
+    label: 'generated-media-purge',
+    displayName: 'Generated Media Purge',
+    application: 'Notebooks',
+    sourceQueue: 'generatedMediaPurgeQueue',
+    description: 'Deletes generated images, audio and video left behind when a message or notebook is deleted.',
+    replay: 'safe',
+    replayNote:
+      'Each key is rechecked against live references and notebook ownership before it is deleted, and deleting a key that is already gone is a no-op.',
+    owner: 'Notebooks',
+  },
 ] as const satisfies readonly CoreDlqDescriptor[];
 
 type CoreDlqLabel = (typeof DLQ_REGISTRY)[number]['label'];
-type CoreSourceQueueName = (typeof DLQ_REGISTRY)[number]['sourceQueue'];
+type CoreSourceQueueName = NonNullable<(typeof DLQ_REGISTRY)[number]['sourceQueue']>;
 
 declare const contributedBrand: unique symbol;
 /** A DLQ label an overlay declared; obtained from contributedDlqLabel, which checks registration. */
@@ -520,9 +711,9 @@ export type DlqLabel = CoreDlqLabel | ContributedDlqLabel;
 /** Valid source queue names: DLQ_REGISTRY's, plus the contributed ones that registered. */
 export type SourceQueueName = CoreSourceQueueName | ContributedSourceQueueName;
 
-/** An entry the registry holds, whose label and source queue are therefore resolvable. */
-export type RegisteredDlqDescriptor = DlqDescriptor &
-  Partial<DlqQueueHelp> & { label: DlqLabel; sourceQueue: SourceQueueName };
+/** An entry the registry holds; a null source queue has no SQS replay destination. */
+export type RegisteredDlqDescriptor = InspectableDlqDescriptor &
+  Partial<DlqQueueHelp> & { label: DlqLabel; sourceQueue: SourceQueueName | null };
 
 type LinkableQueues = {
   dlqUrls: Record<string, string>;
@@ -549,7 +740,9 @@ function contributedDescriptors(): DlqDescriptor[] {
   }
   const labels = new Set(reserved.dlqLabels);
   const names = new Set(reserved.resourceNames);
-  const unknown = DLQ_REGISTRY.filter(d => !labels.has(d.label) || !names.has(d.sourceQueue)).map(d => d.label);
+  const unknown = DLQ_REGISTRY.filter(
+    d => !labels.has(d.label) || (d.sourceQueue !== null && !names.has(d.sourceQueue))
+  ).map(d => d.label);
   if (unknown.length > 0) {
     Logger.warn(
       `[dlqRegistry] generated core names miss DLQ_REGISTRY entries (${unknown.join(', ')}); re-run pnpm codegen. ` +
@@ -567,7 +760,7 @@ function contributedDescriptors(): DlqDescriptor[] {
   }));
 }
 
-let registry: ReturnType<typeof createDlqRegistry<readonly DlqDescriptor[]>> | undefined;
+let registry: ReturnType<typeof createInspectableDlqRegistry<readonly InspectableDlqDescriptor[]>> | undefined;
 const contributedLabels = new Set<string>();
 const contributedSourceQueues = new Set<string>();
 
@@ -576,12 +769,16 @@ function getRegistry() {
     const contributed = contributedDescriptors();
     for (const d of contributed) {
       contributedLabels.add(d.label);
-      contributedSourceQueues.add(d.sourceQueue);
+      if (d.sourceQueue !== null) contributedSourceQueues.add(d.sourceQueue);
     }
-    registry = createDlqRegistry<readonly DlqDescriptor[]>([...DLQ_REGISTRY, ...contributed], resolvers, {
-      dlqErrorContext: 'Check dlqUrls Linkable in infra/web.ts.',
-      sourceQueueErrorContext: 'Check sourceQueueUrls Linkable in infra/web.ts.',
-    });
+    registry = createInspectableDlqRegistry<readonly InspectableDlqDescriptor[]>(
+      [...DLQ_REGISTRY, ...contributed],
+      resolvers,
+      {
+        dlqErrorContext: 'Check dlqUrls Linkable in infra/web.ts.',
+        sourceQueueErrorContext: 'Check sourceQueueUrls Linkable in infra/web.ts.',
+      }
+    );
   }
   return registry;
 }

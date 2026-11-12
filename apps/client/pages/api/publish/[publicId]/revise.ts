@@ -190,7 +190,11 @@ const handler = baseApi().post(
       action = await consumePublishAction(req.user);
 
       // ── Run the LLM (in-monorepo path; accumulate the non-streamed completion). ──
-      const { modelId, llm: rawLlm, modelInfo } = await OperationsModelService.getOperationsModel();
+      const {
+        modelId,
+        llm: rawLlm,
+        modelInfo,
+      } = await OperationsModelService.getOperationsModel({ endUserId: String(req.user.id) });
       req.logger.info(`[REVISE] ${publicId} using ${modelInfo.name} (${modelInfo.backend}) on ${open.length} comments`);
 
       const messages = buildPrompt(currentHtml, open);

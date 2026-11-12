@@ -1,5 +1,7 @@
 import { SHADOW_DETECTION_LIST_LIMIT, type ShadowDetectionItem } from '@bike4mind/common';
 import { AbuseAssessmentModel, User, mongoose, shadowDetectionRepository } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
+import { findLinkedAdvisoryAccounts } from './linkedAdvisoryAccounts';
 import {
   AI_ADVISORY_WINDOW_HOURS,
   type AiAbuseAdvisory,
@@ -44,7 +46,7 @@ async function latestJudgments(detectionIds: string[]): Promise<Map<string, Late
 async function unsuspendedUserIds(userIds: string[]): Promise<Set<string>> {
   const ids = userIds.filter(id => OBJECT_ID.test(id)).map(id => new mongoose.Types.ObjectId(id));
   if (ids.length === 0) return new Set();
-  const users = await User.find({ _id: { $in: ids }, isBanned: { $ne: true } })
+  const users = await User.find({ _id: { $in: ids }, isBanned: { $ne: true }, deletedAt: null })
     .select('_id')
     .lean();
   return new Set(users.map(user => String(user._id)));
@@ -111,12 +113,24 @@ function mailDomainsOf(flagged: ShadowDetectionItem[], open: Set<string>): AiAdv
  * clears the advisory. The admin dashboard strip, the Users list's `aiVerdict` filter and its badge
  * all read this one function, so they always agree.
  */
-export async function listAiAbuseAdvisories(now = new Date()): Promise<AiAdvisorySummary> {
+export async function listAiAbuseAdvisories(
+  now = new Date(),
+  { includeLinkedAccounts = false }: { includeLinkedAccounts?: boolean } = {}
+): Promise<AiAdvisorySummary> {
   const since = new Date(now.getTime() - AI_ADVISORY_WINDOW_HOURS * 60 * 60 * 1000);
   const fetched = await shadowDetectionRepository.listUnreviewedSince(since, SHADOW_DETECTION_LIST_LIMIT + 1);
   let truncated = fetched.length > SHADOW_DETECTION_LIST_LIMIT;
   const detections = fetched.slice(0, SHADOW_DETECTION_LIST_LIMIT);
-  if (detections.length === 0) return { since, advisories: [], networks: [], mailDomains: [], truncated };
+  if (detections.length === 0)
+    return {
+      since,
+      advisories: [],
+      networks: [],
+      mailDomains: [],
+      linkedAccounts: [],
+      linkedAccountsStatus: 'complete',
+      truncated,
+    };
 
   const judgments = await latestJudgments(detections.map(detection => detection.id));
   const flagged = detections.filter(detection => judgments.get(detection.id)?.result === 'abuse');
@@ -126,6 +140,8 @@ export async function listAiAbuseAdvisories(now = new Date()): Promise<AiAdvisor
   for (const detection of flagged) {
     const judgment = judgments.get(detection.id);
     if (!judgment) continue;
+    // A campaign verdict covers every current member, transitive ones included. The judgment is keyed on
+    // the detection, not its revision, so members who joined after it was made inherit it too.
     for (const userId of detection.userIds) {
       if (!open.has(userId)) continue;
       const candidate: AiAbuseAdvisory = {
@@ -141,11 +157,28 @@ export async function listAiAbuseAdvisories(now = new Date()): Promise<AiAdvisor
   }
   const advisories = [...strongest.values()].sort(byStrength);
   truncated ||= advisories.length > MAX_ADVISORIES;
+  let linkedAccounts: AiAdvisorySummary['linkedAccounts'] = [];
+  let linkedAccountsStatus: AiAdvisorySummary['linkedAccountsStatus'] = 'complete';
+  try {
+    const linked = includeLinkedAccounts
+      ? await findLinkedAdvisoryAccounts(
+          advisories.map(advisory => advisory.userId),
+          now
+        )
+      : { accounts: [], truncated: false };
+    linkedAccounts = linked.accounts;
+    linkedAccountsStatus = linked.truncated ? 'truncated' : 'complete';
+  } catch (error) {
+    Logger.globalInstance.error('[ADVISORY_LINK_SCAN_FAILED]', { error });
+    linkedAccountsStatus = 'failed';
+  }
   return {
     since,
     advisories: advisories.slice(0, MAX_ADVISORIES),
     networks: networksOf(flagged, open),
     mailDomains: mailDomainsOf(flagged, open),
+    linkedAccounts,
+    linkedAccountsStatus,
     truncated,
   };
 }

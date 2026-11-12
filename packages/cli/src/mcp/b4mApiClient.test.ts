@@ -1000,7 +1000,7 @@ describe('B4mApiClient publish', () => {
     globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
 
     await client.uploadPublishDraftFile(
-      'https://bucket.s3.amazonaws.com/drafts/d1/index.html?X-Amz=1',
+      { url: 'https://bucket.s3.amazonaws.com/drafts/d1/index.html?X-Amz=1' },
       '<p/>',
       'text/html'
     );
@@ -1061,20 +1061,28 @@ describe('B4mApiClient publish', () => {
     expect(mockPost).toHaveBeenCalledWith('/api/projects/p1/files', { fileIds: ['f1'] });
   });
 
-  it('resolves a self-host relative proxy URL against the base URL', async () => {
+  it('resolves a self-host relative proxy URL against the base URL and sends its token header', async () => {
     globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
 
-    await client.uploadPublishDraftFile('/api/publish/artifact/draft-upload?token=t', '<p/>', 'text/html');
-
-    expect(String(globalFetch.mock.calls[0][0])).toBe(
-      'http://localhost:3000/api/publish/artifact/draft-upload?token=t'
+    await client.uploadPublishDraftFile(
+      { url: '/api/publish/artifact/draft-upload?draftId=d1&path=index.html', headers: { 'x-upload-token': 't' } },
+      '<p/>',
+      'text/html'
     );
+
+    const [url, init] = globalFetch.mock.calls[0];
+    expect(String(url)).toBe('http://localhost:3000/api/publish/artifact/draft-upload?draftId=d1&path=index.html');
+    expect(init).toEqual({
+      method: 'PUT',
+      headers: { 'x-upload-token': 't', 'Content-Type': 'text/html' },
+      body: '<p/>',
+    });
   });
 
   it('fails loudly when the upload is rejected', async () => {
     globalFetch.mockResolvedValue(new Response(null, { status: 403 }));
 
-    await expect(client.uploadPublishDraftFile('https://s3/x', '<p/>', 'text/html')).rejects.toThrow(
+    await expect(client.uploadPublishDraftFile({ url: 'https://s3/x' }, '<p/>', 'text/html')).rejects.toThrow(
       'publish upload failed (403)'
     );
   });

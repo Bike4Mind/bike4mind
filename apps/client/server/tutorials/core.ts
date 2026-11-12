@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import { isFullAdmin } from '@bike4mind/common';
 import { coreTutorialDepsFor } from './coreDeps';
 import { CORE_TUTORIAL_CONTENT } from './content';
+import { CORE_TUTORIAL_SETTING } from './settingName';
 import { tutorialContent } from './effectiveModules';
 import { tutorialModels } from './models';
 import type { FieldMap } from './overrides';
@@ -13,7 +14,7 @@ import { knownSelectorsOf } from './validate';
 import { filterCoreTutorialsVisibleTo } from './visibility';
 import editableFields from './editableFields.json';
 
-export const CORE_TUTORIAL_SETTING = 'EnableCoreTutorials' as const;
+export { CORE_TUTORIAL_SETTING };
 
 export const coreModels = tutorialModels({ prefix: '', modelPrefix: 'Core' });
 export const coreKnownSelectors = knownSelectorsOf(CORE_TUTORIAL_CONTENT.map(t => ({ steps: [...t.steps] })));

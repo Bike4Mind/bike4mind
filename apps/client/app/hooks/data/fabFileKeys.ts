@@ -41,6 +41,10 @@ export const fabFileKeys = {
     ['fabFiles', 'own', params] as const,
   ownBySession: (sessionId: string) => ['fabFiles', 'own', { sessionId }] as const,
   quest: (questId: string) => ['fabFiles', 'quest', questId] as const,
+  /** The ids of the caller's starred files (GET /api/files/favorites). */
+  starredIds: ['fabFiles', 'starred'] as const,
+  /** The generation models behind the caller's files (GET /api/files/generation-models). */
+  generationModels: ['fabFiles', 'generationModels'] as const,
   combined: (params: {
     searchTerm: string;
     filters: { type?: 'text' | 'pdf' | 'url' | 'image'; shared?: boolean };
@@ -48,6 +52,8 @@ export const fabFileKeys = {
     sortField: string;
     page: number;
   }) => ['fabFiles', 'combined', params] as const,
+  /** Invalidation prefix covering search, searchInfinite and searchPaginated. */
+  searchAll: ['fabFiles', 'search'] as const,
   search: (params?: ISearchFabFilesParams) => ['fabFiles', 'search', params] as const,
   searchInfinite: (params?: ISearchFabFilesParams) => ['fabFiles', 'search', 'infinite', params] as const,
   searchPaginated: (params: ISearchFabFilesParams & { page: number }) =>

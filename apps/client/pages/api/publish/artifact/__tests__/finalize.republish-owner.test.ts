@@ -62,7 +62,7 @@ vi.mock('@server/services/publish', async importOriginal => {
     buildPublishUrlPath: () => '/p/u/owner1/art',
     invalidatePublishCdn: mockInvalidate,
     toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
-    mintDraftUploadUrl: () => Promise.resolve('https://example.invalid/put'),
+    mintDraftUploadUrl: () => Promise.resolve({ url: 'https://example.invalid/put' }),
     consumePublishAction: () => Promise.resolve({ refund: () => Promise.resolve() }),
   };
 });

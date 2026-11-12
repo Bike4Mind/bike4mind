@@ -96,6 +96,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/cron/apiKeyBaselineCalculation.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/apiProbeDetector.handler` | `infra/apiProbeDetector.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/businessMetricAlerts.handler` | `infra/businessMetricAlerts.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
+| `apps/workers/src/cron/completionSequenceSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/creditHoldSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/creditLotSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/creditPurchaseReconciliation.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
@@ -184,6 +185,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/queueHandlers/emailJobOrchestrator.dispatch` | `infra/emailMarketing.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `emailBatchQueue`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/queueHandlers/fabFileChunk.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `fabFileVectorizeQueue`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `dataLakeTaxonomyQueue`, `lakeMemoryQueue` | Yes | Connects to MongoDB. |
 | `apps/workers/src/queueHandlers/fabFileVectorize.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `dataLakeTaxonomyQueue`, `lakeMemoryQueue` | Yes | Connects to MongoDB. |
+| `apps/workers/src/queueHandlers/generatedMediaPurge.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `generatedImagesBucket`, `routerDistributionId`, `generatedMediaPurgeQueue` | Yes | Connects to MongoDB. |
 | `apps/workers/src/queueHandlers/generationCallback.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `generatedImagesBucket` | Yes | Connects to MongoDB. |
 | `apps/workers/src/queueHandlers/generationJob.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `generatedImagesBucket`, `fabFileBucket`, `appFilesBucket`, `eventBus`, `generationCallbackQueue`, `generationJobQueue`, `imageProcessor` | Yes | Connects to MongoDB. |
 | `apps/workers/src/queueHandlers/githubLakeIngest.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `githubLakeIngestQueue`, `githubLakeRevokeQueue` | Yes | Connects to MongoDB. |

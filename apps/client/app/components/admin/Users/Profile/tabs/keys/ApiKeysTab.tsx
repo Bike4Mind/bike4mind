@@ -149,6 +149,8 @@ const buildColumns = (
     {
       id: 'name',
       label: 'Name and prefix',
+      // Wide enough for a key prefix and its copy button on one line.
+      width: '13rem',
       sortValue: key => key.name.toLowerCase(),
       render: key => (
         <Stack alignItems="flex-start" gap={0.25} sx={{ minWidth: 0 }}>
@@ -399,6 +401,8 @@ export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
             </Typography>
           }
           testId="user-keys-table"
+          minWidth="60rem"
+          framed={false}
           rowTestId={key => `user-keys-row-${key.id}`}
         />
         <Typography
