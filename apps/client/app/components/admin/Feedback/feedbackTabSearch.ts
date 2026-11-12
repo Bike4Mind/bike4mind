@@ -1,6 +1,9 @@
 import {
   FEEDBACK_ID_PARAM,
   FEEDBACK_SUBJECTS,
+  FEEDBACK_AI_AREAS,
+  FEEDBACK_AI_SEVERITIES,
+  type FeedbackAiLabels,
   FeedbackStatus,
   FeedbackType,
   type FeedbackSubject,
@@ -23,6 +26,8 @@ import { FEEDBACK_RECEIVED_WINDOWS, type FeedbackReceivedWindow } from './feedba
  */
 
 export const FEEDBACK_STATUS_PARAM = 'feedbackStatus';
+export const FEEDBACK_AREA_PARAM = 'feedbackArea';
+export const FEEDBACK_SEVERITY_PARAM = 'feedbackSeverity';
 export const FEEDBACK_SUBJECT_PARAM = 'feedbackSubject';
 export const FEEDBACK_TYPE_PARAM = 'feedbackType';
 export const FEEDBACK_ORG_PARAM = 'feedbackOrg';
@@ -33,6 +38,8 @@ export const FEEDBACK_LIMIT_PARAM = 'feedbackLimit';
 
 /** The params that describe the list view; `feedbackId` (the pinned report) is separate. */
 const FEEDBACK_VIEW_PARAMS = [
+  FEEDBACK_AREA_PARAM,
+  FEEDBACK_SEVERITY_PARAM,
   FEEDBACK_STATUS_PARAM,
   FEEDBACK_SUBJECT_PARAM,
   FEEDBACK_TYPE_PARAM,
@@ -54,6 +61,8 @@ const FEEDBACK_ORDERS = ['asc', 'desc'] as const;
 type FeedbackOrder = (typeof FEEDBACK_ORDERS)[number];
 
 export type FeedbackSearch = {
+  [FEEDBACK_AREA_PARAM]?: FeedbackAiLabels['area'];
+  [FEEDBACK_SEVERITY_PARAM]?: FeedbackAiLabels['severity'];
   [FEEDBACK_STATUS_PARAM]?: string;
   [FEEDBACK_SUBJECT_PARAM]?: FeedbackSubject;
   [FEEDBACK_TYPE_PARAM]?: FeedbackType[];
@@ -66,6 +75,8 @@ export type FeedbackSearch = {
 };
 
 export type FeedbackView = {
+  area?: FeedbackAiLabels['area'];
+  severity?: FeedbackAiLabels['severity'];
   statusFilters: Record<FeedbackStatus, boolean>;
   /** Undefined is every subject. */
   subject: FeedbackSubject | undefined;
@@ -139,6 +150,8 @@ const parseOrder = oneOf(FEEDBACK_ORDERS);
 export const FEEDBACK_SEARCH_PARSERS: {
   readonly [K in keyof FeedbackSearch]-?: (value: unknown) => FeedbackSearch[K];
 } = {
+  [FEEDBACK_AREA_PARAM]: oneOf(FEEDBACK_AI_AREAS),
+  [FEEDBACK_SEVERITY_PARAM]: oneOf(FEEDBACK_AI_SEVERITIES),
   [FEEDBACK_STATUS_PARAM]: parseStatus,
   [FEEDBACK_SUBJECT_PARAM]: oneOf(FEEDBACK_SUBJECTS),
   [FEEDBACK_TYPE_PARAM]: parseTypes,
@@ -155,6 +168,8 @@ export function feedbackViewFromSearch(search: Record<string, unknown>): Feedbac
   const statuses = decodeStatuses(search[FEEDBACK_STATUS_PARAM]);
   return {
     statusFilters: statuses ? toStatusFilters(statuses) : DEFAULT_FEEDBACK_VIEW.statusFilters,
+    area: FEEDBACK_SEARCH_PARSERS[FEEDBACK_AREA_PARAM](search[FEEDBACK_AREA_PARAM]),
+    severity: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SEVERITY_PARAM](search[FEEDBACK_SEVERITY_PARAM]),
     subject: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SUBJECT_PARAM](search[FEEDBACK_SUBJECT_PARAM]),
     types: parseTypes(search[FEEDBACK_TYPE_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.types,
     organizations: parseStringList(search[FEEDBACK_ORG_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.organizations,
@@ -176,6 +191,8 @@ export function feedbackViewToSearch(view: FeedbackView): {
   const defaultStatuses = encodeStatuses(checkedStatuses(DEFAULT_FEEDBACK_VIEW.statusFilters));
   return {
     [FEEDBACK_STATUS_PARAM]: statuses === defaultStatuses ? undefined : statuses,
+    [FEEDBACK_AREA_PARAM]: view.area,
+    [FEEDBACK_SEVERITY_PARAM]: view.severity,
     [FEEDBACK_SUBJECT_PARAM]: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SUBJECT_PARAM](view.subject),
     [FEEDBACK_TYPE_PARAM]: parseTypes(view.types),
     [FEEDBACK_ORG_PARAM]: parseStringList(view.organizations),
