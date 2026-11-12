@@ -1,12 +1,19 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
-import type { MongoMemoryServer } from 'mongodb-memory-server';
 import type { IUserDocument } from '@bike4mind/common';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
+  createMongoReplSet,
+  settleAutoIndexBuilds,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../packages/database/src/__test__/createMongoServer';
+import {
+  Agent,
+  Artifact,
+  FabFile,
   Project,
   Session,
+  withTransaction,
   agentRepository,
   artifactRepository,
   fabFileRepository,
@@ -76,11 +83,13 @@ async function seedNotebook(name: string, extra: Record<string, unknown> = {}) {
   return String(insertedId);
 }
 
-let mongoServer: MongoMemoryServer;
+// A replica set, not a standalone: the atomicity test needs real transactions.
+let mongoServer: Awaited<ReturnType<typeof createMongoReplSet>>;
 
 beforeAll(async () => {
-  mongoServer = await createMongoServer();
+  mongoServer = await createMongoReplSet();
   await mongoose.connect(mongoServer.getUri());
+  await settleAutoIndexBuilds(mongoose);
   await Project.syncIndexes();
 });
 afterAll(async () => {
@@ -88,7 +97,7 @@ afterAll(async () => {
   await mongoServer?.stop();
 });
 afterEach(async () => {
-  await Promise.all([Project.collection.deleteMany({}), Session.collection.deleteMany({})]);
+  await Promise.all([Project, Session, FabFile, Artifact, Agent].map(model => model.collection.deleteMany({})));
 });
 
 describe('member offboarding against real models', () => {
@@ -122,5 +131,36 @@ describe('member offboarding against real models', () => {
     expect(counts).toMatchObject({ projects: 1, notebooks: 0 });
     const notebook = await Session.collection.findOne({ _id: new mongoose.Types.ObjectId(privateNotebook) });
     expect(notebook?.userId).toBe(MEMBER);
+  });
+
+  it('leaves every transferred document with the member when a later step in the transaction fails', async () => {
+    const stampedExtra = { organizationId: ORG, deletedAt: null };
+    await FabFile.collection.insertOne({ userId: MEMBER, ...stampedExtra, fileName: 'a.txt' });
+    await Artifact.collection.insertOne({ userId: MEMBER, ...stampedExtra, title: 'Doc' });
+    await seedProject(MEMBER, 'Launch', { groups: groupShare });
+    await seedNotebook('Shared notes', { groups: groupShare });
+    await Agent.collection.insertOne({
+      userId: MEMBER,
+      organizationId: null,
+      deletedAt: null,
+      name: 'Helper',
+      groups: groupShare,
+    });
+
+    const failure = new Error('revoke failed');
+    await expect(
+      withTransaction(async () => {
+        const counts = await reassignMemberContent(owner, { id: ORG, userId: MEMBER, reassignTo: RECIPIENT }, { db });
+        expect(counts).toEqual({ files: 1, artifacts: 1, projects: 1, notebooks: 1, agents: 1 });
+        throw failure;
+      })
+    ).rejects.toBe(failure);
+
+    const owners = await Promise.all(
+      [FabFile, Artifact, Project, Session, Agent].map(async model =>
+        (await model.collection.find({}).toArray()).map(doc => doc.userId)
+      )
+    );
+    expect(owners).toEqual([[MEMBER], [MEMBER], [MEMBER], [MEMBER], [MEMBER]]);
   });
 });
