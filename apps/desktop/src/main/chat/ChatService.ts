@@ -1,12 +1,14 @@
 import {
   acceptTask,
   assertReportCoversCriteria,
+  modelRequestHint,
   renderTaskBrief,
   resolveWorkerModel,
   validateWorkerModel,
   spawnOptionsSchema,
   taskActionSchema,
   rolePolicySchema,
+  type ModelSelection,
   type RolePolicy,
   type RootPolicy,
   type SpawnOptions,
@@ -3710,6 +3712,9 @@ export class ChatService {
               delegates: orchestrating,
               structuredTask: !!session.workerTask,
               managedDelegation: !!session.origin && !!session.orchestrationPolicy,
+              spawnModelHint: session.orchestrationPolicy
+                ? modelRequestHint(session.model, session.orchestrationPolicy.policy)
+                : null,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
               pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
@@ -6190,11 +6195,7 @@ export class ChatService {
         validated.contract ||
         validated.requirements
       );
-      const selection =
-        managed && explicitWorkerChoice
-          ? { ...resolveWorkerModel(parent.model, managed.policy, validated), rootRunId: managed.rootRunId }
-          : undefined;
-      if (!managed && (validated.role || validated.requestedModelId || validated.contract || validated.requirements)) {
+      if (!managed && explicitWorkerChoice) {
         return {
           ok: false,
           reason: 'model-policy',
@@ -6202,12 +6203,14 @@ export class ChatService {
             'Turn on Orchestrate to use role routing or task contracts. Legacy free-text spawn is still available.',
         };
       }
-      if (selection) {
+      let selection: ModelSelection | undefined;
+      if (managed && explicitWorkerChoice) {
         try {
           const { models } = await this.listModels();
-          const contextWindow = models.find(model => model.id === selection.effectiveModel)?.contextWindow;
+          const resolved = resolveWorkerModel(parent.model, managed.policy, validated, models);
+          const contextWindow = models.find(model => model.id === resolved.effectiveModel)?.contextWindow;
           const briefTokens = Math.ceil((validated.contract ? renderTaskBrief(validated.contract) : seed).length / 3);
-          validateWorkerModel(selection.effectiveModel, models, {
+          validateWorkerModel(resolved.effectiveModel, models, {
             localOnly: this.deviceLocal() || isLocalModel(parent.model),
             ...validated.requirements,
             contextTokens:
@@ -6217,6 +6220,7 @@ export class ChatService {
                   ? briefTokens
                   : undefined,
           });
+          selection = { ...resolved, rootRunId: managed.rootRunId };
         } catch (error) {
           return { ok: false, reason: 'model-policy', message: error instanceof Error ? error.message : String(error) };
         }
@@ -6230,6 +6234,12 @@ export class ChatService {
       const brief = validated.contract ? renderTaskBrief(validated.contract) : seed;
       const named = title?.trim();
       const inherited = managed ? await this.currentPolicyFor(parent, managed) : undefined;
+      if (this.deps.store.scopeKey() !== scope)
+        return {
+          ok: false,
+          reason: 'model-policy',
+          message: 'Account changed before launch. Try again in the intended account.',
+        };
       const child = await this.deps.store.create(selection?.effectiveModel ?? parent.model, {
         ...(inherited ? { orchestrationPolicy: inherited } : {}),
         ...(selection ? { workerSelection: selection } : {}),

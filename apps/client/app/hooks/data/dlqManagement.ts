@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import type { DlqRecommendation } from '@bike4mind/common';
 
@@ -171,17 +171,23 @@ export interface DlqHistoryFilters {
  * Fetch DLQ replay history with optional filters.
  */
 export const useDlqHistory = (filters: DlqHistoryFilters = {}, enabled = true) => {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['admin', 'dlq', 'history', filters],
-    queryFn: async () => {
+    initialPageParam: null as string | null,
+    getNextPageParam: (page: { history: DlqReplayLogEntry[]; nextCursor: string | null }) => page.nextCursor,
+    queryFn: async ({ pageParam }) => {
       const params: Record<string, string> = {};
+      if (pageParam) params.cursor = pageParam;
       if (filters.queueLabel) params.queue = filters.queueLabel;
       if (filters.status) params.status = filters.status;
       if (filters.startDate) params.startDate = filters.startDate;
       if (filters.endDate) params.endDate = filters.endDate;
       if (filters.search) params.search = filters.search;
-      const response = await api.get<{ history: DlqReplayLogEntry[] }>('/api/admin/dlq/history', { params });
-      return response.data.history;
+      const response = await api.get<{ history: DlqReplayLogEntry[]; nextCursor: string | null }>(
+        '/api/admin/dlq/history',
+        { params }
+      );
+      return response.data;
     },
     staleTime: 30 * 1000,
     enabled,

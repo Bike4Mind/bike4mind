@@ -17,13 +17,13 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
-  useRemoveMemberFromOrganization,
   useLeaveOrganization,
   useSetMemberCreditOverride,
   useSetOrganizationManager,
 } from '@client/app/hooks/data/organizations';
 import { useNavigate } from '@tanstack/react-router';
 import CreditLimitModal from './CreditLimitModal';
+import OffboardMemberDialog from './OffboardMemberDialog';
 import { formatMemberCredits, formatMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
 
 interface OrganizationUserCardProps {
@@ -71,7 +71,6 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   });
   const isOwner = user?.id === organization.userId;
   const isManager = !isOwner && (organization.adminUserIds ?? []).some(id => String(id) === user.id);
-  const { mutateAsync: removeMember } = useRemoveMemberFromOrganization();
   const { mutateAsync: leaveOrganization } = useLeaveOrganization();
 
   const confirm = useConfirmation();
@@ -110,19 +109,8 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       )}
     </Stack>
   );
-  const handleRemoveMember = useCallback(
-    async (userId: string) => {
-      confirm({
-        title: 'Remove Member',
-        description: 'Are you sure you want to remove this member?',
-        type: 'danger',
-        onOk: async () => {
-          await removeMember({ organizationId, userId });
-        },
-      });
-    },
-    [organizationId, confirm, removeMember]
-  );
+  const [offboarding, setOffboarding] = useState(false);
+  const handleRemoveMember = useCallback(() => setOffboarding(true), []);
 
   const handleLeaveOrganization = useCallback(async () => {
     confirm({
@@ -218,7 +206,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
           </MenuItem>
         )}
         {!isOwner && canRevoke && (
-          <MenuItem onClick={() => handleRemoveMember(user.id)} data-testid="organization-user-card-revoke-access">
+          <MenuItem onClick={handleRemoveMember} data-testid="organization-user-card-revoke-access">
             Revoke Access
           </MenuItem>
         )}
@@ -229,6 +217,14 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         )}
       </Menu>
     </Dropdown>
+  );
+
+  const offboardDialog = canRevoke && (
+    <OffboardMemberDialog
+      organizationId={organizationId}
+      member={offboarding ? { id: user.id, name: user.name } : null}
+      onClose={() => setOffboarding(false)}
+    />
   );
 
   const creditLimitModal = canSetCreditLimit && (
@@ -284,6 +280,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
           <Box sx={{ flexShrink: 0 }}>{actionsMenu}</Box>
         </Stack>
         {creditLimitModal}
+        {offboardDialog}
       </Box>
     );
   }
@@ -335,6 +332,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         {actionsMenu}
       </Box>
       {creditLimitModal}
+      {offboardDialog}
     </Box>
   );
 };

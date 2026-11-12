@@ -1,6 +1,7 @@
 import { withEventContext } from '@workers/utils/eventContext';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import mailer from '@bike4mind/server-utils/utils/mailer/index';
+import { findMailSinkDomain, parseMailSinkDomains } from '@bike4mind/server-utils/utils/mailer/sinkDomains';
 
 export const handler = withEventContext(async (event, logger) => {
   const { to, subject, body, attachments, category } = EmailEvents.Send.schema.parse(event.properties);
@@ -10,6 +11,12 @@ export const handler = withEventContext(async (event, logger) => {
     subject,
     attachmentCount: attachments?.length || 0,
   });
+
+  const sinkDomain = findMailSinkDomain(to, parseMailSinkDomains(process.env.MAIL_SINK_DOMAINS));
+  if (sinkDomain) {
+    logger.info('Email skipped: recipient is on a sink domain', { to, subject, sinkDomain });
+    return;
+  }
 
   const emailData: {
     subject: string;

@@ -825,6 +825,7 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryAutoRemap',
   'modelDiscoveryProbeNewModels',
   'modelListRevision',
+  'modelAccessRevision',
   // PR REPORT GENERATOR
   'prReportRepo',
   'prReportIdentityMap',
@@ -8499,6 +8500,14 @@ export const settingsMap = {
     defaultValue: '',
     description:
       'Internal stamp rewritten whenever a catalog or price change alters the model list, so open tabs refetch it. Written by packages/server-utils/src/modelDiscovery/modelListRevision.ts; not user-configurable.',
+    category: 'AI',
+  }),
+  modelAccessRevision: makeStringSetting({
+    key: 'modelAccessRevision',
+    name: 'Model Access Revision',
+    defaultValue: '',
+    description:
+      'Internal stamp rewritten whenever an admin changes model access (on / off, tags, entitlements, fallback, rank), so open pickers refetch it. Written by packages/server-utils/src/modelDiscovery/modelAccessRevision.ts; not user-configurable.',
     category: 'AI',
   }),
   prReportRepo: makeStringSetting({

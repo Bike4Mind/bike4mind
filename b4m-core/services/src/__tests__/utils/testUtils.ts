@@ -313,6 +313,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     decrementCreditsFloored: vi.fn(),
     incrementCurrentStorage: vi.fn(),
     setCurrentStorageIfUnchanged: vi.fn(),
+    setPlanStorageLimit: vi.fn(),
     findCurrentStorageSize: vi.fn(),
     listUserIdsAfter: vi.fn(),
     incrementTokenVersion: vi.fn(),
