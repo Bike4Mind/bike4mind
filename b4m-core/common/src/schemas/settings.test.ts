@@ -1663,7 +1663,7 @@ describe('broadcastSafeSettingKeys', () => {
 
   it('keeps the non-sensitive settings clients render live', () => {
     expect(broadcastSafeSettingKeys()).toEqual(
-      expect.arrayContaining(['EnableQuestMaster', 'EnableArtifacts', 'modelListRevision'])
+      expect.arrayContaining(['EnableQuestMaster', 'EnableArtifacts', 'modelListRevision', 'modelAccessRevision'])
     );
   });
 

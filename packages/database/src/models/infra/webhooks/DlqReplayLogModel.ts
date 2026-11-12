@@ -42,6 +42,8 @@ const DlqReplayLogSchema = new mongoose.Schema(
 
 // For history queries sorted by time
 DlqReplayLogSchema.index({ queueLabel: 1, createdAt: -1 });
+DlqReplayLogSchema.index({ createdAt: -1, _id: -1 });
+DlqReplayLogSchema.index({ queueLabel: 1, createdAt: -1, _id: -1 });
 
 // For counting replay attempts per message
 DlqReplayLogSchema.index({ messageId: 1, status: 1 });
@@ -56,6 +58,7 @@ interface DlqReplayLogFilters {
   endDate?: Date;
   search?: string;
   limit?: number;
+  before?: { createdAt: Date; id: string };
   /** Defaults to true. Pass false to project `messageBody` out of the query. */
   includeBody?: boolean;
 }
@@ -117,15 +120,28 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
     if (filters.search) {
       const escaped = filters.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       query.$or = [
+        ...(mongoose.isObjectIdOrHexString(filters.search)
+          ? [{ _id: new mongoose.Types.ObjectId(filters.search) }]
+          : []),
         { messageId: { $regex: escaped, $options: 'i' } },
         { errorMessage: { $regex: escaped, $options: 'i' } },
         { reason: { $regex: escaped, $options: 'i' } },
       ];
     }
+    if (filters.before) {
+      query.$and = [
+        {
+          $or: [
+            { createdAt: { $lt: filters.before.createdAt } },
+            { createdAt: filters.before.createdAt, _id: { $lt: new mongoose.Types.ObjectId(filters.before.id) } },
+          ],
+        },
+      ];
+    }
     const projection = filters.includeBody === false ? { messageBody: 0 } : undefined;
     const results = await this.model
       .find(query, projection)
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(filters.limit ?? 50);
     return results.map(doc => doc.toObject());
   }

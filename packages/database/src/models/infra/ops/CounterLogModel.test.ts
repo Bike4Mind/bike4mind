@@ -538,6 +538,7 @@ describe('findYoungAccountSpend', () => {
         accountCreatedAt: threeDaysBefore,
         stripeCustomerId: null,
         email: 'big@example.com',
+        currentCredits: 0,
       },
     ]);
   });
@@ -675,6 +676,44 @@ describe('findYoungAccountSpend', () => {
       totalCredits: 0,
       accountCount: 0,
       topSpenders: [],
+    });
+  });
+});
+
+describe('findSpendChannelsByUsers', () => {
+  const windowStart = new Date('2026-06-01T11:00:00.000Z');
+  const windowEnd = new Date('2026-06-01T12:00:00.000Z');
+  const inside = new Date('2026-06-01T11:30:00.000Z');
+  const insert = (ownerId: string, credits: number, source: string | undefined, createdAt: Date = inside) =>
+    mongoose.connection.collection('credittransactions').insertOne({
+      ownerId,
+      ownerType: 'User',
+      type: 'text_generation_usage',
+      credits: -credits,
+      createdAt,
+      ...(source === undefined ? {} : { source }),
+    });
+
+  it('splits in-window AI spend into API and chat, leaving agent, system and unclassified rows in neither', async () => {
+    await insert('api-user', 300, 'api');
+    await insert('api-user', 20, 'system');
+    await insert('api-user', 900, 'web', new Date('2026-06-01T10:00:00.000Z'));
+    await insert('mixed-user', 100, 'api');
+    await insert('mixed-user', 50, 'web');
+    await insert('mixed-user', 25, 'cli');
+    await insert('mixed-user', 5, 'desktop');
+    await insert('mixed-user', 7, 'agent');
+    await insert('mixed-user', 9, undefined);
+
+    expect(
+      await counterLogRepository.findSpendChannelsByUsers(
+        ['api-user', 'mixed-user', 'idle-user'],
+        windowStart,
+        windowEnd
+      )
+    ).toEqual({
+      'api-user': { apiCredits: 300, chatCredits: 0 },
+      'mixed-user': { apiCredits: 100, chatCredits: 80 },
     });
   });
 });

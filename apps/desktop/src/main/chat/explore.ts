@@ -1,7 +1,8 @@
 import { ChatModels } from '@bike4mind/common';
 import type { AxiosInstance } from 'axios';
 import type { ChatModelOption, ChatUsage } from '@shared/chat';
-import { streamCompletion, supportsPromptCache } from './completions';
+import type { CompletionRunAttribution } from '@bike4mind/common';
+import { streamCompletion, supportsPromptCache, withRunFallback } from './completions';
 import type { ExploreContext } from './tools/types';
 
 /**
@@ -56,6 +57,10 @@ export function buildExploreContext(options: {
   models: readonly ChatModelOption[];
   sessionModel: string;
   onUsage(usage: ChatUsage): void;
+  /** The turn's run attribution, read per request so a run the server refused mid-turn is not resent. */
+  run?: () => CompletionRunAttribution | undefined;
+  /** Called when the server refuses `run`, before the request is resent without it. */
+  onRunRejected?: () => Promise<void>;
 }): ExploreContext {
   const target = (model: string) => {
     const maxTokens = options.models.find(option => option.id === model)?.maxOutputTokens;
@@ -64,7 +69,12 @@ export function buildExploreContext(options: {
   return {
     ...target(pickExploreModel(options.models, options.sessionModel)),
     fallback: target(options.sessionModel),
-    complete: (request, onEvent, signal) => streamCompletion(options.axios, options.endpoint, request, onEvent, signal),
+    complete: (request, onEvent, signal) =>
+      withRunFallback(
+        options.run?.(),
+        run => streamCompletion(options.axios, options.endpoint, run ? { ...request, run } : request, onEvent, signal),
+        async () => options.onRunRejected?.()
+      ),
     addUsage: options.onUsage,
   };
 }

@@ -57,4 +57,12 @@ describe('email-send worker mail transport wiring', () => {
     expect(eventBus.split('...sesSendPermissions').length - 1).toBe(1);
     expect(eventBus.split('...mailTransportEnvironment').length - 1).toBe(1);
   });
+
+  it('sinks test.com mail on every stage but production, derived from the stage rather than a deploy var', () => {
+    expect(eventBus).toContain("const mailSinkDomains = $app.stage === 'production' ? '' : 'test.com';");
+    expect(emailSendBlock).toContain('MAIL_SINK_DOMAINS: mailSinkDomains,');
+    expect(eventBus.split('MAIL_SINK_DOMAINS').length - 1).toBe(1);
+    expect(eventBus).not.toMatch(/process\.env\.MAIL_SINK/);
+    expect(contract.deployEnv).not.toContain('MAIL_SINK_DOMAINS');
+  });
 });

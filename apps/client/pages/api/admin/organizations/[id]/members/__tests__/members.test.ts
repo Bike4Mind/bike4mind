@@ -53,6 +53,7 @@ vi.mock('@server/middlewares/adminApi', async importOriginal => {
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: mocks.findById, update: mocks.update },
   userRepository: {},
+  userApiKeyRepository: {},
   groupRepository: {},
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
@@ -116,7 +117,10 @@ beforeEach(() => {
   mocks.txRuns = 0;
   mocks.findById.mockResolvedValue(buildOrg());
   mocks.addMember.mockResolvedValue({ user: { id: USER, email: 'ada@example.com', level: 'PaidUser' } });
-  mocks.revokeAccess.mockImplementation(async () => buildOrg({ users: [] }));
+  mocks.revokeAccess.mockImplementation(async () => ({
+    organization: buildOrg({ users: [] }),
+    revokedOrgBilledApiKeyIds: ['key-1'],
+  }));
   mocks.audit.mockResolvedValue({});
   mocks.keptShares.mockResolvedValue(0);
 });
@@ -263,7 +267,7 @@ describe('DELETE /api/admin/organizations/[id]/members/[userId]', () => {
         target: expect.objectContaining({ kind: 'user', id: USER }),
         organizationId: ORG,
         reason: 'Left the team',
-        details: { organizationName: 'Acme', role: 'manager' },
+        details: { organizationName: 'Acme', role: 'manager', revokedOrgBilledKeys: 1 },
       })
     );
     expect(mocks.keptShares).toHaveBeenCalledWith(USER, expect.objectContaining({ id: ORG }), expect.anything());

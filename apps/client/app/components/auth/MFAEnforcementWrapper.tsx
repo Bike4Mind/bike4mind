@@ -8,6 +8,7 @@ import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import { registerMfaEnrollmentInterceptor } from '@client/app/utils/mfaEnrollmentInterceptor';
 import { readMfaEnrolledHint, writeMfaEnrolledHint } from '@client/app/utils/mfaEnrollmentHint';
+import { reportMfaEnrollmentAbandoned } from '@client/app/utils/mfaEnrollmentFunnel';
 import { api } from '@client/app/contexts/ApiContext';
 import { ADMIN_SETTINGS_QUERY_KEY } from '@client/app/hooks/data/queryKeys';
 import MFAModal from '@client/app/components/common/MFAModal';
@@ -346,7 +347,10 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
           data-testid="mfa-enforcement-sign-out-btn"
           variant="plain"
           color="neutral"
-          onClick={() => logout(undefined, { onError: () => toast.error("Couldn't sign out. Please try again.") })}
+          onClick={() => {
+            reportMfaEnrollmentAbandoned(useAccessToken.getState().accessToken);
+            logout(undefined, { onError: () => toast.error("Couldn't sign out. Please try again.") });
+          }}
           loading={logoutIsPending}
         >
           Sign out and sign in again
