@@ -6,20 +6,22 @@ export type DlqRecommendation = {
   basis: string;
 };
 
-export interface DlqRecommendationFacts {
+export type DlqRecommendationFacts = {
   category?: string;
   errorType?: string;
   failedAt?: string;
-  consumerVersion?: string;
-  runningConsumerVersion?: string;
+  /** Lambda LastModified can describe a configuration update, not a code change. */
   consumerDeployedAt?: string;
   replayAttempts?: number;
-}
+  replaySafety?: string;
+};
 
 export const requiresDlqReplayReason = (safety: string | undefined): boolean => safety !== 'safe';
 
 export function recommendDlqAction(facts: DlqRecommendationFacts): DlqRecommendation {
-  if (facts.replayAttempts !== undefined && facts.replayAttempts >= DLQ_MAX_REPLAY_ATTEMPTS) {
+  const attempts =
+    Number.isInteger(facts.replayAttempts) && (facts.replayAttempts ?? -1) >= 0 ? facts.replayAttempts : undefined;
+  if (attempts !== undefined && attempts >= DLQ_MAX_REPLAY_ATTEMPTS) {
     return {
       action: 'discard',
       label: 'Discard',
@@ -27,42 +29,49 @@ export function recommendDlqAction(facts: DlqRecommendationFacts): DlqRecommenda
     };
   }
   if (facts.category === 'refused') {
-    return { action: 'discard', label: 'Discard', basis: 'The recorded failure category is refused.' };
-  }
-  if (
-    facts.category === 'timeout' ||
-    facts.category === 'throttle' ||
-    facts.category === 'dependency' ||
-    /^(ThrottlingException|TooManyRequestsException|Throttling|RequestThrottled|ServiceUnavailableException|DependencyFailedException)$/.test(
-      facts.errorType ?? ''
-    )
-  ) {
     return {
-      action: 'replay',
-      label: 'Replay',
-      basis: `Recorded transient failure: ${facts.errorType || facts.category}.`,
+      action: 'inspect',
+      label: 'Inspect first',
+      basis: 'A refusal can reflect access or configuration. Inspect the recorded error before deciding.',
     };
   }
-  const failedAt = Date.parse(facts.failedAt ?? '');
-  const deployedAt = Date.parse(facts.consumerDeployedAt ?? '');
-  if (Number.isFinite(failedAt) && Number.isFinite(deployedAt) && failedAt < deployedAt) {
-    return {
-      action: 'replay',
-      label: 'Possibly fixed since: replay',
-      basis: `The failure at ${facts.failedAt} predates the running consumer deployment at ${facts.consumerDeployedAt}.`,
-    };
+  const transient =
+    facts.category === 'timeout'
+      ? 'timeout'
+      : /^(ThrottlingException|TooManyRequestsException|Throttling|RequestThrottled|ServiceUnavailableException|DependencyFailedException)$/.test(
+            facts.errorType ?? ''
+          )
+        ? facts.errorType
+        : undefined;
+  if (transient) {
+    if (attempts === undefined)
+      return {
+        action: 'inspect',
+        label: 'Inspect first',
+        basis: 'Replay attempt count is unavailable. Check recorded attempts before replaying.',
+      };
+    if (facts.replaySafety !== 'safe')
+      return {
+        action: 'inspect',
+        label: 'Inspect first',
+        basis: 'Replay can have side effects or its safety is unknown. Inspect the consumer before replaying.',
+      };
+    return { action: 'replay', label: 'Replay', basis: `Recorded transient failure: ${transient}.` };
   }
   if (facts.category === 'invalid output' || facts.category === 'bug') {
-    const sameVersion =
-      facts.consumerVersion &&
-      !['unknown', '$LATEST'].includes(facts.consumerVersion) &&
-      facts.consumerVersion === facts.runningConsumerVersion;
     return {
       action: 'fix-first',
       label: 'Fix first',
-      basis: sameVersion
-        ? `Recorded ${facts.category}; consumer version ${facts.consumerVersion} is still running.`
-        : `Recorded ${facts.category}; no newer consumer deployment is confirmed.`,
+      basis: `Recorded ${facts.category}; inspect and fix the consumer before replaying.`,
+    };
+  }
+  const failedAt = Date.parse(facts.failedAt ?? '');
+  const updatedAt = Date.parse(facts.consumerDeployedAt ?? '');
+  if (Number.isFinite(failedAt) && Number.isFinite(updatedAt) && failedAt < updatedAt) {
+    return {
+      action: 'inspect',
+      label: 'Consumer updated since failure',
+      basis: `Consumer configuration was updated at ${facts.consumerDeployedAt} after the failure. Inspect the change; a code fix is not established.`,
     };
   }
   return {

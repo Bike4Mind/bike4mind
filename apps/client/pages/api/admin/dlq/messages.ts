@@ -99,16 +99,34 @@ const handler = adminApi({
     if (!existing || receiveCount(msg) > receiveCount(existing)) byId.set(msg.MessageId, msg);
   }
   const messages = [...byId.values()];
-  const { failures, lookupFailed } = await findFailures(
-    queueLabel,
-    dlqEntry.sourceQueue,
-    messages.map(msg => msg.MessageId!)
-  );
+  const [[failureLookup], attempts] = await Promise.all([
+    settleWithinBudget(
+      [
+        findFailures(
+          queueLabel,
+          dlqEntry.sourceQueue,
+          messages.map(message => message.MessageId!)
+        ),
+      ],
+      CONSUMER_LOGS_BUDGET_MS
+    ),
+    settleWithinBudget(
+      messages.map(async message => {
+        try {
+          return await dlqReplayLogRepository.countAttempts(message.MessageId!);
+        } catch (error) {
+          Logger.warn('[DLQ Messages] Replay attempts unavailable', {
+            queueLabel,
+            errorName: error instanceof Error ? error.name : 'Unknown',
+          });
+          return null;
+        }
+      }),
+      CONSUMER_LOGS_BUDGET_MS
+    ),
+  ]);
+  const { failures, lookupFailed } = failureLookup ?? { failures: [], lookupFailed: true };
   const failureById = new Map(failures.map(failure => [failure.messageId, failure]));
-  const attempts = await settleWithinBudget(
-    messages.map(msg => dlqReplayLogRepository.countAttempts(msg.MessageId!).catch(() => null)),
-    CONSUMER_LOGS_BUDGET_MS
-  );
 
   // receiptHandle is omitted: with VisibilityTimeout 0 the handle expires immediately,
   // so the frontend uses the messageIds replay path which receives with its own timeout.
@@ -127,10 +145,9 @@ const handler = adminApi({
         category: failure?.category,
         errorType: failure?.errorType,
         failedAt: failure?.failedAt?.toISOString(),
-        consumerVersion: failure?.consumerVersion,
-        runningConsumerVersion: consumerLogs?.consumerVersion,
         consumerDeployedAt: consumerLogs?.consumerDeployedAt,
         replayAttempts: attempts[index] ?? undefined,
+        replaySafety: dlqEntry.replay,
       }),
     };
   });
