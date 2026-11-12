@@ -24,7 +24,7 @@ import {
   dataLakeRepository,
 } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { userRepository } from '@bike4mind/database/auth';
+import { userApiKeyRepository, userRepository } from '@bike4mind/database/auth';
 import { groupRepository } from '@bike4mind/database/social';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { organizationService } from '@bike4mind/services';
@@ -69,6 +69,7 @@ const departureAdapters = {
     groups: groupRepository,
     dataLakes: dataLakeRepository,
     dataLakeAccessGrants: dataLakeAccessGrantRepository,
+    userApiKeys: userApiKeyRepository,
     ...lakeConfigAuditDb,
   },
   logger,
