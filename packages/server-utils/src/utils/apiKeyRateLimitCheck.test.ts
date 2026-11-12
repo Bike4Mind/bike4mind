@@ -513,6 +513,66 @@ describe('apiKeyRateLimitCheck', () => {
   });
 
   describe('resetApiKeyRateLimit', () => {
+    it.each(['lookup unavailable', 'malformed federated identity'])(
+      'clears management independently when request identity fails: %s',
+      async failure => {
+        const lookup = vi.mocked(userApiKeyRepository.findById);
+        if (failure === 'lookup unavailable') lookup.mockRejectedValue(new Error('lookup unavailable'));
+        else lookup.mockResolvedValue({ metadata: { createdFrom: 'oauth-exchange' } } as never);
+        vi.mocked(cacheRepository.deleteByKeyAndReturn).mockResolvedValue(null);
+        const logger = { warn: vi.fn() };
+
+        await expect(resetApiKeyRateLimit(mockKeyId, { alsoResetManagement: true, logger })).resolves.toEqual({
+          request: undefined,
+          management: { minute: 0, day: 0 },
+        });
+
+        const management = buildRateLimitKeys(mockKeyId, 'management');
+        expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledTimes(2);
+        expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(management.minuteKey);
+        expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(management.dayKey);
+        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('request counter'));
+      }
+    );
+
+    it('rejects request-only reset when its identity lookup fails without deleting unverified buckets', async () => {
+      vi.mocked(userApiKeyRepository.findById).mockRejectedValue(new Error('lookup unavailable'));
+      await expect(resetApiKeyRateLimit(mockKeyId, { logger: { warn: vi.fn() } })).rejects.toThrow(
+        /failed to clear any rate-limit counters/i
+      );
+      expect(cacheRepository.deleteByKeyAndReturn).not.toHaveBeenCalled();
+    });
+
+    it('rejects when request identity and both management deletes fail', async () => {
+      vi.mocked(userApiKeyRepository.findById).mockRejectedValue(new Error('lookup unavailable'));
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockRejectedValue(new Error('cache unavailable'));
+      await expect(
+        resetApiKeyRateLimit(mockKeyId, { alsoResetManagement: true, logger: { warn: vi.fn() } })
+      ).rejects.toThrow(/failed to clear any rate-limit counters/i);
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledTimes(2);
+    });
+
+    it('starts management deletes while the request identity read is pending', async () => {
+      let resolveLookup: ((value: null) => void) | undefined;
+      vi.mocked(userApiKeyRepository.findById).mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            resolveLookup = resolve;
+          })
+      );
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockResolvedValue(null);
+      const reset = resetApiKeyRateLimit(mockKeyId, { alsoResetManagement: true });
+      try {
+        const management = buildRateLimitKeys(mockKeyId, 'management');
+        expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledTimes(2);
+        expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(management.minuteKey);
+        expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(management.dayKey);
+      } finally {
+        resolveLookup?.(null);
+        await reset;
+      }
+    });
+
     it('deletes exactly the minute and day counter keys', async () => {
       vi.mocked(cacheRepository.deleteByKeyAndReturn).mockResolvedValue(null);
 

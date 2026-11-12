@@ -184,8 +184,7 @@ export async function resetApiKeyRateLimit(
   options: { alsoResetManagement?: boolean; logger?: CounterLogger } = {}
 ): Promise<ResetApiKeyRateLimitResult> {
   const logger = options.logger ?? Logger.globalInstance;
-  const { minuteKey, dayKey } = await resolveRateLimitKeys(keyId);
-  const request = deleteCounterGroup(keyId, 'request', minuteKey, dayKey, logger);
+  const request = deleteRequestCounterGroup(keyId, logger);
 
   let management: Promise<CounterClearResult> | undefined;
   if (options.alsoResetManagement) {
@@ -200,6 +199,24 @@ export async function resetApiKeyRateLimit(
   }
 
   return { request: requestResult.usage, management: managementResult?.usage };
+}
+
+function warnCounterReset(logger: CounterLogger, message: string): void {
+  try {
+    logger.warn(message);
+  } catch {
+    // A broken logger must never turn an otherwise-successful clear into a failure.
+  }
+}
+
+async function deleteRequestCounterGroup(keyId: string, logger: CounterLogger): Promise<CounterClearResult> {
+  try {
+    const { minuteKey, dayKey } = await resolveRateLimitKeys(keyId);
+    return await deleteCounterGroup(keyId, 'request', minuteKey, dayKey, logger);
+  } catch (error) {
+    warnCounterReset(logger, `[API_KEY_RATE_LIMIT] Failed to clear request counter for API key ${keyId}: ${error}`);
+    return { usage: undefined, cleared: false };
+  }
 }
 
 /**
@@ -232,18 +249,17 @@ async function deleteCounterGroup(
     cacheRepository.deleteByKeyAndReturn(dayKey),
   ]);
 
-  const warn = (message: string) => {
-    try {
-      logger.warn(message);
-    } catch {
-      // A broken logger must never turn an otherwise-successful clear into a failure.
-    }
-  };
   if (minuteResult.status === 'rejected') {
-    warn(`[API_KEY_RATE_LIMIT] Failed to clear ${counter} minute counter for API key ${keyId}: ${minuteResult.reason}`);
+    warnCounterReset(
+      logger,
+      `[API_KEY_RATE_LIMIT] Failed to clear ${counter} minute counter for API key ${keyId}: ${minuteResult.reason}`
+    );
   }
   if (dayResult.status === 'rejected') {
-    warn(`[API_KEY_RATE_LIMIT] Failed to clear ${counter} day counter for API key ${keyId}: ${dayResult.reason}`);
+    warnCounterReset(
+      logger,
+      `[API_KEY_RATE_LIMIT] Failed to clear ${counter} day counter for API key ${keyId}: ${dayResult.reason}`
+    );
   }
 
   const hasRejection = minuteResult.status === 'rejected' || dayResult.status === 'rejected';
