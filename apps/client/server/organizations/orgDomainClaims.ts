@@ -9,6 +9,7 @@ import {
   MAX_ORG_DOMAIN_CLAIMS,
   NotFoundError,
   normalizeSignupRuleDomain,
+  ORG_DOMAIN_ROLE_PERMISSIONS,
   type IOrgDomainClaimDocument,
   type IOrgDomainClaimView,
   type IOrganizationDocument,
@@ -20,6 +21,7 @@ import {
   organizationRepository,
   orgDomainClaimRepository,
   partnerSignupRuleRepository,
+  userRepository,
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { isSelfHost } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
@@ -188,4 +190,57 @@ export async function updateDomainClaimPolicy(
   const after = await orgDomainClaimRepository.updatePolicy(claimId, organizationId, update);
   if (!after) throw new NotFoundError('Domain claim not found');
   return { before, after };
+}
+
+export type OrgDomainMembershipOutcome =
+  | { joined: true; organizationId: string }
+  | {
+      joined: false;
+      reason: 'no-claim' | 'not-auto-join' | 'user-missing' | 'unverified' | 'org-missing' | 'already-member';
+    }
+  | { joined: false; reason: 'at-capacity'; organizationId: string; seats: number };
+
+/**
+ * Auto-join for a verified claim with policy 'auto-join' on the email's exact domain (a subdomain
+ * never matches its parent). Never raises the seat ceiling. The membership shape (a `users[]` row,
+ * `user.organizationId`, a seeded `userDetails` row) must stay in sync with applyPartnerRuleMembership
+ * (b4m-core/services organizationService).
+ */
+export async function applyOrgDomainMembership(userId: string, email: string): Promise<OrgDomainMembershipOutcome> {
+  const at = email.lastIndexOf('@');
+  const domain =
+    at >= 0
+      ? email
+          .slice(at + 1)
+          .trim()
+          .toLowerCase()
+      : '';
+  if (!domain) return { joined: false, reason: 'no-claim' };
+
+  const claim = await orgDomainClaimRepository.findVerifiedJoinableByDomain(domain);
+  if (!claim) return { joined: false, reason: 'no-claim' };
+  if (claim.policy !== 'auto-join') return { joined: false, reason: 'not-auto-join' };
+
+  // Re-read rather than trust the caller's copy, which may predate email verification.
+  const user = await userRepository.findById(userId);
+  if (!user) return { joined: false, reason: 'user-missing' };
+  if (user.emailVerified !== true) return { joined: false, reason: 'unverified' };
+
+  const { organizationId } = claim;
+  const permissions = [...ORG_DOMAIN_ROLE_PERMISSIONS[claim.defaultRole]];
+  const pre = await organizationRepository.addMemberIfUnderCeiling(organizationId, { userId, permissions });
+  if (!pre) {
+    const fresh = await organizationRepository.findById(organizationId);
+    if (!fresh) return { joined: false, reason: 'org-missing' };
+    if (fresh.users.some(member => member.userId === userId)) return { joined: false, reason: 'already-member' };
+    return { joined: false, reason: 'at-capacity', organizationId, seats: fresh.seats };
+  }
+
+  await userRepository.update({ id: userId, organizationId });
+  await organizationRepository.ensureUserDetails(organizationId, {
+    id: user.id,
+    email: user.email ?? user.username,
+    name: user.name,
+  });
+  return { joined: true, organizationId };
 }
