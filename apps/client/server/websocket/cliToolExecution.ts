@@ -7,6 +7,7 @@ import { withWebSocketContext, sendToConnection } from '@bike4mind/server-utils/
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
 import { buildWebToolExecutors } from '@server/cli/webToolExecutors';
+import { withOrganizationMfaContext } from '@bike4mind/db-core';
 
 /**
  * WebSocket handler for CLI tool execution (request-response)
@@ -99,12 +100,16 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   }
 
   try {
-    const result = await executeToolWithLogging(validation.data, {
-      userId,
-      userEmail,
-      logger,
-      executors: buildWebToolExecutors(logger, apiKeyInfo),
-    });
+    const result = await withOrganizationMfaContext(
+      () => userId,
+      () =>
+        executeToolWithLogging(validation.data, {
+          userId,
+          userEmail,
+          logger,
+          executors: buildWebToolExecutors(logger, apiKeyInfo),
+        })
+    );
 
     await sendToConnection(connectionId, endpoint, {
       action: 'cli_tool_response' as const,

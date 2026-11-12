@@ -32,6 +32,7 @@ import { refuseIfSuspendedOwner } from '@server/auth/suspendedApiKeyRefusal';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveUntrustedKeyLimits } from '@bike4mind/server-utils/utils/apiKeyTrust';
 import { assertOrgServiceAccountRequest } from '@bike4mind/server-utils/auth/orgServiceAccount';
+import { withOrganizationMfaContext } from '@bike4mind/db-core';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 
@@ -182,11 +183,16 @@ export const apiKeyAuth = (
       }
       // The same gate the JWT/CLI/WebSocket surfaces use, so the two cannot drift.
       assertAccountStateUsable(user);
-      await assertOrgServiceAccountRequest(user, validation, {
-        method: req.method,
-        path: endpointPath,
-        resourceId: req.query?.id,
-      });
+      await withOrganizationMfaContext(
+        () => user.id,
+        () =>
+          assertOrgServiceAccountRequest(user, validation, {
+            method: req.method,
+            path: endpointPath,
+            resourceId: req.query?.id,
+          }),
+        () => (validation.serviceAccount ? validation.organizationId : undefined)
+      );
 
       // Must run before withholdAdminRole: admins bypass the paid-only switch.
       if (

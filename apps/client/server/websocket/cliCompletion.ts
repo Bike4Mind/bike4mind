@@ -39,6 +39,7 @@ import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailu
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
 import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 import { recordUserActivity } from '@server/users/recordUserActivity';
+import { withOrganizationMfaContext } from '@bike4mind/db-core';
 
 const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or JWT token.';
 
@@ -147,154 +148,159 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
   }
 
-  logger.updateMetadata({ userId, model, requestId });
-  logger.info(`[CLI_WS] Starting completion for user ${userId}, model: ${model}`);
-  recordUserActivity(userId, logger);
+  return withOrganizationMfaContext(
+    () => userId,
+    async () => {
+      logger.updateMetadata({ userId, model, requestId });
+      logger.info(`[CLI_WS] Starting completion for user ${userId}, model: ${model}`);
+      recordUserActivity(userId, logger);
 
-  // Track token counts for analytics
-  let finalInputTokens = 0;
-  let finalOutputTokens = 0;
-  let finalCacheReadTokens = 0;
-  let finalCacheWriteTokens = 0;
-  let finalTurnUsage: TurnUsage[] | undefined;
-  let finalCreditsUsed: number | undefined;
-  let hasToolCalls = false;
+      // Track token counts for analytics
+      let finalInputTokens = 0;
+      let finalOutputTokens = 0;
+      let finalCacheReadTokens = 0;
+      let finalCacheWriteTokens = 0;
+      let finalTurnUsage: TurnUsage[] | undefined;
+      let finalCreditsUsed: number | undefined;
+      let hasToolCalls = false;
 
-  // Resolve API key name for analytics logging
-  if (apiKeyInfo) {
-    const key = await userApiKeyRepository.findById(apiKeyInfo.keyId);
-    if (key) {
-      apiKeyInfoForCompletion = { keyId: key.id, keyName: key.name };
-    }
-  }
+      // Resolve API key name for analytics logging
+      if (apiKeyInfo) {
+        const key = await userApiKeyRepository.findById(apiKeyInfo.keyId);
+        if (key) {
+          apiKeyInfoForCompletion = { keyId: key.id, keyName: key.name };
+        }
+      }
 
-  let quota = NO_COMPLETION_QUOTA;
-  try {
-    if (apiKeyInfo) {
-      quota = await admitApiKeyCompletion({
-        owner: userId,
-        ownerUntrusted: apiKeyInfo.ownerUntrusted,
-        billingOwnerType: apiKeyInfo.billingOwnerType,
-        holdSlot: true,
-      });
-    }
+      let quota = NO_COMPLETION_QUOTA;
+      try {
+        if (apiKeyInfo) {
+          quota = await admitApiKeyCompletion({
+            owner: userId,
+            ownerUntrusted: apiKeyInfo.ownerUntrusted,
+            billingOwnerType: apiKeyInfo.billingOwnerType,
+            holdSlot: true,
+          });
+        }
 
-    // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
-    await checkFreeTierDailySpendCap({
-      userId,
-      userRepository,
-      billingOrganizationId: apiKeyInfo?.organizationId,
-      usageEventRepository,
-      logger,
-    });
-
-    // Execute completion - same function as SSE handler
-    // Cast: Zod parses message content as unknown[], but executeCompletion expects typed arrays
-    await executeCompletion({
-      getEntitlements: getUserEntitlements,
-      getThinkingVisibility: resolveThinkingVisibility,
-      creditHolds: createCompletionCreditHolds(logger),
-      userId,
-      model,
-      messages: messages as IMessage[],
-      options: options as Parameters<typeof executeCompletion>[0]['options'],
-      db: {
-        adminSettings: adminSettingsRepository,
-        apiKeys: apiKeyRepository,
-        creditTransactions: creditTransactionRepository,
-        users: userRepository,
-        usageEvents: usageEventRepository,
-        organizations: organizationRepository,
-        cache: cacheRepository,
-        recordLimitEvent: recordUserLimitEvent,
-      },
-      apiKeyInfo: apiKeyInfoForCompletion,
-      scopeActor: actorScopeForKey(apiKeyInfo),
-      // Org-billed API keys settle to the org's shared pool.
-      billingOrganizationId: apiKeyInfo?.organizationId,
-      requestId,
-      source,
-      sessionId,
-      logger: logger as unknown as Logger,
-      onChunk: async (text, info) => {
-        // Track token counts and tool usage
-        if (info?.inputTokens) finalInputTokens = info.inputTokens;
-        if (info?.outputTokens) finalOutputTokens = info.outputTokens;
-        if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
-        if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
-        if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
-        if (typeof info?.creditsUsed === 'number') finalCreditsUsed = info.creditsUsed;
-        if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
-
-        const chunk = buildCompletionStreamEvent(text, info);
-        await sendToConnection(connectionId, endpoint, {
-          action: 'cli_completion_chunk' as const,
-          requestId,
-          chunk,
+        // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
+        await checkFreeTierDailySpendCap({
+          userId,
+          userRepository,
+          billingOrganizationId: apiKeyInfo?.organizationId,
+          usageEventRepository,
+          logger,
         });
-      },
-    });
 
-    // Signal completion
-    await sendToConnection(connectionId, endpoint, {
-      action: 'cli_completion_done' as const,
-      requestId,
-    });
+        // Execute completion - same function as SSE handler
+        // Cast: Zod parses message content as unknown[], but executeCompletion expects typed arrays
+        await executeCompletion({
+          getEntitlements: getUserEntitlements,
+          getThinkingVisibility: resolveThinkingVisibility,
+          creditHolds: createCompletionCreditHolds(logger),
+          userId,
+          model,
+          messages: messages as IMessage[],
+          options: options as Parameters<typeof executeCompletion>[0]['options'],
+          db: {
+            adminSettings: adminSettingsRepository,
+            apiKeys: apiKeyRepository,
+            creditTransactions: creditTransactionRepository,
+            users: userRepository,
+            usageEvents: usageEventRepository,
+            organizations: organizationRepository,
+            cache: cacheRepository,
+            recordLimitEvent: recordUserLimitEvent,
+          },
+          apiKeyInfo: apiKeyInfoForCompletion,
+          scopeActor: actorScopeForKey(apiKeyInfo),
+          // Org-billed API keys settle to the org's shared pool.
+          billingOrganizationId: apiKeyInfo?.organizationId,
+          requestId,
+          source,
+          sessionId,
+          logger: logger as unknown as Logger,
+          onChunk: async (text, info) => {
+            // Track token counts and tool usage
+            if (info?.inputTokens) finalInputTokens = info.inputTokens;
+            if (info?.outputTokens) finalOutputTokens = info.outputTokens;
+            if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
+            if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
+            if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+            if (typeof info?.creditsUsed === 'number') finalCreditsUsed = info.creditsUsed;
+            if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
-    logger.info('[CLI_WS] Completion stream finished successfully');
+            const chunk = buildCompletionStreamEvent(text, info);
+            await sendToConnection(connectionId, endpoint, {
+              action: 'cli_completion_chunk' as const,
+              requestId,
+              chunk,
+            });
+          },
+        });
 
-    // Log analytics
-    await logCompletionAnalytics({
-      type: 'success',
-      userId,
-      // WS variant accepts a looser message content shape (z.array(z.unknown())) than
-      // CompletionRequestSchema. Cast - analytics only reads model/messages.
-      body: { model, messages, options } as Parameters<typeof logCompletionAnalytics>[0]['body'],
-      apiKeyInfo: apiKeyInfoForCompletion,
-      source,
-      startTime,
-      endpoint: 'ws/cli_completion_request',
-      method: 'WS',
-      finalInputTokens,
-      finalOutputTokens,
-      finalCacheReadTokens,
-      finalCacheWriteTokens,
-      finalTurnUsage,
-      finalCreditsUsed,
-      hasToolCalls,
-      db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-      logger: logger as unknown as Logger,
-    });
-  } catch (error) {
-    const level = error instanceof HTTPError && error.statusCode < 500 ? 'warn' : 'error';
-    logger[level]('[CLI_WS] Completion error:', error);
+        // Signal completion
+        await sendToConnection(connectionId, endpoint, {
+          action: 'cli_completion_done' as const,
+          requestId,
+        });
 
-    // Send error to client
-    await sendToConnection(connectionId, endpoint, {
-      action: 'cli_completion_error' as const,
-      requestId,
-      ...cliCompletionErrorFields(error),
-    });
+        logger.info('[CLI_WS] Completion stream finished successfully');
 
-    // Log failed analytics
-    await logCompletionAnalytics({
-      type: 'failure',
-      userId,
-      // WS variant accepts a looser message content shape (z.array(z.unknown())) than
-      // CompletionRequestSchema. Cast - analytics only reads model/messages.
-      body: { model, messages, options } as Parameters<typeof logCompletionAnalytics>[0]['body'],
-      apiKeyInfo: apiKeyInfoForCompletion,
-      source,
-      startTime,
-      endpoint: 'ws/cli_completion_request',
-      method: 'WS',
-      error,
-      db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-      logger: logger as unknown as Logger,
-    });
-  } finally {
-    await quota.release();
-  }
+        // Log analytics
+        await logCompletionAnalytics({
+          type: 'success',
+          userId,
+          // WS variant accepts a looser message content shape (z.array(z.unknown())) than
+          // CompletionRequestSchema. Cast - analytics only reads model/messages.
+          body: { model, messages, options } as Parameters<typeof logCompletionAnalytics>[0]['body'],
+          apiKeyInfo: apiKeyInfoForCompletion,
+          source,
+          startTime,
+          endpoint: 'ws/cli_completion_request',
+          method: 'WS',
+          finalInputTokens,
+          finalOutputTokens,
+          finalCacheReadTokens,
+          finalCacheWriteTokens,
+          finalTurnUsage,
+          finalCreditsUsed,
+          hasToolCalls,
+          db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+          logger: logger as unknown as Logger,
+        });
+      } catch (error) {
+        const level = error instanceof HTTPError && error.statusCode < 500 ? 'warn' : 'error';
+        logger[level]('[CLI_WS] Completion error:', error);
 
-  return { statusCode: 200 };
+        // Send error to client
+        await sendToConnection(connectionId, endpoint, {
+          action: 'cli_completion_error' as const,
+          requestId,
+          ...cliCompletionErrorFields(error),
+        });
+
+        // Log failed analytics
+        await logCompletionAnalytics({
+          type: 'failure',
+          userId,
+          // WS variant accepts a looser message content shape (z.array(z.unknown())) than
+          // CompletionRequestSchema. Cast - analytics only reads model/messages.
+          body: { model, messages, options } as Parameters<typeof logCompletionAnalytics>[0]['body'],
+          apiKeyInfo: apiKeyInfoForCompletion,
+          source,
+          startTime,
+          endpoint: 'ws/cli_completion_request',
+          method: 'WS',
+          error,
+          db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+          logger: logger as unknown as Logger,
+        });
+      } finally {
+        await quota.release();
+      }
+
+      return { statusCode: 200 };
+    }
+  );
 });

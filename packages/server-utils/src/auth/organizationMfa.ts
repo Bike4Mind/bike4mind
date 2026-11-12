@@ -1,6 +1,7 @@
 import type { IOrganizationDocument } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
+import { isOrganizationMfaServiceContext } from '@bike4mind/db-core';
 
 export const ORGANIZATION_MFA_REQUIRED = 'Organization requires MFA. Set up MFA in account security to continue.';
 
@@ -21,6 +22,14 @@ export async function assertOrganizationMfa(
   const { mfaService } = await import('@bike4mind/services');
   const { userRepository } = await import('@bike4mind/database/auth');
   const user = await userRepository.findById(userId);
+  // Service credentials are admitted only by assertOrgServiceAccountRequest's scope/grant gate.
+  if (
+    isOrganizationMfaServiceContext(userId, organizationId) &&
+    user?.isSystem &&
+    !user.isAdmin &&
+    user.orgServiceAccount?.organizationId === organizationId
+  )
+    return;
   if (!user || !mfaService.userHasMFAConfigured(user)) {
     throw new ForbiddenError(ORGANIZATION_MFA_REQUIRED);
   }

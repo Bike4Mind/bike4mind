@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import mongoose, { ConnectOptions } from 'mongoose';
+import { organizationMfaResourceFilter } from './organizationMfaContext';
 import {
   getDocumentDBCertificate,
   isDocumentDBConnection,
@@ -522,8 +523,9 @@ export const softDeletePlugin = (
     return this.save();
   };
 
-  schema.statics.deleteOne = function (filter, options) {
-    const castFilter = castIdFilter(filter as Record<string, unknown>);
+  schema.statics.deleteOne = async function (filter, options) {
+    const policy = await organizationMfaResourceFilter(this.schema, this.modelName);
+    const castFilter = castIdFilter(policy ? { $and: [filter, policy] } : (filter as Record<string, unknown>));
     // withAlsSession on BOTH paths: the raw driver escapes transactionAsyncLocalStorage, so a
     // hard OR soft delete inside withTransaction would otherwise commit immediately (#1228 mech 1).
     if (options && options.hardDelete) {
@@ -543,8 +545,9 @@ export const softDeletePlugin = (
       }));
   };
 
-  schema.statics.deleteMany = function (filter, options) {
-    const castFilter = castIdFilter(filter as Record<string, unknown>);
+  schema.statics.deleteMany = async function (filter, options) {
+    const policy = await organizationMfaResourceFilter(this.schema, this.modelName);
+    const castFilter = castIdFilter(policy ? { $and: [filter, policy] } : (filter as Record<string, unknown>));
     if (options && options.hardDelete) {
       return this.collection.deleteMany(castFilter, withAlsSession(this, options));
     }
@@ -629,7 +632,8 @@ export const softDeletePlugin = (
     }
     // Auto-convert findOneAndDelete to soft delete instead of throwing
     // This is safer than throwing as it prevents accidental data loss
-    const filter = this.getFilter();
+    const policy = await organizationMfaResourceFilter(this.model.schema, this.model.modelName);
+    const filter = policy ? { $and: [this.getFilter(), policy] } : this.getFilter();
     const queryOptions = this.getOptions();
     const castFilter = castIdFilter(filter as Record<string, unknown>);
     const softDeleteFilter = { ...castFilter, deletedAt: null };

@@ -68,6 +68,7 @@ import {
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
+import { withOrganizationMfaContext } from '@bike4mind/db-core';
 
 /**
  * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
@@ -262,238 +263,249 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     let apiKeyInfoForCompletion: { keyId: string; keyName: string } | undefined;
     let quota: CompletionQuotaGrant = NO_COMPLETION_QUOTA;
 
-    try {
-      // The service connects at boot in the background; a request can land first.
-      if (mongoose.connection.readyState !== 1) {
+    return withOrganizationMfaContext(
+      () => userId,
+      async () => {
         try {
-          await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
-        } catch (dbError) {
-          logger.error('[CLI_LLM] Database connect failed', { requestId, error: serializeError(dbError) });
-          throw new HTTPError(503, 'Service temporarily unavailable. Retry shortly.');
-        }
-      }
+          // The service connects at boot in the background; a request can land first.
+          if (mongoose.connection.readyState !== 1) {
+            try {
+              await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
+            } catch (dbError) {
+              logger.error('[CLI_LLM] Database connect failed', { requestId, error: serializeError(dbError) });
+              throw new HTTPError(503, 'Service temporarily unavailable. Retry shortly.');
+            }
+          }
 
-      // Client-version gate (CONVENTIONS.md section 9), ahead of validation as on every transport.
-      const upgradeRequired = await checkClientVersion(req.headers, logger);
-      if (upgradeRequired) throw upgradeRequired;
+          // Client-version gate (CONVENTIONS.md section 9), ahead of validation as on every transport.
+          const upgradeRequired = await checkClientVersion(req.headers, logger);
+          if (upgradeRequired) throw upgradeRequired;
 
-      const parsed = CompletionRequestSchema.safeParse(req.body);
-      if (!parsed.success) {
-        const errorMessage = fromZodError(parsed.error).message;
-        const emptyMessages = parsed.error.issues.some(
-          issue => issue.code === 'too_small' && issue.path.length === 1 && issue.path[0] === 'messages'
-        );
-        throw emptyMessages ? new BadRequestError(errorMessage) : new UnprocessableEntityError(errorMessage);
-      }
-      body = normalizeCompletionRequest(parsed.data);
+          const parsed = CompletionRequestSchema.safeParse(req.body);
+          if (!parsed.success) {
+            const errorMessage = fromZodError(parsed.error).message;
+            const emptyMessages = parsed.error.issues.some(
+              issue => issue.code === 'too_small' && issue.path.length === 1 && issue.path[0] === 'messages'
+            );
+            throw emptyMessages ? new BadRequestError(errorMessage) : new UnprocessableEntityError(errorMessage);
+          }
+          body = normalizeCompletionRequest(parsed.data);
 
-      let authResult;
-      try {
-        authResult = await resolveContractAuth(headers, createCompletionContract);
-      } catch (authError) {
-        logger.warn('[CLI_LLM] Authentication failed', { requestId, error: serializeError(authError) });
-        // verifyApiKey and verifyJwtToken throw plain Errors for a missing or invalid credential.
-        throw authError instanceof HTTPError
-          ? authError
-          : new UnauthorizedError('Authentication failed. Provide a valid API key or JWT token.');
-      }
-      userId = authResult.userId;
-      timing?.phase('authed');
+          let authResult;
+          try {
+            authResult = await resolveContractAuth(headers, createCompletionContract);
+          } catch (authError) {
+            logger.warn('[CLI_LLM] Authentication failed', { requestId, error: serializeError(authError) });
+            // verifyApiKey and verifyJwtToken throw plain Errors for a missing or invalid credential.
+            throw authError instanceof HTTPError
+              ? authError
+              : new UnauthorizedError('Authentication failed. Provide a valid API key or JWT token.');
+          }
+          userId = authResult.userId;
+          timing?.phase('authed');
 
-      if (authResult.method === 'apiKey') {
-        apiKeyInfo = authResult.apiKeyInfo;
-        // Register before admission so authenticated rejections count as requests too.
-        await logApiKeyUsageOnResponse({
-          req,
-          res,
-          apiKey: apiKeyInfo,
-          endpoint: COMPLETIONS_ENDPOINT,
-          source,
-          startTime,
-          completion: { requestId, requestedModel: body.model, outcome: () => completionOutcome },
-          logger,
-          track,
-        });
-        logger.info('[CLI_LLM] Authenticated via API key', { keyId: apiKeyInfo.keyId });
-        await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
-          userId: apiKeyInfo.userId,
-          endpoint: COMPLETIONS_ENDPOINT,
-          method: req.method,
-        });
-        // The slot is freed in `finally`, once executeCompletion settles, not on disconnect: the
-        // provider call keeps running after the client goes.
-        quota = await admitApiKeyCompletion({
-          owner: apiKeyInfo.userId,
-          ownerUntrusted: apiKeyInfo.ownerUntrusted,
-          billingOwnerType: apiKeyInfo.billingOwnerType,
-          holdSlot: true,
-        });
-      } else {
-        logger.info('[CLI_LLM] Authenticated via JWT', { userId });
-        await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
-      }
+          if (authResult.method === 'apiKey') {
+            apiKeyInfo = authResult.apiKeyInfo;
+            // Register before admission so authenticated rejections count as requests too.
+            await logApiKeyUsageOnResponse({
+              req,
+              res,
+              apiKey: apiKeyInfo,
+              endpoint: COMPLETIONS_ENDPOINT,
+              source,
+              startTime,
+              completion: { requestId, requestedModel: body.model, outcome: () => completionOutcome },
+              logger,
+              track,
+            });
+            logger.info('[CLI_LLM] Authenticated via API key', { keyId: apiKeyInfo.keyId });
+            await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
+              userId: apiKeyInfo.userId,
+              endpoint: COMPLETIONS_ENDPOINT,
+              method: req.method,
+            });
+            // The slot is freed in `finally`, once executeCompletion settles, not on disconnect: the
+            // provider call keeps running after the client goes.
+            quota = await admitApiKeyCompletion({
+              owner: apiKeyInfo.userId,
+              ownerUntrusted: apiKeyInfo.ownerUntrusted,
+              billingOwnerType: apiKeyInfo.billingOwnerType,
+              holdSlot: true,
+            });
+          } else {
+            logger.info('[CLI_LLM] Authenticated via JWT', { userId });
+            await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
+          }
 
-      timing?.phase('rateLimited');
-      logger.updateMetadata({ userId, model: body.model, apiKeyId: apiKeyInfo?.keyId });
-      logger.info(`[CLI_LLM] Starting completion for user ${userId}, model: ${body.model}`, {
-        authMethod: apiKeyInfo ? 'api_key' : 'jwt',
-      });
+          timing?.phase('rateLimited');
+          logger.updateMetadata({ userId, model: body.model, apiKeyId: apiKeyInfo?.keyId });
+          logger.info(`[CLI_LLM] Starting completion for user ${userId}, model: ${body.model}`, {
+            authMethod: apiKeyInfo ? 'api_key' : 'jwt',
+          });
 
-      // Resolve API key name for credit attribution.
-      if (apiKeyInfo) {
-        const userApiKey = await userApiKeyRepository.findById(apiKeyInfo.keyId);
-        if (userApiKey) {
-          apiKeyInfoForCompletion = { keyId: userApiKey.id, keyName: userApiKey.name };
-        }
-      }
+          // Resolve API key name for credit attribution.
+          if (apiKeyInfo) {
+            const userApiKey = await userApiKeyRepository.findById(apiKeyInfo.keyId);
+            if (userApiKey) {
+              apiKeyInfoForCompletion = { keyId: userApiKey.id, keyName: userApiKey.name };
+            }
+          }
 
-      // Stream the completion, tracking usage for analytics.
-      let finalInputTokens = 0;
-      let finalOutputTokens = 0;
-      let finalCacheReadTokens = 0;
-      let finalCacheWriteTokens = 0;
-      let finalTurnUsage: TurnUsage[] | undefined;
-      let finalCreditsUsed: number | undefined;
-      let hasToolCalls = false;
+          // Stream the completion, tracking usage for analytics.
+          let finalInputTokens = 0;
+          let finalOutputTokens = 0;
+          let finalCacheReadTokens = 0;
+          let finalCacheWriteTokens = 0;
+          let finalTurnUsage: TurnUsage[] | undefined;
+          let finalCreditsUsed: number | undefined;
+          let hasToolCalls = false;
 
-      // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
-      await checkFreeTierDailySpendCap({
-        userId,
-        userRepository,
-        billingOrganizationId: apiKeyInfo?.organizationId,
-        usageEventRepository,
-        logger,
-      });
+          // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
+          await checkFreeTierDailySpendCap({
+            userId,
+            userRepository,
+            billingOrganizationId: apiKeyInfo?.organizationId,
+            usageEventRepository,
+            logger,
+          });
 
-      timing?.phase('completionStarted');
-      await executeCompletion({
-        getEntitlements: getUserEntitlements,
-        getThinkingVisibility: resolveThinkingVisibility,
-        creditHolds: createCompletionCreditHolds(logger),
-        userId,
-        model: body.model,
-        messages: body.messages as IMessage[],
-        options: body.options,
-        db: {
-          adminSettings: adminSettingsRepository,
-          apiKeys: apiKeyRepository,
-          creditTransactions: creditTransactionRepository,
-          users: userRepository,
-          // Required for the UsageEvent dual-write (executeCompletion does
-          // `db.usageEvents?.record(...)` - optional-chained, so omitting this silently drops
-          // billing/usage analytics for the public completions path, as the old Lambda did NOT).
-          usageEvents: usageEventRepository,
-          // Required to reserve/settle against an org pool for org-billed API keys.
-          organizations: organizationRepository,
-          cache: cacheRepository,
-          recordLimitEvent: recordUserLimitEvent,
-        },
-        apiKeyInfo: apiKeyInfoForCompletion,
-        scopeActor: actorScopeForKey(apiKeyInfo),
-        // Org-billed API keys route spend to the org's shared pool (invariant:
-        // organizationId is set iff the key's billingOwnerType is Organization).
-        billingOrganizationId: apiKeyInfo?.organizationId,
-        // Correlation id for the usage-event dual write (synthesized downstream if absent).
-        requestId,
-        source,
-        sessionId: body.sessionId,
-        logger,
-        onReady,
-        onChunk: async (text, info) => {
-          if (info?.inputTokens) finalInputTokens = info.inputTokens;
-          if (info?.outputTokens) finalOutputTokens = info.outputTokens;
-          if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
-          if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
-          if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
-          if (typeof info?.creditsUsed === 'number') finalCreditsUsed = info.creditsUsed;
-          if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
-          timing?.chunk(classifyChunk(text, info));
-          write(serializeSSEEvent(buildCompletionStreamEvent(text, info)));
-        },
-      });
+          timing?.phase('completionStarted');
+          await executeCompletion({
+            getEntitlements: getUserEntitlements,
+            getThinkingVisibility: resolveThinkingVisibility,
+            creditHolds: createCompletionCreditHolds(logger),
+            userId,
+            model: body.model,
+            messages: body.messages as IMessage[],
+            options: body.options,
+            db: {
+              adminSettings: adminSettingsRepository,
+              apiKeys: apiKeyRepository,
+              creditTransactions: creditTransactionRepository,
+              users: userRepository,
+              // Required for the UsageEvent dual-write (executeCompletion does
+              // `db.usageEvents?.record(...)` - optional-chained, so omitting this silently drops
+              // billing/usage analytics for the public completions path, as the old Lambda did NOT).
+              usageEvents: usageEventRepository,
+              // Required to reserve/settle against an org pool for org-billed API keys.
+              organizations: organizationRepository,
+              cache: cacheRepository,
+              recordLimitEvent: recordUserLimitEvent,
+            },
+            apiKeyInfo: apiKeyInfoForCompletion,
+            scopeActor: actorScopeForKey(apiKeyInfo),
+            // Org-billed API keys route spend to the org's shared pool (invariant:
+            // organizationId is set iff the key's billingOwnerType is Organization).
+            billingOrganizationId: apiKeyInfo?.organizationId,
+            // Correlation id for the usage-event dual write (synthesized downstream if absent).
+            requestId,
+            source,
+            sessionId: body.sessionId,
+            logger,
+            onReady,
+            onChunk: async (text, info) => {
+              if (info?.inputTokens) finalInputTokens = info.inputTokens;
+              if (info?.outputTokens) finalOutputTokens = info.outputTokens;
+              if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
+              if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
+              if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+              if (typeof info?.creditsUsed === 'number') finalCreditsUsed = info.creditsUsed;
+              if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
+              timing?.chunk(classifyChunk(text, info));
+              write(serializeSSEEvent(buildCompletionStreamEvent(text, info)));
+            },
+          });
 
-      completionOutcome = 'completed';
-      // Close the stream and log success analytics.
-      write(SSE_DONE_SIGNAL);
-      end();
-      if (heartbeat) clearInterval(heartbeat);
-      logger.info('[CLI_LLM] Completion stream finished successfully');
-
-      await logCompletionAnalytics({
-        type: 'success',
-        requestId,
-        userId,
-        body,
-        apiKeyInfo: apiKeyInfoForCompletion,
-        source,
-        startTime,
-        endpoint: COMPLETIONS_ENDPOINT,
-        method: req.method,
-        finalInputTokens,
-        finalOutputTokens,
-        finalCacheReadTokens,
-        finalCacheWriteTokens,
-        finalTurnUsage,
-        finalCreditsUsed,
-        hasToolCalls,
-        db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-        logger,
-      });
-    } catch (error) {
-      const jsonError = toJsonError(error, requestId);
-      completionOutcome =
-        jsonError.body.errorCode === DAILY_FREE_LIMIT_REACHED_ERROR_CODE
-          ? 'daily_cap_rejected'
-          : jsonError.status < 500
-            ? 'rejected'
-            : 'failed';
-      // Budget exhaustion is expected, not an operator fault, whoever chose the budget (same policy as
-      // /api/chat); emitProcessingFailed already skips it via isOperatorFault. Only a positive
-      // max_tokens counts as the caller's: resolveOutputMaxTokens discards the rest.
-      const budgetExhausted = isOutputBudgetExhaustedError(error);
-      const callerSetMaxTokens = budgetExhausted && (body?.options?.maxTokens ?? 0) > 0;
-      const level = jsonError.status < 500 || budgetExhausted ? 'warn' : 'error';
-      const upstreamStatus = error instanceof Error ? getHttpStatus(error) : undefined;
-      logger[level]('[CLI_LLM] Handler error', { requestId, upstreamStatus, error: serializeError(error) });
-      // Provider caller errors are not operator failures, including SDK errors that are not HTTPErrors.
-      if (!isUpstreamCallerError(error)) track(emitProcessingFailed('cli-sse', error));
-
-      try {
-        if (res.headersSent) {
-          write(serializeSSEEvent(toStreamErrorFrame(error, requestId, callerSetMaxTokens)));
+          completionOutcome = 'completed';
+          // Close the stream and log success analytics.
+          write(SSE_DONE_SIGNAL);
           end();
           if (heartbeat) clearInterval(heartbeat);
-        } else {
-          res.status(jsonError.status).set(jsonError.headers).json(jsonError.body);
-        }
-      } catch (responseError) {
-        logger.error('[CLI_LLM] Failed to write error response', { requestId, error: serializeError(responseError) });
-      }
+          logger.info('[CLI_LLM] Completion stream finished successfully');
 
-      // After the response so a slow analytics write cannot delay it.
-      if (userId && body && !(error instanceof TooManyRequestsError)) {
-        await logCompletionAnalytics({
-          type: 'failure',
-          requestId,
-          userId,
-          body,
-          apiKeyInfo: apiKeyInfoForCompletion,
-          source,
-          startTime,
-          endpoint: COMPLETIONS_ENDPOINT,
-          method: req.method,
-          error,
-          db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-          logger,
-        }).catch(analyticsError =>
-          logger.warn('[CLI_LLM] Failure analytics write failed', { requestId, error: serializeError(analyticsError) })
-        );
+          await logCompletionAnalytics({
+            type: 'success',
+            requestId,
+            userId,
+            body,
+            apiKeyInfo: apiKeyInfoForCompletion,
+            source,
+            startTime,
+            endpoint: COMPLETIONS_ENDPOINT,
+            method: req.method,
+            finalInputTokens,
+            finalOutputTokens,
+            finalCacheReadTokens,
+            finalCacheWriteTokens,
+            finalTurnUsage,
+            finalCreditsUsed,
+            hasToolCalls,
+            db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+            logger,
+          });
+        } catch (error) {
+          const jsonError = toJsonError(error, requestId);
+          completionOutcome =
+            jsonError.body.errorCode === DAILY_FREE_LIMIT_REACHED_ERROR_CODE
+              ? 'daily_cap_rejected'
+              : jsonError.status < 500
+                ? 'rejected'
+                : 'failed';
+          // Budget exhaustion is expected, not an operator fault, whoever chose the budget (same policy as
+          // /api/chat); emitProcessingFailed already skips it via isOperatorFault. Only a positive
+          // max_tokens counts as the caller's: resolveOutputMaxTokens discards the rest.
+          const budgetExhausted = isOutputBudgetExhaustedError(error);
+          const callerSetMaxTokens = budgetExhausted && (body?.options?.maxTokens ?? 0) > 0;
+          const level = jsonError.status < 500 || budgetExhausted ? 'warn' : 'error';
+          const upstreamStatus = error instanceof Error ? getHttpStatus(error) : undefined;
+          logger[level]('[CLI_LLM] Handler error', { requestId, upstreamStatus, error: serializeError(error) });
+          // Provider caller errors are not operator failures, including SDK errors that are not HTTPErrors.
+          if (!isUpstreamCallerError(error)) track(emitProcessingFailed('cli-sse', error));
+
+          try {
+            if (res.headersSent) {
+              write(serializeSSEEvent(toStreamErrorFrame(error, requestId, callerSetMaxTokens)));
+              end();
+              if (heartbeat) clearInterval(heartbeat);
+            } else {
+              res.status(jsonError.status).set(jsonError.headers).json(jsonError.body);
+            }
+          } catch (responseError) {
+            logger.error('[CLI_LLM] Failed to write error response', {
+              requestId,
+              error: serializeError(responseError),
+            });
+          }
+
+          // After the response so a slow analytics write cannot delay it.
+          if (userId && body && !(error instanceof TooManyRequestsError)) {
+            await logCompletionAnalytics({
+              type: 'failure',
+              requestId,
+              userId,
+              body,
+              apiKeyInfo: apiKeyInfoForCompletion,
+              source,
+              startTime,
+              endpoint: COMPLETIONS_ENDPOINT,
+              method: req.method,
+              error,
+              db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+              logger,
+            }).catch(analyticsError =>
+              logger.warn('[CLI_LLM] Failure analytics write failed', {
+                requestId,
+                error: serializeError(analyticsError),
+              })
+            );
+          }
+        } finally {
+          if (heartbeat) clearInterval(heartbeat);
+          await quota.release();
+          if (timing) logger.info('[CLI_TIMING] completion phases', timing.summary());
+        }
       }
-    } finally {
-      if (heartbeat) clearInterval(heartbeat);
-      await quota.release();
-      if (timing) logger.info('[CLI_TIMING] completion phases', timing.summary());
-    }
+    );
   });
   app.use(COMPLETIONS_ENDPOINT, handleBodyParserError);
 

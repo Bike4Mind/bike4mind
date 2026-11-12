@@ -16,6 +16,7 @@ import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods'
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
 import { resolveContractAuth, type ContractAuthResult } from '@server/cli/resolveContractAuth';
 import { authInfraFailureHeaders, isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
+import { withOrganizationMfaContext } from '@bike4mind/db-core';
 
 export type LambdaRouteContext<C extends EndpointContract> = {
   validated: RequestBodyOf<C>;
@@ -208,7 +209,10 @@ export function defineLambdaRoute<C extends EndpointContract>(
 
     let result: LambdaRouteResult;
     try {
-      result = await handle({ validated, auth, requestId, event });
+      result = await withOrganizationMfaContext(
+        () => auth?.userId,
+        () => handle({ validated, auth, requestId, event })
+      );
     } catch (error) {
       // A thrown handler error must not surface as an opaque API-gateway 502 -
       // shape it with the correlation id. Log it too, or the id in the body has

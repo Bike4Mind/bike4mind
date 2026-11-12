@@ -51,6 +51,7 @@ import {
   PROMPT_TEXT_MAX,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { withOrganizationMfaContext } from '@bike4mind/db-core';
 
 /**
  * Send an untyped JSON payload to a WebSocket connection.
@@ -256,41 +257,46 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
   }
 
-  logger.updateMetadata({ userId, command: body.command });
-  if (isUserAction) recordUserActivity(userId, logger);
+  return withOrganizationMfaContext(
+    () => userId,
+    async () => {
+      logger.updateMetadata({ userId, command: body.command });
+      if (isUserAction) recordUserActivity(userId, logger);
 
-  // Route command
-  const rawBody = JSON.parse(event.body ?? '');
+      // Route command
+      const rawBody = JSON.parse(event.body ?? '');
 
-  switch (body.command) {
-    case 'start': {
-      const startCmd = StartCommandSchema.parse(rawBody);
-      await handleStart(startCmd, userId, apiKeyInfo, connectionId, endpoint, logger);
-      break;
-    }
-    case 'abort': {
-      const abortCmd = AbortCommandSchema.parse(rawBody);
-      await handleAbort(abortCmd, userId, connectionId, endpoint, logger);
-      break;
-    }
-    case 'permission_response': {
-      const permCmd = PermissionResponseSchema.parse(rawBody);
-      await handlePermissionResponse(permCmd, userId, connectionId, endpoint, logger);
-      break;
-    }
-    case 'gate_response': {
-      const gateCmd = GateResponseSchema.parse(rawBody);
-      await handleGateResponse(gateCmd, userId, connectionId, endpoint, logger);
-      break;
-    }
-    case 'reconnect': {
-      const reconnectCmd = ReconnectCommandSchema.parse(rawBody);
-      await handleReconnect(reconnectCmd, userId, connectionId, endpoint, logger);
-      break;
-    }
-  }
+      switch (body.command) {
+        case 'start': {
+          const startCmd = StartCommandSchema.parse(rawBody);
+          await handleStart(startCmd, userId, apiKeyInfo, connectionId, endpoint, logger);
+          break;
+        }
+        case 'abort': {
+          const abortCmd = AbortCommandSchema.parse(rawBody);
+          await handleAbort(abortCmd, userId, connectionId, endpoint, logger);
+          break;
+        }
+        case 'permission_response': {
+          const permCmd = PermissionResponseSchema.parse(rawBody);
+          await handlePermissionResponse(permCmd, userId, connectionId, endpoint, logger);
+          break;
+        }
+        case 'gate_response': {
+          const gateCmd = GateResponseSchema.parse(rawBody);
+          await handleGateResponse(gateCmd, userId, connectionId, endpoint, logger);
+          break;
+        }
+        case 'reconnect': {
+          const reconnectCmd = ReconnectCommandSchema.parse(rawBody);
+          await handleReconnect(reconnectCmd, userId, connectionId, endpoint, logger);
+          break;
+        }
+      }
 
-  return { statusCode: 200 };
+      return { statusCode: 200 };
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------

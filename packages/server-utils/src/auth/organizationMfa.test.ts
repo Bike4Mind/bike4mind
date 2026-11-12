@@ -11,6 +11,7 @@ vi.mock('@bike4mind/services', () => ({
   mfaService: { userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean } }) => !!user.mfa?.totpEnabled },
 }));
 import { assertOrganizationMfa, organizationMfaIsEnforced, ORGANIZATION_MFA_REQUIRED } from './organizationMfa';
+import { withOrganizationMfaContext } from '@bike4mind/db-core';
 
 describe('organization MFA access', () => {
   beforeEach(() => {
@@ -35,6 +36,23 @@ describe('organization MFA access', () => {
   it('does not use a platform-admin bypass', async () => {
     mocks.user.mockResolvedValue({ id: 'admin', isAdmin: true, mfa: null });
     await expect(assertOrganizationMfa('admin', 'org')).rejects.toThrow(ORGANIZATION_MFA_REQUIRED);
+  });
+  it('admits only a matching service principal inside the trusted key context', async () => {
+    mocks.user.mockResolvedValue({
+      id: 'service',
+      isSystem: true,
+      isAdmin: false,
+      orgServiceAccount: { organizationId: 'org' },
+    });
+    await expect(assertOrganizationMfa('service', 'org')).rejects.toThrow(ORGANIZATION_MFA_REQUIRED);
+    await withOrganizationMfaContext(
+      () => 'service',
+      async () => {
+        await expect(assertOrganizationMfa('service', 'org')).resolves.toBeUndefined();
+        await expect(assertOrganizationMfa('service', 'other')).rejects.toThrow(ORGANIZATION_MFA_REQUIRED);
+      },
+      () => 'org'
+    );
   });
   it('fails closed on missing organizations, users and read failures', async () => {
     mocks.org.mockResolvedValueOnce(null);

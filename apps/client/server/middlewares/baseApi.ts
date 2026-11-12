@@ -21,6 +21,7 @@ import nc from 'next-connect';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import { requestLogUrl } from './requestLogUrl';
+import { withOrganizationMfaContext } from '@bike4mind/db-core';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();
@@ -151,6 +152,13 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
   const router = nc<Req, Res>({
     onError: errorHandler,
   });
+  router.use((req, _res, next) =>
+    withOrganizationMfaContext(
+      () => req.user?.id,
+      next,
+      () => (req.apiKeyInfo?.serviceAccount ? req.apiKeyInfo.organizationId : undefined)
+    )
+  );
 
   // FIRST, ahead of every middleware that can await (connectDB, the auth/api-key chain, route
   // feature gates): the crypto-shred fence (MemoryPrincipalKeyModel) refuses a write only when a
