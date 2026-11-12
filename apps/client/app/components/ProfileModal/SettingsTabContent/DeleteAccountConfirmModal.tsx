@@ -93,7 +93,7 @@ export function DeleteAccountConfirm({ onCancel }: { onCancel: () => void }) {
     >
       {soleOwnedOrganizations.length > 0 ? (
         <Typography level="body-sm" data-testid="delete-account-sole-owned-orgs" sx={{ mb: 2 }}>
-          You are the only member of {soleOwnedOrganizations.length === 1 ? 'this organization' : 'these organizations'}
+          You are the only member of {soleOwnedOrganizations.length === 1 ? 'this team' : 'these teams'}
           , so {soleOwnedOrganizations.length === 1 ? 'it' : 'they'} will be deleted along with your account when
           permanent deletion begins:{' '}
           <Typography component="span" sx={{ fontWeight: 'lg' }}>
