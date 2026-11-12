@@ -143,7 +143,6 @@ async function authenticate(key: string, orgId: string) {
 
 const departureAdapters = {
   db: {
-    userApiKeys: userApiKeyRepository,
     organizations: organizationRepository,
     users: userRepository,
     groups: groupRepository,
