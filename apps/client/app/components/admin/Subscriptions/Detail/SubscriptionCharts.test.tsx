@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { AdminSubscriptionDetail, AdminSubscriptionHistory } from '@client/app/utils/adminSubscriptionDetail';
 import type { AdminStripeInvoice } from '@client/app/utils/adminSubscriptionStripe';
 import type { AdminSubscriptionStripeState } from '@client/app/hooks/data/adminSubscriptionDetail';
+import type React from 'react';
 import { CREDITS_CHART_ID, PAYMENT_CHART_ID, SEATS_CHART_ID, SubscriptionChartsView } from './SubscriptionCharts';
 import {
   STRIPE_ROW,
@@ -12,6 +13,20 @@ import {
   buildStripeData,
   buildStripeState,
 } from './subscriptionDetailTestUtils';
+
+const chartInputs = vi.hoisted(() => ({ line: vi.fn<(data: unknown) => void>() }));
+vi.mock('recharts', async importOriginal => {
+  const actual = await importOriginal<typeof import('recharts')>();
+  const ActualLineChart = actual.LineChart;
+  return {
+    ...actual,
+    ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    LineChart: (props: React.ComponentProps<typeof ActualLineChart>) => {
+      chartInputs.line(props.data);
+      return <ActualLineChart {...props} />;
+    },
+  };
+});
 
 const invoice = (overrides: Partial<AdminStripeInvoice> = {}): AdminStripeInvoice => ({
   id: 'in_1',
@@ -44,6 +59,7 @@ const HISTORY: AdminSubscriptionHistory = {
 
 type HistoryOverrides = Partial<{
   data: AdminSubscriptionHistory | undefined;
+  dataUpdatedAt: number;
   isLoading: boolean;
   isError: boolean;
   refetch: () => void;
@@ -51,6 +67,7 @@ type HistoryOverrides = Partial<{
 
 const history = (overrides: HistoryOverrides = {}) => ({
   data: HISTORY,
+  dataUpdatedAt: Date.UTC(2026, 10, 12),
   isLoading: false,
   isError: false,
   isFetching: false,
@@ -235,5 +252,62 @@ describe('Seats used vs paid chart', () => {
   it('shows a skeleton while the history loads', () => {
     renderCharts(stripeOrgDetail(), buildStripeState(), history({ data: undefined, isLoading: true }));
     expect(screen.getByTestId(`${SEATS_CHART_ID}-skeleton`)).toBeInTheDocument();
+  });
+});
+
+describe('cached chart refresh failures', () => {
+  it.each([false, true])('discloses stale credit and seat history, including empty=%s', empty => {
+    const refetch = vi.fn();
+    const data = empty ? { ...HISTORY, creditCycles: [], seatChanges: [] } : HISTORY;
+    renderCharts(stripeOrgDetail(), buildStripeState(), history({ data, isError: true, refetch }));
+
+    for (const chart of [CREDITS_CHART_ID, SEATS_CHART_ID]) {
+      const warning = screen.getByTestId(`${chart}-stale`);
+      expect(warning).toHaveTextContent('Showing previously loaded records');
+      fireEvent.click(within(warning).getByTestId('admin-error-retry-btn'));
+      expect(screen.getByTestId(`${chart}-${empty ? 'empty' : 'chart'}`)).toBeInTheDocument();
+    }
+    expect(refetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('discloses a failed Stripe refresh even when the cached invoice list is empty', () => {
+    const refetchFresh = vi.fn();
+    renderCharts(stripeDetail(), buildStripeState({ isError: true, refetchFresh }));
+    expect(screen.getByTestId(`${PAYMENT_CHART_ID}-empty`)).toBeInTheDocument();
+    fireEvent.click(within(screen.getByTestId(`${PAYMENT_CHART_ID}-stale`)).getByTestId('admin-error-retry-btn'));
+    expect(refetchFresh).toHaveBeenCalledOnce();
+  });
+});
+
+describe('seat snapshot refresh', () => {
+  it('places refreshed current counts after a newly fetched change without remounting', () => {
+    const initialTime = Date.UTC(2026, 10, 12);
+    const laterEvent = initialTime + 60_000;
+    const refreshedTime = laterEvent + 60_000;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(initialTime);
+    try {
+      const detail = stripeOrgDetail();
+      const view = renderCharts(detail, buildStripeState(), history({ dataUpdatedAt: initialTime }));
+      now.mockReturnValue(refreshedTime);
+      const changes = [...(HISTORY.seatChanges ?? []), { at: new Date(laterEvent).toISOString(), quantity: 7 }];
+      const updated = { ...detail, seats: { ...detail.seats!, paid: 7, members: 6 } };
+      view.rerender(
+        <SubscriptionChartsView
+          detail={updated}
+          stripe={buildStripeState()}
+          history={history({
+            data: { ...HISTORY, seatChanges: changes },
+            dataUpdatedAt: refreshedTime,
+          })}
+        />
+      );
+
+      expect(chartInputs.line.mock.calls.at(-1)?.[0]).toEqual([
+        ...changes.map(change => ({ at: new Date(change.at).getTime(), paid: change.quantity, used: null })),
+        { at: refreshedTime, paid: 7, used: 6 },
+      ]);
+    } finally {
+      now.mockRestore();
+    }
   });
 });

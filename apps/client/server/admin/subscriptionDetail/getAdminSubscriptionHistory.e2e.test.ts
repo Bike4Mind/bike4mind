@@ -99,6 +99,23 @@ describe('getAdminSubscriptionHistory', () => {
     ]);
   });
 
+  it('merges same-time grants and assigns usage on a boundary to the cycle starting there', async () => {
+    const sub = await seedSubscription({});
+    await ledger('org-1', 'Organization', 'subscription', 500, daysAgo(60));
+    await ledger('org-1', 'Organization', 'subscription', 250, daysAgo(60));
+    await ledger('org-1', 'Organization', 'text_generation_usage', -10, daysAgo(60));
+    await ledger('org-1', 'Organization', 'subscription', 1000, daysAgo(30));
+    await ledger('org-1', 'Organization', 'text_generation_usage', -20, daysAgo(30));
+    await ledger('org-1', 'Organization', 'text_generation_usage', -999, NOW);
+
+    const history = await getAdminSubscriptionHistory(String(sub._id), NOW);
+
+    expect(history?.creditCycles).toEqual([
+      { start: daysAgo(60).toISOString(), end: daysAgo(30).toISOString(), granted: 750, used: 10, current: false },
+      { start: daysAgo(30).toISOString(), end: NOW.toISOString(), granted: 1000, used: 20, current: true },
+    ]);
+  });
+
   it('ends a canceled subscription at its period end and keeps the latest cycles when there are many', async () => {
     const sub = await seedSubscription({ status: 'canceled', periodEndsAt: daysAgo(5), createdAt: daysAgo(400) });
     for (let month = 13; month >= 0; month--) {

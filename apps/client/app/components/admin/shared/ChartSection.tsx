@@ -75,7 +75,7 @@ export function ChartSection({ title, testId, body, skeletonHeight = CHART_HEIGH
   );
 }
 
-/** The "View as table" body: every plotted value, unpaginated. */
+/** The "View as table" body for the plotted values. */
 export function ChartDataTable<Row>({
   label,
   testId,

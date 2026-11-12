@@ -105,11 +105,19 @@ const creditCyclesOf = async (
     .reverse()
     .map(row => ({ at: row.createdAt, credits: row.credits }));
   const starts = [...new Set(grants.map(grant => grant.at.getTime()))];
-  // $bucket boundaries must strictly increase, and the last cycle needs a nonzero span.
+  // Keep the final cycle nonempty even when its grant shares the snapshot timestamp.
   const end = new Date(Math.max(windowEnd.getTime(), (starts.at(-1) ?? 0) + 1));
-  let buckets: { _id: Date | string; used: number }[] | null;
+  // DocumentDB 5 supports $group/$cond, but not $bucket. At most twelve starts keeps this bounded.
+  type CycleStartExpression = Date | { $cond: [{ $gte: [string, Date] }, Date, CycleStartExpression] };
+  const cycleStart = starts
+    .slice(1)
+    .reduce<CycleStartExpression>(
+      (earlier, start) => ({ $cond: [{ $gte: ['$createdAt', new Date(start)] }, new Date(start), earlier] }),
+      new Date(starts[0])
+    );
+  let buckets: { _id: Date; used: number }[] | null;
   try {
-    buckets = await CreditTransaction.aggregate<{ _id: Date | string; used: number }>([
+    buckets = await CreditTransaction.aggregate<{ _id: Date; used: number }>([
       {
         $match: {
           ownerId,
@@ -119,12 +127,10 @@ const creditCyclesOf = async (
         },
       },
       {
-        $bucket: {
-          groupBy: '$createdAt',
-          boundaries: [...starts.map(start => new Date(start)), end],
-          default: 'outside',
+        $group: {
+          _id: cycleStart,
           // Usage rows are stored negative.
-          output: { used: { $sum: { $abs: '$credits' } } },
+          used: { $sum: { $abs: '$credits' } },
         },
       },
     ]).option({ maxTimeMS: READ_MAX_TIME_MS });
@@ -132,13 +138,7 @@ const creditCyclesOf = async (
     if (!isTimeLimitError(error)) throw error;
     buckets = null;
   }
-  const usedByStart = buckets
-    ? new Map(
-        buckets
-          .filter(bucket => bucket._id instanceof Date)
-          .map(bucket => [(bucket._id as Date).getTime(), bucket.used])
-      )
-    : null;
+  const usedByStart = buckets ? new Map(buckets.map(bucket => [bucket._id.getTime(), bucket.used])) : null;
   return {
     creditCycles: buildCreditCycles(grants, end, usedByStart, !terminal),
     creditCyclesTruncated: truncated,

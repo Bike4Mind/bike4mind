@@ -1,4 +1,4 @@
-import React, { useMemo, useState, type ReactNode } from 'react';
+import React, { useMemo, type ReactNode } from 'react';
 import { Box, Typography } from '@mui/joy';
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Tooltip, XAxis, YAxis } from 'recharts';
 import {
@@ -90,6 +90,30 @@ const notice = (testId: string, title: string, description?: string): ChartSecti
     </Box>
   ),
 });
+
+/** Keep cached charts and empty states usable while disclosing a failed refresh. */
+const withStaleNotice = (body: ChartSectionBody, warning: ReactNode): ChartSectionBody => {
+  if (!warning || body.kind === 'loading') return body;
+  if (body.kind === 'ready')
+    return {
+      ...body,
+      footnote: (
+        <>
+          {body.footnote}
+          {warning}
+        </>
+      ),
+    };
+  return {
+    ...body,
+    content: (
+      <>
+        {body.content}
+        {warning}
+      </>
+    ),
+  };
+};
 
 const PaymentHistoryPlot: React.FC<{ bars: readonly PaymentBar[]; currency: string }> = ({ bars, currency }) => {
   const legend: ChartLegendItem[] = (Object.keys(PAYMENT_OUTCOMES) as PaymentOutcome[])
@@ -187,16 +211,7 @@ export const PaymentHistoryChart: React.FC<{ stripe: AdminSubscriptionStripeStat
           getRowId={bar => bar.id}
         />
       ),
-      footnote: (
-        <>
-          {notes.length > 0 && <Note testId={`${PAYMENT_CHART_ID}-note`}>{notes.join(' ')}</Note>}
-          {stripe.isError && (
-            <Box data-testid={`${PAYMENT_CHART_ID}-stale`}>
-              <ErrorState message={STRIPE_STALE_MESSAGE} onRetry={stripe.refetchFresh} retrying={stripe.isFetching} />
-            </Box>
-          )}
-        </>
-      ),
+      footnote: <>{notes.length > 0 && <Note testId={`${PAYMENT_CHART_ID}-note`}>{notes.join(' ')}</Note>}</>,
     };
   } else if (live) {
     body = notice(PAYMENT_CHART_ID, 'No invoices yet', 'Payment history starts with the first invoice.');
@@ -212,11 +227,18 @@ export const PaymentHistoryChart: React.FC<{ stripe: AdminSubscriptionStripeStat
       ),
     };
   }
-  return <ChartSection title="Payment history" testId={PAYMENT_CHART_ID} body={body} />;
+  const warning =
+    live && stripe.isError ? (
+      <Box data-testid={`${PAYMENT_CHART_ID}-stale`}>
+        <ErrorState message={STRIPE_STALE_MESSAGE} onRetry={stripe.refetchFresh} retrying={stripe.isFetching} />
+      </Box>
+    ) : null;
+  return <ChartSection title="Payment history" testId={PAYMENT_CHART_ID} body={withStaleNotice(body, warning)} />;
 };
 
 type HistoryState = {
   data: AdminSubscriptionHistory | undefined;
+  dataUpdatedAt: number;
   isLoading: boolean;
   isError: boolean;
   isFetching: boolean;
@@ -231,6 +253,17 @@ const historyError = (testId: string, history: HistoryState, what: string): Char
     </Box>
   ),
 });
+
+const historyStaleNotice = (testId: string, history: HistoryState) =>
+  history.data && history.isError ? (
+    <Box data-testid={`${testId}-stale`}>
+      <ErrorState
+        message="History refresh failed. Showing previously loaded records."
+        onRetry={history.refetch}
+        retrying={history.isFetching}
+      />
+    </Box>
+  ) : null;
 
 const GRANTED_ITEM: ChartLegendItem = { label: 'Granted', color: INK_MUTED, opacity: COMPARISON_OPACITY };
 const CREDITS_LEGEND: ChartLegendItem[] = [GRANTED_ITEM, { label: 'Used', color: ACCENT }];
@@ -345,7 +378,13 @@ export const CreditCyclesChart: React.FC<{ detail: AdminSubscriptionDetail; hist
   } else {
     body = { kind: 'loading' };
   }
-  return <ChartSection title="Credits per cycle" testId={CREDITS_CHART_ID} body={body} />;
+  return (
+    <ChartSection
+      title="Credits per cycle"
+      testId={CREDITS_CHART_ID}
+      body={withStaleNotice(body, historyStaleNotice(CREDITS_CHART_ID, history))}
+    />
+  );
 };
 
 const SEATS_LEGEND: ChartLegendItem[] = [
@@ -433,9 +472,11 @@ export const SeatsHistoryChart: React.FC<{
   comp: boolean;
   history: HistoryState;
 }> = ({ seats, comp, history }) => {
-  const [now] = useState(() => Date.now());
   const changes = history.data?.seatChanges;
-  const points = toSeatPoints(changes ?? [], seats, now);
+  const points = useMemo(
+    () => toSeatPoints(changes ?? [], seats, history.dataUpdatedAt),
+    [changes, seats, history.dataUpdatedAt]
+  );
   const today = `Today: ${seats.members.toLocaleString('en-US')} used of ${seats.paid.toLocaleString('en-US')} paid.`;
   let body: ChartSectionBody;
   if (changes && changes.length > 0) {
@@ -473,7 +514,13 @@ export const SeatsHistoryChart: React.FC<{
   } else {
     body = { kind: 'loading' };
   }
-  return <ChartSection title="Seats used vs paid" testId={SEATS_CHART_ID} body={body} />;
+  return (
+    <ChartSection
+      title="Seats used vs paid"
+      testId={SEATS_CHART_ID}
+      body={withStaleNotice(body, historyStaleNotice(SEATS_CHART_ID, history))}
+    />
+  );
 };
 
 /** The Overview tab's charts. Each loads and fails on its own, so a Stripe outage leaves the Mongo charts up. */
@@ -502,6 +549,7 @@ export const SubscriptionCharts: React.FC<{
   const query = useAdminSubscriptionHistory(detail.subscription.id);
   const history: HistoryState = {
     data: query.data,
+    dataUpdatedAt: query.dataUpdatedAt,
     isLoading: query.isLoading,
     isError: query.isError,
     isFetching: query.isFetching,

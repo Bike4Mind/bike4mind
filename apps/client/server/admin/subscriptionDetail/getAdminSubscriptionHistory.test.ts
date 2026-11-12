@@ -106,6 +106,16 @@ describe('getAdminSubscriptionHistory usage time limit', () => {
     ]);
   });
 
+  it('uses only aggregation stages supported by DocumentDB 5', async () => {
+    aggregate.mockClear().mockReturnValue({ option: () => Promise.resolve([]) });
+    await getAdminSubscriptionHistory('a'.repeat(24), at(20));
+    // AWS's supported-stage matrix excludes $bucket on DocumentDB 5.
+    const pipeline: Record<string, unknown>[] = aggregate.mock.calls[0][0];
+    const supportedStages = new Set(['$match', '$group']);
+    expect(pipeline.every(stage => Object.keys(stage).every(name => supportedStages.has(name)))).toBe(true);
+    expect(pipeline.some(stage => '$group' in stage)).toBe(true);
+  });
+
   it('still rejects on any other aggregate error', async () => {
     aggregate.mockReturnValue(rejectWith(Object.assign(new Error('boom'), { code: 11000 })));
     await expect(getAdminSubscriptionHistory('a'.repeat(24), at(20))).rejects.toThrow('boom');
