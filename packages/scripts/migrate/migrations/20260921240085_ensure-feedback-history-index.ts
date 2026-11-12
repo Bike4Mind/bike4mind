@@ -2,7 +2,7 @@ import { AdminAuditLogModel } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 const migration: MigrationFile = {
-  id: 20261112000000,
+  id: 20260921240085,
   name: 'ensure feedback history index',
   up: async () => {
     await AdminAuditLogModel.createIndexes();
