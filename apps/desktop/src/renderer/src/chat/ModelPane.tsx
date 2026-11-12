@@ -27,7 +27,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
-import type { ModelLighting, ModelView } from '@shared/model3d';
+import type { ModelLighting, ModelUnits, ModelView } from '@shared/model3d';
 import {
   CaretDownIcon,
   CheckIcon,
@@ -46,8 +46,15 @@ import {
 import type { ModelEngine } from './model3d/useModelEngine';
 import { ModelClips } from './model3d/ModelClips';
 import { ModelJoints } from './model3d/ModelJoints';
-import { canExplode } from './model3d/modelScene';
-import { ModelViewport, type ModelViewportHandle } from './model3d/ModelViewport';
+import { canExplode, renderPartCloseup } from './model3d/modelScene';
+import {
+  ModelViewport,
+  type ModelViewportHandle,
+  type ViewportPick,
+  type ViewportPoint,
+} from './model3d/ModelViewport';
+import { PartEditPrompt, partListLabel } from './model3d/PartEditPrompt';
+import { formatModelEditNote, modelEditContext } from '@shared/modelEdit';
 import {
   clampModelPaneWidth,
   MODEL_PANE_MIN_WIDTH,
@@ -72,11 +79,38 @@ type Props = {
   onClose: () => void;
   /** Puts an example prompt in the composer. */
   onExamplePrompt: (text: string) => void;
-  /** Adds a mention of a clicked part to the end of the composer's draft. */
-  onPickPart: (text: string) => void;
+  /**
+   * Sends a point-and-edit turn into this pane's conversation: what the user typed, the hidden
+   * note tying it to the picked parts, and a close-up of them. Resolves false when it was refused.
+   */
+  onSendEdit: (edit: PartEditTurn) => Promise<boolean>;
   /** The column the pane trades width with; it bounds how wide a drag may take the pane. */
   conversation?: RefObject<HTMLElement | null>;
 };
+
+/** A point-and-edit turn, as the pane hands it to the conversation. */
+export type PartEditTurn = {
+  text: string;
+  /**
+   * The hidden context (shared/modelEdit.ts), never drawn in the thread; `withCloseup` false when
+   * the close-up could not go along (a model that cannot read images).
+   */
+  note: (withCloseup: boolean) => string;
+  closeup: { name: string; bytes: Uint8Array } | null;
+};
+
+/** The close-up's file name: the picked parts, kept to safe characters. */
+export function closeupName(parts: readonly string[]): string {
+  const slug = parts
+    .join('-')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return `model-edit-${slug || 'part'}.png`;
+}
+
+const NO_PARTS: readonly string[] = [];
 
 const STATUS_LABEL = { idle: 'No model', building: 'Building', ok: 'Ready', error: 'Error' } as const;
 const STATUS_COLOR = { idle: 'neutral', building: 'primary', ok: 'success', error: 'danger' } as const;
@@ -100,7 +134,7 @@ export const MODEL_LIGHTING_PRESETS: readonly { lighting: ModelLighting; label: 
   { lighting: 'night', label: 'Night' },
 ];
 const KEY_HELP =
-  'Arrow keys orbit, plus and minus zoom, 0 to 4 pick a view, W wireframe, G grid, E explode, L lighting, N night.';
+  'Arrow keys orbit, plus and minus zoom, 0 to 4 pick a view, W wireframe, G grid, E explode, L lighting, N night, [ and ] pick a part, Enter edits it.';
 
 function nextLighting(lighting: ModelLighting): ModelLighting {
   const index = MODEL_LIGHTING_PRESETS.findIndex(preset => preset.lighting === lighting);
@@ -179,12 +213,7 @@ function formatSize(size: [number, number, number], units: string): string {
   return `${size.map(value => Number(value.toFixed(value < 10 ? 2 : 1))).join(' x ')} ${units}`;
 }
 
-/** How a clicked part reads in the draft: its name as the model file and the agent know it. */
-export function partMention(name: string): string {
-  return `the \`${name}\` part `;
-}
-
-export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, conversation }: Props) {
+export function ModelPane({ engine, dark, onClose, onExamplePrompt, onSendEdit, conversation }: Props) {
   const [width, setWidth] = useState(readModelPaneWidth);
   const [dragging, setDragging] = useState(false);
   const [limit, setLimit] = useState(() => modelPaneMaxWidth(window.innerWidth, Number.POSITIVE_INFINITY));
@@ -210,7 +239,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
     };
   }, [conversation, pane]);
 
-  const { state, status, error, object, summary, params, unsaved, joints, jointAngles, clips } = engine;
+  const { state, status, error, object, summary, parts, params, unsaved, joints, jointAngles, clips } = engine;
   const explodable = useMemo(() => object !== null && canExplode(object), [object]);
   const [wireframe, setWireframe] = useState(false);
   const [grid, setGrid] = useState(false);
@@ -221,21 +250,104 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
   const recording = recordProgress !== null;
   const keyHelpId = useId();
   const viewportHandle = useRef<ModelViewportHandle | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   // Keyed to the file, so opening another model never keeps a stale highlight.
-  const [picked, setPicked] = useState<{ path: string | null; name: string } | null>(null);
-  const pickedName = picked && picked.path === state.path ? picked.name : null;
+  const [picked, setPicked] = useState<{ path: string | null; names: string[] } | null>(null);
+  const pickedNames = useMemo(
+    () => (picked && picked.path === state.path ? picked.names : NO_PARTS),
+    [picked, state.path]
+  );
+  // The point-and-edit prompt, open by the selection; only a model file has code to edit.
+  const editable = state.kind === 'model' && !!state.source && !!object && !recording;
+  const [prompt, setPrompt] = useState<{
+    path: string | null;
+    point: ViewportPoint;
+    bounds: { width: number; height: number };
+  } | null>(null);
+  const promptOpen = prompt && prompt.path === state.path && pickedNames.length > 0 && editable ? prompt : null;
+  const [sending, setSending] = useState(false);
+  // Parts a sent edit is waiting on, so the rebuild that changes them gets its moment.
+  const [editing, setEditing] = useState<{ path: string | null; names: string[] } | null>(null);
+  const editingNames = editing && editing.path === state.path ? editing.names : NO_PARTS;
   // Keyed to the file like `picked`, so another file opens at rest.
   const [playing, setPlaying] = useState<{ path: string | null; clip: string } | null>(null);
   const playingClip = playing && playing.path === state.path && clips.includes(playing.clip) ? playing.clip : null;
-  const pickPart = (part: string | null) => {
-    // A second click on the picked part, or a click on empty space, clears it without adding text.
-    if (part === null || part === pickedName) {
-      setPicked(null);
+  const stageBounds = () => {
+    const rect = stageRef.current?.getBoundingClientRect();
+    return { width: rect?.width ?? 0, height: rect?.height ?? 0 };
+  };
+  const openPrompt = (point: ViewportPoint | null) =>
+    setPrompt({
+      path: state.path,
+      point: point ?? { x: stageBounds().width / 2, y: stageBounds().height / 2 },
+      bounds: stageBounds(),
+    });
+  const clearPick = () => {
+    setPicked(null);
+    setPrompt(null);
+  };
+  const pickPart = ({ name: part, additive, point }: ViewportPick) => {
+    // Empty space, or a second plain click on the only picked part, clears the selection.
+    if (part === null || (!additive && pickedNames.length === 1 && pickedNames[0] === part)) {
+      clearPick();
       return;
     }
-    setPicked({ path: state.path, name: part });
-    onPickPart(partMention(part));
+    const names = additive
+      ? pickedNames.includes(part)
+        ? pickedNames.filter(entry => entry !== part)
+        : [...pickedNames, part]
+      : [part];
+    if (!names.length) {
+      clearPick();
+      return;
+    }
+    setPicked({ path: state.path, names });
+    openPrompt(point);
   };
+  // `[` and `]` from the keyboard: one part at a time, in the order the model lists them.
+  const stepPick = (direction: 1 | -1) => {
+    const all = summary?.parts ?? [];
+    if (!all.length) return;
+    const at = pickedNames.length ? all.indexOf(pickedNames[pickedNames.length - 1]) : -1;
+    const next = all[(at + direction + all.length) % all.length] ?? all[0];
+    setPicked({ path: state.path, names: [next] });
+    setPrompt(null);
+  };
+  const sendEdit = async (text: string) => {
+    if (!state.path || !state.source || !summary || !pickedNames.length) return;
+    const names = [...pickedNames];
+    setSending(true);
+    try {
+      const name = closeupName(names);
+      const bytes = object ? await renderPartCloseup(object, names, dark, jointAngles).catch(() => null) : null;
+      const context = {
+        path: state.path,
+        source: state.source,
+        units: (summary.units === 'm' ? 'm' : 'mm') as ModelUnits,
+        facts: parts,
+        picked: names,
+      };
+      const note = (withCloseup: boolean) =>
+        formatModelEditNote(modelEditContext(withCloseup ? { ...context, closeup: name } : context));
+      const sent = await onSendEdit({ text, note, closeup: bytes ? { name, bytes } : null });
+      if (!sent) return;
+      setEditing({ path: state.path, names });
+      clearPick();
+      // Focus goes back to the view, so the next pick or shortcut works without a click.
+      stageRef.current?.focus();
+    } catch (caught) {
+      setNote({ kind: 'error', text: errorText(caught) });
+    } finally {
+      setSending(false);
+    }
+  };
+  const onEditShown = useCallback((shown: string[]) => {
+    setEditing(current => {
+      if (!current) return current;
+      const left = current.names.filter(name => !shown.includes(name));
+      return left.length ? { ...current, names: left } : null;
+    });
+  }, []);
   const [note, setNote] = useState<Note>(null);
   const name = state.path ? (state.path.split(/[\\/]/).pop() ?? state.path) : null;
   const paramEntries = Object.entries(params);
@@ -291,6 +403,10 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
       l: () => setLighting(nextLighting),
       n: () => setLighting(value => (value === 'night' ? 'studio' : 'night')),
       e: () => explodable && setExploded(value => !value),
+      '[': () => stepPick(-1),
+      ']': () => stepPick(1),
+      Enter: () => editable && pickedNames.length > 0 && openPrompt(handle?.partPoint(pickedNames) ?? null),
+      Escape: () => clearPick(),
     };
     const action = preset
       ? () => handle?.setView(preset.view)
@@ -390,6 +506,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
       )}
 
       <Box
+        ref={stageRef}
         tabIndex={object ? 0 : undefined}
         role={object ? 'application' : undefined}
         aria-roledescription={object ? '3D view' : undefined}
@@ -430,11 +547,27 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
               frameKey={state.path}
               pose={jointAngles}
               exploded={exploded && explodable}
-              picked={pickedName}
+              picked={pickedNames}
               onPick={pickPart}
+              editing={editingNames}
+              onEditShown={onEditShown}
               clip={playingClip}
               handleRef={viewportHandle}
             />
+            {promptOpen && (
+              <PartEditPrompt
+                key={`${promptOpen.point.x},${promptOpen.point.y}`}
+                parts={pickedNames}
+                point={promptOpen.point}
+                bounds={promptOpen.bounds}
+                sending={sending}
+                onSend={text => void sendEdit(text)}
+                onCancel={() => {
+                  clearPick();
+                  stageRef.current?.focus();
+                }}
+              />
+            )}
             {status === 'building' && !object && (
               <Stack alignItems="center" justifyContent="center" sx={{ position: 'absolute', inset: 0 }}>
                 <CircularProgress size="sm" />
@@ -636,7 +769,12 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
               >
                 {formatSize(summary.size, summary.units)}
                 {state.kind === 'stl' ? ' (assumed)' : ''} - {summary.triangles} tris
-                {summary.parts.length > 1 && (pickedName ? ` - ${pickedName}` : ' - click a part to mention it')}
+                {summary.parts.length > 1 &&
+                  (pickedNames.length
+                    ? ` - ${partListLabel(pickedNames)}`
+                    : editable
+                      ? ' - click a part to edit it'
+                      : '')}
               </Typography>
             )}
           </>

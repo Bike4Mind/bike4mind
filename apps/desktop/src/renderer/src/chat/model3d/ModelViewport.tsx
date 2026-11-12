@@ -4,7 +4,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { ModelJoint, ModelView } from '@shared/model3d';
 import { newPartNames, startBuildIn } from './buildIn';
-import { explodeModel, fitAngle, frameCamera, poseJoints, VIEW_DIRECTIONS } from './modelScene';
+import { changedParts, startEditFlash, type EditFlash } from './editFlash';
+import { explodeModel, fitAngle, frameCamera, partsBox, poseJoints, VIEW_DIRECTIONS } from './modelScene';
 import {
   addGlowLights,
   enableShadows,
@@ -37,7 +38,18 @@ export type ModelViewportHandle = {
   orbit: (azimuth: number, polar: number) => void;
   /** Moves the camera towards the target (factor below 1) or away from it (above 1). */
   zoom: (factor: number) => void;
+  /**
+   * Where the named parts' centre shows on screen, in CSS px from the viewport's top left: where
+   * the edit prompt opens when the parts were picked from the keyboard. Null when none is shown.
+   */
+  partPoint: (names: readonly string[]) => ViewportPoint | null;
 };
+
+/** A point on the viewport, in CSS px from its top left. */
+export type ViewportPoint = { x: number; y: number };
+
+/** A click on a part: `additive` (shift held) adds it to the selection or takes it out. */
+export type ViewportPick = { name: string | null; additive: boolean; point: ViewportPoint };
 
 type Props = {
   object: THREE.Group | null;
@@ -55,10 +67,16 @@ type Props = {
   pose: Record<string, number>;
   /** Pulls the parts apart (animated); a rebuild keeps the view exploded. */
   exploded: boolean;
-  /** The part to highlight, by name. */
-  picked: string | null;
-  /** A click (not an orbit drag) on a part, or on empty space (null). */
-  onPick: (name: string | null) => void;
+  /** The parts to highlight, by name. */
+  picked: readonly string[];
+  /** A click (not an orbit drag) on a part, or on empty space (a null name). */
+  onPick: (pick: ViewportPick) => void;
+  /**
+   * Parts a point-and-edit turn is waiting on. When a rebuild changes any of them they get the
+   * before/after moment (editFlash.ts) and `onEditShown` hears which ones.
+   */
+  editing: readonly string[];
+  onEditShown: (names: string[]) => void;
   /** An opened asset's animation to play on a loop, by name; null shows it at rest. */
   clip: string | null;
   /** Filled with the viewport's handle while it is mounted. */
@@ -73,12 +91,12 @@ const IDLE_RENDER_DELAY = 150;
 /** How long the parts take to pull apart or come back together, in ms. */
 const EXPLODE_MS = 700;
 
-/** Tints the picked part's (cloned, per-view) material so it reads as selected; clears the rest. */
-function highlightPart(root: THREE.Object3D, name: string | null): void {
+/** Tints the picked parts' (cloned, per-view) materials so they read as selected; clears the rest. */
+function highlightParts(root: THREE.Object3D, names: readonly string[]): void {
   root.traverse(child => {
     if (!(child instanceof THREE.Mesh)) return;
     const material = child.material as THREE.MeshStandardMaterial;
-    const picked = name !== null && child.name === name;
+    const picked = names.includes(child.name);
     // A part's own glow (partMaterial records it) comes back when it is no longer picked.
     const own = typeof material.userData.emissive === 'number' ? material.userData.emissive : 0x000000;
     const ownIntensity =
@@ -116,6 +134,8 @@ export function ModelViewport({
   exploded,
   picked,
   onPick,
+  editing,
+  onEditShown,
   clip,
   handleRef,
 }: Props) {
@@ -136,6 +156,11 @@ export function ModelViewport({
   pickedRef.current = picked;
   const onPickRef = useRef(onPick);
   onPickRef.current = onPick;
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  const onEditShownRef = useRef(onEditShown);
+  onEditShownRef.current = onEditShown;
+  const flash = useRef<{ frame: number; run: EditFlash } | null>(null);
   // Set by the user orbiting, zooming or panning; until then a resize re-frames, because the first
   // frame is often taken before the pane has its size and a tall pane would crop the model.
   const userMoved = useRef(false);
@@ -214,7 +239,11 @@ export function ModelViewport({
       const raycaster = new THREE.Raycaster();
       raycaster.setFromCamera(pointer, camera);
       const hit = raycaster.intersectObject(shown, true).find(entry => entry.object instanceof THREE.Mesh);
-      onPickRef.current(hit ? hit.object.name : null);
+      onPickRef.current({
+        name: hit ? hit.object.name : null,
+        additive: event.shiftKey,
+        point: { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
+      });
     };
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     renderer.domElement.addEventListener('pointerup', onPointerUp);
@@ -228,6 +257,15 @@ export function ModelViewport({
       // A preset is a deliberate camera; only the default view goes back to following the pane's size.
       userMoved.current = view !== null;
       controls.update();
+    };
+    const partPoint = (names: readonly string[]): ViewportPoint | null => {
+      const shown = shownCopy.current;
+      if (!shown) return null;
+      const box = partsBox(shown, names);
+      if (box.isEmpty()) return null;
+      const centre = box.getCenter(new THREE.Vector3()).project(camera);
+      const bounds = renderer.domElement.getBoundingClientRect();
+      return { x: ((centre.x + 1) / 2) * bounds.width, y: ((1 - centre.y) / 2) * bounds.height };
     };
     const orbit = (azimuth: number, polar: number) => {
       if (recording) return;
@@ -316,6 +354,7 @@ export function ModelViewport({
       setView,
       orbit,
       zoom,
+      partPoint,
     };
     resize();
     return () => {
@@ -324,6 +363,7 @@ export function ModelViewport({
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       clearTimeout(idleTimer);
       cancelAnimationFrame(buildFrame.current);
+      if (flash.current) cancelAnimationFrame(flash.current.frame);
       controls.dispose();
       composer.dispose();
       stage.dispose();
@@ -344,6 +384,7 @@ export function ModelViewport({
       setView: view => viewer.current?.setView(view),
       orbit: (azimuth, polar) => viewer.current?.orbit(azimuth, polar),
       zoom: factor => viewer.current?.zoom(factor),
+      partPoint: names => viewer.current?.partPoint(names) ?? null,
     };
     return () => {
       handleRef.current = null;
@@ -357,6 +398,11 @@ export function ModelViewport({
     // Parts the agent just added print in; a model opened afresh builds up whole.
     const previous = framedFor.current === frameKey ? shownObject.current : null;
     const added = object && previous !== object ? newPartNames(previous, object) : new Set<string>();
+    if (flash.current) {
+      cancelAnimationFrame(flash.current.frame);
+      flash.current.run.finish();
+      flash.current = null;
+    }
     current.content.clear();
     current.stage.fit(object, { dark, grid, lighting });
     current.composer.fit(current.stage.bounds);
@@ -377,7 +423,7 @@ export function ModelViewport({
           child.material = material;
         }
       });
-      highlightPart(shown, pickedRef.current);
+      highlightParts(shown, pickedRef.current);
       enableShadows(shown);
       if (lightingGlows(lighting)) addGlowLights(shown, current.stage.radius);
       current.content.add(shown);
@@ -392,10 +438,27 @@ export function ModelViewport({
       const names = new Set([...(carried?.names ?? []), ...added]);
       const start = carried?.start ?? performance.now();
       building.current = null;
-      const build =
-        names.size && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
-          ? startBuildIn(shown, names, start)
+      const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const build = names.size && !still ? startBuildIn(shown, names, start) : null;
+      const edited =
+        previous && previous !== object && editingRef.current.length
+          ? changedParts(previous, object, editingRef.current)
+          : [];
+      const run =
+        previous && edited.length
+          ? startEditFlash(current.content, shown, previous, edited, performance.now(), still)
           : null;
+      if (run) {
+        const playing = { run, frame: 0 };
+        flash.current = playing;
+        playing.frame = requestAnimationFrame(function step(now) {
+          const going = run.step(now);
+          current.render();
+          if (going && flash.current === playing) playing.frame = requestAnimationFrame(step);
+          else if (flash.current === playing) flash.current = null;
+        });
+      }
+      if (edited.length) onEditShownRef.current(edited);
       if (build) {
         building.current = { frameKey, names, start };
         buildFrame.current = requestAnimationFrame(function step(now) {
@@ -455,7 +518,7 @@ export function ModelViewport({
 
   useEffect(() => {
     if (!viewer.current || !shownCopy.current) return;
-    highlightPart(shownCopy.current, picked);
+    highlightParts(shownCopy.current, picked);
     viewer.current.render();
   }, [picked]);
 

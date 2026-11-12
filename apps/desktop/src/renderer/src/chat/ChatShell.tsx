@@ -34,7 +34,7 @@ import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
 import { readPanelFlag, spawnedSessions, writePanelFlag } from './backgroundTasks';
 import { BrowserPane } from './BrowserPane';
 import { SimulatorPane } from './SimulatorPane';
-import { ModelPane } from './ModelPane';
+import { ModelPane, type PartEditTurn } from './ModelPane';
 import { useModelBackgroundBuilds } from './model3d/useModelBackgroundBuilds';
 import { useModelEngine } from './model3d/useModelEngine';
 import { useSimulatorView } from './useSimulatorView';
@@ -404,10 +404,6 @@ export function ChatShell({
   const [composerFill, setComposerFill] = useState<ComposerFill | null>(null);
   const fillSeq = useRef(0);
   const fillComposer = useCallback((text: string) => setComposerFill({ id: ++fillSeq.current, text }), []);
-  const appendToComposer = useCallback(
-    (text: string) => setComposerFill({ id: ++fillSeq.current, text, append: true }),
-    []
-  );
   const clearComposerFill = useCallback(() => setComposerFill(null), []);
   const [composerFocus, setComposerFocus] = useState(0);
   // Per conversation, like the composer's own drafts: a quote waits in the one it was taken in.
@@ -854,6 +850,25 @@ export function ChatShell({
     return message && snippet ? { id: message.id, snippet } : undefined;
   }, [conversation.session?.id, activeId, conversation.messages, turnOpen]);
   const { send: sendToConversation } = conversation;
+  const conversationId = conversation.session?.id;
+  const modelSessionId = modelEngine.sessionId;
+  // Point-and-edit from the model pane, straight to its conversation like the innkeeper desk below.
+  const sendModelEdit = useCallback(
+    async (edit: PartEditTurn): Promise<boolean> => {
+      if (!modelSessionId || modelSessionId !== conversationId) return false;
+      const closeup = edit.closeup
+        ? (
+            await window.b4m.chat.addAttachments(modelSessionId, [
+              { source: 'bytes', name: edit.closeup.name, mediaType: 'image/png', data: edit.closeup.bytes },
+            ])
+          ).attachments
+        : [];
+      if (await sendToConversation(edit.text, closeup, [edit.note(closeup.length > 0)])) return true;
+      // Refused with the image (a model that cannot read one): the words and the note still go.
+      return closeup.length > 0 && sendToConversation(edit.text, [], [edit.note(false)]);
+    },
+    [sendToConversation, modelSessionId, conversationId]
+  );
   const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
   const innkeeperDesk = useMemo<InnkeeperDesk>(
     () => ({
@@ -2230,7 +2245,7 @@ export function ChatShell({
           dark={darkMode}
           onClose={toggleModel}
           onExamplePrompt={fillComposer}
-          onPickPart={appendToComposer}
+          onSendEdit={sendModelEdit}
           conversation={conversationColumn}
         />
       )}
