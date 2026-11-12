@@ -1,15 +1,20 @@
 import {
+  ASSIGNABLE_ORG_ROLES,
+  AssignableOrgRole,
   InviteType,
   IUserDocument,
   Permission,
   IOrganizationDocument,
+  canAssignOrgRole,
   orgAclRowConfersMembership,
+  organizationMemberRole,
 } from '@bike4mind/common';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { useCancelInvite } from '@client/app/hooks/data/invites';
 import { getAppFileUrl } from '@client/app/utils/s3';
 import { Box, Avatar, Stack, IconButton, Dropdown, MenuButton, Menu, MenuItem, Chip, Typography } from '@mui/joy';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { FC, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -19,7 +24,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import {
   useLeaveOrganization,
   useSetMemberCreditOverride,
-  useSetOrganizationManager,
+  useSetOrganizationMemberRole,
 } from '@client/app/hooks/data/organizations';
 import { useNavigate } from '@tanstack/react-router';
 import CreditLimitModal from './CreditLimitModal';
@@ -40,8 +45,6 @@ interface OrganizationUserCardProps {
   canRevokeMembers: boolean;
   /** Viewer may set this member's monthly credit limit (`canManageMemberCreditBudgets`). */
   canManageCreditBudgets: boolean;
-  /** Viewer may make or remove managers (`isOrgOwnerOrPlatformAdmin`, the manager route's gate). */
-  canManageManagers: boolean;
 }
 
 const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
@@ -50,7 +53,6 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   canInviteMembers,
   canRevokeMembers,
   canManageCreditBudgets,
-  canManageManagers,
 }) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -70,7 +72,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     },
   });
   const isOwner = user?.id === organization.userId;
-  const isManager = !isOwner && (organization.adminUserIds ?? []).some(id => String(id) === user.id);
+  const memberRole = organizationMemberRole(organization, user.id);
   const { mutateAsync: leaveOrganization } = useLeaveOrganization();
 
   const confirm = useConfirmation();
@@ -89,9 +91,13 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         <Chip size="sm" variant="soft" color="primary" data-testid="organization-user-card-owner-chip">
           {t('organization.roles.owner')}
         </Chip>
-      ) : isManager ? (
+      ) : memberRole === 'manager' ? (
         <Chip size="sm" variant="soft" color="success" data-testid="organization-user-card-manager-chip">
           {t('organization.roles.manager')}
+        </Chip>
+      ) : memberRole === 'billingManager' ? (
+        <Chip size="sm" variant="outlined" color="success" data-testid="organization-user-card-billing-manager-chip">
+          {t('organization.roles.billingManager')}
         </Chip>
       ) : (
         <>
@@ -127,15 +133,18 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   const canRevoke = canRevokeMembers && user.status === 'accepted';
   const canLeave = user.status === 'accepted' && currentUser?.id === user.id;
   const canCancelInvite = user.status === 'pending' && canInviteMembers;
-  // Appointing needs an active member row (setOrganizationManager); removal is always allowed.
-  const canToggleManager =
-    canManageManagers &&
+  // Roles above Member need an active member row (setOrganizationMemberRole); moving to Member is
+  // always allowed so a deactivated manager can still be demoted.
+  const isAssignableRole = (role: AssignableOrgRole) =>
     user.status === 'accepted' &&
-    (isManager || (!user.isBanned && orgAclRowConfersMembership(user)));
+    canAssignOrgRole(currentUser ?? { id: '' }, organization, user.id, role) &&
+    (role === 'member' || (!user.isBanned && orgAclRowConfersMembership(user)));
+  const selectableRoles = ASSIGNABLE_ORG_ROLES.filter(role => role !== memberRole && isAssignableRole(role));
+  const canChangeRole = !isOwner && !organization.personal && selectableRoles.length > 0;
   // The owner row is excluded from roster actions but not from budgets: the owner's own spend from
   // the pool is capped like anyone's.
-  const hasRosterAction = !isOwner && (canRevoke || canLeave || canCancelInvite || canToggleManager);
-  const setManager = useSetOrganizationManager();
+  const hasRosterAction = !isOwner && (canRevoke || canLeave || canCancelInvite);
+  const setRole = useSetOrganizationMemberRole();
   const canSetCreditLimit = canManageCreditBudgets && user.status === 'accepted';
 
   const [editingLimit, setEditingLimit] = useState(false);
@@ -158,6 +167,33 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     </Typography>
   );
 
+  const roleSelect = canChangeRole && (
+    <Dropdown>
+      <MenuButton
+        size="sm"
+        variant="outlined"
+        endDecorator={<ArrowDropDownIcon />}
+        loading={setRole.isPending}
+        data-testid="organization-user-card-role-select"
+      >
+        {t('organization.roles.label')}
+      </MenuButton>
+      <Menu placement="bottom-end" sx={{ zIndex: 9999 }}>
+        {ASSIGNABLE_ORG_ROLES.filter(role => role === memberRole || selectableRoles.includes(role)).map(role => (
+          <MenuItem
+            key={role}
+            selected={role === memberRole}
+            disabled={setRole.isPending || role === memberRole}
+            onClick={() => setRole.mutate({ organizationId, userId: user.id, role })}
+            data-testid={`organization-user-card-role-option-${role}`}
+          >
+            {t(`organization.roles.${role}`)}
+          </MenuItem>
+        ))}
+      </Menu>
+    </Dropdown>
+  );
+
   const actionsMenu = (hasRosterAction || canSetCreditLimit) && (
     <Dropdown>
       <MenuButton
@@ -172,15 +208,6 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         {canSetCreditLimit && (
           <MenuItem onClick={() => setEditingLimit(true)} data-testid="organization-user-card-set-limit">
             Set monthly limit
-          </MenuItem>
-        )}
-        {!isOwner && canToggleManager && (
-          <MenuItem
-            onClick={() => setManager.mutate({ organizationId, userId: user.id, isManager: !isManager })}
-            disabled={setManager.isPending}
-            data-testid={isManager ? 'organization-user-card-remove-manager' : 'organization-user-card-make-manager'}
-          >
-            {isManager ? 'Remove manager' : 'Make manager'}
           </MenuItem>
         )}
         {!isOwner && canCancelInvite && (
@@ -277,7 +304,10 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
               </Stack>
             </Stack>
           </Stack>
-          <Box sx={{ flexShrink: 0 }}>{actionsMenu}</Box>
+          <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
+            {roleSelect}
+            {actionsMenu}
+          </Stack>
         </Stack>
         {creditLimitModal}
         {offboardDialog}
@@ -329,6 +359,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         {creditUsageCell}
       </Box>
       <Box className="organization-user-card-actions" display="flex" gap="10px" justifyContent="flex-end" zIndex={2}>
+        {roleSelect}
         {actionsMenu}
       </Box>
       {creditLimitModal}

@@ -51,6 +51,7 @@ describe('Teams list for an appointed manager', () => {
         id: 'org1',
         userId: 'owner1',
         adminUserIds: ['manager1'],
+        users: [{ userId: 'manager1', permissions: ['read'] }],
         name: 'Managed Team',
         personal: false,
         seats: 4,
@@ -115,6 +116,21 @@ describe('Teams list for an appointed manager', () => {
     expect(screen.getByText('Manager')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'View Details' }));
     expect(mocks.navigate).toHaveBeenCalledWith({ to: '/organizations/org1' });
+  });
+
+  it.each([
+    ['Billing manager', { adminUserIds: [], billingManagerUserIds: ['manager1'] }],
+    [null, { adminUserIds: ['manager1'], users: [] }],
+  ])('labels the viewer %s from the role lists and roster row', (label, over) => {
+    mocks.memberOrganizations = [{ ...mocks.memberOrganizations[0], ...over }];
+    render(
+      <CssVarsProvider theme={theme}>
+        <OrganizationListPage />
+      </CssVarsProvider>
+    );
+
+    if (label) expect(screen.getByText(label)).toBeTruthy();
+    expect(screen.queryByText('Manager')).toBeNull();
   });
 
   it('lists teams once each, sorted by name', () => {

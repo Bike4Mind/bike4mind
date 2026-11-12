@@ -36,6 +36,7 @@ const findById = vi.hoisted(() => vi.fn());
 const update = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById, update } }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
+vi.mock('@bike4mind/database', () => ({ withTransaction: <T>(fn: () => Promise<T>) => fn() }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
@@ -68,8 +69,32 @@ describe('PUT /api/organizations/[id]/admins - appointee eligibility', () => {
     const { res, run } = put(['member1']);
     await run();
 
-    expect(update).toHaveBeenCalledWith({ id: 'org1', adminUserIds: ['member1'] });
+    expect(update).toHaveBeenCalledWith({ id: 'org1', adminUserIds: ['member1'], billingManagerUserIds: [] });
     expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('moves an appointed billing manager off the billing list, keeping the others', async () => {
+    findById.mockResolvedValue({
+      ...org([
+        { userId: 'member1', permissions: ['read'] },
+        { userId: 'member2', permissions: ['read'] },
+      ]),
+      billingManagerUserIds: ['member1', 'member2'],
+    });
+
+    const { run } = put(['member1']);
+    await run();
+
+    expect(update).toHaveBeenCalledWith({ id: 'org1', adminUserIds: ['member1'], billingManagerUserIds: ['member2'] });
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        changes: [
+          { field: 'adminUserIds', before: [], after: ['member1'] },
+          { field: 'billingManagerUserIds', before: ['member1', 'member2'], after: ['member2'] },
+        ],
+      })
+    );
   });
 
   it('records org.admins.updated as an organization-scope action', async () => {
@@ -139,7 +164,11 @@ describe('PUT /api/organizations/[id]/admins - appointee eligibility', () => {
     const { res, run } = put(['legacy1', 'member1']);
     await run();
 
-    expect(update).toHaveBeenCalledWith({ id: 'org1', adminUserIds: ['legacy1', 'member1'] });
+    expect(update).toHaveBeenCalledWith({
+      id: 'org1',
+      adminUserIds: ['legacy1', 'member1'],
+      billingManagerUserIds: [],
+    });
     expect(res._getStatusCode()).toBe(200);
   });
 
@@ -196,6 +225,6 @@ describe('PUT /api/organizations/[id]/admins - appointee eligibility', () => {
     const { run } = put(['member1'], { id: 'someone-else', isAdmin: true });
     await run();
 
-    expect(update).toHaveBeenCalledWith({ id: 'org1', adminUserIds: ['member1'] });
+    expect(update).toHaveBeenCalledWith({ id: 'org1', adminUserIds: ['member1'], billingManagerUserIds: [] });
   });
 });

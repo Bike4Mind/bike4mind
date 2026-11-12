@@ -127,6 +127,30 @@ describe('ChangeOrgRoleDialog', () => {
     );
   });
 
+  it('preselects the current billing manager role and moves them to member', async () => {
+    const onClose = vi.fn();
+    render(<ChangeOrgRoleDialog user={user} org={org({ billingManagerUserIds: [USER_ID] })} onClose={onClose} />, {
+      wrapper: ProfileTestWrapper,
+    });
+
+    pickReason('org-role-dialog');
+    expect(screen.getByTestId('org-role-dialog-hint')).toHaveTextContent('Pick a different role.');
+    fireEvent.click(screen.getByTestId('org-role-dialog-role-member'));
+    fireEvent.click(confirmButton('org-role-dialog'));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mocks.patch).toHaveBeenCalledWith(`/api/admin/organizations/org-1/members/${USER_ID}`, {
+      role: 'member',
+      reason: 'Customer request',
+    });
+  });
+
+  it('offers Billing manager as a choice', () => {
+    render(<ChangeOrgRoleDialog user={user} org={org()} onClose={vi.fn()} />, { wrapper: ProfileTestWrapper });
+    fireEvent.click(screen.getByTestId('org-role-dialog-role-billingManager'));
+    expect(screen.getByTestId('org-role-dialog-preview-after')).toHaveTextContent('Billing manager');
+  });
+
   it("blocks changing the owner's role", () => {
     render(<ChangeOrgRoleDialog user={user} org={org({ userId: USER_ID, users: [] })} onClose={vi.fn()} />, {
       wrapper: ProfileTestWrapper,
@@ -155,6 +179,19 @@ describe('RemoveFromOrganizationDialog', () => {
       data: { reason: 'Customer request' },
     });
     expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
+  });
+
+  it('names the lost billing manager rights', () => {
+    render(
+      <RemoveFromOrganizationDialog
+        user={user}
+        org={org({ billingManagerUserIds: [USER_ID] })}
+        isActive={false}
+        onClose={vi.fn()}
+      />,
+      { wrapper: ProfileTestWrapper }
+    );
+    expect(screen.getByText(/billing manager rights are removed/)).toBeInTheDocument();
   });
 
   it('blocks removing the owner', () => {

@@ -42,7 +42,7 @@ Usage is charged to whichever account you have selected in the account menu, not
 
 ## Add and manage members
 
-Open a Team with **View Details**. The Team page has an **Overview** tab and a **Members** tab. Other tabs (Groups, Usage, Analysis, Integrations, Connectors, Settings) appear only for people with the right access. The Usage tab, which shows the Team's credit usage, is for the owner and platform admins; being a Team manager does not grant access. The **Billing** tab is visible to the owner only. A Team manager finds the Team in the Teams list marked with a **Manager** badge.
+Open a Team with **View Details**. The Team page has an **Overview** tab and a **Members** tab. Other tabs (Groups, Usage, Analysis, Integrations, Connectors, Settings) appear only for people with the right access. The Usage tab, which shows the Team's credit usage, is for the owner, billing managers and platform admins; being a Team manager does not grant access. The **Billing** tab is visible to the owner and billing managers. A Team manager or billing manager finds the Team in the Teams list marked with a **Manager** or **Billing manager** badge.
 
 On the **Members** tab:
 
@@ -74,10 +74,26 @@ If the deployment has custom connectors turned off, the page shows a notice; sav
 
 Each member shows a role label on the Members tab.
 
-- **Owner:** created the Team and holds the subscription.
+- **Owner:** created the Team and holds the subscription. The owner can do everything below.
+- **Manager:** manages members, groups, member credit limits, connectors, Team API keys, Team data lake sources and the Team audit trail.
+- **Billing manager:** manages the subscription, seats and payment on the Billing tab, and sees the Usage tab.
+- **Member:** uses the Team's shared resources.
+
+### Changing a member's role
+
+Open the **Members** tab and use the **Role** menu on a member's row to choose **Manager**, **Billing manager** or **Member**. The menu shows only the changes you are allowed to make:
+
+- The owner and platform admins can give any member any of the three roles.
+- A Team manager can make a member a Manager. A Team manager cannot change another manager or a billing manager, and cannot give the Billing manager role.
+- Billing managers and members do not see the menu.
+
+Each role change is recorded in the Team's audit trail. Ownership is not a role you can pick here; the owner hands it over with the ownership transfer on the Settings tab.
+
+### Access levels
+
 - **Admin**, **Editor** and **Viewer:** the access level shown on a member. Viewer is the level new invites start with. These labels do not decide who manages the roster: the Team owner, Team managers and platform admins do.
 
-## Billing tab (owner only)
+## Billing tab (owner and billing managers)
 
 The Billing tab shows **Billing & Subscription**:
 
@@ -87,7 +103,7 @@ The Billing tab shows **Billing & Subscription**:
 - **Manage Seats** to change the number of seats. The dialog is called **Update Team Seats**; type the number of seats or use the minus and plus buttons, and it shows the price per seat per month and the new total. You cannot go below the number of people already on the Team (the owner counts) or below the minimum Team size (the lowest number the dialog accepts is the larger of the two, and typing a number outside the range shows an error). People you have invited who have not yet accepted also count toward the minimum when you save: the dialog does not include them in its limit, so if you enter fewer seats than your members plus pending invites, the update is rejected with a message naming the minimum, and you can cancel invites or enter a higher number. The changes show up on your next billing cycle. While the Team has a payment issue, Manage Seats is hidden until the payment is fixed.
 - **Billing Portal** to update your payment method, view invoices and manage or cancel the subscription.
 
-If a payment fails, the Team shows **Payment Issue** and the Billing Portal is where you update your card. The Team owner also sees **Pay now**, which charges the open invoice right away. If the card was declined, update it in the Billing Portal first.
+If a payment fails, the Team shows **Payment Issue** and the Billing Portal is where you update your card. The Team owner and billing managers also see **Pay now**, which charges the open invoice right away. If the card was declined, update it in the Billing Portal first.
 
 ## Related Features
 

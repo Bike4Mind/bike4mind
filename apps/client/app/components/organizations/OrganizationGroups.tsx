@@ -122,8 +122,9 @@ const OrgAdminsEditor: FC<{
             data-testid="org-admins-input"
           />
           <FormHelperText>
-            Managers manage groups and members and connect GitHub and Drive sources to team data lakes. Billing, credit
-            spend reports and integration secrets stay with the billing owner.
+            Managers manage groups and members and connect GitHub and Drive sources to team data lakes. Billing and
+            credit spend reports stay with the billing owner and billing managers, and integration secrets with the
+            billing owner. Adding a billing manager here makes them a manager instead.
           </FormHelperText>
         </FormControl>
         <Box>

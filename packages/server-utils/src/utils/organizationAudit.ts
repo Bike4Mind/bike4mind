@@ -35,6 +35,7 @@ export async function recordOrganizationAuditEventSafe(input: RecordOrganization
 // Deliberately not a prefix match: new platform actions must never become customer-visible implicitly.
 export const organizationLifecycleAuditActions: Readonly<Record<string, OrganizationAuditAction>> = {
   'org.admins.updated': 'member.role_changed',
+  'org.member.role_changed': 'member.role_changed',
   'org.owner.transferred': 'owner.transferred',
   'org.invite.created': 'invite.created',
   'org.member_budget.updated': 'policy.updated',

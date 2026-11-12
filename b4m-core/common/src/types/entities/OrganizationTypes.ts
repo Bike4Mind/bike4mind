@@ -2,6 +2,7 @@ import { IAppFileDocument, IShareableDocument, IShareableStaticMethods } from '.
 import { IBaseRepository } from './BaseTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { IModelConfig } from './ModelConfigTypes';
+import type { AssignableOrgRole } from '../../constants/orgRoles';
 
 export interface IUserDetails {
   id: string;
@@ -254,14 +255,11 @@ export interface IOrganizationRepository
   removeMember(organizationId: string, userId: string): Promise<void>;
 
   /**
-   * Appoint one manager without rewriting the rest of `adminUserIds` (idempotent). Matches only while the
-   * user still holds a `users[]` row, so a concurrent removal cannot leave a manager outside the roster.
-   * Returns false when no such row exists.
+   * Give one member one assignable role, keeping `adminUserIds` and `billingManagerUserIds` disjoint
+   * (one atomic update; idempotent). Manager and Billing manager match only while the user holds a
+   * `users[]` row that confers membership. Returns false when nothing matched.
    */
-  addAdmin(organizationId: string, userId: string): Promise<boolean>;
-
-  /** Drop one manager from `adminUserIds` without rewriting the rest (idempotent). */
-  removeAdmin(organizationId: string, userId: string): Promise<void>;
+  setMemberRole(organizationId: string, userId: string, role: AssignableOrgRole): Promise<boolean>;
 
   /**
    * Set one member's monthly credit budget override (`userDetails[].maxCredits`; null inherits the

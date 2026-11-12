@@ -1,4 +1,4 @@
-import { IOrganizationDocument } from '@bike4mind/common';
+import { IOrganizationDocument, organizationMemberRole } from '@bike4mind/common';
 import { useCreateTeamModal } from '@client/app/components/organizations/CreateTeamModal';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserOrganizations, useOrganizationSeats } from '@client/app/hooks/data/organizations';
@@ -49,8 +49,8 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
   const hasActiveSubscription = !!subscription && !subscription.canceledAt && !paymentIssue;
   const { currentSeats } = useOrganizationSeats(organization.id);
 
-  const isOwner = organization.userId === currentUser?.id;
-  const isManager = !!currentUser && (organization.adminUserIds ?? []).includes(currentUser.id) && !isOwner;
+  const role = currentUser ? organizationMemberRole(organization, currentUser.id) : null;
+  const isOwner = role === 'owner';
 
   return (
     <Card
@@ -76,9 +76,14 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
                   {t('organization.roles.owner')}
                 </Chip>
               )}
-              {isManager && (
+              {role === 'manager' && (
                 <Chip size="sm" variant="soft" color="primary">
                   {t('organization.roles.manager')}
+                </Chip>
+              )}
+              {role === 'billingManager' && (
+                <Chip size="sm" variant="soft" color="primary">
+                  {t('organization.roles.billingManager')}
                 </Chip>
               )}
             </Box>

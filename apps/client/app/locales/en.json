@@ -132,8 +132,10 @@
     "learn_about": "Learn about Teams",
     "document_title_suffix": " | Team",
     "roles": {
+      "label": "Role",
       "owner": "Owner",
       "manager": "Manager",
+      "billingManager": "Billing manager",
       "member": "Member"
     },
     "access": {
