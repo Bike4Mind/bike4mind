@@ -280,6 +280,11 @@ const nextConfig = {
         source: '/.well-known/jwks.json',
         destination: '/api/oauth/jwks',
       },
+      // Digital Asset Links: verifies the Android app's https sign-in redirect as an App Link
+      {
+        source: '/.well-known/assetlinks.json',
+        destination: '/api/well-known/assetlinks',
+      },
       // Client ID Metadata Document for custom MCP connector sign-in
       {
         source: '/.well-known/oauth-client/mcp-client.json',
