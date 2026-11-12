@@ -13,6 +13,8 @@ import {
   type ModelAccessPatchRequest,
   type ModelAccessPatchResult,
   type ModelAccessSelection,
+  type ModelAccessSaveRequest,
+  type ModelAccessSaveResult,
 } from '@bike4mind/common';
 import { bumpModelAccessRevision } from '@bike4mind/server-utils/modelDiscovery/modelAccessRevision';
 import { resolveAdminModelFilterIds } from '@server/admin/models/adminModelFilter';
@@ -31,7 +33,13 @@ import {
   type AccessFields,
   type StoredAccessEntry,
 } from './modelAccessEntries';
-import { claimDryRun, commitAccessEntry, readAccessEntries } from './modelAccessStore';
+import {
+  claimDryRun,
+  commitAccessEntry,
+  commitAccessEntries,
+  readAccessEntries,
+  type AccessCommit,
+} from './modelAccessStore';
 import {
   ACCESS_TOKEN_TTL_MS,
   canonicalJson,
@@ -55,7 +63,7 @@ export const STALE_ENTRY_MESSAGE = "Someone changed this model's access since yo
 export const ADMIN_ONLY_MESSAGE = 'Only admins will see this model. Confirm to continue.';
 
 /** Model access writes need a full admin: adminApi admits a delegate holding settings:manage. */
-export function assertFullAdmin(user: { isAdmin?: boolean | null } | undefined): void {
+export function assertFullAdmin(user: { isAdmin?: boolean | null } | undefined): asserts user is { isAdmin: true } {
   if (!isFullAdmin(user)) throw new ForbiddenError('Only full administrators can manage models');
 }
 
@@ -99,6 +107,38 @@ export async function patchModelAccess(
     throw new ConflictError(STALE_ENTRY_MESSAGE, { entry: latest ? toEntryView(latest) : null });
   }
   return { entry: toEntryView(next), changed: true, revision: await bumpRevision(req) };
+}
+
+/** Keeps the current dashboard usable without accepting unsafe whole-array replacement. */
+export async function saveModelAccess(
+  req: AccessRequest,
+  request: ModelAccessSaveRequest
+): Promise<ModelAccessSaveResult> {
+  const currentEntries = await readAccessEntries();
+  const commits: AccessCommit[] = [];
+  const results: ModelAccessSaveResult['entries'] = [];
+  const adminOnlyIds: string[] = [];
+  for (const { id, change, expectedUpdatedAt } of request.changes) {
+    const current = currentEntries.get(id) ?? null;
+    const expected = toDate(expectedUpdatedAt);
+    if (stampOf(current) !== (expected ? expected.toISOString() : null)) throw new ConflictError(STALE_ENTRY_MESSAGE);
+    const before = accessFieldsOf(current);
+    const after = applyAccessChange(before, change);
+    if (sameAccess(before, after)) {
+      results.push({ id, entry: current ? toEntryView(current) : null });
+      continue;
+    }
+    if (isAdminOnly(after)) adminOnlyIds.push(id);
+    const next = buildEntry(id, after, nextStamp(current?.updatedAt));
+    commits.push({ id, expected, before: current, next, reason: request.reason });
+    results.push({ id, entry: toEntryView(next) });
+  }
+  if (adminOnlyIds.length > 0 && !request.confirmAdminOnly) {
+    throw new UnprocessableEntityError(ADMIN_ONLY_MESSAGE, { adminOnlyIds });
+  }
+  if (commits.length === 0) return { entries: results, changed: 0, revision: null };
+  if ((await commitAccessEntries(req, commits)) === 'stale') throw new ConflictError(STALE_ENTRY_MESSAGE);
+  return { entries: results, changed: commits.length, revision: await bumpRevision(req) };
 }
 
 /** The sorted ids a selection covers; `{ filter }` resolves to exactly what the model list shows for it. */

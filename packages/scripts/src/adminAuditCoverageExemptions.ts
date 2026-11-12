@@ -22,10 +22,6 @@ export const ADMIN_AUDIT_COVERAGE_EXEMPTIONS: Readonly<Record<string, string>> =
   'POST /api/admin/liveops-triage-configs/[id]/trigger':
     'queues a run of an existing triage config; the run is logged in the triage config audit log',
 
-  // Retired verbs kept registered so old callers get a 410
-  'PUT /api/admin/llm-models/configurations':
-    'retired: answers 410 and writes nothing; model access writes are audited by models/access',
-
   // Machine ingests (auth: false, a shared ingest token, no admin actor)
   'POST /api/admin/rate-limits/ingest': 'machine ingest of rate-limit events, token-authenticated',
   'POST /api/admin/security-dashboard/web-owasp-ingest': 'machine ingest of scan results, token-authenticated',

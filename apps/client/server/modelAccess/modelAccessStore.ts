@@ -82,26 +82,32 @@ export type AccessCommit = {
   details?: Record<string, unknown>;
 };
 
-/**
- * One conditional entry write plus its strict audit entry, in one transaction. Returns 'stale' when the
- * entry's stamp no longer matches `expected` (or a create found the id already present).
- */
-export async function commitAccessEntry(req: AuditRequest, commit: AccessCommit): Promise<'written' | 'stale'> {
+/** The caller owns the transaction; never opens a nested transaction. */
+async function writeAndAuditEntry(req: AuditRequest, commit: AccessCommit): Promise<void> {
   const { id, expected, before, next, reason, details } = commit;
-  // autoIndex builds lazily; without the unique settingName index a racing create would insert a second document.
-  if (expected === null) await AdminSettings.init();
+  await writeEntry(id, expected, next);
+  await recordAdminSettingChange(req, {
+    settingName: ACCESS_SETTING_NAME,
+    before: before ? accessFieldsOf(before) : null,
+    after: next ? accessFieldsOf(next) : null,
+    summary: next ? `updated access for model ${id}` : `removed the access entry for model ${id}`,
+    target: { id: `${ACCESS_SETTING_NAME}:${id}`, displayName: `${id} access` },
+    details: { modelId: id, ...details },
+    reason,
+  });
+}
+
+/** Conditional writes and their strict audits either all commit or all roll back. */
+export async function commitAccessEntries(
+  req: AuditRequest,
+  commits: readonly AccessCommit[]
+): Promise<'written' | 'stale'> {
+  if (commits.length === 0) return 'written';
+  // Racing first creates rely on the unique settingName index.
+  if (commits.some(commit => commit.expected === null)) await AdminSettings.init();
   try {
     await withTransaction(async () => {
-      await writeEntry(id, expected, next);
-      await recordAdminSettingChange(req, {
-        settingName: ACCESS_SETTING_NAME,
-        before: before ? accessFieldsOf(before) : null,
-        after: next ? accessFieldsOf(next) : null,
-        summary: next ? `updated access for model ${id}` : `removed the access entry for model ${id}`,
-        target: { id: `${ACCESS_SETTING_NAME}:${id}`, displayName: `${id} access` },
-        details: { modelId: id, ...details },
-        reason,
-      });
+      for (const commit of commits) await writeAndAuditEntry(req, commit);
     });
   } catch (error) {
     if (error instanceof StaleAccessEntryError) return 'stale';
@@ -109,4 +115,9 @@ export async function commitAccessEntry(req: AuditRequest, commit: AccessCommit)
   }
   invalidateSettingsCache(ACCESS_SETTING_NAME);
   return 'written';
+}
+
+/** One conditional entry and strict audit in their own transaction. */
+export function commitAccessEntry(req: AuditRequest, commit: AccessCommit): Promise<'written' | 'stale'> {
+  return commitAccessEntries(req, [commit]);
 }

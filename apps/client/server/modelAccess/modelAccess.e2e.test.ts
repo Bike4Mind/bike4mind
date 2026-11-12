@@ -1,7 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import type { ModelAccessBulkDryRun, ModelAccessBulkResult, ModelAccessPatchResult } from '@bike4mind/common';
+import type {
+  ModelAccessBulkDryRun,
+  ModelAccessBulkResult,
+  ModelAccessPatchResult,
+  ModelAccessSaveResult,
+} from '@bike4mind/common';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -18,7 +23,7 @@ const routes = vi.hoisted(() => ({}) as Record<string, Handler>);
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = { use: () => chain };
-    for (const method of ['get', 'post', 'patch']) {
+    for (const method of ['get', 'post', 'patch', 'put']) {
       chain[method] = (fn: Handler) => {
         routes[method] = fn;
         return chain;
@@ -42,6 +47,8 @@ await import('../../pages/api/admin/models/access/bulk');
 const bulkRoute = routes.post;
 await import('../../pages/api/admin/users/tags');
 const tagsRoute = routes.get;
+await import('../../pages/api/admin/llm-models/configurations');
+const saveRoute = routes.put;
 
 const ADMIN = {
   id: '650000000000000000000002',
@@ -79,6 +86,8 @@ const patch = (id: string, body: Record<string, unknown>, user: unknown = ADMIN)
 const bulk = <T>(body: Record<string, unknown>, user: unknown = ADMIN) => call<T>(bulkRoute, { body, user });
 const dryRun = (ids: string[], change: Record<string, unknown>) =>
   bulk<ModelAccessBulkDryRun>({ selection: { ids }, change });
+const save = (changes: unknown[], extra: Record<string, unknown> = {}) =>
+  call<ModelAccessSaveResult>(saveRoute, { body: { changes, reason: REASON, ...extra } });
 const apply = (ids: string[], change: Record<string, unknown>, token: string) =>
   bulk<ModelAccessBulkResult>({ selection: { ids }, change, reason: REASON, dryRunToken: token });
 
@@ -214,6 +223,7 @@ describe('PATCH /api/admin/models/access', () => {
     // As on a fresh deployment: autoIndex on, no settingName index yet, and no init() run, so only the create
     // path's own AdminSettings.init() can build the index the duplicate has to collide with.
     await AdminSettings.collection.dropIndexes();
+    const previousAutoIndex = AdminSettings.schema.get('autoIndex');
     AdminSettings.schema.set('autoIndex', true);
     (AdminSettings as unknown as { $init?: Promise<unknown> }).$init = undefined;
     const settingNameIsUnique = async () =>
@@ -223,7 +233,7 @@ describe('PATCH /api/admin/models/access', () => {
     try {
       await patch('model-x', { change: { allowedUserTags: ['beta'] }, expectedUpdatedAt: null });
     } finally {
-      AdminSettings.schema.set('autoIndex', null);
+      AdminSettings.schema.set('autoIndex', previousAutoIndex);
     }
     expect(await settingNameIsUnique()).toBe(true);
 
@@ -587,5 +597,113 @@ describe('GET /api/admin/users/tags', () => {
 
   it('refuses a delegate with 403', async () => {
     await expect(call(tagsRoute, { user: DELEGATE })).rejects.toMatchObject({ statusCode: 403 });
+  });
+});
+
+describe('atomic dashboard compatibility Save', () => {
+  it('changes only requested entries, preserving unrelated concurrent edits and routing fields', async () => {
+    await seed([entry('a', { fallbackModel: 'fallback', rank: 3 }), entry('b', { rank: 40 })]);
+    const unrelated = bson(await stored('b'));
+    const result = await save([{ id: 'a', change: { enabled: false }, expectedUpdatedAt: '2026-11-01T00:00:00.000Z' }]);
+    expect(result.changed).toBe(1);
+    expect(await stored('a')).toMatchObject({ enabled: false, fallbackModel: 'fallback', rank: 3 });
+    expect(Buffer.compare(bson(await stored('b')), unrelated)).toBe(0);
+    expect(await audits()).toHaveLength(1);
+  });
+
+  it('refuses a stale changed entry before any writes or audits', async () => {
+    await seed([entry('a'), entry('b')]);
+    const before = bson(await storedValue());
+    await expect(
+      save([
+        { id: 'a', change: { enabled: false }, expectedUpdatedAt: '2026-11-01T00:00:00.000Z' },
+        { id: 'b', change: { enabled: false }, expectedUpdatedAt: '2026-10-01T00:00:00.000Z' },
+      ])
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(Buffer.compare(bson(await storedValue()), before)).toBe(0);
+    expect(await audits()).toHaveLength(0);
+    expect(await settingRow('modelAccessRevision')).toBeNull();
+  });
+
+  it('rolls earlier entry writes and audits back if a later conditional write loses its stamp', async () => {
+    await seed([entry('a'), entry('b', { updatedAt: stamp('2026-11-02T00:00:00.000Z') })]);
+    const before = bson(await storedValue());
+    const { commitAccessEntries } = await vi.importActual<typeof import('./modelAccessStore')>('./modelAccessStore');
+    const outcome = await commitAccessEntries({ user: ADMIN, headers: {}, url: '/test' } as never, [
+      {
+        id: 'a',
+        expected: stamp('2026-11-01T00:00:00.000Z'),
+        before: { ...entry('a'), allowedUserTags: [] },
+        next: { ...entry('a'), allowedUserTags: [], enabled: false, updatedAt: new Date() },
+        reason: REASON,
+      },
+      {
+        id: 'b',
+        expected: stamp('2026-11-01T00:00:00.000Z'),
+        before: { ...entry('b'), allowedUserTags: [] },
+        next: { ...entry('b'), allowedUserTags: [], enabled: false, updatedAt: new Date() },
+        reason: REASON,
+      },
+    ]);
+    expect(outcome).toBe('stale');
+    expect(Buffer.compare(bson(await storedValue()), before)).toBe(0);
+    expect(await audits()).toHaveLength(0);
+  });
+
+  it('rolls the entire Save back when its second strict audit fails', async () => {
+    await seed([entry('a'), entry('b')]);
+    const before = bson(await storedValue());
+    const original = AdminAuditLogModel.collection.insertOne.bind(AdminAuditLogModel.collection);
+    let writes = 0;
+    const spy = vi
+      .spyOn(AdminAuditLogModel.collection, 'insertOne')
+      .mockImplementation(async (...args: Parameters<typeof original>) => {
+        writes += 1;
+        if (writes === 2) throw new Error('Second strict audit failed');
+        return original(...args);
+      });
+    try {
+      await expect(
+        save(['a', 'b'].map(id => ({ id, change: { enabled: false }, expectedUpdatedAt: '2026-11-01T00:00:00.000Z' })))
+      ).rejects.toThrow('Second strict audit failed');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(writes).toBe(2);
+    expect(Buffer.compare(bson(await storedValue()), before)).toBe(0);
+    expect(await audits()).toHaveLength(0);
+    expect(await settingRow('modelAccessRevision')).toBeNull();
+  });
+
+  it('supports mixed creates and updates, including explicit fallback/rank removal', async () => {
+    await seed([entry('a', { fallbackModel: 'fallback', rank: 3 })]);
+    const result = await save([
+      { id: 'a', change: { fallbackModel: null, rank: null }, expectedUpdatedAt: '2026-11-01T00:00:00.000Z' },
+      { id: 'new/local:model', change: { enabled: false, allowedUserTags: ['beta'] }, expectedUpdatedAt: null },
+    ]);
+    expect(result.changed).toBe(2);
+    expect(await stored('a')).not.toHaveProperty('fallbackModel');
+    expect(await stored('a')).not.toHaveProperty('rank');
+    expect(await stored('new/local:model')).toMatchObject({ enabled: false, allowedUserTags: ['beta'] });
+    expect(await audits()).toHaveLength(2);
+    expect((await settingRow('modelAccessRevision'))?.settingValue).toBe(result.revision);
+  });
+
+  it('requires explicit confirmation for an admin-only changed audience', async () => {
+    await seed([entry('a')]);
+    const changes = [{ id: 'a', change: { allowedEntitlements: [] }, expectedUpdatedAt: '2026-11-01T00:00:00.000Z' }];
+    await expect(save(changes)).rejects.toMatchObject({ statusCode: 422 });
+    expect(await audits()).toHaveLength(0);
+    expect((await save(changes, { confirmAdminOnly: true })).changed).toBe(1);
+  });
+
+  it('does not audit or bump revision for unchanged fields or an empty diff', async () => {
+    await seed([entry('a')]);
+    expect(
+      (await save([{ id: 'a', change: { enabled: true }, expectedUpdatedAt: '2026-11-01T00:00:00.000Z' }])).changed
+    ).toBe(0);
+    expect((await save([])).changed).toBe(0);
+    expect(await audits()).toHaveLength(0);
+    expect(await settingRow('modelAccessRevision')).toBeNull();
   });
 });
