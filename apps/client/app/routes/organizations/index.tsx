@@ -34,6 +34,7 @@ import { FC, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ContextHelpButton } from '@client/app/components/help';
 import { getAppFileUrl } from '@client/app/utils/s3';
+import { creditBalanceParams } from '@client/app/utils/formatCredits';
 
 const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organization }) => {
   const { t } = useTranslation();
@@ -72,17 +73,17 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
               <Typography level="title-md">{organization.name}</Typography>
               {isOwner && (
                 <Chip size="sm" variant="solid" color="primary">
-                  {t('organization.owner')}
+                  {t('organization.roles.owner')}
                 </Chip>
               )}
               {isManager && (
                 <Chip size="sm" variant="soft" color="primary">
-                  Manager
+                  {t('organization.roles.manager')}
                 </Chip>
               )}
             </Box>
             <Typography level="body-sm" color="neutral">
-              {organization.personal ? 'Personal team' : 'Shared team'}
+              {organization.personal ? t('organization.personal_team') : t('organization.shared_team')}
             </Typography>
           </Box>
         </Box>
@@ -101,7 +102,7 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
             {t('organization.x_members', { count: currentSeats })}
           </Chip>
           <Chip size="sm" variant="soft" color="neutral">
-            {t('organization.x_credits', { count: organization.currentCredits })}
+            {t('organization.x_credits', creditBalanceParams(organization.currentCredits))}
           </Chip>
           {organization.billingContact && (
             <Chip size="sm" variant="soft">
@@ -179,7 +180,7 @@ const OrganizationListPage: FC = () => {
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
   const teamPlanAvailable = useTeamPlanAvailable();
 
-  useDocumentTitle('Teams');
+  useDocumentTitle(t('organization.organizations'));
 
   const organizations = [...(memberOrganizations ?? [])].sort((a, b) => a.name.localeCompare(b.name));
   const isLoading = membersLoading;
@@ -195,7 +196,7 @@ const OrganizationListPage: FC = () => {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Typography level="h2">{t('organization.organizations')}</Typography>
-          <ContextHelpButton helpId="features/organizations-teams" tooltipText="Learn about Teams" />
+          <ContextHelpButton helpId="features/organizations-teams" tooltipText={t('organization.learn_about')} />
         </Box>
         <Tooltip title={teamPlanAvailable ? undefined : TEAM_PLAN_UNAVAILABLE_MESSAGE} placement="bottom">
           {/* Span so the tooltip still fires on hover/focus while the button is disabled. */}
@@ -216,10 +217,8 @@ const OrganizationListPage: FC = () => {
       <Card variant="soft" sx={{ mb: 3 }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
           <Box sx={{ flex: 1 }}>
-            <Typography level="title-md">Explore Team administration before subscribing</Typography>
-            <Typography level="body-sm">
-              See sample members, monthly credit limits and usage, plus which controls each role can access.
-            </Typography>
+            <Typography level="title-md">{t('organization.admin_preview.title')}</Typography>
+            <Typography level="body-sm">{t('organization.admin_preview.description')}</Typography>
           </Box>
           <Button
             component="a"
@@ -229,7 +228,7 @@ const OrganizationListPage: FC = () => {
             variant="outlined"
             data-testid="organizations-admin-preview-link"
           >
-            Preview Team administration
+            {t('organization.admin_preview.button')}
           </Button>
         </Stack>
       </Card>

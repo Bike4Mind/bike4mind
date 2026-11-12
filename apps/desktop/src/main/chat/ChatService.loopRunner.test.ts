@@ -87,14 +87,14 @@ describe('ChatService loop runner sessions', () => {
     const runner = await service.createSession();
     await service.startAutomaticTurn(runner.id, 'work the ticket', origin);
     await nextStream(1);
-    expect(post.mock.calls[0][2].headers).toEqual({ [LOOP_RUN_HEADER]: 'run-1' });
+    expect(post.mock.calls[0][2].headers).toEqual({ 'X-Request-ID': expect.any(String), [LOOP_RUN_HEADER]: 'run-1' });
     expect(service.loopRunOf(runner.id)).toBe('run-1');
     expect(service.loopRunSessions('run-1')).toEqual([runner.id]);
 
     const normal = await service.createSession();
     await service.send(normal.id, 'hello');
     await nextStream(2);
-    expect(post.mock.calls[1][2].headers).toBeUndefined();
+    expect(post.mock.calls[1][2].headers).not.toHaveProperty(LOOP_RUN_HEADER);
     expect(service.loopRunOf(normal.id)).toBeUndefined();
   });
 
@@ -142,7 +142,7 @@ describe('ChatService loop runner sessions', () => {
       () => events.some(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval'),
       { timeout: 5000, interval: 10 }
     );
-    expect(post.mock.calls[1][2].headers).toBeUndefined();
+    expect(post.mock.calls[1][2].headers).not.toHaveProperty(LOOP_RUN_HEADER);
     expect(unattended).toEqual([]);
     expect(ended().some(call => call.status === 'denied')).toBe(false);
   });

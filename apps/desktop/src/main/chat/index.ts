@@ -61,6 +61,7 @@ import {
 import type { McpMutationResult, McpServerInput, McpServersState } from '@shared/mcp';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
+import { createCompletionRunMinter } from './completionRuns';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
@@ -743,6 +744,9 @@ export function registerChat(
     models,
     modelSettings,
     logger,
+    mintCompletionRun: createCompletionRunMinter(message =>
+      logger.warn(`CHAT: could not mint a completion run: ${message}`)
+    ),
     turnTiming: TURN_TIMING,
     preferredModel: PREFERRED_MODEL,
     modelMemory: modelPreference,
