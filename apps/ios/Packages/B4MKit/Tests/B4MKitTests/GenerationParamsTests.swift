@@ -162,6 +162,39 @@ final class GenerationParamsTests: XCTestCase {
     XCTAssertEqual(model.estimatedCredits, 640, "4s at the 480p default of 160 credits a second")
   }
 
+  func testUsingSettingsOfARemovedModelSaysWhichModelIsUsedAndKeepsATypedPrompt() async throws {
+    let api = FakeStudioAPI()
+    let list = try await models(.video, videoModels)
+    await api.setModels(.video, list)
+    let model = StudioCreateViewModel(
+      api: api,
+      tracker: GenerationTracker(
+        api: api, realtime: nil, store: MemoryGenerationStore(),
+        sleep: { _ in try await Task.sleep(for: .seconds(3600)) }))
+    let gone = GenerationHandle(
+      kind: .video, id: "j1", prompt: "waves", startedAt: Date(timeIntervalSince1970: 0), modelID: "retired",
+      params: GenerationParams())
+
+    await model.use(settingsOf: gone)
+
+    XCTAssertEqual(model.selectedModel?.id, "grok-imagine-video-1.5")
+    XCTAssertEqual(
+      model.paramsNote, "The original model isn't available, so this uses Grok Imagine Video 1.5.",
+      "nothing was dropped, but the model still changed")
+    XCTAssertEqual(model.prompt, "waves")
+
+    model.prompt = "a lighthouse"
+    let veo = GenerationHandle(
+      kind: .video, id: "j2", prompt: "waves", startedAt: Date(timeIntervalSince1970: 0), modelID: "veo",
+      params: GenerationParams([.duration: .number(4)]))
+    await model.use(settingsOf: veo)
+
+    XCTAssertEqual(model.selectedModel?.id, "veo")
+    XCTAssertEqual(model.params, GenerationParams([.duration: .number(4)]))
+    XCTAssertNil(model.paramsNote)
+    XCTAssertEqual(model.prompt, "a lighthouse", "a typed prompt is not overwritten")
+  }
+
   // MARK: Cost
 
   func testCreditEstimatesFollowTheAdvertisedPricing() async throws {
@@ -250,5 +283,11 @@ final class GenerationParamsTests: XCTestCase {
       kind: .video, id: "j2", prompt: "waves", startedAt: Date(timeIntervalSince1970: 0), modelID: "veo",
       params: GenerationParams([.duration: .number(4), .audio: .flag(false)]))
     XCTAssertEqual(try JSONDecoder().decode(GenerationHandle.self, from: try JSONEncoder().encode(current)), current)
+  }
+
+  func testPersistedNumbersNeverDecodeAsFlags() throws {
+    let values: [ParamValue] = [.number(0), .number(1), .flag(false), .flag(true), .text("1")]
+    let decoded = try JSONDecoder().decode([ParamValue].self, from: try JSONEncoder().encode(values))
+    XCTAssertEqual(decoded, values)
   }
 }

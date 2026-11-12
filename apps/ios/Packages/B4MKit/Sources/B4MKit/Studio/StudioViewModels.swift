@@ -99,17 +99,20 @@ public final class StudioCreateViewModel {
   public var estimatedCredits: Int? { CreditEstimate.credits(for: selectedModel?.capabilities, params: params) }
 
   /// "Use these settings" from a finished item: its kind, model and values, with the same carry-over rules as a
-  /// model switch so a model since removed falls back cleanly.
+  /// model switch so a model since removed falls back cleanly. Its prompt fills the bar only when nothing is typed.
   public func use(settingsOf handle: GenerationHandle) async {
     kind = handle.kind
     await loadModels()
-    if let modelID = handle.modelID, let model = availableModels.first(where: { $0.id == modelID }) {
-      selectedModelIDs[kind] = model.id
-    }
+    let original = handle.modelID.flatMap { id in availableModels.first { $0.id == id } }
+    if let original { selectedModelIDs[kind] = original.id }
     let (kept, dropped) = (handle.params ?? GenerationParams()).carried(to: selectedModel?.capabilities)
     paramsByKind[kind] = kept
-    paramsNote = dropped.isEmpty ? nil : "Some settings aren't available on \(selectedModel?.name ?? "this model")."
-    prompt = handle.prompt
+    let current = selectedModel?.name ?? "this model"
+    var notes: [String] = []
+    if original == nil { notes.append("The original model isn't available, so this uses \(current).") }
+    if !dropped.isEmpty { notes.append("Some settings aren't available on \(current).") }
+    paramsNote = notes.isEmpty ? nil : notes.joined(separator: " ")
+    if trimmedPrompt.isEmpty { prompt = handle.prompt }
   }
 
   /// What a generation was made with, for its tile: the changed values against its model's controls.

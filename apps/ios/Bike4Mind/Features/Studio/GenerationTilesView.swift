@@ -84,7 +84,8 @@ private struct GenerationTile: View {
     .contentShape(Rectangle())
     .onTapGesture { if case .failed = generation.phase { showsFailure = true } }
     .contextMenu {
-      if let onUseSettings {
+      // A generation saved before settings were recorded has no model or values to restore.
+      if let onUseSettings, generation.handle.modelID != nil {
         if let settingsHeader {
           Section(settingsHeader) { useSettingsButton(onUseSettings) }
         } else {
