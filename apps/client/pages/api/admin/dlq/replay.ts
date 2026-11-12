@@ -303,7 +303,8 @@ const handler = adminApi({
       // SQS can return fewer messages than it holds, so only an empty receive means the queue is drained.
       if (messages.length === 0) break;
     }
-    messagesToReplay = allMessages;
+    // At-least-once delivery can return one message twice in a run; keep the latest copy, whose receipt handle is the valid one.
+    messagesToReplay = [...new Map(allMessages.map(m => [m.MessageId ?? '', m])).values()];
   }
 
   // Track which requested messageIds were not found in the received batch
