@@ -61,6 +61,7 @@ describe('CreditEconomy', () => {
     expect(screen.getByText('4 credits unresolved')).toBeInTheDocument();
     expect(screen.getByText('No transactions match these filters')).toBeInTheDocument();
     expect(screen.getByTestId('economy-export-btn')).not.toBeDisabled();
+    expect(screen.getByTestId('date-filter-end-input')).toHaveValue('2026-08-31');
   });
   it('drills into the same flow and keeps dates and owner in shareable filters', () => {
     draw();

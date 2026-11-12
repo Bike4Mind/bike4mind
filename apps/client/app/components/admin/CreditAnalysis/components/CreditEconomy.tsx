@@ -141,7 +141,10 @@ export function CreditEconomy() {
         </Button>
       </Stack>
       <DateFilterComponent
-        value={{ startDate: from.slice(0, 10), endDate: to.slice(0, 10) }}
+        value={{
+          startDate: from.slice(0, 10),
+          endDate: Number.isNaN(Date.parse(to)) ? '' : new Date(Date.parse(to) - 1).toISOString().slice(0, 10),
+        }}
         onChange={range => {
           const start = new Date(`${range.startDate}T00:00:00Z`);
           const end = new Date(Math.min(Date.parse(`${range.endDate}T00:00:00Z`) + 86400000, Date.now()));

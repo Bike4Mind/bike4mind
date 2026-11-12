@@ -152,7 +152,11 @@ export async function readEconomyReport(query: EconomyQueryInput, now = new Date
                   {
                     $abs: {
                       $subtract: [
-                        { $add: fundingKeys.map(key => ({ $ifNull: [`$fundingBreakdown.${key}`, 0] })) },
+                        {
+                          $add: fundingKeys.map(key => ({
+                            $cond: [{ $isNumber: `$fundingBreakdown.${key}` }, `$fundingBreakdown.${key}`, 0],
+                          })),
+                        },
                         '$creditsCharged',
                       ],
                     },

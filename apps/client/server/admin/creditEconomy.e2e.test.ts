@@ -115,7 +115,7 @@ describe('credit economy read accounting', () => {
         ownerId: 'individual',
         createdAt: from,
         creditsCharged: 5,
-        fundingBreakdown: { purchased: 100, subscription: 0, granted: 0, unknown: 0 },
+        fundingBreakdown: { purchased: 'invalid', subscription: 0, granted: 0, unknown: 0 },
       },
     ]);
     await CreditLot.collection.insertMany([

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Box, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import PeopleIcon from '@mui/icons-material/People';
 import InsightsIcon from '@mui/icons-material/Insights';
@@ -28,7 +28,13 @@ export const CreditAnalyticsTab: React.FC = () => {
   const setActiveTab = useCreditAnalysisStore(state => state.setActiveTab);
   const search = useSearch({ strict: false });
   const navigate = useNavigate();
-  const selectedTab = search.creditView === 'economy' ? 'economy' : activeTab;
+  const pricingModelId = useCreditAnalysisStore(state => state.pricingModelId);
+  const selectedTab = pricingModelId ? 'pricing' : search.creditView === 'economy' ? 'economy' : activeTab;
+  useEffect(() => {
+    if (pricingModelId && search.creditView === 'economy') {
+      void navigate({ to: '/admin', replace: true, search: previous => ({ ...previous, creditView: undefined }) });
+    }
+  }, [pricingModelId, search.creditView, navigate]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
