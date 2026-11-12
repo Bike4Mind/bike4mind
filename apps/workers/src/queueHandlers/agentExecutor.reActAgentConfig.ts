@@ -16,9 +16,8 @@ import { DEFAULT_OUTPUT_MAX_TOKENS } from '@bike4mind/utils';
  * `thinking` is forwarded whenever present, including `enabled: false`: the backends read
  * an explicit `enabled: false` as the off switch for adaptive-by-default models. It is
  * rebuilt as a plain object, never the persisted subdocument. Only `can_think` models get it,
- * mirroring chat (ChatCompletionProcess), so a non-thinking model never has a budget reserved.
- *
- * Extracted into its own pure helper so the conditional spread can be unit-tested directly.
+ * so a non-thinking model never has a budget reserved. The gate and the 16000 default must stay
+ * in sync with `chatThinking` in b4m-core/services/src/llm/ChatCompletionProcess.ts.
  */
 export function buildReActAgentRuntimeConfig(
   execution: {

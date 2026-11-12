@@ -28,6 +28,11 @@ describe('buildReActAgentRuntimeConfig', () => {
     expect(result.thinking).not.toBe(input);
   });
 
+  it('defaults budget_tokens to 16000 when thinking is off and none was sent', () => {
+    const result = buildReActAgentRuntimeConfig({ thinking: { enabled: false } }, thinker);
+    expect(result.thinking).toEqual({ enabled: false, budget_tokens: 16000 });
+  });
+
   it('does NOT spread thinking when the object is omitted entirely', () => {
     expect(buildReActAgentRuntimeConfig({}, thinker)).not.toHaveProperty('thinking');
   });

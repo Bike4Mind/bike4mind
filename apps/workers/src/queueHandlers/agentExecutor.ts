@@ -2486,11 +2486,8 @@ async function runExecution(
           })
         : llm;
 
-    // Create or restore ReActAgent. LLM runtime knobs are merged via
-    // `buildReActAgentRuntimeConfig` - a pure helper that conditionally spreads
-    // temperature / maxTokens / thinking so they only override the agent's
-    // built-in defaults when the client actually selected a value. Extracted
-    // for unit-testability.
+    // Create or restore ReActAgent. Runtime knobs come from `buildReActAgentRuntimeConfig`,
+    // which leaves unset values out so the agent's defaults apply.
     const agent = new ReActAgent({
       userId: execution.userId,
       logger,
