@@ -340,7 +340,6 @@ export interface IOrgApiKeyView {
   createdAt?: Date;
   expiresAt?: Date;
   lastUsedAt?: Date;
-  totalRequests: number;
   /** The member who created the key; `name` is null when that account no longer exists. */
   createdBy: { id: string; name: string | null } | null;
 }

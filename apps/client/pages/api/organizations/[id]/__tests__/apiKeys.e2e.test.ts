@@ -213,6 +213,11 @@ describe('org-owned API keys', () => {
     expect(listed.data).toEqual([
       expect.objectContaining({ id: created.data.apiKey.id, createdBy: { id: creator.id, name: null } }),
     ]);
+    // Validation stamps lastUsedAt without awaiting it, so poll for the write.
+    await vi.waitFor(async () => {
+      const relisted = await call<IOrgApiKeyView[]>(listHandler, 'GET', owner.id, { id: orgId });
+      expect(relisted.data[0].lastUsedAt).toBeTruthy();
+    });
   });
 
   it('rotates without handing the key to the rotating admin, and refuses a revoked key', async () => {
@@ -322,6 +327,16 @@ describe('org-owned API keys', () => {
       { name: 'Svc', scopes: [ApiKeyScope.AI_CHAT] }
     );
     const keyId = created.data.apiKey.id;
+    // Give the other org a service account and key of its own, so a refusal below can only come from
+    // the key lookup, not from that org having no service account to resolve.
+    const otherKey = await call(
+      listHandler,
+      'POST',
+      other.creator.id,
+      { id: other.orgId },
+      { name: 'Other svc', scopes: [ApiKeyScope.AI_CHAT] }
+    );
+    expect(otherKey.statusCode).toBe(201);
 
     for (const userId of [member.id, other.creator.id]) {
       expect((await call(listHandler, 'GET', userId, { id: orgId })).statusCode).toBe(404);
