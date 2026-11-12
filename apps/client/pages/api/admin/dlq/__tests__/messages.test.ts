@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { Logger } from '@bike4mind/observability';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
@@ -8,7 +9,9 @@ const h = vi.hoisted(() => ({
   receiveFromQueue: vi.fn(),
   resolveConsumerLogsForSourceQueue: vi.fn(),
   findForMessages: vi.fn(),
+  countAttempts: vi.fn(),
   sourceQueue: 'webhookDeliveryQueue' as string | null,
+  replaySafety: 'unsafe',
 }));
 
 vi.mock('@server/middlewares/adminApi', () => ({
@@ -21,7 +24,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getDlqByLabel: (label: string) =>
-    label === 'q1' ? { label, sourceQueue: h.sourceQueue, replay: 'unsafe' } : undefined,
+    label === 'q1' ? { label, sourceQueue: h.sourceQueue, replay: h.replaySafety } : undefined,
   getDlqUrl: () => 'https://sqs.example/dlq',
   getSourceQueueUrl: () => 'https://sqs.example/physical-source',
 }));
@@ -30,7 +33,10 @@ vi.mock('@bike4mind/server-utils/utils/dlqConsumerLogs', async importOriginal =>
   resolveConsumerLogsForSourceQueue: h.resolveConsumerLogsForSourceQueue,
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ receiveFromQueue: h.receiveFromQueue }));
-vi.mock('@bike4mind/database', () => ({ dlqFailureRepository: { findForMessages: h.findForMessages } }));
+vi.mock('@bike4mind/database', () => ({
+  dlqFailureRepository: { findForMessages: h.findForMessages },
+  dlqReplayLogRepository: { countAttempts: h.countAttempts },
+}));
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), warn: vi.fn() } }));
 
 import { CONSUMER_LOGS_BUDGET_MS } from '@bike4mind/server-utils/utils/dlqConsumerLogs';
@@ -56,6 +62,7 @@ const peek = async (adminPermissions: string[], queue = 'q1') => {
       logsUrl?: string | null;
       failureLookupFailed?: boolean;
       failure?: { errorMessage: string; category: string };
+      recommendation: { action: string; label: string; basis: string };
     }>;
   };
 };
@@ -66,9 +73,12 @@ const decodeConsoleUrl = (url: string) =>
 
 describe('GET /api/admin/dlq/messages', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    h.replaySafety = 'unsafe';
     h.receiveFromQueue.mockReset().mockResolvedValue([message]);
     h.resolveConsumerLogsForSourceQueue.mockReset().mockResolvedValue(consumerLogs);
     h.findForMessages.mockReset().mockResolvedValue([]);
+    h.countAttempts.mockReset().mockResolvedValue(0);
     h.sourceQueue = 'webhookDeliveryQueue';
   });
 
@@ -178,6 +188,23 @@ describe('GET /api/admin/dlq/messages', () => {
     const row = (await peek(['support:read'])).messages[0];
     expect(row.failure).toBeUndefined();
     expect(row.failureLookupFailed).toBeUndefined();
+    expect(row.recommendation.action).toBe('inspect');
+  });
+
+  it('joins recorded failures, consumer deployment and replay attempts into advisory recommendations', async () => {
+    h.findForMessages.mockResolvedValue([{ messageId: 'm1', category: 'bug', failedAt: new Date('2026-01-01') }]);
+    h.resolveConsumerLogsForSourceQueue.mockResolvedValue({
+      ...consumerLogs,
+      consumerDeployedAt: '2026-01-02T00:00:00Z',
+    });
+    expect((await peek(['support:read'])).messages[0].recommendation.label).toBe('Fix first');
+    h.countAttempts.mockResolvedValue(3);
+    expect((await peek(['support:read'])).messages[0].recommendation).toMatchObject({
+      action: 'discard',
+      basis: expect.stringContaining('3 recorded replay attempts'),
+    });
+    h.countAttempts.mockRejectedValue(new Error('private lookup error'));
+    expect((await peek(['support:read'])).messages[0].recommendation.label).toBe('Fix first');
   });
 
   it.each(['settings:manage', 'support:read'])(
@@ -192,6 +219,78 @@ describe('GET /api/admin/dlq/messages', () => {
       expect(body.messages[0]).not.toHaveProperty('receiptHandle');
       expect(body.messages[0].failure).toBeUndefined();
       expect(JSON.stringify(body)).not.toContain('private diagnostic failure');
+    }
+  );
+
+  it('starts attempt metadata while the independent failure lookup is still pending', async () => {
+    let release!: (value: never[]) => void;
+    h.findForMessages.mockReturnValue(
+      new Promise<never[]>(resolve => {
+        release = resolve;
+      })
+    );
+    const pending = peek(['support:read']);
+    try {
+      await vi.waitFor(() => expect(h.countAttempts).toHaveBeenCalledWith('m1'));
+    } finally {
+      release([]);
+      await pending;
+    }
+  });
+  it('keeps the row and unknown-count advice when attempt lookup exceeds its budget', async () => {
+    vi.useFakeTimers();
+    try {
+      h.replaySafety = 'safe';
+      h.findForMessages.mockResolvedValue([{ messageId: 'm1', category: 'timeout', errorType: 'Error' }]);
+      h.countAttempts.mockReturnValue(new Promise(() => {}));
+      const pending = peek(['support:read']);
+      await vi.advanceTimersByTimeAsync(CONSUMER_LOGS_BUDGET_MS);
+      const row = (await pending).messages[0];
+      expect(row.messageId).toBe('m1');
+      expect(row.recommendation).toMatchObject({
+        action: 'inspect',
+        basis: expect.stringContaining('attempt count is unavailable'),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('bounds a stalled failure read and preserves visible messages', async () => {
+    vi.useFakeTimers();
+    try {
+      h.findForMessages.mockReturnValue(new Promise(() => {}));
+      const pending = peek(['support:read']);
+      await vi.advanceTimersByTimeAsync(CONSUMER_LOGS_BUDGET_MS);
+      expect((await pending).messages[0]).toMatchObject({
+        messageId: 'm1',
+        failureLookupFailed: true,
+        recommendation: { action: 'inspect' },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('logs rejected attempt metadata by error name without copying diagnostics', async () => {
+    h.replaySafety = 'safe';
+    h.findForMessages.mockResolvedValue([{ messageId: 'm1', category: 'timeout', errorType: 'Error' }]);
+    h.countAttempts.mockRejectedValue(
+      Object.assign(new Error('private diagnostic content'), { name: 'MetadataUnavailable' })
+    );
+    expect((await peek(['support:read'])).messages[0].recommendation.action).toBe('inspect');
+    expect(Logger.warn).toHaveBeenCalledWith('[DLQ Messages] Replay attempts unavailable', {
+      queueLabel: 'q1',
+      errorName: 'MetadataUnavailable',
+    });
+    expect(JSON.stringify(vi.mocked(Logger.warn).mock.calls)).not.toContain('private diagnostic content');
+  });
+  it.each(['safe', 'side-effects', 'unsafe', 'future-class'])(
+    'requires known queue safety for transient advice: %s',
+    async safety => {
+      h.replaySafety = safety;
+      h.findForMessages.mockResolvedValue([{ messageId: 'm1', category: 'timeout', errorType: 'Error' }]);
+      const advice = (await peek(['support:read'])).messages[0].recommendation;
+      expect(advice.action).toBe(safety === 'safe' ? 'replay' : 'inspect');
+      if (safety === 'safe') expect(advice.basis).toBe('Recorded transient failure: timeout.');
     }
   );
 
