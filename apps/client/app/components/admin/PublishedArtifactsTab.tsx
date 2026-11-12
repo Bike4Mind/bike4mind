@@ -41,7 +41,7 @@ interface AdminArtifact {
   title: string;
   visibility: string;
   ownerId: string;
-  moderationStatus: ModerationStatus;
+  moderationStatus?: ModerationStatus;
   reportCount: number;
   takedownReason?: string | null;
   size?: { totalBytes: number; fileCount: number };
@@ -209,8 +209,8 @@ const PublishedArtifactsTab: React.FC = () => {
       width: '9rem',
       render: a => (
         <StatusChip
-          tone={STATUS_CHIP[a.moderationStatus].tone}
-          label={STATUS_CHIP[a.moderationStatus].label}
+          tone={STATUS_CHIP[a.moderationStatus ?? 'active'].tone}
+          label={STATUS_CHIP[a.moderationStatus ?? 'active'].label}
           data-testid={`admin-published-status-${a.publicId}`}
         />
       ),
@@ -394,8 +394,8 @@ const PageDetail: React.FC<{ artifact: AdminArtifact; onTakedown: () => void; on
       >
         <Fact label="Status">
           <StatusChip
-            tone={STATUS_CHIP[artifact.moderationStatus].tone}
-            label={STATUS_CHIP[artifact.moderationStatus].label}
+            tone={STATUS_CHIP[artifact.moderationStatus ?? 'active'].tone}
+            label={STATUS_CHIP[artifact.moderationStatus ?? 'active'].label}
           />
         </Fact>
         <Fact label="URL">

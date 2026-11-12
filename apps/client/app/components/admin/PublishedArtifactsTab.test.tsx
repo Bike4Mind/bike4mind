@@ -79,6 +79,21 @@ describe('PublishedArtifactsTab', () => {
     expect(mocks.get).toHaveBeenCalledWith('/api/admin/published-artifacts?status=reported&limit=50&skip=0');
   });
 
+  it('renders legacy pages without a moderation status as active in the list and detail', async () => {
+    mocks.get.mockImplementation((url: string) =>
+      url.endsWith('/reports')
+        ? Promise.resolve({ data: { reports: [] } })
+        : Promise.resolve(listResponse([artifact('legacy', { moderationStatus: undefined })]))
+    );
+    renderTab();
+    const row = await screen.findByTestId('admin-published-row-legacy');
+    expect(within(row).getByTestId('admin-published-status-legacy')).toHaveTextContent('Active');
+    fireEvent.click(row);
+    const detail = await screen.findByTestId('admin-published-detail');
+    expect(within(detail).getByText('Active')).toBeInTheDocument();
+    expect(within(detail).getByTestId('admin-published-takedown-legacy')).toBeEnabled();
+  });
+
   it('refetches from the first page when the status filter changes', async () => {
     renderTab();
     await screen.findByTestId('admin-published-row-a1');
