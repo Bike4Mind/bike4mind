@@ -52,14 +52,14 @@ Organization admins configure a single webhook URL that covers the entire team. 
 ### Step 1: Create the Organization Webhook
 
 1. Go to your **Organization** page in Bike4Mind
-2. Click the **Webhooks** tab
+2. Open the **Integrations** tab and pick **Webhooks**
 3. Click **Create Webhook**
 4. You'll see:
    - **Webhook URL** — Copy this to add to GitHub
    - **Secret** — Shown once when created. Copy and save it securely.
 
 :::caution Save Your Secret
-The webhook secret is only displayed once when created. If you lose it, you'll need to rotate (regenerate) it from the Webhooks tab.
+The webhook secret is only displayed once when created. If you lose it, you'll need to rotate (regenerate) it from the Webhooks section of the Integrations tab.
 :::
 
 ### Step 2: Add the Webhook to GitHub
@@ -94,7 +94,7 @@ For organization webhooks, go to: `github.com/orgs/YOUR-ORG/settings/hooks`
 
 After adding the webhook to GitHub:
 
-1. Return to your Bike4Mind **Organization** → **Webhooks** tab
+1. Return to your Bike4Mind **Organization** > **Integrations** > **Webhooks**
 2. Look for the **Last Delivery** timestamp to confirm events are being received
 3. Try creating a test PR or pushing a commit to verify notifications flow through
 
@@ -104,7 +104,7 @@ After adding the webhook to GitHub:
 
 If you need to regenerate the webhook secret (e.g., if it was exposed):
 
-1. Go to **Organization** → **Webhooks** tab
+1. Go to **Organization** > **Integrations** > **Webhooks**
 2. Click **Rotate Secret**
 3. Copy the new secret and update it in GitHub's webhook settings
 
@@ -231,7 +231,7 @@ If notifications fail to deliver 10 times consecutively (e.g., Slack connection 
 
 Check these in order:
 
-1. **Org webhook enabled?** Organization page → Webhooks tab → Enabled toggle must be ON
+1. **Org webhook enabled?** Organization page > Integrations > Webhooks > Enabled toggle must be ON
 2. **Subscription enabled?** Settings → Integrations → Webhook Subscriptions → Enabled toggle must be ON
 3. **GitHub connected?** Profile > Integrations > GitHub Integration > Reconnect if your login changed
 4. **Notification toggles on?** Same section → Toggle must be ON for the event type you expect

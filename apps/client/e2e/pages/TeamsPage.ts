@@ -4,17 +4,7 @@ import { BasePage } from './BasePage';
 
 /** Tab labels as the team detail page renders them (app/routes/organizations/$id.tsx). */
 export type TeamTab =
-  | 'Overview'
-  | 'Members'
-  | 'Groups'
-  | 'Usage'
-  | 'Analysis'
-  | 'Billing'
-  | 'Integrations'
-  | 'GitHub API'
-  | 'Webhooks'
-  | 'Connectors'
-  | 'Settings';
+  'Overview' | 'Members' | 'Groups' | 'Usage' | 'Analysis' | 'Integrations' | 'Billing' | 'Settings';
 
 export const ALL_TEAM_TABS: TeamTab[] = [
   'Overview',
@@ -22,11 +12,8 @@ export const ALL_TEAM_TABS: TeamTab[] = [
   'Groups',
   'Usage',
   'Analysis',
-  'Billing',
   'Integrations',
-  'GitHub API',
-  'Webhooks',
-  'Connectors',
+  'Billing',
   'Settings',
 ];
 

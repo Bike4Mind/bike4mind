@@ -1,10 +1,5 @@
-import {
-  IOrganizationDocument,
-  Permission,
-  WithId,
-  isOrgOwnerOrCurrentAdmin,
-  isOrgOwnerOrPlatformAdmin,
-} from '@bike4mind/common';
+import { IOrganizationDocument, WithId, isOrgOwnerOrCurrentAdmin, isOrgOwnerOrPlatformAdmin } from '@bike4mind/common';
+import { AdminPageHeader, SegmentedControl } from '@client/app/components/admin/shared';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
@@ -44,28 +39,70 @@ import {
 } from '@mui/joy';
 import BusinessOutlinedIcon from '@mui/icons-material/BusinessOutlined';
 import CreditCardOutlinedIcon from '@mui/icons-material/CreditCardOutlined';
-import VpnKeyOutlinedIcon from '@mui/icons-material/VpnKeyOutlined';
+import WorkspacePremiumOutlinedIcon from '@mui/icons-material/WorkspacePremiumOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import GroupOutlinedIcon from '@mui/icons-material/GroupOutlined';
 import GroupWorkOutlinedIcon from '@mui/icons-material/GroupWorkOutlined';
 import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined';
-import GitHubIcon from '@mui/icons-material/GitHub';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
-import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import {
   canManageOrgConnectors,
   canManageOrgIntegrations,
+  canManageOrgSettings,
   canViewOrgAnalysis,
   canViewOrgBilling,
   canViewOrgUsage,
+  IntegrationSections,
+  LEGACY_INTEGRATION_TABS,
   OrganizationTabs,
   resolveAccessibleTab,
+  resolveIntegrationSection,
+  visibleIntegrationSections,
+  type OrgTabAccess,
 } from '@client/app/routes/organizations/orgTabAccess';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
-import { FC, useMemo } from 'react';
+import { FC, Fragment, ReactNode, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+
+type RailTab = { tab: OrganizationTabs; icon: ReactNode; visible: (access: OrgTabAccess) => boolean };
+
+/** The rail, grouped. A group whose tabs are all hidden for this caller renders no label. */
+const RAIL_GROUPS: ReadonlyArray<{ key: 'team' | 'insights' | 'integrations' | 'admin'; tabs: RailTab[] }> = [
+  {
+    key: 'team',
+    tabs: [
+      { tab: OrganizationTabs.Overview, icon: <BusinessOutlinedIcon />, visible: () => true },
+      { tab: OrganizationTabs.Members, icon: <GroupOutlinedIcon />, visible: () => true },
+      { tab: OrganizationTabs.Groups, icon: <GroupWorkOutlinedIcon />, visible: a => a.canManageGroups },
+    ],
+  },
+  {
+    key: 'insights',
+    tabs: [
+      { tab: OrganizationTabs.Usage, icon: <InsightsOutlinedIcon />, visible: a => a.canViewUsage },
+      { tab: OrganizationTabs.Analysis, icon: <RateReviewOutlinedIcon />, visible: a => a.canViewAnalysis },
+    ],
+  },
+  {
+    key: 'integrations',
+    tabs: [
+      {
+        tab: OrganizationTabs.Integrations,
+        icon: <ExtensionOutlinedIcon />,
+        visible: a => visibleIntegrationSections(a).length > 0,
+      },
+    ],
+  },
+  {
+    key: 'admin',
+    tabs: [
+      { tab: OrganizationTabs.Billing, icon: <CreditCardOutlinedIcon />, visible: a => a.canViewBilling },
+      { tab: OrganizationTabs.Settings, icon: <SettingsOutlinedIcon />, visible: a => a.canManageOrg },
+    ],
+  },
+];
 
 const OrganizationPage: FC = () => {
   const { t } = useTranslation();
@@ -73,91 +110,105 @@ const OrganizationPage: FC = () => {
   const { data: organization, isLoading } = useGetOrganization(id as string);
   const { maxSeats, currentSeats } = useOrganizationSeats(id as string);
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { tab?: string };
+  const search = useSearch({ strict: false }) as { tab?: string; section?: string };
   const { currentUser } = useUser();
+
+  // A pre-merge ?tab=github|webhooks|connectors reads as the Integrations section it moved to, on the
+  // first paint, and the effect below rewrites the URL to the current shape.
+  const legacySection = search.tab ? LEGACY_INTEGRATION_TABS[search.tab] : undefined;
 
   // The URL is the only place the requested tab lives; the page keeps no copy, so Back and a
   // pasted link move it like a click does. An unknown value names no tab, which would leave Tabs
   // with nothing selected, so it reads as Overview.
-  const requestedTab =
-    search.tab && Object.values(OrganizationTabs).includes(search.tab as OrganizationTabs)
+  const requestedTab = legacySection
+    ? OrganizationTabs.Integrations
+    : search.tab && Object.values(OrganizationTabs).includes(search.tab as OrganizationTabs)
       ? (search.tab as OrganizationTabs)
       : OrganizationTabs.Overview;
+  const requestedSection = legacySection ?? search.section;
+
+  useEffect(() => {
+    if (!legacySection) return;
+    navigate({
+      to: '/organizations/$id',
+      params: { id: id as string },
+      search: { tab: OrganizationTabs.Integrations, section: legacySection },
+      replace: true,
+    });
+  }, [legacySection, id, navigate]);
 
   // Replace rather than push: a tab click is a view change, not a destination, and pushing would
   // put one back-stack entry per click between the caller and the page they arrived from.
   const requestTab = (tab: OrganizationTabs) => {
     navigate({ to: '/organizations/$id', params: { id: id as string }, search: { tab }, replace: true });
   };
+  const requestSection = (section: IntegrationSections) => {
+    navigate({
+      to: '/organizations/$id',
+      params: { id: id as string },
+      search: { tab: OrganizationTabs.Integrations, section },
+      replace: true,
+    });
+  };
 
-  // The viewer's org permission set, which drives tab visibility (canManageOrg). The Members tab
-  // does not use it: each roster control there asks the server predicate behind its own endpoint.
-  const userPermissions = useMemo(() => {
-    if (!currentUser || !organization) return [];
-    if (currentUser.id === organization.userId) return [Permission.read, Permission.update, Permission.share];
-    const memberDetails = organization.users.find(u => u.userId === currentUser.id);
-    return memberDetails?.permissions || [];
-  }, [currentUser, organization]);
-
-  const canManageOrg = useMemo(() => {
-    return userPermissions.includes(Permission.share) || userPermissions.includes(Permission.update);
-  }, [userPermissions]);
-
-  // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs are owner-only;
-  // Analysis is open to managers. None of them follows the permission set - see orgTabAccess.ts.
-  const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
-  const canViewAnalysis = useMemo(() => canViewOrgAnalysis(currentUser, organization), [currentUser, organization]);
-  const canManageIntegrations = useMemo(
-    () => canManageOrgIntegrations(currentUser, organization),
-    [currentUser, organization]
-  );
-
-  // Who may manage group instances + membership: the same isOrgOwnerOrCurrentAdmin rule
-  // assertCanManageOrgGroups enforces, so a stale adminUserIds entry is never shown a surface whose
-  // every write would 403. Personal orgs never have groups.
-  const canManageGroups = useMemo(() => {
-    if (!currentUser || !organization || organization.personal) return false;
-    return isOrgOwnerOrCurrentAdmin(currentUser, organization);
-  }, [currentUser, organization]);
-
-  // Billing is owner-only, narrower than canManageOrg - see canViewOrgBilling for why, and for
-  // why a platform admin is not admitted here either.
-  const canViewBilling = useMemo(() => canViewOrgBilling(currentUser, organization), [currentUser, organization]);
-  const canManageConnectors = useMemo(
-    () => canManageOrgConnectors(currentUser, organization),
+  // Every gate is computed here once and passed down; children never re-derive them. Usage and the
+  // GitHub/Slack/Webhooks integrations are owner-only, Analysis is open to managers, Connectors to
+  // owners and current managers - see orgTabAccess.ts for each rule and the server gate it mirrors.
+  const access = useMemo<OrgTabAccess>(
+    () => ({
+      canManageOrg: canManageOrgSettings(currentUser, organization),
+      canViewUsage: canViewOrgUsage(currentUser, organization),
+      canViewAnalysis: canViewOrgAnalysis(currentUser, organization),
+      canManageIntegrations: canManageOrgIntegrations(currentUser, organization),
+      // Who may manage group instances + membership: the same isOrgOwnerOrCurrentAdmin rule
+      // assertCanManageOrgGroups enforces. Personal orgs never have groups.
+      canManageGroups:
+        !!currentUser &&
+        !!organization &&
+        !organization.personal &&
+        isOrgOwnerOrCurrentAdmin(currentUser, organization),
+      canViewBilling: canViewOrgBilling(currentUser, organization),
+      canManageConnectors: canManageOrgConnectors(currentUser, organization),
+    }),
     [currentUser, organization]
   );
 
   // Only the billing owner or a platform admin may add or remove managers (admins route authz).
-  const canSetAdmins = useMemo(() => {
-    if (!currentUser || !organization) return false;
-    return isOrgOwnerOrPlatformAdmin(currentUser, organization);
-  }, [currentUser, organization]);
+  const canSetAdmins = !!currentUser && !!organization && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
   // A ?tab= deep link can ask for a tab this caller never gets rendered, so the request is sent
-  // back through the same visibility rules the TabList applies. Resolved during render rather than
+  // back through the same visibility rules the rail applies. Resolved during render rather than
   // in an effect on purpose: the gates read the org document, which lands a render after mount, and
   // until it does they deny everyone; deriving re-answers the question the moment it arrives.
   // The answer is deliberately not written back to the URL - rewriting ?tab=usage to ?tab=overview
   // would break the link for this caller the day they are granted access, and make one shared URL
   // mean different things to different people.
-  const selectedTab = resolveAccessibleTab(requestedTab, {
-    canManageOrg,
-    canViewUsage,
-    canViewAnalysis,
-    canManageIntegrations,
-    canManageGroups,
-    canViewBilling,
-    canManageConnectors,
-  });
+  const selectedTab = resolveAccessibleTab(requestedTab, access);
+  const selectedSection = resolveIntegrationSection(requestedSection, access);
+  const integrationSections = visibleIntegrationSections(access);
 
   useDocumentTitle(organization?.name, t('organization.document_title_suffix'));
 
-  return isLoading || !organization ? (
-    <Box display="flex" justifyContent="center" alignItems="center" height="100%" width="100%">
-      <CircularProgress />
+  if (isLoading || !organization) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" height="100%" width="100%">
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  const header = (tab: OrganizationTabs, extra?: { count?: number; description?: string }) => (
+    <Box sx={{ mb: 3 }}>
+      <AdminPageHeader
+        level="section"
+        title={t(`organization.tabs.${tab}`)}
+        count={extra?.count}
+        description={extra?.description ?? t(`organization.descriptions.${tab}`)}
+      />
     </Box>
-  ) : (
+  );
+
+  return (
     <Stack
       gap="24px"
       height="100vh"
@@ -185,7 +236,8 @@ const OrganizationPage: FC = () => {
 
       <OrganizationHeader
         organization={organization}
-        onSettingsClick={() => canManageOrg && requestTab(OrganizationTabs.Settings)}
+        canManageOrg={access.canManageOrg}
+        onSettingsClick={() => requestTab(OrganizationTabs.Settings)}
       />
 
       <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
@@ -211,6 +263,10 @@ const OrganizationPage: FC = () => {
                 justifyContent: 'flex-start',
                 px: 2,
                 py: 1.5,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                '& svg': { fontSize: 16 },
                 '&.Mui-selected': {
                   backgroundColor: 'background.level2',
                   fontWeight: 'bold',
@@ -218,142 +274,89 @@ const OrganizationPage: FC = () => {
               },
             }}
           >
-            <Tab value={OrganizationTabs.Overview} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <BusinessOutlinedIcon sx={{ fontSize: 16 }} />
-              {t('organization.tabs.overview')}
-            </Tab>
-            <Tab value={OrganizationTabs.Members} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <GroupOutlinedIcon sx={{ fontSize: 16 }} />
-              {t('organization.tabs.members')}
-            </Tab>
-            {canManageGroups && (
-              <Tab value={OrganizationTabs.Groups} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <GroupWorkOutlinedIcon sx={{ fontSize: 16 }} />
-                {t('organization.tabs.groups')}
-              </Tab>
-            )}
-            {canViewUsage && (
-              <Tab value={OrganizationTabs.Usage} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <InsightsOutlinedIcon sx={{ fontSize: 16 }} />
-                {t('organization.tabs.usage')}
-              </Tab>
-            )}
-            {canViewAnalysis && (
-              <Tab value={OrganizationTabs.Analysis} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <RateReviewOutlinedIcon sx={{ fontSize: 16 }} />
-                {t('organization.tabs.analysis')}
-              </Tab>
-            )}
-            {canViewBilling && (
-              <Tab value={OrganizationTabs.Billing} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <CreditCardOutlinedIcon sx={{ fontSize: 16 }} />
-                {t('organization.tabs.billing')}
-              </Tab>
-            )}
-            {canManageIntegrations && (
-              <>
-                <Tab value={OrganizationTabs.Integrations} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <ExtensionOutlinedIcon sx={{ fontSize: 16 }} />
-                  {t('organization.tabs.integrations')}
-                </Tab>
-                <Tab value={OrganizationTabs.GitHub} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <VpnKeyOutlinedIcon sx={{ fontSize: 16 }} />
-                  {t('organization.tabs.github_api')}
-                </Tab>
-                <Tab value={OrganizationTabs.Webhooks} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <GitHubIcon sx={{ fontSize: 16 }} />
-                  {t('organization.tabs.webhooks')}
-                </Tab>
-              </>
-            )}
-            {canManageConnectors && (
-              <Tab value={OrganizationTabs.Connectors} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <HubOutlinedIcon sx={{ fontSize: 16 }} />
-                {t('organization.tabs.connectors')}
-              </Tab>
-            )}
-            {canManageOrg && (
-              <Tab value={OrganizationTabs.Settings} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
-                {t('organization.tabs.settings')}
-              </Tab>
-            )}
+            {RAIL_GROUPS.map(group => {
+              const tabs = group.tabs.filter(entry => entry.visible(access));
+              if (tabs.length === 0) return null;
+              return (
+                <Fragment key={group.key}>
+                  <Typography
+                    level="body-xs"
+                    role="presentation"
+                    data-testid={`organization-tab-group-${group.key}`}
+                    sx={{ px: 2, pt: 1.5, pb: 0.5, fontWeight: 600, color: 'text.tertiary' }}
+                  >
+                    {t(`organization.tab_groups.${group.key}`)}
+                  </Typography>
+                  {tabs.map(entry => (
+                    <Tab key={entry.tab} value={entry.tab}>
+                      {entry.icon}
+                      {t(`organization.tabs.${entry.tab}`)}
+                    </Tab>
+                  ))}
+                </Fragment>
+              );
+            })}
           </TabList>
 
           <Box sx={{ p: 3, flex: 1, overflow: 'auto' }}>
             <TabPanel value={OrganizationTabs.Overview}>
+              {header(OrganizationTabs.Overview)}
               <OrganizationOverviewSection organization={organization} />
             </TabPanel>
             <TabPanel value={OrganizationTabs.Members}>
-              <Typography level="title-lg" startDecorator={<GroupOutlinedIcon />} sx={{ mb: 3 }}>
-                {t('organization.headings.members_seats', { current: currentSeats, max: maxSeats })}
-              </Typography>
+              {header(OrganizationTabs.Members, {
+                count: currentSeats,
+                description: t('organization.descriptions.members', { current: currentSeats, max: maxSeats }),
+              })}
               {currentUser && <OrganizationMembers organization={organization} />}
             </TabPanel>
-            {canManageGroups && (
+            {access.canManageGroups && (
               <TabPanel value={OrganizationTabs.Groups}>
-                <Typography level="title-lg" startDecorator={<GroupWorkOutlinedIcon />} sx={{ mb: 3 }}>
-                  {t('organization.headings.groups')}
-                </Typography>
+                {header(OrganizationTabs.Groups)}
                 <OrganizationGroups organization={organization} canSetAdmins={canSetAdmins} />
               </TabPanel>
             )}
-            {canViewUsage && (
+            {access.canViewUsage && (
               <TabPanel value={OrganizationTabs.Usage}>
-                <Typography level="title-lg" startDecorator={<InsightsOutlinedIcon />} sx={{ mb: 3 }}>
-                  {t('organization.headings.usage')}
-                </Typography>
+                {header(OrganizationTabs.Usage)}
                 <OrganizationUsageSection organization={organization} />
               </TabPanel>
             )}
-            {canViewAnalysis && (
+            {access.canViewAnalysis && (
               <TabPanel value={OrganizationTabs.Analysis}>
-                <Typography level="title-lg" startDecorator={<RateReviewOutlinedIcon />} sx={{ mb: 3 }}>
-                  {t('organization.headings.analysis')}
-                </Typography>
+                {header(OrganizationTabs.Analysis)}
                 <OrganizationAnalysisSection organization={organization} />
               </TabPanel>
             )}
-            {canViewBilling && (
+            {selectedSection && (
+              <TabPanel value={OrganizationTabs.Integrations}>
+                {header(OrganizationTabs.Integrations)}
+                {integrationSections.length > 1 && (
+                  <Box sx={{ mb: 3 }}>
+                    <SegmentedControl
+                      aria-label={t('organization.tabs.integrations')}
+                      data-testid="organization-integration-sections"
+                      value={selectedSection}
+                      onChange={requestSection}
+                      options={integrationSections.map(section => ({
+                        value: section,
+                        label: t(`organization.integration_sections.${section}`),
+                      }))}
+                    />
+                  </Box>
+                )}
+                <IntegrationSection section={selectedSection} organization={organization} />
+              </TabPanel>
+            )}
+            {access.canViewBilling && (
               <TabPanel value={OrganizationTabs.Billing}>
-                <Typography level="title-lg" startDecorator={<CreditCardOutlinedIcon />} sx={{ mb: 3 }}>
-                  {t('organization.headings.billing')}
-                </Typography>
+                {header(OrganizationTabs.Billing)}
                 <OrganizationBillingSection organization={organization} />
               </TabPanel>
             )}
-            {canManageIntegrations && (
-              <>
-                <TabPanel value={OrganizationTabs.Integrations}>
-                  <Typography level="title-lg" startDecorator={<ExtensionOutlinedIcon />} sx={{ mb: 3 }}>
-                    {t('organization.headings.integrations')}
-                  </Typography>
-                  <OrgSlackIntegration organization={organization} />
-                </TabPanel>
-                <TabPanel value={OrganizationTabs.GitHub}>
-                  <OrgGitHubConnectionTab orgId={organization.id} />
-                </TabPanel>
-                <TabPanel value={OrganizationTabs.Webhooks}>
-                  <Typography level="title-lg" startDecorator={<GitHubIcon />} sx={{ mb: 3 }}>
-                    {t('organization.headings.webhooks')}
-                  </Typography>
-                  <OrgWebhookConfig organization={organization} />
-                </TabPanel>
-              </>
-            )}
-            {canManageConnectors && (
-              <TabPanel value={OrganizationTabs.Connectors}>
-                <Typography level="title-lg" startDecorator={<HubOutlinedIcon />} sx={{ mb: 3 }}>
-                  {t('organization.headings.connectors')}
-                </Typography>
-                <OrgCustomMcpPolicySection key={organization.id} organization={organization} />
-              </TabPanel>
-            )}
-            {canManageOrg && (
+            {access.canManageOrg && (
               <TabPanel value={OrganizationTabs.Settings}>
-                <Typography level="title-lg" startDecorator={<SettingsOutlinedIcon />} sx={{ mb: 3 }}>
-                  {t('organization.headings.settings')}
-                </Typography>
+                {header(OrganizationTabs.Settings)}
                 <OrganizationSettingsSection organization={organization} />
               </TabPanel>
             )}
@@ -364,10 +367,37 @@ const OrganizationPage: FC = () => {
   );
 };
 
+/** One Integrations sub-section: a section title and description over the existing panel. */
+const IntegrationSection: FC<{ section: IntegrationSections; organization: WithId<IOrganizationDocument> }> = ({
+  section,
+  organization,
+}) => {
+  const { t } = useTranslation();
+  return (
+    <Stack spacing={2} data-testid={`organization-integration-section-${section}`}>
+      <Box>
+        <Typography level="title-md" component="h3">
+          {t(`organization.integration_sections.${section}`)}
+        </Typography>
+        <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+          {t(`organization.integration_descriptions.${section}`)}
+        </Typography>
+      </Box>
+      {section === IntegrationSections.GitHub && <OrgGitHubConnectionTab orgId={organization.id} />}
+      {section === IntegrationSections.Slack && <OrgSlackIntegration organization={organization} />}
+      {section === IntegrationSections.Webhooks && <OrgWebhookConfig organization={organization} />}
+      {section === IntegrationSections.Connectors && (
+        <OrgCustomMcpPolicySection key={organization.id} organization={organization} />
+      )}
+    </Stack>
+  );
+};
+
 const OrganizationHeader: FC<{
   organization: WithId<IOrganizationDocument>;
+  canManageOrg: boolean;
   onSettingsClick: () => void;
-}> = ({ organization, onSettingsClick }) => {
+}> = ({ organization, canManageOrg, onSettingsClick }) => {
   const { t } = useTranslation();
   const { name, description } = organization;
   const initial = name.charAt(0).toUpperCase();
@@ -376,16 +406,6 @@ const OrganizationHeader: FC<{
   const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
   const hasActiveSubscription = !!subscription && !subscription.canceledAt && !paymentIssue;
   const { currentSeats } = useOrganizationSeats(organization.id);
-  const { currentUser } = useUser();
-  const canManageOrg = useMemo(() => {
-    if (!currentUser || !organization) return false;
-    // Grant admin permissions if user is a system admin
-    if (currentUser.isAdmin) return true;
-    // Grant full permissions if user is the owner
-    if (currentUser.id === organization.userId) return true;
-    const memberDetails = organization.users.find(u => u.userId === currentUser.id);
-    return memberDetails?.permissions?.some(p => p === Permission.share || p === Permission.update) ?? false;
-  }, [currentUser, organization]);
 
   return (
     <Card variant="outlined" sx={{ mx: 3, p: 3 }}>
@@ -403,8 +423,9 @@ const OrganizationHeader: FC<{
                 startDecorator={<SettingsOutlinedIcon sx={{ fontSize: 16 }} />}
                 size="sm"
                 onClick={onSettingsClick}
+                data-testid="organization-header-settings-btn"
               >
-                {t('organization.headings.settings')}
+                {t('organization.tabs.settings')}
               </Button>
             )}
           </Stack>
@@ -426,7 +447,7 @@ const OrganizationHeader: FC<{
               size="sm"
               variant="soft"
               color={paymentIssue ? 'danger' : hasActiveSubscription ? 'success' : 'neutral'}
-              startDecorator={<VpnKeyOutlinedIcon sx={{ fontSize: 14 }} />}
+              startDecorator={<WorkspacePremiumOutlinedIcon sx={{ fontSize: 14 }} />}
             >
               {paymentIssue
                 ? t('organization.payment_issue')
@@ -457,10 +478,6 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
 
   return (
     <Stack spacing={3}>
-      <Typography level="title-lg" startDecorator={<BusinessOutlinedIcon />}>
-        {t('organization.headings.overview')}
-      </Typography>
-
       {/* First row - Key metrics */}
       <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
         <Card variant="outlined" sx={{ flex: 1, minWidth: 200, p: 3 }}>
@@ -490,7 +507,7 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
         {/* Subscription Status Card */}
         <Card variant="outlined" sx={{ flex: 1, minWidth: 280, p: 3 }} data-testid="subscription-status-card">
           <Stack spacing={2}>
-            <Typography level="title-md" startDecorator={<VpnKeyOutlinedIcon sx={{ fontSize: 20 }} />}>
+            <Typography level="title-md" startDecorator={<WorkspacePremiumOutlinedIcon sx={{ fontSize: 20 }} />}>
               {t('organization.overview.subscription_status')}
             </Typography>
             <Stack spacing={1}>

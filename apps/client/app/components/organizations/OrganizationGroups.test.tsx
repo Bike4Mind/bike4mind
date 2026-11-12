@@ -10,6 +10,7 @@ import OrganizationGroups from './OrganizationGroups';
 const fetchOrganizationGroups = vi.fn();
 const unassignGroupMember = vi.fn();
 
+vi.mock('@tanstack/react-router', () => ({ useBlocker: () => ({ status: 'idle' }) }));
 vi.mock('@client/app/utils/groupsAPICalls', () => ({
   fetchOrganizationGroups: (...args: unknown[]) => fetchOrganizationGroups(...args),
   assignGroupMember: vi.fn(),

@@ -9,6 +9,7 @@ import OrganizationSettingsSection from './OrganizationSettingsSection';
 const currentUser = vi.fn();
 const transfer = vi.hoisted(() => vi.fn());
 const navigate = vi.hoisted(() => vi.fn());
+const updateOrg = vi.hoisted(() => vi.fn());
 const members = vi.hoisted(() => ({
   list: [] as { id: string; name: string; email?: string; isBanned?: boolean }[],
   loaded: true,
@@ -16,7 +17,7 @@ const members = vi.hoisted(() => ({
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useDeleteOrganization: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useUpdateOrganization: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useUpdateOrganization: () => ({ mutateAsync: updateOrg, isPending: false }),
   useTransferOrganizationOwnership: () => ({ mutateAsync: transfer, isPending: false }),
 }));
 
@@ -32,7 +33,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: currentUser() }),
 }));
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate, useBlocker: () => ({ status: 'idle' }) }));
 
 const OWNER_ID = 'owner1';
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -174,5 +175,32 @@ describe('OrganizationSettingsSection - Transfer ownership', () => {
     await waitFor(() => expect(transfer).toHaveBeenCalled());
     expect(navigate).not.toHaveBeenCalled();
     expect(screen.getByTestId('transfer-ownership-modal')).toBeTruthy();
+  });
+});
+
+describe('OrganizationSettingsSection - system prompt save bar', () => {
+  beforeEach(() => updateOrg.mockReset().mockResolvedValue({}));
+
+  const promptInput = () => screen.getByTestId('organization-settings-system-prompt-input') as HTMLTextAreaElement;
+
+  it('shows the save bar only once the prompt differs from the stored one, and saves it', () => {
+    renderAs({ id: OWNER_ID });
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+
+    fireEvent.change(promptInput(), { target: { value: 'Lunar elevators only.' } });
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+    expect(updateOrg).toHaveBeenCalledWith({ orgId: 'org1', data: { systemPrompt: 'Lunar elevators only.' } });
+  });
+
+  it('restores the stored prompt on Discard', () => {
+    renderAs({ id: OWNER_ID });
+    fireEvent.change(promptInput(), { target: { value: 'Draft' } });
+
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+
+    expect(promptInput().value).toBe('');
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(updateOrg).not.toHaveBeenCalled();
   });
 });

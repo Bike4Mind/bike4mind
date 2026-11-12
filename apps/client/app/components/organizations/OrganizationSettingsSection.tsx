@@ -1,4 +1,4 @@
-import { FC, useState, useEffect, useMemo } from 'react';
+import { FC, useState, useMemo } from 'react';
 import { Card, Typography, Box, Button, Stack, Textarea, FormControl, FormLabel, FormHelperText } from '@mui/joy';
 import { IOrganizationDocument, orgAclRowConfersMembership } from '@bike4mind/common';
 import {
@@ -11,6 +11,7 @@ import { useConfirmationModal } from '@client/app/hooks/useConfirmation';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useNavigate } from '@tanstack/react-router';
 import TransferOwnershipModal, { TransferCandidate } from './TransferOwnershipModal';
+import OrgFormSaveBar from './OrgFormSaveBar';
 
 const MAX_SYSTEM_PROMPT_LENGTH = 10000; // ~2500 tokens
 
@@ -61,26 +62,24 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
     navigate({ to: '/organizations/$id', params: { id: organization.id }, search: { tab: 'members' }, replace: true });
   };
 
-  const [systemPrompt, setSystemPrompt] = useState(organization.systemPrompt || '');
-  const [hasChanges, setHasChanges] = useState(false);
+  const savedSystemPrompt = organization.systemPrompt || '';
+  const [systemPrompt, setSystemPrompt] = useState(savedSystemPrompt);
 
-  // Reset form when organization changes
-  useEffect(() => {
-    setSystemPrompt(organization.systemPrompt || '');
-    setHasChanges(false);
-  }, [organization.systemPrompt]);
+  // Reset the form when the stored prompt changes (our own save included). Adjusted during render
+  // so the first paint after a refetch already shows it.
+  const [syncedPrompt, setSyncedPrompt] = useState(savedSystemPrompt);
+  if (syncedPrompt !== savedSystemPrompt) {
+    setSyncedPrompt(savedSystemPrompt);
+    setSystemPrompt(savedSystemPrompt);
+  }
 
-  const handleSystemPromptChange = (value: string) => {
-    setSystemPrompt(value);
-    setHasChanges(value !== (organization.systemPrompt || ''));
-  };
+  const hasChanges = systemPrompt !== savedSystemPrompt;
 
   const handleSaveSystemPrompt = async () => {
     await updateOrganization.mutateAsync({
       orgId: organization.id,
       data: { systemPrompt },
     });
-    setHasChanges(false);
   };
 
   const handleDelete = () => {
@@ -109,7 +108,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
             <FormLabel>Team-wide AI Context</FormLabel>
             <Textarea
               value={systemPrompt}
-              onChange={e => handleSystemPromptChange(e.target.value)}
+              onChange={e => setSystemPrompt(e.target.value)}
               placeholder="Enter custom context that will be included in all AI conversations for team members. For example: 'Our company specializes in lunar space elevators, not Earth-based ones. Always focus on lunar applications when discussing space elevator technology.'"
               minRows={4}
               maxRows={12}
@@ -132,17 +131,6 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
             This prompt is automatically injected into every AI conversation for all team members. Use it to provide
             domain-specific context, correct model biases, or establish organizational guidelines.
           </Typography>
-          <Box>
-            <Button
-              color="primary"
-              onClick={handleSaveSystemPrompt}
-              loading={updateOrganization.isPending}
-              disabled={!hasChanges}
-              data-testid="organization-settings-system-prompt-save-btn"
-            >
-              Save System Prompt
-            </Button>
-          </Box>
         </Stack>
       </Card>
 
@@ -194,6 +182,12 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
           </Stack>
         </Card>
       )}
+      <OrgFormSaveBar
+        count={hasChanges ? 1 : 0}
+        pending={updateOrganization.isPending}
+        onSave={() => void handleSaveSystemPrompt()}
+        onDiscard={() => setSystemPrompt(savedSystemPrompt)}
+      />
       {canTransferOwnership && (
         <TransferOwnershipModal
           open={transferOpen}

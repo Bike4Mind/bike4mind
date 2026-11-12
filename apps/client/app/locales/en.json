@@ -152,22 +152,35 @@
       "analysis": "Analysis",
       "billing": "Billing",
       "integrations": "Integrations",
-      "github_api": "GitHub API",
-      "webhooks": "Webhooks",
-      "connectors": "Connectors",
       "settings": "Settings"
     },
-    "headings": {
-      "members_seats": "Members ({{current}} / {{max}})",
-      "groups": "Groups",
-      "usage": "Usage & Spend",
-      "analysis": "Feedback Analysis",
-      "billing": "Billing & Subscription",
+    "tab_groups": {
+      "team": "Team",
+      "insights": "Insights",
       "integrations": "Integrations",
-      "webhooks": "GitHub Webhooks",
-      "connectors": "Custom Connectors",
-      "settings": "Team Settings",
-      "overview": "Team Overview"
+      "admin": "Admin"
+    },
+    "descriptions": {
+      "overview": "Plan, credits and seat usage for this team.",
+      "members": "{{current}} of {{max}} seats used. Invite people and manage their roles.",
+      "groups": "Appoint managers and organize members into groups.",
+      "usage": "Credit spend across the team.",
+      "analysis": "Feedback members left on AI responses, summarized.",
+      "integrations": "Connect GitHub, Slack, webhooks and custom connectors for the whole team.",
+      "billing": "Subscription, seats and payment details.",
+      "settings": "Team-wide AI context, ownership and deletion."
+    },
+    "integration_sections": {
+      "github": "GitHub",
+      "slack": "Slack",
+      "webhooks": "Webhooks",
+      "connectors": "Connectors"
+    },
+    "integration_descriptions": {
+      "github": "API access for PR summaries, code context and repository features.",
+      "slack": "Link the team's Slack workspace.",
+      "webhooks": "Receive GitHub repository events and share them with members.",
+      "connectors": "Which custom MCP servers members may connect, and on what terms."
     },
     "overview": {
       "total_members": "Total Members",

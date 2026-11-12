@@ -876,13 +876,13 @@ const organizationDetailRoute = createRoute({
       <OrganizationDetailPage />
     </Suspense>
   ),
-  // Declares `tab` as this route's search contract, mirroring profileRoute. The page reads it via
+  // Declares `tab` (and the Integrations tab's `section`) as this route's search contract, mirroring profileRoute. The page reads it via
   // useSearch({ strict: false }), so this types the param rather than being what makes it work.
   // Deliberately not exhaustive: the Slack org-connect callback returns to this route carrying
   // slack_connected/slack_error, which OrgSlackIntegration reads loosely. Keep those reads loose,
   // or declare the params here too - a strict schema listing only `tab` would hide them.
-  validateSearch: (search: Record<string, unknown>): { tab?: string } => {
-    return { tab: optionalStringParam(search, 'tab') };
+  validateSearch: (search: Record<string, unknown>): { tab?: string; section?: string } => {
+    return { tab: optionalStringParam(search, 'tab'), section: optionalStringParam(search, 'section') };
   },
 });
 

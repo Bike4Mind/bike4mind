@@ -3,6 +3,11 @@ import { Permission, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
 import {
   canManageOrgConnectors,
   canManageOrgIntegrations,
+  canManageOrgSettings,
+  IntegrationSections,
+  LEGACY_INTEGRATION_TABS,
+  resolveIntegrationSection,
+  visibleIntegrationSections,
   canViewOrgAnalysis,
   canViewOrgBilling,
   canViewOrgUsage,
@@ -379,22 +384,24 @@ describe('resolveAccessibleTab', () => {
     );
   });
 
-  // Same shape for the Integrations, GitHub API and Webhooks tabs: every route behind them is
-  // verifyOrgOwner.
-  it('bounces Integrations, GitHub API and Webhooks for a caller who may manage the org but is not its owner', () => {
-    const managing = { ...all, canManageIntegrations: false };
-    expect(resolveAccessibleTab(OrganizationTabs.Integrations, managing)).toBe(OrganizationTabs.Overview);
-    expect(resolveAccessibleTab(OrganizationTabs.GitHub, managing)).toBe(OrganizationTabs.Overview);
-    expect(resolveAccessibleTab(OrganizationTabs.Webhooks, managing)).toBe(OrganizationTabs.Overview);
+  // GitHub, Slack and Webhooks are owner-only (verifyOrgOwner); Connectors also admits a current
+  // manager. The Integrations tab stands while any one of its sections does.
+  it('bounces Integrations only when the caller may see none of its sections', () => {
+    const none = { ...all, canManageIntegrations: false, canManageConnectors: false };
+    expect(resolveAccessibleTab(OrganizationTabs.Integrations, none)).toBe(OrganizationTabs.Overview);
+    expect(resolveAccessibleTab(OrganizationTabs.Integrations, { ...none, canManageConnectors: true })).toBe(
+      OrganizationTabs.Integrations
+    );
+    expect(resolveAccessibleTab(OrganizationTabs.Integrations, { ...none, canManageIntegrations: true })).toBe(
+      OrganizationTabs.Integrations
+    );
   });
 
-  it.each([OrganizationTabs.Integrations, OrganizationTabs.GitHub, OrganizationTabs.Webhooks])(
-    'keeps %s reachable for the owner, keyed on canManageIntegrations alone',
-    tab => {
-      expect(resolveAccessibleTab(tab, all)).toBe(tab);
-      expect(resolveAccessibleTab(tab, { ...all, canManageOrg: false })).toBe(tab);
-    }
-  );
+  it('keeps Integrations reachable for the owner whether or not canManageOrg holds', () => {
+    expect(resolveAccessibleTab(OrganizationTabs.Integrations, { ...all, canManageOrg: false })).toBe(
+      OrganizationTabs.Integrations
+    );
+  });
 
   it('keeps Settings reachable for that same caller', () => {
     const managing = { ...all, canViewBilling: false, canManageIntegrations: false };
@@ -454,19 +461,72 @@ describe('canManageOrgConnectors', () => {
     expect(canManageOrgConnectors({ id: 'owner1' }, undefined)).toBe(false);
   });
 
-  it('bounces a deep link to Connectors for a caller who may not manage them', () => {
-    const access = {
-      canManageOrg: true,
-      canViewUsage: false,
-      canViewAnalysis: true,
-      canManageIntegrations: false,
-      canManageGroups: false,
-      canViewBilling: false,
-      canManageConnectors: false,
-    };
-    expect(resolveAccessibleTab(OrganizationTabs.Connectors, access)).toBe(OrganizationTabs.Overview);
-    expect(resolveAccessibleTab(OrganizationTabs.Connectors, { ...access, canManageConnectors: true })).toBe(
-      OrganizationTabs.Connectors
+  it('offers the Connectors section to a manager and the owner-only sections to the owner', () => {
+    expect(visibleIntegrationSections({ canManageIntegrations: false, canManageConnectors: true })).toEqual([
+      IntegrationSections.Connectors,
+    ]);
+    expect(visibleIntegrationSections({ canManageIntegrations: true, canManageConnectors: true })).toEqual([
+      IntegrationSections.Slack,
+      IntegrationSections.GitHub,
+      IntegrationSections.Webhooks,
+      IntegrationSections.Connectors,
+    ]);
+  });
+});
+
+describe('resolveIntegrationSection', () => {
+  const owner = { canManageIntegrations: true, canManageConnectors: true };
+  const manager = { canManageIntegrations: false, canManageConnectors: true };
+
+  it('honours a requested section the caller may see', () => {
+    expect(resolveIntegrationSection('webhooks', owner)).toBe(IntegrationSections.Webhooks);
+  });
+
+  it('falls back to the first visible section for a missing, unknown or hidden one', () => {
+    expect(resolveIntegrationSection(undefined, owner)).toBe(IntegrationSections.Slack);
+    expect(resolveIntegrationSection('nope', owner)).toBe(IntegrationSections.Slack);
+    expect(resolveIntegrationSection('github', manager)).toBe(IntegrationSections.Connectors);
+  });
+
+  it('resolves to nothing when no section is visible', () => {
+    expect(resolveIntegrationSection('github', { canManageIntegrations: false, canManageConnectors: false })).toBe(
+      undefined
     );
+  });
+});
+
+describe('LEGACY_INTEGRATION_TABS', () => {
+  it('maps every pre-merge integration tab onto its section', () => {
+    expect(LEGACY_INTEGRATION_TABS).toEqual({
+      github: IntegrationSections.GitHub,
+      webhooks: IntegrationSections.Webhooks,
+      connectors: IntegrationSections.Connectors,
+    });
+  });
+});
+
+describe('canManageOrgSettings', () => {
+  // Mirrors organizationService.update: platform admin, owner, or a member holding update/share.
+  const org = {
+    userId: 'owner1',
+    users: [
+      { userId: 'editor1', permissions: [Permission.read, Permission.update] },
+      { userId: 'sharer1', permissions: [Permission.read, Permission.share] },
+      { userId: 'reader1', permissions: [Permission.read] },
+    ],
+  };
+
+  it('admits the owner, a platform admin and members holding update or share', () => {
+    expect(canManageOrgSettings({ id: 'owner1' }, org)).toBe(true);
+    expect(canManageOrgSettings({ id: 'admin9', isAdmin: true }, org)).toBe(true);
+    expect(canManageOrgSettings({ id: 'editor1' }, org)).toBe(true);
+    expect(canManageOrgSettings({ id: 'sharer1' }, org)).toBe(true);
+  });
+
+  it('refuses a read-only member, a stranger, and a caller while loading', () => {
+    expect(canManageOrgSettings({ id: 'reader1' }, org)).toBe(false);
+    expect(canManageOrgSettings({ id: 'stranger' }, org)).toBe(false);
+    expect(canManageOrgSettings(null, org)).toBe(false);
+    expect(canManageOrgSettings({ id: 'owner1' }, undefined)).toBe(false);
   });
 });

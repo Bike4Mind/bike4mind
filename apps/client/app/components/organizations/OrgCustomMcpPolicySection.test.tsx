@@ -34,6 +34,7 @@ vi.mock('@client/app/hooks/data/useOrgCustomMcpPolicy', () => ({
   useSaveOrgCustomMcpPolicy: () => ({ mutate: state.save, isPending: false }),
   useResetOrgCustomMcpPolicy: () => ({ mutate: state.reset, isPending: false }),
 }));
+vi.mock('@tanstack/react-router', () => ({ useBlocker: () => ({ status: 'idle' }) }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetOrganizationUsers: () => ({ data: [{ id: 'u1', name: 'Ada' }] }),
 }));
@@ -57,7 +58,7 @@ const viewOf = (overrides: Partial<OrgCustomMcpPolicyView> = {}, policy = {}): O
 });
 
 const toggle = (testId: string) => fireEvent.click(within(screen.getByTestId(testId)).getByRole('switch'));
-const saveButton = () => screen.getByTestId('org-custom-mcp-save-btn') as HTMLButtonElement;
+const saveButton = () => screen.getByTestId('admin-save-confirm-btn') as HTMLButtonElement;
 
 describe('OrgCustomMcpPolicySection', () => {
   beforeEach(() => {
@@ -74,7 +75,7 @@ describe('OrgCustomMcpPolicySection', () => {
 
   it('saves mode off when the kill switch is turned off, keeping the rest of the policy', () => {
     renderSection();
-    expect(saveButton().disabled).toBe(true);
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
 
     toggle('org-custom-mcp-enabled-switch');
     fireEvent.click(saveButton());
@@ -132,7 +133,7 @@ describe('OrgCustomMcpPolicySection', () => {
     rerender(<OrgCustomMcpPolicySection organization={{ id: 'org-1' } as IOrganizationDocument} />);
 
     expect(screen.queryByTestId('org-custom-mcp-changed-elsewhere')).toBeNull();
-    expect(saveButton().disabled).toBe(true);
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
     expect(
       (within(screen.getByTestId('org-custom-mcp-require-approval-switch')).getByRole('switch') as HTMLInputElement)
         .checked
@@ -190,7 +191,7 @@ describe('OrgCustomMcpPolicySection', () => {
 
     fireEvent.click(screen.getByText('Load latest'));
     expect(screen.queryByTestId('org-custom-mcp-changed-elsewhere')).toBeNull();
-    expect(saveButton().disabled).toBe(true);
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
   });
 
   it('takes a newer policy as is when there are no unsaved edits, and after its own save', () => {
@@ -203,7 +204,7 @@ describe('OrgCustomMcpPolicySection', () => {
     state.view = viewOf({}, { mode: 'any', requireApprovalForAll: true });
     rerender(<OrgCustomMcpPolicySection organization={{ id: 'org-1' } as IOrganizationDocument} />);
     expect(screen.queryByTestId('org-custom-mcp-changed-elsewhere')).toBeNull();
-    expect(saveButton().disabled).toBe(true);
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
   });
 
   it('lists member connections by member name with their policy status', () => {
