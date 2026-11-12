@@ -24,7 +24,7 @@ import {
 import { useMemo, useRef, useState } from 'react';
 import { useSettingsDraft } from './SettingsDraftProvider';
 import { AdminDialog } from './shared/AdminDialog';
-import { SettingsSection } from './shared/SettingsSection';
+import { SettingFieldRow } from './shared/SettingFieldRow';
 import { useAdminSaveShortcut } from './shared/adminKeyboard';
 import {
   describeFields,
@@ -201,11 +201,7 @@ function FieldGrid({ fields, value, defaults, errors, disabled, testIdPrefix, on
         if (field.kind === 'group') {
           return (
             <Grid xs={12} key={id}>
-              <Box
-                component="fieldset"
-                data-testid={`${testId}-group`}
-                sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'md', m: 0, px: 2, pb: 2, pt: 1 }}
-              >
+              <Box component="fieldset" data-testid={`${testId}-group`} sx={{ border: 0, m: 0, p: 0, minWidth: 0 }}>
                 <Typography component="legend" level="title-sm" sx={{ px: 0.5 }}>
                   {field.label}
                 </Typography>
@@ -346,7 +342,6 @@ const AdminSchemaSettingField = ({
   setting,
   structured: { schema, confirmations },
   storedValue,
-  index,
 }: {
   setting: { key: SettingKey; name: string; description: string };
   structured: StructuredSetting;
@@ -404,11 +399,7 @@ const AdminSchemaSettingField = ({
   const handleSave = () => (warnings.length ? setConfirming(true) : commit());
 
   return (
-    <SettingsSection
-      variant="outlined"
-      data-testid={`${testIdPrefix}-form`}
-      sx={{ width: '100%', mb: 1, bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 2 }}
-    >
+    <SettingFieldRow data-testid={`${testIdPrefix}-form`}>
       <Stack
         ref={draft.staged ? null : saveRef}
         data-admin-settings-editor
@@ -530,7 +521,7 @@ const AdminSchemaSettingField = ({
           </Stack>
         </AdminDialog>
       )}
-    </SettingsSection>
+    </SettingFieldRow>
   );
 };
 

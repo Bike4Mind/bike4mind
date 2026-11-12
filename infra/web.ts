@@ -520,11 +520,19 @@ export const web = new sst.aws.Nextjs(
         resources: ['*'],
       },
       {
-        // Admin DLQ replay (receive and delete from DLQs, send to source queues, read depth) and the
+        // Admin DLQ replay (receive and delete from DLQs, hand back the messages a replay-by-ID
+        // search received but was not asked for, send to source queues, read depth) and the
         // API routes that enqueue work through sourceQueueUrls, limited to this stage's queues. One
         // prefix pattern instead of one ARN per queue keeps the inline policy well under Lambda's
         // size cap, which is why the queue URLs travel as Linkables in the first place.
-        actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SendMessage'],
+        // Pinned in infra/__tests__/webDlqReplayPermissions.test.ts.
+        actions: [
+          'sqs:ReceiveMessage',
+          'sqs:DeleteMessage',
+          'sqs:ChangeMessageVisibility',
+          'sqs:GetQueueAttributes',
+          'sqs:SendMessage',
+        ],
         resources: [stageQueueArns, ...(dlqAlarmHandlerDlq ? [dlqAlarmHandlerDlq.arn] : [])],
       },
       {

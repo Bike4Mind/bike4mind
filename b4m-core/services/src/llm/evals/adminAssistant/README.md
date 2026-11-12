@@ -1,6 +1,6 @@
 # Admin assistant eval
 
-About 30 admin questions asked through the **real** admin assistant turn path on a live stack, graded deterministically, with a pass rate per category. It exists so that a change to the admin prompt, the admin view registry or the admin tools (and, later, the admin feature guide) shows up as a number.
+About 30 admin questions asked through the **real** admin assistant turn path on a live stack, graded deterministically, with a pass rate per category. It exists so that a change to the admin prompt, the admin view registry the admin tools or the admin feature guide shows up as a number.
 
 It is a measurement, not a gate: the live run never fails on its pass rate and never runs in CI.
 
@@ -16,13 +16,13 @@ The gate, prompt, view-registry summary and tools all run server-side, unmodifie
 
 ## Categories
 
-| `category`     | The right answer is                                                                      |
-| -------------- | ---------------------------------------------------------------------------------------- |
-| `where-is`     | A `navigate_view` hand-off to the right admin tab.                                       |
-| `how-to`       | The same hand-off (the assistant is read-only, so it points at the tab).                 |
-| `what-is`      | The hand-off plus an explanation that mentions the feature's terms.                      |
-| `data`         | An admin tool call, and the seeded value where there is one.                             |
-| `out-of-scope` | A decline, with no admin tool called (secrets, write actions, non-admin trivia).         |
+| `category`     | The right answer is                                                              |
+| -------------- | -------------------------------------------------------------------------------- |
+| `where-is`     | A `navigate_view` hand-off to the right admin tab.                               |
+| `how-to`       | The same hand-off (the assistant is read-only, so it points at the tab).         |
+| `what-is`      | The hand-off plus an explanation that mentions the feature's terms.              |
+| `data`         | An admin tool call, and the seeded value where there is one.                     |
+| `out-of-scope` | A decline, with no admin tool called (secrets, write actions, non-admin trivia). |
 
 ## Grading order (`grade.ts`)
 
@@ -34,13 +34,13 @@ All must pass. The rubric is lexical, so it can be brittle: a correct answer phr
 
 ## Layout
 
-| Path                      | What                                                                       |
-| ------------------------- | -------------------------------------------------------------------------- |
-| `cases.ts`                | The question set, and the drift guard's view of callable tools.            |
-| `grade.ts`                | The pure grader.                                                           |
-| `run.ts`                  | The HTTP driver (fetch-injected), reusing `../lakeRag/http.ts`.            |
-| `report.ts`, `reportFile.ts` | Per-category aggregation, text summary and the JSON file.               |
-| `run.live.test.ts`        | The env-gated live run.                                                    |
+| Path                         | What                                                            |
+| ---------------------------- | --------------------------------------------------------------- |
+| `cases.ts`                   | The question set, and the drift guard's view of callable tools. |
+| `grade.ts`                   | The pure grader.                                                |
+| `run.ts`                     | The HTTP driver (fetch-injected), reusing `../lakeRag/http.ts`. |
+| `report.ts`, `reportFile.ts` | Per-category aggregation, text summary and the JSON file.       |
+| `run.live.test.ts`           | The env-gated live run.                                         |
 
 ## Running it
 
@@ -52,13 +52,13 @@ ADMIN_EVAL_REPORT_PATH=<scratch>/admin-eval.json \
   pnpm --filter @bike4mind/services test adminAssistant/run.live
 ```
 
-| Variable                   | Meaning                                                              |
-| -------------------------- | -------------------------------------------------------------------- |
-| `ADMIN_EVAL_BASE_URL`      | The stack. https, or http on localhost.                              |
-| `ADMIN_EVAL_MODEL`         | The model id sent as `params.model`.                                 |
-| `E2E_CLEANUP_SECRET`       | The stack's E2E secret; mints and later deletes both users.          |
-| `ADMIN_EVAL_SAMPLES`       | Turns per question. Default 1.                                       |
-| `ADMIN_EVAL_REPORT_PATH`   | Optional. Writes the JSON report (no quest or session ids).          |
+| Variable                 | Meaning                                                     |
+| ------------------------ | ----------------------------------------------------------- |
+| `ADMIN_EVAL_BASE_URL`    | The stack. https, or http on localhost.                     |
+| `ADMIN_EVAL_MODEL`       | The model id sent as `params.model`.                        |
+| `E2E_CLEANUP_SECRET`     | The stack's E2E secret; mints and later deletes both users. |
+| `ADMIN_EVAL_SAMPLES`     | Turns per question. Default 1.                              |
+| `ADMIN_EVAL_REPORT_PATH` | Optional. Writes the JSON report (no quest or session ids). |
 
 The run mints an admin user and a target user with a known credit balance (`TARGET_CREDITS`), runs every row, prints the report, and deletes both users. Without the variables the test is skipped. A turn's quest poll is capped at 2 minutes; a stuck turn fails alone and the run continues. The JSON report is rewritten after every turn, and its `complete` field is false (and the text summary says PARTIAL RUN) when fewer than `expectedTurns` finished, so a run killed mid-way is never mistaken for a baseline. A run aborted before its first turn writes nothing, so check the report's timestamp before trusting an old file.
 
@@ -70,5 +70,7 @@ A new admin tab (a `requiresAdmin` view in `viewRegistry.ts`) or admin tool (in 
 
 - a tab: a `where-is` row, and a `what-is` row with `expect` terms for what it does;
 - a tool: a `data` row with `expectTools`, and the seeded value in `expect` if the target user has one.
+
+A new tab also needs its entry in the admin feature guide (`apps/client/server/adminAssistant/guide/`); `guide.test.ts` there fails until every admin view is covered. `admin_search_guide` rows are `how-to` and `what-is` rows with `expectTools`, including one for a feature that does not exist, where the right answer is that the guide does not cover it.
 
 `cases.test.ts` fails if a row names a view that is not an admin view or a tool the assistant cannot call. A test in `apps/client/server/adminAssistant/index.test.ts` requires a row for every registered tool.
