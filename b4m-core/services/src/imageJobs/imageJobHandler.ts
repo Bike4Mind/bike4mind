@@ -154,8 +154,8 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
       const { s3Key } = await deps.saveToGeneratedBucket({ key, bytes, contentType, signal: fallbackSignal });
       return { location: 'generated', s3Key, ...common };
     } catch (error) {
-      // Rendered and billed but cannot be kept: the throw fails a sync submit as orphaned_submit; an async
-      // store step is retried until the job's deadline.
+      // Rendered and billed but cannot be kept: the throw fails a sync submit as orphaned_submit; an async store
+      // step is retried up to MAX_STEP_ATTEMPTS (not bounded by the deadline), then the job fails and the hold is released.
       deps.logger.error('image_job_output_unsaved', { jobId: job.id, bytes: bytes.byteLength, error });
       throw error;
     }
@@ -184,7 +184,7 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     if (!declared) return fail('provider_error', 'The provider returned something that is not an image');
     const contentType = normalizeContentType(declared);
     // A throw here (the scan could not run) fails closed: orphaned_submit on the sync path, a retried store
-    // step on the async one. Either way the image is not kept.
+    // step on the async one (up to MAX_STEP_ATTEMPTS, then the job fails). Either way the image is not kept.
     const verdict = await deps.moderate({ job, bytes, mimeType: contentType });
     if (verdict.blocked) {
       return {
