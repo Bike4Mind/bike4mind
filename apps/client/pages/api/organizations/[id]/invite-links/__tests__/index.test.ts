@@ -130,6 +130,14 @@ describe('/api/organizations/[id]/invite-links', () => {
 
   describe('link role gate', () => {
     const nonOwnerManager = { id: 'u-manager', email: 'manager@example.com' };
+    beforeEach(() => {
+      mocks.findOrganization.mockResolvedValue({
+        id: ORG_ID,
+        name: 'Acme',
+        userId: 'u-owner',
+        users: [{ userId: 'u-manager', permissions: ['read'] }],
+      });
+    });
 
     it.each([
       ['an Editor', ['read', 'update']],

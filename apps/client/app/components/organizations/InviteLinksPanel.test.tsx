@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { OrgInviteLink } from '@client/app/hooks/data/organizations';
@@ -86,18 +85,18 @@ describe('InviteLinksPanel', () => {
     expect(mocks.revoke).toHaveBeenCalledWith('l1');
   });
 
-  it('offers a non-owner manager only the Viewer role for a link', async () => {
+  it('offers a non-owner manager only the Viewer role for a link', () => {
     renderPanel(false);
-    await userEvent.click(screen.getByTestId('org-invite-link-role-select'));
+    fireEvent.click(within(screen.getByTestId('org-invite-link-role-select')).getByRole('combobox'));
 
     expect(screen.getByRole('option', { name: 'Viewer' })).toBeTruthy();
     expect(screen.queryByRole('option', { name: 'Editor' })).toBeNull();
     expect(screen.queryByRole('option', { name: 'Admin' })).toBeNull();
   });
 
-  it('offers the owner tier every link role', async () => {
+  it('offers the owner tier every link role', () => {
     renderPanel(true);
-    await userEvent.click(screen.getByTestId('org-invite-link-role-select'));
+    fireEvent.click(within(screen.getByTestId('org-invite-link-role-select')).getByRole('combobox'));
 
     expect(screen.getByRole('option', { name: 'Editor' })).toBeTruthy();
     expect(screen.getByRole('option', { name: 'Admin' })).toBeTruthy();

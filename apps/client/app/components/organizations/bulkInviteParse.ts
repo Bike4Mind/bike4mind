@@ -8,7 +8,7 @@ const isListSeparator = (ch: string) => ch === ',' || ch === ';' || ch === '\n' 
 
 /**
  * Addresses typed or pasted into the textarea, separated by whitespace, commas or semicolons.
- * A `Name <addr>` entry (mail-client copy format) yields just `addr`; the display name is dropped.
+ * A `Name <addr>` entry (mail-client copy format) yields just `addr`; display-name words (tokens without '@') are dropped.
  * Single linear scan.
  */
 export function parseEmailList(text: string): string[] {
@@ -37,6 +37,7 @@ export function parseEmailList(text: string): string[] {
         for (const token of segment.slice(pos).split(/\s+/)) if (token) out.push(token);
         break;
       }
+      for (const token of segment.slice(pos, lt).split(/\s+/)) if (token.includes('@')) out.push(token);
       const addr = segment.slice(lt + 1, gt).trim();
       if (addr) out.push(addr);
       pos = gt + 1;
