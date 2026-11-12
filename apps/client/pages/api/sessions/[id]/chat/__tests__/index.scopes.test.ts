@@ -134,6 +134,16 @@ describe('/api/sessions/[id]/chat API-key scopes', () => {
     expect(mockAddMessage).not.toHaveBeenCalled();
   });
 
+  it.each(['GET', 'POST'] as const)('admits %s for an admin:* key with no notebook scope', async method => {
+    keyWithScopes([ApiKeyScope.ADMIN]);
+    mockAddMessage.mockResolvedValue({ id: 'm1' });
+    const { req, res } = fire(method);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).not.toBe(403);
+    expect(method === 'GET' ? mockGetMessages : mockAddMessage).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ['GET', 'an unscoped key', []],
     ['GET', 'a non-notebook key', [ApiKeyScope.ME_READ]],

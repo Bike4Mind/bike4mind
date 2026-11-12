@@ -17,8 +17,10 @@ import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { purgeDeletedNotebookMedia } from '@server/sessions/purgeDeletedNotebookMedia';
 
-// Door admits either notebook scope; DELETE narrows to notebooks:write below.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS] })
+// Door admits either notebook scope or admin:*; DELETE narrows to notebooks:write (or admin:*) below.
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
+})
   /**
    * Get all sessions
    */
@@ -64,7 +66,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
     asyncHandler(async (req, res) => {
       assertApiKeyScope(
         req,
-        [ApiKeyScope.WRITE_NOTEBOOKS],
+        [ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
         'This API key is read-only for notebooks; notebooks:write is required'
       );
       const userId = req.user?.id;

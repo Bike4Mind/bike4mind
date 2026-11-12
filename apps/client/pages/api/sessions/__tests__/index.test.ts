@@ -173,6 +173,15 @@ describe('/api/sessions API-key scopes', () => {
     expect(mockSearchOwnSessions).toHaveBeenCalledTimes(1);
   });
 
+  it('admits an admin:* key with no notebook scope', async () => {
+    keyWithScopes([ApiKeyScope.ADMIN]);
+    const { req, res } = fire('GET');
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSearchOwnSessions).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ['GET', 'an unscoped key', []],
     ['GET', 'a non-notebook key', [ApiKeyScope.ME_READ]],

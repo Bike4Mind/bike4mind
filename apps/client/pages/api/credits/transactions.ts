@@ -24,7 +24,7 @@ const CreditTransactionsQuerySchema = z.object({
   type: z.enum(['all', 'added', 'deducted']).prefault('all'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ] }).get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN] }).get(async (req, res) => {
   const { user } = req;
   if (!user) {
     return res.status(401).json({ error: 'Unauthorized' });

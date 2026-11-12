@@ -24,7 +24,7 @@ const extractBearerToken = ExtractJwt.fromAuthHeaderAsBearerToken();
  * either into a full browser session. Sessions come only from the login, second-factor and
  * refresh routes.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ] })
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN] })
   .use(rateLimit(IDENTIFY_RATE_LIMIT))
   .use(requireUser)
   .get(async (req, res) => {

@@ -90,7 +90,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/common', () => ({
-  ApiKeyScope: { ME_READ: 'me:read' },
+  ApiKeyScope: { ME_READ: 'me:read', ADMIN: 'admin:*' },
   CreditHolderType: { User: 'User' },
 }));
 

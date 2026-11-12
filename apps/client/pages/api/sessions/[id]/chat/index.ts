@@ -26,8 +26,10 @@ const chatMessagePageResponseSchema = z.object({
   hasMore: z.boolean(),
 });
 
-// Door admits either notebook scope; POST narrows to notebooks:write below.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS] })
+// Door admits either notebook scope or admin:*; POST narrows to notebooks:write (or admin:*) below.
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
+})
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const { id: sessionId } = req.query;
@@ -41,7 +43,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       assertApiKeyScope(
         req,
-        [ApiKeyScope.WRITE_NOTEBOOKS],
+        [ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
         'This API key is read-only for notebooks; notebooks:write is required'
       );
       const { id: sessionId } = req.query ?? {};
