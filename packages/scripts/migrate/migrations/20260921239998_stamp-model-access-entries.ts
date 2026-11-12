@@ -23,7 +23,7 @@ const entryById = (list: unknown, id: string): string | undefined => {
  * per-model write never overwrites that write's stamp, and a rerun changes nothing.
  */
 const migration: MigrationFile = {
-  id: 20260921239997,
+  id: 20260921239998,
   name: 'stamp-model-access-entries',
 
   up: async () => {
