@@ -47,6 +47,8 @@ const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, m
   const [disposition, setDisposition] = useState<Disposition>('keep');
   const [reassignTo, setReassignTo] = useState<string | null>(null);
   const organizationQuery = useGetOrganization(member ? organizationId : null);
+  const { refetch: refreshOrganization } = organizationQuery;
+  const memberId = member?.id;
   const organization = organizationQuery.data;
   const currentMember = !!member && !!organization && organizationMemberRole(organization, member.id) !== null;
   const inventory = useMemberOffboardingInventory(organizationId, member?.id ?? null, { enabled: currentMember });
@@ -57,7 +59,9 @@ const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, m
   useEffect(() => {
     setDisposition('keep');
     setReassignTo(null);
-  }, [member?.id]);
+    // The roster may have refreshed since this five-minute detail cache was loaded.
+    if (memberId) void refreshOrganization({ cancelRefetch: false });
+  }, [memberId, organizationId, refreshOrganization]);
 
   if (!member) return null;
 
@@ -98,7 +102,7 @@ const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, m
           {keyCount > 0 ? ` (${keyCount})` : ''} are revoked.
         </Typography>
 
-        {(organizationQuery.isLoading || inventory.isLoading) && (
+        {(organizationQuery.isLoading || (!currentMember && organizationQuery.isFetching) || inventory.isLoading) && (
           <CircularProgress size="sm" data-testid="offboard-dialog-loading" />
         )}
         {inventoryError && (

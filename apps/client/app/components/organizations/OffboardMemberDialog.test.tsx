@@ -23,10 +23,12 @@ const hooks = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   isPending: false,
   refetch: vi.fn(),
+  refreshOrganization: vi.fn(),
 }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useMemberOffboardingInventory: () => ({ ...hooks.inventory, refetch: hooks.refetch }),
   useGetOrganization: () => ({
+    refetch: hooks.refreshOrganization,
     data: {
       id: 'org1',
       userId: 'owner1',
@@ -69,6 +71,7 @@ describe('OffboardMemberDialog', () => {
     hooks.mutateAsync.mockReset().mockResolvedValue(0);
     hooks.isPending = false;
     hooks.refetch.mockReset().mockResolvedValue(undefined);
+    hooks.refreshOrganization.mockReset().mockResolvedValue(undefined);
     hooks.inventory = {
       data: {
         ...emptyInventory,
