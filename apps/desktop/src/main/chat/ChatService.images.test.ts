@@ -128,6 +128,35 @@ describe('ChatService images shown by tools', () => {
     expect(JSON.stringify(post.mock.calls[2][1].messages)).not.toContain('"type":"image"');
   });
 
+  it('keeps a read image on the row once per content, so an overwrite shows on the new row only', async () => {
+    const id = await codeSession();
+    /** One read round, and the media its call settled with. */
+    const readShot = async (args: Record<string, unknown> = {}) => {
+      events.length = 0;
+      await toolRound(id, 'file_read', { path: join(root, 'shot.png'), ...args });
+      const end = events.find(event => event.type === 'tool-end');
+      return end && 'call' in end ? end.call.media : undefined;
+    };
+
+    const first = await readShot();
+    expect(first).toEqual([
+      expect.objectContaining({ kind: 'image', caption: join(root, 'shot.png'), width: 10, height: 10 }),
+    ]);
+    expect((await readShot())?.[0].url).toBe(first?.[0].url);
+
+    await writeFile(join(root, 'shot.png'), Buffer.concat([PNG, Buffer.from('changed')]));
+    // `limit` only so the doom-loop guard does not stop a third identical call; an image ignores it.
+    const changed = await readShot({ limit: 1 });
+    expect(changed?.[0].url).not.toBe(first?.[0].url);
+
+    const stored = await store.get(id);
+    const urls = (stored?.messages ?? [])
+      .flatMap(message => message.toolCalls ?? [])
+      .flatMap(call => call.media ?? [])
+      .map(item => item.url);
+    expect(urls).toEqual([first?.[0].url, first?.[0].url, changed?.[0].url]);
+  });
+
   it('caps the images one round sends and tells the model how many were left out', async () => {
     const id = await codeSession('full');
     await service.send(id, 'look at them all');

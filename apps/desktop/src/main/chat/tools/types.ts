@@ -235,6 +235,20 @@ export interface ImageContext {
    * read, which nativeImage does not for GIF and WebP. Injected so only main/chat imports Electron.
    */
   prepare(bytes: Buffer, mediaType: string, maxBytes: number): PreparedImage | null;
+  /**
+   * Keep `display` in the conversation's media folder for the transcript, once per distinct
+   * `source`: the same bytes read again return the copy already kept. Resolves undefined when
+   * there is nowhere to keep it or the write failed; reading the image goes on regardless.
+   */
+  keep?(source: Buffer, display: KeptImage, caption: string): Promise<ChatMedia | undefined>;
+}
+
+/** The fitted copy of an image a tool keeps for the transcript. Sizes are absent for a format the decoder cannot read. */
+export interface KeptImage {
+  bytes: Buffer;
+  mediaType: string;
+  width?: number;
+  height?: number;
 }
 
 /** A window or display, as screen_capture lists it. */

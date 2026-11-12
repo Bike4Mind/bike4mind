@@ -100,6 +100,9 @@ export interface ChatMedia {
    * is how the user finds the same file in the web app's file browser.
    */
   fabFileId?: string;
+  /** Pixel size of a kept image, so its thumbnail holds its box before it loads. */
+  width?: number;
+  height?: number;
 }
 
 /**

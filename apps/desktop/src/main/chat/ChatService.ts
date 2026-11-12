@@ -283,6 +283,7 @@ import {
   type SuggestionOutcome,
   type SkillContext,
   type ImageContext,
+  type KeptImage,
   type ScreenCapturer,
   type ScreenContext,
   type ModelContext,
@@ -3450,7 +3451,11 @@ export class ChatService {
       // Silence is not "no": see ChatModelOption.supportsVision.
       const vision = modelOption?.supportsVision !== false;
       const images: ImageContext | undefined = this.deps.prepareImage
-        ? { vision, prepare: this.deps.prepareImage }
+        ? {
+            vision,
+            prepare: this.deps.prepareImage,
+            keep: (source, display, caption) => this.keepToolImage(sessionId, source, display, caption),
+          }
         : undefined;
       // A wrapper only: nothing is listed or captured until the model calls the tool.
       const screenCapturer = this.deps.screen;
@@ -4644,6 +4649,32 @@ export class ChatService {
     if (!store) return undefined;
     const stored = await store.save(sessionId, bytes, 'image/png');
     return { kind: 'image', url: stored.url, mimeType: stored.mimeType, byteLength: stored.byteLength, caption };
+  }
+
+  private async keepToolImage(
+    sessionId: string,
+    source: Buffer,
+    display: KeptImage,
+    caption: string
+  ): Promise<ChatMedia | undefined> {
+    const store = this.deps.media;
+    if (!store) return undefined;
+    try {
+      const stored = await store.saveForContent(sessionId, source, display.bytes, display.mediaType);
+      return {
+        kind: 'image',
+        url: stored.url,
+        mimeType: stored.mimeType,
+        byteLength: stored.byteLength,
+        caption,
+        ...(display.width && display.height ? { width: display.width, height: display.height } : {}),
+      };
+    } catch (error) {
+      this.deps.logger.warn(
+        `CHAT: could not keep a read image for the transcript: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return undefined;
+    }
   }
 
   /**

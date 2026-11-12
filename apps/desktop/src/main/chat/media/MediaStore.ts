@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -121,6 +121,46 @@ export class MediaStore {
       mimeType: own(MIME_BY_EXTENSION, extension) ?? 'application/octet-stream',
       byteLength: bytes.length,
     };
+  }
+
+  /**
+   * Save `bytes` under a name derived from `source`'s content, or return the file already saved
+   * for that content. Lets a tool that reads the same unchanged file again point at one copy.
+   */
+  async saveForContent(sessionId: string, source: Buffer, bytes: Buffer, mimeType: string): Promise<StoredMedia> {
+    const extension = own(EXTENSION_BY_MIME, normalizeMime(mimeType));
+    if (!extension) throw new Error(`Cannot display ${mimeType || 'an unknown media type'}.`);
+    if (bytes.length === 0) throw new Error('The file is empty.');
+    if (bytes.length > MAX_MEDIA_BYTES) {
+      throw new Error(`The file is ${Math.round(bytes.length / 1024 / 1024)}MB, which is too large to display.`);
+    }
+
+    // UUID-shaped so NAME_PATTERN, and with it read/locate/export, accept it unchanged.
+    const digest = createHash('sha256').update(source).digest('hex');
+    const name = `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20, 32)}.${extension}`;
+    const directory = this.sessionDirectory(sessionId);
+    const path = join(directory, name);
+    const stored = (byteLength: number): StoredMedia => ({
+      name,
+      url: mediaUrl(sessionId, name),
+      mimeType: own(MIME_BY_EXTENSION, extension) ?? 'application/octet-stream',
+      byteLength,
+    });
+
+    const existing = await stat(path).catch(() => null);
+    if (existing?.isFile()) return stored(existing.size);
+
+    await mkdir(directory, { recursive: true });
+    // Renamed into place so a parallel read of the same file, or the protocol handler, never sees half of it.
+    const partial = `${path}.${randomUUID()}.part`;
+    try {
+      await writeFile(partial, bytes);
+      await rename(partial, path);
+    } catch (error) {
+      await rm(partial, { force: true });
+      throw error;
+    }
+    return stored(bytes.length);
   }
 
   /**
