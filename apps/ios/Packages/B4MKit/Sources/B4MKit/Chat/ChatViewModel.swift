@@ -141,6 +141,7 @@ public final class ChatViewModel {
     pollTasks.removeAll()
     for task in settleTasks.values { task.cancel() }
     settleTasks.removeAll()
+    settledQuestIDs.removeAll()
   }
 
   // MARK: - Sending

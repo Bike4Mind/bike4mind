@@ -186,6 +186,20 @@ final class ChatViewModelTests: XCTestCase {
     model.stop()
   }
 
+  func testASettleCancelledByStopIsRetriedByALaterTerminalFrame() async throws {
+    let model = makeModel(realtime: FakeRealtime())
+    let api = self.api!
+    model.apply(frame(reply: "Hello there", status: .done, prompt: "Hi"))
+    model.stop()
+    await eventually { await api.questLookups.contains("quest-1") }
+
+    model.apply(frame(reply: "Hello there", status: .done, prompt: "Hi"))
+    await eventually { await api.questLookups.filter { $0 == "quest-1" }.count == 2 }
+    let lookups = await api.questLookups.filter { $0 == "quest-1" }
+    XCTAssertEqual(lookups.count, 2)
+    model.stop()
+  }
+
   func testAFrameThatBeatsTheReceiptIsAdoptedNotDuplicated() async {
     await api.holdSends()
     let model = makeModel(realtime: FakeRealtime())
