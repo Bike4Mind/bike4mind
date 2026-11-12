@@ -7,7 +7,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
 import migration from './20260921241030_backfill-user-provider-end-user-id';
-import repair from './20260921241032_repair-provider-end-user-id-migration-collision';
+import repair from './20260921241036_repair-provider-end-user-id-migration-collision';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let server: Awaited<ReturnType<typeof createMongoServer>> | undefined;
