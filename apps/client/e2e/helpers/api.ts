@@ -153,6 +153,8 @@ export async function apiCreateTestUser(
 export async function apiCreateThrowawayUser(
   request: APIRequestContext,
   label: string,
+  // Pass includePredefinedTags: false for a free-tier account: the predefined Developer tag bypasses
+  // the free-tier rate limit and daily caps.
   options: Pick<
     Parameters<typeof apiCreateTestUser>[1],
     'initialCredits' | 'includePredefinedTags' | 'emailVerified' | 'apiKeyTrustApproved'
@@ -395,6 +397,22 @@ export async function apiSeedLakeArticle(
     contentHash: params.contentHash,
     tags: [{ name: lake.datalakeTag, strength: 1 }],
   });
+}
+
+/** Stored admin setting rows by name. A key with no row is absent and resolves to its registry default. */
+export async function apiGetAdminSettings(
+  request: APIRequestContext,
+  adminToken: string
+): Promise<Map<string, unknown>> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/settings/fetch`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  if (!response.ok()) {
+    throw new Error(`Fetch admin settings failed: ${response.status()} ${response.statusText()}`);
+  }
+  const rows = (await response.json()) as Array<{ settingName: string; settingValue: unknown }>;
+  return new Map(rows.map(row => [row.settingName, row.settingValue]));
 }
 
 export async function apiUpdateAdminSetting(
