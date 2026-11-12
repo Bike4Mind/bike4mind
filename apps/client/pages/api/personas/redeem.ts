@@ -16,6 +16,7 @@ import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { issueBrowserSession, issueSessionForRequest } from '@server/auth/issueSession';
+import { logSignInSuccess } from '@server/auth/signInSecondFactor';
 import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 import { loadPersonaSettings, redeemPersonaLoginCode } from '@server/personas/personaAccounts';
 
@@ -59,6 +60,7 @@ const handler = baseApi({ auth: false })
       const persona = await redeemPersonaLoginCode(code, now, loginClient(req));
       if (!persona) return res.status(400).json({ error: INVALID_CODE });
       await issueBrowserSession(req, res, persona.id, sessionParams(persona, now));
+      await logSignInSuccess(req, { userId: persona.id, strategy: 'persona', trustedDevice: null });
       return res.redirect(303, '/');
     })
   )
@@ -74,6 +76,7 @@ const handler = baseApi({ auth: false })
       const persona = await redeemPersonaLoginCode(parsed.data.code, now, loginClient(req));
       if (!persona) return res.status(400).json({ error: INVALID_CODE });
       const { accessToken, refreshToken } = await issueSessionForRequest(req, persona.id, sessionParams(persona, now));
+      await logSignInSuccess(req, { userId: persona.id, strategy: 'persona', trustedDevice: null });
       return res.status(200).json({
         user: { id: persona.id, username: persona.username, email: persona.email, isPersona: true },
         accessToken,

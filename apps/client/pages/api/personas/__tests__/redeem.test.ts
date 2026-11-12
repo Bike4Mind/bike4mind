@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   redeemPersonaLoginCode: vi.fn(),
   issueBrowserSession: vi.fn(),
   issueSessionForRequest: vi.fn(),
+  logSignInSuccess: vi.fn(),
   readRefreshCookie: vi.fn(),
   readAdminReturnCookie: vi.fn(),
 }));
@@ -36,6 +37,7 @@ vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: h.issueBrowserSession,
   issueSessionForRequest: h.issueSessionForRequest,
 }));
+vi.mock('@server/auth/signInSecondFactor', () => ({ logSignInSuccess: h.logSignInSuccess }));
 vi.mock('@server/auth/tokenGenerator', () => ({ ACCESS_TOKEN_TTL_SECONDS: 1800 }));
 vi.mock('@server/personas/personaAccounts', () => ({
   loadPersonaSettings: async () => h.settings,
@@ -99,6 +101,11 @@ describe('GET /api/personas/redeem', () => {
       PERSONA.id,
       expect.objectContaining({ createdVia: 'persona-mint', tokenVersion: 3 })
     );
+    expect(h.logSignInSuccess).toHaveBeenCalledWith(expect.anything(), {
+      userId: PERSONA.id,
+      strategy: 'persona',
+      trustedDevice: null,
+    });
   });
 
   it.each([
@@ -140,6 +147,21 @@ describe('GET /api/personas/redeem', () => {
 });
 
 describe('POST /api/personas/redeem', () => {
+  it('writes the login_success audit row the Sign-ins tab reads', async () => {
+    await run('POST', { body: { code: CODE } });
+    expect(h.logSignInSuccess).toHaveBeenCalledWith(expect.anything(), {
+      userId: PERSONA.id,
+      strategy: 'persona',
+      trustedDevice: null,
+    });
+  });
+
+  it('writes no sign-in audit for a rejected code', async () => {
+    h.redeemPersonaLoginCode.mockResolvedValue(null);
+    await run('POST', { body: { code: CODE } });
+    expect(h.logSignInSuccess).not.toHaveBeenCalled();
+  });
+
   it('returns the persona and a token pair, uncacheable', async () => {
     const res = await run('POST', { body: { code: CODE } });
 

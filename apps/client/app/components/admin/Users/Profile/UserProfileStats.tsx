@@ -2,6 +2,7 @@ import React from 'react';
 import { ApiKeyStatus } from '@bike4mind/common';
 import { useAdminGetUserApiKeys } from '@client/app/hooks/data/userApiKeys';
 import { useAdminCreditSummary } from '@client/app/hooks/data/adminUserCredits';
+import { useUserSignIns } from '@client/app/hooks/data/adminUserTimeline';
 import { RelativeTime, StatSparkline, StatStrip, StatTile } from '../../shared';
 import { formatCredits } from './actions/creditAdjustment';
 import { LEVEL_LABELS, latestSignIn, type AdminUserProfile } from './userProfileModel';
@@ -15,6 +16,8 @@ export const UserProfileStats: React.FC<{ user: AdminUserProfile }> = ({ user })
   // The same charged-credits figure as the Credits tab's "Spent, 30 days", so the two never disagree.
   const creditSummary = useAdminCreditSummary(user.id);
   const apiKeys = useAdminGetUserApiKeys(user.id);
+  // Shares the Sign-ins tab's query. GET /api/users/:id strips loginRecords, so the auth audit is the source.
+  const signIns = useUserSignIns(user.id);
   const spend = creditSummary.data
     ? {
         total: creditSummary.data.spent.last30d,
@@ -27,7 +30,7 @@ export const UserProfileStats: React.FC<{ user: AdminUserProfile }> = ({ user })
     .map(key => key.lastUsedAt)
     .filter((at): at is Date => !!at)
     .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
-  const signIn = latestSignIn(user);
+  const signIn = latestSignIn(signIns.data?.pages ?? []);
   const network = user.signupMeta;
   const level = user.level ? (LEVEL_LABELS[user.level] ?? user.level) : null;
 
@@ -63,7 +66,7 @@ export const UserProfileStats: React.FC<{ user: AdminUserProfile }> = ({ user })
       />
       <StatTile
         label="Last sign-in"
-        value={signIn ? <RelativeTime at={signIn.loginTime} /> : 'Never'}
+        value={signIn ? <RelativeTime at={signIn.at} /> : signIns.data ? 'Never' : signIns.isError ? '-' : <Pending />}
         comparison={signIn ? [signIn.location, signIn.browser].filter(Boolean).join(' \u00b7 ') : undefined}
       />
       <StatTile

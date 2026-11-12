@@ -9,7 +9,8 @@ import {
   type AdminPermissionId,
   type AccountDeletionSource,
   type ClientSurface,
-  type ILoginRecord,
+  type UserSignIn,
+  type UserSignInsPage,
   type IUserDocument,
   type OrganizationMemberRole,
 } from '@bike4mind/common';
@@ -119,9 +120,9 @@ export const LEVEL_LABELS: Readonly<Record<string, string>> = {
 };
 
 /** The most recent sign-in; records are appended, but sort anyway since nothing guarantees it. */
-export const latestSignIn = (user: Pick<AdminUserListItem, 'loginRecords'>): ILoginRecord | null =>
-  [...(user.loginRecords ?? [])].sort((a, b) => new Date(b.loginTime).getTime() - new Date(a.loginTime).getTime())[0] ??
-  null;
+/** The newest successful sign-in among the loaded sign-in pages (each newest first), or null. */
+export const latestSignIn = (pages: readonly UserSignInsPage[]): UserSignIn | null =>
+  pages.flatMap(page => page.entries).find(entry => entry.event === 'login_success') ?? null;
 
 export const CLIENT_SURFACE_LABELS: Readonly<Record<ClientSurface, string>> = {
   web: 'Web',
