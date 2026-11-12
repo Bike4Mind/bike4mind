@@ -106,6 +106,7 @@ export const ADMIN_REASON_PRESETS = {
   ],
   identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
   knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
+  dlqDiscard: ['Account refused', 'Job obsolete', 'Fixed with no replay needed', 'Bad payload', 'Other'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

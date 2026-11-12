@@ -1,4 +1,4 @@
-import { ApiKeyScope, meetsAdminPermissionRequirement } from '@bike4mind/common';
+import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
@@ -56,11 +56,10 @@ async function findFailures(queueLabel: string, sourceQueue: SourceQueueName | n
 /**
  * GET /api/admin/dlq/messages?queue=<label>&maxMessages=10
  *
- * Peeks at messages in a specific DLQ. Callers who can replay get a
- * 120-second visibility timeout so their receipt handles stay valid while
- * they decide. Read-only callers cannot replay, so their peek leaves the
- * messages visible and returns no receipt handles. Each message carries a Logs Insights link
- * over its consumer's logs around its send time (null when either is unknown).
+ * Receives messages with immediate visibility so browsing does not hide them from other admins.
+ * SQS still increments ApproximateReceiveCount for these receives.
+ * Each message carries a Logs Insights link over its consumer's logs around its send time
+ * (null when either is unknown).
  */
 const handler = adminApi({
   adminPermissions: { GET: 'support:read' },
@@ -84,9 +83,8 @@ const handler = adminApi({
 
   Logger.info(`[DLQ Messages] Peeking at ${queueLabel}`, { adminUserId, maxMessages });
 
-  const canReplay = meetsAdminPermissionRequirement(req.user, 'settings:manage');
   const [received, consumerLogs] = await Promise.all([
-    receiveFromQueue(dlqUrl, maxMessages, canReplay ? 120 : 0),
+    receiveFromQueue(dlqUrl, maxMessages, 0),
     settleWithinBudget([resolveConsumerLogsForSourceQueue(dlqEntry.sourceQueue)], CONSUMER_LOGS_BUDGET_MS).then(
       ([logs]) => logs
     ),
@@ -108,12 +106,13 @@ const handler = adminApi({
   );
   const failureById = new Map(failures.map(failure => [failure.messageId, failure]));
 
+  // receiptHandle is omitted: with VisibilityTimeout 0 the handle expires immediately,
+  // so the frontend uses the messageIds replay path which receives with its own timeout.
   const formatted = messages.map(msg => {
     const failure = failureById.get(msg.MessageId!);
     return {
       messageId: msg.MessageId,
       body: msg.Body,
-      receiptHandle: canReplay ? msg.ReceiptHandle : undefined,
       sentTimestamp: msg.Attributes?.SentTimestamp,
       approximateReceiveCount: msg.Attributes?.ApproximateReceiveCount,
       approximateFirstReceiveTimestamp: msg.Attributes?.ApproximateFirstReceiveTimestamp,

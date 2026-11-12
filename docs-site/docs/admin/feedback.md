@@ -99,7 +99,7 @@ Reports are listed in one table with the following columns:
 | **Feedback** | The feedback content, displayed with preserved whitespace and word wrapping. Scrollable if content exceeds 80px height; open the report to read it in full. A **Truncated** chip appears if the original submission was cut down to the length cap, and expired content (see Data Retention below) renders as `[content expired]`. |
 | **Status** | A status select (see Update Status below) |
 
-The last cell of each row holds a **...** button that opens the row menu: **Copy link to this report**, **Open the conversation** (see Deep Links below) and **Delete feedback**. The button shows while you hover or focus the row, and always on touch screens. No row has a delete button of its own.
+The last cell of each row holds a **...** button that opens the row menu: **Copy link to this report**, **Open the conversation** (see Deep Links below), **Email reporter** (see Emailing the reporter below) and **Delete feedback**. The button shows while you hover or focus the row, and always on touch screens. No row has a delete button of its own.
 
 The **Created** header is clickable and toggles the sort direction, displaying an up or down arrow to indicate the current order.
 
@@ -117,7 +117,7 @@ The detail panel slides in from the right over the list, which keeps its filters
 | **Summary** | Status, type (Bug, Feedback, Thumbs Up, Thumbs Down), subject and how long ago it was filed |
 | **Text** | The full report text, with the help context chip, the **Truncated** chip and tags where they apply |
 | **Links** | **Open conversation at this turn** (or **Open the conversation** for a report on a whole conversation) opens it in a new tab; **Open the help article** opens the article a help report was written on in the help panel |
-| **Reporter** | Name, email, organization and user ID, with **Open profile** to open the reporter's admin profile in a new tab |
+| **Reporter** | Name, email, organization and user ID, with **Email reporter** to start an email to them and **Open profile** to open the reporter's admin profile in a new tab |
 | **This turn** | For a report on a conversation turn: the model and provider, the tools the turn called (and how many failed), input and output token counts, whether knowledge search ran, and how many sources were cited. This is a short summary, not the raw diagnostic record. |
 | **Status** | A status select that works like the one in the row, with when the report was filed and when it last changed |
 
@@ -157,6 +157,12 @@ or page; when the report is not on the page of the list on screen, **Previous** 
 the report has since been deleted, the panel says it is no longer available. In a very long
 conversation the jump may land on the newest message first and reach the highlighted turn as older
 history loads.
+
+### Emailing the reporter
+
+**Email reporter** (in the row menu and next to **Open profile** in the detail panel) opens a draft in your mail client addressed to the person who filed the report. The subject names the report by the day it was filed, and the body quotes the report's text, one `>` line per line of the report. A very long report is cut at 1,500 characters with a final `> ...` line, so the draft stays small enough for mail clients to open.
+
+The action is hidden for a report with no email address. A report whose text has expired (see Data Retention below) opens a draft with the subject and no quote. Replies go out from your own mail account, not from Bike4Mind.
 
 ### Refresh
 
