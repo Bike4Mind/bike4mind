@@ -101,6 +101,7 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
         expect(res._getStatusCode()).toBe(200);
       }
       expect(h.sendToQueue).toHaveBeenCalledTimes(2);
+      expect(h.receiveFromQueue).toHaveBeenCalledWith(expect.anything(), 1, 60, 2);
       expect(h.getSourceQueueUrl).toHaveBeenCalledWith('questQueue');
     }
   );
