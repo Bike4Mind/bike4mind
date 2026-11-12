@@ -83,6 +83,13 @@ async function matchStoredSecret(key: string, apiKey: IUserApiKeyDocument): Prom
   return null;
 }
 
+/** Stamps `lastUsedAt` without blocking the request; a failed write is logged, never thrown. */
+export function recordUserApiKeyUse(keyId: string, db: ValidateUserApiKeyAdapters['db']): void {
+  db.userApiKeys.updateLastUsed(keyId).catch(err => {
+    Logger.globalInstance.warn('Failed to update API key last used timestamp:', err);
+  });
+}
+
 /**
  * Post-lookup gates shared by every key-validation path (raw-key-by-prefix and
  * by-id). Runs the checks that must hold regardless of HOW the doc was located -
@@ -102,12 +109,7 @@ function finalizeApiKeyValidation(
     return { isValid: false, reason: 'disabled' };
   }
 
-  // Update last used timestamp (fire and forget)
-  if (recordUse) {
-    db.userApiKeys.updateLastUsed(apiKey.id).catch(err => {
-      Logger.globalInstance.warn('Failed to update API key last used timestamp:', err);
-    });
-  }
+  if (recordUse) recordUserApiKeyUse(apiKey.id, db);
 
   return {
     isValid: true,

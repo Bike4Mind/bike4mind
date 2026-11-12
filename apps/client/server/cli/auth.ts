@@ -308,7 +308,7 @@ export async function verifyApiKey(
     const validation = await userApiKeyService.validateUserApiKey(
       apiKey,
       { db: { userApiKeys: userApiKeyRepository } },
-      { recordUse: options?.recordUse }
+      { recordUse: false }
     );
 
     if (!validation.isValid || !validation.userId || !validation.keyId || !validation.scopes || !validation.rateLimit) {
@@ -321,6 +321,11 @@ export async function verifyApiKey(
 
     if (validation.oauthExchangeClientId && !options?.allowExchangeKeys) {
       throw new ForbiddenError('This key cannot be used for this endpoint');
+    }
+
+    // Deferred past the exchange refusal so a refused key is never stamped as used.
+    if (options?.recordUse !== false) {
+      userApiKeyService.recordUserApiKeyUse(validation.keyId, { userApiKeys: userApiKeyRepository });
     }
 
     const requiredScopes = options?.requiredScopes ?? DEFAULT_COMPLETION_SCOPES;
