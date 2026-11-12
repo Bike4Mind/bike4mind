@@ -58,6 +58,15 @@ describe('buildLifecycleNote', () => {
     expect(note).toContain('Signal: models.dev carries the deprecation.');
   });
 
+  it('omits the run count when the model was seen again or the count is unknown', () => {
+    for (const extra of [{ missCount: 0 }, {}]) {
+      const note = buildLifecycleNote(
+        subject('claude-experimental', { source: 'absence', status: 'deprecated' }, extra)
+      );
+      expect(note).toContain('Signal: absent from the provider model list.');
+    }
+  });
+
   it('carries the miss count for an absence-raised suggestion', () => {
     const note = buildLifecycleNote(
       subject('claude-experimental', { source: 'absence', status: 'deprecated' }, { missCount: 4 })

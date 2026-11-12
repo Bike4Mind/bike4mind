@@ -12,7 +12,7 @@ import {
   newQueryClient,
 } from './__tests__/discoveryTestKit';
 import type { AdminModelRow } from '@bike4mind/common';
-import { LIFECYCLE_QUEUE_QUERY_KEY, type LifecycleStatus } from './discoveryApi';
+import { LIFECYCLE_QUEUE_QUERY_KEY, STALE_REFERENCES_QUERY_KEY, type LifecycleStatus } from './discoveryApi';
 
 const m = vi.hoisted(() => ({
   get: vi.fn(),
@@ -633,6 +633,54 @@ describe('LifecycleSuggestions bulk settle', () => {
 
     fireEvent.click(screen.getByTestId('discovery-bulk-review-gpt-sunset'));
     expect(await screen.findByTestId('discovery-accept-dialog')).toHaveTextContent('GPT Sunset');
+    // The blockers the run already got are listed, and the override is offered without a first refusal.
+    expect(screen.getByTestId('discovery-accept-blockers')).toHaveTextContent('costs more than gpt-sunset');
+    expect(screen.getByTestId('discovery-accept-dialog-confirm-btn')).toHaveTextContent('Accept anyway');
+  });
+
+  it('keeps the plain accept dialog free of blockers when opened from the row menu', async () => {
+    renderQueue();
+    await openMenuItem('accept');
+    expect(screen.queryByTestId('discovery-accept-blockers')).not.toBeInTheDocument();
+    expect(confirm('accept')).not.toHaveTextContent('Accept anyway');
+  });
+
+  it('refetches the queue after a bulk run where every row failed, and drops vanished rows from the selection', async () => {
+    m.post.mockImplementation(async () => {
+      throw apiError(400, { error: 'already dismissed' });
+    });
+    renderQueue();
+    await selectRows('gpt-sunset', 'anthropic.claude-v2');
+    const before = lifecycleGets();
+    // Another admin settled both meanwhile.
+    lifecycle = {
+      ...lifecycle,
+      queue: lifecycle.queue.filter(item => !['gpt-sunset', 'anthropic.claude-v2'].includes(item.modelId)),
+    };
+    fireEvent.click(screen.getByTestId('discovery-bulk-accept-btn'));
+    fireEvent.click(bulkConfirm());
+
+    await waitFor(() => expect(lifecycleGets()).toBe(before + 1));
+    await waitFor(() => expect(screen.queryByTestId('discovery-suggestion-row-gpt-sunset')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('admin-bulk-action-bar')).not.toBeInTheDocument();
+  });
+
+  it('re-runs a loaded reference report after a bulk accept, and never starts an unloaded one', async () => {
+    renderQueue();
+    await selectRows('gpt-sunset');
+    fireEvent.click(screen.getByTestId('discovery-bulk-accept-btn'));
+    fireEvent.click(bulkConfirm());
+    await waitFor(() => expect(m.post).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(lifecycleGets()).toBe(2));
+    expect(m.get.mock.calls.filter(([url, config]) => url === LIFECYCLE_PATH && !config)).toHaveLength(0);
+
+    queryClient.setQueryData(STALE_REFERENCES_QUERY_KEY, { ...LIFECYCLE, staleReferences: [] });
+    await selectRows('anthropic.claude-v2');
+    fireEvent.click(screen.getByTestId('discovery-bulk-accept-btn'));
+    fireEvent.click(bulkConfirm());
+    await waitFor(() =>
+      expect(m.get.mock.calls.filter(([url, config]) => url === LIFECYCLE_PATH && !config)).toHaveLength(1)
+    );
   });
 
   it("lists a failed row with the server's message", async () => {

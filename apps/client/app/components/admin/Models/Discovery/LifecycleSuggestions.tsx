@@ -45,6 +45,8 @@ import { ModelWriteAction, useModelWriteBlock } from '../ModelWriteAction';
 import { useModelsNavigation } from '../modelsNavigation';
 import {
   LIFECYCLE_QUEUE_QUERY_KEY,
+  STALE_REFERENCES_QUERY_KEY,
+  fetchStaleReferences,
   LIFECYCLE_STATUS_PATH,
   apiErrorMessage,
   useLifecycleQueue,
@@ -211,18 +213,21 @@ function AcceptSuggestionDialog({
   item,
   index,
   rates,
+  initialBlockers,
   onClose,
   onAccepted,
 }: {
   item: LifecycleQueueItem;
   index: ModelIndex;
   rates: Record<string, PerMTokRate>;
+  /** Blockers a bulk run already got for this row, so "Accept anyway" is offered without a first refusal. */
+  initialBlockers?: string[];
   onClose: () => void;
   onAccepted: (status: string) => void;
 }) {
   const [replacedBy, setReplacedBy] = useState(item.suggestion?.replacedBy ?? '');
   // Set only by a 409: the clauses the chosen successor missed, held until it is overruled or changed.
-  const [blockers, setBlockers] = useState<string[] | null>(null);
+  const [blockers, setBlockers] = useState<string[] | null>(initialBlockers ?? null);
   const [failure, setFailure] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const name = modelName(index, item.modelId);
@@ -524,7 +529,7 @@ function BulkOutcomeAlert({
   outcome: BulkOutcome;
   waiting: Unsettled[];
   index: ModelIndex;
-  onReview: (modelId: string) => void;
+  onReview: (modelId: string, blockers: string[]) => void;
   onClose: () => void;
 }) {
   const verb = outcome.action === 'accept' ? 'accepted' : 'dismissed';
@@ -538,7 +543,7 @@ function BulkOutcomeAlert({
           size="sm"
           variant="plain"
           color="neutral"
-          aria-label="Dismiss"
+          aria-label="Close summary"
           onClick={onClose}
           data-testid="discovery-bulk-result-dismiss-btn"
         >
@@ -565,7 +570,7 @@ function BulkOutcomeAlert({
                       size="sm"
                       variant="plain"
                       disabled={disabled}
-                      onClick={() => onReview(result.modelId)}
+                      onClick={() => onReview(result.modelId, result.blockers)}
                       data-testid={`discovery-bulk-review-${result.modelId}`}
                     >
                       Review
@@ -596,6 +601,7 @@ export function LifecycleSuggestions() {
   const index = useModelIndex().data?.byId;
   const { openModel, openPrices } = useModelsNavigation();
   const [accepting, setAccepting] = useState<LifecycleQueueItem | null>(null);
+  const [acceptBlockers, setAcceptBlockers] = useState<string[] | undefined>(undefined);
   const [dismissing, setDismissing] = useState<LifecycleQueueItem | null>(null);
   const [selection, setSelection] = useState<AdminSelection>(NO_SELECTION);
   const [bulk, setBulk] = useState<BulkRequest | null>(null);
@@ -620,6 +626,15 @@ export function LifecycleSuggestions() {
     );
     void queryClient.invalidateQueries({ queryKey: LIFECYCLE_QUEUE_QUERY_KEY });
     void queryClient.invalidateQueries({ queryKey: ADMIN_MODELS_QUERY_KEY });
+    refreshLoadedReferences();
+  };
+
+  // Only a report the admin already loaded is re-run; nothing here may start the provider fan-out itself.
+  const refreshLoadedReferences = () => {
+    if (queryClient.getQueryData(STALE_REFERENCES_QUERY_KEY) === undefined) return;
+    void queryClient
+      .fetchQuery({ queryKey: STALE_REFERENCES_QUERY_KEY, queryFn: fetchStaleReferences, staleTime: 0 })
+      .catch(() => undefined);
   };
 
   const settle = (modelId: string, message: string) => {
@@ -632,6 +647,7 @@ export function LifecycleSuggestions() {
     const settled = results.filter(result => result.outcome === 'settled').map(result => result.modelId);
     const unsettled = results.filter((result): result is Unsettled => result.outcome !== 'settled');
     if (settled.length > 0) removeSettled(settled);
+    else void queryClient.invalidateQueries({ queryKey: LIFECYCLE_QUEUE_QUERY_KEY });
     // What still needs a decision stays selected, so the next pass starts from it.
     setSelection({ mode: 'explicit', ids: unsettled.map(result => result.modelId) });
     setOutcome(unsettled.length > 0 ? { action, total: results.length, settled: settled.length, unsettled } : null);
@@ -681,7 +697,10 @@ export function LifecycleSuggestions() {
               outcome={outcome}
               waiting={outcomeWaiting}
               index={index}
-              onReview={modelId => setAccepting(queue.find(item => item.modelId === modelId) ?? null)}
+              onReview={(modelId, blockers) => {
+                setAcceptBlockers(blockers);
+                setAccepting(queue.find(item => item.modelId === modelId) ?? null);
+              }}
               onClose={() => setOutcome(null)}
             />
           )}
@@ -709,7 +728,10 @@ export function LifecycleSuggestions() {
               <SuggestionMenu
                 item={item}
                 name={modelName(index, item.modelId)}
-                onAccept={() => setAccepting(item)}
+                onAccept={() => {
+                  setAcceptBlockers(undefined);
+                  setAccepting(item);
+                }}
                 onDismiss={() => setDismissing(item)}
               />
             )}
@@ -763,6 +785,7 @@ export function LifecycleSuggestions() {
           item={accepting}
           index={index}
           rates={rates}
+          initialBlockers={acceptBlockers}
           onClose={() => setAccepting(null)}
           onAccepted={status => {
             setAccepting(null);

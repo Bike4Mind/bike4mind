@@ -110,7 +110,7 @@ export function sourcePhrase(subject: Pick<NoteSubject, 'suggestion' | 'missCoun
     case 'heuristic':
       return 'successor chosen by the family heuristic';
     case 'absence':
-      return subject.missCount !== undefined
+      return subject.missCount
         ? `absent from the provider model list for ${subject.missCount} runs`
         : 'absent from the provider model list';
     case undefined:

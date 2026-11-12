@@ -265,11 +265,14 @@ export const useLifecycleQueue = (enabled: boolean) =>
     enabled,
   });
 
+export const fetchStaleReferences = async (): Promise<LifecycleStatus> =>
+  (await api.get<LifecycleStatus>(LIFECYCLE_STATUS_PATH)).data;
+
 /** Never fetched on mount or by an invalidation: `refetch()` from "Check references" is the only way in. */
 export const useStaleReferences = () =>
   useQuery({
     queryKey: STALE_REFERENCES_QUERY_KEY,
-    queryFn: async () => (await api.get<LifecycleStatus>(LIFECYCLE_STATUS_PATH)).data,
+    queryFn: fetchStaleReferences,
     enabled: false,
     refetchOnWindowFocus: false,
     staleTime: Infinity,
