@@ -1,16 +1,18 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { Cache } from '@bike4mind/database';
 import { UserApiKey } from '@bike4mind/database/auth';
-import { createMongoServer } from '../../../database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 import { checkApiKeyRateLimit, getApiKeyRateLimitUsage, resetApiKeyRateLimit } from './apiKeyRateLimitCheck';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
   await Promise.all([Cache.init(), UserApiKey.init()]);
-}, 60_000);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await server?.stop();
