@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 
@@ -10,10 +10,19 @@ const download = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/hooks/tutorials/useTutorialDrafts', () => ({
   useTutorialDrafts: () => current.value,
   useTutorialDraftAction: () => ({ mutate: mockMutate, isPending: false }),
-  TutorialDraftRefused: class extends Error {},
+  TutorialDraftRefused: class extends Error {
+    constructor(
+      message: string,
+      readonly rules: unknown[] = [],
+      readonly code?: string
+    ) {
+      super(message);
+    }
+  },
 }));
 vi.mock('./tutorialOverrideExport', () => ({ downloadModuleBundle: download }));
 
+import { TutorialDraftRefused } from '@client/app/hooks/tutorials/useTutorialDrafts';
 import TutorialDraftsCard from './TutorialDraftsCard';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -75,6 +84,16 @@ const openDraft = (drafts: unknown[] = [draft()], choices: Record<string, unknow
   fireEvent.click(screen.getByTestId('tutorial-draft-open-my-sites'));
   typeReason();
   return view;
+};
+const settle = (kind: 'onSuccess' | 'onError', arg: unknown) =>
+  act(() => {
+    mockMutate.mock.calls[0][1][kind](arg);
+  });
+const confirmDelete = () => {
+  fireEvent.click(screen.getByTestId('tutorial-draft-delete'));
+  fireEvent.click(screen.getByTestId('tutorial-draft-delete-dialog-reason-input-preset-0'));
+  fireEvent.change(screen.getByTestId('tutorial-draft-delete-dialog-typed-input'), { target: { value: 'my-sites' } });
+  fireEvent.click(screen.getByTestId('tutorial-draft-delete-dialog-confirm-btn'));
 };
 const edit = (testid = 'tutorial-draft-pitch', value = 'edited') =>
   fireEvent.change(screen.getByTestId(testid), { target: { value } });
@@ -216,7 +235,76 @@ describe('TutorialDraftsCard', () => {
     });
   });
 
+  describe('delete outcomes', () => {
+    it('is enabled without the card reason', () => {
+      setDrafts([draft()]);
+      renderCard();
+      fireEvent.click(screen.getByTestId('tutorial-draft-open-my-sites'));
+      expect(screen.getByTestId('tutorial-draft-delete')).not.toBeDisabled();
+    });
+
+    it('closes the dialog and the editor on success', async () => {
+      openDraft();
+      confirmDelete();
+      settle('onSuccess', { drafts: [] });
+      await waitFor(() => expect(screen.queryByTestId('tutorial-draft-delete-dialog-confirm-btn')).toBeNull());
+    });
+
+    it('closes the dialog when the delete is stale', async () => {
+      openDraft();
+      confirmDelete();
+      settle('onError', new TutorialDraftRefused('changed', [], 'STALE'));
+      await waitFor(() => expect(screen.queryByTestId('tutorial-draft-delete-dialog-confirm-btn')).toBeNull());
+    });
+
+    it('sends the seq captured when the dialog opened', () => {
+      const view = openDraft();
+      fireEvent.click(screen.getByTestId('tutorial-draft-delete'));
+      setDrafts([draft({ contentSeq: 9 })]);
+      view.rerender(
+        <CssVarsProvider theme={appTheme}>
+          <TutorialDraftsCard apiBase="/api/test-tutorials" owner="core" />
+        </CssVarsProvider>
+      );
+      fireEvent.click(screen.getByTestId('tutorial-draft-delete-dialog-reason-input-preset-0'));
+      fireEvent.change(screen.getByTestId('tutorial-draft-delete-dialog-typed-input'), {
+        target: { value: 'my-sites' },
+      });
+      fireEvent.click(screen.getByTestId('tutorial-draft-delete-dialog-confirm-btn'));
+      expect(mockMutate.mock.calls[0][0]).toMatchObject({ action: 'delete', contentSeq: 3 });
+    });
+  });
+
+  describe('refusals', () => {
+    it('shows the refused rules on a 4xx', async () => {
+      openDraft();
+      edit();
+      fireEvent.click(screen.getByTestId('tutorial-draft-save'));
+      settle('onError', new TutorialDraftRefused('refused', [{ rule: 'draft-step', message: 'bad step' }]));
+      await waitFor(() => expect(screen.getByTestId('tutorial-draft-refused')).toHaveTextContent('bad step'));
+    });
+  });
+
   describe('editing', () => {
+    it('does not count a visibility kind round trip as an edit', () => {
+      openDraft([draft({ content: { ...draft().content, visibility: { public: true } } })], { visibility: true });
+      chooseOption('tutorial-draft-visibility-kind', 'Entitlement key');
+      fireEvent.change(screen.getByTestId('tutorial-draft-visibility-key'), { target: { value: 'pro:x' } });
+      expect(screen.getByTestId('tutorial-draft-save')).not.toBeDisabled();
+      chooseOption('tutorial-draft-visibility-kind', 'Everyone');
+      expect(screen.getByTestId('tutorial-draft-save')).toBeDisabled();
+      expect(screen.queryByTestId('tutorial-draft-discard')).not.toBeInTheDocument();
+    });
+
+    it('offers discard on an ordinary dirty edit, without the changed-on-server warning', () => {
+      openDraft();
+      expect(screen.queryByTestId('tutorial-draft-discard')).not.toBeInTheDocument();
+      edit();
+      expect(screen.queryByTestId('tutorial-draft-changed-warning')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('tutorial-draft-discard'));
+      expect(screen.getByTestId('tutorial-draft-pitch')).toHaveValue('p');
+    });
+
     it('disables save until something changed, then sends only the changed fields', () => {
       openDraft();
       expect(screen.getByTestId('tutorial-draft-save')).toBeDisabled();

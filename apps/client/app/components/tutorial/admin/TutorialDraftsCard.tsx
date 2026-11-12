@@ -57,7 +57,7 @@ const VisibilityControl: FC<{
       size="sm"
       placeholder="Who may run it"
       value={value.kind || null}
-      onChange={(_, kind) => onChange({ ...value, kind: kind ?? '' })}
+      onChange={(_, kind) => onChange({ kind: kind ?? '', key: '' })}
       slotProps={{ button: { 'data-testid': `${testid}-kind` } }}
     >
       <Option value="entitlement">Entitlement key</Option>
@@ -133,6 +133,7 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
   const [buffers, setBuffers] = useState<Buffers | null>(null);
   const [refused, setRefused] = useState<ValidationIssue[]>([]);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteSeq, setDeleteSeq] = useState<number | null>(null);
   const [changedSince, setChangedSince] = useState(false);
   const seeded = useRef<{ moduleId: string; contentSeq: number; buffers: Buffers } | null>(null);
   const reasonGiven = reason.trim().length > 0;
@@ -142,6 +143,7 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
 
   const original = draft ? buffersOf(draft) : null;
   const dirty = !!buffers && !!original && !sameBuffers(buffers, original);
+  const sheetBlocked = !reasonGiven || dirty || act.isPending;
 
   const seed = (from: TutorialDraftView) => {
     const next = buffersOf(from);
@@ -188,7 +190,12 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
           setDeleteOpen(false);
         }
       },
-      onError: error => setRefused(error instanceof TutorialDraftRefused ? error.rules : []),
+      onError: error => {
+        setRefused(error instanceof TutorialDraftRefused ? error.rules : []);
+        if (input.action === 'delete' && error instanceof TutorialDraftRefused && error.code === 'STALE') {
+          setDeleteOpen(false);
+        }
+      },
     });
   };
 
@@ -338,7 +345,7 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
           Could not read the tutorial drafts.
         </Typography>
       ) : (
-        <Stack direction="row" gap={1} flexWrap="wrap">
+        <Stack direction="row" gap={1} flexWrap="wrap" data-testid="tutorial-drafts-list">
           {(drafts.data?.drafts ?? []).map(row => (
             <Button
               key={row.moduleId}
@@ -411,14 +418,21 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
               data-testid="tutorial-draft-enable"
               endDecorator={draft.enabled ? 'On' : 'Off'}
             />
-            <Button size="sm" variant="outlined" component="label" data-testid="tutorial-draft-sheet-upload">
+            <Button
+              size="sm"
+              variant="outlined"
+              component="label"
+              disabled={sheetBlocked}
+              aria-disabled={sheetBlocked}
+              data-testid="tutorial-draft-sheet-upload"
+            >
               Upload sheet (.csv)
               <input
                 hidden
                 type="file"
                 accept=".csv,text/csv"
                 data-testid="tutorial-draft-sheet-input"
-                disabled={!reasonGiven || dirty}
+                disabled={sheetBlocked}
                 onChange={event => {
                   const file = event.target.files?.[0];
                   event.target.value = '';
@@ -445,8 +459,11 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
               variant="outlined"
               color="danger"
               data-testid="tutorial-draft-delete"
-              disabled={!reasonGiven || act.isPending}
-              onClick={() => setDeleteOpen(true)}
+              disabled={act.isPending}
+              onClick={() => {
+                setDeleteSeq(draft.contentSeq);
+                setDeleteOpen(true);
+              }}
             >
               Delete
             </Button>
@@ -467,15 +484,22 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
             confirmLabel="Delete draft"
             pending={act.isPending}
             onConfirm={deleteReason =>
-              run({ action: 'delete', moduleId: draft.moduleId, contentSeq: draft.contentSeq, reason: deleteReason })
+              run({
+                action: 'delete',
+                moduleId: draft.moduleId,
+                contentSeq: deleteSeq ?? draft.contentSeq,
+                reason: deleteReason,
+              })
             }
             data-testid="tutorial-draft-delete-dialog"
           />
-          {changedSince && (
-            <Stack direction="row" gap={1} alignItems="center" data-testid="tutorial-draft-changed-warning">
-              <Typography level="body-sm" color="warning">
-                This draft changed since you started editing. Saving will replace that change.
-              </Typography>
+          {dirty && (
+            <Stack direction="row" gap={1} alignItems="center">
+              {changedSince && (
+                <Typography level="body-sm" color="warning" data-testid="tutorial-draft-changed-warning">
+                  This draft changed since you started editing. Saving will replace that change.
+                </Typography>
+              )}
               <Button size="sm" variant="outlined" data-testid="tutorial-draft-discard" onClick={() => seed(draft)}>
                 Discard my edits
               </Button>
