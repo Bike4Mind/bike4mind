@@ -1,5 +1,10 @@
 import { creditTransactionRepository } from '@bike4mind/database';
-import { CreditHolderType, CREDIT_ADD_TRANSACTION_TYPES, CREDIT_DEDUCT_TRANSACTION_TYPES } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  CreditHolderType,
+  CREDIT_ADD_TRANSACTION_TYPES,
+  CREDIT_DEDUCT_TRANSACTION_TYPES,
+} from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 
@@ -19,7 +24,7 @@ const CreditTransactionsQuerySchema = z.object({
   type: z.enum(['all', 'added', 'deducted']).prefault('all'),
 });
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ] }).get(async (req, res) => {
   const { user } = req;
   if (!user) {
     return res.status(401).json({ error: 'Unauthorized' });

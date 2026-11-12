@@ -1,8 +1,7 @@
 // @vitest-environment node
 /**
- * /api/sessions - the notebook list (GET) and delete-every-notebook (DELETE) share one baseApi()
- * door, so the API-key scope is asserted per verb in the handler rather than by a route-level
- * requiredScopes: DELETE needs notebooks:write, GET stays open to read keys.
+ * /api/sessions - the notebook list (GET) and delete-every-notebook (DELETE) share one baseApi door
+ * that admits either notebook scope; DELETE then narrows to notebooks:write in the handler.
  */
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { EventEmitter } from 'events';
@@ -136,11 +135,8 @@ describe('/api/sessions API-key scopes', () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    ['a notebooks:read key', [ApiKeyScope.READ_NOTEBOOKS]],
-    ['an unscoped key', []],
-  ])('refuses DELETE for %s without deleting anything', async (_label, scopes) => {
-    keyWithScopes(scopes);
+  it('refuses DELETE for a notebooks:read key without deleting anything', async () => {
+    keyWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
     const { req, res } = fire('DELETE');
     await handler(req, res);
 
@@ -175,5 +171,20 @@ describe('/api/sessions API-key scopes', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockSearchOwnSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['GET', 'an unscoped key', []],
+    ['GET', 'a non-notebook key', [ApiKeyScope.ME_READ]],
+    ['DELETE', 'an unscoped key', []],
+  ] as const)('refuses %s at the door for %s', async (method, _label, scopes) => {
+    keyWithScopes([...scopes]);
+    const { req, res } = fire(method);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(JSON.stringify(res._getData())).toContain('Insufficient API key permissions');
+    expect(mockSearchOwnSessions).not.toHaveBeenCalled();
+    expect(mockDeleteMany).not.toHaveBeenCalled();
   });
 });

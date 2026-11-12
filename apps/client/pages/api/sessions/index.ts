@@ -17,7 +17,8 @@ import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { purgeDeletedNotebookMedia } from '@server/sessions/purgeDeletedNotebookMedia';
 
-const handler = baseApi()
+// Door admits either notebook scope; DELETE narrows to notebooks:write below.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS] })
   /**
    * Get all sessions
    */
@@ -61,8 +62,6 @@ const handler = baseApi()
    */
   .delete(
     asyncHandler(async (req, res) => {
-      // Gated per verb, not at the door: GET above is the notebook list that notebooks:read and
-      // unscoped keys rely on, so a route-level requiredScopes would newly deny them.
       assertApiKeyScope(
         req,
         [ApiKeyScope.WRITE_NOTEBOOKS],
