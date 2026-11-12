@@ -12,7 +12,7 @@ export function buildDlqTriageSection(
       const shortId = suggestion.entityId.slice(queueLabel.length + 1).slice(0, 8);
       const basis = suggestion.reasons[0]?.text ?? 'Inspect consumer logs before acting.';
       const link = appUrl
-        ? ` <${appUrl}/admin?tab=dlq-replay&queue=${encodeURIComponent(queueLabel)}&message=${encodeURIComponent(suggestion.entityId.slice(queueLabel.length + 1))}|Review in console>`
+        ? ` <${appUrl}/admin?tab=dlq-replay&dlqQueue=${encodeURIComponent(queueLabel)}&dlqMessage=${encodeURIComponent(suggestion.entityId.slice(queueLabel.length + 1))}|Review in console>`
         : '';
       return `Dead letter ${escape(shortId)}: ${escape(suggestion.actionClass ?? 'review-required')} - ${escape(suggestion.verdict)}. ${escape(basis)}${link}`;
     })

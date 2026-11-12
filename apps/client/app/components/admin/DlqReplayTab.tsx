@@ -271,8 +271,8 @@ const DlqReplayTab: React.FC = () => {
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const linkedMessageOpened = useRef(false);
   useEffect(() => {
-    if (typeof search.queue === 'string') setSelectedQueue(search.queue);
-  }, [search.queue]);
+    if (typeof search.dlqQueue === 'string') setSelectedQueue(search.dlqQueue);
+  }, [search.dlqQueue]);
   const [showHistory, setShowHistory] = useState(false);
   const [historyStatus, setHistoryStatus] = useState<'success' | 'failed' | 'skipped' | ''>('');
   const [historyDateRange, setHistoryDateRange] = useState<'24h' | '7d' | '30d' | 'all'>('7d');
@@ -308,14 +308,14 @@ const DlqReplayTab: React.FC = () => {
     refetch: refetchMessages,
   } = useDlqMessages(selectedQueue);
   useEffect(() => {
-    if (linkedMessageOpened.current || typeof search.message !== 'string') return;
-    const message = messages?.find(message => message.messageId === search.message);
+    if (linkedMessageOpened.current || typeof search.dlqMessage !== 'string') return;
+    const message = messages?.find(message => message.messageId === search.dlqMessage);
     if (message) {
       setSelectedMessage(message);
       setDrawerOpen(true);
       linkedMessageOpened.current = true;
     }
-  }, [messages, search.message]);
+  }, [messages, search.dlqMessage]);
   const replayMutation = useDlqReplay();
   const {
     data: history,

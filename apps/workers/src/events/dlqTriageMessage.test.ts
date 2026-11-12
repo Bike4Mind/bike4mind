@@ -14,7 +14,7 @@ describe('DLQ triage Slack surface', () => {
     } as unknown as AdminAiSuggestionItem;
     const text = buildDlqTriageSection('fixture', [suggestion], 'https://example.test');
     expect(text).toContain('Dead letter 12345678: safe-transient - replay');
-    expect(text).toContain('queue=fixture&message=123456789-secret');
+    expect(text).toContain('dlqQueue=fixture&dlqMessage=123456789-secret');
     expect(text).not.toContain('private payload');
   });
   it('reports ambiguous delivery without retrying', async () => {
