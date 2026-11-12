@@ -151,6 +151,7 @@
       "usage": "Usage",
       "analysis": "Analysis",
       "billing": "Billing",
+      "api-keys": "API keys",
       "integrations": "Integrations",
       "settings": "Settings"
     },
@@ -168,6 +169,7 @@
       "analysis": "Feedback members left on AI responses, summarized.",
       "integrations": "Connect GitHub, Slack, webhooks and custom connectors for the whole team.",
       "billing": "Subscription, seats and payment details.",
+      "api-keys": "Keys the team owns, and members' own keys billed to this team.",
       "settings": "Team-wide AI context, ownership and deletion."
     },
     "integration_sections": {
@@ -197,6 +199,9 @@
       "x_active": "{{count}} Active",
       "x_pending": "{{count}} Pending",
       "x_available": "{{count}} Available"
+    },
+    "api_keys": {
+      "member_keys": "Member API keys"
     }
   },
   "session": {

@@ -11,6 +11,8 @@ import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIn
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
+import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
+import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
@@ -46,6 +48,7 @@ import GroupWorkOutlinedIcon from '@mui/icons-material/GroupWorkOutlined';
 import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import {
   canManageOrgConnectors,
@@ -99,6 +102,8 @@ const RAIL_GROUPS: ReadonlyArray<{ key: 'team' | 'insights' | 'integrations' | '
     key: 'admin',
     tabs: [
       { tab: OrganizationTabs.Billing, icon: <CreditCardOutlinedIcon />, visible: a => a.canViewBilling },
+      // Same gate as Connectors: owner, current manager or platform admin.
+      { tab: OrganizationTabs.ApiKeys, icon: <KeyOutlinedIcon />, visible: a => a.canManageConnectors },
       { tab: OrganizationTabs.Settings, icon: <SettingsOutlinedIcon />, visible: a => a.canManageOrg },
     ],
   },
@@ -352,6 +357,16 @@ const OrganizationPage: FC = () => {
               <TabPanel value={OrganizationTabs.Billing}>
                 {header(OrganizationTabs.Billing)}
                 <OrganizationBillingSection organization={organization} />
+              </TabPanel>
+            )}
+            {access.canManageConnectors && (
+              <TabPanel value={OrganizationTabs.ApiKeys}>
+                {header(OrganizationTabs.ApiKeys)}
+                <OrgApiKeysSection key={organization.id} organizationId={organization.id} />
+                <Typography level="title-md" component="h3" sx={{ mt: 4, mb: 2 }}>
+                  {t('organization.api_keys.member_keys')}
+                </Typography>
+                <OrgMemberApiKeysSection key={`members-${organization.id}`} organizationId={organization.id} />
               </TabPanel>
             )}
             {access.canManageOrg && (

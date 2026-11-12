@@ -18,6 +18,12 @@
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
     static let workingQuestID = "fixture-0-q4"
 
+    /// `B4M_UI_FIXTURE_LINK` opens an app link at launch (e.g. `https://app.bike4mind.com/notebooks/fixture-1`),
+    /// so a screenshot run can land on a screen without driving taps.
+    static var initialLink: URL? {
+      ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_LINK"].flatMap(URL.init(string:))
+    }
+
     /// `B4M_UI_FIXTURE_ACCOUNT` picks the account-deletion story: `org-transfer` (the 409 list),
     /// `pending` (launch on the restore screen) or the default (deletion succeeds and signs out).
     enum AccountScenario: String {
@@ -187,6 +193,10 @@
               "fixture-1-q2", "Draft two bullet points for the board deck.",
               "- Revenue grew 9% quarter over quarter, led by renewals.\n- Churn fell to its lowest level in two years.",
               ago: 6_900),
+            done(
+              "fixture-1-q3", "Show the churn query.",
+              "This reads the monthly churn rate:\n\n```sql\nSELECT month, churned / active AS rate\nFROM churn_by_month\nWHERE year = 2025;\n```\n\nRun it against the reporting replica.",
+              ago: 6_600),
           ]
         case "fixture-3":
           turns = [

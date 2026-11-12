@@ -59,6 +59,8 @@ vi.mock('@client/app/components/organizations/OrgSlackIntegration', () => ({ def
 vi.mock('@client/app/components/organizations/OrgWebhookConfig', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgGitHubConnectionTab', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgCustomMcpPolicySection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgApiKeysSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgMemberApiKeysSection', () => ({ default: () => null }));
 
 // A real i18next over en.json, so assertions pin the wording, plurals and interpolation users get.
 const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
@@ -384,6 +386,7 @@ describe('organization detail page - grouped rail and tab headers', () => {
       'Analysis',
       'Integrations',
       'Billing',
+      'API keys',
       'Settings',
     ]);
     for (const group of ['team', 'insights', 'integrations', 'admin']) {
@@ -391,7 +394,7 @@ describe('organization detail page - grouped rail and tab headers', () => {
     }
   });
 
-  it.each(['overview', 'members', 'groups', 'usage', 'analysis', 'integrations', 'billing', 'settings'])(
+  it.each(['overview', 'members', 'groups', 'usage', 'analysis', 'integrations', 'billing', 'api-keys', 'settings'])(
     'gives the %s tab the shared header with a description',
     tab => {
       searchParams.current = { tab };

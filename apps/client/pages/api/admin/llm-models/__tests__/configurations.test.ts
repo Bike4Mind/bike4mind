@@ -1,136 +1,129 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
-const captured = vi.hoisted(() => ({ put: undefined as Handler | undefined }));
-
-vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: Handler) => fn }));
+const h = vi.hoisted(() => ({
+  get: undefined as Handler | undefined,
+  put: undefined as Handler | undefined,
+  find: vi.fn(),
+  revision: vi.fn(),
+  save: vi.fn(),
+}));
+vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (handler: Handler) => handler }));
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
-    get: () => chain,
-    put: (fn: Handler) => {
-      captured.put = fn;
+    get: (handler: Handler) => {
+      h.get = handler;
+      return chain;
+    },
+    put: (handler: Handler) => {
+      h.put = handler;
       return chain;
     },
   };
   return { baseApi: () => chain };
 });
-const mockFindOneAndUpdate = vi.fn();
-const mockStored = vi.fn();
-const mockAudit = vi.fn();
-vi.mock('@bike4mind/database', () => ({ withTransaction: (fn: () => Promise<unknown>) => fn() }));
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
-  recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a),
+vi.mock('@bike4mind/database/infra', () => ({ AdminSettings: { findOne: (...args: unknown[]) => h.find(...args) } }));
+vi.mock('@bike4mind/server-utils/modelDiscovery/modelAccessRevision', () => ({
+  readModelAccessRevision: () => h.revision(),
 }));
-vi.mock('@bike4mind/database/infra', () => ({
-  AdminSettings: {
-    findOne: () => ({ lean: () => mockStored() }),
-    syncIndexes: vi.fn(),
-    findOneAndUpdate: (...a: unknown[]) => mockFindOneAndUpdate(...a),
-  },
+vi.mock('@server/modelAccess/modelAccess', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/modelAccess/modelAccess')>()),
+  saveModelAccess: (...args: unknown[]) => h.save(...args),
 }));
-vi.mock('@bike4mind/utils', () => ({ invalidateSettingsCache: vi.fn() }));
-
 import '../configurations';
 
-function put(config: Record<string, unknown>, user: Record<string, unknown> = { isAdmin: true }) {
-  const req = {
-    user,
-    ability: {},
-    body: { configurations: [{ id: 'model-a', enabled: true, allowedUserTags: [], ...config }] },
-  };
-  const res = { json: vi.fn() };
-  return captured.put!(req, res);
-}
-
-describe('PUT /api/admin/llm-models/configurations - source: namespace', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFindOneAndUpdate.mockResolvedValue({});
-    mockStored.mockResolvedValue(null);
-    mockAudit.mockResolvedValue(null);
-  });
-
-  it('refuses a self-assignable source: tag in allowedUserTags', async () => {
-    await expect(put({ allowedUserTags: ['vip', 'Source:Acme'] })).rejects.toThrow(/allowedUserTags\[1\]/);
-    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
-  });
-
-  it('refuses a source: key in allowedEntitlements', async () => {
-    await expect(put({ allowedEntitlements: ['source:acme'] })).rejects.toThrow(/allowedEntitlements\[0\]/);
-    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
-  });
-
-  it('saves ordinary tags and entitlements', async () => {
-    await put({ allowedUserTags: ['vip'], allowedEntitlements: ['acme:pro'] });
-    expect(mockFindOneAndUpdate).toHaveBeenCalledTimes(1);
-  });
+const respond = () => ({ json: vi.fn(), setHeader: vi.fn() });
+const stamp = '2026-11-01T00:00:00.000Z';
+const entry = { id: 'model-a', enabled: true, allowedUserTags: [], allowedEntitlements: ['base'] };
+const body = {
+  changes: [{ id: 'model-a', change: { enabled: false }, expectedUpdatedAt: stamp }],
+  reason: 'Update model availability',
+};
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.find.mockResolvedValue({ settingValue: [{ ...entry, updatedAt: new Date(stamp) }] });
+  h.revision.mockResolvedValue('rev-1');
+  h.save.mockResolvedValue({ entries: [], changed: 0, revision: null });
 });
 
-describe('PUT /api/admin/llm-models/configurations - admin audit', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFindOneAndUpdate.mockResolvedValue({});
-    mockStored.mockResolvedValue(null);
-    mockAudit.mockResolvedValue(null);
+describe('conditional dashboard compatibility Save', () => {
+  it('refuses an unversioned old-client body with reload-required 409 and no writes', async () => {
+    await expect(
+      h.put!({ user: { isAdmin: true }, body: { configurations: [entry] } }, respond())
+    ).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('Reload') });
+    expect(h.save).not.toHaveBeenCalled();
   });
 
-  it('records a strict llmModelConfigurations entry with the stored and saved lists', async () => {
-    const previous = [{ id: 'model-a', enabled: false, allowedUserTags: [] }];
-    mockStored.mockResolvedValue({ settingValue: previous });
+  it.each([
+    { user: { isAdmin: false, adminPermissions: ['settings:manage'] } },
+    { user: { isAdmin: true }, apiKeyInfo: { scopes: ['admin:*'] } },
+    { user: undefined },
+  ])('refuses delegates, API keys and unauthenticated callers before writing: %j', async credentials => {
+    await expect(h.put!({ ...credentials, body }, respond())).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.save).not.toHaveBeenCalled();
+  });
 
-    await put({});
+  it('accepts the validated changed-entry request from a full-admin session', async () => {
+    const request = { user: { isAdmin: true }, body };
+    const response = respond();
+    await h.put!(request, response);
+    expect(h.save).toHaveBeenCalledWith(request, body);
+    expect(response.json).toHaveBeenCalledWith({ entries: [], changed: 0, revision: null });
+  });
 
-    expect(mockAudit).toHaveBeenCalledTimes(1);
-    expect(mockAudit.mock.calls[0][1]).toMatchObject({
-      action: 'settings.admin_settings.updated',
-      target: { kind: 'settings', id: 'llmModelConfigurations' },
-      changes: [
-        {
-          field: 'llmModelConfigurations',
-          before: previous,
-          after: [{ id: 'model-a', enabled: true, allowedUserTags: [] }],
-        },
-      ],
+  it.each([
+    { ...body, reason: '' },
+    { ...body, changes: [...body.changes, ...body.changes] },
+    { ...body, changes: [{ ...body.changes[0], change: { allowedUserTags: ['source:oauth'] } }] },
+    { ...body, changes: [{ ...body.changes[0], change: { rank: 101 } }] },
+  ])('validates reason, unique IDs, namespaces and rank: %j', async invalid => {
+    await expect(h.put!({ user: { isAdmin: true }, body: invalid }, respond())).rejects.toMatchObject({
+      statusCode: 400,
     });
-    expect(mockFindOneAndUpdate.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
-  });
-
-  it('records before as null when nothing was stored', async () => {
-    await put({});
-    expect(mockAudit.mock.calls[0][1].changes[0].before).toBeNull();
-  });
-
-  it('does not report success when the audit write rejects', async () => {
-    mockAudit.mockRejectedValue(new Error('audit down'));
-    const res = { json: vi.fn() };
-    const req = {
-      user: { isAdmin: true },
-      ability: {},
-      body: { configurations: [{ id: 'model-a', enabled: true, allowedUserTags: [] }] },
-    };
-
-    await expect(captured.put!(req, res)).rejects.toThrow(/audit down/);
-    expect(res.json).not.toHaveBeenCalled();
+    expect(h.save).not.toHaveBeenCalled();
   });
 });
 
-describe('PUT /api/admin/llm-models/configurations - permission', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFindOneAndUpdate.mockResolvedValue({});
-    mockStored.mockResolvedValue(null);
-    mockAudit.mockResolvedValue(null);
+describe('configuration reads', () => {
+  it('keeps the picker body shape and returns the pre-read revision header', async () => {
+    const response = respond();
+    await h.get!({ user: { id: 'u1' } }, response);
+    expect(response.setHeader).toHaveBeenCalledWith('x-model-access-revision', 'rev-1');
+    expect(response.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
+    expect(response.json).toHaveBeenCalledWith({ settingValue: [entry] });
+    expect(h.revision.mock.invocationCallOrder[0]).toBeLessThan(h.find.mock.invocationCallOrder[0]);
   });
 
-  it('lets a settings:manage delegate save', async () => {
-    await put({}, { isAdmin: false, adminPermissions: ['settings:manage'] });
-    expect(mockFindOneAndUpdate).toHaveBeenCalledOnce();
+  it('adds the actually loaded entry stamps for a full-admin editor', async () => {
+    const response = respond();
+    await h.get!({ user: { isAdmin: true } }, response);
+    expect(response.json).toHaveBeenCalledWith({ settingValue: [{ ...entry, updatedAt: stamp }] });
   });
 
-  it('refuses a delegate without settings:manage before writing', async () => {
-    await expect(put({}, { isAdmin: false, adminPermissions: ['support:read'] })).rejects.toThrow(
-      'Missing permission: settings:manage'
-    );
-    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  it('preserves legacy missing-enabled semantics and allows a truly absent setting', async () => {
+    h.find.mockResolvedValueOnce({ settingValue: [{ id: 'legacy', allowedUserTags: [] }] }).mockResolvedValueOnce(null);
+    const legacy = respond();
+    await h.get!({ user: { id: 'u1' } }, legacy);
+    expect(legacy.json).toHaveBeenCalledWith({ settingValue: [{ id: 'legacy', enabled: false, allowedUserTags: [] }] });
+    const missing = respond();
+    await h.get!({ user: { id: 'u1' } }, missing);
+    expect(missing.json).toHaveBeenCalledWith({ settingValue: [] });
+  });
+
+  it('does not turn a failed or corrupt access read into an empty default-restoring list', async () => {
+    h.find.mockRejectedValueOnce(new Error('Access read failed')).mockResolvedValueOnce({ settingValue: 'invalid' });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = respond();
+      await expect(h.get!({ user: { id: 'u1' } }, response)).rejects.toThrow();
+      expect(response.json).not.toHaveBeenCalled();
+    }
+  });
+
+  it('keeps serving real configurations when the advisory revision read is unavailable', async () => {
+    h.revision.mockRejectedValue(new Error('Revision read failed'));
+    const response = respond();
+    await h.get!({ user: { id: 'u1' } }, response);
+    expect(response.setHeader).not.toHaveBeenCalledWith('x-model-access-revision', expect.anything());
+    expect(response.json).toHaveBeenCalledWith({ settingValue: [entry] });
   });
 });

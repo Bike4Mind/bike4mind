@@ -417,6 +417,13 @@ describe('resolveAccessibleTab', () => {
     );
   });
 
+  it('opens the API Keys tab only for an org manager', () => {
+    expect(resolveAccessibleTab(OrganizationTabs.ApiKeys, all)).toBe(OrganizationTabs.ApiKeys);
+    expect(resolveAccessibleTab(OrganizationTabs.ApiKeys, { ...all, canManageConnectors: false })).toBe(
+      OrganizationTabs.Overview
+    );
+  });
+
   it('never bounces the tabs every member may see', () => {
     const none = {
       canManageOrg: false,

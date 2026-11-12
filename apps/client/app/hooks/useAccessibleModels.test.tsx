@@ -1,9 +1,12 @@
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PAID_PLAN_ENTITLEMENT_KEY, type LLMModelConfig, type ModelInfo } from '@bike4mind/common';
 import { useAccessibleModels } from './useAccessibleModels';
 
 const h = vi.hoisted(() => ({
+  configError: null as Error | null,
+  refetchInfos: vi.fn(),
+  refetchConfigs: vi.fn(),
   locked: [] as unknown[],
   saved: [] as unknown[],
   entitlements: ['base'] as string[],
@@ -14,7 +17,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (state: { currentUser: typeof h.user }) => unknown) => selector({ currentUser: h.user }),
 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
-  useModelInfo: () => ({ data: [], isPending: false, isError: false, refetch: vi.fn() }),
+  useModelInfo: () => ({ data: [], isPending: false, isError: false, refetch: h.refetchInfos }),
   useLockedModels: () => ({ data: h.locked, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/entitlements', () => ({
@@ -37,6 +40,8 @@ vi.mock('@client/app/hooks/data/llmModelConfig', async () => {
         [infos]
       ),
       isLoading: pending,
+      error: h.configError,
+      refetch: h.refetchConfigs,
     }),
   };
 });
@@ -56,6 +61,9 @@ const lockedIds = () => renderHook(() => useAccessibleModels()).result.current.l
 
 describe('useAccessibleModels lockedModels', () => {
   beforeEach(() => {
+    h.configError = null;
+    h.refetchInfos.mockClear();
+    h.refetchConfigs.mockClear();
     h.locked = [lockedModel('paid-a')];
     h.saved = [];
     h.entitlements = ['base'];
@@ -92,5 +100,25 @@ describe('useAccessibleModels lockedModels', () => {
   it('drops a locked model gated on an entitlement the paid plan does not grant', () => {
     h.saved = [config('paid-a', { allowedEntitlements: ['plan:enterprise'] })];
     expect(lockedIds()).toEqual([]);
+  });
+});
+
+describe('model access read failures', () => {
+  it('reports failed access reads as retryable and retries both catalog and access', async () => {
+    h.configError = new Error('Access unavailable');
+    try {
+      const view = renderHook(() => useAccessibleModels());
+      expect(view.result.current.isModelsError).toBe(true);
+      await act(async () => {
+        await view.result.current.refetchModels();
+      });
+      expect(h.refetchInfos).toHaveBeenCalled();
+      expect(h.refetchConfigs).toHaveBeenCalled();
+      h.configError = null;
+      view.rerender();
+      expect(view.result.current.isModelsError).toBe(false);
+    } finally {
+      h.configError = null;
+    }
   });
 });

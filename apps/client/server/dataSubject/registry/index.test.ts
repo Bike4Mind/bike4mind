@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { findUnclassifiedModels, mergeRegistries } from './index';
+import { DATA_HOLDER_REGISTRY, findUnclassifiedModels, mergeRegistries } from './index';
+import { holderExportScope } from '../exportScope';
 import type { DataHolderRegistry } from '../types';
 
 const noData = { kind: 'noUserData', note: 'test' } as const;
@@ -24,5 +25,18 @@ describe('mergeRegistries', () => {
   it('throws when a model is classified in two registries', () => {
     const a: DataHolderRegistry = { A: noData };
     expect(() => mergeRegistries([a, a])).toThrow(/classified twice/);
+  });
+});
+
+describe('private feedback note export policy', () => {
+  it.each(['userId', 'author.id'])('excludes bodies from whole-record export policy for %s', path => {
+    const holder = DATA_HOLDER_REGISTRY.FeedbackNote;
+    if (holder.kind !== 'holder') throw new Error('FeedbackNote must be a holder');
+    const references = holder.references.filter(reference => reference.path === path);
+    expect(references).toHaveLength(1);
+    expect(holderExportScope(references.map(reference => ({ reference, throughArray: false })))).toEqual({
+      scope: 'wholeDocument',
+    });
+    expect(holder.secretPaths).toContain('body');
   });
 });

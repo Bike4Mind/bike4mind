@@ -42,7 +42,7 @@ Usage is charged to whichever account you have selected in the account menu, not
 
 ## Add and manage members
 
-Open a Team with **View Details**. The tabs on the left are grouped: **Team** (Overview, Members, Groups), **Insights** (Usage, Analysis), **Integrations**, and **Admin** (Billing, Settings). Everyone sees Overview and Members; the other tabs appear only for people with the right access. The **Integrations** tab holds the Slack, GitHub, Webhooks and Connectors sections, and each section appears only for people who may manage it. The Usage tab, which shows the Team's credit usage, is for the owner and platform admins; being a Team manager does not grant access. The **Billing** tab is visible to the owner only. A Team manager finds the Team in the Teams list marked with a **Manager** badge.
+Open a Team with **View Details**. The tabs on the left are grouped: **Team** (Overview, Members, Groups), **Insights** (Usage, Analysis), **Integrations**, and **Admin** (Billing, API keys, Settings). Everyone sees Overview and Members; the other tabs appear only for people with the right access. The **Integrations** tab holds the Slack, GitHub, Webhooks and Connectors sections, and each section appears only for people who may manage it. The Usage tab, which shows the Team's credit usage, is for the owner and platform admins; being a Team manager does not grant access. The **Billing** tab is visible to the owner only. A Team manager finds the Team in the Teams list marked with a **Manager** badge.
 
 On the **Members** tab:
 
