@@ -11,7 +11,7 @@ import { admitLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
 import { recordRejectedUploadBatch } from '@bike4mind/server-utils/s3/recordRejectedUploadBatch';
 import { recomputeStatsForUploadedFile } from '@bike4mind/server-utils/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@bike4mind/server-utils/s3/historyUploadComplete';
-import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
+import { dispatch as notebookImportComplete } from '@bike4mind/server-utils/s3/notebookImportComplete';
 import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
 import { buildKnowledgeModerationDeps } from '@bike4mind/server-utils/s3/knowledgeModerationDeps';
 import { Resource } from 'sst';

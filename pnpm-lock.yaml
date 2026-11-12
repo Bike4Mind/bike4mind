@@ -2825,6 +2825,9 @@ importers:
       stripe:
         specifier: ^22.6.2
         version: 22.6.2(@types/node@24.12.3)
+      uuid:
+        specifier: ^14.0.2
+        version: 14.0.2
       zod:
         specifier: ^4.6.6
         version: 4.6.6

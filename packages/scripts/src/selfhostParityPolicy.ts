@@ -262,7 +262,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'notification:infra/buckets.ts:historyImportBucket.notebookImportCompleted',
-    '038477bf6725480f4648201ff0ee3640423f78bb39f3c04d9b45a8cdcd3d434a'
+    '10c12e2ca242b238692422efdec75956518f41a011790a494ae053166d7ad7c7'
   ),
   gap(
     'notification:infra/buckets.ts:historyImportBucket.uploadComplete',

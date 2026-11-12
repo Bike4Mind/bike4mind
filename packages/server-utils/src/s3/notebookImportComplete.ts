@@ -20,11 +20,11 @@ import {
   adminSettingsRepository,
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
-import { chargeStampedKnowledgeStorage, stampImportedKnowledgeRows } from '@bike4mind/server-utils/s3/storageCharge';
-import { buildKnowledgeModerationDeps } from '@bike4mind/server-utils/s3/knowledgeModerationDeps';
-import { withContext } from '@bike4mind/server-utils/s3/utils';
-import { createOwnedArtifactSourceRefsGuard } from '@bike4mind/server-utils/utils/artifactSourceRefsGuards';
+import { moderateImportedKnowledgeFiles } from './moderateImportedKnowledgeFiles';
+import { chargeStampedKnowledgeStorage, stampImportedKnowledgeRows } from './storageCharge';
+import { buildKnowledgeModerationDeps } from './knowledgeModerationDeps';
+import { withContext } from './utils';
+import { createOwnedArtifactSourceRefsGuard } from '../utils/artifactSourceRefsGuards';
 import type { ClientSession, FilterQuery } from 'mongoose';
 import type {
   IArtifactContentDocument,
@@ -33,15 +33,11 @@ import type {
   IChatHistoryItem,
   IChatHistoryItemDocument,
 } from '@bike4mind/common';
-import { parseNotebookImportKey } from '@server/utils/notebookImportKeys';
+import { parseNotebookImportKey } from '../utils/notebookImportKeys';
 import { Resource } from 'sst';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { getFilesStorage } from '../utils/storage/index';
 import { v4 as uuidv4 } from 'uuid';
-import {
-  updateImportProgress,
-  markImportComplete,
-  markImportFailed,
-} from '@bike4mind/server-utils/utils/importHistoryProgress';
+import { updateImportProgress, markImportComplete, markImportFailed } from '../utils/importHistoryProgress';
 
 const { NotebookImportService } = notebookImportService;
 

@@ -445,7 +445,7 @@ const uploadCompleteFunction = new sst.aws.Function('HistoryUploadCompleteFuncti
 });
 
 const notebookImportFunction = new sst.aws.Function('NotebookImportCompleteFunction', {
-  handler: 'apps/client/server/s3/notebookImportComplete.dispatch',
+  handler: 'apps/workers/src/s3/notebookImportComplete.dispatch',
   runtime: 'nodejs24.x',
   link: [...allSecrets, fabFileBucket, appFilesBucket, generatedImagesBucket, historyImportBucket, websocketApi],
   vpc: lambdaVpc,
