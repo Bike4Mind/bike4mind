@@ -229,6 +229,15 @@ export default defineConfig({
       testMatch: [/(?:^|\/)referrals\.spec\.ts$/],
       dependencies: ['setup-core'],
     },
+    // Launch-readiness A6.1: the signup leg on a short phone screen over a throttled link. Each run is
+    // a real signup, so like referrals it stays out of the `unauthenticated` deploy gate. Chromium
+    // only: the throttle goes through CDP. The spec sets the 375x667 viewport itself.
+    {
+      name: 'launch-readiness',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: [/(?:^|\/)launch-readiness-[\w-]+\.spec\.ts$/],
+      dependencies: ['setup-core'],
+    },
     // WebSocket token enforcement: mints its own throwaway users (revoking a token kills every
     // token that user holds), so it needs no shared auth state - only core setup.
     {
