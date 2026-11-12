@@ -177,6 +177,22 @@ describe('GET /api/admin/model-deprecation-status', () => {
     ]);
   });
 
+  it('tags queue items with the backend and, for absence, the miss count the accept note cites', async () => {
+    mockPendingSuggestions.mockResolvedValue([
+      { modelId: 'gpt-live', missCount: 0, suggestion: SUGGESTION },
+      { modelId: 'ghost-model', missCount: 5, suggestion: { ...SUGGESTION, source: 'absence' } },
+    ]);
+    const { res, run } = call({ method: 'GET' });
+    await run();
+
+    expect(res._getJSONData().queue).toEqual([
+      // Live list first: the merged model carries its backend.
+      { modelId: 'gpt-live', backend: 'openai', suggestion: expect.any(Object) },
+      // Unknown to both lists: no backend key at all, so the client falls back to the id.
+      { modelId: 'ghost-model', missCount: 5, suggestion: expect.objectContaining({ source: 'absence' }) },
+    ]);
+  });
+
   it('still serves the rest of the report when the stale reference report fails', async () => {
     mockGetAvailableModels.mockResolvedValueOnce([LIVE_MODEL]).mockRejectedValueOnce(new Error('provider down'));
     const { res, run } = call({ method: 'GET' });
@@ -622,6 +638,17 @@ describe('POST /api/admin/model-deprecation-status admin audit', () => {
       action: 'settings.model_lifecycle.suggestion_resolved',
       target: { kind: 'settings', id: 'gpt-sunset' },
       details: { resolution: 'dismiss' },
+    });
+  });
+
+  it('keeps a dismiss note in the audit entry when one is given', async () => {
+    await call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'dismiss', note: '  duplicate of an accepted signal ' },
+    }).run();
+
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      details: { resolution: 'dismiss', note: 'duplicate of an accepted signal' },
     });
   });
 

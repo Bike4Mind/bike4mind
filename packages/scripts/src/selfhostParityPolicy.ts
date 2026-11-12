@@ -1105,7 +1105,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/apiProbeDetector.ts:apiProbeDetector',
-    '6fb2b015daddb2370f5f952330d9551db7c37666390f9537f219dff16366108f',
+    'fc238dab90c68e25fefacf618a2f11bd489455fbb3955154e1243e487179c07a',
     'Queries the hosted server function CloudWatch log group; a portable deployment has none.',
     [
       'bedrock:*',
