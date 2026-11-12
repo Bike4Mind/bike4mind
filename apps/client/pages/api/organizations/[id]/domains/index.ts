@@ -2,7 +2,7 @@
 // POST /api/organizations/:id/domains - add a pending claim { domain }
 // Owner, manager or platform admin (canAdministerOrganization); session routes, not public API contract.
 
-import { addOrgDomainSchema, ApiKeyScope } from '@bike4mind/common';
+import { addOrgDomainSchema } from '@bike4mind/common';
 import { orgDomainClaimRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -15,7 +15,7 @@ const organizationIdFrom = (query: { id?: unknown }): string => {
   return query.id;
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = baseApi({ auth: 'jwtOnly' })
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const organizationId = organizationIdFrom(req.query);

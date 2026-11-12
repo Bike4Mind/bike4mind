@@ -5,7 +5,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { listOrgDomainJoinSuggestions } from '@server/organizations/orgDomainClaims';
 
-const handler = baseApi().get(
+const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler(async (req, res) => {
     const suggestions = await listOrgDomainJoinSuggestions(req.user!.id);
     return res.status(200).json({ suggestions });

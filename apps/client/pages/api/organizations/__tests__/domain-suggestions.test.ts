@@ -3,7 +3,7 @@ import { createMocks } from 'node-mocks-http';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
-const mockRefs = vi.hoisted(() => ({ current: {} as Record<string, Handler> }));
+const mockRefs = vi.hoisted(() => ({ current: {} as Record<string, Handler>, configs: [] as unknown[] }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: Record<string, unknown> = {};
@@ -14,7 +14,12 @@ vi.mock('@server/middlewares/baseApi', () => {
     };
   }
   chain.use = () => chain;
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options: unknown) => {
+      mockRefs.configs.push(options);
+      return chain;
+    },
+  };
 });
 
 const claims = vi.hoisted(() => ({ findVerifiedJoinableByDomain: vi.fn() }));
@@ -67,6 +72,11 @@ beforeEach(() => {
 });
 
 describe('GET /api/organizations/domain-suggestions', () => {
+  it('accepts a JWT session only, so an API key is never a credential here', () => {
+    expect(mockRefs.configs).toHaveLength(1);
+    for (const config of mockRefs.configs) expect(config).toMatchObject({ auth: 'jwtOnly' });
+  });
+
   it.each(['suggest', 'auto-join'])('offers the org behind a verified %s claim, ids and name only', async policy => {
     claims.findVerifiedJoinableByDomain.mockResolvedValue({ ...CLAIM, policy, verificationToken: 'secret' });
     const suggestions = await fetchSuggestions();

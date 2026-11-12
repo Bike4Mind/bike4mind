@@ -4,7 +4,7 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from '@
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
-const mockRefs = vi.hoisted(() => ({ current: {} as Record<string, Handler> }));
+const mockRefs = vi.hoisted(() => ({ current: {} as Record<string, Handler>, configs: [] as unknown[] }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: Record<string, unknown> = {};
@@ -15,7 +15,12 @@ vi.mock('@server/middlewares/baseApi', () => {
     };
   }
   chain.use = () => chain;
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options: unknown) => {
+      mockRefs.configs.push(options);
+      return chain;
+    },
+  };
 });
 
 const claims = vi.hoisted(() => ({
@@ -116,6 +121,11 @@ beforeEach(() => {
 });
 
 describe('org domain routes - access gate', () => {
+  it('accepts a JWT session only, so an API key is never a credential here', () => {
+    expect(mockRefs.configs).toHaveLength(3);
+    for (const config of mockRefs.configs) expect(config).toMatchObject({ auth: 'jwtOnly' });
+  });
+
   it.each([
     ['owner', 'owner1', false],
     ['manager', 'mgr1', false],

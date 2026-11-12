@@ -2,7 +2,7 @@
 // DELETE /api/organizations/:id/domains/:claimId - remove the claim
 // Owner, manager or platform admin (canAdministerOrganization). Claims resolve only within :id.
 
-import { ApiKeyScope, updateOrgDomainPolicySchema } from '@bike4mind/common';
+import { updateOrgDomainPolicySchema } from '@bike4mind/common';
 import { orgDomainClaimRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -22,7 +22,7 @@ const idsFrom = (query: Query) => {
   return { organizationId: query.id, claimId: query.claimId };
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = baseApi({ auth: 'jwtOnly' })
   .patch(
     asyncHandler<{}, unknown, unknown, Query>(async (req, res) => {
       const { organizationId, claimId } = idsFrom(req.query);

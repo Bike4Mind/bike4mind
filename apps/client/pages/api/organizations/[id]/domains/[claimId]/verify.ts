@@ -1,14 +1,13 @@
 // POST /api/organizations/:id/domains/:claimId/verify - check the claim's DNS TXT record
 // A lookup miss is 200 { verified: false, reason }, not an error; losing a verify race is 409.
 
-import { ApiKeyScope } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { loadOrgForDomainAdmin, toOrgDomainClaimView, verifyDomainClaim } from '@server/organizations/orgDomainClaims';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, unknown, unknown, { id?: string; claimId?: string }>(async (req, res) => {
     const { id: organizationId, claimId } = req.query;
     if (typeof organizationId !== 'string' || !organizationId) throw new BadRequestError('Invalid organization id');

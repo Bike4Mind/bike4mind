@@ -4,7 +4,7 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from '@
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
-const mockRefs = vi.hoisted(() => ({ current: {} as Record<string, Handler> }));
+const mockRefs = vi.hoisted(() => ({ current: {} as Record<string, Handler>, configs: [] as unknown[] }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: Record<string, unknown> = {};
@@ -15,7 +15,12 @@ vi.mock('@server/middlewares/baseApi', () => {
     };
   }
   chain.use = () => chain;
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options: unknown) => {
+      mockRefs.configs.push(options);
+      return chain;
+    },
+  };
 });
 
 const claims = vi.hoisted(() => ({ findVerifiedJoinableByDomain: vi.fn() }));
@@ -78,6 +83,11 @@ beforeEach(() => {
 });
 
 describe('POST /api/organizations/:id/domain-join', () => {
+  it('accepts a JWT session only, so an API key is never a credential here', () => {
+    expect(mockRefs.configs).toHaveLength(1);
+    for (const config of mockRefs.configs) expect(config).toMatchObject({ auth: 'jwtOnly' });
+  });
+
   it('adds the user with the claim default role, points the user at the org and seeds userDetails', async () => {
     const { res, run } = call();
     await run();
