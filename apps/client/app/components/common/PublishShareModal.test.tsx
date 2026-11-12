@@ -47,6 +47,32 @@ const noopPublish = vi.fn<[], Promise<PublishResult>>();
 const radio = (value: string) =>
   document.querySelector(`input[type="radio"][value="${value}"]`) as HTMLInputElement | null;
 
+describe('PublishShareModal organization policy', () => {
+  it('explains why public publication is unavailable before publishing', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({
+      data: { publicLinkBlockedReason: 'Your organization does not allow public links for this content.' },
+    });
+    const publish = vi.fn();
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={publish}
+          title="Bound artifact"
+          policySource={{ artifactId: 'artifact' }}
+        />
+      </Wrapper>
+    );
+    expect(await screen.findByTestId('publish-sharing-policy-explanation')).toHaveTextContent(
+      'does not allow public links'
+    );
+    expect(radio('public')).toBeDisabled();
+    expect(radio('private')).toBeChecked();
+    expect(publish).not.toHaveBeenCalled();
+  });
+});
+
 describe('PublishShareModal — update seeds controls from the prior publication', () => {
   it('carries a PRIVATE, comments-off publication into update mode (does not reset to public)', async () => {
     render(

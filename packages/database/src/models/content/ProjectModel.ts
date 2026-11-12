@@ -3,6 +3,7 @@ import { IProject, IProjectDocument, IProjectMethods, IProjectRepository, IUserD
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { organizationContentPolicyPlugin } from '../../utils/organizationSharingPolicy';
 import {
   ShareableDocumentSchema,
   ShareableDocumentRepository,
@@ -171,6 +172,7 @@ export const ProjectSchema = new Schema<IProject, IProjectModel, IProjectMethods
     // Optional: mongoose's `required` rejects '' too, and the create form no longer demands one.
     description: { type: String, default: '' },
     userId: { type: String, required: true },
+    organizationId: { type: String, immutable: true },
     sessionIds: [{ type: String, required: true }],
     fileIds: [{ type: String, required: true }],
     systemPrompts: {
@@ -197,6 +199,7 @@ export const ProjectSchema = new Schema<IProject, IProjectModel, IProjectMethods
 );
 
 ProjectSchema.plugin(softDeletePlugin);
+ProjectSchema.plugin(organizationContentPolicyPlugin);
 
 // Optimized index for searchCollections query - projects collection
 ProjectSchema.index({ userId: 1, deletedAt: 1, name: 'text', updatedAt: -1 });

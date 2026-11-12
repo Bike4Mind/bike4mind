@@ -23,6 +23,7 @@ import {
 } from '@bike4mind/utils';
 import { z } from 'zod';
 import { resolveRedeemableInvite } from './resolveRedeemableInvite';
+import { assertContentInvitePolicy } from './organizationPolicy';
 
 const acceptInviteSchema = z.object({
   id: z.string(),
@@ -164,6 +165,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
     case InviteType.Session: {
       const session = await db.sessions.findById(invite.documentId);
       if (!session) throw new NotFoundError('Session not found');
+      await assertContentInvitePolicy(session, [user], db.organization, isLinkOnlyInvite(invite));
       const granted = permissionsInviterCanStillGrant(session, invite, invitePermissions, inviter);
 
       // A session's knowledgeIds can point at files the inviter neither owns nor holds
@@ -302,6 +304,7 @@ const acceptProject = async (
   }
 
   const permissions = permissionsInviterCanStillGrant(project, invite, invite.permissions, inviter);
+  await assertContentInvitePolicy(project, [user], db.organization);
 
   await db.projects.shareable.updateUserShares(project.id, { add: [{ userId: user.id, permissions }] });
 

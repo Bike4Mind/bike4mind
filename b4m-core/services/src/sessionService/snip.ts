@@ -60,6 +60,7 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
     stripSurfaceOwnedFields(
       {
         name: `Snip ${session.name}`,
+        organizationId: session.organizationId,
         knowledgeIds: session.knowledgeIds,
         tags: session.tags,
         summary: session.summary,

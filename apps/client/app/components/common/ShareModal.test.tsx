@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   cancelInvite: vi.fn(),
   confirm: vi.fn(),
   apiPost: vi.fn(),
+  apiGet: vi.fn(),
   currentUser: { id: 'u1', email: 'me@test.com', username: 'me' } as {
     id: string;
     email: string;
@@ -55,7 +56,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: mocks.currentUser }),
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { post: mocks.apiPost },
+  api: { post: mocks.apiPost, get: mocks.apiGet },
 }));
 vi.mock('sonner', () => ({ toast: mocks.toast }));
 
@@ -93,6 +94,7 @@ const rejectWith = (error: unknown) =>
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.mutateAsync.mockResolvedValue({});
+  mocks.apiGet.mockResolvedValue({ data: { policy: null } });
   mocks.shareData = undefined;
   mocks.currentUser = { id: 'u1', email: 'me@test.com', username: 'me' };
 });
@@ -105,6 +107,20 @@ const openByUsersTab = async (files?: IFabFileDocument[]) => {
 };
 
 describe('ShareModal - By Link tab', () => {
+  it('disables links and explains the organization restriction', async () => {
+    mocks.apiGet.mockResolvedValue({
+      data: { policy: { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: ['partner.example'] } },
+    });
+    renderModal();
+    await waitFor(() => expect(screen.getByTestId('share-modal-link-tab')).toHaveAttribute('aria-disabled', 'true'));
+    expect(screen.getByTestId('share-modal-policy-explanation')).toHaveTextContent(
+      'Your organization does not allow public links'
+    );
+    expect(
+      screen.getByText('Only organization members and recipients at partner.example can receive this share.')
+    ).toBeInTheDocument();
+  });
+
   it('marks the Description field as optional', () => {
     renderModal();
     // The "By Link" tab is the default (tabIndex 1), so the Description field is visible.

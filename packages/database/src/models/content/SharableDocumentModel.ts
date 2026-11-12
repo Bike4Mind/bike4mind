@@ -10,6 +10,7 @@ import {
   UserSharesChange,
 } from '@bike4mind/common';
 import { usableObjectIds } from '../../utils/mongo';
+import { assertOrganizationUserGrants } from '../../utils/organizationSharingPolicy';
 
 export const GroupShareableSchema: Schema<IGroupShare> = new Schema<IGroupShare>({
   groupId: { type: String, required: true },
@@ -274,6 +275,10 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
   async updateUserShares(id: string, changes: UserSharesChange): Promise<T | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const { remove, add = [], includeDeleted } = changes;
+    if (add.length > 0) {
+      const content = await this.model.findById(id).lean<{ organizationId?: string }>();
+      if (content) await assertOrganizationUserGrants(content, add);
+    }
     if (remove && remove.userId === undefined && remove.projectId === undefined) {
       throw new Error('updateUserShares: remove needs a userId or projectId');
     }

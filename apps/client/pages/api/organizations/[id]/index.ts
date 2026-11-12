@@ -16,7 +16,12 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
 import { clearDeletedOrganizationReferences } from '@server/organizations/clearDeletedOrganizationReferences';
 import { creditService, organizationService } from '@bike4mind/services';
-import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  MAX_STORAGE_LIMIT_MB,
+  toSafeOrganization,
+  OrganizationSharingPolicySchema,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Request } from 'express';
@@ -34,6 +39,7 @@ const updateOrgBodySchema = z.object({
     .optional(),
   systemPrompt: z.string().max(10000).optional(),
   redactPushContent: z.boolean().optional(),
+  sharingPolicy: OrganizationSharingPolicySchema.optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });

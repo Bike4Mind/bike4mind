@@ -649,7 +649,7 @@ export interface paths {
     put?: never;
     /**
      * Create a session
-     * @description Creates a session (called a "notebook" in the product UI). Pass the returned `id` as `sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as `ai:chat`. A key holding `ai:generate` without `notebooks:write` may create a bare session only (`name`, `lastUsedModel`, `temperature`, `autoNamePlaceholder`); any other field is a 403. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from `GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on forced retrieval.
+     * @description Creates a session (called a "notebook" in the product UI). Pass the returned `id` as `sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as `ai:chat`. A key holding `ai:generate` without `notebooks:write` may create a bare session only (`name`, `lastUsedModel`, `temperature`, `autoNamePlaceholder`); any other field is a 403. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from `GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on forced retrieval. Set `organizationId` to create in an organization you belong to; this binding cannot be changed later.
      */
     post: operations['createSession'];
     delete?: never;
@@ -1137,7 +1137,7 @@ export interface paths {
     put?: never;
     /**
      * Create a project
-     * @description Creates a project owned by the caller, optionally grouping existing sessions and files in it. Every listed session and file must be readable by the caller. A project's `file_ids` and `session_ids` are shared with it: anyone the project is shared with can read every file and session it groups. Sharing the project later shares them too. Unknown body fields are rejected.
+     * @description Creates a project owned by the caller, optionally grouping existing sessions and files in it. Every listed session and file must be readable by the caller. Set `organization_id` to create in an organization you belong to; this binding cannot be changed later. A project's `file_ids` and `session_ids` are shared with it: anyone the project is shared with can read every file and session it groups. Sharing the project later shares them too. Unknown body fields are rejected.
      */
     post: operations['createProject'];
     delete?: never;
@@ -2402,6 +2402,7 @@ export interface components {
       _id?: string;
       name: string;
       userId: string;
+      organizationId?: string;
       knowledgeIds?: string[];
       artifactIds?: string[];
       tags?: {
@@ -2430,6 +2431,7 @@ export interface components {
       _id?: string;
       name: string;
       userId: string;
+      organizationId?: string;
       knowledgeIds?: string[];
       artifactIds?: string[];
       tags?: {
@@ -2493,6 +2495,7 @@ export interface components {
       _id?: string;
       name: string;
       userId: string;
+      organizationId?: string;
       knowledgeIds?: string[];
       artifactIds?: string[];
       tags?: {
@@ -5146,6 +5149,7 @@ export interface components {
       _id?: string;
       name: string;
       userId: string;
+      organizationId?: string;
       knowledgeIds?: string[];
       artifactIds?: string[];
       tags?: {
@@ -5176,6 +5180,8 @@ export interface components {
      */
     createSessionRequest: {
       name: string;
+      /** @description Organization context for new content. Requires membership; immutable after creation. */
+      organizationId?: string;
       /** @description Adds the new session to this project. */
       projectId?: string;
       /** @description Seeds retrieval defaults from this data lake and turns on forced retrieval. Get ids from `GET /api/v1/data-lakes`. */
@@ -5220,6 +5226,7 @@ export interface components {
         _id?: string;
         name: string;
         userId: string;
+        organizationId?: string;
         knowledgeIds?: string[];
         artifactIds?: string[];
         tags?: {
@@ -6838,6 +6845,8 @@ export interface components {
       /** @description Unique among your live projects. */
       name: string;
       description: string;
+      /** @description Organization context for new content. Requires membership; immutable after creation. */
+      organization_id?: string;
       /** @description Sessions to group in the project. Each must be readable by the caller. */
       session_ids?: string[];
       /** @description Files to group in the project. Each must be readable by the caller. */
@@ -7472,6 +7481,7 @@ export interface components {
         _id?: string;
         name: string;
         userId: string;
+        organizationId?: string;
         knowledgeIds?: string[];
         artifactIds?: string[];
         tags?: {
@@ -20648,7 +20658,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `projects:write`. */
+      /** @description The API key lacks `projects:write`, or the caller is not a member of the selected organization. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

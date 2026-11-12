@@ -10,6 +10,7 @@ export * from './groupTypes';
 export * from './importHistoryFailure';
 export * from './insufficientCredits';
 export * from './memberCreditPeriod';
+export * from './organizationSharingPolicy';
 export * from './validation';
 export * from './apikey';
 export * from './agentQuest';

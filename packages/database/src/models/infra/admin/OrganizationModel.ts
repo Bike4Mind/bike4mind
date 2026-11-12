@@ -166,6 +166,17 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     maxTokens: { type: Number, min: 1, max: 200000 },
     maxCreditsPerMember: { type: Number, required: false },
     redactPushContent: { type: Boolean, default: false },
+    sharingPolicy: {
+      type: new Schema(
+        {
+          allowPublicLinks: { type: Boolean, required: true },
+          allowExternalSharing: { type: Boolean, required: true },
+          allowedDomains: { type: [String], default: [] },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
   },
   {
     virtuals: true,

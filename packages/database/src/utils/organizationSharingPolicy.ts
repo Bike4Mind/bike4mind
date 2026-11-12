@@ -1,0 +1,152 @@
+import { Schema } from 'mongoose';
+import {
+  EXTERNAL_SHARING_BLOCKED,
+  ForbiddenError,
+  isOrgMember,
+  organizationAllowsRecipient,
+  organizationSharingPolicy,
+  PUBLIC_SHARING_BLOCKED,
+  type IOrganizationDocument,
+  type UserShareGrant,
+} from '@bike4mind/common';
+
+type BoundContent = {
+  organizationId?: string;
+  userId?: string;
+  isGlobalRead?: boolean;
+  isGlobalWrite?: boolean;
+  visibility?: string;
+  permissions?: { isPublic?: boolean; canRead?: string[]; canWrite?: string[]; canDelete?: string[] };
+  users?: Array<{ userId: string }>;
+  groups?: Array<{ groupId: string }>;
+  sessionId?: string;
+  projectId?: string;
+};
+
+async function loadOrganization(id: string): Promise<IOrganizationDocument> {
+  const { organizationRepository } = await import('../models/infra/admin/OrganizationModel');
+  const organization = await organizationRepository.findById(id);
+  if (!organization) throw new ForbiddenError('The content organization is unavailable.');
+  return organization;
+}
+
+export async function assertOrganizationRecipients(
+  organizationId: string | undefined,
+  recipients: Array<{ id: string; email?: string | null }>
+): Promise<void> {
+  if (!organizationId) return;
+  const org = await loadOrganization(organizationId);
+  if (recipients.some(recipient => !organizationAllowsRecipient(org, recipient))) {
+    throw new ForbiddenError(EXTERNAL_SHARING_BLOCKED);
+  }
+}
+
+export async function assertOrganizationPublicLink(organizationId: string | undefined): Promise<void> {
+  if (!organizationId) return;
+  const policy = organizationSharingPolicy(await loadOrganization(organizationId));
+  if (!policy.allowPublicLinks) throw new ForbiddenError(PUBLIC_SHARING_BLOCKED);
+  if (!policy.allowExternalSharing) throw new ForbiddenError(EXTERNAL_SHARING_BLOCKED);
+}
+
+export async function assertOrganizationUserGrants(content: BoundContent, grants: UserShareGrant[]): Promise<void> {
+  if (!content.organizationId || !grants.length) return;
+  const { userRepository } = await import('../models/auth/UserModel');
+  const users = await userRepository.findByIds(grants.map(grant => grant.userId));
+  const byId = new Map(users.map(user => [String(user.id), user]));
+  await assertOrganizationRecipients(
+    content.organizationId,
+    grants.map(grant => ({
+      id: grant.userId,
+      email: byId.get(grant.userId)?.email,
+    }))
+  );
+}
+
+const recipientIds = (content: BoundContent): string[] => [
+  ...(content.users ?? []).map(user => user.userId),
+  ...(content.permissions?.canRead ?? []),
+  ...(content.permissions?.canWrite ?? []),
+  ...(content.permissions?.canDelete ?? []),
+];
+
+async function assertContentSharing(content: BoundContent, previous: BoundContent = {}): Promise<void> {
+  if (!content.organizationId) return;
+  if (
+    (content.isGlobalRead && !previous.isGlobalRead) ||
+    (content.isGlobalWrite && !previous.isGlobalWrite) ||
+    (content.visibility === 'public' && previous.visibility !== 'public') ||
+    (content.permissions?.isPublic && !previous.permissions?.isPublic)
+  ) {
+    await assertOrganizationPublicLink(content.organizationId);
+  }
+  const previousIds = new Set(recipientIds(previous));
+  const ids = new Set(recipientIds(content).filter(id => !previousIds.has(id)));
+  await assertOrganizationUserGrants(
+    content,
+    [...ids].map(userId => ({ userId, permissions: [] }))
+  );
+  const groups = content.groups?.filter(row => !previous.groups?.some(old => old.groupId === row.groupId));
+  if (groups?.length) {
+    const org = await loadOrganization(content.organizationId);
+    if (!organizationSharingPolicy(org).allowExternalSharing) {
+      const { groupRepository } = await import('../models/social/GroupModel');
+      for (const row of groups) {
+        const group = await groupRepository.findById(row.groupId);
+        if (!group || String(group.organizationId) !== content.organizationId) {
+          throw new ForbiddenError(EXTERNAL_SHARING_BLOCKED);
+        }
+      }
+    }
+  }
+}
+
+// All grant writers, including project propagation, pass through these model boundaries.
+export function organizationContentPolicyPlugin(schema: Schema): void {
+  schema.pre('save', async function () {
+    const content = this.toObject() as BoundContent;
+    if (this.isNew && (content.sessionId || content.projectId)) {
+      const { sessionRepository } = await import('../models/auth/SessionModel');
+      const { projectRepository } = await import('../models/content/ProjectModel');
+      const session = content.sessionId ? await sessionRepository.findById(content.sessionId) : null;
+      const project = content.projectId ? await projectRepository.findById(content.projectId) : null;
+      const inherited = session?.organizationId ?? project?.organizationId;
+      if (inherited) {
+        content.organizationId = inherited;
+        this.set('organizationId', inherited);
+      }
+    }
+    if (this.isNew && content.organizationId) {
+      const org = await loadOrganization(content.organizationId);
+      if (!content.userId || !isOrgMember({ id: content.userId }, org)) {
+        throw new ForbiddenError('You are not a member of the selected organization.');
+      }
+    }
+    if (
+      this.isNew ||
+      ['users', 'groups', 'permissions', 'visibility', 'isGlobalRead', 'isGlobalWrite'].some(key =>
+        this.isModified(key)
+      )
+    ) {
+      const previous = this.isNew ? undefined : await this.$model().findById(this._id).lean<BoundContent>();
+      await assertContentSharing(content, previous ?? {});
+    }
+  });
+  schema.pre(['updateOne', 'findOneAndUpdate'], async function () {
+    const update = this.getUpdate();
+    if (!update || Array.isArray(update)) return;
+    const changes = (update.$set ?? update) as Record<string, unknown>;
+    const sharingKeys = ['users', 'groups', 'permissions', 'visibility', 'isGlobalRead', 'isGlobalWrite'];
+    if (!Object.keys(changes).some(key => sharingKeys.some(field => key === field || key.startsWith(`${field}.`))))
+      return;
+    const current = await this.model.findOne(this.getFilter()).lean<BoundContent>();
+    if (!current?.organizationId) return;
+    const next = { ...current };
+    for (const [key, value] of Object.entries(changes)) {
+      if (sharingKeys.includes(key)) Object.assign(next, { [key]: value });
+      else if (key.startsWith('permissions.')) {
+        next.permissions = { ...next.permissions, [key.slice('permissions.'.length)]: value };
+      }
+    }
+    await assertContentSharing(next, current);
+  });
+}

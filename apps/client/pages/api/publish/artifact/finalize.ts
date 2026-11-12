@@ -1,4 +1,5 @@
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
+import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -137,6 +138,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   if (!viz.ok || viz.visibility !== manifest.visibility) {
     return res.status(400).json({ error: 'Draft visibility is no longer valid for this scope' });
   }
+  if (manifest.visibility === 'public') await assertPublicationPublicLink(manifest);
 
   // 3. Verify every file exists + collect metadata
   type FileWithMeta = ArtifactFile;
