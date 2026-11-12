@@ -4,6 +4,8 @@ import SwiftUI
 /// A strip of what Studio is making right now: progress while it runs, the result or the reason once it settles.
 struct GenerationTilesView: View {
   let tracker: GenerationTracker
+  /// "Use these settings": loads a generation's kind, model, prompt and values back into the create bar.
+  var settings: StudioCreateViewModel?
   @State private var cancelError: String?
 
   var body: some View {
@@ -12,7 +14,10 @@ struct GenerationTilesView: View {
         ScrollView(.horizontal, showsIndicators: false) {
           HStack(spacing: Tokens.Spacing.s) {
             ForEach(tracker.generations) { generation in
-              GenerationTile(generation: generation) {
+              GenerationTile(
+                generation: generation, summary: settings?.summary(of: generation.handle),
+                onUseSettings: settings.map { create in { Task { await create.use(settingsOf: generation.handle) } } }
+              ) {
                 Task {
                   do { try await tracker.cancel(generation.id) } catch { cancelError = "Couldn't cancel this one." }
                 }
@@ -39,6 +44,9 @@ struct GenerationTilesView: View {
 
 private struct GenerationTile: View {
   let generation: TrackedGeneration
+  /// The values it was made with that differ from the model defaults.
+  let summary: String?
+  let onUseSettings: (() -> Void)?
   let onCancel: () -> Void
   let onDismiss: () -> Void
 
@@ -63,6 +71,14 @@ private struct GenerationTile: View {
     }
     .contentShape(Rectangle())
     .onTapGesture { if case .failed = generation.phase { showsFailure = true } }
+    .contextMenu {
+      if let onUseSettings {
+        Section(summary ?? "Model defaults") {
+          Button("Use these settings", systemImage: "slider.horizontal.3", action: onUseSettings)
+            .accessibilityIdentifier("studio-generation-use-settings")
+        }
+      }
+    }
     .alert("Couldn't create this", isPresented: $showsFailure) {
       Button("OK", role: .cancel) {}
     } message: {

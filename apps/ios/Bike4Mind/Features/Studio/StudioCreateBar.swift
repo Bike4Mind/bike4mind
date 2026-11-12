@@ -5,6 +5,7 @@ import SwiftUI
 struct StudioCreateBar: View {
   @Bindable var model: StudioCreateViewModel
   @FocusState private var isFocused: Bool
+  @State private var showsParams = false
   @ScaledMetric(relativeTo: .title) private var iconSize: CGFloat = 32
 
   var body: some View {
@@ -19,10 +20,14 @@ struct StudioCreateBar: View {
         Spacer(minLength: 0)
         modelMenu
       }
-      if model.kind == .music {
-        Toggle("Instrumental", isOn: $model.instrumental)
+      if !model.controls.isEmpty || model.estimatedCredits != nil {
+        paramsRow
+      }
+      if let note = model.paramsNote {
+        Text(note)
           .font(Tokens.Typography.meta)
-          .accessibilityIdentifier("studio-create-instrumental")
+          .foregroundStyle(Tokens.Palette.secondaryText)
+          .accessibilityIdentifier("studio-create-params-note")
       }
       if let error = model.error {
         Text(error.message)
@@ -39,6 +44,38 @@ struct StudioCreateBar: View {
     .padding(.vertical, Tokens.Spacing.s)
     .background(.bar)
     .task(id: model.kind) { await model.loadModels() }
+    .sheet(isPresented: $showsParams) { StudioParamsSheet(model: model) }
+  }
+
+  /// The summary chip opens the full panel; the prompt stays the one field a first-time user needs.
+  private var paramsRow: some View {
+    HStack(spacing: Tokens.Spacing.s) {
+      if !model.controls.isEmpty {
+        Button {
+          showsParams = true
+        } label: {
+          Label(model.paramsSummary ?? "Model defaults", systemImage: "slider.horizontal.3")
+            .font(Tokens.Typography.meta)
+            .lineLimit(1)
+            .padding(.horizontal, Tokens.Spacing.s)
+            .padding(.vertical, Tokens.Spacing.xs)
+            .background(Tokens.Palette.groupedBackground, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .frame(minHeight: 44)
+        .accessibilityLabel("Settings, \(model.paramsSummary ?? "model defaults")")
+        .accessibilityIdentifier("studio-create-params")
+      }
+      Spacer(minLength: 0)
+      if let credits = model.estimatedCredits {
+        Text("\(credits) credits")
+          .font(Tokens.Typography.meta)
+          .foregroundStyle(Tokens.Palette.secondaryText)
+          .monospacedDigit()
+          .accessibilityLabel("Estimated cost, \(credits) credits")
+          .accessibilityIdentifier("studio-create-cost")
+      }
+    }
   }
 
   @ViewBuilder
@@ -118,6 +155,7 @@ extension StudioSubmitError {
   var message: String {
     switch self {
     case .refused(let failure): failure.message
+    case .rejected(_, let message): message
     case .api(let error): error.message
     }
   }

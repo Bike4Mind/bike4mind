@@ -6,11 +6,19 @@ import Observation
 public enum StudioSubmitError: Error, Equatable, Sendable {
   /// The server refused it with a reason the person can act on (credits, model, content).
   case refused(GenerationFailure)
+  /// The server refused a value with its own reason (an `unsupported_*` or validation code). The reason is shown as
+  /// sent, so the wording matches the web app.
+  case rejected(code: String?, message: String)
   case api(APIError)
 
   init(_ error: any Error) {
     switch error {
-    case let refusal as StudioRequestError: self = .refused(refusal.failure)
+    case let refusal as StudioRequestError:
+      if case .other = refusal.failure, let message = refusal.serverMessage, !message.isEmpty {
+        self = .rejected(code: refusal.code, message: message)
+      } else {
+        self = .refused(refusal.failure)
+      }
     case let api as APIError: self = .api(api)
     default: self = .api(.malformedResponse)
     }
@@ -24,10 +32,15 @@ public final class StudioCreateViewModel {
   /// The video and music routes cap prompts at this length; the image routes accept the same.
   public static let maximumPromptLength = 4000
 
-  public var kind: GenerationKind = .image
+  public var kind: GenerationKind = .image {
+    didSet { paramsNote = nil }
+  }
   public var prompt = ""
-  public var instrumental = false
   public private(set) var models: [GenerationKind: [GenerationModel]] = [:]
+  /// Changed values per kind, kept while switching kinds so nothing is lost.
+  public private(set) var paramsByKind: [GenerationKind: GenerationParams] = [:]
+  /// Names the values a model switch had to drop; cleared on the next change.
+  public private(set) var paramsNote: String?
   public private(set) var isSubmitting = false
   public var error: StudioSubmitError?
 
@@ -47,8 +60,69 @@ public final class StudioCreateViewModel {
     return list.first { $0.id == selectedModelIDs[kind] } ?? list.first
   }
 
+  /// Switches model, keeping the values the new one also takes and naming the ones it doesn't.
   public func select(model: GenerationModel) {
+    let previousControls = controls
+    let (kept, dropped) = params.carried(to: model.capabilities)
     selectedModelIDs[kind] = model.id
+    paramsByKind[kind] = kept
+    let names = dropped.compactMap { key in previousControls.first { $0.key == key }?.title }
+    paramsNote = names.isEmpty ? nil : "\(model.name) doesn't take \(Self.list(names)), so it was reset."
+  }
+
+  public var params: GenerationParams { paramsByKind[kind] ?? GenerationParams() }
+
+  /// The panel's controls for the selected model, in display order.
+  public var controls: [ParamControl] {
+    ParamControls.controls(for: selectedModel?.capabilities, params: params)
+  }
+
+  public func value(for control: ParamControl) -> ParamValue? { params.value(for: control) }
+
+  public func set(_ value: ParamValue?, for control: ParamControl) {
+    var updated = params
+    updated.set(value, for: control)
+    if control.key == .instrumental, value?.flag == true { updated[.lyrics] = nil }
+    paramsByKind[kind] = updated
+    paramsNote = nil
+  }
+
+  public func resetParams() {
+    paramsByKind[kind] = nil
+    paramsNote = nil
+  }
+
+  /// The summary chip: the changed values, or nil when everything is the model default.
+  public var paramsSummary: String? { params.summary(controls: controls) }
+
+  /// Credits the selected settings should cost, when the model list prices them.
+  public var estimatedCredits: Int? { CreditEstimate.credits(for: selectedModel?.capabilities, params: params) }
+
+  /// "Use these settings" from a finished item: its kind, model and values, with the same carry-over rules as a
+  /// model switch so a model since removed falls back cleanly.
+  public func use(settingsOf handle: GenerationHandle) async {
+    kind = handle.kind
+    await loadModels()
+    if let modelID = handle.modelID, let model = availableModels.first(where: { $0.id == modelID }) {
+      selectedModelIDs[kind] = model.id
+    }
+    let (kept, dropped) = (handle.params ?? GenerationParams()).carried(to: selectedModel?.capabilities)
+    paramsByKind[kind] = kept
+    paramsNote = dropped.isEmpty ? nil : "Some settings aren't available on \(selectedModel?.name ?? "this model")."
+    prompt = handle.prompt
+  }
+
+  /// What a generation was made with, for its tile: the changed values against its model's controls.
+  public func summary(of handle: GenerationHandle) -> String? {
+    guard let params = handle.params, !params.isEmpty else { return nil }
+    let capabilities = models[handle.kind]?.first { $0.id == handle.modelID }?.capabilities
+    return params.summary(controls: ParamControls.controls(for: capabilities, params: params))
+  }
+
+  static func list(_ names: [String]) -> String {
+    let lowered = names.map { $0.lowercased() }
+    guard lowered.count > 1, let last = lowered.last else { return lowered.first ?? "" }
+    return lowered.dropLast().joined(separator: ", ") + " or " + last
   }
 
   private var trimmedPrompt: String { prompt.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -80,7 +154,7 @@ public final class StudioCreateViewModel {
     defer { isSubmitting = false }
     do {
       let handle = try await api.generate(
-        GenerationRequest(kind: kind, prompt: trimmedPrompt, modelID: model.id, instrumental: instrumental))
+        GenerationRequest(kind: kind, prompt: trimmedPrompt, modelID: model.id, params: params))
       tracker.track(handle)
       prompt = ""
       return true

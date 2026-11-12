@@ -39,16 +39,31 @@ enum StudioWire {
     }
   }
 
+  /// Optional keys are left out when nil, so the server applies the model default.
   struct ImageGenerationBody: Encodable {
     let prompt: String
     let model: String
-    let n = 1
+    let n: Int
+    let size: String?
+    let quality: String?
+    let seed: Int?
+    let background: String?
     /// The create bar has no conversation for the server to resolve a follow-up against.
     let promptResolution = "literal"
     let organizationID = PersonalBilling()
 
+    init(prompt: String, model: String, params: GenerationParams = GenerationParams()) {
+      self.prompt = prompt
+      self.model = model
+      n = params[.count]?.number.map { Int($0) } ?? 1
+      size = params[.size]?.text
+      quality = params[.quality]?.text
+      seed = params[.seed]?.number.map { Int($0) }
+      background = params[.transparentBackground]?.flag == true ? "transparent" : nil
+    }
+
     enum CodingKeys: String, CodingKey {
-      case prompt, model, n
+      case prompt, model, n, size, quality, seed, background
       case promptResolution = "prompt_resolution"
       case organizationID = "organization_id"
     }
@@ -74,14 +89,36 @@ enum StudioWire {
   }
 
   /// Video and music bodies are strict on the server: an unknown key is a 422, so only declared keys go.
+  /// Each kind sends only its own keys (the video and music request schemas in b4m-core/common/src/schemas).
   struct JobBody: Encodable {
     let model: String
     let prompt: String
+    let durationSeconds: Double?
+    let aspectRatio: String?
+    let resolution: String?
+    let audio: Bool?
     let instrumental: Bool?
+    let lyrics: String?
     let organizationID = PersonalBilling()
 
+    init(kind: GenerationKind, model: String, prompt: String, params: GenerationParams = GenerationParams()) {
+      self.model = model
+      self.prompt = prompt
+      let isVideo = kind == .video
+      // Music takes whole seconds only.
+      durationSeconds = params[.duration]?.number.map { isVideo ? $0 : $0.rounded() }
+      aspectRatio = isVideo ? params[.aspectRatio]?.text : nil
+      resolution = isVideo ? params[.resolution]?.text : nil
+      audio = isVideo ? params[.audio]?.flag : nil
+      let instrumental = !isVideo && params[.instrumental]?.flag == true
+      self.instrumental = instrumental ? true : nil
+      lyrics = isVideo || instrumental ? nil : params[.lyrics]?.text.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
     enum CodingKeys: String, CodingKey {
-      case model, prompt, instrumental
+      case model, prompt, resolution, audio, instrumental, lyrics
+      case durationSeconds = "duration_seconds"
+      case aspectRatio = "aspect_ratio"
       case organizationID = "organization_id"
     }
   }
@@ -140,14 +177,61 @@ enum StudioWire {
   }
 
   struct ImageModelsPage: Decodable {
+    /// `PublicImageCapabilitiesSchema`; `sizing` is a union on `kind` and only the size-taking kinds carry presets.
+    struct Image: Decodable {
+      struct Sizing: Decodable {
+        let kind: String
+        let presets: [String]?
+        let defaultSize: String?
+
+        enum CodingKeys: String, CodingKey {
+          case kind, presets
+          case defaultSize = "default_size"
+        }
+      }
+      struct Supports: Decodable {
+        let transparentBackground: Bool?
+        let seed: Bool?
+        let qualities: [String]?
+        let maxImages: Int?
+        let maxReferenceImages: Int?
+        let edit: Bool?
+        let requiresInputImage: Bool?
+
+        enum CodingKeys: String, CodingKey {
+          case seed, qualities, edit
+          case transparentBackground = "transparent_background"
+          case maxImages = "max_images"
+          case maxReferenceImages = "max_reference_images"
+          case requiresInputImage = "requires_input_image"
+        }
+      }
+      let sizing: Sizing?
+      let supports: Supports?
+
+      static let sizeTakingKinds: Set<String> = ["presets", "constrained", "dimensions"]
+
+      var capabilities: ImageCapabilities {
+        let sizes = sizing.map { Self.sizeTakingKinds.contains($0.kind) ? $0.presets ?? [] : [] } ?? []
+        return ImageCapabilities(
+          sizes: sizes, defaultSize: sizes.isEmpty ? nil : sizing?.defaultSize,
+          // `auto` is what an omitted quality means; offering it as a choice would only duplicate the default.
+          qualities: (supports?.qualities ?? []).filter { $0 != "auto" },
+          maxImages: max(1, supports?.maxImages ?? 1), seed: supports?.seed ?? false,
+          transparentBackground: supports?.transparentBackground ?? false,
+          maxReferenceImages: supports?.maxReferenceImages ?? 0, edit: supports?.edit ?? false,
+          requiresInputImage: supports?.requiresInputImage ?? false)
+      }
+    }
     struct Model: Decodable {
       let id: String
       let name: String?
       let type: String?
       let deprecationDate: String?
+      let image: Image?
 
       enum CodingKeys: String, CodingKey {
-        case id, name, type
+        case id, name, type, image
         case deprecationDate = "deprecation_date"
       }
     }
@@ -160,17 +244,115 @@ enum StudioWire {
     }
   }
 
+  /// `GET /api/v1/video-models` and `GET /api/v1/music-models`. Every capability field is optional here so an older
+  /// or newer server degrades to fewer controls rather than a failed list.
   struct JobModels: Decodable {
+    struct Duration: Decodable {
+      let kind: String?
+      let control: String?
+      let min: Double?
+      let max: Double?
+      let step: Double?
+      let values: [Double]?
+      let `default`: Double?
+      let seconds: Double?
+    }
+    struct InputRole: Decodable {
+      let role: String
+      let max: Int
+    }
+    struct Defaults: Decodable {
+      let durationSeconds: Double?
+      let aspectRatio: String?
+      let resolution: String?
+
+      enum CodingKeys: String, CodingKey {
+        case resolution
+        case durationSeconds = "duration_seconds"
+        case aspectRatio = "aspect_ratio"
+      }
+    }
+    struct Lyrics: Decodable {
+      let maxChars: Int?
+
+      enum CodingKeys: String, CodingKey {
+        case maxChars = "max_chars"
+      }
+    }
+    struct Pricing: Decodable {
+      let unit: String
+      let credits: Double
+    }
     struct Model: Decodable {
       let id: String
       let displayName: String?
       let modes: [String]?
       let deprecationDate: String?
+      let inputRoles: [InputRole]?
+      let duration: Duration?
+      let aspectRatios: [String]?
+      let resolutions: [String]?
+      let defaults: Defaults?
+      let audio: String?
+      let creditsPerSecond: [String: Double]?
+      let vocals: String?
+      let lyrics: Lyrics?
+      let pricing: Pricing?
 
       enum CodingKeys: String, CodingKey {
-        case id, modes
+        case id, modes, duration, resolutions, defaults, audio, vocals, lyrics, pricing
         case displayName = "display_name"
         case deprecationDate = "deprecation_date"
+        case inputRoles = "input_roles"
+        case aspectRatios = "aspect_ratios"
+        case creditsPerSecond = "credits_per_second"
+      }
+
+      var videoCapabilities: VideoCapabilities {
+        VideoCapabilities(
+          modes: modes ?? ["text_to_video"],
+          inputRoles: Dictionary((inputRoles ?? []).map { ($0.role, $0.max) }, uniquingKeysWith: { first, _ in first }),
+          duration: durationRule, aspectRatios: aspectRatios ?? [], resolutions: resolutions ?? [],
+          defaultDuration: defaults?.durationSeconds, defaultAspectRatio: defaults?.aspectRatio,
+          defaultResolution: defaults?.resolution, audio: AudioSupport(rawValue: audio ?? "") ?? .none,
+          creditsPerSecond: creditsPerSecond)
+      }
+
+      private var durationRule: DurationRule? {
+        guard let duration else { return nil }
+        switch duration.kind {
+        case "range":
+          guard let min = duration.min, let max = duration.max else { return nil }
+          return .range(min: min, max: max, step: duration.step ?? 1)
+        case "discrete":
+          guard let values = duration.values, !values.isEmpty else { return nil }
+          return .discrete(values)
+        default:
+          return nil
+        }
+      }
+
+      var musicCapabilities: MusicCapabilities {
+        MusicCapabilities(
+          vocals: vocals != "never", lyricsMaxChars: lyrics?.maxChars, duration: musicDuration,
+          pricing: pricing.flatMap { price in
+            MusicPricing.Unit(rawValue: price.unit).map { MusicPricing(unit: $0, credits: price.credits) }
+          })
+      }
+
+      private var musicDuration: MusicDuration? {
+        guard let duration else { return nil }
+        switch duration.control {
+        case "exact", "approximate":
+          guard let min = duration.min, let max = duration.max else { return nil }
+          return .adjustable(
+            min: Int(min), max: Int(max), defaultSeconds: Int(duration.default ?? min),
+            exact: duration.control == "exact")
+        case "fixed":
+          return duration.seconds.map { .fixed(seconds: Int($0)) }
+        default:
+          return nil
+        }
       }
     }
     let models: [Model]
@@ -291,7 +473,9 @@ public struct StudioClient: StudioAPI {
         guard response.status == 200 else { throw APIError(status: response.status) }
         let page = try StudioWire.decode(StudioWire.ImageModelsPage.self, from: response.body)
         models += page.data.filter { $0.type == "image" && $0.deprecationDate == nil }
-          .map { GenerationModel(id: $0.id, name: $0.name ?? $0.id) }
+          .map {
+            GenerationModel(id: $0.id, name: $0.name ?? $0.id, capabilities: $0.image.map { .image($0.capabilities) })
+          }
         guard let next = page.nextCursor, !next.isEmpty else { break }
         cursor = next
       }
@@ -301,7 +485,11 @@ public struct StudioClient: StudioAPI {
       guard response.status == 200 else { throw APIError(status: response.status) }
       return try StudioWire.decode(StudioWire.JobModels.self, from: response.body).models
         .filter { $0.deprecationDate == nil && (kind == .music || ($0.modes ?? []).contains("text_to_video")) }
-        .map { GenerationModel(id: $0.id, name: $0.displayName ?? $0.id) }
+        .map {
+          GenerationModel(
+            id: $0.id, name: $0.displayName ?? $0.id,
+            capabilities: kind == .video ? .video($0.videoCapabilities) : .music($0.musicCapabilities))
+        }
     }
   }
 
@@ -309,22 +497,25 @@ public struct StudioClient: StudioAPI {
     let startedAt = now()
     switch request.kind {
     case .image:
-      let body = try StudioWire.encode(StudioWire.ImageGenerationBody(prompt: request.prompt, model: request.modelID))
+      let body = try StudioWire.encode(
+        StudioWire.ImageGenerationBody(prompt: request.prompt, model: request.modelID, params: request.params))
       let response = try await requester.send(method: "POST", path: StudioWire.imageGenerationsPath, jsonBody: body)
       guard response.status == 200 else { throw StudioWire.refusal(status: response.status, body: response.body) }
       let reply = try StudioWire.decode(StudioWire.ImageGenerationReply.self, from: response.body)
-      return GenerationHandle(kind: .image, id: reply.quest.id, prompt: request.prompt, startedAt: startedAt)
+      return GenerationHandle(
+        kind: .image, id: reply.quest.id, prompt: request.prompt, startedAt: startedAt, modelID: request.modelID,
+        params: request.params)
     case .video, .music:
       let body = try StudioWire.encode(
-        StudioWire.JobBody(
-          model: request.modelID, prompt: request.prompt,
-          instrumental: request.kind == .music && request.instrumental ? true : nil))
+        StudioWire.JobBody(kind: request.kind, model: request.modelID, prompt: request.prompt, params: request.params))
       let response = try await requester.send(method: "POST", path: StudioWire.jobsPath(request.kind), jsonBody: body)
       guard response.status == 202 || response.status == 200 else {
         throw StudioWire.refusal(status: response.status, body: response.body)
       }
       let job = try StudioWire.decode(StudioWire.Job.self, from: response.body)
-      return GenerationHandle(kind: request.kind, id: job.id, prompt: request.prompt, startedAt: startedAt)
+      return GenerationHandle(
+        kind: request.kind, id: job.id, prompt: request.prompt, startedAt: startedAt, modelID: request.modelID,
+        params: request.params)
     }
   }
 
