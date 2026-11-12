@@ -128,7 +128,7 @@ export const exploreTool: ToolDefinition = {
             ...(on.maxTokens ? { maxTokens: on.maxTokens } : {}),
           },
           event => {
-            if (event.type === 'error' || event.type === 'meta') return;
+            if (event.type === 'error' || event.type === 'meta' || event.type === 'settled') return;
             if (event.text) text += filter.push(event.text).text;
             if (event.type === 'tool_use') {
               if (event.tools) requested.push(...event.tools);

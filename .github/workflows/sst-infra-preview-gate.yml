@@ -42,7 +42,8 @@ jobs:
   preview-gate:
     name: preview gate
     if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    # API-only required check; keep it off the pool that CI fan-out saturates.
+    runs-on: ${{ vars.RUNNER_LABEL_LIGHT || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - name: Expire preview waiver on push
         uses: actions/github-script@v8

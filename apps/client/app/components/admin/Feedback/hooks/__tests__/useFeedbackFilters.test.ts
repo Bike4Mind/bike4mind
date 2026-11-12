@@ -389,4 +389,26 @@ describe('useFeedbackFilters', () => {
       expect(result.current.filterParams).not.toHaveProperty('search');
     });
   });
+  it.each(['New', 'mixed', 'all'])('clears resolution when status selection becomes %s', selection => {
+    const { result } = setup();
+    act(() => result.current.setResolution('fixed'));
+    expect(result.current.filterParams.status).toEqual([FeedbackStatus.Closed]);
+    act(() =>
+      result.current.setStatusFilters({
+        [FeedbackStatus.New]: true,
+        [FeedbackStatus.InProgress]: selection === 'all',
+        [FeedbackStatus.Closed]: selection !== 'New',
+      })
+    );
+    expect(result.current.filters.resolution).toBeUndefined();
+    expect(result.current.filterParams.resolution).toBeUndefined();
+    // The UI maps unchecking its sole Closed status to All; this path must also clear resolution.
+    if (selection === 'all') expect(result.current.filterParams.status).toHaveLength(3);
+  });
+  it('clearing resolution restores the default New view', () => {
+    const { result } = setup();
+    act(() => result.current.setResolution('fixed'));
+    act(() => result.current.setResolution(undefined));
+    expect(result.current.filterParams.status).toEqual([FeedbackStatus.New]);
+  });
 });

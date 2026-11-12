@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -75,6 +75,8 @@ export interface StoredMedia {
   byteLength: number;
 }
 
+type PendingWrite = { promise: Promise<StoredMedia>; cancel?: () => void };
+
 export function mediaUrl(sessionId: string, name: string): string {
   return `${MEDIA_SCHEME}://${MEDIA_HOST}/${sessionId}/${name}`;
 }
@@ -97,9 +99,16 @@ function normalizeMime(mimeType: string): string {
  * reachable from the file tools, which honour the protected paths.
  */
 export class MediaStore {
+  private readonly deletedSessions = new Set<string>();
+  private readonly pendingWrites = new Map<string, Set<PendingWrite>>();
+
   constructor(private readonly baseDirectory: string) {}
 
   async save(sessionId: string, bytes: Buffer, mimeType: string): Promise<StoredMedia> {
+    return this.writeForSession(sessionId, () => this.saveBytes(sessionId, bytes, mimeType));
+  }
+
+  private async saveBytes(sessionId: string, bytes: Buffer, mimeType: string): Promise<StoredMedia> {
     const normalized = normalizeMime(mimeType);
     const extension = own(EXTENSION_BY_MIME, normalized);
     if (!extension) throw new Error(`Cannot display ${mimeType || 'an unknown media type'}.`);
@@ -121,6 +130,55 @@ export class MediaStore {
       mimeType: own(MIME_BY_EXTENSION, extension) ?? 'application/octet-stream',
       byteLength: bytes.length,
     };
+  }
+
+  /**
+   * Save `bytes` under a name derived from `source`'s content, or return the file already saved
+   * for that content. Lets a tool that reads the same unchanged file again point at one copy.
+   */
+  async saveForContent(sessionId: string, source: Buffer, bytes: Buffer, mimeType: string): Promise<StoredMedia> {
+    return this.writeForSession(sessionId, () => this.saveContentBytes(sessionId, source, bytes, mimeType));
+  }
+
+  private async saveContentBytes(
+    sessionId: string,
+    source: Buffer,
+    bytes: Buffer,
+    mimeType: string
+  ): Promise<StoredMedia> {
+    const extension = own(EXTENSION_BY_MIME, normalizeMime(mimeType));
+    if (!extension) throw new Error(`Cannot display ${mimeType || 'an unknown media type'}.`);
+    if (bytes.length === 0) throw new Error('The file is empty.');
+    if (bytes.length > MAX_MEDIA_BYTES) {
+      throw new Error(`The file is ${Math.round(bytes.length / 1024 / 1024)}MB, which is too large to display.`);
+    }
+
+    // UUID-shaped so NAME_PATTERN, and with it read/locate/export, accept it unchanged.
+    const digest = createHash('sha256').update(source).digest('hex');
+    const name = `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20, 32)}.${extension}`;
+    const directory = this.sessionDirectory(sessionId);
+    const path = join(directory, name);
+    const stored = (byteLength: number): StoredMedia => ({
+      name,
+      url: mediaUrl(sessionId, name),
+      mimeType: own(MIME_BY_EXTENSION, extension) ?? 'application/octet-stream',
+      byteLength,
+    });
+
+    const existing = await stat(path).catch(() => null);
+    if (existing?.isFile()) return stored(existing.size);
+
+    await mkdir(directory, { recursive: true });
+    // Renamed into place so a parallel read of the same file, or the protocol handler, never sees half of it.
+    const partial = `${path}.${randomUUID()}.part`;
+    try {
+      await writeFile(partial, bytes);
+      await rename(partial, path);
+    } catch (error) {
+      await rm(partial, { force: true });
+      throw error;
+    }
+    return stored(bytes.length);
   }
 
   /**
@@ -149,6 +207,21 @@ export class MediaStore {
    * a quit or a cap never leaves a truncated file the protocol handler would serve as a clip.
    */
   async saveStream(sessionId: string, source: Readable, mimeType: string, maxBytes: number): Promise<StoredMedia> {
+    const controller = new AbortController();
+    return this.writeForSession(
+      sessionId,
+      () => this.saveStreamBytes(sessionId, source, mimeType, maxBytes, controller.signal),
+      () => controller.abort()
+    );
+  }
+
+  private async saveStreamBytes(
+    sessionId: string,
+    source: Readable,
+    mimeType: string,
+    maxBytes: number,
+    signal: AbortSignal
+  ): Promise<StoredMedia> {
     const extension = own(EXTENSION_BY_MIME, normalizeMime(mimeType));
     if (!extension) throw new Error(`Cannot display ${mimeType || 'an unknown media type'}.`);
 
@@ -167,7 +240,7 @@ export class MediaStore {
       }
     });
     try {
-      await pipeline(source, createWriteStream(partial));
+      await pipeline(source, createWriteStream(partial), { signal });
       if (byteLength === 0) throw new Error('The server returned an empty file.');
       await rename(partial, join(directory, name));
     } catch (error) {
@@ -208,7 +281,37 @@ export class MediaStore {
   /** Drop everything a conversation generated. Called when the conversation is deleted. */
   async forgetSession(sessionId: string): Promise<void> {
     if (!SESSION_ID_PATTERN.test(sessionId)) return;
-    await rm(this.sessionDirectory(sessionId), { recursive: true, force: true });
+    // Read-only tools can finish after cancellation, so deletion must also refuse their late writes.
+    this.deletedSessions.add(sessionId);
+    await this.clearReusableBucket(sessionId);
+  }
+
+  /** Clear a reusable cache bucket. Its owner must serialize clears and writes; deleted conversations use forgetSession. */
+  async clearReusableBucket(bucketId: string): Promise<void> {
+    if (!SESSION_ID_PATTERN.test(bucketId)) return;
+    const writes = [...(this.pendingWrites.get(bucketId) ?? [])];
+    for (const write of writes) write.cancel?.();
+    await Promise.allSettled(writes.map(write => write.promise));
+    await rm(this.sessionDirectory(bucketId), { recursive: true, force: true });
+  }
+
+  private async writeForSession(
+    sessionId: string,
+    write: () => Promise<StoredMedia>,
+    cancel?: () => void
+  ): Promise<StoredMedia> {
+    this.sessionDirectory(sessionId);
+    if (this.deletedSessions.has(sessionId)) throw new Error('The conversation was deleted.');
+    const writes = this.pendingWrites.get(sessionId) ?? new Set<PendingWrite>();
+    this.pendingWrites.set(sessionId, writes);
+    const pending = { promise: write(), cancel };
+    writes.add(pending);
+    try {
+      return await pending.promise;
+    } finally {
+      writes.delete(pending);
+      if (writes.size === 0) this.pendingWrites.delete(sessionId);
+    }
   }
 
   private sessionDirectory(sessionId: string): string {

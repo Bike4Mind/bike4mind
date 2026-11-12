@@ -81,20 +81,71 @@ const ecsSecretNames = [
   'STRIPE_SECRET_KEY',
   'STRIPE_WEBHOOK_SECRET',
   'CHAT_COMPLETION_INTERNAL_SECRET',
+  'GOOGLE_CLIENT_SECRET',
+  'GITHUB_CLIENT_SECRET',
+  'APPLE_PRIVATE_KEY',
+  'GITHUB_LAKE_APP_CLIENT_SECRET',
+  'GITHUB_LAKE_APP_PRIVATE_KEY',
+  'GITHUB_LAKE_APP_WEBHOOK_SECRET',
+  'MAIL_PASSWORD',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_ADMIN_API_KEY',
+  'TURNSTILE_SECRET_KEY',
+  'GEMINI_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENAI_ADMIN_API_KEY',
+  'XAI_API_KEY',
+  'MOONSHOT_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'OKTA_CLIENT_SECRET',
+  'NPM_TOKEN',
+  'SLACK_SIGNING_SECRET',
+  'SLACK_CLIENT_SECRET',
+  'SECOPS_ZAP_DISPATCH_TOKEN',
+  'SECOPS_ZAP_INGEST_TOKEN',
+  'SECOPS_PROWLER_INGEST_TOKEN',
+  'SECOPS_PROWLER_WORKFLOW_TOKEN',
+  'SECOPS_ATTACK_SIMULATION_INGEST_TOKEN',
+  'RATE_LIMIT_INGEST_TOKEN',
+  'NCMEC_API_KEY',
+  'E2E_CLEANUP_SECRET',
+  'GA_SERVICE_ACCOUNT_KEY',
+  'YOUTUBE_API_KEY',
+  'LINKEDIN_CLIENT_SECRET',
+  'OPTIHASHI_API_TOKEN',
+  'OPTIHASHI_WEBHOOK_SECRET',
+  'OPTIHASHI_WEBHOOK_SECRET_PREVIOUS',
+  'OPTIHASHI_INSTANCE_SERVICE_TOKEN_PREVIOUS',
+  'OVERWATCH_INGEST_KEY',
 ] as const;
 const ecsSecretResources: sst.Secret[] = [
   ...ecsSecretNames.map(n => secrets[n]),
   secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN,
 ];
 const linkedSecrets = $dev ? allSecrets : allSecrets.filter(s => !ecsSecretResources.includes(s));
-// The PEM key size is operator-chosen and may exceed the 4 KB Standard tier limit, so it alone is Advanced tier.
+// PEM and service-account JSON sizes are operator-chosen and may exceed the 4 KB Standard tier limit.
+const ecsAdvancedSecretNames = [
+  'OAUTH_RSA_PRIVATE_KEY',
+  'APPLE_PRIVATE_KEY',
+  'GITHUB_LAKE_APP_PRIVATE_KEY',
+  'GA_SERVICE_ACCOUNT_KEY',
+];
+// Same gate and kill switch as the frontend (infra/web.ts); not under `sst dev`.
+const originVerifyEnabled = !$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true';
 const ecsSecretGroups = $dev
   ? undefined
   : [
       ecsResourceSecrets('ChatCompletion', Object.fromEntries(ecsSecretNames.map(n => [n, secrets[n]])), {
-        advanced: ['OAUTH_RSA_PRIVATE_KEY'],
+        advanced: ecsAdvancedSecretNames,
       }),
-      ecsEnvSecret('ChatCompletion', 'OPTIHASHI_INSTANCE_SERVICE_TOKEN', secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN),
+      ecsEnvSecret(
+        'ChatCompletion',
+        'OPTIHASHI_INSTANCE_SERVICE_TOKEN',
+        secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN.value
+      ),
+      ...(originVerifyEnabled
+        ? [ecsEnvSecret('ChatCompletion', 'ORIGIN_VERIFY_SECRET', originVerifySecret.result)]
+        : []),
     ];
 const ecsSecretParameters = ecsSecretGroups && Object.assign({}, ...ecsSecretGroups.map(g => g.ssm));
 
@@ -195,10 +246,6 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // inside the VPC.
     ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
     ...providerFederation.environment,
-    // Same gate and kill switch as the frontend (infra/web.ts); not under `sst dev`.
-    ...(!$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true'
-      ? { ORIGIN_VERIFY_SECRET: originVerifySecret.result }
-      : {}),
   },
   logging: {
     // Long enough to investigate a model-fallback or billing report after the fact; these
