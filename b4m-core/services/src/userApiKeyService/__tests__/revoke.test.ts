@@ -88,7 +88,7 @@ describe('revokeUserApiKey', () => {
     const before = Date.now();
     const result = await revokeUserApiKey('user1', { keyId: 'key-1', reason: 'Leaked in a build log' }, adapters);
 
-    expect(result).toMatchObject({ name: 'CI key', holderUserId: 'user1', orgOwned: false, didRevoke: true });
+    expect(result).toMatchObject({ name: 'CI key', holderUserId: 'user1', didRevoke: true });
     expect(result.organizationId).toBeUndefined();
     expect(getStored()!.revokedBy).toBe('user1');
     expect(getStored()!.revokedReason).toBe('Leaked in a build log');

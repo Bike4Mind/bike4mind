@@ -20,8 +20,8 @@ interface RevokeUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository & Pick<Required<IUserApiKeyRepository>, 'revokeIfNotDisabled'>;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
-    // Optional only so existing overlay callers keep compiling; when omitted, the realtime sweep
-    // ends the key's connections on its next run instead. In-repo callers always pass it.
+    // When omitted, the caller ends the key's connections itself (a caller revoking inside a
+    // transaction does it after commit), or the realtime sweep ends them on its next run.
     realtimeConnections?: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
 }
@@ -35,8 +35,6 @@ export interface RevokeUserApiKeyResult {
   holderUserId: string;
   /** Set when the key is billed to an org. */
   organizationId?: string;
-  /** The key is held by the org's service account rather than a member. */
-  orgOwned: boolean;
   /** False when the key was already disabled, so nothing changed. */
   didRevoke: boolean;
 }
@@ -71,7 +69,6 @@ export const revokeUserApiKey = async (
     keyPrefix: apiKey.keyPrefix,
     holderUserId: apiKey.userId,
     organizationId: apiKey.billingOwnerType === CreditHolderType.Organization ? apiKey.organizationId : undefined,
-    orgOwned: Boolean(apiKey.orgOwned),
     didRevoke,
   };
 };

@@ -45,6 +45,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
 vi.mock('@server/utils/apiKeyRotationNotifier', () => ({ notifyApiKeyOrgRevoke: vi.fn() }));
+vi.mock('@server/utils/adminApiKeyActions', () => ({ endKeyRealtimeConnections: vi.fn() }));
 
 import '@pages/api/user-api-keys/[id]/revoke';
 
