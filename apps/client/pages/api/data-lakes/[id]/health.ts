@@ -11,6 +11,7 @@ import {
   memoryLedgerRepository,
 } from '@bike4mind/database';
 import { Request } from 'express';
+import { recordLakeRead } from '@server/dataLakes/recordLakeRead';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 
 /**
@@ -58,6 +59,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       logger: req.logger,
     });
 
+    const fileIds = [
+      ...health.affectedMembers.map(m => m.fabFileId),
+      ...health.duplicateMembers.groups.flatMap(g => g.members.map(m => m.fabFileId)),
+      ...health.membership.duplicateGroups.flatMap(g => g.members.map(m => m.fabFileId)),
+    ];
+    if (fileIds.length > 0) await recordLakeRead(req, { lakeIds: [lake.id], fileIds, surface: 'data-lake-health' });
     return res.json(health);
   });
 
