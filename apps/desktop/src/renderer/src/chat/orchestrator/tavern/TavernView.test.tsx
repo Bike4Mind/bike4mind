@@ -713,7 +713,7 @@ describe('TavernView screen reader announcements', () => {
 
       await renderTavern([agentFixture('a', 'done'), ...start.slice(1)]);
       await act(async () => vi.advanceTimersByTime(ANNOUNCE_DEBOUNCE_MS / 2));
-      // An activity tick with no state change does not push the message back.
+      // A re-render with no state change adds nothing to what is spoken.
       await renderTavern([agentFixture('a', 'done'), agentFixture('b', 'working', { title: 'Agent b' }), start[2]]);
       await renderTavern([agentFixture('a', 'done'), agentFixture('b', 'needs-you'), agentFixture('c', 'failed')]);
       expect(announcer().textContent).toBe('');
