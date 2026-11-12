@@ -48,6 +48,20 @@ describe('priceSummary', () => {
     expect(priceSummary(price, 'text')).toBe('$2.50 / $10.00');
   });
 
+  it.each([
+    [3.75e-8, 7.5e-8, '$0.0375 / $0.075'],
+    [5e-7, 1.23456e-6, '$0.50 / $1.23'],
+    [1e-11, 0, '$0.00 / $0.00'],
+  ])('shows a per-token rate of %s in and %s out as %s', (input, output, shown) => {
+    const price = {
+      source: 'row' as const,
+      unit: 'per_token' as const,
+      pricing: { '0': { input, output } },
+      effectiveFrom: '',
+    };
+    expect(priceSummary(price, 'text')).toBe(shown);
+  });
+
   it('shows an image price per image and a non-text build literal by source', () => {
     const tier = { '0': { input: 0.04, output: 0 } };
     expect(priceSummary({ source: 'row', unit: 'per_image', pricing: tier, effectiveFrom: '' }, 'image')).toBe(

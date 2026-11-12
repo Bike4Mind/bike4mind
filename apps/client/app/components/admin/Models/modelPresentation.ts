@@ -88,12 +88,13 @@ export const accessSummary = (access: AdminModelAccess, baseKey = 'base'): Acces
   return { label: `${parts.join(' + ') || 'Restricted'}${lock}`, tone: 'neutral', adminsOnly: false };
 };
 
+// Sub-dollar rates keep up to 4 places, so a rate like $0.0375 is not rounded to $0.04.
 const usd = (value: number) =>
   value.toLocaleString('en-US', {
     style: 'currency',
     currency: 'USD',
     minimumFractionDigits: 2,
-    maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2,
+    maximumFractionDigits: value < 1 ? 4 : 2,
   });
 
 /** The first tier: the price below every threshold. */
