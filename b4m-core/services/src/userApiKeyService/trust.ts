@@ -82,6 +82,7 @@ export type ApiKeyTrustSubject = Pick<
   IUser,
   'isAdmin' | 'emailVerified' | 'apiKeyTrustApproved' | 'lastCreditsPurchasedAt'
 > & {
+  isPersona?: boolean | null;
   createdAt?: Date | string | null;
   id?: string | null;
 };
@@ -117,7 +118,7 @@ export type UntrustedApiKeyAssessment = Extract<ApiKeyTrustAssessment, { status:
  * Trusted = platform admin, or emailVerified AND (purchase or active plan OR account age >= minAccountAgeDays OR
  * admin-approved). Account age comes from createdAt, then the id's ObjectId timestamp; with neither the account
  * counts as new. `honorAccountAge: false` skips the age path, leaving paid standing as the only way out.
- * `hasActivePlan` is lazy because it is the only check that hits the database,
+ * Test personas never earn trust by age. `hasActivePlan` is lazy because it is the only check that hits the database,
  * and the cheap user-field checks settle most accounts first.
  */
 export const assessApiKeyTrust = async (
@@ -129,7 +130,9 @@ export const assessApiKeyTrust = async (
     now?: Date;
   }
 ): Promise<ApiKeyTrustAssessment> => {
-  const { settings, hasActivePlan, honorAccountAge = true, now = new Date() } = options;
+  const { settings, hasActivePlan, now = new Date() } = options;
+  // A test persona is pre-verified at mint, so its age says nothing about who holds it.
+  const honorAccountAge = (options.honorAccountAge ?? true) && user.isPersona !== true;
   if (!settings.gateEnabled || user.isAdmin) return { status: 'trusted' };
   if (!user.emailVerified) return { status: 'untrusted', reason: 'email_unverified' };
   if (user.apiKeyTrustApproved || user.lastCreditsPurchasedAt) return { status: 'trusted' };

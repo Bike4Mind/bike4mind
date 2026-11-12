@@ -29,6 +29,7 @@ import {
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
 import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
+import { requireStepUp } from '@server/auth/stepUp';
 import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import { Request } from 'express';
 
@@ -169,6 +170,9 @@ const handler = baseApi()
     if (unentitledScopes.length > 0) {
       throw new ForbiddenError(`Scope not available on your account: ${unentitledScopes.join(', ')}`);
     }
+    // A persona-mint key creates accounts, so it needs a fresh sign-in; an API key caller has no
+    // session to verify and is refused.
+    if (requestedScopes.includes(ApiKeyScope.PERSONAS_MINT)) await requireStepUp(req);
 
     // Authorize org-billed minting: caller must administer the org (owner or
     // manager) or be a platform admin. Fail closed on anything else.

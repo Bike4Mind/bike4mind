@@ -39,6 +39,11 @@ export enum ApiKeyScope {
    */
   ME_READ = 'me:read',
   ADMIN = 'admin:*',
+  /**
+   * Create and delete throwaway test-persona accounts (POST/DELETE /api/v1/personas). Offered only to
+   * admins and developer-tagged users, and re-checked against the key owner on every call.
+   */
+  PERSONAS_MINT = 'personas:mint',
   MARKETING_REPORTS_READ = 'marketing-reports:read',
   MARKETING_REPORTS_WRITE = 'marketing-reports:write',
   /** Server-to-server ingest scope for Overwatch analytics. Admin-provisioned only - never shown in user-facing key creation UI. */

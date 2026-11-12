@@ -1150,6 +1150,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '91bbf43d2f4288d039b17b5258fb32e0998597ed586df3b174b32311ee131ad6',
     'Hosted error triage and auto-fix dispatch; not applicable to a portable deployment.'
   ),
+  gap('schedule:infra/cron.ts:personaExpirySweep', '6994be0fdcb6a4252ee07d551f5bed1b35ddef6a986b68bd49b1c7736bc5d2cd'),
   wired(
     'schedule:infra/cron.ts:signupIpRetention',
     'b90d6f8f8b7bdc5640a0de6c90b64dcdc176e9170da8d595b5aa6a52328cb312',

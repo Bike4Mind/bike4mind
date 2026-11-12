@@ -666,6 +666,14 @@ export const SettingKeySchema = z.enum([
   'AdminAuditCriticalGrantCredits',
   'AdminAuditDailyGrantCredits',
 
+  // Test personas minted with the persona key
+  'PersonaMintEnabled',
+  'PersonaMintDailyLimit',
+  'PersonaMaxLive',
+  'PersonaTtlDays',
+  'PersonaStartingCredits',
+  'PersonaEmailDomain',
+
   // Two-person approval for high-risk admin actions
   'AdminApprovalsEnabled',
   'AdminApprovalBulkUserThreshold',
@@ -1170,6 +1178,12 @@ export interface BaseSetting {
    */
   changesCustomerPrice?: boolean;
 }
+
+/** Defaults for the persona-key caps (PersonaMintDailyLimit, PersonaMaxLive, PersonaTtlDays). */
+export const PERSONA_MINT_DAILY_LIMIT_DEFAULT = 20;
+export const PERSONA_MAX_LIVE_DEFAULT = 40;
+export const PERSONA_TTL_DAYS_DEFAULT = 14;
+export const PERSONA_STARTING_CREDITS_DEFAULT = 0;
 
 /** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
 export const LOW_CREDITS_THRESHOLD_DEFAULT = 1000;
@@ -4738,6 +4752,65 @@ export const settingsMap = {
     int: true,
     description:
       'A grant that takes one admin past this many credits granted in the last 24 hours is recorded as critical in the Admin Audit Log and alerts the security channel.',
+    category: 'SecOps',
+  }),
+  PersonaMintEnabled: makeBooleanSetting({
+    key: 'PersonaMintEnabled',
+    name: 'Test Persona Minting',
+    defaultValue: false,
+    description:
+      'Lets admins and developers create test persona accounts on this stage, with an API key holding the personas:mint scope. Off by default. Turning it off stops minting, and the hourly persona sweep then disables every live test persona and signs it out everywhere.',
+    category: 'SecOps',
+  }),
+  PersonaMintDailyLimit: makeNumberSetting({
+    key: 'PersonaMintDailyLimit',
+    name: 'Test Persona Mints per Day',
+    defaultValue: PERSONA_MINT_DAILY_LIMIT_DEFAULT,
+    min: 0,
+    max: 1000,
+    int: true,
+    description:
+      'How many test persona accounts may be created in any 24 hours, across all minters. 0 turns minting off.',
+    category: 'SecOps',
+  }),
+  PersonaMaxLive: makeNumberSetting({
+    key: 'PersonaMaxLive',
+    name: 'Live Test Personas',
+    defaultValue: PERSONA_MAX_LIVE_DEFAULT,
+    min: 0,
+    max: 10_000,
+    int: true,
+    description:
+      'How many enabled test persona accounts may exist at once. Minting stops at this number until personas are deleted or expire.',
+    category: 'SecOps',
+  }),
+  PersonaTtlDays: makeNumberSetting({
+    key: 'PersonaTtlDays',
+    name: 'Test Persona Lifetime (days)',
+    defaultValue: PERSONA_TTL_DAYS_DEFAULT,
+    min: 1,
+    max: 90,
+    int: true,
+    description: 'Days after creation when the expiry sweep disables a test persona and signs it out everywhere.',
+    category: 'SecOps',
+  }),
+  PersonaStartingCredits: makeNumberSetting({
+    key: 'PersonaStartingCredits',
+    name: 'Test Persona Starting Credits',
+    defaultValue: PERSONA_STARTING_CREDITS_DEFAULT,
+    min: 0,
+    max: 1_000_000,
+    int: true,
+    description:
+      'Credits each new test persona starts with. The daily and live persona caps bound the total. Re-minting an existing persona does not top it up.',
+    category: 'SecOps',
+  }),
+  PersonaEmailDomain: makeStringSetting({
+    key: 'PersonaEmailDomain',
+    name: 'Test Persona Email Domain',
+    defaultValue: '',
+    description:
+      'Mail domain for test personas minted on production, as <name>@<domain>. Use a dedicated subdomain: a public mail provider, a staff domain or any domain with entitlement or partner signup grants is refused, since every persona address is verified. Leave empty to keep minting off on production. Other stages use the -e2e@test.com addresses.',
     category: 'SecOps',
   }),
   AdminApprovalsEnabled: makeBooleanSetting({
