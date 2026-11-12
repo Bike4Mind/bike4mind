@@ -85,7 +85,7 @@ export async function issuePersonaLoginCode(personaId: string, now: Date): Promi
  */
 export async function redeemPersonaLoginCode(code: string, now: Date, client: { userAgent: string; ip: string }) {
   if (!PERSONA_LOGIN_CODE_PATTERN.test(code)) return null;
-  // Same record shape and 15-entry cap as OTC sign-in; the admin profile's "Last sign-in" reads it.
+  // Same client metadata shape and 15-entry cap as OTC sign-in; successful session issuance also records an auth audit.
   const loginRecord: ILoginRecord = {
     loginTime: now,
     userAgent: client.userAgent,

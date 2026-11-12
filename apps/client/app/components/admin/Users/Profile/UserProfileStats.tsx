@@ -66,8 +66,18 @@ export const UserProfileStats: React.FC<{ user: AdminUserProfile }> = ({ user })
       />
       <StatTile
         label="Last sign-in"
-        value={signIn ? <RelativeTime at={signIn.at} /> : signIns.data ? 'Never' : signIns.isError ? '-' : <Pending />}
-        comparison={signIn ? [signIn.location, signIn.browser].filter(Boolean).join(' \u00b7 ') : undefined}
+        value={
+          signIn ? <RelativeTime at={signIn.at} /> : signIns.data ? 'Unknown' : signIns.isError ? '-' : <Pending />
+        }
+        comparison={
+          signIn
+            ? [signIn.location, signIn.browser].filter(Boolean).join(' \u00b7 ')
+            : signIns.data
+              ? 'No successful sign-in in loaded history'
+              : signIns.isError
+                ? 'Sign-in history unavailable'
+                : undefined
+        }
       />
       <StatTile
         label="Signup network"

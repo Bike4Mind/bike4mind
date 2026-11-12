@@ -6,7 +6,7 @@
  *
  * Callers: admins and developer-tagged users only, by JWT or by a key with personas:mint, re-checked
  * here on every call. The fence is server-side: the server builds the username and email, forces
- * isPersona/isSynthetic, and grants no credits and no role. Mints are capped per 24 hours and by
+ * isPersona/isSynthetic, with configurable, default-zero starting credits and no role. Mints are capped per 24 hours and by
  * live count (AdminSettings PersonaMintDailyLimit / PersonaMaxLive) and audited.
  */
 import {

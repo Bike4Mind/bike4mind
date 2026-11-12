@@ -119,7 +119,6 @@ export const LEVEL_LABELS: Readonly<Record<string, string>> = {
   AdminUser: 'Admin',
 };
 
-/** The most recent sign-in; records are appended, but sort anyway since nothing guarantees it. */
 /** The newest successful sign-in among the loaded sign-in pages (each newest first), or null. */
 export const latestSignIn = (pages: readonly UserSignInsPage[]): UserSignIn | null =>
   pages.flatMap(page => page.entries).find(entry => entry.event === 'login_success') ?? null;
