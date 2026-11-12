@@ -13,13 +13,13 @@ const DEFAULT_RAPID_SYSTEM_PROMPT =
   `IMPORTANT: Provide a quick, friendly acknowledgment (1 sentence max). ` +
   `The main AI is loading full context and will provide the complete answer.`;
 
-export interface RapidReplyMappingInput {
+export type RapidReplyMappingInput = {
   id: string;
   rapidModelId: string;
   systemPrompt?: string;
   maxTokens?: number;
   maxLatency?: number;
-}
+};
 
 export type RapidReplyGeneration =
   | { status: 'generated'; content: string; modelId: string; latency: number }
@@ -91,9 +91,7 @@ export async function generateRapidReply({
   const rapidStartTime = Date.now();
   let accumulatedText = '';
   await meteredRapidLlm.complete(
-    // any: resolveRapidModel yields a catalog id string; complete() is typed to the ChatModels enum.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rapidModelId as any,
+    rapidModelId,
     rapidMessages,
     rapidOptions,
     async (rapidStreamedTexts: (string | null | undefined)[]) => {

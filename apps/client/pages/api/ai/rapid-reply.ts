@@ -93,7 +93,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       // so the sales surface gets the instant ack without turning RapidReply on platform-wide.
       const adminSettings = await adminSettingsRepository.getSettingsValue('EnableRapidReply');
       const rapidReplyEnabled = adminSettings === true;
-      const userPreference = (req.user as any).preferences?.experimentalFeatures?.rapidReply !== false;
+      const userPreference = req.user.preferences?.experimentalFeatures?.rapidReply !== false;
 
       if (!isOpti && (!rapidReplyEnabled || !userPreference)) {
         req.logger.info('⏭️ [RapidReply] Feature disabled');

@@ -165,4 +165,30 @@ describe('rapid reply admin test run', () => {
     expect(data.testResults.performance).toMatchObject({ mainModelError: 'main down' });
     expect(data.recommendations.join(' ')).toContain('The main model run failed: main down');
   });
+  it('reports an empty rapid response and never starts the main run', async () => {
+    h.generate.mockResolvedValue({ status: 'skipped', reason: 'empty_response' });
+
+    const data = await run();
+
+    expect(data.success).toBe(false);
+    expect(data.testResults.rapidReplyTest.error).toContain('returned an empty response');
+    expect(data.testResults.performance.latencyCheck.passed).toBe(false);
+    expect(h.save).not.toHaveBeenCalled();
+    expect(h.process).not.toHaveBeenCalled();
+  });
+
+  it('reports a persistence failure and never runs the main model without its rapid result', async () => {
+    h.save.mockRejectedValueOnce(new Error('Rapid result write failed'));
+
+    const data = await run();
+
+    expect(data.success).toBe(false);
+    expect(data.testResults.rapidReplyTest).toMatchObject({
+      response: null,
+      error: 'Rapid result write failed',
+    });
+    expect(h.process).not.toHaveBeenCalled();
+    expect(h.deleteResult).toHaveBeenCalledWith('result-1');
+  });
+
 });

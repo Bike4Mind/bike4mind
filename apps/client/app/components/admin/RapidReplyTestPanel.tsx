@@ -45,8 +45,8 @@ export interface RapidReplyTestResult {
     rapidReplyTest?: {
       success?: boolean;
       testInput?: string;
-      response?: string;
-      error?: string;
+      response?: string | null;
+      error?: string | null;
       responseLength?: number;
       responseWordCount?: number;
     };
