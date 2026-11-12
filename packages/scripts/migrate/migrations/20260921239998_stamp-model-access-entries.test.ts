@@ -37,7 +37,7 @@ const accessChange = (occurredAt: string, before: unknown, after: unknown): Audi
   changes: [{ field: 'llmModelConfigurations', before, after }],
 });
 
-const { default: migration } = await import('./20260921239997_stamp-model-access-entries');
+const { default: migration } = await import('./20260921239998_stamp-model-access-entries');
 
 const DOC_UPDATED = new Date('2026-11-01T00:00:00Z');
 const stampFor = (id: string) => updateOne.mock.calls.find(call => call[0].settingValue.$elemMatch.id === id)?.[1];
