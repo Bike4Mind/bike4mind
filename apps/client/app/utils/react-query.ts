@@ -225,8 +225,8 @@ export const updateSingleQueryDataFast = <
       } else if ('data' in currentData) {
         if (type === 'delete') {
           return {
+            ...currentData,
             data: currentData.data.filter(item => item.id !== data.id),
-            meta: currentData.meta,
           };
         } else {
           const itemIndex = currentData.data.findIndex(item => item.id === data.id);
@@ -244,8 +244,8 @@ export const updateSingleQueryDataFast = <
           }
 
           return {
+            ...currentData,
             data: updatedData,
-            meta: currentData.meta,
           };
         }
       } else if (Array.isArray(currentData)) {
