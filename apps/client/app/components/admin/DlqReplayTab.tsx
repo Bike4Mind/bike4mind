@@ -17,6 +17,8 @@ import {
 } from '@mui/joy';
 import { RotateCcw, X, Copy, Eye, Search, FileText, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useNavigate, useSearch } from '@tanstack/react-router';
+import { DLQ_QUEUE_PARAM } from '@bike4mind/common';
 import {
   useDlqQueues,
   useDlqMessages,
@@ -42,7 +44,7 @@ import {
   StatTile,
   StatusChip,
 } from '@client/app/components/admin/shared';
-import { ADMIN_REGION_GAP } from '@client/app/components/admin/shared/adminStyles';
+import { ADMIN_REGION_GAP, adminSurface } from '@client/app/components/admin/shared/adminStyles';
 import type { DataColumn } from './shared/DataTable';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { AdminPermissionAction } from './shared/MissingPermission';
@@ -84,6 +86,21 @@ const REPLAY_STATUS: Record<DlqReplayLogEntry['status'], { tone: AdminStatusTone
   discarded: { tone: 'neutral', label: 'discarded' },
   pending: { tone: 'warn', label: 'Discard outcome unconfirmed' },
 };
+
+/** Stands in for the totals when every queue reports zero messages, visible or in flight. */
+const AllClear: React.FC<{ checkedAt: number; onCheckAgain: () => void }> = ({ checkedAt, onCheckAgain }) => (
+  <Sheet variant="outlined" sx={{ ...adminSurface, borderRadius: 'lg' }} data-testid="dlq-all-clear">
+    <EmptyState
+      title="No dead letters"
+      description={`Every queue listed here is empty, so there is nothing to replay. Last checked ${new Date(checkedAt).toLocaleTimeString()}.`}
+      action={
+        <Button size="sm" variant="outlined" color="neutral" onClick={onCheckAgain} data-testid="dlq-all-clear-refresh">
+          Check again
+        </Button>
+      }
+    />
+  </Sheet>
+);
 
 const MessageExpiry: React.FC<{
   sentTimestamp?: string;
@@ -241,8 +258,31 @@ const MessageDrawer: React.FC<{
   );
 };
 
+const isOnStage = (queue: DlqQueueInfo) => queue.deployed !== false;
+
 const DlqReplayTab: React.FC = () => {
-  const [selectedQueue, setSelectedQueue] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as Record<string, unknown>;
+  const queueParam = typeof search[DLQ_QUEUE_PARAM] === 'string' ? search[DLQ_QUEUE_PARAM] : null;
+  const {
+    data: queues,
+    isLoading: queuesLoading,
+    isError: queuesError,
+    dataUpdatedAt: queuesCheckedAt,
+    refetch: refetchQueues,
+  } = useDlqQueues();
+
+  // The selection lives in the URL so an alarm can deep-link to one queue. A label the registry
+  // does not list, or a queue this stage does not create, selects nothing rather than querying it.
+  const linkedQueue = queueParam ? queues?.find(q => q.label === queueParam) : undefined;
+  const selectedQueue = linkedQueue && isOnStage(linkedQueue) ? linkedQueue.label : null;
+  const unknownQueue = queueParam && queues && !selectedQueue ? queueParam : null;
+  const setSelectedQueue = (label: string | null) =>
+    void navigate({
+      to: '/admin',
+      search: previous => ({ ...previous, [DLQ_QUEUE_PARAM]: label ?? undefined }),
+      replace: true,
+    });
   const [selectedMessage, setSelectedMessage] = useState<DlqMessage | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -275,7 +315,6 @@ const DlqReplayTab: React.FC = () => {
     return filters;
   }, [showHistory, selectedQueue, historyStatus, historyDateRange, debouncedSearch]);
 
-  const { data: queues, isLoading: queuesLoading, isError: queuesError, refetch: refetchQueues } = useDlqQueues();
   const {
     data: messages,
     isLoading: messagesLoading,
@@ -291,15 +330,28 @@ const DlqReplayTab: React.FC = () => {
     refetch: refetchHistory,
   } = useDlqHistory(historyFilters, showHistory);
 
-  const totalMessages = useMemo(() => {
-    if (!queues) return 0;
-    return queues.reduce((sum, q) => sum + Math.max(q.approximateMessageCount, 0), 0);
-  }, [queues]);
+  // Totals and the all-clear cover only queues this stage creates; a queue that exists but could
+  // not be read (-1) still counts, so it keeps the all-clear from showing.
+  const stageQueues = useMemo(() => queues?.filter(isOnStage) ?? [], [queues]);
 
-  const queuesWithMessages = useMemo(() => {
-    if (!queues) return 0;
-    return queues.filter(q => q.approximateMessageCount > 0).length;
-  }, [queues]);
+  const totalMessages = useMemo(
+    () => stageQueues.reduce((sum, q) => sum + Math.max(q.approximateMessageCount, 0), 0),
+    [stageQueues]
+  );
+
+  const queuesWithMessages = useMemo(
+    () => stageQueues.filter(q => q.approximateMessageCount > 0).length,
+    [stageQueues]
+  );
+
+  // A failed background refetch keeps the last good data, so an error must not read as all clear.
+  const allClear = useMemo(
+    () =>
+      !queuesError &&
+      stageQueues.length > 0 &&
+      stageQueues.every(q => q.approximateMessageCount === 0 && q.approximateNotVisibleCount <= 0),
+    [stageQueues, queuesError]
+  );
 
   const selectedQueueInfo = useMemo(() => {
     if (!queues || !selectedQueue) return null;
@@ -627,11 +679,13 @@ const DlqReplayTab: React.FC = () => {
         <LoadingState label="Loading dead-letter queues" />
       ) : queuesError ? (
         <ErrorState message="The dead-letter queues failed to load." onRetry={() => void refetchQueues()} />
+      ) : allClear ? (
+        <AllClear checkedAt={queuesCheckedAt} onCheckAgain={() => void refetchQueues()} />
       ) : (
         <StatStrip aria-label="Dead-letter queue totals">
           <StatTile
             label="Dead-letter queues"
-            value={<span data-testid="dlq-stats-total">{(queues?.length ?? 0).toLocaleString()}</span>}
+            value={<span data-testid="dlq-stats-total">{stageQueues.length.toLocaleString()}</span>}
           />
           <StatTile
             label="Queues with messages"
@@ -642,6 +696,14 @@ const DlqReplayTab: React.FC = () => {
             value={<span data-testid="dlq-stats-failed">{totalMessages.toLocaleString()}</span>}
           />
         </StatStrip>
+      )}
+
+      {unknownQueue && (
+        <Alert color="neutral" variant="soft" data-testid="dlq-unknown-queue">
+          {linkedQueue
+            ? `The ${linkedQueue.displayName} queue is not created on this stage, so there is nothing to view here.`
+            : `The ${unknownQueue} queue is not listed on this page yet, so it cannot be viewed or replayed here. Check it in the AWS console.`}
+        </Alert>
       )}
 
       <FormControl sx={{ maxWidth: 400 }}>
@@ -659,10 +721,14 @@ const DlqReplayTab: React.FC = () => {
           data-testid="dlq-queue-selector"
         >
           {queues?.map(q => (
-            <Option key={q.label} value={q.label} data-testid={`dlq-queue-option-${q.label}`}>
+            <Option key={q.label} value={q.label} disabled={!isOnStage(q)} data-testid={`dlq-queue-option-${q.label}`}>
               <Stack direction="row" alignItems="center" gap={1}>
                 <Typography level="body-sm">{q.displayName}</Typography>
-                {q.approximateMessageCount < 0 && <StatusChip tone="warn" label="Count unavailable" />}
+                {!isOnStage(q) ? (
+                  <StatusChip tone="neutral" label="Not on this stage" />
+                ) : (
+                  q.approximateMessageCount < 0 && <StatusChip tone="warn" label="Count unavailable" />
+                )}
                 {q.approximateMessageCount > 0 && (
                   <Typography level="body-xs" sx={{ color: 'admin.inkMuted', fontVariantNumeric: 'tabular-nums' }}>
                     {q.approximateMessageCount.toLocaleString()}

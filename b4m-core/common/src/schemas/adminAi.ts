@@ -25,7 +25,7 @@ export const ADMIN_AI_FEATURE_ENGINE: Record<AdminAiFeature, AdminAiEngine> = {
   abuseAssessment: 'decision',
   domainHold: 'decision',
   detectionTriage: 'decision',
-  feedbackTriage: 'text',
+  feedbackTriage: 'decision',
   dlqTriage: 'text',
   morningBrief: 'text',
 };
@@ -74,6 +74,9 @@ export const adminAiSuggestionItemSchema = z.object({
   entityId: z.string().min(1),
   inputHash: z.string().min(1),
   policyVersion: z.string().min(1),
+  actionClass: z.string().optional(),
+  overrideCostly: z.boolean().nullable().optional(),
+  costUnknown: z.boolean().optional(),
   model: z.string().min(1),
   escalated: z.boolean(),
   verdict: z.string().min(1),
