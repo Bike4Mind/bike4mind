@@ -185,7 +185,8 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
       <OrgFormSaveBar
         count={hasChanges ? 1 : 0}
         pending={updateOrganization.isPending}
-        onSave={() => void handleSaveSystemPrompt()}
+        // The mutation's onError already toasts; catching only stops an unhandled rejection.
+        onSave={() => handleSaveSystemPrompt().catch(() => undefined)}
         onDiscard={() => setSystemPrompt(savedSystemPrompt)}
       />
       {canTransferOwnership && (

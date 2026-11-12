@@ -45,8 +45,10 @@ export const LEGACY_INTEGRATION_TABS: Readonly<Record<string, IntegrationSection
 
 /**
  * Who may manage the org's settings (the Settings tab and the header's Settings button). Mirrors
- * organizationService.update: a platform admin, the owner, or a member holding `update`/`share`.
- * The single source for `canManageOrg`; the page computes it once and passes it down.
+ * organizationService.update, whose finder admits the owner and a `users[]` row holding `update`
+ * (updateAccessArms in SharableDocumentModel.ts), plus a platform admin. `share` alone is not
+ * enough: the save would 404. Group-granted `update` is not visible here, so such a member fails
+ * closed. The single source for `canManageOrg`; the page computes it once and passes it down.
  */
 export const canManageOrgSettings = (
   currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
@@ -56,7 +58,7 @@ export const canManageOrgSettings = (
   if (!currentUser || !organization) return false;
   if (currentUser.isAdmin === true || currentUser.id === organization.userId) return true;
   const row = organization.users?.find(u => u.userId === currentUser.id);
-  return row?.permissions?.some(p => p === Permission.share || p === Permission.update) ?? false;
+  return row?.permissions?.includes(Permission.update) ?? false;
 };
 
 /**

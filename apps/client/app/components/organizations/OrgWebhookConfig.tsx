@@ -480,7 +480,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
         // The server reads an empty list as "all events", so clearing a specific selection would
         // silently widen it; the change is refused rather than reinterpreted.
         blockedReason={editedEvents && editedEvents.length === 0 ? 'Select at least one event.' : undefined}
-        onSave={() => void handleSaveEvents()}
+        onSave={() => handleSaveEvents().catch(() => undefined)}
         onDiscard={() => setEditedEvents(null)}
       />
     </Card>

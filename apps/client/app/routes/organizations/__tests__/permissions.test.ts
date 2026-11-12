@@ -506,7 +506,7 @@ describe('LEGACY_INTEGRATION_TABS', () => {
 });
 
 describe('canManageOrgSettings', () => {
-  // Mirrors organizationService.update: platform admin, owner, or a member holding update/share.
+  // Mirrors organizationService.update: platform admin, owner, or a users[] row holding update.
   const org = {
     userId: 'owner1',
     users: [
@@ -516,11 +516,15 @@ describe('canManageOrgSettings', () => {
     ],
   };
 
-  it('admits the owner, a platform admin and members holding update or share', () => {
+  it('admits the owner, a platform admin and a member holding update', () => {
     expect(canManageOrgSettings({ id: 'owner1' }, org)).toBe(true);
     expect(canManageOrgSettings({ id: 'admin9', isAdmin: true }, org)).toBe(true);
     expect(canManageOrgSettings({ id: 'editor1' }, org)).toBe(true);
-    expect(canManageOrgSettings({ id: 'sharer1' }, org)).toBe(true);
+  });
+
+  // The server's update finder has no share arm, so share alone would offer a Save that 404s.
+  it('refuses a member holding share without update', () => {
+    expect(canManageOrgSettings({ id: 'sharer1' }, org)).toBe(false);
   });
 
   it('refuses a read-only member, a stranger, and a caller while loading', () => {
