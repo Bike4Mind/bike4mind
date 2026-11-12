@@ -18,6 +18,7 @@ import { adminAuditService } from '@bike4mind/services';
 import { getClientIp } from './ip';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
+import { recordOrganizationAuditEvent, organizationLifecycleAuditActions } from './organizationAudit';
 
 // A hand-written slice of the client's augmented Express.User (apps/client/global.d.ts). Keep in sync:
 // apps/client/server/utils/adminAuditActor.typecheck.ts fails client typecheck when the user stops fitting it.
@@ -128,11 +129,26 @@ export const recordAdminActionFromRequest = async (
   req: AuditRequest,
   { actorScope, ...input }: RecordAdminActionFromRequestInput,
   options: { creditGrantPolicy?: () => Promise<adminAuditService.CreditGrantPolicy> } = {}
-): Promise<AuditEntry | null> =>
-  adminAuditService.recordAdminAction(
+): Promise<AuditEntry | null> => {
+  const entry = await adminAuditService.recordAdminAction(
     { ...input, actor: await resolveActor(req, actorScope ?? 'platform'), context: buildContext(req) },
     await writerAdapters(req, input.action, options.creditGrantPolicy)
   );
+  const action = organizationLifecycleAuditActions[input.action];
+  if (action && actorScope === 'organization' && input.target.kind === 'organization' && req.user) {
+    try {
+      await recordOrganizationAuditEvent({
+        organizationId: input.target.id,
+        actorUserId: entry?.actor.userId ?? req.user.id,
+        action,
+      });
+    } catch (error) {
+      if (input.action === 'org.owner.transferred') throw error;
+      Logger.error('[ORGANIZATION_AUDIT_WRITE_FAILED]', { action, error });
+    }
+  }
+  return entry;
+};
 
 /**
  * Writes one admin audit entry for a caller that has already decided who the actor is. Lets shared

@@ -22,7 +22,7 @@ import { recordDeprecatedModelRequest } from './modelSunsetMetrics';
  *
  * Mappings must not silently raise a user's cost. Where the modern equivalent
  * is more expensive than what the user chose, prefer the cheapest CURRENT
- * model that preserves the original's intent (see grok-3-mini-fast below).
+ * model that preserves the original's intent (see gemini-2.5-flash below).
  *
  * Two tables feed the resolver: the catalog overlay below (lifecycle.replacedBy
  * on rows the catalog marks deprecated or retired, refreshed by
@@ -53,9 +53,9 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   'us.anthropic.claude-opus-4-20250514-v1:0': 'global.anthropic.claude-opus-4-8',
   'us.anthropic.claude-opus-4-1-20250805-v1:0': 'global.anthropic.claude-opus-4-8',
   'us.anthropic.claude-sonnet-4-20250514-v1:0': 'global.anthropic.claude-sonnet-4-6',
-  // Legacy on Bedrock, so discovery hides it. Cheaper to serve ($3.30/$16.50 -> $3/$15
-  // per 1M) but our 4.6 Bedrock entry caps output at 16K (bedrockBackend/anthropic.ts) against 64K.
-  'us.anthropic.claude-sonnet-4-5-20250929-v1:0': 'global.anthropic.claude-sonnet-4-6',
+  // Legacy on Bedrock, so discovery hides it. Sonnet 5.5 is Anthropic's named replacement and
+  // cheaper to serve ($3.30/$16.50 -> $2/$10 per 1M), with a 128K output cap against 4.5's 64K.
+  'us.anthropic.claude-sonnet-4-5-20250929-v1:0': 'global.anthropic.claude-sonnet-5-5',
   // Anthropic-hosted models
   'claude-3-5-sonnet-20241022': 'claude-sonnet-4-6',
   'claude-3-7-sonnet-20250219': 'claude-sonnet-4-6',
@@ -102,11 +102,11 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   // direct Kimi ($0.95/$4 against k2.5's $0.60/$3 per 1M) - a modest increase, and the only
   // option that keeps the family, the 256K context, vision and tools.
   'kimi-k2.5': 'kimi-k2.6',
-  // Not grok-4.5: Grok 3 Mini Fast is the budget reasoning tier ($0.60/$4), and Grok 4.5 would
-  // be a cost increase. Grok 3 Mini is both current and cheaper ($0.30/$0.50) while keeping
-  // can_think, so it preserves intent without raising the bill.
-  'grok-3-mini-fast': 'grok-3-mini',
-  // Deliberately NOT mapped: `grok-3-mini` ($0.30/$0.50, can_think) is current and has no
+  // Grok 3 Mini, the cheaper budget target this used to name, is now deprecated in the catalog,
+  // so Grok 4.5 is the only current xAI reasoning model left. It is a raise over Grok 3 Mini
+  // Fast ($0.60/$4 -> $2/$6 per 1M), accepted because the alternative is a dead redirect.
+  'grok-3-mini-fast': 'grok-4.5',
+  // Deliberately NOT mapped: `grok-3-mini` ($0.30/$0.50, can_think) is deprecated, not retired, and has no
   // cheaper replacement. Mapping it to grok-4.5 would raise input cost 6.7x and output 12x
   // for a user who explicitly chose the budget tier.
 };
