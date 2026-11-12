@@ -122,12 +122,13 @@ const SharePage = () => {
   const invites = query.data?.items ?? [];
   const isMultiple = invites.length > 1;
 
-  // Check if any invite is user's own
-  const hasOwnInvite = invites.some(item => item.invite?.username === currentUser?.username);
+  const isOrgShareLink = (item: (typeof invites)[number]) =>
+    item.invite?.type === 'Organization' && item.invite?.isLinkOnly === true;
+  // An org share link's username is its minter, who following it is usually already a member;
+  // the accept route reports that, so it is not treated as "your own invite".
+  const hasOwnInvite = invites.some(item => !isOrgShareLink(item) && item.invite?.username === currentUser?.username);
   // An Organization share link names nobody, so there is no pending entry for Refuse to clear.
-  const allOrgShareLinks = invites.every(
-    item => item.invite?.type === 'Organization' && item.invite?.isLinkOnly === true
-  );
+  const allOrgShareLinks = invites.every(isOrgShareLink);
 
   const acceptInvite = useAcceptDocument({
     onSuccess: () => {

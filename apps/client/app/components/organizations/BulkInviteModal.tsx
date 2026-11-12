@@ -21,6 +21,9 @@ import { getErrorMessage } from '@client/app/utils/error';
 import { MAX_BULK_INVITE_ROWS, parseCsvFirstColumn, parseEmailList } from './bulkInviteParse';
 import OrgInviteRoleSelect from './OrgInviteRoleSelect';
 
+// A 100-row address list is a few KB; anything this large is not an invite list.
+const MAX_BULK_INVITE_FILE_BYTES = 1024 * 1024;
+
 interface BulkInviteModalProps {
   organizationId: string;
   availableSeats: number;
@@ -70,6 +73,10 @@ const BulkInviteModal: FC<BulkInviteModalProps> = ({ organizationId, availableSe
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
+    if (file.size > MAX_BULK_INVITE_FILE_BYTES) {
+      setFileError('That file is too large. Use a file under 1 MB.');
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       setFileError(null);

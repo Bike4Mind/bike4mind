@@ -100,7 +100,8 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   // out of `pending` into `accepted`, so on a multi-recipient invite where others are still
   // pending, checking membership first would misreport a re-accept as "not sent to your
   // account" instead of "already accepted".
-  if ((invite.recipients?.accepted || []).includes(user.email)) {
+  const acceptedEmail = user.email.toLowerCase();
+  if ((invite.recipients?.accepted || []).some(email => email.toLowerCase() === acceptedEmail)) {
     throw new UnprocessableEntityError('User has already accepted the invite');
   }
 
