@@ -57,10 +57,13 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
 
   const setStatusFilters = useCallback<UseFeedbackFiltersReturn['setStatusFilters']>(
     update =>
-      updateView(current => ({
-        statusFilters: typeof update === 'function' ? update(current.statusFilters) : update,
-        page: 1,
-      })),
+      updateView(current => {
+        const statusFilters = typeof update === 'function' ? update(current.statusFilters) : update;
+        const onlyClosed = Object.values(FeedbackStatus).every(
+          status => statusFilters[status] === (status === FeedbackStatus.Closed)
+        );
+        return { statusFilters, resolution: onlyClosed ? current.resolution : undefined, page: 1 };
+      }),
     [updateView]
   );
 

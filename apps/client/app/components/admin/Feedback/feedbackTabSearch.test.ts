@@ -224,3 +224,19 @@ describe('feedbackViewToSearch', () => {
     );
   });
 });
+
+describe('resolution/status URL consistency', () => {
+  it.each([undefined, 'New', 'New,Closed'])(
+    'normalizes resolution with status=%s to exactly Closed',
+    feedbackStatus => {
+      const view = feedbackViewFromSearch({ feedbackResolution: 'fixed', feedbackStatus });
+      expect(view.statusFilters).toEqual(statusFilters(FeedbackStatus.Closed));
+      expect(view.resolution).toBe('fixed');
+    }
+  );
+  it('ignores an invalid resolution without changing independent statuses', () => {
+    const view = feedbackViewFromSearch({ feedbackResolution: 'invalid', feedbackStatus: 'New,Closed' });
+    expect(view.resolution).toBeUndefined();
+    expect(view.statusFilters).toEqual(statusFilters(FeedbackStatus.New, FeedbackStatus.Closed));
+  });
+});

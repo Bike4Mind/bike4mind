@@ -170,7 +170,13 @@ type StoredRecord = AdminAuditLogRecord & { _id: Types.ObjectId };
 
 const toAuditEntry = (record: StoredRecord): AuditEntry => {
   const { _id, ...rest } = record;
-  return { ...rest, id: _id.toString(), source: 'admin' };
+  // During rollout an older writer may still leave an inline note. Only the private history
+  // join may return note bodies; the migration/retention sweep removes these legacy bytes.
+  const details =
+    record.action === 'feedback.note_added' && rest.details
+      ? Object.fromEntries(Object.entries(rest.details).filter(([key]) => key !== 'note'))
+      : rest.details;
+  return { ...rest, ...(details ? { details } : {}), id: _id.toString(), source: 'admin' };
 };
 
 const OBJECT_ID_HEX_PATTERN = /^[0-9a-f]{24}$/i;

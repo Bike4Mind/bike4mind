@@ -159,11 +159,12 @@ export const FEEDBACK_SEARCH_PARSERS: {
 
 /** The list view a URL describes; a missing or invalid param means its default. */
 export function feedbackViewFromSearch(search: Record<string, unknown>): FeedbackView {
-  const statuses = decodeStatuses(search[FEEDBACK_STATUS_PARAM]);
+  const resolution = FEEDBACK_SEARCH_PARSERS[FEEDBACK_RESOLUTION_PARAM](search[FEEDBACK_RESOLUTION_PARAM]);
+  const statuses = resolution ? [FeedbackStatus.Closed] : decodeStatuses(search[FEEDBACK_STATUS_PARAM]);
   return {
     statusFilters: statuses ? toStatusFilters(statuses) : DEFAULT_FEEDBACK_VIEW.statusFilters,
     subject: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SUBJECT_PARAM](search[FEEDBACK_SUBJECT_PARAM]),
-    resolution: FEEDBACK_SEARCH_PARSERS[FEEDBACK_RESOLUTION_PARAM](search[FEEDBACK_RESOLUTION_PARAM]),
+    resolution,
     types: parseTypes(search[FEEDBACK_TYPE_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.types,
     organizations: parseStringList(search[FEEDBACK_ORG_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.organizations,
     received: FEEDBACK_SEARCH_PARSERS[FEEDBACK_RECEIVED_PARAM](search[FEEDBACK_RECEIVED_PARAM]),

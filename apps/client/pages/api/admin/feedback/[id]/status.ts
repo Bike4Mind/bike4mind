@@ -47,6 +47,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:mo
       if (expectedStatus && previousStatus !== expectedStatus) {
         throw new ConflictError(`This report is already ${previousStatus}. Refresh and try again.`);
       }
+      // Resolution corrections use reopen/reclose so Undo keeps its status-transition contract.
       if (previousStatus === status) {
         return { previousStatus, handledBy: current.handledBy, handledAt: current.handledAt, auditEntryId: null };
       }

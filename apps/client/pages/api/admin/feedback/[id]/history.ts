@@ -2,12 +2,19 @@ import type { Request } from 'express';
 import { z } from 'zod';
 import {
   AddFeedbackNoteRequestSchema,
+  ADMIN_NOTE_MAX_LENGTH,
   BadRequestError,
   NotFoundError,
   type FeedbackHistoryItem,
   type FeedbackHistoryPage,
 } from '@bike4mind/common';
-import { FeedbackModel, adminAuditLogRepository, withTransaction } from '@bike4mind/database';
+import {
+  FeedbackModel,
+  FeedbackNoteModel,
+  lockFeedbackNoteParent,
+  adminAuditLogRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
@@ -19,7 +26,7 @@ async function report(req: Request) {
   if (!isValidObjectId(id)) throw new NotFoundError('Feedback not found');
   const feedback = await FeedbackModel.findById(id).select('userId').lean();
   if (!feedback) throw new NotFoundError('Feedback not found');
-  return { id, feedback };
+  return { id: String(feedback._id), feedback };
 }
 
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'users:moderate', POST: 'users:moderate' } })
@@ -35,14 +42,29 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'users:mode
       }
     }
     const page = await adminAuditLogRepository.listForFeedback(id, { limit: 25, cursor });
+    const noteIds = page.entries.flatMap(entry =>
+      entry.action === 'feedback.note_added' &&
+      typeof entry.details?.noteId === 'string' &&
+      isValidObjectId(entry.details.noteId)
+        ? [entry.details.noteId]
+        : []
+    );
+    const notes = noteIds.length
+      ? await FeedbackNoteModel.find({ _id: { $in: noteIds }, feedbackId: id, expiresAt: { $gt: new Date() } })
+          .select('body')
+          .lean()
+      : [];
+    const bodies = new Map(notes.map(note => [String(note._id), note.body]));
     const items: FeedbackHistoryItem[] = page.entries.map(entry => ({
       id: entry.id,
       occurredAt: entry.occurredAt.toISOString(),
       author: entry.actor.name,
       summary: entry.summary,
       ...(entry.reason ? { reason: entry.reason } : {}),
-      ...(entry.action === 'feedback.note_added' && typeof entry.details?.note === 'string'
-        ? { note: entry.details.note }
+      ...(entry.action === 'feedback.note_added' &&
+      typeof entry.details?.noteId === 'string' &&
+      bodies.has(entry.details.noteId)
+        ? { note: bodies.get(entry.details.noteId) }
         : {}),
       changes: entry.changes,
     }));
@@ -56,14 +78,33 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'users:mode
   })
   .post(async (req, res) => {
     const parsed = AddFeedbackNoteRequestSchema.safeParse(req.body);
-    if (!parsed.success) throw new BadRequestError('Write a note between 1 and 2000 characters');
-    const entry = await withTransaction(async () => {
-      const { id, feedback } = await report(req);
+    if (!parsed.success) throw new BadRequestError(`Write a note between 1 and ${ADMIN_NOTE_MAX_LENGTH} characters`);
+    const entry = await withTransaction(async session => {
+      const id = String(req.query.id ?? '');
+      const parent = await lockFeedbackNoteParent(id, session);
+      if (!parent) throw new NotFoundError('Feedback or its reporter is no longer available');
+      const { feedbackId, userId, expiresAt } = parent;
+      const now = new Date();
+      if (expiresAt <= now)
+        throw new BadRequestError('The report text retention period has ended; new note text cannot be stored');
+      const [note] = await FeedbackNoteModel.create(
+        [
+          {
+            feedbackId,
+            userId,
+            body: parsed.data.note,
+            author: { id: req.user.id, name: req.user.username || req.user.name || req.user.id },
+            createdAt: now,
+            expiresAt,
+          },
+        ],
+        { session }
+      );
       const saved = await recordAdminActionFromRequest(req, {
         action: 'feedback.note_added',
-        target: await userAuditTarget(feedback.userId),
+        target: await userAuditTarget(userId),
         summary: 'added an internal feedback note',
-        details: { feedbackId: id, note: parsed.data.note },
+        details: { feedbackId, noteId: String(note._id) },
       });
       if (!saved) throw new Error('Feedback note requires an audit entry');
       return saved;

@@ -13,6 +13,7 @@
     "./help/ingestHelpDatalake": "./help/ingestHelpDatalake.ts"
   },
   "scripts": {
+    "feedback-notes:scrub": "tsx src/scrubLegacyFeedbackNotes.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "typecheck:native": "tsgo --noEmit --types node",

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Alert, Button, Stack, Textarea, Typography } from '@mui/joy';
-import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { addFeedbackNoteOnServer, getFeedbackHistoryFromServer } from '@client/app/utils/feedbackAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { ADMIN_NOTE_MAX_LENGTH, FEEDBACK_RESOLUTION_LABELS, type FeedbackResolution } from '@bike4mind/common';
@@ -20,31 +20,25 @@ const changeValue = (field: string, value: unknown) =>
 export default function FeedbackHistory({ id }: { id: string }) {
   const client = useQueryClient();
   const [note, setNote] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string>();
   const history = useInfiniteQuery({
     queryKey: ['feedback-history', id],
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) => getFeedbackHistoryFromServer(id, pageParam),
     getNextPageParam: page => page.nextCursor ?? undefined,
   });
-  const addNote = async () => {
-    setSaving(true);
-    setError(undefined);
-    try {
-      await addFeedbackNoteOnServer(id, note.trim());
+  const addNote = useMutation({
+    mutationFn: (body: string) => addFeedbackNoteOnServer(id, body),
+    onSuccess: async () => {
       setNote('');
       await client.invalidateQueries({ queryKey: ['feedback-history', id] });
-    } catch (failure) {
-      setError(getErrorMessage(failure));
-    } finally {
-      setSaving(false);
-    }
-  };
+    },
+  });
   return (
     <SectionCard title="Internal history" body="custom" data-testid="feedback-history">
       <Stack gap={2} sx={{ p: 2 }}>
-        <Typography level="body-sm">Notes are private to administrators and are never sent to the reporter.</Typography>
+        <Typography level="body-sm">
+          Notes are private to moderators and expire with the report text. Audit metadata remains in history.
+        </Typography>
         {history.isPending ? (
           <LoadingState label="Loading history" />
         ) : history.isError ? (
@@ -86,6 +80,7 @@ export default function FeedbackHistory({ id }: { id: string }) {
           </>
         )}
         <Textarea
+          disabled={addNote.isPending}
           value={note}
           onChange={event => setNote(event.target.value)}
           minRows={3}
@@ -97,16 +92,16 @@ export default function FeedbackHistory({ id }: { id: string }) {
             },
           }}
         />
-        {error && (
+        {addNote.isError && (
           <Alert color="danger" data-testid="feedback-note-error">
-            {error}
+            {getErrorMessage(addNote.error)}
           </Alert>
         )}
         <Button
           variant="outlined"
-          loading={saving}
-          disabled={!note.trim() || note.trim().length > ADMIN_NOTE_MAX_LENGTH}
-          onClick={() => void addNote()}
+          loading={addNote.isPending}
+          disabled={addNote.isPending || !note.trim() || note.trim().length > ADMIN_NOTE_MAX_LENGTH}
+          onClick={() => addNote.mutate(note.trim())}
           data-testid="feedback-note-add-btn"
         >
           Add internal note

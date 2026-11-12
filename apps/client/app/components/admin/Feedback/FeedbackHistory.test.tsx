@@ -70,4 +70,32 @@ describe('private feedback history UI', () => {
     expect(await screen.findByTestId('feedback-note-error')).toHaveTextContent('Could not save');
     expect(screen.getByTestId('feedback-note-input')).toHaveValue('Keep this draft');
   });
+  it.each(['success', 'failure'])('locks pending note edits and handles delayed %s', async outcome => {
+    let complete!: () => void;
+    let fail!: (error: Error) => void;
+    mocks.add.mockReturnValue(
+      new Promise<void>((resolve, reject) => {
+        complete = resolve;
+        fail = reject;
+      })
+    );
+    renderHistory();
+    const input = screen.getByTestId('feedback-note-input');
+    await userEvent.type(input, 'Keep pending draft');
+    await userEvent.click(screen.getByTestId('feedback-note-add-btn'));
+    expect(input).toBeDisabled();
+    await userEvent.type(input, 'unsubmitted edit');
+    expect(input).toHaveValue('Keep pending draft');
+    expect(mocks.add).toHaveBeenCalledTimes(1);
+    if (outcome === 'success') {
+      complete();
+      await waitFor(() => expect(input).toHaveValue(''));
+      await waitFor(() => expect(input).toBeEnabled());
+    } else {
+      fail(new Error('Save failed'));
+      expect(await screen.findByTestId('feedback-note-error')).toHaveTextContent('Save failed');
+      expect(input).toBeEnabled();
+      expect(input).toHaveValue('Keep pending draft');
+    }
+  });
 });
