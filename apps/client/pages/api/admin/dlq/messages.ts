@@ -1,4 +1,4 @@
-import { ApiKeyScope, meetsAdminPermissionRequirement } from '@bike4mind/common';
+import { ApiKeyScope, meetsAdminPermissionRequirement, recommendDlqAction } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
@@ -17,7 +17,7 @@ import {
 } from '@bike4mind/server-utils/utils/dlqConsumerLogs';
 import { receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
-import { dlqFailureRepository } from '@bike4mind/database';
+import { dlqFailureRepository, dlqReplayLogRepository } from '@bike4mind/database';
 import { z } from 'zod';
 
 const QuerySchema = z.object({
@@ -107,8 +107,12 @@ const handler = adminApi({
     messages.map(msg => msg.MessageId!)
   );
   const failureById = new Map(failures.map(failure => [failure.messageId, failure]));
+  const attempts = await settleWithinBudget(
+    messages.map(msg => dlqReplayLogRepository.countAttempts(msg.MessageId!).catch(() => null)),
+    CONSUMER_LOGS_BUDGET_MS
+  );
 
-  const formatted = messages.map(msg => {
+  const formatted = messages.map((msg, index) => {
     const failure = failureById.get(msg.MessageId!);
     return {
       messageId: msg.MessageId,
@@ -120,6 +124,15 @@ const handler = adminApi({
       logsUrl: messageLogsUrl(consumerLogs, msg.Attributes?.SentTimestamp),
       ...(lookupFailed ? { failureLookupFailed: true } : {}),
       failure: failure ? { errorMessage: failure.errorMessage, category: failure.category } : undefined,
+      recommendation: recommendDlqAction({
+        category: failure?.category,
+        errorType: failure?.errorType,
+        failedAt: failure?.failedAt?.toISOString(),
+        consumerVersion: failure?.consumerVersion,
+        runningConsumerVersion: consumerLogs?.consumerVersion,
+        consumerDeployedAt: consumerLogs?.consumerDeployedAt,
+        replayAttempts: attempts[index] ?? undefined,
+      }),
     };
   });
 

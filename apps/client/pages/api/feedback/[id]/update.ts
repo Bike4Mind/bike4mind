@@ -13,7 +13,15 @@ import { z } from 'zod';
 // Triage fields belong to the admin status route (admin/feedback/[id]/status.ts). A `status` equal
 // to the stored one is the whole-report echo older clients send and is ignored; a different one is
 // rejected rather than stripped, so the caller learns the change did not apply.
-const ADMIN_ONLY_FIELDS = ['handledBy', 'handledAt'] as const;
+const ADMIN_ONLY_FIELDS = [
+  'handledBy',
+  'handledAt',
+  'handledAuditEntryId',
+  'resolution',
+  'resolutionDuplicateId',
+  'internalNotes',
+  'notes',
+] as const;
 
 const UpdateFeedbackRequestSchema = z.object({
   userId: z.string(),

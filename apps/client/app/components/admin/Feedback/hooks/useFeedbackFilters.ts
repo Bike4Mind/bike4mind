@@ -30,6 +30,18 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     setValueImmediately: clearSearchTerm,
   } = useDebounceValue('');
   const [view, updateView] = useFeedbackView();
+  const resolution = view.resolution;
+  const setResolution = useCallback<UseFeedbackFiltersReturn['setResolution']>(
+    next =>
+      updateView({
+        resolution: next,
+        statusFilters: Object.fromEntries(
+          Object.values(FeedbackStatus).map(status => [status, next ? status === FeedbackStatus.Closed : true])
+        ) as Record<FeedbackStatus, boolean>,
+        page: 1,
+      }),
+    [updateView]
+  );
   const { statusFilters, organizations: selectedOrganizations, subject, types, received, sortAscending, page } = view;
 
   const setSearchTerm = useCallback(
@@ -76,6 +88,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
         types: DEFAULT_FEEDBACK_VIEW.types,
         organizations: DEFAULT_FEEDBACK_VIEW.organizations,
         received: DEFAULT_FEEDBACK_VIEW.received,
+        resolution: undefined,
         ...next,
         page: 1,
       });
@@ -93,6 +106,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     statusFilters,
     selectedOrganizations,
     subject,
+    resolution,
     types,
     received,
     sortAscending,
@@ -107,12 +121,13 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
       ...(selectedOrganizations.length > 0 ? { organization: selectedOrganizations } : {}),
       // Single-valued, unlike status/organization: the endpoint takes one subject or none.
       ...(subject ? { subject } : {}),
+      ...(resolution ? { resolution } : {}),
       ...(types.length > 0 ? { type: types } : {}),
       ...(received ? { received } : {}),
       ...(debouncedSearchTerm.trim() ? { search: debouncedSearchTerm.trim() } : {}),
       sort: sortAscending ? 'asc' : 'desc',
     };
-  }, [statusFilters, selectedOrganizations, subject, types, received, debouncedSearchTerm, sortAscending]);
+  }, [statusFilters, selectedOrganizations, subject, resolution, types, received, debouncedSearchTerm, sortAscending]);
 
   return {
     filters,
@@ -120,6 +135,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     setStatusFilters,
     setSelectedOrganizations,
     setSubject,
+    setResolution,
     setTypes,
     setReceived,
     showOnly,

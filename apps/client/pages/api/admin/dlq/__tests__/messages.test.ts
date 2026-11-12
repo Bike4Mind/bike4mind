@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   receiveFromQueue: vi.fn(),
   resolveConsumerLogsForSourceQueue: vi.fn(),
   findForMessages: vi.fn(),
+  countAttempts: vi.fn(),
   sourceQueue: 'webhookDeliveryQueue' as string | null,
 }));
 
@@ -30,7 +31,10 @@ vi.mock('@bike4mind/server-utils/utils/dlqConsumerLogs', async importOriginal =>
   resolveConsumerLogsForSourceQueue: h.resolveConsumerLogsForSourceQueue,
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ receiveFromQueue: h.receiveFromQueue }));
-vi.mock('@bike4mind/database', () => ({ dlqFailureRepository: { findForMessages: h.findForMessages } }));
+vi.mock('@bike4mind/database', () => ({
+  dlqFailureRepository: { findForMessages: h.findForMessages },
+  dlqReplayLogRepository: { countAttempts: h.countAttempts },
+}));
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), warn: vi.fn() } }));
 
 import { CONSUMER_LOGS_BUDGET_MS } from '@bike4mind/server-utils/utils/dlqConsumerLogs';
@@ -56,6 +60,7 @@ const peek = async (adminPermissions: string[], queue = 'q1') => {
       logsUrl?: string | null;
       failureLookupFailed?: boolean;
       failure?: { errorMessage: string; category: string };
+      recommendation: { action: string; label: string; basis: string };
     }>;
   };
 };
@@ -69,6 +74,7 @@ describe('GET /api/admin/dlq/messages', () => {
     h.receiveFromQueue.mockReset().mockResolvedValue([message]);
     h.resolveConsumerLogsForSourceQueue.mockReset().mockResolvedValue(consumerLogs);
     h.findForMessages.mockReset().mockResolvedValue([]);
+    h.countAttempts.mockReset().mockResolvedValue(0);
     h.sourceQueue = 'webhookDeliveryQueue';
   });
 
@@ -178,6 +184,23 @@ describe('GET /api/admin/dlq/messages', () => {
     const row = (await peek(['support:read'])).messages[0];
     expect(row.failure).toBeUndefined();
     expect(row.failureLookupFailed).toBeUndefined();
+    expect(row.recommendation.action).toBe('inspect');
+  });
+
+  it('joins recorded failures, consumer deployment and replay attempts into advisory recommendations', async () => {
+    h.findForMessages.mockResolvedValue([{ messageId: 'm1', category: 'bug', failedAt: new Date('2026-01-01') }]);
+    h.resolveConsumerLogsForSourceQueue.mockResolvedValue({
+      ...consumerLogs,
+      consumerDeployedAt: '2026-01-02T00:00:00Z',
+    });
+    expect((await peek(['support:read'])).messages[0].recommendation.label).toBe('Possibly fixed since: replay');
+    h.countAttempts.mockResolvedValue(3);
+    expect((await peek(['support:read'])).messages[0].recommendation).toMatchObject({
+      action: 'discard',
+      basis: expect.stringContaining('3 recorded replay attempts'),
+    });
+    h.countAttempts.mockRejectedValue(new Error('private lookup error'));
+    expect((await peek(['support:read'])).messages[0].recommendation.label).toBe('Possibly fixed since: replay');
   });
 
   it.each([

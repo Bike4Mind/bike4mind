@@ -6,6 +6,9 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import DlqReplayTab from './DlqReplayTab';
 
 const state = vi.hoisted(() => ({
+  compact: false,
+  messagesLoading: false,
+  messagesError: false,
   retentionSeconds: undefined as number | undefined,
   messages: [] as Array<{
     messageId: string;
@@ -45,6 +48,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: h.user }) }));
+vi.mock('@mui/system/useMediaQuery', () => ({ default: () => state.compact }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({
@@ -55,8 +59,8 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   }),
   useDlqMessages: () => ({
     data: h.messages.length ? h.messages : state.messages,
-    isLoading: false,
-    isError: false,
+    isLoading: state.messagesLoading,
+    isError: state.messagesError,
     refetch: vi.fn(),
   }),
   useDlqReplay: () => ({
@@ -85,7 +89,7 @@ function renderTab() {
 }
 
 const selectQueue = async (name: RegExp) => {
-  await userEvent.click(screen.getByRole('combobox'));
+  await userEvent.click(within(screen.getByTestId('dlq-queue-selector')).getByRole('combobox'));
   await userEvent.click(await screen.findByRole('option', { name }));
 };
 
@@ -100,6 +104,9 @@ const renderWithQueueSelected = async (name = /Queue One/) => {
 };
 
 beforeEach(() => {
+  state.compact = false;
+  state.messagesLoading = false;
+  state.messagesError = false;
   state.messages = [{ messageId: 'm1', body: '{}', sentTimestamp: '1700000000000', approximateReceiveCount: '1' }];
   h.replay.mockReset();
   state.history = [];
@@ -110,7 +117,60 @@ beforeEach(() => {
   h.messages = [];
 });
 
+describe('DlqReplayTab toolkit presentation', () => {
+  it('puts the message and failure on a single compact column with visible actions', async () => {
+    state.compact = true;
+    state.messages[0].failure = { errorMessage: 'worker timed out', category: 'timeout' };
+    await renderWithQueueSelected();
+    const table = screen.getByTestId('dlq-messages-table');
+    expect(within(table).getAllByRole('columnheader')).toHaveLength(1);
+    const row = screen.getByTestId('dlq-message-row-m1');
+    expect(within(row).getAllByRole('cell')).toHaveLength(1);
+    expect(row).toHaveTextContent('m1');
+    expect(row).toHaveTextContent('worker timed out');
+    expect(within(row).getByTestId('dlq-recommendation-m1')).toHaveTextContent('Recorded transient failure: timeout.');
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+    expect(screen.getByTestId('dlq-failure-reason')).toHaveTextContent('worker timed out');
+  });
+
+  it('shows an empty state rather than a blank table', async () => {
+    state.messages = [];
+    await renderWithQueueSelected();
+    expect(screen.getByText('No messages in this queue')).toBeInTheDocument();
+  });
+
+  it('replaces stale rows with the shared error state', async () => {
+    state.messagesError = true;
+    await renderWithQueueSelected();
+    expect(screen.getByText('Messages failed to load.')).toBeInTheDocument();
+    expect(screen.queryByTestId('dlq-message-row-m1')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['dlq-replay-all', 'dlq-replay-dialog', 'dlq-replay-confirm'],
+    ['dlq-replay-single-m1', 'dlq-single-replay-dialog', 'dlq-single-replay-confirm'],
+  ])('uses a reason picker in the %s confirmation', async (openId, dialogId, confirmId) => {
+    h.user = { isAdmin: true };
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId(openId));
+    expect(screen.getByTestId(confirmId)).toBeDisabled();
+    expect(screen.getByTestId(`${dialogId}-reason-input-helper`)).toHaveTextContent('Recorded in the audit log');
+    fireEvent.change(screen.getByTestId(`${dialogId}-reason-input`), { target: { value: 'Reviewed the failure' } });
+    expect(screen.getByTestId(confirmId)).toBeEnabled();
+    await userEvent.click(screen.getByTestId(`${dialogId}-cancel-btn`));
+    expect(h.replay).not.toHaveBeenCalled();
+  });
+});
+
 describe('DlqReplayTab failure metadata', () => {
+  it('shows an advisory recommendation and its basis on each row', async () => {
+    state.messages[0].failure = { errorMessage: 'worker timed out', category: 'timeout' };
+    await renderWithQueueSelected();
+    expect(screen.getByTestId('dlq-recommendation-m1')).toHaveTextContent('Replay');
+    expect(screen.getByTestId('dlq-recommendation-m1')).toHaveTextContent('Recorded transient failure: timeout.');
+    expect(screen.getByTestId('dlq-recommendation-m1')).toHaveTextContent('Advisory only');
+  });
+
   it('shows recorded reason and category in the row and drawer', async () => {
     state.messages[0].failure = { errorMessage: 'worker timed out', category: 'timeout' };
     await renderWithQueueSelected();
@@ -211,6 +271,38 @@ describe('DlqReplayTab history table', () => {
 });
 
 describe('DlqReplayTab replay permission', () => {
+  it.each(['side-effects', 'unsafe', undefined])(
+    'shows consequences and requires a reason for %s in single and batch replay',
+    async replay => {
+      h.user = { isAdmin: true };
+      state.queues = [
+        { ...QUEUE_ONE, replay, description: 'Delivers notifications.', replayNote: 'A replay can deliver again.' },
+      ];
+      h.replay.mockResolvedValue({ replayed: 1, failed: 0, skipped: 0, notFound: 0, results: [] });
+      await renderWithQueueSelected();
+      for (const [opener, confirm, dialog] of [
+        ['dlq-replay-single-m1', 'dlq-single-replay-confirm', 'dlq-single-replay-dialog'],
+        ['dlq-replay-all', 'dlq-replay-confirm', 'dlq-replay-dialog'],
+      ]) {
+        await userEvent.click(screen.getByTestId(opener));
+        expect(screen.getByTestId('dlq-replay-summary')).toHaveTextContent('Queue One');
+        expect(screen.getByTestId('dlq-replay-summary')).toHaveTextContent('A replay can deliver again.');
+        expect(screen.getByTestId(confirm)).toBeDisabled();
+        fireEvent.change(screen.getByTestId(`${dialog}-reason-input`), { target: { value: 'Reviewed side effects' } });
+        await userEvent.click(screen.getByTestId(confirm));
+        expect(h.replay).toHaveBeenLastCalledWith(expect.objectContaining({ reason: 'Reviewed side effects' }));
+      }
+    }
+  );
+
+  it('allows a safe replay without a reason', async () => {
+    h.user = { isAdmin: true };
+    state.queues = [{ ...QUEUE_ONE, replay: 'safe' }];
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-replay-all'));
+    expect(screen.getByTestId('dlq-replay-confirm')).toBeEnabled();
+  });
+
   it('disables both replay buttons for a support:read viewer', async () => {
     h.user = { isAdmin: false, adminPermissions: ['support:read'] };
     await renderWithQueueSelected();

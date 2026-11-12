@@ -216,6 +216,7 @@ describe('feedbackViewToSearch', () => {
         'feedbackOrg',
         'feedbackPage',
         'feedbackReceived',
+        'feedbackResolution',
         'feedbackStatus',
         'feedbackSubject',
         'feedbackType',
