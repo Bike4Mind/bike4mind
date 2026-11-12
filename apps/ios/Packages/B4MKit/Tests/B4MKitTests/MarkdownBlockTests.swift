@@ -68,4 +68,24 @@ final class MarkdownBlockTests: XCTestCase {
   func testAStreamingHeadingWithoutTextYetStaysProse() {
     XCTAssertEqual(MarkdownBlock.split("Intro\n#"), [.prose("Intro\n#")])
   }
+
+  func testAnInlineTripleBacktickSpanOnItsOwnLineIsNotAFence() {
+    XCTAssertEqual(
+      MarkdownBlock.split("Run\n```npm install```\n# Next"),
+      [.prose("Run\n```npm install```"), .heading(level: 1, text: "Next")])
+  }
+
+  func testCRLFRepliesSplitIntoBlocks() {
+    XCTAssertEqual(
+      MarkdownBlock.split("# Title\r\n\r\n- one\r\n```swift\r\nlet x = 1\r\n```\r\nDone."),
+      [
+        .heading(level: 1, text: "Title"), .listItem(marker: .bullet, depth: 0, text: "one"),
+        .code(language: "swift", code: "let x = 1"), .prose("Done."),
+      ])
+  }
+
+  func testDeeplyIndentedHashOrRuleLinesAreNotBlocks() {
+    XCTAssertEqual(MarkdownBlock.split("Code:\n    # comment\n    ---"), [.prose("Code:\n    # comment\n    ---")])
+    XCTAssertEqual(MarkdownBlock.split("   ## Three spaces"), [.heading(level: 2, text: "Three spaces")])
+  }
 }

@@ -13,17 +13,39 @@ struct MessageBubble: View {
   private var isUser: Bool { message.role == .user }
 
   var body: some View {
+    let blocks = isUser || message.text.isEmpty ? [] : MarkdownBlock.split(message.text)
     VStack(alignment: isUser ? .trailing : .leading, spacing: Tokens.Spacing.xs) {
       if isUser {
         promptBubble
       } else {
-        reply
+        reply(blocks)
       }
       footer
     }
     .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(message.accessibilityLabel())
+    .accessibilityActions { codeCopyActions(blocks) }
+  }
+
+  /// The message is one VoiceOver element (children ignored), which hides each code block's copy button,
+  /// so every code block is offered as a named action on the message instead.
+  @ViewBuilder
+  private func codeCopyActions(_ blocks: [MarkdownBlock]) -> some View {
+    let codes = blocks.compactMap { block -> (language: String?, code: String)? in
+      guard case .code(let language, let code) = block else { return nil }
+      return (language, code)
+    }
+    ForEach(Array(codes.enumerated()), id: \.offset) { index, entry in
+      Button(Self.copyActionName(index: index, count: codes.count, language: entry.language)) {
+        UIPasteboard.general.string = entry.code
+      }
+    }
+  }
+
+  private static func copyActionName(index: Int, count: Int, language: String?) -> String {
+    let base = count == 1 ? "Copy code" : "Copy code block \(index + 1)"
+    return language.map { "\(base), \($0)" } ?? base
   }
 
   @ViewBuilder
@@ -53,13 +75,13 @@ struct MessageBubble: View {
       .contextMenu { if !message.text.isEmpty { contextActions } }
   }
 
-  private var reply: some View {
+  private func reply(_ blocks: [MarkdownBlock]) -> some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.m) {
       if message.text.isEmpty {
         // A turn still working has no text yet; the badge below says why.
         Text(" ")
       } else {
-        ForEach(Array(MarkdownBlock.split(message.text).enumerated()), id: \.offset) { _, block in
+        ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
           MarkdownBlockView(block: block)
         }
       }
@@ -196,6 +218,9 @@ private struct CodeBlockView: View {
   let code: String
   @State private var copied = false
 
+  /// How long the checkmark shows before the button reads "Copy" again, so a later copy confirms too.
+  private static let copiedDuration: Duration = .seconds(2)
+
   var body: some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
       HStack {
@@ -217,6 +242,15 @@ private struct CodeBlockView: View {
         .buttonStyle(.borderless)
         .foregroundStyle(Tokens.Palette.secondaryText)
         .sensoryFeedback(.success, trigger: copied) { _, isCopied in isCopied }
+        .task(id: copied) {
+          guard copied else { return }
+          do {
+            try await Task.sleep(for: Self.copiedDuration)
+          } catch {
+            return  // Cancelled: the view went away or the state already changed.
+          }
+          copied = false
+        }
         .accessibilityIdentifier("message-code-copy-btn")
       }
       ScrollView(.horizontal, showsIndicators: false) {

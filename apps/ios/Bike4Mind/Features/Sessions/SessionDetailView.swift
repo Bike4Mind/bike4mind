@@ -146,8 +146,10 @@ private struct ChatScreen: View {
           }
           footer
         }
+        .frame(maxWidth: Tokens.Layout.transcriptMaxWidth)
         .padding(.horizontal, Tokens.Spacing.m)
         .padding(.vertical, Tokens.Spacing.s)
+        .frame(maxWidth: .infinity)
       }
       .scrollDismissesKeyboard(.interactively)
       .defaultScrollAnchor(.bottom)

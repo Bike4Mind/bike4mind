@@ -60,7 +60,9 @@ enum Tokens {
     static let row = BrandFont.font(size: Size.sm, relativeTo: .subheadline)
     static let caption = BrandFont.font(size: Size.sm, relativeTo: .footnote)
     static let meta = BrandFont.font(size: Size.xs, relativeTo: .caption2)
-    static let code = Font.system(size: Size.sm, design: .monospaced).leading(.standard)
+    /// System monospace has no fixed-size-relative-to-style form, so code takes the nearest text style
+    /// (footnote, 13pt at the default size, against the web's 14px) in order to scale with Dynamic Type.
+    static let code = Font.system(.footnote, design: .monospaced).leading(.standard)
     /// Reply headings, h1 to h6 (web `.b4m-md` headings, weight 600); h4 and below stay body size.
     static func heading(level: Int) -> Font {
       switch level {
@@ -70,7 +72,8 @@ enum Tokens {
       default: BrandFont.font(size: Size.md, weight: Weight.lg, relativeTo: .headline)
       }
     }
-    static let codeLabel = Font.system(size: Size.xs, design: .monospaced)
+    /// The code block's language label (web 12px; caption is 12pt at the default size).
+    static let codeLabel = Font.system(.caption, design: .monospaced)
   }
 
   enum LineSpacing {

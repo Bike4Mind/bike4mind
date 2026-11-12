@@ -206,7 +206,7 @@ public final class ChatViewModel {
           liveTurns[streamedIndex] = QuestTurn(
             id: streamed.id, prompt: prompt, reply: streamed.reply, status: streamed.status, kind: streamed.kind,
             errorCode: streamed.errorCode, createdAt: streamed.createdAt, creditsUsed: streamed.creditsUsed,
-            pendingAction: streamed.pendingAction)
+            pendingAction: streamed.pendingAction, rawReplyLength: streamed.rawReplyLength)
         }
         liveTurns.remove(at: localIndex)
       } else {
@@ -439,6 +439,6 @@ extension QuestTurn {
     QuestTurn(
       id: id ?? self.id, prompt: prompt, reply: reply ?? self.reply, status: status ?? self.status,
       kind: kind ?? self.kind, errorCode: errorCode ?? self.errorCode, createdAt: createdAt,
-      creditsUsed: creditsUsed, pendingAction: pendingAction)
+      creditsUsed: creditsUsed, pendingAction: pendingAction, rawReplyLength: reply == nil ? rawReplyLength : nil)
   }
 }

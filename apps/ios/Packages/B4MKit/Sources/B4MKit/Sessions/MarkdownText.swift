@@ -63,7 +63,8 @@ public enum MarkdownBlock: Equatable, Sendable {
       quote.removeAll()
     }
 
-    for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
+    // "\r\n" is one Character in Swift, so a CRLF reply only splits when it is matched as a newline of its own.
+    for line in source.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }) {
       let trimmed = line.trimmingCharacters(in: .whitespaces)
       if let fence = openFence {
         if closes(fence.marker, trimmed) {
@@ -101,10 +102,19 @@ public enum MarkdownBlock: Equatable, Sendable {
     return blocks
   }
 
+  /// Headings and rules allow at most three columns of indent (CommonMark); a deeper line such as
+  /// `    # comment` is indented code, not a heading. List items keep their indent as nesting depth.
   private static func blockLine(_ line: Substring, trimmed: String) -> MarkdownBlock? {
-    if let heading = heading(trimmed) { return heading }
-    if isRule(trimmed) { return .rule }
+    if indentWidth(line) < 4 {
+      if let heading = heading(trimmed) { return heading }
+      if isRule(trimmed) { return .rule }
+    }
     return listItem(line)
+  }
+
+  /// Leading spaces and tabs in columns, a tab counting as four.
+  private static func indentWidth(_ line: Substring) -> Int {
+    line.prefix { $0 == " " || $0 == "\t" }.reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
   }
 
   /// ATX heading: 1-6 `#` then a space and text. A closing run of `#` is dropped.
@@ -130,7 +140,7 @@ public enum MarkdownBlock: Equatable, Sendable {
 
   /// `- `, `* `, `+ ` or `1. ` / `1) `; every two leading spaces nest one level deeper.
   private static func listItem(_ line: Substring) -> MarkdownBlock? {
-    let indent = line.prefix { $0 == " " || $0 == "\t" }.reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
+    let indent = indentWidth(line)
     let body = line.drop { $0 == " " || $0 == "\t" }
     let depth = indent / 2
     if let bullet = body.first, "-*+".contains(bullet), body.dropFirst().first == " " {
@@ -159,10 +169,14 @@ public enum MarkdownBlock: Equatable, Sendable {
     return line.count >= marker.count && line.allSatisfy { $0 == character }
   }
 
+  /// The opening run of a fence line. A backtick fence's info string cannot contain a backtick, so a line
+  /// such as ```` ```npm install``` ```` is inline code, not a fence (mirrors `ReplyVisibility`).
   private static func fenceMarker(_ line: String) -> String? {
     for character in ["`", "~"] {
       let run = line.prefix { String($0) == character }
-      if run.count >= 3 { return String(run) }
+      guard run.count >= 3 else { continue }
+      if character == "`" && line.dropFirst(run.count).contains("`") { return nil }
+      return String(run)
     }
     return nil
   }

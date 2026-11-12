@@ -332,4 +332,46 @@ final class QuestTurnMonotonicReplyTests: XCTestCase {
       id: "q1", prompt: nil, reply: "Hello.", status: .stopped, createdAt: Date(timeIntervalSince1970: 0))
     XCTAssertEqual(streaming.applying(polled: polled).reply, "Hello.")
   }
+
+  private func frame(replies: [String], status: QuestTurn.Status = .running) -> ChatQuestFrame? {
+    let quest: JSONObject = [
+      "id": .string("q1"), "sessionId": .string("s1"), "status": .string(status.rawValue),
+      "replies": .array(replies.map(JSONValue.string)),
+    ]
+    return ChatQuestFrame(ActionFrame(action: ChatQuestFrame.action, payload: ["quest": .object(quest)]))
+  }
+
+  private func stream(_ slots: [String]) -> QuestTurn {
+    let start = QuestTurn(
+      id: "q1", prompt: "Hi", reply: nil, status: .pending, createdAt: Date(timeIntervalSince1970: 0))
+    return slots.reduce(start) { turn, slot in frame(replies: [slot]).map(turn.applying) ?? turn }
+  }
+
+  // Hiding the block shrinks the VISIBLE text once ```choices completes; the guard must measure the raw slots.
+  func testAChoicesFenceArrivingInPiecesDoesNotFreezeOnTheBareFence() {
+    let turn = stream(["Pick:\n\n```", "Pick:\n\n```choices\n{"])
+    XCTAssertEqual(turn.reply, "Pick:")
+  }
+
+  func testAThinkTagArrivingInPiecesDoesNotFreezeOnThePartialTag() {
+    let partial = stream(["<thi"])
+    XCTAssertEqual(partial.reply, "<thi")
+    let reasoning = stream(["<thi", "<think>weighing it"])
+    XCTAssertNil(reasoning.reply)
+    let answered = stream(["<thi", "<think>weighing it", "<think>weighing it</think>Answer"])
+    XCTAssertEqual(answered.reply, "Answer")
+  }
+
+  func testARawShorterFrameStillCannotShortenTheText() {
+    let turn = stream(["Hello there, how are", "Hello"])
+    XCTAssertEqual(turn.reply, "Hello there, how are")
+  }
+
+  func testALaggingPollCannotShortenAFrameTurnButALongerOneApplies() {
+    let streamed = stream(["Hello there, how are"])
+    let behind = QuestTurn(id: "q1", prompt: nil, reply: "Hello", status: .running, createdAt: Date())
+    XCTAssertEqual(streamed.applying(polled: behind).reply, "Hello there, how are")
+    let ahead = QuestTurn(id: "q1", prompt: nil, reply: "Hello there, how are you", status: .running, createdAt: Date())
+    XCTAssertEqual(streamed.applying(polled: ahead).reply, "Hello there, how are you")
+  }
 }

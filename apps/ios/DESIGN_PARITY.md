@@ -55,8 +55,9 @@ Web: `components/Session/SidenavItem.tsx` (L741-803), row style
 title `body-xs`-`body-sm`, single line. Selected: `notebooklist` focused background plus a 2px accent bar
 on the left. Backdrop `gray[50]` light / `gray[850]` dark.
 
-iOS: `sidebar` backdrop, `sidebarText` rows at radius md, `sidebarSelected` plus a 2pt accent bar for the
-open conversation. Touch targets stay at 44pt.
+iOS: `sidebar` backdrop, `sidebarText` rows at radius md, `sidebarSelected` while a row is pressed. The
+drawer opens only over the start-of-chat home, where no conversation is open, so no row has a selected
+state to hold and there is no accent bar. Touch targets stay at 44pt.
 
 ## Code blocks
 
