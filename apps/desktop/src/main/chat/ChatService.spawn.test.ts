@@ -318,6 +318,24 @@ describe('ChatService spawn caps', () => {
     await expect(card).resolves.toMatchObject({ decision: 'deny' });
   });
 
+  it("marks a Desktop loop run's child as the same local run", async () => {
+    const parent = await codeSession();
+    await service.startAutomaticTurn(parent.id, 'go', {
+      kind: 'local-loop',
+      loopId: 'loop-1',
+      ticketId: 'ticket-1',
+      runId: 'local-run-1',
+      summary: 'Fix the docs',
+    });
+    await awaitStream(0);
+    requestSpawns(streams[0], 1, 'local');
+    await startSuggested(parent.id, ['local-0']);
+
+    const child = (await store.list()).find(session => session.origin);
+    expect(child && service.loopRunOf(child.id)).toBe('local-run-1');
+    expect(child && service.isLocalLoopRun(child.id)).toBe(true);
+  });
+
   it('gives a spawned session exactly its parent grants, with no way to name others', async () => {
     const parent = await codeSession();
     await service.send(parent.id, 'go');

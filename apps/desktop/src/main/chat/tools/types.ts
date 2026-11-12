@@ -456,6 +456,8 @@ export interface ToolContext {
   lowPriority?: boolean;
   /** A loop runner session's merge, under its stage's policy. Absent elsewhere; loop_merge_pr refuses. */
   loopMerge?: { merge(prUrl: string): Promise<string> };
+  /** A Desktop loop run's loop_ticket_* tools, bound to its run. Absent elsewhere; they refuse. */
+  localLoopTickets?: { call(tool: string, input: Record<string, unknown>): Promise<string> };
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
   /**

@@ -693,6 +693,7 @@ export type ChatRelayHoldReason = 'other-project' | 'looser-mode';
  * and a guard holds it to the rules they agreed to (no force-push, no merge). 'background-exit'
  * tells the model a background command it started has ended (see main/chat/backgroundWake.ts).
  * 'loop-runner' works one ticket of a loop stage that runs on this machine (see main/loops).
+ * 'local-loop' is a run of a loop Desktop owns, ticket or triage (see main/loops/local).
  * 'agents-settled' tells an Orchestrate parent that every agent it started has stopped running
  * (see main/chat/agentWake.ts).
  */
@@ -717,6 +718,15 @@ export type ChatAutomaticOrigin =
       /** The server's run id; tagged on this session's completion requests for credit attribution. */
       runId: string;
       /** One line for the thread's collapsed row: the ticket's title. */
+      summary: string;
+    }
+  | {
+      kind: 'local-loop';
+      loopId: string;
+      /** Absent on a triage run. */
+      ticketId?: string;
+      /** A local run id: never sent to the server, which knows nothing of Desktop loops. */
+      runId: string;
       summary: string;
     }
   | {

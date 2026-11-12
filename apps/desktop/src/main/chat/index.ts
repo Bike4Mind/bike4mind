@@ -414,6 +414,8 @@ export function registerChat(
     loopUnattended?(sessionId: string): void;
     /** loop_merge_pr. Called only once the runner is registered, after this returns. */
     loopMerge?(sessionId: string, prUrl: string): Promise<string>;
+    /** loop_ticket_* of a Desktop loop run. Called only once the scheduler is registered, after this returns. */
+    localLoopTickets?(sessionId: string, tool: string, input: Record<string, unknown>): Promise<string>;
     /** The curated family sampling for an installed local model; see ModelHubService.catalogSampling. */
     catalogSampling?: CatalogSamplingHook;
   } = {}
@@ -740,6 +742,7 @@ export function registerChat(
     store,
     access,
     ...(hooks.loopMerge ? { loopMerge: hooks.loopMerge } : {}),
+    ...(hooks.localLoopTickets ? { localLoopTickets: hooks.localLoopTickets } : {}),
     attachments,
     models,
     modelSettings,

@@ -39,6 +39,7 @@ describe('ChatService loop runner sessions', () => {
   let post: ReturnType<typeof vi.fn>;
   let root: string;
   let unattended: string[];
+  const localLoopTickets = vi.fn(async (_sessionId: string, tool: string) => `ran ${tool}`);
 
   const ended = (): ChatToolCall[] => events.flatMap(event => (event.type === 'tool-end' ? [event.call] : []));
   const nextStream = async (count: number) => {
@@ -48,6 +49,7 @@ describe('ChatService loop runner sessions', () => {
 
   beforeEach(async () => {
     vi.mocked(lowerPriority).mockClear();
+    localLoopTickets.mockClear();
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-loop-')));
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-loop-sessions-')), 'test-model');
     events = [];
@@ -75,6 +77,7 @@ describe('ChatService loop runner sessions', () => {
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => events.push(event),
+      localLoopTickets,
     });
   });
 
@@ -163,5 +166,47 @@ describe('ChatService loop runner sessions', () => {
     streams[2].write(frame('[DONE]'));
     await vi.waitUntil(() => ended().length === 2, { timeout: 5000, interval: 10 });
     expect(lowerPriority).toHaveBeenCalledTimes(1);
+  });
+
+  describe('a Desktop loop run', () => {
+    const local: ChatAutomaticOrigin = {
+      kind: 'local-loop',
+      loopId: 'local-loop-1',
+      ticketId: 'local-ticket-1',
+      runId: 'local-run-1',
+      summary: 'Fix the docs',
+    };
+    const toolNames = (call: number): string[] =>
+      (post.mock.calls[call][1].options.tools as { toolSchema: { name: string } }[]).map(tool => tool.toolSchema.name);
+
+    it('never sends its local run id to the server, but is still a loop run', async () => {
+      const session = await service.createSession();
+      await service.startAutomaticTurn(session.id, 'work the ticket', local);
+      await nextStream(1);
+      expect(post.mock.calls[0][2].headers).not.toHaveProperty(LOOP_RUN_HEADER);
+      expect(service.loopRunOf(session.id)).toBe('local-run-1');
+      expect(service.isLocalLoopRun(session.id)).toBe(true);
+      expect(toolNames(0)).toContain('loop_ticket_update');
+    });
+
+    it('keeps the runner guards and routes loop_ticket_* to the local store', async () => {
+      const session = await service.createSession();
+      await service.setApprovalMode(session.id, 'auto');
+      await service.startAutomaticTurn(session.id, 'work the ticket', local);
+      (await nextStream(1)).write(toolTurn('c1', 'bash_execute', { command: 'gh pr merge 3 --squash', cwd: root }));
+      streams[0].write(toolTurn('c2', 'loop_ticket_list', {}));
+      streams[0].write(frame('[DONE]'));
+      await vi.waitUntil(() => ended().length === 2, { timeout: 5000, interval: 10 });
+      expect(ended().find(call => call.name === 'bash_execute')?.error).toContain('loop_merge_pr');
+      expect(localLoopTickets).toHaveBeenCalledWith(session.id, 'loop_ticket_list', {});
+    });
+
+    it('is not offered the loop ticket tools in a server loop run or a normal session', async () => {
+      const runner = await service.createSession();
+      await service.startAutomaticTurn(runner.id, 'work the ticket', origin);
+      await nextStream(1);
+      expect(toolNames(0)).not.toContain('loop_ticket_list');
+      expect(service.isLocalLoopRun(runner.id)).toBe(false);
+    });
   });
 });
