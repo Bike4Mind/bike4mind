@@ -52,6 +52,7 @@ const MFA_PENDING_ALLOWED_PATHS = new Set([
   '/api/auth/mfa/verify-setup',
   '/api/auth/mfa/verify',
   '/api/auth/mfa/cancel-setup',
+  '/api/auth/mfa/enrollment-abandoned', // funnel telemetry; records nothing outside forced enrollment
   '/api/auth/mfa/status', // MFAEnforcementWrapper reads the user's MFA status
   '/api/auth/mfa/passkey/authenticate-options',
   '/api/auth/mfa/passkey/authenticate',

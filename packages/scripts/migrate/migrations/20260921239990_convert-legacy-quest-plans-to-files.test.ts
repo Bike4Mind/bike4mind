@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ convert: vi.fn() }));
 
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({}) }));
+vi.mock('../legacyQuestPlanArchiveStorage', () => ({ filesArchiveStorage: () => ({}) }));
 vi.mock('../legacyQuestPlanConversion', () => ({ DEFAULT_RUN_MS: 12 * 60 * 1000, convertLegacyQuestPlans: h.convert }));
 
 import migration from './20260921239990_convert-legacy-quest-plans-to-files';

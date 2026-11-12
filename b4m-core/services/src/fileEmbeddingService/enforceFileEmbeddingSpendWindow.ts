@@ -298,7 +298,7 @@ export async function resetFileEmbeddingSpendWindow(
   const keys = fileEmbeddingWindowCacheKeys(userId);
   const countOf = async (key: string) => {
     const doc = await db.cache.findByKey(key);
-    const live = doc !== null && doc.expiresAt > new Date();
+    const live = doc != null && doc.expiresAt > new Date();
     const count = (doc?.result as { count?: unknown } | undefined)?.count;
     return live && typeof count === 'number' ? count : 0;
   };
