@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { Migration } from '@bike4mind/database';
+import { Migration, QuestGraph, QuestMasterPlan, QuestNode } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
@@ -57,10 +57,11 @@ const seed = async () => {
     .insertMany([
       {
         email: 'v5@x.test',
+        username: 'v5',
         preferences: { experimentalFeatures: { enableQuestMasterV5: true, enableQuestMaster: true } },
       },
-      { email: 'off@x.test', preferences: { experimentalFeatures: { enableQuestMasterV5: false } } },
-      { email: 'none@x.test', preferences: { experimentalFeatures: { enableMementos: true } } },
+      { email: 'off@x.test', username: 'off', preferences: { experimentalFeatures: { enableQuestMasterV5: false } } },
+      { email: 'none@x.test', username: 'none', preferences: { experimentalFeatures: { enableMementos: true } } },
     ]);
 };
 
@@ -84,10 +85,24 @@ describe('drop legacy quest plan collections migration', () => {
     ).toBe(1005);
   });
 
-  it('stays pending when the coverage check was applied in the same run', async () => {
+  it('stays pending and touches nothing when the coverage check was applied in the same run', async () => {
+    await seed();
     const startedAt = new Date(Date.now() - 60_000);
     await markVerified(new Date());
     await expect(migration.up({ startedAt })).resolves.toMatchObject({ incomplete: true });
+    expect(await collectionNames()).toEqual(expect.arrayContaining([...LEGACY_QUEST_PLAN_COLLECTIONS]));
+    expect(
+      await db()
+        .collection('quests')
+        .countDocuments({ questMasterPlanId: { $exists: true } })
+    ).toBe(1005);
+  });
+
+  it('keeps the legacy models from recreating the dropped collections', () => {
+    for (const model of [QuestMasterPlan, QuestGraph, QuestNode]) {
+      expect(model.schema.get('autoCreate')).toBe(false);
+      expect(model.schema.get('autoIndex')).toBe(false);
+    }
   });
 
   it('drops the legacy collections, unsets the references, logs counts and keeps chat history', async () => {

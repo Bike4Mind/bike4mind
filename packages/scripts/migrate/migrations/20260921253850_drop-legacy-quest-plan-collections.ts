@@ -26,13 +26,20 @@ const db = () => {
   return database;
 };
 
-const collectionExists = async (name: string) =>
-  (await db().listCollections({ name }, { nameOnly: true }).toArray()).length > 0;
+const existingLegacyCollections = async () =>
+  new Set(
+    (
+      await db()
+        .listCollections({ name: { $in: [...LEGACY_QUEST_PLAN_COLLECTIONS] } }, { nameOnly: true })
+        .toArray()
+    ).map(c => c.name)
+  );
 
 const counts = async () => {
   const result: Record<string, number> = {};
+  const existing = await existingLegacyCollections();
   for (const name of LEGACY_QUEST_PLAN_COLLECTIONS) {
-    result[name] = (await collectionExists(name)) ? await db().collection(name).countDocuments() : 0;
+    result[name] = existing.has(name) ? await db().collection(name).countDocuments() : 0;
   }
   for (const { collection, field } of LEGACY_QUEST_PLAN_FIELDS) {
     result[`${collection}.${field}`] = await db()
@@ -103,9 +110,7 @@ const migration: MigrationFile = {
         return { incomplete: true, reason: `ran out of time unsetting ${collection}.${field}` };
       }
     }
-    for (const name of LEGACY_QUEST_PLAN_COLLECTIONS) {
-      if (await collectionExists(name)) await db().dropCollection(name);
-    }
+    for (const name of await existingLegacyCollections()) await db().dropCollection(name);
 
     console.info(`Legacy quest plan data after: ${format(await counts())}`);
   },

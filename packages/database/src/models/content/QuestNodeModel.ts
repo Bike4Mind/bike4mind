@@ -20,6 +20,10 @@ import mongoose, { Model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { convertId, convertIds, softDeletePlugin } from '../../utils/mongo';
 
+// Both collections are dropped by migration 20260921253850; without these, model init on every
+// cold start would recreate them with their indexes. Remove together with these models.
+const LEGACY_DROPPED_COLLECTION = { autoCreate: false, autoIndex: false } as const;
+
 const QuestGraphSchema = new Schema<IQuestGraphDocument>(
   {
     goal: { type: String, required: true, maxlength: 4000 },
@@ -36,7 +40,7 @@ const QuestGraphSchema = new Schema<IQuestGraphDocument>(
       maxWallClockMs: { type: Number, required: false, min: 0 },
     },
   },
-  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
+  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true }, ...LEGACY_DROPPED_COLLECTION }
 );
 
 const QuestNodeSchema = new Schema<IQuestNodeDocument>(
@@ -69,7 +73,7 @@ const QuestNodeSchema = new Schema<IQuestNodeDocument>(
     startedAt: { type: Date, required: false },
     completedAt: { type: Date, required: false },
   },
-  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
+  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true }, ...LEGACY_DROPPED_COLLECTION }
 );
 
 // Performance indexes declared together (see CLAUDE.md MongoDB guidelines).
