@@ -1,46 +1,94 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import type { ArtifactType } from '@bike4mind/common';
 import { renderArtifactIndexHtml } from './renderArtifactHtml';
-import { buildArtifactIndexHtml } from '@client/app/utils/publishApi';
 
 /**
- * The server renderer is the permanent home for artifact -> published bytes. Until #1492
- * removes the web client's pre-render, both must emit BYTE-IDENTICAL output so switching the
- * client to raw upload cannot change any already-published page. These tests pin the server
- * output to the current client output (`buildArtifactIndexHtml`) per artifact type.
+ * Published bytes pinned per artifact type. Customer /p/ pages were built from these exact bytes,
+ * so any drift changes a live page. The fixtures were captured from the web client's pre-render
+ * (`buildArtifactIndexHtml`, since removed) before the client switched to raw upload; regenerate
+ * only for an intended change to published output.
  *
- * `react` is intentionally absent: the client uploads raw JSX (it does not pre-render react)
- * and finalize transpiles it via `buildReactArtifactBundle` - that path is covered by
- * `transpileReactArtifact.test.ts`, not this wrapper.
+ * `react` is absent: finalize transpiles it via `buildReactArtifactBundle`, pinned in
+ * `reactBundlePinned.test.ts`.
  */
-describe('renderArtifactIndexHtml byte-parity with the client pre-render', () => {
-  const title = 'My "Cool" <Artifact> & Friends';
+const TITLE = 'My "Cool" <Artifact> & Friends';
 
-  const cases: Array<{ name: string; type: Parameters<typeof renderArtifactIndexHtml>[0]; content: string }> = [
-    {
-      name: 'html with <!doctype> (full document)',
-      type: 'html',
-      content: '<!doctype html><html lang="en"><head><title>x</title></head><body><h1>Hi</h1></body></html>',
-    },
-    {
-      name: 'html full document without a </body> (footer appended)',
-      type: 'html',
-      content: '<html><head><title>x</title></head><h1>no body close</h1></html>',
-    },
-    { name: 'html fragment (wrapped in page shell)', type: 'html', content: '<h1>Just a fragment</h1><p>hi</p>' },
-    {
-      name: 'svg (wrapped in page shell)',
-      type: 'svg',
-      content: '<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>',
-    },
-    { name: 'code (code view)', type: 'code', content: 'const x = 1 < 2 && 3 > 2;\nconsole.log("<script>");' },
-    { name: 'python (code view)', type: 'python', content: 'print("hello & <world>")' },
-    { name: 'mermaid (code view)', type: 'mermaid', content: 'graph TD;\n  A-->B;' },
-    { name: 'recharts (code view)', type: 'recharts', content: '{"type":"bar","data":[1,2,3]}' },
-  ];
+// The footer reads brand env at module load, so it is fixed here and the module re-imported.
+const BRAND_ENV: Record<string, string> = {
+  NEXT_PUBLIC_APP_NAME: 'acme',
+  APP_NAME: '',
+  SEED_APP_NAME: '',
+  NEXT_PUBLIC_WEBSITE_URL: 'https://acme.example',
+  NEXT_PUBLIC_CANONICAL_ORIGIN: '',
+  NEXT_PUBLIC_SHARE_BUILTIN_LOGO: '',
+  NEXT_PUBLIC_SHARE_BRAND_NAVY: '',
+  NEXT_PUBLIC_SHARE_BRAND_LIME: '',
+  NEXT_PUBLIC_SHARE_BRAND_ORANGE: '',
+};
 
-  it.each(cases)('matches the client output for $name', ({ type, content }) => {
-    expect(renderArtifactIndexHtml(type, content, title)).toBe(buildArtifactIndexHtml(type, content, title));
+const PINNED_CASES: Record<string, { type: Exclude<ArtifactType, 'react'>; content: string }> = {
+  'html-document': {
+    type: 'html',
+    content: '<!doctype html><html lang="en"><head><title>x</title></head><body><h1>Hi</h1></body></html>',
+  },
+  'html-document-no-body-close': {
+    type: 'html',
+    content: '<html><head><title>x</title></head><h1>no body close</h1></html>',
+  },
+  'html-fragment': { type: 'html', content: '<h1>Just a fragment</h1><p>hi</p>' },
+  // The client uploads the content untrimmed, and the server decodes it as UTF-8.
+  'html-fragment-untrimmed-non-ascii': {
+    type: 'html',
+    content: `\n  <p>caf${String.fromCodePoint(0xe9)} ${String.fromCodePoint(0x2014)} ${String.fromCodePoint(0x1f680)}</p>\n\n`,
+  },
+  svg: { type: 'svg', content: '<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>' },
+  code: { type: 'code', content: 'const x = 1 < 2 && 3 > 2;\nconsole.log("<script>");' },
+  python: { type: 'python', content: 'print("hello & <world>")' },
+  mermaid: { type: 'mermaid', content: 'graph TD;\n  A-->B;' },
+  recharts: { type: 'recharts', content: '{"type":"bar","data":[1,2,3]}' },
+};
+
+const pinned = (name: string) =>
+  readFileSync(resolve(__dirname, '__fixtures__/renderArtifactHtml', `${name}.html`), 'utf8');
+
+describe('renderArtifactIndexHtml pinned published bytes', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
   });
+
+  async function loadRenderer() {
+    vi.resetModules();
+    for (const [key, value] of Object.entries(BRAND_ENV)) vi.stubEnv(key, value);
+    return (await import('./renderArtifactHtml')).renderArtifactIndexHtml;
+  }
+
+  it.each(Object.keys(PINNED_CASES))('%s matches its pinned page', async name => {
+    const render = await loadRenderer();
+    const { type, content } = PINNED_CASES[name];
+    expect(render(type, content, TITLE)).toBe(pinned(name));
+  });
+
+  it.each(Object.keys(PINNED_CASES))('%s: the client pre-render emits the same pinned page', async name => {
+    vi.resetModules();
+    for (const [key, value] of Object.entries(BRAND_ENV)) vi.stubEnv(key, value);
+    const { buildArtifactIndexHtml } = await import('@client/app/utils/publishApi');
+    const { type, content } = PINNED_CASES[name];
+    expect(buildArtifactIndexHtml(type, content, TITLE)).toBe(pinned(name));
+  });
+
+  it('round-trips the UTF-8 bytes finalize decodes from the upload', async () => {
+    const render = await loadRenderer();
+    const { type, content } = PINNED_CASES['html-fragment-untrimmed-non-ascii'];
+    const uploaded = Buffer.from(new TextEncoder().encode(content)).toString('utf-8');
+    expect(render(type, uploaded, TITLE)).toBe(pinned('html-fragment-untrimmed-non-ascii'));
+  });
+});
+
+describe('renderArtifactIndexHtml', () => {
+  const title = TITLE;
 
   it('injects the footer before </body> for a full HTML document', () => {
     const out = renderArtifactIndexHtml('html', '<html><body><h1>Hi</h1></body></html>', title);
