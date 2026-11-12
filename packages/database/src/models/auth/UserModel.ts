@@ -6,6 +6,7 @@ import {
   USER_RISK_SIGNAL_TYPES,
   VERIFIED_SLACK_IDENTITY_FILTER,
   canonicalizeEmail,
+  DEFAULT_STORAGE_LIMIT_MB,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
@@ -1115,6 +1116,39 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       { _id: userId, currentStorageSize: counterFilter },
       { $set: { currentStorageSize: next } }
     );
+    return res.matchedCount === 1;
+  }
+
+  async setPlanStorageLimit(userId: string, planStorageLimitMb: number): Promise<boolean> {
+    if (!mongoose.isValidObjectId(userId)) return false;
+    const fieldMissing = (field: string) => ({ $eq: [{ $type: field }, 'missing'] });
+    const res = await this.model.updateOne({ _id: userId }, [
+      // A row without the override field (pre-backfill, or an OAuth signup) gets the override
+      // resolveUserStorageLimit would derive for it, since a defined plan limit retires that fallback.
+      {
+        $set: {
+          storageLimitOverride: {
+            $cond: [
+              fieldMissing('$storageLimitOverride'),
+              {
+                $cond: [
+                  { $in: ['$storageLimit', [null, DEFAULT_STORAGE_LIMIT_MB]] },
+                  null,
+                  { $cond: [fieldMissing('$storageLimit'), null, '$storageLimit'] },
+                ],
+              },
+              '$storageLimitOverride',
+            ],
+          },
+        },
+      },
+      {
+        $set: {
+          planStorageLimit: planStorageLimitMb,
+          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb] },
+        },
+      },
+    ]);
     return res.matchedCount === 1;
   }
 
