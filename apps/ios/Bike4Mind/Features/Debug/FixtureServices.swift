@@ -40,15 +40,51 @@
 
       func models(for kind: GenerationKind) async throws -> [GenerationModel] {
         switch kind {
-        case .image: [GenerationModel(id: "gpt-image-2", name: "GPT Image 2"), GenerationModel.regionEditModels[0]]
-        case .video: [GenerationModel(id: "fixture-video", name: "Fixture Video")]
-        case .music: [GenerationModel(id: "fixture-music", name: "Fixture Music")]
+        case .image:
+          [
+            GenerationModel(
+              id: "gpt-image-2", name: "GPT Image 2",
+              capabilities: .image(
+                ImageCapabilities(
+                  sizes: ["1024x1024", "1536x1024", "1024x1536"], defaultSize: "1024x1024",
+                  qualities: ["low", "medium", "high"], maxImages: 4, transparentBackground: true))),
+            GenerationModel(
+              id: GenerationModel.regionEditModels[0].id, name: GenerationModel.regionEditModels[0].name,
+              capabilities: .image(ImageCapabilities(seed: true, edit: true))),
+          ]
+        case .video:
+          [
+            GenerationModel(
+              id: "fixture-video", name: "Fixture Video",
+              capabilities: .video(
+                VideoCapabilities(
+                  inputRoles: ["first_frame": 1], duration: .range(min: 1, max: 15, step: 1),
+                  aspectRatios: ["16:9", "9:16", "1:1"], resolutions: ["480p", "720p"], defaultDuration: 6,
+                  defaultAspectRatio: "16:9", defaultResolution: "480p", audio: .optional,
+                  creditsPerSecond: ["480p": 160, "720p": 280]))),
+            GenerationModel(
+              id: "fixture-video-short", name: "Fixture Video Short",
+              capabilities: .video(
+                VideoCapabilities(
+                  duration: .discrete([4, 6, 8]), aspectRatios: ["16:9"], resolutions: ["720p", "1080p"],
+                  defaultDuration: 8, defaultAspectRatio: "16:9", defaultResolution: "720p"))),
+          ]
+        case .music:
+          [
+            GenerationModel(
+              id: "fixture-music", name: "Fixture Music",
+              capabilities: .music(
+                MusicCapabilities(
+                  lyricsMaxChars: 10_000, duration: .adjustable(min: 30, max: 180, defaultSeconds: 120, exact: false),
+                  pricing: MusicPricing(unit: .perSong, credits: 160))))
+          ]
         }
       }
 
       func generate(_ request: GenerationRequest) async throws -> GenerationHandle {
         GenerationHandle(
-          kind: request.kind, id: "fixture-\(UUID().uuidString)", prompt: request.prompt, startedAt: Date())
+          kind: request.kind, id: "fixture-\(UUID().uuidString)", prompt: request.prompt, startedAt: Date(),
+          modelID: request.modelID, params: request.params)
       }
 
       func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle {
