@@ -129,7 +129,7 @@ export interface UseFeedbackOperationsReturn {
   refreshFeedback: () => Promise<void>;
   handleStatusChange: (feedbackItem: IExtendedFeedbackDocument, newValue: FeedbackStatus | null) => Promise<void>;
   handleDeleteFeedbackClick: (feedback: IExtendedFeedbackDocument) => void;
-  confirmDeleteFeedback: () => Promise<void>;
+  confirmDeleteFeedback: (reason: string) => Promise<void>;
   feedbackToDelete: string | null;
   openDeleteFeedbackModal: boolean;
   toggleDeleteFeedbackModal: () => void;
