@@ -145,6 +145,9 @@ export function seatsTakeaway(
   const first = changes[0];
   if (!first) return today;
   const since = formatDate(first.at);
-  if (first.quantity === seats.paid) return `${today} Paid seats unchanged at ${seats.paid} since ${since}.`;
+  if (changes.every(change => change.quantity === seats.paid)) {
+    return `${today} Paid seats unchanged at ${seats.paid} since ${since}.`;
+  }
+  if (first.quantity === seats.paid) return `${today} Paid seats changed since ${since} and are back at ${seats.paid}.`;
   return `${today} Paid seats went from ${first.quantity} to ${seats.paid} since ${since}.`;
 }

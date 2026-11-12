@@ -130,6 +130,9 @@ describe('seat points', () => {
     expect(seatsTakeaway([changes[1]], seats)).toBe(
       '6 of 8 paid seats used today. Paid seats unchanged at 8 since 1 Oct 2026.'
     );
+    expect(seatsTakeaway([{ at: '2026-08-01T00:00:00.000Z', quantity: 8 }, ...changes], seats)).toBe(
+      '6 of 8 paid seats used today. Paid seats changed since 1 Aug 2026 and are back at 8.'
+    );
     expect(seatsTakeaway([], seats)).toBe('6 of 8 paid seats used today.');
   });
 });

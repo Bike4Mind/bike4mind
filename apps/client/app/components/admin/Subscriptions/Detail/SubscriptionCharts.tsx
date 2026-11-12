@@ -165,9 +165,14 @@ export const PaymentHistoryChart: React.FC<{ stripe: AdminSubscriptionStripeStat
   if (history && history.currency && history.bars.length > 0) {
     const { currency, olderCount, otherCurrencyCount } = history;
     const notes = [
-      olderCount > 0 && `The ${olderCount} older invoices are on the Invoices tab.`,
+      olderCount > 0 &&
+        (olderCount === 1
+          ? 'The 1 older invoice is on the Invoices tab.'
+          : `The ${olderCount} older invoices are on the Invoices tab.`),
       otherCurrencyCount > 0 &&
-        `${otherCurrencyCount} invoices in other currencies are on the Invoices tab, not in this chart.`,
+        (otherCurrencyCount === 1
+          ? '1 invoice in another currency is on the Invoices tab, not in this chart.'
+          : `${otherCurrencyCount} invoices in other currencies are on the Invoices tab, not in this chart.`),
     ].filter(Boolean);
     body = {
       kind: 'ready',
