@@ -22,6 +22,7 @@ import {
   MAX_INVITE_RECIPIENTS,
   notifyInvitees,
   reserveInviteSendBudget,
+  type TypedAddressBucket,
 } from '@server/utils/inviteSendLimits';
 import type { Request } from 'express';
 import { z } from 'zod';
@@ -96,12 +97,18 @@ const getDocumentName = async (type: InviteType, id: string): Promise<string> =>
  */
 export async function createDocumentInvite(
   req: InviteRequest,
-  { type, id, body }: { type: InviteType; id: string; body: CreateInviteBody }
+  {
+    type,
+    id,
+    body,
+    typedAddressBucket,
+  }: { type: InviteType; id: string; body: CreateInviteBody; typedAddressBucket?: TypedAddressBucket }
 ) {
   const user = req.user!;
   const { expiresAt, ...restBody } = body;
   const budget = await reserveInviteSendBudget(user.id, restBody.recipients, {
     chargeTypedAddresses: type === InviteType.Organization,
+    typedAddressBucket,
   });
   const created = await withTransaction(() => {
     return sharingService.createInvite(
