@@ -1,5 +1,5 @@
 // POST /api/organizations/:id/domain-join - join the org through a verified email domain claim
-// 200 { joined } (false when already a member), 403 when the domain does not grant it, 409 when full.
+// 200 { joined } (false if already a member); 403 unverified email or non-granting domain; 409 full.
 
 import { ApiKeyScope } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';

@@ -16,6 +16,7 @@ import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIn
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
+import OrgDomainsTab from '@client/app/components/organizations/OrgDomainsTab';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
@@ -54,8 +55,10 @@ import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
 import {
   canManageOrgConnectors,
+  canManageOrgDomains,
   canManageOrgIntegrations,
   canViewOrgAnalysis,
   canViewOrgBilling,
@@ -128,6 +131,8 @@ const OrganizationPage: FC = () => {
     [currentUser, organization]
   );
 
+  const canManageDomains = useMemo(() => canManageOrgDomains(currentUser, organization), [currentUser, organization]);
+
   // Only the billing owner or a platform admin may add or remove managers (admins route authz).
   const canSetAdmins = useMemo(() => {
     if (!currentUser || !organization) return false;
@@ -149,6 +154,7 @@ const OrganizationPage: FC = () => {
     canManageGroups,
     canViewBilling,
     canManageConnectors,
+    canManageDomains,
   });
 
   useDocumentTitle(organization?.name, ' | Team');
@@ -272,6 +278,16 @@ const OrganizationPage: FC = () => {
                 Connectors
               </Tab>
             )}
+            {canManageDomains && (
+              <Tab
+                value={OrganizationTabs.Domains}
+                sx={{ display: 'flex', alignItems: 'center', gap: 1 }}
+                data-testid="org-tab-domains"
+              >
+                <LanguageOutlinedIcon sx={{ fontSize: 16 }} />
+                Domains
+              </Tab>
+            )}
             {canManageOrg && (
               <Tab value={OrganizationTabs.Settings} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
@@ -347,6 +363,14 @@ const OrganizationPage: FC = () => {
                   Custom Connectors
                 </Typography>
                 <OrgCustomMcpPolicySection key={organization.id} organization={organization} />
+              </TabPanel>
+            )}
+            {canManageDomains && (
+              <TabPanel value={OrganizationTabs.Domains}>
+                <Typography level="title-lg" startDecorator={<LanguageOutlinedIcon />} sx={{ mb: 3 }}>
+                  Email Domains
+                </Typography>
+                <OrgDomainsTab key={organization.id} organizationId={organization.id} />
               </TabPanel>
             )}
             {canManageOrg && (

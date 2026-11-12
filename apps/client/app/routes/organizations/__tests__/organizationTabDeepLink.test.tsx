@@ -57,6 +57,7 @@ vi.mock('@client/app/components/organizations/OrganizationAnalysisSection', () =
 vi.mock('@client/app/components/organizations/OrgSlackIntegration', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgWebhookConfig', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgGitHubConnectionTab', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgDomainsTab', () => ({ default: () => null }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -157,6 +158,24 @@ describe('organization detail page - ?tab= deep link', () => {
 
     expect(selectedTabName()).toBe('Overview');
     expect(screen.queryByRole('tab', { name: 'Usage' })).toBeNull();
+  });
+
+  it('opens the Domains tab for the owner', () => {
+    searchParams.current = { tab: 'domains' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Domains');
+  });
+
+  it('falls back to Overview on ?tab=domains for a member who is not a manager', () => {
+    searchParams.current = { tab: 'domains' };
+    user.current = { id: 'manager2' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByRole('tab', { name: 'Domains' })).toBeNull();
   });
 
   // The same caller, the same load, opposite answers: honouring a deep link is per-gate, not a
