@@ -34,7 +34,11 @@ import InviteLinksPanel from './InviteLinksPanel';
 import OrgInviteRoleSelect from './OrgInviteRoleSelect';
 import MemberCreditBudgetCard from './MemberCreditBudgetCard';
 import { getMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
-import { useOrganizationInvites, useOrganizationSeats } from '@client/app/hooks/data/organizations';
+import {
+  useOrganizationInvites,
+  useOrganizationSeats,
+  useResendOrganizationInvite,
+} from '@client/app/hooks/data/organizations';
 
 import { z } from 'zod';
 
@@ -90,6 +94,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     },
   });
 
+  const resendEmailInvite = useResendOrganizationInvite(organization.id);
   const cancelEmailInvite = useCancelInvite({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['organizations', organization.id, 'invites'] });
@@ -540,6 +545,17 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
                   }
                 >
                   Cancel invitation
+                </Button>
+              )}
+              {canInviteMembers && !email.includes('*') && (
+                <Button
+                  size="sm"
+                  variant="plain"
+                  data-testid="organization-resend-email-invite-btn"
+                  disabled={resendEmailInvite.isPending}
+                  onClick={() => resendEmailInvite.mutate({ email })}
+                >
+                  Resend
                 </Button>
               )}
             </Stack>

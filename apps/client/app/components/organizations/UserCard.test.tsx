@@ -10,12 +10,14 @@ import { MemberCreditUsage } from './memberCreditBudget';
 
 const setOverride = vi.fn();
 const setManager = vi.fn();
+const resend = vi.fn();
 const viewer = vi.hoisted(() => ({ id: 'viewer' }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useRemoveMemberFromOrganization: () => ({ mutateAsync: vi.fn() }),
   useLeaveOrganization: () => ({ mutateAsync: vi.fn() }),
   useSetMemberCreditOverride: () => ({ mutateAsync: setOverride, isPending: false }),
   useSetOrganizationManager: () => ({ mutate: setManager, isPending: false }),
+  useResendOrganizationInvite: () => ({ mutate: resend, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/invites', () => ({ useCancelInvite: () => ({ mutateAsync: vi.fn() }) }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => vi.fn() }));
@@ -159,6 +161,13 @@ describe('OrganizationUserCard roster actions', () => {
     renderCard(member('p', null, 'pending'), false, { invite: true, revoke: false });
     openMenu();
     expect(await screen.findByTestId('organization-user-card-cancel-invite')).toBeTruthy();
+  });
+
+  it('resends a pending invite by user id', async () => {
+    renderCard(member('p', null, 'pending'), false, { invite: true, revoke: false });
+    openMenu();
+    fireEvent.click(await screen.findByTestId('organization-user-card-resend-invite'));
+    expect(resend).toHaveBeenCalledWith({ userId: 'p' });
   });
 
   it('withholds Cancel Invite from a viewer who may only revoke', () => {

@@ -611,3 +611,12 @@ export function useRevokeOrganizationInviteLink(organizationId: string) {
     onError: error => toast.error(getErrorMessage(error)),
   });
 }
+
+export function useResendOrganizationInvite(organizationId: string) {
+  return useMutation({
+    mutationFn: async (recipient: { email: string } | { userId: string }) =>
+      (await api.post<{ resent: boolean }>(`/api/organizations/${organizationId}/invite-resend`, recipient)).data,
+    onSuccess: () => toast.success('Invitation resent'),
+    onError: error => toast.error(getErrorMessage(error)),
+  });
+}

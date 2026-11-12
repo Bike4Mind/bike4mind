@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   share: vi.fn(),
   search: vi.fn(),
   cancel: vi.fn(),
+  resend: vi.fn(),
   invitations: [] as { id: string; recipients: { pending: string[] }; permissions?: string[] }[],
   viewerId: 'viewer',
   viewer: undefined as { id: string; isAdmin: boolean } | null | undefined,
@@ -40,6 +41,7 @@ vi.mock('@client/app/hooks/data/invites', () => ({
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useOrganizationSeats: () => mocks.seats,
   useOrganizationInvites: () => ({ data: mocks.invitations, isError: false }),
+  useResendOrganizationInvite: () => ({ mutate: mocks.resend, isPending: false }),
   useSetMemberCreditDefault: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock('./InviteLinksPanel', () => ({ default: () => null }));
@@ -355,11 +357,19 @@ describe('OrganizationMembers email invitations', () => {
     expect(mocks.cancel).toHaveBeenCalledWith({ id: 'org1', type: 'Organization', email: 'new@example.test' });
   });
 
+  it('resends a pending email invitation by address', () => {
+    mocks.invitations = [{ id: 'invite1', recipients: { pending: ['new@example.test'] } }];
+    renderMembers(buildOrg({}));
+    fireEvent.click(screen.getByTestId('organization-resend-email-invite-btn'));
+    expect(mocks.resend).toHaveBeenCalledWith({ email: 'new@example.test' });
+  });
+
   it('does not offer cancellation with another inviter masked address', () => {
     mocks.invitations = [{ id: 'invite1', recipients: { pending: ['n***@example.test'] } }];
     renderMembers(buildOrg({}));
     expect(screen.getByTestId('organization-pending-email-invites')).toHaveTextContent('n***@example.test');
     expect(screen.queryByTestId('organization-cancel-email-invite-btn')).toBeNull();
+    expect(screen.queryByTestId('organization-resend-email-invite-btn')).toBeNull();
   });
 
   it('shows a typed email invite once even after the account appears in pending users', () => {
