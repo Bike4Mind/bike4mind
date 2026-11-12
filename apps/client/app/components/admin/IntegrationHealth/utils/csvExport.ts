@@ -30,7 +30,7 @@ export function exportDashboardCsv(data: IntegrationDashboardResponse): void {
       String(entry.consecutiveFailures),
       entry.circuitBreaker.mode,
       String(entry.circuitBreaker.available),
-      // An empty cell, not '--': the CSV formula guard would export a leading '-' as '--.
+      // Empty, not '--': toCsv quotes any cell starting with '-' (formula guard), so '--' exported as '--.
       entry.rateLimit?.remaining != null ? String(entry.rateLimit.remaining) : '',
       entry.rateLimit?.limit != null ? String(entry.rateLimit.limit) : '',
       entry.rateLimit?.usagePercent != null ? `${entry.rateLimit.usagePercent}%` : '',

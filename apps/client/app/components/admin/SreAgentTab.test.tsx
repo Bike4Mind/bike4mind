@@ -18,20 +18,21 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-function Wrapper({ children }: { children: ReactNode }) {
+function renderTab() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return (
+  const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>
       <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
     </QueryClientProvider>
   );
+  return render(<SreAgentTab />, { wrapper: Wrapper });
 }
 
 describe('SreAgentTab', () => {
   // The admin shell frames every [role="tabpanel"] under it (AdminPage.tsx) unless the panel opts
   // out, so a nested sub-tab panel without the attribute gets inset from the page title.
   it('opts every nested sub-tab panel out of the admin shell framing', () => {
-    render(<SreAgentTab />, { wrapper: Wrapper });
+    renderTab();
 
     const panels = screen.getAllByRole('tabpanel', { hidden: true });
     expect(panels).toHaveLength(3);
