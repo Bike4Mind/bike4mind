@@ -28,13 +28,63 @@ export type AdminAiClassKey = { feature: AdminAiFeature; actionClass: string; po
 
 export async function getAdminAiClassReadiness(key: AdminAiClassKey, now = new Date()) {
   let state = await AdminAiClassModel.findOne(key).lean();
-  const decided = await AdminAiSuggestionModel.find({
-    ...key,
-    status: { $in: ['accepted', 'overridden'] },
-    decidedAt: { $gte: new Date(now.getTime() - 14 * DAY), $lte: now },
-  })
-    .select('status decidedAt overrideCostly')
-    .lean();
+  const [counts] = await AdminAiSuggestionModel.aggregate<{
+    accepted: number;
+    overridden: number;
+    accepted7: number;
+    overridden7: number;
+    costly: number;
+    unclassified: number;
+    latest: Date;
+  }>([
+    {
+      $match: {
+        ...key,
+        status: { $in: ['accepted', 'overridden'] },
+        decidedAt: { $gte: new Date(now.getTime() - 14 * DAY), $lte: now },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        accepted: { $sum: { $cond: [{ $eq: ['$status', 'accepted'] }, 1, 0] } },
+        overridden: { $sum: { $cond: [{ $eq: ['$status', 'overridden'] }, 1, 0] } },
+        accepted7: {
+          $sum: {
+            $cond: [
+              { $and: [{ $eq: ['$status', 'accepted'] }, { $gte: ['$decidedAt', new Date(now.getTime() - 7 * DAY)] }] },
+              1,
+              0,
+            ],
+          },
+        },
+        overridden7: {
+          $sum: {
+            $cond: [
+              {
+                $and: [{ $eq: ['$status', 'overridden'] }, { $gte: ['$decidedAt', new Date(now.getTime() - 7 * DAY)] }],
+              },
+              1,
+              0,
+            ],
+          },
+        },
+        costly: {
+          $sum: { $cond: [{ $and: [{ $eq: ['$status', 'overridden'] }, { $eq: ['$overrideCostly', true] }] }, 1, 0] },
+        },
+        unclassified: {
+          $sum: {
+            $cond: [
+              { $and: [{ $eq: ['$status', 'overridden'] }, { $eq: [{ $ifNull: ['$overrideCostly', null] }, null] }] },
+              1,
+              0,
+            ],
+          },
+        },
+        latest: { $max: '$decidedAt' },
+      },
+    },
+  ]);
   const first = await AdminAiSuggestionModel.findOne({
     ...key,
     status: { $in: ['accepted', 'overridden'] },
@@ -43,16 +93,12 @@ export async function getAdminAiClassReadiness(key: AdminAiClassKey, now = new D
     .sort({ decidedAt: 1 })
     .select('decidedAt')
     .lean();
-  const recent = decided.filter(row => row.decidedAt && row.decidedAt.getTime() >= now.getTime() - 7 * DAY);
-  const latest = recent.reduce<Date | null>(
-    (last, row) => (row.decidedAt && (!last || row.decidedAt > last) ? row.decidedAt : last),
-    null
-  );
+  const latest = counts?.latest ?? null;
   if (state) {
     const mode = adminAiDemotedMode(
       state.mode,
-      recent.filter(r => r.status === 'accepted').length,
-      recent.filter(r => r.status === 'overridden').length,
+      counts?.accepted7 ?? 0,
+      counts?.overridden7 ?? 0,
       latest,
       state.lastDemotedDecision
     );
@@ -77,8 +123,8 @@ export async function getAdminAiClassReadiness(key: AdminAiClassKey, now = new D
               changes: [{ field: 'mode', before: previous.mode, after: mode }],
               details: {
                 ...key,
-                accepted: recent.filter(r => r.status === 'accepted').length,
-                overridden: recent.filter(r => r.status === 'overridden').length,
+                accepted: counts?.accepted7 ?? 0,
+                overridden: counts?.overridden7 ?? 0,
                 latestDecision: latest,
               },
               context: { source: 'worker' },
@@ -95,11 +141,11 @@ export async function getAdminAiClassReadiness(key: AdminAiClassKey, now = new D
     replayCases: state?.replayCases ?? 0,
     replayAgreed: state?.replayAgreed ?? 0,
     replayArtifact: state?.replayArtifact ?? '',
-    onlineAccepted: decided.filter(r => r.status === 'accepted').length,
-    onlineOverridden: decided.filter(r => r.status === 'overridden').length,
+    onlineAccepted: counts?.accepted ?? 0,
+    onlineOverridden: counts?.overridden ?? 0,
     onlineDays: first?.decidedAt ? Math.max(0, (now.getTime() - first.decidedAt.getTime()) / DAY) : 0,
-    costlyOverrides: decided.filter(r => r.status === 'overridden' && r.overrideCostly === true).length,
-    unclassifiedOverrides: decided.filter(r => r.status === 'overridden' && r.overrideCostly == null).length,
+    costlyOverrides: counts?.costly ?? 0,
+    unclassifiedOverrides: counts?.unclassified ?? 0,
   };
   const registration = ADMIN_AI_CLASS_REGISTRY.find(
     r =>
@@ -110,13 +156,20 @@ export async function getAdminAiClassReadiness(key: AdminAiClassKey, now = new D
       typeof r.undo === 'function'
   );
   const readiness = adminAiReadiness(evidence, registration);
+  const settings = await AdminSettings.findOne({ settingName: 'adminAiConfig' }).lean();
+  const config = AdminAiConfigSchema.parse(settings?.settingValue ?? {});
+  const featureMode = config.features[key.feature].mode;
   return {
     ...readiness,
     evidence,
     mode: evidence.mode,
     undoPath: readiness.registered ? registration?.undoPath : undefined,
-    canRecommend: (evidence.mode === 'recommend' || evidence.mode === 'act') && readiness.recommend,
-    canAct: evidence.mode === 'act' && readiness.act,
+    canRecommend:
+      config.enabled &&
+      (featureMode === 'recommend' || featureMode === 'act') &&
+      (evidence.mode === 'recommend' || evidence.mode === 'act') &&
+      readiness.recommend,
+    canAct: config.enabled && featureMode === 'act' && evidence.mode === 'act' && readiness.act,
   };
 }
 
