@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Alert,
   Box,
@@ -7,7 +7,6 @@ import {
   FormControl,
   FormLabel,
   IconButton,
-  Input,
   Modal,
   ModalDialog,
   Option,
@@ -23,7 +22,6 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import SearchIcon from '@mui/icons-material/Search';
 import ArticleIcon from '@mui/icons-material/Article';
 import { toast } from 'sonner';
 import {
@@ -31,10 +29,7 @@ import {
   useDlqMessages,
   useDlqReplay,
   useDlqDiscard,
-  useDlqHistory,
   DlqMessage,
-  DlqReplayLogEntry,
-  DlqHistoryFilters,
   DlqQueueInfo,
   DlqReplaySafety,
 } from '@client/app/hooks/data/dlqManagement';
@@ -47,6 +42,7 @@ import {
   StatStrip,
   StatTile,
   StatusChip,
+  ViewTabs,
 } from '@client/app/components/admin/shared';
 import { ADMIN_REGION_GAP, adminSurface } from '@client/app/components/admin/shared/adminStyles';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
@@ -54,6 +50,7 @@ import { AdminPermissionAction } from './shared/MissingPermission';
 import { ActionDialog } from './shared/ActionDialog';
 import { ADMIN_REASON_PRESETS } from './shared/adminReason';
 import { formatDuration, formatExpiresIn, getDlqExpiry } from './dlqExpiry';
+import { DlqHistoryView } from './DlqHistoryView';
 
 const REPLAY_CHIP: Record<DlqReplaySafety, { tone: AdminStatusTone; label: string }> = {
   safe: { tone: 'good', label: 'Safe to replay' },
@@ -78,14 +75,6 @@ const QueueHint: React.FC<{ queue: DlqQueueInfo }> = ({ queue }) => {
       {queue.owner && <Typography level="body-xs">Owner: {queue.owner}</Typography>}
     </Stack>
   );
-};
-
-const REPLAY_STATUS: Record<DlqReplayLogEntry['status'], { tone: AdminStatusTone; label: string }> = {
-  success: { tone: 'good', label: 'Success' },
-  failed: { tone: 'bad', label: 'Failed' },
-  skipped: { tone: 'warn', label: 'Skipped' },
-  discarded: { tone: 'neutral', label: 'discarded' },
-  pending: { tone: 'warn', label: 'Discard outcome unconfirmed' },
 };
 
 const tableSurface = { ...adminSurface, borderRadius: 'lg', overflow: 'auto' } as const;
@@ -269,31 +258,6 @@ const DlqReplayTab: React.FC = () => {
   const [singleReplayConfirm, setSingleReplayConfirm] = useState<DlqMessage | null>(null);
   const [discardConfirm, setDiscardConfirm] = useState<DlqMessage | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [historyStatus, setHistoryStatus] = useState<DlqReplayLogEntry['status'] | ''>('');
-  const [historyDateRange, setHistoryDateRange] = useState<'24h' | '7d' | '30d' | 'all'>('7d');
-  const [historySearch, setHistorySearch] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  useEffect(() => {
-    searchTimerRef.current = setTimeout(() => setDebouncedSearch(historySearch), 300);
-    return () => clearTimeout(searchTimerRef.current);
-  }, [historySearch]);
-
-  const historyFilters = useMemo((): DlqHistoryFilters => {
-    if (!showHistory) return {};
-    const filters: DlqHistoryFilters = {};
-    if (selectedQueue) filters.queueLabel = selectedQueue;
-    if (historyStatus) filters.status = historyStatus;
-    if (historyDateRange !== 'all') {
-      const now = new Date();
-      const msMap = { '24h': 24 * 60 * 60 * 1000, '7d': 7 * 24 * 60 * 60 * 1000, '30d': 30 * 24 * 60 * 60 * 1000 };
-      filters.startDate = new Date(now.getTime() - msMap[historyDateRange]).toISOString();
-      filters.endDate = now.toISOString();
-    }
-    if (debouncedSearch) filters.search = debouncedSearch;
-    return filters;
-  }, [showHistory, selectedQueue, historyStatus, historyDateRange, debouncedSearch]);
 
   const { data: queues, isLoading: queuesLoading, isError: queuesError, refetch: refetchQueues } = useDlqQueues();
   const {
@@ -301,15 +265,9 @@ const DlqReplayTab: React.FC = () => {
     isLoading: messagesLoading,
     isError: messagesError,
     refetch: refetchMessages,
-  } = useDlqMessages(selectedQueue);
+  } = useDlqMessages(showHistory ? null : selectedQueue);
   const replayMutation = useDlqReplay();
   const discardMutation = useDlqDiscard();
-  const {
-    data: history,
-    isLoading: historyLoading,
-    isError: historyError,
-    refetch: refetchHistory,
-  } = useDlqHistory(historyFilters, showHistory);
 
   const totalMessages = useMemo(() => {
     if (!queues) return 0;
@@ -430,19 +388,9 @@ const DlqReplayTab: React.FC = () => {
               size="sm"
               variant="outlined"
               color="neutral"
-              aria-pressed={showHistory}
-              onClick={() => setShowHistory(prev => !prev)}
-              data-testid="dlq-toggle-history"
-            >
-              {showHistory ? 'Hide replay history' : 'Show replay history'}
-            </Button>
-            <Button
-              size="sm"
-              variant="outlined"
-              color="neutral"
               onClick={() => {
                 refetchQueues();
-                if (selectedQueue) refetchMessages();
+                if (selectedQueue && !showHistory) refetchMessages();
               }}
               data-testid="dlq-refresh"
             >
@@ -452,430 +400,303 @@ const DlqReplayTab: React.FC = () => {
         }
       />
 
-      {queuesLoading ? (
-        <LoadingState label="Loading dead-letter queues" />
-      ) : queuesError ? (
-        <ErrorState message="The dead-letter queues failed to load." onRetry={() => void refetchQueues()} />
+      <ViewTabs
+        views={[
+          { id: 'messages', label: 'Messages' },
+          { id: 'history', label: 'History', testId: 'dlq-toggle-history' },
+        ]}
+        activeId={showHistory ? 'history' : 'messages'}
+        onSelect={view => setShowHistory(view === 'history')}
+        aria-label="Dead-letter views"
+        data-testid="dlq-views"
+      />
+      {showHistory ? (
+        <DlqHistoryView queues={queues ?? []} />
       ) : (
-        <StatStrip aria-label="Dead-letter queue totals">
-          <StatTile
-            label="Dead-letter queues"
-            value={<span data-testid="dlq-stats-total">{(queues?.length ?? 0).toLocaleString()}</span>}
-          />
-          <StatTile
-            label="Queues with messages"
-            value={<span data-testid="dlq-stats-with-messages">{queuesWithMessages.toLocaleString()}</span>}
-          />
-          <StatTile
-            label="Failed messages"
-            value={<span data-testid="dlq-stats-failed">{totalMessages.toLocaleString()}</span>}
-          />
-        </StatStrip>
-      )}
+        <>
+          {queuesLoading ? (
+            <LoadingState label="Loading dead-letter queues" />
+          ) : queuesError ? (
+            <ErrorState message="The dead-letter queues failed to load." onRetry={() => void refetchQueues()} />
+          ) : (
+            <StatStrip aria-label="Dead-letter queue totals">
+              <StatTile
+                label="Dead-letter queues"
+                value={<span data-testid="dlq-stats-total">{(queues?.length ?? 0).toLocaleString()}</span>}
+              />
+              <StatTile
+                label="Queues with messages"
+                value={<span data-testid="dlq-stats-with-messages">{queuesWithMessages.toLocaleString()}</span>}
+              />
+              <StatTile
+                label="Failed messages"
+                value={<span data-testid="dlq-stats-failed">{totalMessages.toLocaleString()}</span>}
+              />
+            </StatStrip>
+          )}
 
-      <FormControl sx={{ maxWidth: 400 }}>
-        <FormLabel>Queue</FormLabel>
-        <Select
-          placeholder={queuesLoading ? 'Loading queues' : 'Choose a queue'}
-          disabled={queuesLoading}
-          value={selectedQueue}
-          onChange={(_e, value) => setSelectedQueue(value)}
-          renderValue={option => {
-            if (!option) return null;
-            const q = queues?.find(queue => queue.label === option.value);
-            return q ? q.displayName : option.label;
-          }}
-          data-testid="dlq-queue-selector"
-        >
-          {queues?.map(q => (
-            <Option key={q.label} value={q.label} data-testid={`dlq-queue-option-${q.label}`}>
-              <Stack direction="row" alignItems="center" gap={1}>
-                <Typography level="body-sm">{q.displayName}</Typography>
-                {q.approximateMessageCount < 0 && <StatusChip tone="warn" label="Count unavailable" />}
-                {q.approximateMessageCount > 0 && (
-                  <StatusChip tone="bad" label={q.approximateMessageCount.toLocaleString()} />
-                )}
-              </Stack>
-            </Option>
-          ))}
-        </Select>
-      </FormControl>
+          <FormControl sx={{ maxWidth: 400 }}>
+            <FormLabel>Queue</FormLabel>
+            <Select
+              placeholder={queuesLoading ? 'Loading queues' : 'Choose a queue'}
+              disabled={queuesLoading}
+              value={selectedQueue}
+              onChange={(_e, value) => setSelectedQueue(value)}
+              renderValue={option => {
+                if (!option) return null;
+                const q = queues?.find(queue => queue.label === option.value);
+                return q ? q.displayName : option.label;
+              }}
+              data-testid="dlq-queue-selector"
+            >
+              {queues?.map(q => (
+                <Option key={q.label} value={q.label} data-testid={`dlq-queue-option-${q.label}`}>
+                  <Stack direction="row" alignItems="center" gap={1}>
+                    <Typography level="body-sm">{q.displayName}</Typography>
+                    {q.approximateMessageCount < 0 && <StatusChip tone="warn" label="Count unavailable" />}
+                    {q.approximateMessageCount > 0 && (
+                      <StatusChip tone="bad" label={q.approximateMessageCount.toLocaleString()} />
+                    )}
+                  </Stack>
+                </Option>
+              ))}
+            </Select>
+          </FormControl>
 
-      {selectedQueueInfo && (
-        <SectionCard
-          title={selectedQueueInfo.displayName}
-          body="custom"
-          action={
-            <Stack direction="row" spacing={1}>
-              {selectedQueueInfo.logsUrl && (
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  component="a"
-                  href={selectedQueueInfo.logsUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  startDecorator={<ArticleIcon />}
-                  data-testid="dlq-queue-logs"
-                >
-                  View logs
-                </Button>
+          {selectedQueueInfo && (
+            <SectionCard
+              title={selectedQueueInfo.displayName}
+              body="custom"
+              action={
+                <Stack direction="row" spacing={1}>
+                  {selectedQueueInfo.logsUrl && (
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      component="a"
+                      href={selectedQueueInfo.logsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      startDecorator={<ArticleIcon />}
+                      data-testid="dlq-queue-logs"
+                    >
+                      View logs
+                    </Button>
+                  )}
+                  <AdminPermissionAction requirement="settings:manage">
+                    {permissionDisabled => (
+                      <Button
+                        size="sm"
+                        startDecorator={<ReplayIcon />}
+                        onClick={handleReplayAll}
+                        loading={replayMutation.isPending}
+                        disabled={
+                          permissionDisabled || !hasReplayDestination || selectedQueueInfo.approximateMessageCount === 0
+                        }
+                        data-testid="dlq-replay-all"
+                      >
+                        Replay all (up to 100)
+                      </Button>
+                    )}
+                  </AdminPermissionAction>
+                </Stack>
+              }
+            >
+              <Typography level="body-sm" sx={{ px: 2, py: 1.75, color: 'admin.inkSecondary' }}>
+                Application: {selectedQueueInfo.application}. Messages:{' '}
+                {selectedQueueInfo.approximateMessageCount < 0
+                  ? 'unavailable'
+                  : selectedQueueInfo.approximateMessageCount.toLocaleString()}
+                {selectedQueueInfo.approximateNotVisibleCount > 0 &&
+                  ` (${selectedQueueInfo.approximateNotVisibleCount.toLocaleString()} in flight)`}
+              </Typography>
+              {selectedQueueInfo.description !== undefined && <QueueHint queue={selectedQueueInfo} />}
+              {!hasReplayDestination && (
+                <Alert color="neutral" sx={{ mx: 2, mb: 1.75 }} data-testid="dlq-replay-unavailable">
+                  No replay destination is available for this queue. You can still inspect its messages.
+                </Alert>
               )}
-              <AdminPermissionAction requirement="settings:manage">
-                {permissionDisabled => (
-                  <Button
-                    size="sm"
-                    startDecorator={<ReplayIcon />}
-                    onClick={handleReplayAll}
-                    loading={replayMutation.isPending}
-                    disabled={
-                      permissionDisabled || !hasReplayDestination || selectedQueueInfo.approximateMessageCount === 0
-                    }
-                    data-testid="dlq-replay-all"
-                  >
-                    Replay all (up to 100)
-                  </Button>
-                )}
-              </AdminPermissionAction>
-            </Stack>
-          }
-        >
-          <Typography level="body-sm" sx={{ px: 2, py: 1.75, color: 'admin.inkSecondary' }}>
-            Application: {selectedQueueInfo.application}. Messages:{' '}
-            {selectedQueueInfo.approximateMessageCount < 0
-              ? 'unavailable'
-              : selectedQueueInfo.approximateMessageCount.toLocaleString()}
-            {selectedQueueInfo.approximateNotVisibleCount > 0 &&
-              ` (${selectedQueueInfo.approximateNotVisibleCount.toLocaleString()} in flight)`}
-          </Typography>
-          {selectedQueueInfo.description !== undefined && <QueueHint queue={selectedQueueInfo} />}
-          {!hasReplayDestination && (
-            <Alert color="neutral" sx={{ mx: 2, mb: 1.75 }} data-testid="dlq-replay-unavailable">
-              No replay destination is available for this queue. You can still inspect its messages.
+            </SectionCard>
+          )}
+
+          {replayMutation.data && (
+            <Alert
+              color={replayMutation.data.failed > 0 ? 'warning' : 'success'}
+              endDecorator={
+                <IconButton size="sm" onClick={() => replayMutation.reset()} aria-label="Dismiss replay result">
+                  <CloseIcon />
+                </IconButton>
+              }
+            >
+              Last replay: {replayMutation.data.replayed} replayed, {replayMutation.data.failed} failed,{' '}
+              {replayMutation.data.skipped} skipped
             </Alert>
           )}
-        </SectionCard>
-      )}
 
-      {replayMutation.data && (
-        <Alert
-          color={replayMutation.data.failed > 0 ? 'warning' : 'success'}
-          endDecorator={
-            <IconButton size="sm" onClick={() => replayMutation.reset()} aria-label="Dismiss replay result">
-              <CloseIcon />
-            </IconButton>
-          }
-        >
-          Last replay: {replayMutation.data.replayed} replayed, {replayMutation.data.failed} failed,{' '}
-          {replayMutation.data.skipped} skipped
-        </Alert>
-      )}
+          {selectedQueue && !messagesError && messages?.some(message => message.failureLookupFailed) && (
+            <Alert color="warning" sx={{ mb: 2 }} data-testid="dlq-failure-lookup-warning">
+              Failure details are temporarily unavailable. Queue messages are still shown.
+            </Alert>
+          )}
 
-      {selectedQueue && !messagesError && messages?.some(message => message.failureLookupFailed) && (
-        <Alert color="warning" sx={{ mb: 2 }} data-testid="dlq-failure-lookup-warning">
-          Failure details are temporarily unavailable. Queue messages are still shown.
-        </Alert>
-      )}
-
-      {selectedQueue && (
-        <Sheet variant="outlined" sx={tableSurface}>
-          {/* fixed table layout ignores th min-width; the floor keeps Body preview >= 160px */}
-          <Table stickyHeader hoverRow sx={{ minWidth: 1200 }} data-testid="dlq-messages-table">
-            <thead>
-              <tr>
-                <th style={{ width: 200 }}>Message ID</th>
-                <th>Body preview</th>
-                <th style={{ width: 200 }}>Failure reason</th>
-                <th style={{ width: 120 }}>Category</th>
-                <th style={{ width: 160 }}>Sent at</th>
-                <th style={{ width: 80 }}>Age</th>
-                <th style={{ width: 100 }}>Expires in</th>
-                <th style={{ width: 100, textAlign: 'right' }}>
-                  <Tooltip title="Approximate SQS receives, including views in this browser; not a count of handler failures">
-                    <span>Receives</span>
-                  </Tooltip>
-                </th>
-                <th style={{ width: 80 }} aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {messagesLoading && (
-                <StateRow colSpan={9}>
-                  <LoadingState label="Loading messages" />
-                </StateRow>
-              )}
-              {!messagesLoading && messagesError && (
-                <StateRow colSpan={9}>
-                  <ErrorState message="Messages failed to load." onRetry={() => void refetchMessages()} />
-                </StateRow>
-              )}
-              {!messagesLoading && !messagesError && (!messages || messages.length === 0) && (
-                <StateRow colSpan={9}>
-                  <EmptyState title="No messages in this queue" action={null} />
-                </StateRow>
-              )}
-              {messages?.map(msg => (
-                <tr
-                  key={msg.messageId}
-                  onClick={() => {
-                    setSelectedMessage(msg);
-                    setDrawerOpen(true);
-                  }}
-                  style={{ cursor: 'pointer' }}
-                  data-testid={`dlq-message-row-${msg.messageId}`}
-                >
-                  <td>
-                    <Typography level="body-xs" sx={{ fontFamily: 'monospace', color: 'admin.inkMuted' }}>
-                      {msg.messageId?.slice(0, 20)}...
-                    </Typography>
-                  </td>
-                  <td>
-                    <Typography level="body-xs" noWrap sx={{ maxWidth: 300 }}>
-                      {msg.body?.slice(0, 100)}
-                    </Typography>
-                  </td>
-                  <td data-testid={`dlq-reason-${msg.messageId}`}>
-                    <Typography level="body-xs" noWrap sx={{ maxWidth: 300 }}>
-                      {msg.failure?.errorMessage ?? 'Unknown'}
-                    </Typography>
-                  </td>
-                  <td data-testid={`dlq-category-${msg.messageId}`}>
-                    <StatusChip tone="neutral" label={msg.failure?.category ?? 'Unknown'} />
-                  </td>
-                  <td>
-                    <Typography level="body-xs">
-                      {msg.sentTimestamp ? new Date(parseInt(msg.sentTimestamp, 10)).toLocaleString() : '-'}
-                    </Typography>
-                  </td>
-                  <AgeExpiryCells
-                    sentTimestamp={msg.sentTimestamp}
-                    retentionSeconds={selectedQueueInfo?.messageRetentionSeconds}
-                    messageId={msg.messageId}
-                  />
-                  <td style={{ textAlign: 'right' }}>
-                    <Typography level="body-xs" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                      {msg.approximateReceiveCount ?? '-'}
-                    </Typography>
-                  </td>
-                  <td>
-                    <Stack direction="row" gap={0.5}>
-                      <Tooltip title="View details">
-                        <IconButton
-                          size="sm"
-                          aria-label="View details"
-                          onClick={e => {
-                            e.stopPropagation();
-                            setSelectedMessage(msg);
-                            setDrawerOpen(true);
-                          }}
-                          data-testid={`dlq-view-${msg.messageId}`}
-                        >
-                          <VisibilityIcon fontSize="small" />
-                        </IconButton>
+          {selectedQueue && (
+            <Sheet variant="outlined" sx={tableSurface}>
+              {/* fixed table layout ignores th min-width; the floor keeps Body preview >= 160px */}
+              <Table stickyHeader hoverRow sx={{ minWidth: 1200 }} data-testid="dlq-messages-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: 200 }}>Message ID</th>
+                    <th>Body preview</th>
+                    <th style={{ width: 200 }}>Failure reason</th>
+                    <th style={{ width: 120 }}>Category</th>
+                    <th style={{ width: 160 }}>Sent at</th>
+                    <th style={{ width: 80 }}>Age</th>
+                    <th style={{ width: 100 }}>Expires in</th>
+                    <th style={{ width: 100, textAlign: 'right' }}>
+                      <Tooltip title="Approximate SQS receives, including views in this browser; not a count of handler failures">
+                        <span>Receives</span>
                       </Tooltip>
-                      {msg.logsUrl && (
-                        <Tooltip title="View consumer logs around the send time">
-                          <IconButton
-                            size="sm"
-                            component="a"
-                            href={msg.logsUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={e => e.stopPropagation()}
-                            data-testid={`dlq-logs-${msg.messageId}`}
-                          >
-                            <ArticleIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      )}
-                      <AdminPermissionAction requirement="settings:manage">
-                        {permissionDisabled => (
-                          <Tooltip title="Replay this message">
-                            <IconButton
-                              size="sm"
-                              aria-label="Replay this message"
-                              onClick={e => {
-                                e.stopPropagation();
-                                if (hasReplayDestination) setSingleReplayConfirm(msg);
-                              }}
-                              disabled={permissionDisabled || !hasReplayDestination || replayMutation.isPending}
-                              data-testid={`dlq-replay-single-${msg.messageId}`}
-                            >
-                              <ReplayIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                      </AdminPermissionAction>
-                      <AdminPermissionAction requirement="settings:manage">
-                        {permissionDisabled => (
-                          <Tooltip title="Discard this message">
-                            <IconButton
-                              size="sm"
-                              color="danger"
-                              onClick={e => {
-                                e.stopPropagation();
-                                setDiscardConfirm(msg);
-                              }}
-                              disabled={
-                                permissionDisabled || !msg.receiptHandle || !msg.body || discardMutation.isPending
-                              }
-                              data-testid={`dlq-discard-single-${msg.messageId}`}
-                            >
-                              <DeleteOutlineIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                      </AdminPermissionAction>
-                    </Stack>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </Sheet>
-      )}
-
-      {showHistory && (
-        <Stack gap={2} component="section" aria-labelledby="dlq-history-heading">
-          <Typography id="dlq-history-heading" level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
-            Replay history {selectedQueue ? `(${selectedQueueInfo?.displayName ?? selectedQueue})` : '(all queues)'}
-          </Typography>
-
-          <Stack direction="row" gap={2} flexWrap="wrap">
-            <FormControl size="sm">
-              <FormLabel>Status</FormLabel>
-              <Select
-                placeholder="All statuses"
-                value={historyStatus || null}
-                onChange={(_e, value) => setHistoryStatus((value as typeof historyStatus) || '')}
-                sx={{ minWidth: 140 }}
-                data-testid="dlq-history-status-filter"
-              >
-                <Option value="">All</Option>
-                <Option value="success">Success</Option>
-                <Option value="failed">Failed</Option>
-                <Option value="skipped">Skipped</Option>
-                <Option value="discarded">Discarded</Option>
-                <Option value="pending">Discard outcome unconfirmed</Option>
-              </Select>
-            </FormControl>
-            <FormControl size="sm">
-              <FormLabel>Date range</FormLabel>
-              <Select
-                value={historyDateRange}
-                onChange={(_e, value) => setHistoryDateRange(value as typeof historyDateRange)}
-                sx={{ minWidth: 140 }}
-                data-testid="dlq-history-date-filter"
-              >
-                <Option value="24h">Last 24 hours</Option>
-                <Option value="7d">Last 7 days</Option>
-                <Option value="30d">Last 30 days</Option>
-                <Option value="all">All time</Option>
-              </Select>
-            </FormControl>
-            <FormControl size="sm">
-              <FormLabel>Search</FormLabel>
-              <Input
-                placeholder="Search message ID, error or reason"
-                value={historySearch}
-                onChange={e => setHistorySearch(e.target.value)}
-                startDecorator={<SearchIcon fontSize="small" />}
-                sx={{ minWidth: 240 }}
-                data-testid="dlq-history-search"
-              />
-            </FormControl>
-            {(historyStatus || historyDateRange !== '7d' || historySearch) && (
-              <Box sx={{ display: 'flex', alignItems: 'flex-end' }}>
-                <Button
-                  size="sm"
-                  variant="plain"
-                  color="neutral"
-                  onClick={() => {
-                    setHistoryStatus('');
-                    setHistoryDateRange('7d');
-                    setHistorySearch('');
-                  }}
-                  data-testid="dlq-history-clear-filters"
-                >
-                  Clear filters
-                </Button>
-              </Box>
-            )}
-          </Stack>
-
-          <Sheet variant="outlined" sx={tableSurface}>
-            <Table stickyHeader hoverRow sx={{ minWidth: 640 }} data-testid="dlq-history-table">
-              <thead>
-                <tr>
-                  <th style={{ width: 160 }}>Feature</th>
-                  <th style={{ width: 200 }}>Message ID</th>
-                  <th style={{ width: 100 }}>Status</th>
-                  <th>Details</th>
-                  <th style={{ width: 120 }}>By</th>
-                  <th style={{ width: 160 }}>Recorded at</th>
-                </tr>
-              </thead>
-              <tbody>
-                {historyLoading && (
-                  <StateRow colSpan={6}>
-                    <LoadingState label="Loading replay history" />
-                  </StateRow>
-                )}
-                {!historyLoading && historyError && (
-                  <StateRow colSpan={6}>
-                    <ErrorState message="Replay history failed to load." onRetry={() => void refetchHistory()} />
-                  </StateRow>
-                )}
-                {!historyLoading && !historyError && (!history || history.length === 0) && (
-                  <StateRow colSpan={6}>
-                    <EmptyState title="No replays match these filters" action={null} />
-                  </StateRow>
-                )}
-                {history?.map((entry: DlqReplayLogEntry) => (
-                  <tr key={entry.id} data-testid={`dlq-history-row-${entry.id}`}>
-                    <td>
-                      <Typography level="body-xs">{entry.sourceQueue}</Typography>
-                    </td>
-                    <td>
-                      <Typography level="body-xs" sx={{ fontFamily: 'monospace', color: 'admin.inkMuted' }}>
-                        {entry.messageId?.slice(0, 20)}...
-                      </Typography>
-                    </td>
-                    <td>
-                      <StatusChip
-                        tone={REPLAY_STATUS[entry.status].tone}
-                        label={
-                          entry.operation === 'discard' && entry.status === 'failed'
-                            ? 'Discard request failed'
-                            : REPLAY_STATUS[entry.status].label
-                        }
-                      />
-                    </td>
-                    <td>
-                      <Typography level="body-xs" noWrap sx={{ maxWidth: 200 }}>
-                        {entry.errorMessage || entry.reason || '-'}
-                        {entry.errorMessage && entry.reason && (
-                          <>
-                            <br />
-                            Reason: {entry.reason}
-                          </>
-                        )}
-                      </Typography>
-                    </td>
-                    <td>
-                      <Typography level="body-xs" data-testid={`dlq-history-by-${entry.id}`}>
-                        {entry.replayedByName}
-                      </Typography>
-                    </td>
-                    <td>
-                      <Typography level="body-xs">{new Date(entry.createdAt).toLocaleString()}</Typography>
-                    </td>
+                    </th>
+                    <th style={{ width: 80 }} aria-label="Actions" />
                   </tr>
-                ))}
-              </tbody>
-            </Table>
-          </Sheet>
-        </Stack>
+                </thead>
+                <tbody>
+                  {messagesLoading && (
+                    <StateRow colSpan={9}>
+                      <LoadingState label="Loading messages" />
+                    </StateRow>
+                  )}
+                  {!messagesLoading && messagesError && (
+                    <StateRow colSpan={9}>
+                      <ErrorState message="Messages failed to load." onRetry={() => void refetchMessages()} />
+                    </StateRow>
+                  )}
+                  {!messagesLoading && !messagesError && (!messages || messages.length === 0) && (
+                    <StateRow colSpan={9}>
+                      <EmptyState title="No messages in this queue" action={null} />
+                    </StateRow>
+                  )}
+                  {messages?.map(msg => (
+                    <tr
+                      key={msg.messageId}
+                      onClick={() => {
+                        setSelectedMessage(msg);
+                        setDrawerOpen(true);
+                      }}
+                      style={{ cursor: 'pointer' }}
+                      data-testid={`dlq-message-row-${msg.messageId}`}
+                    >
+                      <td>
+                        <Typography level="body-xs" sx={{ fontFamily: 'monospace', color: 'admin.inkMuted' }}>
+                          {msg.messageId?.slice(0, 20)}...
+                        </Typography>
+                      </td>
+                      <td>
+                        <Typography level="body-xs" noWrap sx={{ maxWidth: 300 }}>
+                          {msg.body?.slice(0, 100)}
+                        </Typography>
+                      </td>
+                      <td data-testid={`dlq-reason-${msg.messageId}`}>
+                        <Typography level="body-xs" noWrap sx={{ maxWidth: 300 }}>
+                          {msg.failure?.errorMessage ?? 'Unknown'}
+                        </Typography>
+                      </td>
+                      <td data-testid={`dlq-category-${msg.messageId}`}>
+                        <StatusChip tone="neutral" label={msg.failure?.category ?? 'Unknown'} />
+                      </td>
+                      <td>
+                        <Typography level="body-xs">
+                          {msg.sentTimestamp ? new Date(parseInt(msg.sentTimestamp, 10)).toLocaleString() : '-'}
+                        </Typography>
+                      </td>
+                      <AgeExpiryCells
+                        sentTimestamp={msg.sentTimestamp}
+                        retentionSeconds={selectedQueueInfo?.messageRetentionSeconds}
+                        messageId={msg.messageId}
+                      />
+                      <td style={{ textAlign: 'right' }}>
+                        <Typography level="body-xs" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                          {msg.approximateReceiveCount ?? '-'}
+                        </Typography>
+                      </td>
+                      <td>
+                        <Stack direction="row" gap={0.5}>
+                          <Tooltip title="View details">
+                            <IconButton
+                              size="sm"
+                              aria-label="View details"
+                              onClick={e => {
+                                e.stopPropagation();
+                                setSelectedMessage(msg);
+                                setDrawerOpen(true);
+                              }}
+                              data-testid={`dlq-view-${msg.messageId}`}
+                            >
+                              <VisibilityIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          {msg.logsUrl && (
+                            <Tooltip title="View consumer logs around the send time">
+                              <IconButton
+                                size="sm"
+                                component="a"
+                                href={msg.logsUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={e => e.stopPropagation()}
+                                data-testid={`dlq-logs-${msg.messageId}`}
+                              >
+                                <ArticleIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          <AdminPermissionAction requirement="settings:manage">
+                            {permissionDisabled => (
+                              <Tooltip title="Replay this message">
+                                <IconButton
+                                  size="sm"
+                                  aria-label="Replay this message"
+                                  onClick={e => {
+                                    e.stopPropagation();
+                                    if (hasReplayDestination) setSingleReplayConfirm(msg);
+                                  }}
+                                  disabled={permissionDisabled || !hasReplayDestination || replayMutation.isPending}
+                                  data-testid={`dlq-replay-single-${msg.messageId}`}
+                                >
+                                  <ReplayIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                          </AdminPermissionAction>
+                          <AdminPermissionAction requirement="settings:manage">
+                            {permissionDisabled => (
+                              <Tooltip title="Discard this message">
+                                <IconButton
+                                  size="sm"
+                                  color="danger"
+                                  onClick={e => {
+                                    e.stopPropagation();
+                                    setDiscardConfirm(msg);
+                                  }}
+                                  disabled={
+                                    permissionDisabled || !msg.receiptHandle || !msg.body || discardMutation.isPending
+                                  }
+                                  data-testid={`dlq-discard-single-${msg.messageId}`}
+                                >
+                                  <DeleteOutlineIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                          </AdminPermissionAction>
+                        </Stack>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </Sheet>
+          )}
+        </>
       )}
 
       <MessageDrawer

@@ -11,7 +11,7 @@ export default {
   'AdminWhatsNewModalsTab.tsx': [[1, '27481ac346d5dfed']],
   'CreateSlackAppModal.tsx': [[2, '77f0833039f8ec69']],
   'DiscoveryRunDetailModal.tsx': [[2, '2dbf3bba4b9d6a8c']],
-  'DlqReplayTab.tsx': [[2, '200a803000b1483f']],
+  'DlqReplayTab.tsx': [[2, '5d218b7bfe701c36']],
   'EventMetrics/components/CurationBreakdownTab.tsx': [[2, 'e2ae0a0feb2b939a']],
   'EventMetrics/components/OverviewTab.tsx': [[2, 'e2ae0a0feb2b939a']],
   'EventMetrics/components/RawDataTab.tsx': [[2, '3cb357bfb4fea47c']],

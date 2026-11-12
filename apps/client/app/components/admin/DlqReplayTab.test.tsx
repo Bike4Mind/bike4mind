@@ -72,7 +72,7 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   }),
   useDlqDiscard: () => ({ mutateAsync: h.discard, isPending: false }),
   useDlqHistory: () => ({
-    data: state.history,
+    data: { pages: [{ history: state.history, nextCursor: null }] },
     isLoading: false,
     isError: false,
   }),
@@ -252,9 +252,10 @@ describe('DlqReplayTab history table', () => {
     ).toBeTruthy();
     const failed = within(screen.getByTestId('dlq-history-row-failed-1'));
     expect(failed.getByText('Discard request failed')).toBeTruthy();
-    expect(failed.getByText(/expired receipt/)).toHaveTextContent('Job obsolete');
-    expect(within(screen.getByTestId('dlq-history-row-legacy-1')).getByText('Failed')).toBeTruthy();
-    expect(screen.getByRole('columnheader', { name: 'Recorded at' })).toBeTruthy();
+    expect(failed.getByText(/expired receipt/)).toBeTruthy();
+    expect(failed.getByText('Job obsolete')).toBeTruthy();
+    expect(within(screen.getByTestId('dlq-history-row-legacy-1')).getAllByText('Failed')).toHaveLength(2);
+    expect(screen.getByRole('columnheader', { name: 'Time' })).toBeTruthy();
   });
 
   it('shows discarded history with its reason', () => {
@@ -272,7 +273,7 @@ describe('DlqReplayTab history table', () => {
       },
     ];
     renderTab();
-    expect(within(screen.getByTestId('dlq-history-row-discard-1')).getByText('discarded')).toBeTruthy();
+    expect(within(screen.getByTestId('dlq-history-row-discard-1')).getAllByText('Discarded')).toHaveLength(2);
     expect(screen.getByText('Job obsolete')).toBeTruthy();
   });
 });
