@@ -165,10 +165,9 @@ credit enforcement is disabled; aborts carrying settled partial usage count too.
 
 Metric filters on every log group that logs the line write the same metrics to the
 `<app>/<stage>/LLMSpend` namespace, so every alarm and widget below sums them all.
-The list is `infra/llmSpendLogGroups.ts`: the ChatCompletion container and the
-`cli_completion_request` WebSocket Lambda (both run `executeCompletion`), the Slack
-quest processor Lambda, and the Next.js server Lambda (`/api/chat?wait=true` and the
-voice v2 LLM proxy run `ChatCompletionProcess` inline):
+The list is `infra/llmSpendLogGroups.ts`: the ChatCompletion container (it runs
+`executeCompletion`), the Slack quest processor Lambda, and the Next.js server Lambda
+(`/api/chat?wait=true` and the voice v2 LLM proxy run `ChatCompletionProcess` inline):
 
 | Metric                      | Value            | Dimensions        |
 | --------------------------- | ---------------- | ----------------- |

@@ -17,7 +17,6 @@ const resources = vi.hoisted(() => {
       { logConfiguration: { options: { 'awslogs-group': 'chat-completion-logs' } } },
     ]) as string,
     topic: { arn: 'alarm-topic' } as { arn: string } | undefined,
-    cliCompletionLogGroup: { name: 'cli-completion-logs' } as { name: string } | undefined,
     slackQuestLogGroup: { name: 'slack-quest-logs' } as { name: string } | undefined,
     webServerLogGroup: { name: 'web-server-logs' } as { name: string } | undefined,
     hasWebServer: true,
@@ -29,15 +28,6 @@ vi.mock('../chatCompletion', () => ({
     nodes: {
       get taskDefinition() {
         return resources.output({ containerDefinitions: resources.containerDefinitions });
-      },
-    },
-  },
-}));
-vi.mock('../websocket', () => ({
-  cliCompletionRoute: {
-    nodes: {
-      get function() {
-        return resources.output({ nodes: { logGroup: resources.cliCompletionLogGroup } });
       },
     },
   },
@@ -111,7 +101,6 @@ beforeEach(() => {
     { logConfiguration: { options: { 'awslogs-group': 'chat-completion-logs' } } },
   ]);
   resources.topic = { arn: 'alarm-topic' };
-  resources.cliCompletionLogGroup = { name: 'cli-completion-logs' };
   resources.slackQuestLogGroup = { name: 'slack-quest-logs' };
   resources.webServerLogGroup = { name: 'web-server-logs' };
   resources.hasWebServer = true;
@@ -172,12 +161,11 @@ describe('LLM spend metric filters', () => {
     expect(callFor(resources.filter, 'llmSpendYoungAccountUsdFilter')?.metricTransformation).not.toHaveProperty(
       'dimensions'
     );
-    // Five filters for each of the four log groups that log the line.
-    expect(resources.filter).toHaveBeenCalledTimes(20);
+    // Five filters for each of the three log groups that log the line.
+    expect(resources.filter).toHaveBeenCalledTimes(15);
   });
 
   it.each([
-    ['cli_completion_request', 'cli-completion', 'cli-completion-logs'],
     ['Slack quest processor', 'slack-quest', 'slack-quest-logs'],
     ['Next.js server', 'web-server', 'web-server-logs'],
   ])('applies every filter to the %s log group into the same metrics', async (_label, key, logGroupName) => {
@@ -431,10 +419,6 @@ describe('LLM spend alarms', () => {
     await expect(load()).rejects.toThrow('ChatCompletion container log group');
   });
 
-  it('fails loudly when the cli_completion_request log group cannot be resolved', async () => {
-    resources.cliCompletionLogGroup = undefined;
-    await expect(load()).rejects.toThrow('cli_completion_request function is missing its CloudWatch log group');
-  });
 
   it('fails loudly when the Slack quest processor log group cannot be resolved', async () => {
     resources.slackQuestLogGroup = undefined;
