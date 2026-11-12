@@ -283,10 +283,16 @@ export class MediaStore {
     if (!SESSION_ID_PATTERN.test(sessionId)) return;
     // Read-only tools can finish after cancellation, so deletion must also refuse their late writes.
     this.deletedSessions.add(sessionId);
-    const writes = [...(this.pendingWrites.get(sessionId) ?? [])];
+    await this.clearReusableBucket(sessionId);
+  }
+
+  /** Clear a reusable cache bucket. Its owner must serialize clears and writes; deleted conversations use forgetSession. */
+  async clearReusableBucket(bucketId: string): Promise<void> {
+    if (!SESSION_ID_PATTERN.test(bucketId)) return;
+    const writes = [...(this.pendingWrites.get(bucketId) ?? [])];
     for (const write of writes) write.cancel?.();
     await Promise.allSettled(writes.map(write => write.promise));
-    await rm(this.sessionDirectory(sessionId), { recursive: true, force: true });
+    await rm(this.sessionDirectory(bucketId), { recursive: true, force: true });
   }
 
   private async writeForSession(
