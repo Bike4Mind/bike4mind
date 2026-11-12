@@ -11,9 +11,12 @@ import { fetchOrgDomainJoinSuggestions, joinOrgViaDomain } from '@client/app/uti
 
 const DISMISS_KEY_PREFIX = 'orgDomainJoinDismissed:';
 
-function isDismissed(organizationId: string): boolean {
+// Keyed per user: a shared browser must not carry one account's dismissal over to another.
+const dismissKey = (userId: string, organizationId: string) => `${DISMISS_KEY_PREFIX}${userId}:${organizationId}`;
+
+function isDismissed(userId: string, organizationId: string): boolean {
   try {
-    return localStorage.getItem(DISMISS_KEY_PREFIX + organizationId) === '1';
+    return localStorage.getItem(dismissKey(userId, organizationId)) === '1';
   } catch {
     return false;
   }
@@ -54,16 +57,21 @@ const OrgDomainJoinBanner: React.FC = () => {
     },
   });
 
-  const suggestion = suggestions?.find(s => !dismissed.includes(s.organizationId) && !isDismissed(s.organizationId));
+  const suggestion = userId
+    ? suggestions?.find(
+        s => !dismissed.includes(dismissKey(userId, s.organizationId)) && !isDismissed(userId, s.organizationId)
+      )
+    : undefined;
   if (!userId || !suggestion) return null;
 
   const handleDismiss = () => {
+    const key = dismissKey(userId, suggestion.organizationId);
     try {
-      localStorage.setItem(DISMISS_KEY_PREFIX + suggestion.organizationId, '1');
+      localStorage.setItem(key, '1');
     } catch {
       // Storage unavailable: hidden for this page load only.
     }
-    setDismissed(prev => [...prev, suggestion.organizationId]);
+    setDismissed(prev => [...prev, key]);
   };
 
   return (

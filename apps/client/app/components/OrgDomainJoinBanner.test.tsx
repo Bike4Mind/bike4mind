@@ -77,6 +77,16 @@ describe('OrgDomainJoinBanner', () => {
     expect(screen.queryByTestId('org-domain-join-banner')).not.toBeInTheDocument();
   });
 
+  it('keeps a dismissal to the user who dismissed it', async () => {
+    const { unmount } = renderBanner();
+    fireEvent.click(await screen.findByTestId('org-domain-join-dismiss-btn'));
+    unmount();
+
+    mockCurrentUser = { id: 'u2', emailVerified: true };
+    renderBanner();
+    expect(await screen.findByTestId('org-domain-join-banner')).toHaveTextContent('Acme');
+  });
+
   it('renders nothing when there are no suggestions', async () => {
     api.fetchSuggestions.mockResolvedValue([]);
     renderBanner();
