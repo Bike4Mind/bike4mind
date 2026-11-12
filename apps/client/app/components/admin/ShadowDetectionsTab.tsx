@@ -892,7 +892,7 @@ export const ShadowDetectionsTab: React.FC = () => {
           <Typography level="body-xs" sx={muted} data-testid="shadow-detection-precision-note">
             Precision is confirmed abuse over conclusive verdicts; insufficient evidence is left out. Automation
             verdicts (stale signup bursts that nothing corroborated) are counted apart from admin verdicts. Recall is
-            not measured: accounts the detectors did not flag are not sampled.
+            estimated from the evaluation sets below, which label a sample of the accounts the detectors did not flag.
           </Typography>
         </Stack>
       )}
