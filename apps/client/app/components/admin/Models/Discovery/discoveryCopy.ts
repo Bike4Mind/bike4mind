@@ -60,13 +60,30 @@ const POLICY_LABEL: Record<string, string> = {
 };
 export const policyLabel = (policy: string): string => POLICY_LABEL[policy] ?? `New models: ${policy}`;
 
-type RunOutcome = Pick<DiscoveryRunListItem, 'status' | 'finishedAt' | 'mode'> & {
+// Past the discovery job's longest possible run (its Lambda timeout in infra/cron.ts, also the default budget of a
+// self-hosted run), so a run still unfinished by then was killed and will never record its finish.
+export const UNFINISHED_RUN_LIMIT_MS = 20 * 60 * 1000;
+
+export type RunProgress = 'running' | 'did-not-finish' | 'finished';
+
+/** A run is recorded before it starts and only its last write sets finishedAt, so a killed run never finishes. */
+export function runProgress(
+  run: Pick<DiscoveryRunListItem, 'startedAt' | 'finishedAt'>,
+  now: Date = new Date()
+): RunProgress {
+  if (run.finishedAt) return 'finished';
+  return now.getTime() - new Date(run.startedAt).getTime() <= UNFINISHED_RUN_LIMIT_MS ? 'running' : 'did-not-finish';
+}
+
+type RunOutcome = Pick<DiscoveryRunListItem, 'status' | 'startedAt' | 'finishedAt' | 'mode'> & {
   sources?: ReadonlyArray<{ ok: boolean }>;
 };
 
 /** The Result column: what the run did, in words, with its tone. */
-export function runResult(run: RunOutcome): { label: string; tone: AdminStatusTone } {
-  if (!run.finishedAt) return { label: 'Running', tone: 'info' };
+export function runResult(run: RunOutcome, now: Date = new Date()): { label: string; tone: AdminStatusTone } {
+  const progress = runProgress(run, now);
+  if (progress === 'running') return { label: 'Running', tone: 'info' };
+  if (progress === 'did-not-finish') return { label: 'Did not finish', tone: 'bad' };
   if (run.status === 'failed') return { label: 'Failed', tone: 'bad' };
   const lead = run.mode === 'report' ? 'Report only' : 'Finished';
   if (run.status === 'partial') {

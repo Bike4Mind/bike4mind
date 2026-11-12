@@ -32,6 +32,7 @@ import {
   lifecycleWord,
   longContextBrackets,
   modelStatusCopy,
+  runProgress,
   runResult,
   runSentence,
   triggerLabel,
@@ -527,7 +528,11 @@ export function DiscoveryRunPage({ runId }: { runId: string }) {
           run && (
             <span data-testid="discovery-run-header">
               {triggerLabel(run.trigger)} run on {run.host}, started {formatRunTime(run.startedAt)}
-              {run.finishedAt ? `, finished ${formatRunTime(run.finishedAt)}` : ', still running'}
+              {run.finishedAt
+                ? `, finished ${formatRunTime(run.finishedAt)}`
+                : runProgress(run) === 'running'
+                  ? ', still running'
+                  : ', did not finish'}
             </span>
           )
         }

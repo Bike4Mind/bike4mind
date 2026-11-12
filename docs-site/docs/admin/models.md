@@ -129,7 +129,7 @@ Price rows bill text and realtime voice models only, so other model types offer 
 
 Model discovery checks the providers for new models, price changes, and retirements. The Discovery section shows:
 
-- **Discovery runs**: recent runs with when each started, what triggered it, its result, and a summary of what it found. Select a run to open its page
+- **Discovery runs**: recent runs with when each started, what triggered it, its result, and a summary of what it found. A run still going shows **Running**; one with no result 20 minutes after it started was stopped before it could report, and shows **Did not finish**. Select a run to open its page
 - **Lifecycle suggestions**: deprecations, retirements, and replacements discovery suggests. **Accept change** applies one, with a successor model you choose, and says when the model leaves the pickers. **Dismiss suggestion** dismisses it for good: you type the model id to confirm, and discovery does not raise it again while the provider's signal is unchanged. **Model prices** opens the Prices section
 - **References to unavailable models**: settings and defaults that still name a model users can no longer pick. **Check references** asks every provider and shows the result; nothing is checked until you ask
 

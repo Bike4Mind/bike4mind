@@ -12,6 +12,7 @@ import {
   longContextBrackets,
   modeLabel,
   priceSkipCopy,
+  runProgress,
   runResult,
   signalCopy,
   sourceSkipCopy,
@@ -191,7 +192,13 @@ export function RunDetails({ run }: { run: DiscoveryRun }) {
           {run.mode ? `${modeLabel(run.mode)} (${run.mode})` : modeLabel(run.mode)}
         </Fact>
         <Fact label="Started">{formatRunTime(run.startedAt)}</Fact>
-        <Fact label="Finished">{run.finishedAt ? formatRunTime(run.finishedAt) : 'Still running'}</Fact>
+        <Fact label="Finished">
+          {run.finishedAt
+            ? formatRunTime(run.finishedAt)
+            : runProgress(run) === 'running'
+              ? 'Still running'
+              : 'Did not finish'}
+        </Fact>
         <Fact label="Passes" data-testid="discovery-run-passes">
           {String(run.passes)}
         </Fact>

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { AdminModelRow } from '@bike4mind/common';
 import {
   EMPTY_CHANGES,
@@ -15,6 +15,7 @@ import {
 } from './__tests__/discoveryTestKit';
 import { ADMIN_SETTINGS_SEARCH_PARAM, ADMIN_SETTINGS_TAB_SLUG } from '../../adminTabParams';
 import type { DiscoveryRun, RunPriceRow } from './discoveryApi';
+import { UNFINISHED_RUN_LIMIT_MS } from './discoveryCopy';
 
 const m = vi.hoisted(() => ({
   get: vi.fn(),
@@ -116,11 +117,25 @@ describe('DiscoveryRunPage frame', () => {
   });
 
   it('says a running run is still running', async () => {
-    run = runWith({ finishedAt: null });
+    run = runWith({ startedAt: new Date(Date.now() - 60_000).toISOString(), finishedAt: null });
     await renderLoaded();
 
     expect(screen.getByTestId('discovery-run-result')).toHaveTextContent('Running');
     expect(screen.getByTestId('discovery-run-header')).toHaveTextContent('still running');
+    openDetails();
+    expect(screen.getByTestId('discovery-run-facts')).toHaveTextContent('Still running');
+  });
+
+  it('says a run that never finished did not finish once it is past the limit', async () => {
+    run = runWith({ startedAt: new Date(Date.now() - 21 * 60_000).toISOString(), finishedAt: null, status: 'failed' });
+    await renderLoaded();
+
+    expect(screen.getByTestId('discovery-run-result')).toHaveTextContent('Did not finish');
+    expect(screen.getByTestId('discovery-run-header')).toHaveTextContent('did not finish');
+    expect(screen.getByTestId('discovery-run-header')).not.toHaveTextContent('still running');
+    openDetails();
+    expect(screen.getByTestId('discovery-run-fact-result')).toHaveTextContent('Did not finish (failed)');
+    expect(screen.getByTestId('discovery-run-facts')).not.toHaveTextContent('Still running');
   });
 
   it('shows an expired run as expired, with a way back, and does not retry the 404', async () => {
@@ -147,6 +162,57 @@ describe('DiscoveryRunPage frame', () => {
     renderPage();
 
     expect(await screen.findByTestId('admin-error-state')).toHaveTextContent('Run document is corrupt');
+  });
+});
+
+describe('DiscoveryRunPage polling', () => {
+  const tick = async (ms = 0) => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    run = runWith({ finishedAt: null });
+    // Answers take a moment, as over a network, so a refetch shows as fetching and re-renders the page.
+    const served = m.get.getMockImplementation()!;
+    m.get.mockImplementation(async (...args: unknown[]) => {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return served(...args);
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('polls a running run, and stops once it passes the limit without finishing', async () => {
+    vi.setSystemTime(new Date(new Date(RUN.startedAt).getTime() + UNFINISHED_RUN_LIMIT_MS - 12_000));
+    renderPage();
+    await tick(1_000);
+    expect(runGets()).toBe(1);
+    expect(screen.getByTestId('discovery-run-result')).toHaveTextContent('Running');
+
+    await tick(5_000);
+    expect(runGets()).toBe(2);
+    expect(screen.getByTestId('discovery-run-result')).toHaveTextContent('Running');
+
+    // Two more polls: one just inside the limit, then one past it that reads the run as killed and ends the polling.
+    await tick(30_000);
+    expect(runGets()).toBe(4);
+    expect(screen.getByTestId('discovery-run-result')).toHaveTextContent('Did not finish');
+    await tick(60_000);
+    expect(runGets()).toBe(4);
+  });
+
+  it('never polls a run that is already past the limit', async () => {
+    vi.setSystemTime(new Date(new Date(RUN.startedAt).getTime() + 2 * UNFINISHED_RUN_LIMIT_MS));
+    renderPage();
+    await tick(1_000);
+    expect(screen.getByTestId('discovery-run-result')).toHaveTextContent('Did not finish');
+
+    await tick(60_000);
+    expect(runGets()).toBe(1);
   });
 });
 

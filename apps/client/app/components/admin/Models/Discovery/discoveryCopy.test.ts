@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
+  UNFINISHED_RUN_LIMIT_MS,
   countLabel,
   flagCopy,
   formatRunTime,
   nextScheduledRun,
   runChangeSummary,
+  runProgress,
   runResult,
   runSentence,
   sourceTally,
@@ -37,6 +39,22 @@ describe('sourceTally', () => {
   });
 });
 
+const RUN_START = '2026-07-30T12:00:00.000Z';
+const minutesIn = (minutes: number) => new Date(new Date(RUN_START).getTime() + minutes * 60_000);
+
+describe('runProgress', () => {
+  it('reads an unfinished run as running up to the limit, and as did not finish past it', () => {
+    const unfinished = { startedAt: RUN_START, finishedAt: null };
+    expect(UNFINISHED_RUN_LIMIT_MS).toBe(20 * 60_000);
+    expect(runProgress(unfinished, minutesIn(1))).toBe('running');
+    expect(runProgress(unfinished, minutesIn(20))).toBe('running');
+    expect(runProgress(unfinished, new Date(minutesIn(20).getTime() + 1))).toBe('did-not-finish');
+    expect(runProgress({ startedAt: RUN_START, finishedAt: minutesIn(3).toISOString() }, minutesIn(60))).toBe(
+      'finished'
+    );
+  });
+});
+
 describe('runResult', () => {
   it.each([
     [{ status: 'ok', finishedAt: null, mode: 'write' }, 'Running', 'info'],
@@ -50,7 +68,16 @@ describe('runResult', () => {
       'warn',
     ],
   ] as const)('reads %o as %s', (run, label, tone) => {
-    expect(runResult(run)).toEqual({ label, tone });
+    expect(runResult({ ...run, startedAt: RUN_START }, minutesIn(5))).toEqual({ label, tone });
+  });
+
+  it('reads a run killed before it finished as did not finish, whatever status it was written with', () => {
+    expect(
+      runResult({ status: 'failed', startedAt: RUN_START, finishedAt: null, mode: 'write' }, minutesIn(21))
+    ).toEqual({
+      label: 'Did not finish',
+      tone: 'bad',
+    });
   });
 });
 

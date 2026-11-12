@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type { DiscoveryRunMode, DiscoveryRunStatus, PerMTokRate } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { runProgress } from './discoveryCopy';
 
 /**
  * Wire shapes of GET /api/admin/model-discovery (status, and one run with ?runId=) and GET
@@ -239,7 +240,8 @@ export const useDiscoveryRun = (runId: string) =>
     queryFn: async () => (await api.get<{ run: DiscoveryRun }>(DISCOVERY_STATUS_PATH, { params: { runId } })).data.run,
     // A 404 is the run having expired, and no retry brings it back.
     retry: (failureCount, error) => apiStatusOf(error) !== 404 && failureCount < 2,
-    refetchInterval: query => (query.state.data && !query.state.data.finishedAt ? RUNNING_REFETCH_MS : false),
+    refetchInterval: query =>
+      query.state.data && runProgress(query.state.data) === 'running' ? RUNNING_REFETCH_MS : false,
   });
 
 const RUNNING_REFETCH_MS = 5_000;

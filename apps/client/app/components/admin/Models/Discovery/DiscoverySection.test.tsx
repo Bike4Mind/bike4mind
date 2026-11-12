@@ -195,6 +195,17 @@ describe('DiscoverySection run history', () => {
     expect(m.nav.openRun).toHaveBeenCalledWith('run-0');
   });
 
+  it('shows an unfinished run as running until the limit, and as did not finish past it', async () => {
+    const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+    const running = listOf(runLike({ id: 'run-young', startedAt: minutesAgo(2), finishedAt: null }));
+    const killed = listOf(runLike({ id: 'run-killed', startedAt: minutesAgo(25), finishedAt: null, status: 'failed' }));
+    m.get.mockResolvedValue({ data: { ...STATUS, runs: [running, killed] } });
+    renderSection();
+
+    expect(await screen.findByTestId('discovery-run-result-run-young')).toHaveTextContent('Running');
+    expect(screen.getByTestId('discovery-run-result-run-killed')).toHaveTextContent('Did not finish');
+  });
+
   it('states how long runs are kept and where their decisions live', async () => {
     renderSection();
 
