@@ -85,17 +85,9 @@ describe('normalize-organization-role-lists migration (real DB)', () => {
     expect(organizationMemberRole(after, MEMBER)).toBe('member');
     // No roster row, so no role before or after; the entry itself is left for the purge paths.
     expect(organizationMemberRole(after, STALE_MANAGER)).toBeNull();
-    expect(after.adminUserIds).toEqual([MANAGER, STALE_MANAGER]);
+    // The owner entry is kept: transferOwnership relies on it to leave the former owner a Manager.
+    expect(after.adminUserIds).toEqual([OWNER, MANAGER, STALE_MANAGER]);
     expect(after.billingManagerUserIds).toEqual([]);
-  });
-
-  it('drops an owner entry stored as an ObjectId', async () => {
-    const ownerObjectId = new mongoose.Types.ObjectId();
-    const id = await seed({ userId: ownerObjectId.toString(), adminUserIds: [ownerObjectId, MANAGER] });
-
-    await migration.up();
-
-    expect((await load(id)).adminUserIds).toEqual([MANAGER]);
   });
 
   it('turns missing and null role lists into empty lists', async () => {
