@@ -98,6 +98,16 @@ The History tab records a research-configuration edit only when a setting meanin
 Saving the same values again, or reordering the same entries in **Sites to review**, **Never these
 sites** or **Tags to propose**, does not add a row.
 
+**Can research add sources to a lake without my approval?**
+Only from sites you list as trusted. Add a site to **Trusted sites** on a research configuration and
+turn on automatic adding. A new source from that site, or one of its subdomains, is then added to the
+lake without waiting in the review queue. Everything else still waits for your approval. A relevance
+score never adds anything on its own, and a source you declined before is never added again. List only
+sites whose content you control or vouch for. Never list a host where anyone can publish, such as a
+blogging platform, a code-hosting site or a shared file host, because anyone could then put content
+into your lake. Broad entries such as a bare top-level domain are rejected. Each automatic addition
+is marked in the lake's History tab and on the source itself.
+
 **Who can connect a Google Drive folder to a Data Lake?**
 On an organization Data Lake, an organization owner or manager (or a platform admin). On a
 personal Data Lake, only the person who created it: the folder syncs using their own linked Google

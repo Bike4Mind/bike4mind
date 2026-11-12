@@ -109,9 +109,11 @@ const renderPanel = (props: Partial<React.ComponentProps<typeof DataLakeResearch
 beforeEach(() => vi.clearAllMocks());
 
 describe('DataLakeResearchPanel', () => {
-  it('says up front that nothing reaches the lake without a human', () => {
+  it('says up front that only a trusted site can skip review, never a score', () => {
     renderPanel();
-    expect(screen.getByTestId('datalake-research-help').textContent).toMatch(/until you approve/i);
+    const text = screen.getByTestId('datalake-research-help').textContent ?? '';
+    expect(text).toMatch(/wait there for your approval/i);
+    expect(text).toMatch(/ever added because of a relevance score/i);
   });
 
   it('shows a spinner while loading and an error when the read failed', () => {
@@ -222,7 +224,7 @@ describe('DataLakeResearchPanel', () => {
       );
       const sent = spies.onCreate.mock.calls[0][0];
       expect(sent).not.toHaveProperty('allowedDomains');
-      expect(sent).not.toHaveProperty('trustedDomains');
+      expect(sent).toMatchObject({ trustedDomains: [], autoAdmitTrusted: false });
     });
 
     it('sends other sites to review by default', () => {
@@ -254,11 +256,167 @@ describe('DataLakeResearchPanel', () => {
       expect(spies.onCreate).toHaveBeenCalled();
     });
 
-    it('renders no trusted-sites input', () => {
-      renderPanel();
-      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
-      expect(screen.queryByTestId('datalake-research-trusted-input')).not.toBeInTheDocument();
-      expect(screen.queryByText(/trusted/i)).not.toBeInTheDocument();
+    describe('trusted sites and auto-admit', () => {
+      const openForm = () => {
+        const spies = renderPanel();
+        fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+        fireEvent.click(screen.getByTestId('datalake-research-advanced-toggle'));
+        fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+        fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+        return spies;
+      };
+      const toggle = () => screen.getByTestId('datalake-research-auto-admit-toggle');
+
+      it('round-trips the trusted list, the switch and the cap on create', () => {
+        const spies = openForm();
+        fireEvent.change(screen.getByTestId('datalake-research-trusted-input'), {
+          target: { value: 'example.com\ndocs.example.org' },
+        });
+        fireEvent.click(toggle());
+        fireEvent.change(screen.getByTestId('datalake-research-auto-admit-cap'), { target: { value: '4' } });
+        fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+        expect(spies.onCreate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            trustedDomains: ['example.com', 'docs.example.org'],
+            autoAdmitTrusted: true,
+            maxAutoAdmits: 4,
+          })
+        );
+      });
+
+      it('disables the switch while the trusted list is empty and hides the cap', () => {
+        openForm();
+        expect(toggle()).toBeDisabled();
+        expect(screen.queryByTestId('datalake-research-auto-admit-cap')).not.toBeInTheDocument();
+      });
+
+      it('never sends the switch on with an empty list', () => {
+        const spies = openForm();
+        fireEvent.change(screen.getByTestId('datalake-research-trusted-input'), { target: { value: 'example.com' } });
+        fireEvent.click(toggle());
+        fireEvent.change(screen.getByTestId('datalake-research-trusted-input'), { target: { value: '' } });
+        fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+        expect(spies.onCreate).toHaveBeenCalledWith(expect.objectContaining({ autoAdmitTrusted: false }));
+      });
+
+      it('shows the effective limit when the cap exceeds the proposal limit', () => {
+        openForm();
+        fireEvent.change(screen.getByTestId('datalake-research-trusted-input'), { target: { value: 'example.com' } });
+        fireEvent.click(toggle());
+        fireEvent.change(screen.getByTestId('datalake-research-max-proposals-input'), { target: { value: '2' } });
+        fireEvent.change(screen.getByTestId('datalake-research-auto-admit-cap'), { target: { value: '9' } });
+        expect(screen.getByText(/Up to 2 per run; the proposal limit applies/)).toBeInTheDocument();
+      });
+
+      it('loads a saved configuration with the switch on', () => {
+        renderPanel({
+          configs: [config({ trustedDomains: ['example.com'], autoAdmitTrusted: true, maxAutoAdmits: 6 })],
+        });
+        expect(screen.getByTestId('datalake-research-config-auto-admit').textContent).toMatch(/up to 6 per run/);
+        fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+        expect(screen.getByTestId('datalake-research-trusted-input')).toHaveValue('example.com');
+        expect(screen.getByTestId('datalake-research-auto-admit-cap')).toHaveValue(6);
+      });
+
+      it('explains what applies to a run in progress and what waits for the next run', () => {
+        openForm();
+        expect(screen.getByTestId('datalake-research-auto-admit-timing-help').textContent).toMatch(
+          /stops a run already in progress.*applies from the next run/
+        );
+      });
+
+      it('tells the user a save that turned auto-admit off takes effect now', async () => {
+        const onUpdate = vi.fn().mockResolvedValue(undefined);
+        renderPanel({
+          configs: [config({ trustedDomains: ['example.com'], autoAdmitTrusted: true, maxAutoAdmits: 6 })],
+          onUpdate,
+        });
+        fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+        fireEvent.click(screen.getByTestId('datalake-research-advanced-toggle'));
+        fireEvent.click(toggle());
+        fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+        const notice = await screen.findByTestId('datalake-research-save-timing-notice');
+        expect(notice.textContent).toBe(
+          'Saved. Runs in progress stop adding results from removed or disabled sites now.'
+        );
+      });
+
+      it('tells the user a save that turned auto-admit on applies from the next run', async () => {
+        renderPanel({ configs: [config({ trustedDomains: ['example.com'], autoAdmitTrusted: false })] });
+        fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+        fireEvent.click(screen.getByTestId('datalake-research-advanced-toggle'));
+        fireEvent.click(toggle());
+        fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+        const notice = await screen.findByTestId('datalake-research-save-timing-notice');
+        expect(notice.textContent).toBe('Saved. This applies from the next run.');
+      });
+
+      describe('notice only when the save changes what a run does', () => {
+        const saveWith = async (
+          stored: Parameters<typeof config>[0],
+          field: string,
+          value: string,
+          onUpdate = vi.fn().mockResolvedValue(undefined)
+        ) => {
+          renderPanel({ configs: [config(stored)], onUpdate });
+          fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+          fireEvent.click(screen.getByTestId('datalake-research-advanced-toggle'));
+          fireEvent.change(screen.getByTestId(field), { target: { value } });
+          fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+          await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+        };
+        const noNotice = () =>
+          expect(screen.queryByTestId('datalake-research-save-timing-notice')).not.toBeInTheDocument();
+
+        it('shows none when a site is retyped in another spelling', async () => {
+          await saveWith(
+            { trustedDomains: ['example.com'], autoAdmitTrusted: true },
+            'datalake-research-trusted-input',
+            'www.example.com'
+          );
+          noNotice();
+        });
+
+        it('shows none when a site is removed while auto-admit is off', async () => {
+          await saveWith(
+            { trustedDomains: ['example.com', 'other.org'], autoAdmitTrusted: false },
+            'datalake-research-trusted-input',
+            'example.com'
+          );
+          noNotice();
+        });
+
+        it('shows none when a site is added while auto-admit is off', async () => {
+          await saveWith(
+            { trustedDomains: ['example.com'], autoAdmitTrusted: false },
+            'datalake-research-trusted-input',
+            'example.com\nother.org'
+          );
+          noNotice();
+        });
+
+        it('says it stops now when a site is blocked while auto-admit stays on', async () => {
+          await saveWith(
+            { trustedDomains: ['example.com'], autoAdmitTrusted: true },
+            'datalake-research-blocked-input',
+            'example.com'
+          );
+          expect((await screen.findByTestId('datalake-research-save-timing-notice')).textContent).toMatch(/now\.$/);
+        });
+      });
+
+      it('shows no timing notice when the save leaves auto-admit untouched', async () => {
+        const onUpdate = vi.fn().mockResolvedValue(undefined);
+        renderPanel({ configs: [config()], onUpdate });
+        fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+        fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+        await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+        expect(screen.queryByTestId('datalake-research-save-timing-notice')).not.toBeInTheDocument();
+      });
     });
 
     // The default state of a new configuration, and the one the wire schema used to reject: the
@@ -538,6 +696,20 @@ describe('DataLakeResearchPanel', () => {
     it('falls back to the query the run actually executed when its config is gone', () => {
       renderPanel({ configs: [], runs: [run({ configId: 'deleted-config' })] });
       expect(screen.getByTestId('datalake-research-run-config').textContent).toBe('coastal erosion in Cornwall');
+    });
+
+    it('reports what the trusted-site rule did, without counting it as a drop', () => {
+      renderPanel({
+        runs: [
+          run({
+            totals: { ...emptyResearchRunTotals(), searchHits: 6, proposed: 4, autoAdmitted: 3, autoAdmitSkipped: 1 },
+          }),
+        ],
+      });
+      const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
+      expect(summary).toMatch(/4 proposed/);
+      expect(summary).toMatch(/3 added automatically/);
+      expect(summary).toMatch(/1 trusted, not added automatically/);
     });
 
     it('names the lever that stopped a run early', () => {
