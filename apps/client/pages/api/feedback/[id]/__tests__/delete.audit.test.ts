@@ -18,6 +18,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@bike4mind/database', () => ({
+  FeedbackAiModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
   FeedbackNoteModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
   FeedbackModel: { findById: mocks.findById, deleteOne: mocks.deleteOne },
   FeedbackTextModel: { deleteOne: vi.fn().mockResolvedValue({}) },

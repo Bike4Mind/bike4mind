@@ -1,3 +1,4 @@
+import { AxiosError } from 'axios';
 import type { ReactNode } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -103,11 +104,17 @@ describe('AI operations page', () => {
     expect(JSON.parse(requests[1].data as string)).toEqual({ ...config, enabled: true });
   });
   it('renders permission failures as a retryable error without controls', async () => {
-    api.defaults.adapter = async () => {
-      throw new Error('Request failed (403)');
+    api.defaults.adapter = async request => {
+      throw new AxiosError('Forbidden', '403', request, undefined, {
+        status: 403,
+        statusText: 'Forbidden',
+        headers: {},
+        config: request,
+        data: { message: 'Missing settings:manage' },
+      });
     };
     mount();
-    expect(await screen.findByTestId('admin-error-state')).toHaveTextContent('403');
+    expect(await screen.findByTestId('admin-error-state')).toHaveTextContent('Missing settings:manage');
     expect(screen.queryByTestId('ai-operations-global-switch')).not.toBeInTheDocument();
   });
   it.each(['put', 'post'])('locks every draft editor during a delayed %s and retains failed drafts', async method => {
@@ -126,7 +133,7 @@ describe('AI operations page', () => {
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
     await waitFor(() => expectEditorsDisabled(true));
     gate.resolve();
-    expect(await screen.findByText('Save failed')).toBeInTheDocument();
+    expect(await screen.findByText('Could not save AI operations: Save failed')).toBeInTheDocument();
     expectEditorsDisabled(false);
     if (method === 'put') expect(screen.getByTestId('ai-operations-global-switch')).toBeChecked();
     else expect(screen.getByTestId('ai-operations-class-name').querySelector('input')).toHaveValue('triage');
@@ -144,7 +151,7 @@ describe('AI operations page', () => {
     stageClass();
     fireEvent.click(screen.getByTestId('ai-operations-global-switch'));
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
-    expect(await screen.findByText('Config failed')).toBeInTheDocument();
+    expect(await screen.findByText('Could not save AI operations: Config failed')).toBeInTheDocument();
     expect(screen.getByTestId('ai-operations-global-switch')).toBeChecked();
     expect(screen.getByTestId('ai-operations-class-name').querySelector('input')).toHaveValue('');
     failConfig = false;
