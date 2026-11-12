@@ -57,7 +57,7 @@ export const refineTextRequest = async (
     async () => {
       let operationsModel;
       try {
-        operationsModel = await OperationsModelService.getOperationsModel();
+        operationsModel = await OperationsModelService.getOperationsModel({ endUserId: req.user?.id });
       } catch (error) {
         // getOperationsModel never returns a null llm - it throws when it cannot resolve
         // one, which is the same deployment state the public route calls provider_not_configured.

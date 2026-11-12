@@ -549,11 +549,6 @@
       "count": 1
     }
   },
-  "apps/client/app/components/admin/OrganizationProfileUpdated.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/app/components/admin/SlackWorkspacesTab.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 4
@@ -4194,7 +4189,7 @@
   },
   "b4m-core/services/src/userService/register.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 10
+      "count": 9
     }
   },
   "b4m-core/services/src/userService/requestEmailChange.test.ts": {

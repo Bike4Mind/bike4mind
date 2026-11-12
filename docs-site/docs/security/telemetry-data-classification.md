@@ -446,6 +446,8 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
 
+Streaming HTTP API-key completion requests can additionally record a server-observed start time, correlation id, requested model and explicit completion outcome in `ApiKeyUsageLog.completionObservation`. The start is written after authentication and before execution, then the same server-owned log row is updated on response completion or disconnect. A missing terminal response keeps an unknown outcome; status `0` means no HTTP response was recorded. Daily-cap rejections are separate from successful completions, and HTTP transport status is separate from in-band stream outcome. No prompts, messages, response bodies or key secrets are added. These fields use the existing 90-day API-log TTL, including retained security logs after account deletion; no source retention is extended.
+
 ## Client usage
 
 Every authenticated request to a `baseApi` route records which client the account used on the user record (`clientUsage`): the web app, the desktop app, the CLI, or the API (an API key or an OAuth token without a first-party client header). The desktop app and the CLI name themselves in their `User-Agent` and `X-B4M-Client` headers, so the value is a claim the caller makes, used only for statistics and for hiding the desktop app prompt, never for access decisions. A record is written at most once a day per client, or sooner when the client reports a new version. Impersonation sessions, sign-ins still waiting on MFA, system accounts and accounts pending deletion write nothing. The account owner and admins can see it, and it is deleted with the account.
@@ -454,6 +456,26 @@ Every authenticated request to a `baseApi` route records which client the accoun
 | -------------- | --------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------- |
 | Client seen    | `clientUsage.<web, desktop, cli or api>.firstSeenAt`, `lastSeenAt` | Account lifetime; deleted with the account | Usage statistics, hiding the desktop app prompt |
 | Client version | `clientUsage.<desktop or cli>.version`, at most 32 characters   | Account lifetime; deleted with the account | Usage statistics                                |
+
+## Related advisory accounts
+
+The admin AI advisory can derive one-hop review candidates from exact signup and successful-login IP observations in the preceding seven days. It reads existing user signup metadata and AuthEvent records, returns the matching account ids, current display names, IP and observation kinds to authorized admins, and does not persist another evidence store or extend source retention. Reads are bounded and high-population addresses are discounted. The candidate scan sends no extra data to an AI provider and does not apply an abuse verdict or account action to a linked candidate. Capped and failed coverage are reported separately.
+
+## Coordinated completion observations
+
+An hourly job, controlled by `shadowDetectionRecordingEnabled`, reads existing successful `completion_api` UsageEvent settlements from the preceding 24 hours. Results are capped at 5,000 events and 1,000 eligible accounts, processing is bounded, and database reads have time limits. Unavailable account activity remains a barrier when comparing contiguous runs. No prompts, response bodies, model names, key identifiers or network observations are copied.
+
+The derived `ShadowDetection` record stores the ordered participant ids, settlement time range, repeated-round counts, request-count ranges, timing summaries, and coverage flags. One ordered group is deduplicated within a UTC activity day; reviewed records remain immutable. Records follow the existing 365-day shadow detection TTL. Purging any participant removes the whole ordered observation. The detector is review-only and is excluded from automatic containment and automatic risk-review approval decisions.
+
+When advisory model assessment is enabled, its allowlisted summary can include ordered pseudonymous member references, counts, relative timing summaries, coverage flags and an explicit review-only marker. It sends no participant identifiers or absolute settlement timestamps. Missing source data or omitted participants are represented as incomplete evidence. This uses the assessment's existing retention and budget controls; it does not train model weights.
+
+## Synchronized completion observations
+
+The existing hourly completion observation job can read bounded API-key request metadata from the preceding 24 hours. It derives repeated account subsets with closely timed starts and requested-model switches. It stores participant ids, first/last observation times, burst and switch counts, relative skew, outcome counts and explicit legacy/capped coverage in `ShadowDetection.completionSynchrony`. Model names and request correlation ids are not copied into this derived record. Source reads have time limits; result and processing caps are explicit. Old request rows without start/model metadata are incomplete coverage, never reconstructed from settlement times.
+
+For matched cohorts, a separate bounded UsageEvent read can add a snapshot of total API-completion credits charged, grant-funded credits and unknown funding in the scan's 24-hour window. This is cohort-wide spending, not only matched bursts. Grants include non-signup rewards. Failed or capped reads remain unavailable or incomplete, without suppressing the timing observation.
+
+Unreviewed observations refresh from newer scan snapshots, including settled outcomes and recovered funding evidence without requiring another request burst. Older scans cannot overwrite newer snapshots, and reviewed records stay immutable. Derived observations use the existing 365-day shadow-record TTL and are removed when any participant is purged. API source logs retain their existing 90-day security retention. The provider summary uses only pseudonymous member references, counts, relative timing, funding totals and coverage flags; it includes no absolute start timestamps, models or correlation ids. These detections are excluded from automated containment and automatic risk-review approval decisions. Any manual grant block uses the existing credit-adjustment permissions, preview and audit flow.
 
 ## Manual campaign watches
 
@@ -480,6 +502,10 @@ or key identifiers. An empty partial log is not proof that no attempts occurred.
 These derived fields use the assessment summary's existing retention policy.
 
 Off by default behind the `abuseAssessmentEnabled` and `abuseAssessmentConfig` admin settings, an admin action or an hourly job can ask a Decisions model to judge a shadow detection as abuse, legitimate automation or insufficient evidence. The model receives only a pseudonymous summary built from an allowlist: detector name, window, a hosting-network flag, per-signal counts and thresholds, and per-account ages and counts from the stored behavioral evidence, with accounts named `acct_1`, `acct_2` and so on. It never receives an IP, network number, country, email, user id, prompt, document or free text. Calls use the platform's provider key and a platform budget, never the assessed account's credits or keys. The result is for admin review only and triggers no automatic action on the account, its access, its credits or its review state.
+
+The allowlisted account profile can also include signup-method and network flags, provider-aware email-shape flags, relative minutes to two-factor setup and first spend, up to five recorded model identifiers with spending shares, and counts of nearby signups sharing an IP, JA4, canonical mailbox or non-consumer mail domain. No raw shared value or linked-account identifier enters the provider payload. Profile reads are bounded to the accounts retained in the summary; unavailable profiles or link reads remain null. These derived facts use existing account, authentication and usage records and add no raw collection or source-retention extension.
+
+The same model call can return probabilities for fixed evidence-factor questions. Up to three allowlisted factor keys and finite probabilities are stored as `AbuseAssessment.reasons` for the same 365-day assessment retention. No generated explanation text is stored. The factors describe the supplied evidence rather than measuring causal contributions to the overall verdict.
 
 | Data              | Storage                                                                                                | Lifetime                       | Purpose                              |
 | ----------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------ | ------------------------------------ |

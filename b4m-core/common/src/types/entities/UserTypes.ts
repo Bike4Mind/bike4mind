@@ -445,6 +445,11 @@ export interface IUser extends ICreditHolder {
    * until a grant is claimed; unique across users, so aliases of one inbox share a single grant.
    */
   freeCreditClaimEmail?: string | null;
+  /**
+   * The opaque id LLM providers receive for this account (toProviderEndUserId of `_id`). Stored only so
+   * an admin can resolve a provider safety notice to the account; `select: false` on the model.
+   */
+  providerEndUserId?: string;
   /** Absent on accounts created before staged grants were enabled. */
   signupGrant?: SignupGrant;
   signupGrantAssessment?: SignupGrantAssessment;

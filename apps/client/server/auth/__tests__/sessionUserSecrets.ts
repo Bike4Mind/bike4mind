@@ -67,6 +67,7 @@ export function secretUserFields() {
     personaLoginCodeHash: SECRET_VALUE,
     personaLoginCodeExpiresAt: new Date('2026-01-01'),
     accountDataExportLease: { id: SECRET_VALUE, expiresAt: new Date('2026-01-01') },
+    providerEndUserId: SECRET_VALUE,
     riskScore: { score: 90, signals: [{ signal: 'quickApiKey', points: 15, reason: SECRET_VALUE }] },
     riskEvidence: { summary: { trigger: SECRET_VALUE }, refresh: { lastFailure: SECRET_VALUE } },
     riskReviewAutoApproval: { policy: 'settled_payment', decidedAt: new Date(0) },

@@ -5058,7 +5058,7 @@ export interface components {
             }[];
           }
       )[];
-      /** @description A stable, non-identifying id for your end user. Defaults to a hash of the B4M user id. */
+      /** @description Deprecated and ignored: the provider always receives a hash of the calling B4M user id. Accepted so existing callers keep working. */
       safety_identifier?: string;
     };
     listDecisionModelsResponse200: {

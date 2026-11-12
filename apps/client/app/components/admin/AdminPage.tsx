@@ -191,9 +191,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           </TabPanel>
           <TabPanel value={AdminTab.WorldTime}>{activeTab === AdminTab.WorldTime && <WorldTimeTab />}</TabPanel>
           <TabPanel value={AdminTab.Feedback}>{activeTab === AdminTab.Feedback && <FeedbackTab />}</TabPanel>
-          <TabPanel value={AdminTab.Analytics} {...selfFramed}>
-            {activeTab === AdminTab.Analytics && <AnalyticsTab />}
-          </TabPanel>
+          <TabPanel value={AdminTab.Analytics}>{activeTab === AdminTab.Analytics && <AnalyticsTab />}</TabPanel>
           <TabPanel value={AdminTab.RegistrationInvites}>
             {activeTab === AdminTab.RegistrationInvites && <InviteCenter />}
           </TabPanel>
@@ -247,7 +245,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.Subscriptions}>
             {activeTab === AdminTab.Subscriptions && <AdminSubscriptions />}
           </TabPanel>
-          <TabPanel value={AdminTab.Organizations} {...selfFramed}>
+          <TabPanel value={AdminTab.Organizations}>
             {activeTab === AdminTab.Organizations && <OrganizationsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.CreditAnalytics} {...selfFramed}>

@@ -8,12 +8,13 @@ import {
   type ICompletionBackend,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { ModelBackend, type ModelInfo } from '@bike4mind/common';
+import { ChatModels, ModelBackend, SpeechToTextModels, type ModelInfo } from '@bike4mind/common';
 import { apiKeyRepository, adminSettingsRepository, AdminSettings } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import {
   OperationsModelConfig,
   OperationsModelResult,
+  DEFAULT_OPERATIONS_IMAGE_MODEL,
   getDefaultImageModel,
   getApiKeyTypeFromBackend,
 } from '../utils/modelResolvers';
@@ -26,8 +27,26 @@ import {
  */
 type OperationsApiKeyTable = ApiKeyTable;
 
+/**
+ * The operations text model used when the `operationsModel` admin setting is missing or names a
+ * model this deployment cannot run. Cheapest current-generation OpenAI text model.
+ */
+export const DEFAULT_OPERATIONS_TEXT_MODEL = ChatModels.GPT5_6_LUNA;
+
+/** Operations speech-to-text model when none is configured; the catalog has no newer option. */
+export const DEFAULT_OPERATIONS_SPEECH_MODEL = SpeechToTextModels.WHISPER_1;
+
+/** Tried in order after the preferred model, before falling back to any available text model. */
+const OPERATIONS_TEXT_MODEL_FALLBACKS: readonly string[] = [
+  DEFAULT_OPERATIONS_TEXT_MODEL,
+  ChatModels.GPT5_4_MINI,
+  ChatModels.GPT4o_MINI,
+];
+
 /** Text-only operations result: no image/speech resolution. */
 export type OperationsTextModelResult = Pick<OperationsModelResult, 'modelId' | 'llm' | 'modelInfo'>;
+
+export type OperationsModelOptions = { endUserId?: string | null };
 
 /**
  * Get effective API key directly from ModelBackend without needing to convert to ApiKeyType first
@@ -105,7 +124,7 @@ export class OperationsModelService {
   /**
    * Shared operations text-model selection chain (no LLM init, no image/speech).
    * Order: self-host local Ollama (only when self-host and no cloud key) ->
-   * the preferred model id (admin config or hardcoded default) -> gpt-3.5-turbo ->
+   * the preferred model id (admin config or hardcoded default) -> OPERATIONS_TEXT_MODEL_FALLBACKS ->
    * any available text model. Throws only when no text model exists at all.
    */
   private static pickOperationsTextModelInfo(
@@ -120,9 +139,9 @@ export class OperationsModelService {
     if (!modelInfo && preferredModelId) {
       modelInfo = models.find(m => m.id === preferredModelId);
     }
-    if (!modelInfo) {
-      // gpt-3.5-turbo is a legacy fallback id no longer in the ModelName union; compare as string.
-      modelInfo = models.find(m => (m.id as string) === 'gpt-3.5-turbo');
+    for (const fallbackId of OPERATIONS_TEXT_MODEL_FALLBACKS) {
+      if (modelInfo) break;
+      modelInfo = models.find(m => m.id === fallbackId);
     }
     if (!modelInfo) {
       modelInfo = OperationsModelService.pickAnyTextModel(models);
@@ -168,7 +187,8 @@ export class OperationsModelService {
     apiKeyTable: OperationsApiKeyTable,
     models: ModelInfo[],
     candidate: ModelInfo | undefined,
-    logLabel: string
+    logLabel: string,
+    endUserId?: string | null
   ): { imageModelInfo: ModelInfo | undefined; imageLlm: ICompletionBackend | null } {
     const tried = new Set<string>();
     let next = candidate;
@@ -177,7 +197,7 @@ export class OperationsModelService {
       tried.add(next.id);
       let llm: ICompletionBackend | null = null;
       try {
-        llm = getLlmByModel(apiKeyTable, { modelInfo: next, logger: this.logger });
+        llm = getLlmByModel(apiKeyTable, { modelInfo: next, logger: this.logger, endUserId });
       } catch (err) {
         this.logger.warn(`Failed to initialize ${logLabel} image model ${next.id}`, err);
       }
@@ -202,8 +222,9 @@ export class OperationsModelService {
    * no image/speech model is configured or available, unlike getOperationsModel which
    * resolves all three. Uses the same text-selection chain (self-host Ollama default
    * -> admin-configured model -> cloud fallbacks).
+   * Pass options.endUserId (the requesting user's id) when the call runs on behalf of a user; omit for system jobs.
    */
-  static async getOperationsTextModel(): Promise<OperationsTextModelResult> {
+  static async getOperationsTextModel(options: OperationsModelOptions = {}): Promise<OperationsTextModelResult> {
     const dbAdapters = {
       db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
       getSettingsByNames,
@@ -217,10 +238,10 @@ export class OperationsModelService {
     const modelInfo = OperationsModelService.pickOperationsTextModelInfo(
       apiKeyTable,
       models,
-      config?.modelId ?? 'gpt-4o-mini'
+      config?.modelId ?? DEFAULT_OPERATIONS_TEXT_MODEL
     );
 
-    const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: this.logger });
+    const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: this.logger, endUserId: options.endUserId });
     if (!llm) {
       throw new OperationsModelUnavailableError(`Failed to initialize operations text model ${modelInfo.id}`);
     }
@@ -231,8 +252,9 @@ export class OperationsModelService {
 
   /**
    * Get the configured operations model and initialize LLM
+   * Pass options.endUserId (the requesting user's id) when the call runs on behalf of a user; omit for system jobs.
    */
-  static async getOperationsModel(): Promise<OperationsModelResult> {
+  static async getOperationsModel(options: OperationsModelOptions = {}): Promise<OperationsModelResult> {
     try {
       let setting;
       try {
@@ -246,12 +268,12 @@ export class OperationsModelService {
         ]);
       } catch (dbError) {
         this.logger.warn('Database timeout getting operations model setting, using hardcoded default');
-        return await this.getHardcodedDefaultOperationsModel();
+        return await this.getHardcodedDefaultOperationsModel(options);
       }
 
       if (!setting) {
         this.logger.warn('Operations model not configured, using default');
-        return await this.getDefaultOperationsModel();
+        return await this.getDefaultOperationsModel(options);
       }
 
       const config = (setting as any).settingValue as unknown as OperationsModelConfig;
@@ -269,12 +291,13 @@ export class OperationsModelService {
 
       if (!modelInfo) {
         this.logger.error(`Operations model ${config.modelId} not available, using default`);
-        return await this.getDefaultOperationsModel();
+        return await this.getDefaultOperationsModel(options);
       }
 
       const llm = getLlmByModel(apiKeyTable, {
         modelInfo,
         logger: this.logger,
+        endUserId: options.endUserId,
       });
 
       if (!llm) {
@@ -294,7 +317,13 @@ export class OperationsModelService {
       // Image model is optional - a deployment with no configured image backend
       // (e.g. self-host with no BFL/OpenAI/local-image key) has none, and
       // text-only operations callers must not fail on that account.
-      const imagePick = OperationsModelService.pickWorkingImageModel(apiKeyTable, models, imageModelInfo, 'operations');
+      const imagePick = OperationsModelService.pickWorkingImageModel(
+        apiKeyTable,
+        models,
+        imageModelInfo,
+        'operations',
+        options.endUserId
+      );
       imageModelInfo = imagePick.imageModelInfo;
       const imageLlm = imagePick.imageLlm;
 
@@ -308,6 +337,7 @@ export class OperationsModelService {
         speechLlm = getLlmByModel(apiKeyTable, {
           modelInfo: speechModelInfo,
           logger: this.logger,
+          endUserId: options.endUserId,
         });
 
         if (!speechLlm) {
@@ -332,18 +362,20 @@ export class OperationsModelService {
     } catch (error) {
       this.logger.error('Error getting operations model:', error);
       // If all else fails, try hardcoded default without database
-      return await this.getHardcodedDefaultOperationsModel();
+      return await this.getHardcodedDefaultOperationsModel(options);
     }
   }
 
   /**
    * Get hardcoded default operations model (no database access)
    */
-  private static async getHardcodedDefaultOperationsModel(): Promise<OperationsModelResult> {
+  private static async getHardcodedDefaultOperationsModel(
+    options: OperationsModelOptions
+  ): Promise<OperationsModelResult> {
     const defaultConfig: OperationsModelConfig = {
-      modelId: 'gpt-4o-mini',
-      imageModelId: 'flux-pro-1.1',
-      speechModelId: 'whisper-1',
+      modelId: DEFAULT_OPERATIONS_TEXT_MODEL,
+      imageModelId: DEFAULT_OPERATIONS_IMAGE_MODEL,
+      speechModelId: DEFAULT_OPERATIONS_SPEECH_MODEL,
     };
 
     const dbAdapters = {
@@ -359,6 +391,7 @@ export class OperationsModelService {
     const llm = getLlmByModel(apiKeyTable, {
       modelInfo,
       logger: this.logger,
+      endUserId: options.endUserId,
     });
 
     if (!llm) {
@@ -380,7 +413,8 @@ export class OperationsModelService {
       apiKeyTable,
       models,
       imageModelInfo,
-      'hardcoded default operations'
+      'hardcoded default operations',
+      options.endUserId
     );
     imageModelInfo = imagePick.imageModelInfo;
     const imageLlm = imagePick.imageLlm;
@@ -404,6 +438,7 @@ export class OperationsModelService {
       speechLlm = getLlmByModel(apiKeyTable, {
         modelInfo: speechModelInfo,
         logger: this.logger,
+        endUserId: options.endUserId,
       });
 
       if (!speechLlm) {
@@ -434,11 +469,11 @@ export class OperationsModelService {
   /**
    * Get default operations model when configuration is missing
    */
-  private static async getDefaultOperationsModel(): Promise<OperationsModelResult> {
+  private static async getDefaultOperationsModel(options: OperationsModelOptions): Promise<OperationsModelResult> {
     const defaultConfig: OperationsModelConfig = {
-      modelId: 'gpt-4o-mini',
-      imageModelId: 'flux-pro-1.1',
-      speechModelId: 'whisper-1',
+      modelId: DEFAULT_OPERATIONS_TEXT_MODEL,
+      imageModelId: DEFAULT_OPERATIONS_IMAGE_MODEL,
+      speechModelId: DEFAULT_OPERATIONS_SPEECH_MODEL,
     };
 
     // Seed the default setting, but don't fail if database is unavailable. $setOnInsert:
@@ -472,6 +507,7 @@ export class OperationsModelService {
     const llm = getLlmByModel(apiKeyTable, {
       modelInfo,
       logger: this.logger,
+      endUserId: options.endUserId,
     });
 
     if (!llm) {
@@ -487,7 +523,8 @@ export class OperationsModelService {
       apiKeyTable,
       models,
       imageModelInfo,
-      'default operations'
+      'default operations',
+      options.endUserId
     );
     imageModelInfo = imagePick.imageModelInfo;
     const imageLlm = imagePick.imageLlm;
@@ -505,6 +542,7 @@ export class OperationsModelService {
       speechLlm = getLlmByModel(apiKeyTable, {
         modelInfo: speechModelInfo,
         logger: this.logger,
+        endUserId: options.endUserId,
       });
 
       if (!speechLlm) {

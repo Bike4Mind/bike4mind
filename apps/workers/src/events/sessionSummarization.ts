@@ -103,7 +103,7 @@ export const handler = withEventContext(async (event, logger) => {
 
   logger.info(`Handling summarization job for session ${sessionId} (as user ${userId ?? session.userId})`);
 
-  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: user.id });
   logger.info(`Using operations model for summarizing: ${modelInfo.name} (${modelInfo.backend})`);
 
   const modelHasChanged = session.summaryModelId && session.summaryModelId !== modelId;
@@ -219,26 +219,33 @@ export const handler = withEventContext(async (event, logger) => {
     .filter((text): text is string => Boolean(text))
     .join('\n');
 
+  // A completed call with no text (e.g. the model declined the content) is an outcome of this
+  // input, not a fault: retrying it reproduces it and parks the event in the session-enrichment
+  // DLQ. Keep the previous summary and stop here, before the session is mutated.
+  if (!summaryText) {
+    logger.warn(`Model returned no summary text for notebook ${session.id}; keeping the previous summary`, {
+      modelId,
+      stopReason: lastCompletionInfo?.stopReason ?? null,
+      outputTokens: lastCompletionInfo?.outputTokens ?? null,
+      hadPreviousSummary: Boolean(session.summary),
+    });
+    return;
+  }
+
   session.summary = summaryText;
   session.summaryAt = new Date();
   session.summaryModelId = modelId as ChatModelName;
   session.summaryTrigger = trigger;
 
-  const summaryContent = session.summary;
-
-  if (!summaryContent) {
-    throw new Error(`Failed to generate summary for notebook ${session.id}`);
-  }
-
-  logger.info(`Summary: ${summaryContent}`);
+  logger.info(`Summary: ${summaryText}`);
 
   // Create a FabFile for the summary so we can chunk and vectorize it to be
   // used for RAG prompting
   const fabFileData = {
     userId: session.userId,
     fileName: `[Automatic summary] ${session.name || 'Notebook'}.txt`,
-    fileContent: summaryContent,
-    fileSize: Buffer.byteLength(summaryContent),
+    fileContent: summaryText,
+    fileSize: Buffer.byteLength(summaryText),
     mimeType: SupportedFabFileMimeTypes.TXT_PLAIN,
     isPublic: false,
     type: KnowledgeType.FILE,
@@ -409,7 +416,7 @@ export const handler = withEventContext(async (event, logger) => {
           throw new Error(`Failed to generate file path for notebook ${session.id} summary`);
         }
 
-        await getFilesStorage().upload(summaryContent, newFabFile.filePath, { ContentType: newFabFile.mimeType });
+        await getFilesStorage().upload(summaryText, newFabFile.filePath, { ContentType: newFabFile.mimeType });
       }
     });
   } catch (error) {

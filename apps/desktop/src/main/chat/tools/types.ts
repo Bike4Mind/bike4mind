@@ -717,6 +717,11 @@ export interface ApprovalPrompt {
    */
   askInFull?: true;
   /**
+   * `askInAuto` and `askInFull` come only from parts that say so in `always.commands[].ask`, with no reason
+   * that holds for the whole script: each part is then decided on its own, and only the undecided ones ask.
+   */
+  byPart?: true;
+  /**
    * For a shell command: what "always allow" remembers. Each sub-command of the script is
    * covered by a prefix pattern, and each directory outside the project by the directory.
    */
@@ -727,6 +732,24 @@ export interface ApprovalPrompt {
   alwaysCovers?: string;
 }
 
+/** One sub-command of a shell script, as a rule, a chat allowance or the mode decides it. */
+export interface ApprovalPart {
+  text: string;
+  pattern: string;
+  coverable: boolean;
+  words?: string;
+  expanded?: string;
+  opaque?: string;
+  /**
+   * Why this part needs a decision even where commands run unasked: 'auto' asks in auto mode, 'full' in
+   * every mode. Only set on a prompt with `byPart`.
+   */
+  ask?: { mode: 'auto' | 'full'; reason: string; kinds: readonly PartAskKind[] };
+}
+
+/** What makes a part ask: an "Allow in this chat" covers it only when given over every one of these. */
+export type PartAskKind = 'unread' | 'outbound' | 'env';
+
 export interface ApprovalAlways {
   /** The tool the patterns belong to: allowing `npm run dev *` for one tool is not allowing it for the other. */
   namespace: string;
@@ -734,7 +757,7 @@ export interface ApprovalAlways {
    * One per sub-command, as written; matched against remembered `patterns`. Never covered when
    * not `coverable` (see ShellCommand.coverable).
    */
-  commands: readonly { text: string; pattern: string; coverable: boolean; words?: string; opaque?: string }[];
+  commands: readonly ApprovalPart[];
   /** Directories outside every granted root that the command reaches. */
   directories: readonly string[];
   /** Physical paths named by a shell command, used to protect permission files even through aliases. */

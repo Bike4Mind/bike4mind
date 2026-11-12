@@ -1,0 +1,37 @@
+# Xcode
+DerivedData/
+build/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# SwiftPM
+.build/
+.swiftpm/
+Packages/*/.build/
+Packages/*/.swiftpm/
+
+# Test output
+*.xcresult
+Tools/Generator/.build/
+
+# fastlane
+fastlane/report.xml
+fastlane/test_output/
+fastlane/README.md
+
+# Signing material and local Ruby state; none of it may ever be committed.
+*.p8
+*.p12
+*.mobileprovision
+*.cer
+*.xcarchive
+fastlane/.env.default
+vendor/bundle/
+.bundle/
