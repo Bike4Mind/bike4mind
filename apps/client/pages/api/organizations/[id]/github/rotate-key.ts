@@ -85,7 +85,7 @@ const handler = baseApi()
       tokenCachedAt: undefined,
     });
 
-    logKeyRotated({
+    await logKeyRotated({
       connectionId: connection.id,
       organizationId: orgId,
       actorUserId: user.id,
