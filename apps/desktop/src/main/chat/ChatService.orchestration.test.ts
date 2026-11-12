@@ -248,6 +248,49 @@ describe('role routing and task runtime compatibility', () => {
     ).toBe(true);
   });
 
+  it('resolves a family alias to the newest allowed catalog model and offers the field only when overrides exist', async () => {
+    models.push(
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', releaseDate: '2026-02-01', supportsTools: true },
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', releaseDate: '2026-09-01', supportsTools: true }
+    );
+    const spawnField = (index: number) =>
+      wire(index).options?.tools?.find(entry => entry.toolSchema.name === 'session_spawn')?.toolSchema.parameters
+        .properties.requested_model_id;
+
+    const closed = await created();
+    await service.setRolePolicy({
+      ...inheritancePolicy(),
+      roles: { ...inheritancePolicy().roles, implementation: 'worker' },
+    });
+    await service.setSessionOrchestrate(closed.id, true);
+    const refusedIndex = streams.length;
+    expect(await spawn(closed, { role: 'implementation', requested_model_id: 'sonnet' })).toBeUndefined();
+    expect(spawnField(refusedIndex)).toBeUndefined();
+    const refusal = events.find(
+      event => event.type === 'tool-end' && event.sessionId === closed.id && event.call.name === 'session_spawn'
+    );
+    expect(refusal?.type === 'tool-end' && refusal.call.error).toMatch(
+      /^Model request refused: 'sonnet' is not an allowed override \(allowed: none\)\. Nothing was started\. Omit requested_model_id to use the role default \(worker\)/
+    );
+
+    const open = await created();
+    await service.setRolePolicy({
+      ...inheritancePolicy(),
+      roles: { ...inheritancePolicy().roles, implementation: 'worker' },
+      allowedOverrides: ['claude-sonnet-4-6', 'claude-sonnet-5'],
+    });
+    await service.setSessionOrchestrate(open.id, true);
+    const openIndex = streams.length;
+    const child = await spawn(open, { role: 'implementation', requested_model_id: 'sonnet' });
+    expect(spawnField(openIndex)).toMatchObject({ description: expect.stringContaining('claude-sonnet-5') });
+    expect(child?.model).toBe('claude-sonnet-5');
+    expect((await store.get(child?.id ?? ''))?.workerSelection).toMatchObject({
+      requestedModelId: 'sonnet',
+      effectiveModel: 'claude-sonnet-5',
+      source: 'override',
+    });
+  });
+
   it('persists escalation evidence; denial and duplicate delivery make no paid attempt; parent acceptance requires passing results', async () => {
     const parent = await created();
     await policy();
