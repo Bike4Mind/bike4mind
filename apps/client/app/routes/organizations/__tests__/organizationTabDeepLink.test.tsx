@@ -61,6 +61,7 @@ vi.mock('@client/app/components/organizations/OrgGitHubConnectionTab', () => ({ 
 vi.mock('@client/app/components/organizations/OrgCustomMcpPolicySection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgApiKeysSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgMemberApiKeysSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrganizationAuditSection', () => ({ default: () => null }));
 
 // A real i18next over en.json, so assertions pin the wording, plurals and interpolation users get.
 const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
@@ -387,6 +388,7 @@ describe('organization detail page - grouped rail and tab headers', () => {
       'Integrations',
       'Billing',
       'API keys',
+      'Audit',
       'Settings',
     ]);
     for (const group of ['team', 'insights', 'integrations', 'admin']) {
@@ -394,18 +396,26 @@ describe('organization detail page - grouped rail and tab headers', () => {
     }
   });
 
-  it.each(['overview', 'members', 'groups', 'usage', 'analysis', 'integrations', 'billing', 'api-keys', 'settings'])(
-    'gives the %s tab the shared header with a description',
-    tab => {
-      searchParams.current = { tab };
+  it.each([
+    'overview',
+    'members',
+    'groups',
+    'usage',
+    'analysis',
+    'integrations',
+    'billing',
+    'api-keys',
+    'audit',
+    'settings',
+  ])('gives the %s tab the shared header with a description', tab => {
+    searchParams.current = { tab };
 
-      renderThroughLoad();
+    renderThroughLoad();
 
-      const header = screen.getByTestId('admin-page-header');
-      expect(header.querySelector('h2')?.textContent).toMatch(
-        new RegExp(`^${en.organization.tabs[tab as keyof typeof en.organization.tabs]}`)
-      );
-      expect(header.querySelector('p')?.textContent).toBeTruthy();
-    }
-  );
+    const header = screen.getByTestId('admin-page-header');
+    expect(header.querySelector('h2')?.textContent).toMatch(
+      new RegExp(`^${en.organization.tabs[tab as keyof typeof en.organization.tabs]}`)
+    );
+    expect(header.querySelector('p')?.textContent).toBeTruthy();
+  });
 });

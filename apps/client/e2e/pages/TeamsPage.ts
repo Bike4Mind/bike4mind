@@ -15,6 +15,7 @@ export const ALL_TEAM_TABS: TeamTab[] = [
   'Integrations',
   'Billing',
   'API keys',
+  'Audit',
   'Settings',
 ];
 

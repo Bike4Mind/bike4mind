@@ -152,6 +152,7 @@
       "analysis": "Analysis",
       "billing": "Billing",
       "api-keys": "API keys",
+      "audit": "Audit",
       "integrations": "Integrations",
       "settings": "Settings"
     },
@@ -170,6 +171,7 @@
       "integrations": "Connect GitHub, Slack, webhooks and custom connectors for the whole team.",
       "billing": "Subscription, seats and payment details.",
       "api-keys": "Keys the team owns, and members' own keys billed to this team.",
+      "audit": "Team activity recorded from the time audit logging was enabled. Dates use UTC.",
       "settings": "Team-wide AI context, ownership and deletion."
     },
     "integration_sections": {

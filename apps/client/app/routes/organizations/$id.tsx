@@ -13,6 +13,7 @@ import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitH
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
 import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
+import OrganizationAuditSection from '@client/app/components/organizations/OrganizationAuditSection';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
@@ -48,6 +49,7 @@ import GroupWorkOutlinedIcon from '@mui/icons-material/GroupWorkOutlined';
 import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
+import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import {
@@ -56,6 +58,7 @@ import {
   canManageOrgSettings,
   canViewOrgAnalysis,
   canViewOrgBilling,
+  canViewOrgAudit,
   canViewOrgUsage,
   IntegrationSections,
   LEGACY_INTEGRATION_TABS,
@@ -69,7 +72,12 @@ import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { FC, Fragment, ReactNode, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-type RailTab = { tab: OrganizationTabs; icon: ReactNode; visible: (access: OrgTabAccess) => boolean };
+type RailTab = {
+  tab: OrganizationTabs;
+  icon: ReactNode;
+  visible: (access: OrgTabAccess) => boolean;
+  testId?: string;
+};
 
 /** The rail, grouped. A group whose tabs are all hidden for this caller renders no label. */
 const RAIL_GROUPS: ReadonlyArray<{ key: 'team' | 'insights' | 'integrations' | 'admin'; tabs: RailTab[] }> = [
@@ -104,6 +112,12 @@ const RAIL_GROUPS: ReadonlyArray<{ key: 'team' | 'insights' | 'integrations' | '
       { tab: OrganizationTabs.Billing, icon: <CreditCardOutlinedIcon />, visible: a => a.canViewBilling },
       // Same gate as Connectors: owner, current manager or platform admin.
       { tab: OrganizationTabs.ApiKeys, icon: <KeyOutlinedIcon />, visible: a => a.canManageConnectors },
+      {
+        tab: OrganizationTabs.Audit,
+        icon: <HistoryOutlinedIcon />,
+        visible: a => !!a.canViewAudit,
+        testId: 'organization-audit-tab',
+      },
       { tab: OrganizationTabs.Settings, icon: <SettingsOutlinedIcon />, visible: a => a.canManageOrg },
     ],
   },
@@ -174,6 +188,7 @@ const OrganizationPage: FC = () => {
         isOrgOwnerOrCurrentAdmin(currentUser, organization),
       canViewBilling: canViewOrgBilling(currentUser, organization),
       canManageConnectors: canManageOrgConnectors(currentUser, organization),
+      canViewAudit: canViewOrgAudit(currentUser, organization),
     }),
     [currentUser, organization]
   );
@@ -293,7 +308,7 @@ const OrganizationPage: FC = () => {
                     {t(`organization.tab_groups.${group.key}`)}
                   </Typography>
                   {tabs.map(entry => (
-                    <Tab key={entry.tab} value={entry.tab}>
+                    <Tab key={entry.tab} value={entry.tab} data-testid={entry.testId}>
                       {entry.icon}
                       {t(`organization.tabs.${entry.tab}`)}
                     </Tab>
@@ -367,6 +382,13 @@ const OrganizationPage: FC = () => {
                   {t('organization.api_keys.member_keys')}
                 </Typography>
                 <OrgMemberApiKeysSection key={`members-${organization.id}`} organizationId={organization.id} />
+              </TabPanel>
+            )}
+            {/* Mounted only while selected, so the audit query runs only when someone opens the tab. */}
+            {access.canViewAudit && selectedTab === OrganizationTabs.Audit && (
+              <TabPanel value={OrganizationTabs.Audit}>
+                {header(OrganizationTabs.Audit)}
+                <OrganizationAuditSection key={organization.id} organizationId={organization.id} />
               </TabPanel>
             )}
             {access.canManageOrg && (

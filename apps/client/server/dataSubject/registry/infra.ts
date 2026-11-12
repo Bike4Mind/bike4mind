@@ -56,6 +56,14 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'openBursts.actorUserId', matchBy: 'userId', action: 'pullFromArray' }],
   },
+  OrganizationAuditEvent: {
+    kind: 'holder',
+    references: [
+      { path: 'actorUserId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      { path: 'targetId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG, where: { action: 'member.added' } },
+      { path: 'targetId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG, where: { action: 'member.removed' } },
+    ],
+  },
   // Append-only: the model rejects every update, so the entry cannot be anonymized in place. Free-text `summary`,
   // `changes` and `details` are not scanned for the person.
   AdminAuditLog: {
@@ -145,6 +153,7 @@ export const infraHolders = {
     references: [
       { path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['userName'] },
       // Free-form context on admin and membership counters.
+      { path: 'metadata.userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'metadata.targetUserId', matchBy: 'userId', action: 'anonymize' },
       { path: 'metadata.memberEmail', matchBy: 'email', action: 'anonymize' },
       { path: 'metadata.email', matchBy: 'email', action: 'anonymize' },

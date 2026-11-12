@@ -7,6 +7,7 @@ import {
   type AdministrableOrg,
 } from '@bike4mind/common';
 import { hasOrgUpdateAccess } from '@client/app/utils/orgAccessGate';
+import { orgAclRowConfersMembership } from '@bike4mind/common';
 
 export enum OrganizationTabs {
   Overview = 'overview',
@@ -18,6 +19,7 @@ export enum OrganizationTabs {
   Billing = 'billing',
   ApiKeys = 'api-keys',
   Settings = 'settings',
+  Audit = 'audit',
 }
 
 /**
@@ -72,6 +74,19 @@ export const canManageOrgSettings = (
  * actually runs; a copy of the logic declared in the test passes whatever the page does.
  */
 export const canViewOrgAnalysis = hasOrgUpdateAccess;
+
+export const canViewOrgAudit = (
+  user: { id: string } | null | undefined,
+  org:
+    | (Omit<AdministrableOrg, 'users'> & { users?: { userId: string; permissions?: readonly string[] | null }[] })
+    | null
+    | undefined
+): boolean =>
+  !!user &&
+  !!org &&
+  (org.userId === user.id ||
+    ((org.adminUserIds ?? []).includes(user.id) &&
+      (org.users ?? []).some(row => row.userId === user.id && orgAclRowConfersMembership(row))));
 
 /** `isOrgOwnerOrPlatformAdmin`, failing closed while the user or org is still loading. */
 const ownerTierGate = (
@@ -138,6 +153,7 @@ export interface OrgTabAccess {
   canManageGroups: boolean;
   canViewBilling: boolean;
   canManageConnectors: boolean;
+  canViewAudit?: boolean;
 }
 
 /** The Integrations sub-sections this caller may see, in display order. */
@@ -155,6 +171,7 @@ export const visibleIntegrationSections = (
  * is a redirect rather than only a conditional render.
  */
 export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabAccess): OrganizationTabs => {
+  if (!access.canViewAudit && selected === OrganizationTabs.Audit) return OrganizationTabs.Overview;
   if (!access.canManageOrg && selected === OrganizationTabs.Settings) return OrganizationTabs.Overview;
   if (selected === OrganizationTabs.Integrations && visibleIntegrationSections(access).length === 0) {
     return OrganizationTabs.Overview;

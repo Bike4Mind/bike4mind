@@ -20,6 +20,7 @@ import type {
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { TERMINAL_SUBSCRIPTION_STATUSES } from '@bike4mind/server-utils/lib/subscriptions/types';
 import type Stripe from 'stripe';
+import { loadSubscriptionUsage, subscriptionUsageCondition } from './subscriptionUsage';
 import {
   adminSubscriptionsSort,
   buildAdminSubscriptionsMatch,
@@ -152,13 +153,15 @@ export async function adminSubscriptionsMatch(
 ): Promise<{ match: Condition; searchTruncated: boolean; mismatchTruncated: boolean }> {
   const search = await resolveSearch(filter.search);
   const mismatch = filter.mismatch ? await mismatchRowCondition() : undefined;
+  const usageCondition = filter.usageCohort ? await subscriptionUsageCondition(filter.usageCohort, now) : undefined;
+  const baseMatch = buildAdminSubscriptionsMatch(filter, {
+    now,
+    catalog,
+    searchCondition: search.condition,
+    mismatchCondition: mismatch?.condition,
+  });
   return {
-    match: buildAdminSubscriptionsMatch(filter, {
-      now,
-      catalog,
-      searchCondition: search.condition,
-      mismatchCondition: mismatch?.condition,
-    }),
+    match: usageCondition ? { $and: [baseMatch, usageCondition] } : baseMatch,
     searchTruncated: search.truncated,
     mismatchTruncated: mismatch?.truncated ?? false,
   };
@@ -304,8 +307,11 @@ export async function listAdminSubscriptions(
     { maxTimeMS: LIST_MAX_TIME_MS }
   );
   const total: number = result.totalCount[0]?.count ?? 0;
+  const docs = result.paginatedResults as SubscriptionDoc[];
+  const rows = await toAdminSubscriptionRows(docs, catalog);
+  const usage = await loadSubscriptionUsage(docs, now).catch(() => new Map());
   return {
-    subscriptions: await toAdminSubscriptionRows(result.paginatedResults as SubscriptionDoc[], catalog),
+    subscriptions: rows.map(row => ({ ...row, usage: usage.get(row.id) })),
     total,
     page: params.page,
     totalPages: Math.ceil(total / params.limit),
