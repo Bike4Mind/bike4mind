@@ -43,8 +43,8 @@ export const defaultTxtResolver: TxtResolver = name => {
 };
 
 /**
- * Local-only stub for the e2e run: answers every name with the claim's own expected record. Never
- * active on a hosted or self-host runtime, whatever the env says.
+ * Local-only stub for the e2e run: answers every name with the claim's own expected record. Needs
+ * B4M_DOMAIN_VERIFY_STUB=1 on a local dev runtime (IS_LOCAL or NODE_ENV development); never on self-host.
  */
 function stubEnabled(): boolean {
   if (process.env.B4M_DOMAIN_VERIFY_STUB !== '1' || isSelfHost()) return false;

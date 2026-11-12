@@ -30,8 +30,8 @@ export interface IOrgDomainClaim {
 export interface IOrgDomainClaimDocument extends IOrgDomainClaim, IMongoDocument {}
 
 /**
- * A claim as the org-admin domain routes return it. The token never leaves the server; a pending
- * claim carries the TXT record to publish instead.
+ * A claim as the org-admin domain routes return it. A pending claim carries the TXT record to publish
+ * (its value embeds the token); a verified claim carries neither.
  */
 export interface IOrgDomainClaimView {
   id: string;
