@@ -340,8 +340,29 @@ export interface IOrgApiKeyView {
   createdAt?: Date;
   expiresAt?: Date;
   lastUsedAt?: Date;
+  /** Lifetime settled spend (`usage.totalSpendCredits`); the key keeps no per-period counter. */
+  creditsUsed: number;
   /** The member who created the key; `name` is null when that account no longer exists. */
   createdBy: { id: string; name: string | null } | null;
+}
+
+/**
+ * A member's own key billed to the org, as the org's owner and managers see it
+ * (pages/api/organizations/[id]/api-keys/members). Same projection rules as IOrgApiKeyView.
+ */
+export interface IOrgMemberApiKeyView {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  scopes: ApiKeyScopeValue[];
+  status: ApiKeyStatus;
+  createdAt?: Date;
+  expiresAt?: Date;
+  lastUsedAt?: Date;
+  revokedAt?: Date;
+  creditsUsed: number;
+  /** The member holding the key; `name` is null when that account no longer exists. */
+  createdBy: { id: string; name: string | null };
 }
 
 /** POST /api/organizations/[id]/api-keys and its rotate: the view plus the secret, shown once. */
