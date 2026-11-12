@@ -210,6 +210,39 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       );
     });
 
+    it("tracks no member row for the org's own service account, but still bills the org", async () => {
+      const orgWithoutUser = {
+        id: 'org1',
+        currentCredits: 500,
+        userDetails: [{ id: 'other-user', name: 'Other', usedCredits: 10, lastCreditUsedAt: null }],
+      } as unknown as IOrganizationDocument;
+      const serviceAccount = {
+        ...mockUser,
+        isSystem: true,
+        serviceAccountOrganizationId: 'org1',
+      } as IUserDocument;
+
+      await deductCreditsWithOrgSupport(
+        {
+          type: 'image_generation_usage',
+          user: serviceAccount,
+          organization: orgWithoutUser,
+          credits: 50,
+          sessionId: 'session1',
+          questId: 'quest1',
+          model: 'dall-e-3',
+        },
+        mockAdapters
+      );
+
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerId: 'org1', ownerType: CreditHolderType.Organization }),
+        expect.anything()
+      );
+      expect(mockOrgRepo.ensureUserDetails).not.toHaveBeenCalled();
+      expect(mockOrgRepo.updateUserDetails).not.toHaveBeenCalled();
+    });
+
     it('self-heals a missing userDetails row before incrementing, so the positional $inc lands (#1460)', async () => {
       const orgWithoutUser = {
         id: 'org1',

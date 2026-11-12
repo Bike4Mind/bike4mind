@@ -11,6 +11,16 @@ final class AppNavigatorTests: XCTestCase {
     XCTAssertEqual(navigator.sessionPath.map(\.sessionID), ["s1"])
   }
 
+  func testANewConversationHandsItsFirstTurnToItsScreenOnce() {
+    let navigator = AppNavigator()
+    let turn = QuestTurn(id: "q1", prompt: "Hi", reply: nil, status: .pending, createdAt: Date())
+    navigator.openNewConversation(sessionID: "s1", firstTurn: turn)
+    XCTAssertEqual(navigator.sessionPath.map(\.sessionID), ["s1"])
+    XCTAssertNil(navigator.takeOpeningTurn(forSession: "s2"))
+    XCTAssertEqual(navigator.takeOpeningTurn(forSession: "s1")?.id, "q1")
+    XCTAssertNil(navigator.takeOpeningTurn(forSession: "s1"))
+  }
+
   func testSameSessionDoesNotStackTwice() {
     let navigator = AppNavigator()
     navigator.apply(.session(id: "s1"))

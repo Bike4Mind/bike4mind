@@ -49,7 +49,7 @@ const OrganizationGroups: FC<OrganizationGroupsProps> = ({ organization, canSetA
     onSuccess: () => {
       // Prefix match - this already covers ['organizations', orgId] and its 'groups' child.
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
-      toast.success('Organization managers updated');
+      toast.success('Team managers updated');
     },
     onError: error => toast.error(getErrorMessage(error)),
   });
@@ -108,7 +108,7 @@ const OrgAdminsEditor: FC<{
   return (
     <Card variant="outlined" sx={{ p: 2 }} data-testid="org-admins-card">
       <Stack spacing={1.5}>
-        <Typography level="title-md">Organization Managers</Typography>
+        <Typography level="title-md">Team Managers</Typography>
         <FormControl>
           <FormLabel>Managers</FormLabel>
           <Autocomplete

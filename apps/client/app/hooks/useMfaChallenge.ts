@@ -6,6 +6,7 @@ import { useSetupMFA, useVerifyMFA, useVerifyMFASetup, type MFASetupResponse } f
 import { describePasskeyMfaError, passkeysSupported, useVerifyPasskeyMFA } from '@client/app/hooks/data/passkeys';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
+import { reportMfaEnrollmentAbandoned } from '@client/app/utils/mfaEnrollmentFunnel';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 
 export type MfaChallengeMode = 'verify' | 'setup';
@@ -170,7 +171,11 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     }
   };
 
-  const handleCancel = () => endWithoutSession(challenge?.mode ?? 'verify');
+  const handleCancel = () => {
+    // Read before endWithoutSession drops the pending token the report must carry.
+    if (challenge?.mode === 'setup') reportMfaEnrollmentAbandoned(useAccessToken.getState().accessToken);
+    endWithoutSession(challenge?.mode ?? 'verify');
+  };
 
   const mode = challenge?.mode ?? 'verify';
   const passkeyAvailable = !!challenge?.passkeyAvailable;
