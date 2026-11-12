@@ -194,6 +194,8 @@ export const AI_AND_CONTENT_GUIDE: readonly AdminGuideEntry[] = [
     howTo: [
       'Open Models, then Discovery. Discovery runs lists recent runs; select one to see what it changed. Run discovery in the page header starts a run now.',
       'Under Lifecycle suggestions, use the row menu: Accept change records the deprecation with a reason for the audit trail and a successor you can override; Dismiss suggestion drops it for good after you type the model id.',
+      'The accept reason starts filled in with the evidence: the provider deprecation page, the suggested dates and the discovery signal. Check and edit it before accepting.',
+      'Tick rows, then Accept selected or Dismiss selected settles them one by one with one shared reason. A model whose successor fails the auto-remap checks is skipped and listed with Review.',
       'References to unavailable models is a report: Check references asks every provider and lists the settings and defaults that still name a model users cannot pick.',
       'Lifecycle suggestions and the reference check need the settings:manage permission, and only full administrators can accept or dismiss.',
     ],
@@ -207,6 +209,8 @@ export const AI_AND_CONTENT_GUIDE: readonly AdminGuideEntry[] = [
       'successor model',
       'end of life',
       'stale model references',
+      'bulk accept',
+      'bulk dismiss',
     ],
   },
   {

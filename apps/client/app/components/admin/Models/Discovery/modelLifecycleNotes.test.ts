@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   PROVIDER_DEPRECATION_PAGES,
-  appendQuickPick,
   buildBulkLifecycleNote,
   buildLifecycleNote,
   inferLifecycleProvider,
@@ -104,16 +103,23 @@ describe('buildBulkLifecycleNote', () => {
   it('is empty for an empty selection', () => {
     expect(buildBulkLifecycleNote([])).toBe('');
   });
-});
 
-describe('appendQuickPick', () => {
-  it('appends after the evidence line and does not repeat itself', () => {
-    const once = appendQuickPick('Evidence.', 'Confirmed on vendor page.');
-    expect(once).toBe('Evidence. Confirmed on vendor page.');
-    expect(appendQuickPick(once, 'Confirmed on vendor page.')).toBe(once);
-  });
+  it('drops the page URLs, then the lists, to fit the reason field', () => {
+    const rows = [
+      subject('anthropic.claude-v2', { deprecationDate: '2026-09-30' }),
+      subject('gpt-4-0613', { deprecationDate: '2026-10-01', source: 'models.dev' }),
+      subject('claude-2.1', { source: 'absence', status: 'retired' }, { missCount: 6 }),
+      subject('gemini-1.0-pro', { source: 'heuristic', status: 'deprecated' }),
+    ];
+    const full = buildBulkLifecycleNote(rows);
+    const labels = buildBulkLifecycleNote(rows, full.length - 1);
 
-  it('fills an empty note', () => {
-    expect(appendQuickPick('  ', 'Confirmed on vendor page.')).toBe('Confirmed on vendor page.');
+    expect(labels.length).toBeLessThan(full.length);
+    expect(labels).toContain('AWS Bedrock legacy page; OpenAI deprecations page');
+    expect(labels).not.toContain('https://');
+    expect(labels).toContain('absent from the provider model list for 6 runs');
+    expect(buildBulkLifecycleNote(rows, labels.length - 1)).toBe(
+      'Confirmed on the vendor pages: dates and signals as suggested per row.'
+    );
   });
 });

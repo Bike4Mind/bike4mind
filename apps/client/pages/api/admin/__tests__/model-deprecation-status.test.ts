@@ -192,6 +192,21 @@ describe('GET /api/admin/model-deprecation-status', () => {
     expect(mockReadModelListRevision).not.toHaveBeenCalled();
   });
 
+  it('carries the miss count of an absence-raised suggestion in the queue view, still reading no catalog', async () => {
+    mockPendingSuggestions.mockResolvedValue([
+      { modelId: 'gpt-sunset', missCount: 0, suggestion: SUGGESTION },
+      { modelId: 'ghost-model', missCount: 5, suggestion: { ...SUGGESTION, source: 'absence' } },
+    ]);
+    const { res, run } = call({ method: 'GET', query: { view: 'queue' } });
+    await run();
+
+    expect(res._getJSONData().queue).toEqual([
+      { modelId: 'gpt-sunset', suggestion: expect.any(Object) },
+      { modelId: 'ghost-model', missCount: 5, suggestion: expect.objectContaining({ source: 'absence' }) },
+    ]);
+    expect(mockRowsInForce).not.toHaveBeenCalled();
+  });
+
   it('builds the full report for any other view value', async () => {
     const { res, run } = call({ method: 'GET', query: { view: 'everything' } });
     await run();

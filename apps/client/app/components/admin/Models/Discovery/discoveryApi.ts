@@ -192,6 +192,10 @@ export interface LifecycleSuggestion {
 export interface LifecycleQueueItem {
   modelId: string;
   suggestion?: LifecycleSuggestion;
+  /** The serving backend; only the full report resolves it, so the queue view reads it off the model index. */
+  backend?: string;
+  /** Consecutive misses, sent only for absence-raised suggestions. */
+  missCount?: number;
 }
 
 /** Mirrors StaleReferenceProblem in @bike4mind/llm-adapters; a value added there must be added here by hand. */

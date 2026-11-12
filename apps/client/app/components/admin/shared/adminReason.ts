@@ -120,6 +120,19 @@ export const ADMIN_REASON_PRESETS = {
     'Cost control',
     'Replaced by a newer model',
   ],
+  modelLifecycleAccept: [
+    'Confirmed on the vendor page',
+    'Successor checked against the vendor page',
+    'Provider announced the deprecation',
+    'Experimental or early-access model',
+    'Confirmed with the provider',
+  ],
+  modelLifecycleDismiss: [
+    'Provider signal is wrong',
+    'Model is still supported',
+    'Experimental or early-access model',
+    'Duplicate of another suggestion',
+  ],
   dlqDiscard: ['Account refused', 'Job obsolete', 'Fixed with no replay needed', 'Bad payload', 'Other'],
 } as const satisfies Record<string, readonly string[]>;
 

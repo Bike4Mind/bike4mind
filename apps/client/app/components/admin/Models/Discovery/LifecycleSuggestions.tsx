@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   Alert,
   Box,
+  Button,
   Dropdown,
   FormControl,
   FormHelperText,
@@ -15,6 +16,7 @@ import {
   Stack,
   Typography,
 } from '@mui/joy';
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -22,40 +24,49 @@ import type { AdminModelRow, PerMTokRate } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { ADMIN_MODELS_QUERY_KEY } from '@client/app/hooks/data/adminModels';
 import {
+  ADMIN_REASON_PRESETS,
   ActionDialog,
+  BulkActionBar,
   ChangePreview,
   DataTable,
   EmptyState,
   MissingPermissionState,
+  StatusChip,
   UpdatingBar,
+  maxAdminReasonNoteLength,
   useMissingAdminPermission,
+  type AdminSelection,
   type DataColumn,
 } from '../../shared';
 import { adminFocus } from '../../shared/adminStyles';
 import { SuccessorCostChip, SuccessorCostPanel } from '../../SuccessorCostDelta';
-import { ModelWriteAction } from '../ModelWriteAction';
+import { countOf } from '../List/modelBulkAccess';
+import { ModelWriteAction, useModelWriteBlock } from '../ModelWriteAction';
 import { useModelsNavigation } from '../modelsNavigation';
 import {
   LIFECYCLE_QUEUE_QUERY_KEY,
   LIFECYCLE_STATUS_PATH,
-  apiCodeOf,
   apiErrorMessage,
-  apiStatusOf,
   useLifecycleQueue,
   type LifecycleQueue,
   type LifecycleQueueItem,
 } from './discoveryApi';
 import { lifecycleWord } from './discoveryCopy';
+import { replacementBlockers, runBulkResolution, type BulkAction, type BulkRowResult } from './modelLifecycleBulk';
+import { buildBulkLifecycleNote, buildLifecycleNote, type NoteSubject } from './modelLifecycleNotes';
 import { modelName, useModelIndex } from './useModelIndex';
 
-const ACCEPT_REASONS = [
-  'Provider announced the deprecation',
-  'Confirmed in the provider docs',
-  'Confirmed with the provider',
-];
-const DISMISS_REASONS = ['Provider signal is wrong', 'Model is still supported', 'Duplicate of another suggestion'];
+const ACCEPT_REASONS = ADMIN_REASON_PRESETS.modelLifecycleAccept;
+const DISMISS_REASONS = ADMIN_REASON_PRESETS.modelLifecycleDismiss;
+const NO_SELECTION: AdminSelection = { mode: 'explicit', ids: [] };
 
 type ModelIndex = ReadonlyMap<string, AdminModelRow> | undefined;
+
+/** The queue view carries no backend, so the evidence line takes it from the model index. */
+const noteSubject = (item: LifecycleQueueItem, index: ModelIndex): NoteSubject => ({
+  ...item,
+  backend: item.backend ?? index?.get(item.modelId)?.backend,
+});
 
 /**
  * What accepting does to the pickers: the catalog's retired fold disables a retired model at once, and
@@ -69,16 +80,6 @@ export const acceptEffect = (status: string, deprecationDate: string | undefined
       : 'It stays in pickers until a date is set.';
   }
   return 'Its place in pickers does not change.';
-};
-
-/**
- * The accept route's 409: the auto-remap clauses this successor missed. The one refusal an admin may overrule, so it
- * renders as a decision rather than as an error.
- */
-const replacementBlockers = (error: unknown): string[] | null => {
-  if (apiStatusOf(error) !== 409 || apiCodeOf(error) !== 'replacement-blocked') return null;
-  const details = (error as { response?: { data?: { details?: unknown } } }).response?.data?.details;
-  return Array.isArray(details) && details.length > 0 ? details.map(String) : ['the automation refused this successor'];
 };
 
 function ModelCell({ id, index, testId }: { id: string; index: ModelIndex; testId?: string }) {
@@ -275,6 +276,8 @@ function AcceptSuggestionDialog({
           : `Records the successor for ${name}. Its lifecycle stays ${statusWord}.`
       }
       reasonPresets={ACCEPT_REASONS}
+      // A draft of the evidence, not a submission: the admin reads and edits it before accepting.
+      initialReason={{ preset: null, note: buildLifecycleNote(noteSubject(item, index)) }}
       confirmLabel={blockers ? 'Accept anyway' : suggestion?.status ? `Mark as ${statusWord}` : 'Accept change'}
       onConfirm={accept}
       data-testid="discovery-accept-dialog"
@@ -382,8 +385,6 @@ function DismissSuggestionDialog({
       title="Dismiss suggestion"
       description={`Dismisses the suggestion for ${name} for good: it cannot be settled again, and discovery does not raise it again while the provider's signal is unchanged. There is no undo.`}
       reasonPresets={DISMISS_REASONS}
-      // The route takes the note but does not record it for a dismiss.
-      reasonAudited={false}
       confirmLabel="Dismiss suggestion"
       tone="danger"
       typedConfirm={{ expected: item.modelId, noun: 'model id' }}
@@ -399,28 +400,248 @@ function DismissSuggestionDialog({
   );
 }
 
+type BulkRequest = { action: BulkAction; items: LifecycleQueueItem[] };
+type Unsettled = Exclude<BulkRowResult, { outcome: 'settled' }>;
+type BulkOutcome = { action: BulkAction; total: number; settled: number; unsettled: Unsettled[] };
+
+// The reason must still fit once the longest preset is picked in front of it.
+const BULK_NOTE_MAX = Math.min(...ACCEPT_REASONS.map(maxAdminReasonNoteLength));
+
+/**
+ * Settles the selection one suggestion at a time through the single-row route (see modelLifecycleBulk), with one
+ * shared reason. A blocked or failed row is reported back to the queue; it never stops the rest.
+ */
+function BulkSettleDialog({
+  request,
+  index,
+  onClose,
+  onDone,
+}: {
+  request: BulkRequest;
+  index: ModelIndex;
+  onClose: () => void;
+  onDone: (results: BulkRowResult[]) => void;
+}) {
+  const { action, items } = request;
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const accept = action === 'accept';
+  const count = items.length;
+
+  const settle = async (reason: string) => {
+    setProgress({ done: 0, total: count });
+    try {
+      const results = await runBulkResolution({
+        modelIds: items.map(item => item.modelId),
+        action,
+        note: reason,
+        post: body => api.post(LIFECYCLE_STATUS_PATH, body),
+        onProgress: (done, total) => setProgress({ done, total }),
+      });
+      onDone(results);
+    } finally {
+      setProgress(null);
+    }
+  };
+
+  return (
+    <ActionDialog
+      open
+      // Closing mid-run would hide rows still in flight.
+      onClose={() => {
+        if (!progress) onClose();
+      }}
+      title={accept ? 'Accept lifecycle changes' : 'Dismiss suggestions'}
+      description={
+        accept
+          ? `Records each of the ${countOf(count, 'model')} as suggested, effective now, with its own lifecycle row and audit entry. A model whose successor fails the auto-remap checks is skipped and listed for a decision of its own.`
+          : `Dismisses ${countOf(count, 'suggestion')} for good: none can be settled again, and discovery does not raise them again while the provider's signal is unchanged. There is no undo.`
+      }
+      reasonPresets={accept ? ACCEPT_REASONS : DISMISS_REASONS}
+      initialReason={
+        accept
+          ? {
+              preset: null,
+              note: buildBulkLifecycleNote(
+                items.map(item => noteSubject(item, index)),
+                BULK_NOTE_MAX
+              ),
+            }
+          : undefined
+      }
+      confirmLabel={accept ? `Accept ${countOf(count, 'change')}` : `Dismiss ${countOf(count, 'suggestion')}`}
+      tone={accept ? 'neutral' : 'danger'}
+      typedConfirm={accept ? undefined : { expected: String(count), noun: 'number of suggestions' }}
+      onConfirm={settle}
+      data-testid="discovery-bulk-dialog"
+    >
+      <Stack gap={1}>
+        <Box
+          component="ul"
+          data-testid="discovery-bulk-models"
+          sx={{ my: 0, pl: 2.5, maxHeight: '12rem', overflowY: 'auto' }}
+        >
+          {items.map(item => {
+            const successor = item.suggestion?.replacedBy;
+            const change = [
+              item.suggestion?.status && lifecycleWord(item.suggestion.status),
+              suggestedDates(item),
+              successor && `successor ${modelName(index, successor)}`,
+            ]
+              .filter(Boolean)
+              .join(', ');
+            return (
+              <li key={item.modelId}>
+                <Typography level="body-sm">
+                  {modelName(index, item.modelId)}
+                  {change && (
+                    <Typography component="span" sx={{ color: 'admin.inkMuted' }}>
+                      {` - ${change}`}
+                    </Typography>
+                  )}
+                </Typography>
+              </li>
+            );
+          })}
+        </Box>
+        {progress && (
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="discovery-bulk-progress">
+            {`${progress.done} of ${progress.total} done`}
+          </Typography>
+        )}
+      </Stack>
+    </ActionDialog>
+  );
+}
+
+/** The rows a bulk run left unsettled that are still waiting; a blocked one goes to the single-row dialog. */
+function BulkOutcomeAlert({
+  outcome,
+  waiting,
+  index,
+  onReview,
+  onClose,
+}: {
+  outcome: BulkOutcome;
+  waiting: Unsettled[];
+  index: ModelIndex;
+  onReview: (modelId: string) => void;
+  onClose: () => void;
+}) {
+  const verb = outcome.action === 'accept' ? 'accepted' : 'dismissed';
+  return (
+    <Alert
+      color="warning"
+      size="sm"
+      data-testid="discovery-bulk-result"
+      endDecorator={
+        <IconButton
+          size="sm"
+          variant="plain"
+          color="neutral"
+          aria-label="Dismiss"
+          onClick={onClose}
+          data-testid="discovery-bulk-result-dismiss-btn"
+        >
+          <CloseRoundedIcon />
+        </IconButton>
+      }
+    >
+      <Stack gap={0.75} sx={{ minWidth: 0 }}>
+        <Typography level="body-sm" sx={{ fontWeight: 600 }} data-testid="discovery-bulk-summary">
+          {`${outcome.settled} of ${outcome.total} ${verb}. These still need a decision:`}
+        </Typography>
+        {waiting.map(result => (
+          <Stack key={result.modelId} gap={0.25} data-testid={`discovery-bulk-result-${result.modelId}`}>
+            <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+              <Typography level="body-sm">{modelName(index, result.modelId)}</Typography>
+              <StatusChip
+                tone={result.outcome === 'blocked' ? 'warn' : 'bad'}
+                label={result.outcome === 'blocked' ? 'Needs its own decision' : 'Failed'}
+              />
+              {result.outcome === 'blocked' && (
+                <ModelWriteAction>
+                  {disabled => (
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      disabled={disabled}
+                      onClick={() => onReview(result.modelId)}
+                      data-testid={`discovery-bulk-review-${result.modelId}`}
+                    >
+                      Review
+                    </Button>
+                  )}
+                </ModelWriteAction>
+              )}
+            </Stack>
+            <Typography level="body-xs" sx={{ overflowWrap: 'anywhere' }}>
+              {result.outcome === 'blocked' ? result.blockers.join('; ') : result.message}
+            </Typography>
+          </Stack>
+        ))}
+      </Stack>
+    </Alert>
+  );
+}
+
 /**
  * The lifecycle suggestion queue (pendingSuggestions of GET /api/admin/model-deprecation-status) with Accept and
- * Dismiss.
+ * Dismiss, one row at a time or for a selection.
  */
 export function LifecycleSuggestions() {
   const queryClient = useQueryClient();
   const missing = useMissingAdminPermission('settings:manage');
+  const writeBlock = useModelWriteBlock();
   const lifecycle = useLifecycleQueue(!missing);
   const index = useModelIndex().data?.byId;
   const { openModel, openPrices } = useModelsNavigation();
   const [accepting, setAccepting] = useState<LifecycleQueueItem | null>(null);
   const [dismissing, setDismissing] = useState<LifecycleQueueItem | null>(null);
+  const [selection, setSelection] = useState<AdminSelection>(NO_SELECTION);
+  const [bulk, setBulk] = useState<BulkRequest | null>(null);
+  const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
   const queue = lifecycle.data?.queue ?? [];
   const rates = lifecycle.data?.perMTokRates ?? {};
 
-  const settle = (modelId: string, message: string) => {
+  const waitingIds = new Set(queue.map(item => item.modelId));
+  // A row settled elsewhere (its own dialog, another admin) must not linger in the selected count.
+  const liveSelection: AdminSelection =
+    selection.mode === 'explicit'
+      ? { mode: 'explicit', ids: selection.ids.filter(id => waitingIds.has(id)) }
+      : selection;
+  const selectedItems =
+    liveSelection.mode === 'allMatching' ? queue : queue.filter(item => liveSelection.ids.includes(item.modelId));
+  const outcomeWaiting = outcome?.unsettled.filter(result => waitingIds.has(result.modelId)) ?? [];
+
+  const removeSettled = (modelIds: readonly string[]) => {
+    const settled = new Set(modelIds);
     queryClient.setQueryData<LifecycleQueue>(LIFECYCLE_QUEUE_QUERY_KEY, current =>
-      current ? { ...current, queue: current.queue.filter(item => item.modelId !== modelId) } : current
+      current ? { ...current, queue: current.queue.filter(item => !settled.has(item.modelId)) } : current
     );
     void queryClient.invalidateQueries({ queryKey: LIFECYCLE_QUEUE_QUERY_KEY });
     void queryClient.invalidateQueries({ queryKey: ADMIN_MODELS_QUERY_KEY });
+  };
+
+  const settle = (modelId: string, message: string) => {
+    removeSettled([modelId]);
     toast.success(message);
+  };
+
+  const finishBulk = (action: BulkAction, results: BulkRowResult[]) => {
+    setBulk(null);
+    const settled = results.filter(result => result.outcome === 'settled').map(result => result.modelId);
+    const unsettled = results.filter((result): result is Unsettled => result.outcome !== 'settled');
+    if (settled.length > 0) removeSettled(settled);
+    // What still needs a decision stays selected, so the next pass starts from it.
+    setSelection({ mode: 'explicit', ids: unsettled.map(result => result.modelId) });
+    setOutcome(unsettled.length > 0 ? { action, total: results.length, settled: settled.length, unsettled } : null);
+    if (settled.length > 0) {
+      toast.success(
+        action === 'accept'
+          ? `Accepted ${countOf(settled.length, 'lifecycle change')}.`
+          : `Dismissed ${countOf(settled.length, 'suggestion')}.`
+      );
+    }
   };
 
   return (
@@ -455,12 +676,26 @@ export function LifecycleSuggestions() {
               {apiErrorMessage(lifecycle.error, 'Could not load lifecycle suggestions')}
             </Alert>
           )}
+          {outcome && outcomeWaiting.length > 0 && (
+            <BulkOutcomeAlert
+              outcome={outcome}
+              waiting={outcomeWaiting}
+              index={index}
+              onReview={modelId => setAccepting(queue.find(item => item.modelId === modelId) ?? null)}
+              onClose={() => setOutcome(null)}
+            />
+          )}
           <DataTable
             label="Lifecycle suggestions"
             testId="discovery-suggestions-table"
             rows={queue}
             columns={suggestionColumns(index, rates)}
             getRowId={item => item.modelId}
+            selection={liveSelection}
+            onSelectionChange={setSelection}
+            selectionDisabled={!!writeBlock}
+            // The default 40rem plus the selection column, so the name and successor columns keep their room.
+            minWidth="43rem"
             loading={lifecycle.isLoading}
             error={
               lifecycle.isError && !lifecycle.data
@@ -485,6 +720,41 @@ export function LifecycleSuggestions() {
               </Box>
             }
           />
+          <BulkActionBar
+            selection={liveSelection}
+            totalMatching={queue.length}
+            onSelectAllMatching={() => setSelection({ mode: 'allMatching' })}
+            selectAllLabel={`Select all ${countOf(queue.length, 'suggestion')}`}
+            onClear={() => setSelection(NO_SELECTION)}
+          >
+            <ModelWriteAction>
+              {disabled => (
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  disabled={disabled || selectedItems.length === 0}
+                  onClick={() => setBulk({ action: 'accept', items: selectedItems })}
+                  data-testid="discovery-bulk-accept-btn"
+                >
+                  Accept selected
+                </Button>
+              )}
+            </ModelWriteAction>
+            <ModelWriteAction>
+              {disabled => (
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="danger"
+                  disabled={disabled || selectedItems.length === 0}
+                  onClick={() => setBulk({ action: 'dismiss', items: selectedItems })}
+                  data-testid="discovery-bulk-dismiss-btn"
+                >
+                  Dismiss selected
+                </Button>
+              )}
+            </ModelWriteAction>
+          </BulkActionBar>
         </>
       )}
       {accepting && (
@@ -510,6 +780,14 @@ export function LifecycleSuggestions() {
             setDismissing(null);
             settle(dismissing.modelId, `Dismissed the suggestion for ${modelName(index, dismissing.modelId)}.`);
           }}
+        />
+      )}
+      {bulk && (
+        <BulkSettleDialog
+          request={bulk}
+          index={index}
+          onClose={() => setBulk(null)}
+          onDone={results => finishBulk(bulk.action, results)}
         />
       )}
     </Stack>

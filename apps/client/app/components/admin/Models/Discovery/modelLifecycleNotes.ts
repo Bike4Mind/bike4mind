@@ -1,16 +1,16 @@
 /**
- * Evidence-line templates for the Model lifecycle queue's Accept note.
+ * Evidence-line templates for the reason a lifecycle suggestion is accepted with.
  *
- * The note is the audit trail for a lifecycle row, so the route still requires
- * one and the operator still reviews it. What this saves is the typing: each
+ * The reason is the audit trail for a lifecycle row, so the route still requires
+ * one and the admin still reviews it. What this saves is the typing: each
  * suggestion already knows its source, its dates and (usually) its provider,
  * and the vendor page that confirms it is the same page for every model that
- * provider serves. Pure, so the queue tab and its tests share one builder.
+ * provider serves.
  */
 
 export type LifecycleProvider = 'openai' | 'anthropic' | 'gemini' | 'bedrock';
 
-/** What the builder reads off a queue item; a structural subset of the tab's wire shape. */
+/** What the builder reads off a queue item; a structural subset of LifecycleQueueItem. */
 export type NoteSubject = {
   modelId: string;
   /** The serving backend when the server could resolve it; otherwise inferred from the id. */
@@ -140,37 +140,32 @@ export function buildLifecycleNote(subject: NoteSubject): string {
  * the note. Otherwise it names each distinct vendor page and the distinct
  * signals, and leaves the per-row dates to the rows themselves - each row's
  * catalog patch already records its own dates.
+ *
+ * Past `maxLength` (the reason field's limit) it drops the page URLs, then the
+ * page and signal lists, which each row's suggestion still records.
  */
-export function buildBulkLifecycleNote(subjects: readonly NoteSubject[]): string {
+export function buildBulkLifecycleNote(subjects: readonly NoteSubject[], maxLength = Infinity): string {
   if (subjects.length === 0) return '';
   const lines = new Set(subjects.map(buildLifecycleNote));
   if (lines.size === 1) return [...lines][0];
 
-  const pages = new Set<string>();
+  const providers = new Set<LifecycleProvider>();
   for (const subject of subjects) {
     const provider = inferLifecycleProvider(subject);
-    if (provider)
-      pages.add(`${PROVIDER_DEPRECATION_PAGES[provider].label} (${PROVIDER_DEPRECATION_PAGES[provider].url})`);
+    if (provider) providers.add(provider);
   }
   const signals = new Set(subjects.map(subject => sourcePhrase(subject)));
-  const pageText = pages.size > 0 ? `Confirmed on ${[...pages].join('; ')}` : 'Confirmed on the vendor pages';
-  return `${pageText}: dates as suggested per row. Signals: ${[...signals].join('; ')}.`;
-}
+  const compose = (withUrls: boolean) => {
+    const pages = [...providers].map(provider => {
+      const page = PROVIDER_DEPRECATION_PAGES[provider];
+      return withUrls ? `${page.label} (${page.url})` : page.label;
+    });
+    const pageText = pages.length > 0 ? `Confirmed on ${pages.join('; ')}` : 'Confirmed on the vendor pages';
+    return `${pageText}: dates as suggested per row. Signals: ${[...signals].join('; ')}.`;
+  };
 
-/** One-click additions to a note; appended, never substituted, so the evidence line stays. */
-export const NOTE_QUICK_PICKS: readonly { id: string; label: string; text: string }[] = [
-  { id: 'confirmed', label: 'Confirmed on vendor page', text: 'Confirmed on vendor page.' },
-  {
-    id: 'experimental',
-    label: 'Experimental / EAP',
-    text: 'Experimental or early-access model; absence from the provider list is expected.',
-  },
-  { id: 'successor-checked', label: 'Successor checked', text: 'Successor checked against the vendor page.' },
-];
-
-/** Appends a quick-pick to a note, once, on its own sentence. */
-export function appendQuickPick(note: string, text: string): string {
-  const trimmed = note.trim();
-  if (trimmed.includes(text)) return note;
-  return trimmed ? `${trimmed} ${text}` : text;
+  for (const note of [compose(true), compose(false)]) {
+    if (note.length <= maxLength) return note;
+  }
+  return 'Confirmed on the vendor pages: dates and signals as suggested per row.';
 }

@@ -63,6 +63,18 @@ describe('runBulkResolution', () => {
     ]);
   });
 
+  it('reads the message from the error envelope the admin routes answer with', async () => {
+    const post = vi.fn().mockRejectedValueOnce(
+      Object.assign(new Error('Request failed with status code 400'), {
+        response: { status: 400, data: { error: "a's suggestion was already dismissed", requestId: 'r1' } },
+      })
+    );
+
+    const results = await runBulkResolution({ modelIds: ['a'], action: 'dismiss', note: '', post });
+
+    expect(results).toEqual([{ modelId: 'a', outcome: 'failed', message: "a's suggestion was already dismissed" }]);
+  });
+
   it('sends a dismiss without a note when none is given, and with it when one is', async () => {
     const post = vi.fn().mockResolvedValue({});
     await runBulkResolution({ modelIds: ['a'], action: 'dismiss', note: ' ', post });

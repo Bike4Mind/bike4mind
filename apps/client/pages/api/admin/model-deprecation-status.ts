@@ -77,6 +77,22 @@ function queueBackendResolver(
   };
 }
 
+/**
+ * One queue item. backend and missCount feed the accept reason's evidence line: which vendor page
+ * confirms the change, and how long an absence-raised model has been missing.
+ */
+function queueItem(
+  state: Awaited<ReturnType<typeof modelDiscoveryStateRepository.pendingSuggestions>>[number],
+  backend: string | undefined
+) {
+  return {
+    modelId: state.modelId,
+    suggestion: state.suggestion,
+    ...(backend ? { backend } : {}),
+    ...(state.suggestion?.source === 'absence' ? { missCount: state.missCount } : {}),
+  };
+}
+
 const ResolveBody = z.object({
   modelId: z.string().min(1),
   action: z.enum(['accept', 'dismiss']),
@@ -103,7 +119,8 @@ const handler = adminApi({
         modelPriceRepository.rowsInForce(),
       ]);
       return res.json({
-        queue: pending.map(state => ({ modelId: state.modelId, suggestion: state.suggestion })),
+        // No backend: resolving it reads the catalog, and the client takes it from the admin model list.
+        queue: pending.map(state => queueItem(state, undefined)),
         perMTokRates: perMTokRatesInForce(priceRows),
       });
     }
@@ -147,17 +164,7 @@ const handler = adminApi({
         .filter(([, lifecycle]) => lifecycle.status === 'active' && lifecycle.deprecationDate !== undefined)
         .map(([modelId, lifecycle]) => ({ modelId, deprecationDate: lifecycle.deprecationDate }))
         .sort((left, right) => (left.deprecationDate ?? '').localeCompare(right.deprecationDate ?? '')),
-      // backend and missCount feed the accept note's evidence line: which vendor page
-      // confirms the change, and how long an absence-raised model has been missing.
-      queue: pending.map(state => {
-        const backend = backendOf(state.modelId);
-        return {
-          modelId: state.modelId,
-          suggestion: state.suggestion,
-          ...(backend ? { backend } : {}),
-          ...(state.suggestion?.source === 'absence' ? { missCount: state.missCount } : {}),
-        };
-      }),
+      queue: pending.map(state => queueItem(state, backendOf(state.modelId))),
       // The shared watchdog report uses deployment credentials and catalog lifecycle,
       // so hidden pins remain classifiable even when they have no successor.
       staleReferences: staleReport.references,

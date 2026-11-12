@@ -1,5 +1,5 @@
 /**
- * Bulk settle for the Model lifecycle queue: one shared note, one confirm, and
+ * Bulk settle for the lifecycle suggestions: one shared note, one confirm, and
  * then one ordinary POST per row.
  *
  * A loop over the single-row route rather than a batch endpoint, on purpose:
@@ -23,7 +23,7 @@ export type BulkRowResult =
 export type BulkPost = (body: Record<string, unknown>) => Promise<unknown>;
 
 type ErrorShape = {
-  response?: { status?: number; data?: { code?: string; details?: string[]; message?: string } };
+  response?: { status?: number; data?: { code?: string; details?: string[]; error?: string; message?: string } };
   message?: string;
 };
 
@@ -47,7 +47,8 @@ function classify(modelId: string, error: unknown): BulkRowResult {
   return {
     modelId,
     outcome: 'failed',
-    message: shaped?.response?.data?.message || shaped?.message || 'Request failed',
+    // The error envelope names it `error` (server/middlewares/errorHandler.ts); `message` covers the rest.
+    message: shaped?.response?.data?.error || shaped?.response?.data?.message || shaped?.message || 'Request failed',
   };
 }
 

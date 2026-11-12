@@ -130,10 +130,22 @@ Price rows bill text and realtime voice models only, so other model types offer 
 Model discovery checks the providers for new models, price changes, and retirements. The Discovery section shows:
 
 - **Discovery runs**: recent runs with when each started, what triggered it, its result, and a summary of what it found. A run still going shows **Running**; one with no result 20 minutes after it started was stopped before it could report, and shows **Did not finish**. Select a run to open its page
-- **Lifecycle suggestions**: deprecations, retirements, and replacements discovery suggests. **Accept change** applies one, with a successor model you choose, and says when the model leaves the pickers. **Dismiss suggestion** dismisses it for good: you type the model id to confirm, and discovery does not raise it again while the provider's signal is unchanged. **Model prices** opens the Prices section
+- **Lifecycle suggestions**: deprecations, retirements, and replacements discovery suggests. **Accept change** applies one, with a successor model you choose, and says when the model leaves the pickers. **Dismiss suggestion** dismisses it for good: you type the model id to confirm, and discovery does not raise it again while the provider's signal is unchanged. Both record their reason in the audit log. **Model prices** opens the Prices section
 - **References to unavailable models**: settings and defaults that still name a model users can no longer pick. **Check references** asks every provider and shows the result; nothing is checked until you ask
 
 When discovery is off, the section says so and offers **Open settings**. **Run discovery** in the page header starts a run now; a toast links to the run when it finishes, and the list and prices refresh.
+
+### Evidence in the accept reason
+
+The reason for accepting a suggestion is the audit trail for the change, so the dialog fills it in with the evidence for you to check: the provider's deprecation page (OpenAI, Anthropic, Google AI Studio, or the AWS Bedrock legacy page), the suggested dates in that page's own words, and the discovery signal that raised the suggestion. For a model that dropped off the provider's model list, the signal says for how many runs it has been missing. Edit the text as needed, or pick a preset such as **Confirmed on the vendor page** or **Successor checked against the vendor page** to put in front of it. The reason is still required: with it cleared, the dialog does not accept.
+
+### Settling suggestions in bulk
+
+Use the checkbox at the start of each row to select suggestions, or **Select all N suggestions** in the bar that appears. The bar offers **Accept selected** and **Dismiss selected**. The dialog lists the selected models with their suggested changes and asks for one reason, recorded with each of them. A bulk accept starts with a shared evidence line: the line itself when every model would get the same one, otherwise each vendor page and signal involved. A bulk dismiss cannot be undone, so you type the number of suggestions to confirm it.
+
+Each model is then settled on its own, one after another, as if you had settled it from its row: it gets its own lifecycle change and its own audit entry, and the dialog shows how many are done. A bulk accept takes each suggestion as it stands and never overrules discovery: a model whose successor fails the auto-remap checks is skipped.
+
+When the run ends, a summary above the table lists the models that were not settled, with the reason. **Review** opens the accept dialog for a skipped model, where you can change its successor or accept it anyway. Models that were not settled stay selected, so you can try them again from the bar.
 
 ### Run page
 
