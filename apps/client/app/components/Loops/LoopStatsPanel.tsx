@@ -18,6 +18,7 @@ import { LOOP_STATS_WINDOWS, type ILoop, type ILoopStats, type LoopStatsWindow }
 import { useLoopStats, type ILoopTicketsResponse } from '@client/app/hooks/data/loops';
 import MermaidChart from '@client/app/components/Charts/MermaidChart';
 import { buildLoopMap, formatDuration } from './loopMap';
+import { showLoopTicket } from './loopUi';
 import { formatCredits } from './loopUi';
 
 /** One color per stage band, cycled; readable on both themes. */
@@ -351,6 +352,10 @@ export default function LoopStatsPanel({
                   >
                     {row.executionId ? (
                       <Link component="button" level="body-sm" onClick={() => onViewRun(row.executionId!)}>
+                        {row.title}
+                      </Link>
+                    ) : row.workItemId ? (
+                      <Link component="button" level="body-sm" onClick={() => showLoopTicket(row.workItemId!)}>
                         {row.title}
                       </Link>
                     ) : (

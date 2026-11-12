@@ -116,7 +116,8 @@ export const loopKeys = {
   detail: (id: string) => ['loops', id] as const,
   tickets: (id: string) => ['loops', id, 'tickets'] as const,
   events: (id: string) => ['loops', id, 'events'] as const,
-  // Outside `['loops', id]`, so a run's push does not recompute a loop's stats while the panel is open.
+  // Outside `['loops', id]`, so a run's push does not recompute a loop's stats while the panel is open;
+  // owner ticket writes (create, move, hand-off, rating) invalidate it themselves.
   stats: (id: string, days?: LoopStatsWindow) =>
     days ? (['loopStats', id, days] as const) : (['loopStats', id] as const),
   budget: ['loops', 'budget'] as const,
@@ -293,7 +294,7 @@ export const useCreateLoopTicket = () =>
   useLoopMutation(
     (body: { loopId: string; title: string; description?: string; stage: string; priority?: WorkItemPriority }) =>
       api.post('/api/work-items', body),
-    ({ loopId }) => [{ queryKey: loopKeys.detail(loopId) }]
+    ({ loopId }) => [{ queryKey: loopKeys.detail(loopId) }, { queryKey: loopKeys.stats(loopId) }]
   );
 
 export type HandoffLoopTicketVars = { loopId: string; id: string; toLoopId: string; stage?: string; note?: string };
@@ -307,7 +308,12 @@ export const useHandoffLoopTicket = () =>
         ...(stage && { stage }),
         ...(note && { handoffNote: note }),
       }),
-    ({ loopId, toLoopId }) => [...oneLoop(loopId), ...oneLoop(toLoopId)]
+    ({ loopId, toLoopId }) => [
+      ...oneLoop(loopId),
+      ...oneLoop(toLoopId),
+      { queryKey: loopKeys.stats(loopId) },
+      { queryKey: loopKeys.stats(toLoopId) },
+    ]
   );
 
 export type MoveLoopTicketVars = { loopId: string; id: string; stage?: string; priority?: WorkItemPriority };
@@ -355,6 +361,7 @@ export const useMoveLoopTicket = () => {
       if (queryClient.isMutating({ mutationKey: MOVE_LOOP_TICKET_KEY }) > 1) return;
       void queryClient.invalidateQueries({ queryKey: loopKeys.tickets(loopId) });
       void queryClient.invalidateQueries({ queryKey: loopKeys.detail(loopId), exact: true });
+      void queryClient.invalidateQueries({ queryKey: loopKeys.stats(loopId) });
     },
   });
 };

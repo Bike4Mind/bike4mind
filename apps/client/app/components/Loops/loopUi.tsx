@@ -116,6 +116,16 @@ export const loopNeedsOwner = (loop: Pick<ILoopWithUsage, 'status' | 'statusReas
 
 export const formatCredits = (credits: number) => `${Math.round(credits).toLocaleString()} credits`;
 
+/** DOM id of a ticket's card on LoopTicketBoard, so other panels on the loop page can jump to it. */
+export const loopTicketElementId = (ticketId: string) => `loop-ticket-card-${ticketId}`;
+
+/** Scrolls the loop page to a ticket's board card and focuses it (the card shows a focus ring). */
+export function showLoopTicket(ticketId: string) {
+  const card = document.getElementById(loopTicketElementId(ticketId));
+  card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  card?.focus({ preventScroll: true });
+}
+
 export const formatSpendToday = (loop: Pick<ILoopWithUsage, 'creditsToday' | 'budgetCreditsPerDay'>) =>
   loop.budgetCreditsPerDay === undefined
     ? formatCredits(loop.creditsToday)
