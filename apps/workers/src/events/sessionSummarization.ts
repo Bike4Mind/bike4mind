@@ -219,16 +219,25 @@ export const handler = withEventContext(async (event, logger) => {
     .filter((text): text is string => Boolean(text))
     .join('\n');
 
+  // A completed call with no text (e.g. the model declined the content) is an outcome of this
+  // input, not a fault: retrying it reproduces it and parks the event in the session-enrichment
+  // DLQ. Keep the previous summary and stop here, before the session is mutated.
+  if (!summaryText) {
+    logger.warn(`Model returned no summary text for notebook ${session.id}; keeping the previous summary`, {
+      modelId,
+      stopReason: lastCompletionInfo?.stopReason ?? null,
+      outputTokens: lastCompletionInfo?.outputTokens ?? null,
+      hadPreviousSummary: Boolean(session.summary),
+    });
+    return;
+  }
+
   session.summary = summaryText;
   session.summaryAt = new Date();
   session.summaryModelId = modelId as ChatModelName;
   session.summaryTrigger = trigger;
 
-  const summaryContent = session.summary;
-
-  if (!summaryContent) {
-    throw new Error(`Failed to generate summary for notebook ${session.id}`);
-  }
+  const summaryContent = summaryText;
 
   logger.info(`Summary: ${summaryContent}`);
 
