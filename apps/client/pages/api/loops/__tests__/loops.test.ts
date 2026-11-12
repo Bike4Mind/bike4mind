@@ -1202,13 +1202,16 @@ describe('POST /api/loops/:id/events/:eventId/override', () => {
 
 describe('agent and skill ownership', () => {
   const stages = ['todo', 'review', 'done'];
+  const [mine, theirs, org1, org2, system, deleted, missing] = [1, 2, 3, 4, 5, 6, 7].map(n =>
+    n.toString(16).padStart(24, 'a')
+  );
   const AGENTS: Record<string, Record<string, unknown>> = {
-    mine: { userId: 'u1' },
-    theirs: { userId: 'u2' },
-    org1: { organizationId: 'org1' },
-    org2: { organizationId: 'org2' },
-    system: { isSystem: true },
-    deleted: { userId: 'u1', deletedAt: new Date() },
+    [mine]: { userId: 'u1' },
+    [theirs]: { userId: 'u2' },
+    [org1]: { organizationId: 'org1' },
+    [org2]: { organizationId: 'org2' },
+    [system]: { isSystem: true },
+    [deleted]: { userId: 'u1', deletedAt: new Date() },
   };
   const ACCESSIBLE_SKILLS = ['owned', 'shared', 'global'];
   const post = (body: Record<string, unknown>) =>
@@ -1224,13 +1227,13 @@ describe('agent and skill ownership', () => {
   });
 
   it.each([
-    [{ agentId: 'theirs' }, /^agentId is not available/],
-    [{ agentId: 'org2', organizationId: 'org1' }, /^agentId is not available/],
-    [{ agentId: 'org1' }, /^agentId is not available/],
-    [{ agentId: 'deleted' }, /^agentId is not available/],
-    [{ agentId: 'missing' }, /^agentId is not available/],
-    [{ stageConfig: [{ stage: 'review', agentId: 'theirs' }] }, /agentId for stage review is not available/],
-    [{ stageConfig: [{ stage: 'review', agentId: 'deleted' }] }, /agentId for stage review/],
+    [{ agentId: theirs }, /^agentId is not available/],
+    [{ agentId: org2, organizationId: 'org1' }, /^agentId is not available/],
+    [{ agentId: org1 }, /^agentId is not available/],
+    [{ agentId: deleted }, /^agentId is not available/],
+    [{ agentId: missing }, /^agentId is not available/],
+    [{ stageConfig: [{ stage: 'review', agentId: theirs }] }, /agentId for stage review is not available/],
+    [{ stageConfig: [{ stage: 'review', agentId: deleted }] }, /agentId for stage review/],
     [{ stageConfig: [{ stage: 'todo', skills: ['owned', 'private'] }] }, /skills for stage todo/],
   ])('rejects an agent or skill the owner may not use on POST (%#)', async (body, message) => {
     const result = post(body);
@@ -1239,19 +1242,24 @@ describe('agent and skill ownership', () => {
     expect(repo.create).not.toHaveBeenCalled();
   });
 
+  it('rejects a malformed agent id without a lookup', async () => {
+    await expect(post({ agentId: 'not-an-id' })).rejects.toThrow(/^agentId is not available/);
+    expect(agents.findById).not.toHaveBeenCalled();
+  });
+
   it("accepts the owner's, the loop org's and system agents, and accessible skills", async () => {
     const stageConfig = [
-      { stage: 'todo', agentId: 'system', skills: ACCESSIBLE_SKILLS },
-      { stage: 'review', agentId: 'org1' },
+      { stage: 'todo', agentId: system, skills: ACCESSIBLE_SKILLS },
+      { stage: 'review', agentId: org1 },
     ];
-    await post({ agentId: 'mine', organizationId: 'org1', stageConfig });
-    expect(repo.create.mock.calls[0][0]).toMatchObject({ agentId: 'mine', stageConfig });
+    await post({ agentId: mine, organizationId: 'org1', stageConfig });
+    expect(repo.create.mock.calls[0][0]).toMatchObject({ agentId: mine, stageConfig });
   });
 
   it('checks only new or changed agents and skills on PATCH', async () => {
-    const saved = [{ stage: 'review', agentId: 'theirs', skills: ['private'] }];
-    repo.findByIdAndUserId.mockResolvedValue(loop({ stages, agentId: 'deleted', stageConfig: saved }));
-    await patch({ agentId: 'deleted', stageConfig: saved, name: 'Renamed' });
+    const saved = [{ stage: 'review', agentId: theirs, skills: ['private'] }];
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages, agentId: deleted, stageConfig: saved }));
+    await patch({ agentId: deleted, stageConfig: saved, name: 'Renamed' });
     expect(agents.findById).not.toHaveBeenCalled();
     expect(repo.updateForUser).toHaveBeenCalledTimes(1);
 
@@ -1259,17 +1267,17 @@ describe('agent and skill ownership', () => {
       /skills for stage review/
     );
     expect(skills.findAccessibleByIdsForUser).toHaveBeenLastCalledWith('u1', ['other']);
-    await expect(patch({ agentId: 'theirs' })).rejects.toThrow(/^agentId is not available/);
-    await expect(patch({ stageConfig: [{ stage: 'todo', agentId: 'theirs' }] })).rejects.toThrow(
+    await expect(patch({ agentId: theirs })).rejects.toThrow(/^agentId is not available/);
+    await expect(patch({ stageConfig: [{ stage: 'todo', agentId: theirs }] })).rejects.toThrow(
       /agentId for stage todo/
     );
   });
 
   it("checks a PATCH agent against the loop's org", async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ stages, organizationId: 'org1' }));
-    await patch({ agentId: 'org1' });
+    await patch({ agentId: org1 });
     expect(repo.updateForUser).toHaveBeenCalledTimes(1);
-    await expect(patch({ agentId: 'org2' })).rejects.toMatchObject({ statusCode: 400 });
+    await expect(patch({ agentId: org2 })).rejects.toMatchObject({ statusCode: 400 });
   });
 });
 

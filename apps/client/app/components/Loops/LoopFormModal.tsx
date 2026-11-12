@@ -42,6 +42,7 @@ import { PICKABLE_TOOLS } from '@client/app/components/Agent/OrchestrationSectio
 import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useGetAgents } from '@client/app/hooks/data/agents';
+import { useUser } from '@client/app/contexts/UserContext';
 import { useGetSkills } from '@client/app/hooks/data/skills';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
 import { useConfig } from '@client/app/hooks/data/settings';
@@ -381,7 +382,9 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
   const [errors, setErrors] = useState<LoopFormErrors>({});
   const [newStage, setNewStage] = useState('');
   const { data: mcpServers = [] } = useMcpServers();
-  const { data: agents = [] } = useGetAgents();
+  const { currentUser } = useUser();
+  // The list includes agents shared with the owner, which a loop may not run (isAgentUsableBy); the save rejects them.
+  const agents = (useGetAgents().data ?? []).filter(agent => !agent.userId || agent.userId === currentUser?.id);
   const { data: skills = [] } = useGetSkills();
   const { accessibleTextModels } = useAccessibleModels();
   const { data: loops = [], isSuccess: loopsLoaded } = useLoops();
@@ -415,7 +418,7 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
 
   // The executor names MCP tools `<lowercased server>__<tool>` (toolGenerators generateMcpToolsFromCache).
   const mcpGroups = mcpServers
-    .filter(server => server.enabled)
+    .filter(server => server.enabled && server.tools.length > 0)
     .map(server => ({
       name: server.name,
       prefix: server.name.toLowerCase(),
@@ -460,7 +463,9 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
       const unpicked = server.tools.filter(tool => !selected.includes(tool.value)).length;
       const picked = server.tools.length - unpicked;
       return picked > 0 && unpicked > 0
-        ? [`${unpicked} new tool${unpicked === 1 ? '' : 's'} on ${server.name}; not used until you pick them`]
+        ? [
+            `${unpicked} new tool${unpicked === 1 ? '' : 's'} on ${server.name}; not used until you pick ${unpicked === 1 ? 'it' : 'them'}`,
+          ]
         : [];
     });
     return notes.length > 0 ? (

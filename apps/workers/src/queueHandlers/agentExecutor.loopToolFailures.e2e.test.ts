@@ -32,6 +32,8 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
 }));
 
 vi.mock('@server/utils/loopDispatch', () => ({ requestLoopDispatch: vi.fn(), pushLoopChanged: vi.fn() }));
+const skillsPreamble = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@workers/utils/getFirstIterationSkillsPreamble', () => ({ getFirstIterationSkillsPreamble: skillsPreamble }));
 vi.mock('@bike4mind/server-utils/utils/persistRunAsQuest', () => ({
   persistRunAsQuest: vi.fn().mockResolvedValue(undefined),
 }));
@@ -178,6 +180,8 @@ describe('loop run tool failures, end to end', () => {
     expect(run?.status).toBe('completed');
     expect(run?.toolsUnavailable).toEqual(['missing_tool']);
     expect(run?.toolsErrored).toEqual(['flaky_tool']);
+    // A loop query carries the stage's rendered skills; their `/name` text must not expand a second skill.
+    expect(skillsPreamble).not.toHaveBeenCalled();
   });
 
   it('records nothing on a run outside a loop', async () => {
@@ -185,5 +189,6 @@ describe('loop run tool failures, end to end', () => {
     expect(run?.status).toBe('completed');
     expect(run?.toolsUnavailable).toBeUndefined();
     expect(run?.toolsErrored).toBeUndefined();
+    expect(skillsPreamble).toHaveBeenCalledTimes(1);
   });
 });

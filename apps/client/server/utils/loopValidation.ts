@@ -3,6 +3,7 @@
  * LoopModel's constraints - see packages/database/src/models/ai/LoopModel.ts.
  */
 
+import { isValidObjectId } from 'mongoose';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { adminSettingsRepository, agentRepository, loopRepository, skillRepository } from '@bike4mind/database';
 import { isAgentUsableBy, LOOP_TRIGGERS_MAX, type ILoopStageConfig, type ILoopTrigger } from '@bike4mind/common';
@@ -52,14 +53,12 @@ export async function validateLoopAgentsAndSkills(
   agentId: string | null | undefined,
   stageConfig: Pick<ILoopStageConfig, 'stage' | 'agentId' | 'skills'>[]
 ): Promise<void> {
-  const agents = [
-    ...(agentId ? [{ id: agentId, field: 'agentId' }] : []),
-    ...stageConfig.flatMap(c => (c.agentId ? [{ id: c.agentId, field: `agentId for stage ${c.stage}` }] : [])),
-  ];
+  const agents = new Map<string, string>();
+  for (const c of stageConfig) if (c.agentId) agents.set(c.agentId, `agentId for stage ${c.stage}`);
+  if (agentId) agents.set(agentId, 'agentId');
   await Promise.all([
-    ...agents.map(async ({ id, field }) => {
-      // A malformed id throws a CastError: same 400 as a missing one.
-      const agent = await agentRepository.findById(id).catch(() => null);
+    ...[...agents].map(async ([id, field]) => {
+      const agent = isValidObjectId(id) ? await agentRepository.findById(id) : null;
       if (!agent || !isAgentUsableBy(agent, owner)) throw new BadRequestError(`${field} is not available`);
     }),
     ...stageConfig.map(async ({ stage, skills }) => {

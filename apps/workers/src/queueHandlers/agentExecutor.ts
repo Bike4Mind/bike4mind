@@ -3399,12 +3399,11 @@ async function runExecution(
         // query (not the augmented string) so the preambles above never confuse
         // the mention parser. Gated to iteration 0 by the enclosing block, so the
         // expansion is baked into the checkpointed first message for continuations.
-        const skillsPreamble = await getFirstIterationSkillsPreamble(
-          execution.query,
-          execution.userId,
-          skillRepository,
-          logger
-        );
+        // Not for loop runs: their query already holds the stage's rendered skills (whose headers and bodies hold
+        // `/name` text) plus ticket text, and a mention there must not pull in another skill.
+        const skillsPreamble = execution.loopId
+          ? undefined
+          : await getFirstIterationSkillsPreamble(execution.query, execution.userId, skillRepository, logger);
         if (skillsPreamble) firstIterationQuery = `${firstIterationQuery}${skillsPreamble}`;
 
         // Attachment problems ride the query as text, like every other preamble. Chat says the

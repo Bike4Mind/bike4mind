@@ -27,10 +27,20 @@ vi.mock('@client/app/hooks/data/mcpServers', () => ({
       { name: 'GitHub', enabled: true, tools: ['create_issue'] },
       { name: 'Notion', enabled: true, tools: ['search', 'delete_page'] },
       { name: 'off', enabled: false, tools: ['hidden'] },
+      { name: 'Empty', enabled: true, tools: [] },
     ],
   }),
 }));
-vi.mock('@client/app/hooks/data/agents', () => ({ useGetAgents: () => ({ data: [{ id: 'a1', name: 'Alpha' }] }) }));
+vi.mock('@client/app/hooks/data/agents', () => ({
+  useGetAgents: () => ({
+    data: [
+      { id: 'a1', name: 'Alpha' },
+      { id: 'a2', name: 'Mine', userId: 'u1' },
+      { id: 'a3', name: 'Shared with me', userId: 'u2' },
+    ],
+  }),
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { id: 'u1' } }) }));
 vi.mock('@client/app/hooks/data/skills', () => ({
   useGetSkills: () => ({
     data: [
@@ -523,6 +533,7 @@ describe('LoopFormModal stage settings', () => {
   it("groups MCP tools by server; All picks exactly that server's current tools", () => {
     renderForm(saved as never);
     fireEvent.click(screen.getByRole('combobox', { name: /tools/i }));
+    expect(within(screen.getByRole('listbox')).queryByTestId('loop-form-tools-server-all-empty')).toBeNull();
     const all = within(screen.getByRole('listbox')).getByTestId('loop-form-tools-server-all-notion');
     expect(all.parentElement).toHaveTextContent('Notion');
     fireEvent.click(all);
@@ -541,7 +552,7 @@ describe('LoopFormModal stage settings', () => {
       stageConfig: [{ stage: 'todo', tools: ['github__create_issue'] }],
     } as never);
     expect(screen.getByTestId('loop-form-tools-new-hint')).toHaveTextContent(
-      '1 new tool on Notion; not used until you pick them'
+      '1 new tool on Notion; not used until you pick it'
     );
     fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
     // The stage picked all of GitHub, so only the loop picker hints.
@@ -558,7 +569,11 @@ describe('LoopFormModal stage settings', () => {
       'Same as loop'
     );
     expect(within(screen.getByTestId('loop-form-stage-skills-0')).getByRole('combobox')).toHaveTextContent('None');
-    pick('loop-form-stage-agent-0', 'Alpha');
+    fireEvent.click(within(screen.getByTestId('loop-form-stage-agent-0')).getByRole('combobox'));
+    // An agent shared by another user is not one a loop may run.
+    expect(screen.getByRole('option', { name: 'Mine' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Shared with me' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('option', { name: 'Alpha' }));
     pick('loop-form-stage-skills-1', 'release-notes');
     fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
     expect(updateLoop.mutate).toHaveBeenCalledWith(
