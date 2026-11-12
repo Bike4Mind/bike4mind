@@ -143,7 +143,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       try {
         // Get operations model with initialized LLM backend
         const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
-        const { llm, modelInfo } = await OperationsModelService.getOperationsModel();
+        const { llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: userId });
 
         // Every summary call is reserved and settled against the user's billing owner (org seat when
         // present); the operations model runs on the platform key.

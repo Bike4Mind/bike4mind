@@ -19,9 +19,18 @@ import { attackSimulationFunction, modelDiscoveryFunction } from './cron';
 // web -> agentExecutor -> websocket is acyclic: websocket.ts deliberately does
 // not import agentExecutor (the agent_execute route is declared the other way
 // round to break exactly that cycle).
-import { agentExecutor } from './agentExecutor';
-import { emailJobQueue, emailBatchQueue, emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
+import { agentExecutor, agentContinuationQueueSubscription } from './agentExecutor';
 import {
+  emailJobQueue,
+  emailBatchQueue,
+  emailBatchQueueDLQ,
+  emailJobQueueDLQ,
+  emailBatchQueueSubscription,
+  emailJobQueueSubscription,
+} from './emailMarketing';
+import {
+  emailParserQueueSubscription,
+  emailAnalyzerQueueSubscription,
   emailIngestionQueue,
   emailAnalysisQueue,
   emailIngestionQueueDLQ,
@@ -132,6 +141,43 @@ import {
   libreoncologyAudioRenderQueue,
   libreoncologyAudioRenderQueueDLQ,
   contributedQueues,
+  fabFileChunkQueueSubscription,
+  fabFileVectorizeQueueSubscription,
+  generationCallbackQueueSubscription,
+  imageGenerationQueueSubscription,
+  imageEditQueueSubscription,
+  generationJobQueueSubscription,
+  researchEngineQueueSubscription,
+  whatsNewGenerationQueueSubscription,
+  whatsNewHighlightsQueueSubscription,
+  notebookCurationQueueSubscription,
+  agentProactiveMessageQueueSubscription,
+  slackExportQueueSubscription,
+  githubWebhookQueueSubscription,
+  webhookDeliveryQueueSubscription,
+  questExportQueueSubscription,
+  accountDataExportQueueSubscription,
+  publishThumbnailQueueSubscription,
+  dataLakeCleanupQueueSubscription,
+  dataLakeTaxonomyQueueSubscription,
+  dataLakeResearchQueueSubscription,
+  lakeMemoryQueueSubscription,
+  riskEvidenceQueueSubscription,
+  lakeInconsistencyModelQueueSubscription,
+  driveLakeIngestQueueSubscription,
+  driveDisconnectPurgeQueueSubscription,
+  githubLakeIngestQueueSubscription,
+  githubLakeRevokeQueueSubscription,
+  liveOpsTriageQueueSubscription,
+  deepAgentWakeQueueSubscription,
+  sreFixQueueSubscription,
+  sreJobQueueSubscription,
+  secopsTriageQueueSubscription,
+  overwatchAnalyticsQueueSubscription,
+  optihashiRunCompletionQueueSubscription,
+  bobRunQueueSubscription,
+  libreoncologyAudioRenderQueueSubscription,
+  generatedMediaPurgeQueueSubscription,
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
@@ -474,12 +520,27 @@ export const web = new sst.aws.Nextjs(
         resources: ['*'],
       },
       {
-        // Admin DLQ replay (receive and delete from DLQs, send to source queues, read depth) and the
+        // Admin DLQ replay (receive and delete from DLQs, hand back the messages a replay-by-ID
+        // search received but was not asked for, send to source queues, read depth) and the
         // API routes that enqueue work through sourceQueueUrls, limited to this stage's queues. One
         // prefix pattern instead of one ARN per queue keeps the inline policy well under Lambda's
         // size cap, which is why the queue URLs travel as Linkables in the first place.
-        actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SendMessage'],
+        // Pinned in infra/__tests__/webDlqReplayPermissions.test.ts.
+        actions: [
+          'sqs:ReceiveMessage',
+          'sqs:DeleteMessage',
+          'sqs:ChangeMessageVisibility',
+          'sqs:GetQueueAttributes',
+          'sqs:SendMessage',
+        ],
         resources: [stageQueueArns, ...(dlqAlarmHandlerDlq ? [dlqAlarmHandlerDlq.arn] : [])],
+      },
+      {
+        // Admin DLQ "View logs": finds the Lambda consumers of a source queue. ListEventSourceMappings
+        // has no resource-level permissions, so it cannot be scoped. GetFunctionConfiguration is
+        // granted per consumer by dlqConsumerLogsPolicy below.
+        actions: ['lambda:ListEventSourceMappings'],
+        resources: ['*'],
       },
       {
         // CloudFront cache invalidation for What's New modal edit/delete
@@ -660,3 +721,65 @@ export const web = new sst.aws.Nextjs(
   },
   { dependsOn: migratorInvocation ? [migratorInvocation] : [] }
 );
+
+// Admin DLQ "View logs" reads each consumer's LoggingConfig. Granted on the exact subscriber ARNs:
+// SST truncates or drops the app/stage prefix on long subscriber names, so no name pattern covers
+// them, and '*' would expose every function's env vars. A managed policy keeps the ARN list out
+// of the server role's inline policy size budget. Consumers subscribed outside core (premium
+// overlays) are not listed; their queues show no logs link.
+const dlqConsumerFunctionArns = [
+  fabFileChunkQueueSubscription,
+  fabFileVectorizeQueueSubscription,
+  generationCallbackQueueSubscription,
+  imageGenerationQueueSubscription,
+  imageEditQueueSubscription,
+  generationJobQueueSubscription,
+  researchEngineQueueSubscription,
+  whatsNewGenerationQueueSubscription,
+  whatsNewHighlightsQueueSubscription,
+  notebookCurationQueueSubscription,
+  agentProactiveMessageQueueSubscription,
+  slackExportQueueSubscription,
+  githubWebhookQueueSubscription,
+  webhookDeliveryQueueSubscription,
+  questExportQueueSubscription,
+  accountDataExportQueueSubscription,
+  publishThumbnailQueueSubscription,
+  dataLakeCleanupQueueSubscription,
+  dataLakeTaxonomyQueueSubscription,
+  dataLakeResearchQueueSubscription,
+  lakeMemoryQueueSubscription,
+  riskEvidenceQueueSubscription,
+  lakeInconsistencyModelQueueSubscription,
+  driveLakeIngestQueueSubscription,
+  driveDisconnectPurgeQueueSubscription,
+  githubLakeIngestQueueSubscription,
+  githubLakeRevokeQueueSubscription,
+  liveOpsTriageQueueSubscription,
+  deepAgentWakeQueueSubscription,
+  sreFixQueueSubscription,
+  sreJobQueueSubscription,
+  secopsTriageQueueSubscription,
+  overwatchAnalyticsQueueSubscription,
+  optihashiRunCompletionQueueSubscription,
+  bobRunQueueSubscription,
+  libreoncologyAudioRenderQueueSubscription,
+  generatedMediaPurgeQueueSubscription,
+  emailBatchQueueSubscription,
+  emailJobQueueSubscription,
+  emailParserQueueSubscription,
+  emailAnalyzerQueueSubscription,
+  agentContinuationQueueSubscription,
+].map(subscription => subscription.nodes.function.arn);
+
+if (web.nodes.server) {
+  const dlqConsumerLogsPolicy = new aws.iam.Policy('WebDlqConsumerLogsPolicy', {
+    policy: aws.iam.getPolicyDocumentOutput({
+      statements: [{ actions: ['lambda:GetFunctionConfiguration'], resources: dlqConsumerFunctionArns }],
+    }).json,
+  });
+  new aws.iam.RolePolicyAttachment('WebDlqConsumerLogsPolicyAttachment', {
+    role: web.nodes.server.nodes.role.name,
+    policyArn: dlqConsumerLogsPolicy.arn,
+  });
+}

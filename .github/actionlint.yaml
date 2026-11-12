@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    # actionlint 1.7.7 (pinned in ci.yml) predates the GitHub-hosted macos-26 image label.
+    - macos-26

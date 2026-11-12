@@ -102,8 +102,7 @@ describe('UsageDashboard by-source table', () => {
     setData({ bySource: [] });
     await renderAndSelectOrg();
 
-    const table = await screen.findByTestId('usage-source-table');
-    expect(within(table).getByText('No usage in this window.')).toBeInTheDocument();
+    expect((await screen.findAllByText('No usage in this window.')).length).toBeGreaterThan(0);
   });
 });
 
@@ -127,7 +126,7 @@ describe('UsageDashboard owner type', () => {
     );
     expect(screen.queryByTestId('usage-member-table')).not.toBeInTheDocument();
     expect(screen.queryByTestId('usage-org-select')).not.toBeInTheDocument();
-    expect(screen.getByTestId('usage-source-table')).toBeInTheDocument();
+    expect(screen.getByText('By source')).toBeInTheDocument();
   });
 });
 
@@ -162,9 +161,7 @@ describe('UsageDashboard ledger reconciliation', () => {
     expect(within(modelTable).queryByText('No usage in this window.')).not.toBeInTheDocument();
     expect(within(modelTable).getByText("No per-call detail for this window's charges.")).toBeInTheDocument();
     expect(screen.getByText(/appear as Other charges/)).toBeInTheDocument();
-    const sourceTable = screen.getByTestId('usage-source-table');
-    expect(within(sourceTable).queryByText('No usage in this window.')).not.toBeInTheDocument();
-    expect(within(sourceTable).getByText('No metered AI usage in this window.')).toBeInTheDocument();
+    expect(screen.getByText('No metered AI usage in this window.')).toBeInTheDocument();
     expect(screen.getByText(/Metered AI usage only/)).toBeInTheDocument();
   });
 
@@ -188,14 +185,14 @@ describe('UsageDashboard ledger reconciliation', () => {
     setData({ ownerType: CreditHolderType.User, ownerId: 'user-1' });
     renderUser(7);
 
-    expect(screen.queryByTestId('usage-range-toggle')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('admin-filter-bar')).not.toBeInTheDocument();
     expect(mockUseOwnerUsage).toHaveBeenCalledWith(CreditHolderType.User, 'user-1', 7);
   });
 
   it('keeps its own range toggle when uncontrolled', () => {
     setData({ ownerType: CreditHolderType.User, ownerId: 'user-1' });
     renderUser();
-    expect(screen.getByTestId('usage-range-toggle')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-filter-days')).toBeInTheDocument();
   });
 
   it('keeps the posted ledger total and explains larger per-call detail', () => {
@@ -248,7 +245,6 @@ describe('UsageDashboard ledger reconciliation', () => {
 
     expect(screen.getByTestId('usage-total-credits')).toHaveTextContent('0 credits');
     expect(screen.getAllByText('No usage in this window.').length).toBeGreaterThan(0);
-    expect(within(screen.getByTestId('usage-source-table')).getByText('No usage in this window.')).toBeInTheDocument();
     expect(screen.queryByText(/Metered AI usage only/)).not.toBeInTheDocument();
     expect(screen.queryByTestId('usage-residual-note')).not.toBeInTheDocument();
     expect(screen.queryByText(/Other charges \(no per-call/)).not.toBeInTheDocument();

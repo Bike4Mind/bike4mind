@@ -1,26 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import {
-  Sheet,
-  Card,
-  Stack,
-  Grid,
-  FormControl,
-  Button,
-  Textarea,
-  Tooltip,
-  FormLabel,
-  FormHelperText,
-  Typography,
-  Input,
-} from '@mui/joy';
+import { Stack, Grid, FormControl, Button, Textarea, FormLabel, FormHelperText, Typography, Input } from '@mui/joy';
 import { IOrganization, IOrganizationDocument, WithId } from '@bike4mind/common';
 import { orgManagerNames } from './orgManagerNames';
-import GroupsIcon from '@mui/icons-material/Groups';
-import SportsMartialArtsIcon from '@mui/icons-material/SportsMartialArts';
-import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
-import AccessTimeIcon from '@mui/icons-material/AccessTime';
-import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
-import LoginIcon from '@mui/icons-material/Login';
 import { getLastLoginDate } from '@client/app/utils/user';
 import Compressor from 'compressorjs';
 import { useUpdateOrganization } from '@client/app/hooks/data/organizations';
@@ -28,14 +9,18 @@ import OrganizationGroupTypesCard from './OrganizationGroupTypesCard';
 import OrganizationGroupMembersCard from './OrganizationGroupMembersCard';
 import OrganizationStorageLimitField, { parseStorageLimitInput } from './OrganizationStorageLimitField';
 import { OrganizationBillingSection } from './Billing/OrganizationBillingSection';
-import { ReasonPicker } from './shared/ReasonPicker';
 import {
+  ActionDialog,
   ADMIN_REASON_PRESETS,
-  type AdminReasonDraft,
-  EMPTY_ADMIN_REASON,
-  composeAdminReason,
-  isAdminReasonComplete,
-} from './shared/adminReason';
+  ChangePreview,
+  EntityHeader,
+  SectionCard,
+  SettingsSection,
+  StatStrip,
+  StatTile,
+  Fact,
+  StatusChip,
+} from './shared';
 
 export async function compressLogo(file: File, quality: number = 0.8): Promise<File | Blob> {
   return new Promise((resolve, reject) => {
@@ -66,7 +51,9 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
   // The modal stays open after Update and `org` is the caller's snapshot, so track what was last saved.
   const [savedStorageLimit, setSavedStorageLimit] = useState(org.storageLimit ?? null);
   const parsedStorageLimit = parseStorageLimitInput(storageLimitInput);
-  const [creditReason, setCreditReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
+  const [creditDialogOpen, setCreditDialogOpen] = useState(false);
+  const [creditInput, setCreditInput] = useState(String(org.currentCredits ?? 0));
+  const [savedCredits, setSavedCredits] = useState(org.currentCredits ?? 0);
 
   const updateOrganizationMutation = useUpdateOrganization();
 
@@ -83,7 +70,7 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
   // The org's own managers, not members whose platform-wide `level` happens to be Manager/Admin.
   const managerNames = orgManagerNames(org);
 
-  const handleChange = (field: keyof IOrganizationDocument, value: any) => {
+  const handleChange = (field: 'name' | 'description' | 'billingContact', value: string) => {
     setEditedOrg(prev => ({ ...prev, [field]: value }));
   };
 
@@ -95,14 +82,15 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
     });
     setStorageLimitInput(org.storageLimit?.toString() ?? '');
     setSavedStorageLimit(org.storageLimit ?? null);
+    setSavedCredits(org.currentCredits ?? 0);
+    setCreditInput(String(org.currentCredits ?? 0));
   }, [org]);
 
   // The input holds a string while typing; an empty or non-numeric value ("1,000") is NaN.
-  const rawCredits = String(editedOrg.currentCredits ?? 0).trim();
+  const rawCredits = creditInput.trim();
   const editedCredits = rawCredits === '' ? NaN : Number(rawCredits);
-  const creditsValid = Number.isFinite(editedCredits) && editedCredits >= 0;
-  const creditsChanged = editedCredits !== (org.currentCredits ?? 0);
-  const canSave = !creditsChanged || (creditsValid && isAdminReasonComplete(creditReason));
+  const creditsValid = Number.isSafeInteger(editedCredits) && editedCredits >= 0;
+  const creditsChanged = editedCredits !== savedCredits;
 
   const handleUpdate = async () => {
     if (!parsedStorageLimit.valid) return;
@@ -117,14 +105,27 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
           description: editedOrg.description,
           seats: editedOrg.seats,
           ...(storageLimitChanged && { storageLimit: parsedStorageLimit.storageLimit }),
-          // Only a changed balance is sent: the server books the difference to the ledger.
-          ...(creditsChanged ? { currentCredits: editedCredits, creditReason: composeAdminReason(creditReason) } : {}),
         },
       });
       setSavedStorageLimit(parsedStorageLimit.storageLimit);
-      setCreditReason(EMPTY_ADMIN_REASON);
     } catch (error) {
       // Error is handled by the mutation hook
+    }
+  };
+
+  const handleCreditsUpdate = async (reason: string) => {
+    if (!creditsValid || !creditsChanged) return;
+    try {
+      const saved = await updateOrganizationMutation.mutateAsync({
+        orgId: org.id,
+        data: { currentCredits: editedCredits, creditReason: reason },
+      });
+      const committedCredits = saved.currentCredits ?? editedCredits;
+      setSavedCredits(committedCredits);
+      setCreditInput(String(committedCredits));
+      setCreditDialogOpen(false);
+    } catch {
+      // The mutation reports failures.
     }
   };
 
@@ -139,14 +140,21 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
     .sort((a, b) => b.getTime() - a.getTime())[0];
 
   return (
-    <Sheet>
-      <Stack spacing={2}>
-        <Stack direction={'row'} justifyContent={'space-between'}>
-          <Typography level="h4">{org.name} Profile</Typography>
-        </Stack>
-
-        <Grid container spacing={2}>
-          <Grid xs={12} sm={6}>
+    <Stack spacing={3}>
+      <EntityHeader
+        title={org.name}
+        id={org.id}
+        timestamp={org.createdAt ? String(org.createdAt) : undefined}
+        status={<StatusChip tone="neutral" label={org.personal ? 'Personal' : 'Organization'} />}
+      />
+      <StatStrip aria-label="Organization statistics">
+        <StatTile label="Total users" value={totalUsers} />
+        <StatTile label={`Active (${activeDays}d)`} value={activeUsers} />
+        <StatTile label="Credits" value={savedCredits} />
+      </StatStrip>
+      <Grid container spacing={2}>
+        <Grid xs={12} sm={6}>
+          <SettingsSection>
             <Stack direction="column" spacing={2}>
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                 <FormControl sx={{ flex: 1 }}>
@@ -162,33 +170,11 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
                 </FormControl>
               </Stack>
               <Stack direction="column" spacing={2}>
-                <FormControl error={!creditsValid}>
-                  <FormLabel>Current Credits</FormLabel>
-                  <Input
-                    value={editedOrg.currentCredits ?? 0}
-                    onChange={e => handleChange('currentCredits', e.target.value)}
-                    slotProps={{ input: { 'data-testid': 'org-profile-credits-input' } }}
-                  />
-                  {!creditsValid && (
-                    <FormHelperText data-testid="org-profile-credits-error">
-                      Enter a number of credits (0 or more), without commas.
-                    </FormHelperText>
-                  )}
-                </FormControl>
                 <OrganizationStorageLimitField
                   orgId={org.id}
                   value={storageLimitInput}
                   onChange={setStorageLimitInput}
                 />
-                {creditsChanged && (
-                  <ReasonPicker
-                    label="Reason for the credit change"
-                    presets={ADMIN_REASON_PRESETS.creditAdjustment}
-                    value={creditReason}
-                    onChange={setCreditReason}
-                    data-testid="org-profile-credit-reason-input"
-                  />
-                )}
                 <FormControl>
                   <FormLabel>Description</FormLabel>
                   <Textarea
@@ -198,15 +184,6 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
                   />
                 </FormControl>
               </Stack>
-              <Tooltip title={managerNames.join(', ')}>
-                <Stack direction="row" spacing={1}>
-                  <ManageAccountsIcon />
-                  <Typography level="body-sm">Managers:</Typography>
-                  <Typography textColor={managerNames.length > 0 ? 'primary' : 'danger.500'}>
-                    {managerNames.length > 0 ? managerNames.join(', ') : '<none assigned>'}
-                  </Typography>
-                </Stack>
-              </Tooltip>
             </Stack>
             <Stack direction="row" spacing={2} justifyContent={'space-between'} sx={{ paddingTop: '30px' }}>
               <Button variant="outlined" onClick={onClose}>
@@ -216,68 +193,74 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
                 data-testid="admin-org-update-btn"
                 onClick={handleUpdate}
                 loading={updateOrganizationMutation.isPending}
-                disabled={!parsedStorageLimit.valid || !canSave}
+                disabled={!parsedStorageLimit.valid}
               >
                 Update
               </Button>
             </Stack>
-          </Grid>
+          </SettingsSection>
+        </Grid>
 
-          <Grid xs={12} sm={6}>
-            <Card variant="outlined" sx={{ p: 2 }}>
-              <Stack spacing={1.5}>
-                <Typography level="title-md">Organization Statistics</Typography>
-                <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <GroupsIcon fontSize="small" />
-                    <Typography level="body-sm">Total Users:</Typography>
-                  </Stack>
-                  <Typography fontWeight="lg">{totalUsers}</Typography>
-                </Stack>
-                <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <SportsMartialArtsIcon fontSize="small" />
-                    <Typography level="body-sm">Active ({activeDays}d):</Typography>
-                  </Stack>
-                  <Typography fontWeight="lg">{activeUsers}</Typography>
-                </Stack>
-                {mostRecentLogin && (
-                  <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <LoginIcon fontSize="small" />
-                      <Typography level="body-sm">Last Login:</Typography>
-                    </Stack>
-                    <Typography level="body-sm">{mostRecentLogin.toLocaleDateString()}</Typography>
-                  </Stack>
-                )}
-                {mostRecentExport && (
-                  <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <AccessTimeIcon fontSize="small" />
-                      <Typography level="body-sm">Last Export:</Typography>
-                    </Stack>
-                    <Typography level="body-sm">{mostRecentExport.toLocaleDateString()}</Typography>
-                  </Stack>
-                )}
-                {org.createdAt && (
-                  <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <CalendarMonthIcon fontSize="small" />
-                      <Typography level="body-sm">Created:</Typography>
-                    </Stack>
-                    <Typography level="body-sm">{new Date(org.createdAt).toLocaleDateString()}</Typography>
-                  </Stack>
-                )}
+        <Grid xs={12} sm={6}>
+          <Stack spacing={2}>
+            <SettingsSection>
+              <Stack spacing={1}>
+                <Typography level="title-md">Credits</Typography>
+                <FormControl error={!creditsValid}>
+                  <FormLabel>Current credits</FormLabel>
+                  <Input
+                    value={creditInput}
+                    onChange={e => setCreditInput(e.target.value)}
+                    slotProps={{ input: { 'data-testid': 'org-profile-credits-input' } }}
+                  />
+                  {!creditsValid && (
+                    <FormHelperText data-testid="org-profile-credits-error">
+                      Enter a whole number of credits (0 or more), without commas.
+                    </FormHelperText>
+                  )}
+                </FormControl>
+                <Button
+                  variant="outlined"
+                  disabled={!creditsChanged || !creditsValid}
+                  onClick={() => setCreditDialogOpen(true)}
+                  data-testid="org-profile-adjust-credits-btn"
+                >
+                  Adjust credits
+                </Button>
               </Stack>
-            </Card>
+            </SettingsSection>
+            <SectionCard title="Organization details">
+              <Fact label="Managers">{managerNames.join(', ')}</Fact>
+              <Fact label="Last login">{mostRecentLogin?.toLocaleDateString()}</Fact>
+              <Fact label="Last export">{mostRecentExport?.toLocaleDateString()}</Fact>
+              <Fact label="Created">{org.createdAt ? new Date(org.createdAt).toLocaleDateString() : undefined}</Fact>
+            </SectionCard>
             <OrganizationGroupTypesCard org={org} />
             <OrganizationGroupMembersCard org={org} />
             {children}
-          </Grid>
+          </Stack>
         </Grid>
-        <OrganizationBillingSection orgId={org.id} />
-      </Stack>
-    </Sheet>
+      </Grid>
+      <OrganizationBillingSection orgId={org.id} />
+      <ActionDialog
+        open={creditDialogOpen}
+        onClose={() => setCreditDialogOpen(false)}
+        title={`Adjust credits for ${org.name}`}
+        reasonPresets={ADMIN_REASON_PRESETS.creditAdjustment}
+        confirmLabel={`Set balance to ${creditsValid ? editedCredits.toLocaleString() : '0'}`}
+        blockedReason={creditsValid && creditsChanged ? null : 'Enter a different balance of 0 or more.'}
+        pending={updateOrganizationMutation.isPending}
+        onConfirm={handleCreditsUpdate}
+        data-testid="org-profile-credit-dialog"
+        testIds={{ reason: 'org-profile-credit-reason-input' }}
+      >
+        <ChangePreview
+          before={savedCredits.toLocaleString()}
+          after={creditsValid ? editedCredits.toLocaleString() : '-'}
+          data-testid="org-profile-credit-preview"
+        />
+      </ActionDialog>
+    </Stack>
   );
 };
 

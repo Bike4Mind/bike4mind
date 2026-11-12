@@ -21,6 +21,8 @@ export const socialHolders = {
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
       // Older rows may carry only the email.
       { path: 'userEmail', matchBy: 'email', action: 'deleteDocument' },
+      // The admin who last changed the report's status; the report belongs to its reporter.
+      { path: 'handledBy', matchBy: 'userId', action: 'anonymize' },
     ],
     // A display name on the person's own submission; erased with the document.
     unrelatedPaths: ['username'],

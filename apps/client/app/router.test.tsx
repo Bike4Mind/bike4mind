@@ -181,6 +181,17 @@ describe('Studio route', () => {
     expect(studioMatch('/studio/video')?.paramsError).toBeUndefined();
   });
 
+  it('parses the Create v2 Image medium; its page decides whether the flag lets it through', () => {
+    expect(studioMatch('/studio/image')).toMatchObject({ params: { modality: 'image' } });
+    expect(studioMatch('/studio/image')?.paramsError).toBeUndefined();
+  });
+
+  it.each(['productions', 'library'])('routes /studio/%s to its own area, not the medium param', area => {
+    const ids = router.matchRoutes(`/studio/${area}`, {}).map(match => match.routeId);
+    expect(ids.some(id => id.endsWith(`/studio/${area}`))).toBe(true);
+    expect(studioMatch(`/studio/${area}`)).toBeUndefined();
+  });
+
   it('treats an unknown modality as not found', () => {
     expect(isNotFound(studioMatch('/studio/hologram')?.paramsError)).toBe(true);
   });

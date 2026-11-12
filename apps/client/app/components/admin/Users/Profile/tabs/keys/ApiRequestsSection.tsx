@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Button, Input, Option, Select, Stack, Typography } from '@mui/joy';
-import { API_REQUEST_LOG_COVERAGE, type IUserApiKeyDocument } from '@bike4mind/common';
+import { API_COMPLETION_OUTCOME_LABELS, API_REQUEST_LOG_COVERAGE, type IUserApiKeyDocument } from '@bike4mind/common';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
 import { DataTable, RelativeTime, SectionCard, StatusChip } from '../../../../shared';
 
@@ -96,9 +96,26 @@ export const ApiRequestsSection: React.FC<{ userId: string; apiKeys: readonly IU
             render: entry => (
               <StatusChip
                 tone={entry.request.statusCode >= 400 ? 'bad' : 'neutral'}
-                label={String(entry.request.statusCode)}
+                label={entry.request.statusCode === 0 ? 'No response recorded' : String(entry.request.statusCode)}
               />
             ),
+          },
+          {
+            id: 'completion',
+            label: 'Completion outcome',
+            render: entry => {
+              const observation = entry.request.completionObservation;
+              if (!observation) return 'Not captured';
+              return (
+                <Stack>
+                  <Typography level="body-xs">{API_COMPLETION_OUTCOME_LABELS[observation.outcome]}</Typography>
+                  <Typography level="body-xs">Requested: {observation.requestedModel}</Typography>
+                  <Typography level="body-xs" sx={{ overflowWrap: 'anywhere' }}>
+                    {observation.requestId}
+                  </Typography>
+                </Stack>
+              );
+            },
           },
           { id: 'latency', label: 'Latency', render: entry => `${entry.request.responseTimeMs} ms`, numeric: true },
           { id: 'ip', label: 'IP', render: entry => entry.request.ip },

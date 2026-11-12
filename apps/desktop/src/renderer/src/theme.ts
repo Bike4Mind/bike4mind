@@ -53,6 +53,12 @@ const inkAt = (opacity: number) => `rgba(${INK_RGB} / ${opacity})`;
 
 export const desktopTheme = extendTheme({
   colorSchemes: {
+    light: {
+      palette: {
+        // Electron's window background cannot resolve Joy's default CSS variable.
+        background: { surface: '#FBFCFE' },
+      },
+    },
     dark: {
       palette: {
         // Joy derives surface/level1/level2 and the outlined border from these steps, so retinting
