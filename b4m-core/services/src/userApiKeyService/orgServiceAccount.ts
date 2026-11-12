@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { IOrganization, IUserDocument, isOrgServiceAccountOf, orgServiceAccountEmail } from '@bike4mind/common';
 
 interface OrgServiceAccountAdapters {
@@ -23,7 +24,8 @@ export const getOrCreateOrgServiceAccount = async (
 ): Promise<IUserDocument> => {
   const user = await adapters.db.users.findOrCreateByEmail(orgServiceAccountEmail(organization.id), {
     name: `${organization.name || 'Organization'} service account`,
-    username: `org-${organization.id}-service-account`,
+    // Random so a human cannot claim a derivable username first and block the upsert.
+    username: `org-service-account-${randomBytes(8).toString('hex')}`,
     isSystem: true,
     isAdmin: false,
     serviceAccountOrganizationId: organization.id,
