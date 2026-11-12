@@ -32,7 +32,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
-  useRemoveMemberFromOrganization,
   useLeaveOrganization,
   useSetMemberCreditOverride,
   useSetOrganizationManager,
@@ -40,8 +39,9 @@ import {
 import { useNavigate } from '@tanstack/react-router';
 import { formatAccountAge, formatLastActiveTitle } from '@client/app/components/admin/Users/formatAccountAge';
 import CreditLimitModal from './CreditLimitModal';
+import OffboardMemberDialog from './OffboardMemberDialog';
 import { formatMemberCredits, formatMemberCreditUsage } from './memberCreditBudget';
-import { REMOVE_MEMBER_EFFECT, RosterMember, rosterGridColumns } from './memberRosterView';
+import { RosterMember, rosterGridColumns } from './memberRosterView';
 
 /** A roster row: the safe user shape plus its org standing. `creditUsage` is null for a pending invite. */
 export type OrganizationRosterRow = IUserDocument & RosterMember & { permissions: Permission[] };
@@ -107,22 +107,12 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   const isManager = user.role === 'manager';
   const isSelf = currentUser?.id === user.id;
   const isPending = user.status === 'pending';
-  const { mutateAsync: removeMember } = useRemoveMemberFromOrganization();
   const { mutateAsync: leaveOrganization } = useLeaveOrganization();
 
   const confirm = useConfirmation();
+  const [offboarding, setOffboarding] = useState(false);
 
-  const handleRemoveMember = useCallback(() => {
-    confirm({
-      title: 'Remove member',
-      description: `Remove ${user.name} from this team? ${REMOVE_MEMBER_EFFECT}`,
-      type: 'danger',
-      okLabel: 'Remove member',
-      onOk: async () => {
-        await removeMember({ organizationId, userId: user.id });
-      },
-    });
-  }, [organizationId, user.id, user.name, confirm, removeMember]);
+  const handleRemoveMember = useCallback(() => setOffboarding(true), []);
 
   const handleCancelInvite = useCallback(() => {
     confirm({
@@ -300,6 +290,14 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     </Dropdown>
   );
 
+  const offboardDialog = canRevoke && (
+    <OffboardMemberDialog
+      organizationId={organizationId}
+      member={offboarding ? { id: user.id, name: user.name } : null}
+      onClose={() => setOffboarding(false)}
+    />
+  );
+
   const creditLimitModal = canSetCreditLimit && (
     <CreditLimitModal
       open={editingLimit}
@@ -365,6 +363,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
           <Box sx={{ flexShrink: 0 }}>{actionsMenu}</Box>
         </Stack>
         {creditLimitModal}
+        {offboardDialog}
       </Box>
     );
   }
@@ -415,6 +414,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         {actionsMenu}
       </Box>
       {creditLimitModal}
+      {offboardDialog}
     </Box>
   );
 };

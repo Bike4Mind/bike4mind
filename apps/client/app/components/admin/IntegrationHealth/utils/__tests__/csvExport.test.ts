@@ -134,6 +134,51 @@ describe('exportDashboardCsv', () => {
     expect(capturedCsv).not.toContain('1970');
   });
 
+  it('writes empty rate-limit cells when an integration reports no rate limit', () => {
+    const data = makeResponse({
+      integrations: [
+        {
+          name: 'jira',
+          status: 'no_data',
+          latencyMs: 0,
+          lastCheckedAt: null,
+          successRate: 0,
+          consecutiveFailures: 0,
+          error: null,
+          circuitBreaker: { available: true, reason: null, mode: 'auto', autoTripped: false },
+          rateLimit: null,
+          recentErrors: [],
+        },
+      ],
+    });
+
+    exportDashboardCsv(data);
+    expect(capturedCsv).toContain('"auto","true","","","","never"');
+    expect(capturedCsv).not.toContain('--');
+  });
+
+  it('writes reported rate-limit values', () => {
+    const data = makeResponse({
+      integrations: [
+        {
+          name: 'github',
+          status: 'healthy',
+          latencyMs: 80,
+          lastCheckedAt: '2024-01-15T12:00:00.000Z',
+          successRate: 1,
+          consecutiveFailures: 0,
+          error: null,
+          circuitBreaker: { available: true, reason: null, mode: 'auto', autoTripped: false },
+          rateLimit: { limit: 5000, remaining: 4200, usagePercent: 16, resetAt: null, wasThrottled: false },
+          recentErrors: [],
+        },
+      ],
+    });
+
+    exportDashboardCsv(data);
+    expect(capturedCsv).toContain('"4200","5000","16%"');
+  });
+
   it('prefixes formula-injection characters with a single quote', () => {
     const data = makeResponse({
       integrations: [

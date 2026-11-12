@@ -1,6 +1,8 @@
 import {
   FEEDBACK_ID_PARAM,
   FEEDBACK_SUBJECTS,
+  FEEDBACK_RESOLUTIONS,
+  type FeedbackResolution,
   FeedbackStatus,
   FeedbackType,
   type FeedbackSubject,
@@ -24,6 +26,7 @@ import { FEEDBACK_RECEIVED_WINDOWS, type FeedbackReceivedWindow } from './feedba
 
 export const FEEDBACK_STATUS_PARAM = 'feedbackStatus';
 export const FEEDBACK_SUBJECT_PARAM = 'feedbackSubject';
+export const FEEDBACK_RESOLUTION_PARAM = 'feedbackResolution';
 export const FEEDBACK_TYPE_PARAM = 'feedbackType';
 export const FEEDBACK_ORG_PARAM = 'feedbackOrg';
 export const FEEDBACK_RECEIVED_PARAM = 'feedbackReceived';
@@ -35,6 +38,7 @@ export const FEEDBACK_LIMIT_PARAM = 'feedbackLimit';
 const FEEDBACK_VIEW_PARAMS = [
   FEEDBACK_STATUS_PARAM,
   FEEDBACK_SUBJECT_PARAM,
+  FEEDBACK_RESOLUTION_PARAM,
   FEEDBACK_TYPE_PARAM,
   FEEDBACK_ORG_PARAM,
   FEEDBACK_RECEIVED_PARAM,
@@ -56,6 +60,7 @@ type FeedbackOrder = (typeof FEEDBACK_ORDERS)[number];
 export type FeedbackSearch = {
   [FEEDBACK_STATUS_PARAM]?: string;
   [FEEDBACK_SUBJECT_PARAM]?: FeedbackSubject;
+  [FEEDBACK_RESOLUTION_PARAM]?: FeedbackResolution;
   [FEEDBACK_TYPE_PARAM]?: FeedbackType[];
   [FEEDBACK_ORG_PARAM]?: string[];
   [FEEDBACK_RECEIVED_PARAM]?: FeedbackReceivedWindow;
@@ -69,6 +74,7 @@ export type FeedbackView = {
   statusFilters: Record<FeedbackStatus, boolean>;
   /** Undefined is every subject. */
   subject: FeedbackSubject | undefined;
+  resolution?: FeedbackResolution;
   /** Report types in severity order; empty is every type. */
   types: FeedbackType[];
   /** Organization names; empty is every organization. */
@@ -141,6 +147,7 @@ export const FEEDBACK_SEARCH_PARSERS: {
 } = {
   [FEEDBACK_STATUS_PARAM]: parseStatus,
   [FEEDBACK_SUBJECT_PARAM]: oneOf(FEEDBACK_SUBJECTS),
+  [FEEDBACK_RESOLUTION_PARAM]: oneOf(FEEDBACK_RESOLUTIONS),
   [FEEDBACK_TYPE_PARAM]: parseTypes,
   [FEEDBACK_ORG_PARAM]: parseStringList,
   [FEEDBACK_RECEIVED_PARAM]: oneOf(FEEDBACK_RECEIVED_WINDOWS),
@@ -152,10 +159,12 @@ export const FEEDBACK_SEARCH_PARSERS: {
 
 /** The list view a URL describes; a missing or invalid param means its default. */
 export function feedbackViewFromSearch(search: Record<string, unknown>): FeedbackView {
-  const statuses = decodeStatuses(search[FEEDBACK_STATUS_PARAM]);
+  const resolution = FEEDBACK_SEARCH_PARSERS[FEEDBACK_RESOLUTION_PARAM](search[FEEDBACK_RESOLUTION_PARAM]);
+  const statuses = resolution ? [FeedbackStatus.Closed] : decodeStatuses(search[FEEDBACK_STATUS_PARAM]);
   return {
     statusFilters: statuses ? toStatusFilters(statuses) : DEFAULT_FEEDBACK_VIEW.statusFilters,
     subject: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SUBJECT_PARAM](search[FEEDBACK_SUBJECT_PARAM]),
+    resolution,
     types: parseTypes(search[FEEDBACK_TYPE_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.types,
     organizations: parseStringList(search[FEEDBACK_ORG_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.organizations,
     received: FEEDBACK_SEARCH_PARSERS[FEEDBACK_RECEIVED_PARAM](search[FEEDBACK_RECEIVED_PARAM]),
@@ -177,6 +186,7 @@ export function feedbackViewToSearch(view: FeedbackView): {
   return {
     [FEEDBACK_STATUS_PARAM]: statuses === defaultStatuses ? undefined : statuses,
     [FEEDBACK_SUBJECT_PARAM]: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SUBJECT_PARAM](view.subject),
+    [FEEDBACK_RESOLUTION_PARAM]: view.resolution,
     [FEEDBACK_TYPE_PARAM]: parseTypes(view.types),
     [FEEDBACK_ORG_PARAM]: parseStringList(view.organizations),
     [FEEDBACK_RECEIVED_PARAM]: FEEDBACK_SEARCH_PARSERS[FEEDBACK_RECEIVED_PARAM](view.received),

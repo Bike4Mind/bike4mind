@@ -57,7 +57,10 @@ function collectionFor(modelName: string) {
   return database.collection<PurgeRecord>(mongoose.model<Record<string, unknown>>(modelName).collection.name);
 }
 
-const ownerFilter = (userId: string) => ({ userId: { $in: [userId, new mongoose.Types.ObjectId(userId)] } });
+const ownerFilter = (userId: string) => {
+  const objectId = new mongoose.Types.ObjectId(userId);
+  return { userId: { $in: [userId, objectId.toHexString(), objectId] } };
+};
 const personalFilter = (userId: string, personalOrganizationIds: readonly string[]) => ({
   $or: [
     { ...ownerFilter(userId), organizationId: { $in: [null, ''] } },
@@ -536,6 +539,7 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
     'UserUsagePatternSignals',
     'AdminUserNote',
     'AdminUserNoteRevision',
+    'FeedbackNote',
   ]) {
     await assertLease();
     await collectionFor(model).deleteMany(ownerFilter(userId));

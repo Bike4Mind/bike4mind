@@ -83,8 +83,7 @@ const MemberRoster: FC<MemberRosterProps> = ({
   const confirm = useConfirmation();
   const { mutateAsync: removeMember } = useRemoveMemberFromOrganization();
 
-  // A changed view starts on page 1 with nothing selected, so a bulk action never reaches rows the
-  // admin can no longer see.
+  // Search and filter changes reset selection; sorting and paging retain cross-page selection.
   const resetView = () => {
     setPage(1);
     setSelectedIds(new Set());

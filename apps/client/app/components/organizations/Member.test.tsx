@@ -9,6 +9,8 @@ import OrganizationMembers from './Member';
 
 const mocks = vi.hoisted(() => ({
   share: vi.fn(),
+  confirm: vi.fn<(options: { onOk: () => Promise<void> }) => void>(),
+  removeMember: vi.fn().mockResolvedValue(0),
   search: vi.fn(),
   cancel: vi.fn(),
   invitations: [] as { id: string; recipients?: { pending?: string[] } }[],
@@ -26,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   cancelOptions: undefined as { onSuccess: () => void; onError: (err: Error) => void } | undefined,
   toast: { success: vi.fn(), error: vi.fn() },
 }));
+vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => mocks.confirm }));
 vi.mock('sonner', () => ({ toast: mocks.toast }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -55,7 +58,8 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
   useOrganizationSeats: () => mocks.seats,
   useOrganizationInvites: () => ({ data: mocks.invitations, isError: mocks.invitesError }),
   useSetMemberCreditDefault: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useRemoveMemberFromOrganization: () => ({ mutateAsync: vi.fn() }),
+  useRemoveMemberFromOrganization: () => ({ mutateAsync: mocks.removeMember }),
+  removedMembersMessage: (kept: unknown[]) => `${kept.length} members removed`,
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('./UserCard', () => ({
@@ -626,5 +630,43 @@ describe('OrganizationMembers invite plumbing', () => {
     renderMembers(buildOrg({ userId: undefined }));
     // Only the add modal (owner path) renders candidates; the unresolved viewer gets no modal.
     expect(screen.queryByTestId('item-owner1')).toBeNull();
+  });
+});
+
+describe('OrganizationMembers organization identity', () => {
+  it('requires a fresh selection after switching between loaded teams with a shared member', async () => {
+    mocks.viewerId = 'viewer';
+    mocks.viewer = undefined;
+    mocks.members = [{ id: 'shared', name: 'Shared Member' }];
+    mocks.pending = [];
+    mocks.invitations = [];
+    mocks.membersState = { isLoading: false, isError: false };
+    mocks.removeMember.mockClear();
+    mocks.confirm.mockClear();
+    const organizationA = buildOrg({
+      id: 'team-a',
+      userId: 'viewer',
+      users: [{ userId: 'shared', permissions: [Permission.read] }] as IOrganizationDocument['users'],
+    });
+    const organizationB = { ...organizationA, id: 'team-b' } as IOrganizationDocument;
+    const view = renderMembers(organizationA);
+    fireEvent.click(screen.getByTestId('organization-members-select-all'));
+    expect(screen.getByTestId('organization-members-bulk-bar')).toHaveTextContent('1 selected');
+
+    view.rerender(<OrganizationMembers organization={organizationB} />);
+    expect(screen.queryByTestId('organization-members-bulk-bar')).toBeNull();
+    expect(screen.getByTestId('organization-members-select-all')).not.toBeChecked();
+    expect(mocks.removeMember).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('organization-members-select-all'));
+    fireEvent.click(screen.getByTestId('organization-members-remove-selected-btn'));
+    const confirmation = mocks.confirm.mock.calls.at(-1)?.[0];
+    if (!confirmation) throw new Error('Missing bulk removal confirmation');
+    await act(async () => confirmation.onOk());
+    expect(mocks.removeMember).toHaveBeenCalledExactlyOnceWith({
+      organizationId: 'team-b',
+      userId: 'shared',
+      quiet: true,
+    });
   });
 });

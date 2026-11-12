@@ -44,6 +44,11 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => hooks.navigate }))
 vi.mock('@client/app/utils/s3', () => ({ getAppFileUrl: ({ key }: { key: string }) => `https://files.test/${key}` }));
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('sonner', () => ({ toast: toasts }));
+vi.mock('./OffboardMemberDialog', () => ({
+  default: ({ member }: { member: { id: string } | null }) =>
+    member ? <div data-testid="offboard-dialog" data-member-id={member.id} /> : null,
+}));
+
 // A real i18next over en.json, so the chip assertions pin the wording users see.
 const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: i18n.t }) }));
@@ -227,6 +232,14 @@ describe('OrganizationUserCard roster actions', () => {
     expect(await screen.findByTestId('organization-user-card-remove-member')).toBeTruthy();
   });
 
+  it('opens the offboarding dialog for that member instead of a plain confirm', async () => {
+    renderCard(accepted(), false, { invite: false, revoke: true });
+    expect(screen.queryByTestId('offboard-dialog')).toBeNull();
+    openMenu();
+    fireEvent.click(await screen.findByTestId('organization-user-card-remove-member'));
+    expect(screen.getByTestId('offboard-dialog').getAttribute('data-member-id')).toBe('a');
+  });
+
   it('withholds Remove member from a viewer who may only invite', () => {
     renderCard(accepted(), false, { invite: true, revoke: false });
     expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
@@ -379,20 +392,15 @@ describe('OrganizationUserCard confirmations', () => {
     hooks.navigate.mockReset();
   });
 
-  it('names the member and the effect when removing, with matching wording', async () => {
+  it('routes removal through offboarding without an immediate destructive call', async () => {
     renderCard(member('a', usage), false, { invite: false, revoke: true });
     openMenu();
     const item = await screen.findByTestId('organization-user-card-remove-member');
     expect(item).toHaveTextContent('Remove member');
     fireEvent.click(item);
-    const args = lastConfirm();
-    expect(args.title).toBe('Remove member');
-    expect(args.okLabel).toBe('Remove member');
-    expect(args.type).toBe('danger');
-    expect(args.description).toContain('Remove User a from this team?');
-    expect(args.description).toContain('Their account and the content in it are not deleted.');
-    await args.onOk();
-    expect(hooks.removeMember).toHaveBeenCalledWith({ organizationId: 'org1', userId: 'a' });
+    expect(screen.getByTestId('offboard-dialog')).toHaveAttribute('data-member-id', 'a');
+    expect(hooks.confirm).not.toHaveBeenCalled();
+    expect(hooks.removeMember).not.toHaveBeenCalled();
   });
 
   it('keeps Cancel invite neutral and names the invitee', async () => {

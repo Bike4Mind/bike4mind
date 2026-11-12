@@ -21,6 +21,8 @@ import { z } from 'zod';
 
 const MAX_REPLAY_ATTEMPTS = DLQ_MAX_REPLAY_ATTEMPTS;
 const MAX_BATCH_SIZE = 100;
+// Short polling samples a subset of SQS servers, so a receive can miss messages the queue holds (including the fallback match).
+const RECEIVE_WAIT_SECONDS = 2;
 // Upper bound on receives while searching the DLQ for specific message IDs.
 const TARGETED_MAX_RECEIVES = 20;
 
@@ -194,7 +196,7 @@ const handler = adminApi({
           });
 
           let fallbackDeleted = false;
-          const fallbackMessages = await receiveFromQueue(dlqUrl, 10, 60);
+          const fallbackMessages = await receiveFromQueue(dlqUrl, 10, 60, RECEIVE_WAIT_SECONDS);
           const match = fallbackMessages.find(m => m.MessageId === dm.messageId);
           if (match?.ReceiptHandle) {
             try {
@@ -303,16 +305,17 @@ const handler = adminApi({
     // so they do not stay hidden for the rest of the visibility timeout.
     await releaseReceivedMessages(dlqUrl, queueLabel, others, 'untargeted');
   } else {
-    const iterations = Math.ceil(batchSize / 10);
-    for (let i = 0; i < iterations; i++) {
+    // Each non-empty receive adds at least one message, so batchSize calls is a hard upper bound.
+    for (let i = 0; i < batchSize && allMessages.length < batchSize; i++) {
       const toReceive = Math.min(batchSize - allMessages.length, 10);
-      const messages = await receiveFromQueue(dlqUrl, toReceive, 60);
+      const messages = await receiveFromQueue(dlqUrl, toReceive, 60, RECEIVE_WAIT_SECONDS);
       allMessages.push(...messages);
 
-      // Stop if no more messages
-      if (messages.length < toReceive) break;
+      // SQS can return fewer messages than it holds, so only an empty receive means the queue is drained.
+      if (messages.length === 0) break;
     }
-    messagesToReplay = allMessages;
+    // At-least-once delivery can return one message twice in a run; keep the latest copy, whose receipt handle is the valid one.
+    messagesToReplay = [...new Map(allMessages.map(m => [m.MessageId ?? '', m])).values()];
   }
 
   // Track which requested messageIds were not found in the received batch

@@ -35,7 +35,7 @@ interface OrganizationMembersProps {
   organization: IOrganizationDocument;
 }
 
-const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => {
+const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization }) => {
   const {
     data: users,
     isLoading: membersLoading,
@@ -460,5 +460,9 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     </Card>
   );
 };
+
+const OrganizationMembers: FC<OrganizationMembersProps> = props => (
+  <OrganizationMembersView key={props.organization.id} {...props} />
+);
 
 export default OrganizationMembers;
