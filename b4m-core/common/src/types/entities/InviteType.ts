@@ -94,6 +94,12 @@ export type IBaseInvite = {
   // closes for every new invite without a clock constant to maintain.
   token?: string;
 
+  // Organization share links only: lowercased hosts an accepter's verified email must match exactly
+  // (no subdomains). Absent or empty means any account may join.
+  allowedDomains?: string[];
+  // Set when a manager revokes a share link; accept refuses a revoked invite before any other check.
+  revokedAt?: Date | null;
+
   expiresAt: undefined | Date;
 };
 

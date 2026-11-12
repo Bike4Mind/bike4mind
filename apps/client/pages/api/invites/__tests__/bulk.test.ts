@@ -49,6 +49,8 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: mocks.sendToClient }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: mocks.logEvent }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://x' } } }));
+const reserveInviteAccept = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/inviteAcceptLimits', () => ({ reserveInviteAccept }));
 
 const payOrgInviteBonus = vi.hoisted(() => vi.fn().mockResolvedValue(0));
 vi.mock('@server/credits/orgInviteBonus', () => ({ payOrgInviteBonus }));
@@ -170,6 +172,23 @@ describe('POST /api/invites/bulk', () => {
     expect(body.okCount).toBe(2);
     expect(body.results.every((r: any) => r.ok)).toBe(true);
     expect(mocks.sendToClient).toHaveBeenCalledTimes(1);
+  });
+
+  it('charges each accept attempt and reports a spent window per invite without calling the service', async () => {
+    const { TooManyRequestsError } = await import('@bike4mind/utils');
+    reserveInviteAccept
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new TooManyRequestsError('Too many invite accepts. Try again later.'));
+    const res = await call({ action: 'accept', ids: [ID_A, ID_B] });
+    const body = res._getJSONData();
+    expect(reserveInviteAccept).toHaveBeenCalledTimes(2);
+    expect(mocks.acceptInvite).toHaveBeenCalledTimes(1);
+    expect(body.results[1]).toMatchObject({ id: ID_B, ok: false, error: 'Too many invite accepts. Try again later.' });
+  });
+
+  it('does not charge the accept window for a refuse', async () => {
+    await call({ action: 'refuse', ids: [ID_A] });
+    expect(reserveInviteAccept).not.toHaveBeenCalled();
   });
 
   it('skips the refetch when nothing succeeded', async () => {

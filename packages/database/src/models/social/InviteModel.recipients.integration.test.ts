@@ -75,6 +75,16 @@ describe('InviteRepository recipient writes', () => {
     expect(invite.accepted).toBe(1);
   });
 
+  it('acceptRecipient refuses a revoked invite without spending a slot', async () => {
+    const link = await seed({}, 3);
+    await Invite.updateOne({ _id: link }, { $set: { revokedAt: new Date() } });
+
+    expect(await repo.acceptRecipient(link, 'a@x.com')).toBeNull();
+    const invite = await stored(link);
+    expect(invite.remaining).toBe(3);
+    expect(invite.recipients?.accepted ?? []).toEqual([]);
+  });
+
   it('acceptRecipient on a named invite refuses an email that is no longer pending', async () => {
     const id = await seed({ pending: ['a@x.com', 'b@x.com'] });
     await Invite.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { isLinkOnly: false } });

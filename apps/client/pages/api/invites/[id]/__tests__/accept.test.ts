@@ -62,6 +62,8 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://x' } } }));
+const reserveInviteAccept = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/inviteAcceptLimits', () => ({ reserveInviteAccept }));
 
 import '@pages/api/invites/[id]/accept';
 
@@ -226,5 +228,31 @@ describe('POST /api/invites/[id]/accept - organization invite bonus', () => {
       'Organization invite bonus remains unpaid',
       expect.any(Error)
     );
+  });
+});
+
+describe('POST /api/invites/[id]/accept - accept rate limit', () => {
+  beforeEach(() => {
+    acceptInvite.mockClear();
+    reserveInviteAccept.mockClear();
+  });
+
+  const post = () => {
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'inv1' } });
+    Object.assign(req, { user: { id: 'u1', email: 'me@x.com' }, ability: {} });
+    return mockRefs.postHandler!(req, res);
+  };
+
+  it('charges the caller before resolving the invite', async () => {
+    await post();
+    expect(reserveInviteAccept).toHaveBeenCalledWith('u1');
+    expect(reserveInviteAccept.mock.invocationCallOrder[0]).toBeLessThan(acceptInvite.mock.invocationCallOrder[0]);
+  });
+
+  it('refuses with 429 and never reaches the accept service once the window is spent', async () => {
+    const { TooManyRequestsError } = await import('@bike4mind/utils');
+    reserveInviteAccept.mockRejectedValueOnce(new TooManyRequestsError('Too many invite accepts. Try again later.'));
+    await expect(post()).rejects.toMatchObject({ statusCode: 429 });
+    expect(acceptInvite).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { InviteType, IUserDocument, Permission } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { createInvite } from './create';
 
 /**
@@ -942,5 +942,114 @@ describe('sharingService - createInvite (email-shaped recipients)', () => {
     const invite = await share(['alice']);
 
     expect((invite as any).recipients.pending).toEqual(['a@x.com']);
+  });
+});
+
+describe('sharingService - createInvite (organization share link)', () => {
+  const OWNER_ID = 'link-owner-1';
+  const ORG_ID = 'link-org-1';
+  const owner = { id: OWNER_ID, username: 'owner', isAdmin: false } as IUserDocument;
+  let organization: Record<string, unknown>;
+  const makeDb = () => ({
+    invites: {
+      create: vi.fn(async (build: unknown) => ({ id: 'link-1', ...(build as object) })),
+      findAllByDocumentId: vi.fn(async (): Promise<unknown[]> => []),
+    },
+    users: { findAllByEmailsOrUsernames: vi.fn(async () => []), findByIds: vi.fn(async () => []) },
+    fabFiles: { shareable: { findShareAccessById: vi.fn() } },
+    sessions: { shareable: { findShareAccessById: vi.fn() } },
+    projects: { shareable: { findShareAccessById: vi.fn() } },
+    organizations: { findById: vi.fn(async () => organization) },
+    groups: { findById: vi.fn() },
+  });
+  let db: ReturnType<typeof makeDb>;
+  type Adapters = Parameters<typeof createInvite>[2];
+  const adapters = () => ({ db: db as unknown as Adapters['db'] });
+
+  beforeEach(() => {
+    organization = { id: ORG_ID, name: 'Acme', userId: OWNER_ID, adminUserIds: [], users: [], seats: 5 };
+    db = makeDb();
+  });
+
+  const mint = (overrides: Record<string, unknown> = {}) =>
+    createInvite(
+      owner,
+      {
+        id: ORG_ID,
+        type: InviteType.Organization,
+        permissions: [Permission.read],
+        link: true,
+        ...overrides,
+      } as Parameters<typeof createInvite>[1],
+      adapters()
+    );
+
+  it('mints a recipientless link flagged link-only, sized to the seats left after named invites', async () => {
+    db.invites.findAllByDocumentId.mockResolvedValue([
+      { type: InviteType.Organization, remaining: 1, recipients: { pending: ['p@x.com'] } },
+    ]);
+    const invite = await mint();
+    expect(invite.isLinkOnly).toBe(true);
+    expect(invite.recipients?.pending).toEqual([]);
+    // seats 5 - owner 1 - pending 1
+    expect(invite.remaining).toBe(3);
+    expect(invite.allowedDomains).toBeUndefined();
+  });
+
+  it('takes an explicit cap and normalizes allowed domains', async () => {
+    const invite = await mint({ available: 2, allowedDomains: ['Example.com', 'example.com', ' corp.io '] });
+    expect(invite.remaining).toBe(2);
+    expect(invite.allowedDomains).toEqual(['example.com', 'corp.io']);
+  });
+
+  it('refuses a link when no seat is left', async () => {
+    organization.seats = 1;
+    await expect(mint()).rejects.toThrow('Organization is full');
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a zero cap', { available: 0 }],
+    ['a fractional cap', { available: 1.5 }],
+    ['a malformed domain', { allowedDomains: ['not a host'] }],
+    ['a bare label', { allowedDomains: ['localhost'] }],
+    ['too many domains', { allowedDomains: Array.from({ length: 11 }, (_, i) => `d${i}.com`) }],
+  ])('rejects %s at validation', async (_label, overrides) => {
+    await expect(mint(overrides)).rejects.toThrow(UnprocessableEntityError);
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a link that names recipients', async () => {
+    await expect(mint({ recipients: ['a@x.com'] })).rejects.toThrow(BadRequestError);
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects link options on other invite types', async () => {
+    await expect(mint({ type: InviteType.Project, id: 'p1' })).rejects.toThrow(BadRequestError);
+    await expect(
+      createInvite(
+        owner,
+        {
+          id: ORG_ID,
+          type: InviteType.Organization,
+          permissions: [Permission.read],
+          recipients: ['a@x.com'],
+          allowedDomains: ['example.com'],
+        },
+        adapters()
+      )
+    ).rejects.toThrow('Allowed domains apply only to organization share links');
+  });
+
+  it('still applies the manager gate and role validation to a link', async () => {
+    const outsider = { id: 'stranger', username: 's', isAdmin: false } as IUserDocument;
+    await expect(
+      createInvite(
+        outsider,
+        { id: ORG_ID, type: InviteType.Organization, permissions: [Permission.read], link: true },
+        adapters()
+      )
+    ).rejects.toThrow(BadRequestError);
+    await expect(mint({ permissions: [Permission.delete] })).rejects.toThrow('Invalid role for organization invite');
   });
 });

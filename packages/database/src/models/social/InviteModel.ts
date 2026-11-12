@@ -133,6 +133,17 @@ export const InviteSchema: Schema<IInviteDocument> = new Schema<IInviteDocument>
       type: String,
       required: false,
     },
+    // See IBaseInvite.allowedDomains. `default: undefined` so an unrestricted invite stores nothing.
+    allowedDomains: {
+      type: [String],
+      required: false,
+      default: undefined,
+    },
+    revokedAt: {
+      type: Date,
+      required: false,
+      default: null,
+    },
     accepted: {
       type: Number,
       required: true,
@@ -191,6 +202,8 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
     const filter = {
       _id: id,
       remaining: { $gt: 0 },
+      // A revoke landing after the service's read still refuses here; null also matches legacy rows.
+      revokedAt: null,
       $expr: {
         $and: [
           { $not: [{ $in: [lower, lowercased('accepted')] }] },

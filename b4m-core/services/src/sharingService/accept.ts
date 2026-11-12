@@ -6,6 +6,7 @@ import {
   IInviteRepository,
   InviteType,
   IOrganizationDocument,
+  IOrganizationRepository,
   IProjectRepository,
   ISessionRepository,
   IShareableDocument,
@@ -13,6 +14,7 @@ import {
   Permission,
   ShareableAccessShape,
   isLinkOnlyInvite,
+  ConflictError,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -42,7 +44,7 @@ interface AcceptInviteAdapters {
     };
     organization: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
-      update: (data: Partial<IOrganizationDocument>) => Promise<unknown>;
+      addMemberIfUnderCeiling: IOrganizationRepository['addMemberIfUnderCeiling'];
       ensureUserDetails: (organizationId: string, member: { id: string; email: string; name: string }) => Promise<void>;
     };
     users: {
@@ -82,6 +84,8 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   const invite = await resolveRedeemableInvite(id, { db });
   if (!invite) throw new NotFoundError('Invite not found');
 
+  if (invite.revokedAt) throw new UnprocessableEntityError('Invite has been revoked');
+
   // createInvite defaults expiresAt 100 years out, so this only bites a real expiration.
   if (invite.expiresAt && invite.expiresAt < new Date()) {
     throw new UnprocessableEntityError('Invite has expired');
@@ -117,6 +121,17 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   const isEmail = (entry: string) => entry.toLowerCase() === email;
   if (!isLinkOnlyInvite(invite) && !invite.recipients?.pending?.some(isEmail)) {
     throw new ForbiddenError('This invite was not sent to your account');
+  }
+
+  // Exact host match on a verified address: an unverified email is only a claim, and a subdomain is
+  // not the domain the inviter named.
+  if (invite.allowedDomains?.length) {
+    const domain = email.slice(email.lastIndexOf('@') + 1);
+    if (!user.emailVerified || !invite.allowedDomains.includes(domain)) {
+      throw new ForbiddenError(
+        `This invite is limited to verified email addresses at ${invite.allowedDomains.join(', ')}`
+      );
+    }
   }
 
   // Assumes the invite carries permissions.
@@ -220,6 +235,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
         {
           organizationId: invite.documentId,
           permissions: inviteWithPermissions.permissions,
+          isLink: isLinkOnlyInvite(invite),
         },
         { db }
       );
@@ -242,31 +258,62 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
 interface AcceptOrganizationParameters {
   organizationId: string;
   permissions: Permission[];
+  isLink: boolean;
 }
+
+/**
+ * Distinct addresses still pending on live named invites to the organization, other than the
+ * accepter's own. Same live-invite filter as create.ts inviteToOrg, which reserves these at mint.
+ */
+const countReservedSeats = async (invites: IInviteRepository, organizationId: string, ownEmail: string) => {
+  const now = new Date();
+  const pending = (await invites.findAllByDocumentId(organizationId))
+    .filter(
+      invite =>
+        invite.type === InviteType.Organization &&
+        invite.remaining > 0 &&
+        !invite.revokedAt &&
+        (!invite.expiresAt || new Date(invite.expiresAt) > now)
+    )
+    .flatMap(invite => invite.recipients?.pending ?? [])
+    .map(address => address.trim().toLowerCase())
+    .filter(address => address !== ownEmail);
+  return new Set(pending).size;
+};
+
+const isMemberOf = (organization: IOrganizationDocument, userId: string) =>
+  organization.userId === userId || organization.users.some(member => member.userId === userId);
 
 const acceptOrganization = async (
   user: IUserDocument,
   params: AcceptOrganizationParameters,
   { db }: AcceptInviteAdapters
 ) => {
-  const { organizationId, permissions } = params;
+  const { organizationId, permissions, isLink } = params;
   const organization = await db.organization.findById(organizationId);
 
   if (!organization) {
     throw new NotFoundError('Organization not found');
   }
+  if (isMemberOf(organization, user.id)) throw new ConflictError('You are already a member of this organization');
 
-  const totalUsers = (organization.users.length ?? 0) + 1; // We add 1 to include the owner of the organization
-  if (totalUsers >= organization.seats) {
+  // A named invite's seat was reserved when it was minted, so only a link join holds the others back.
+  const reservedSeats = isLink
+    ? await countReservedSeats(db.invites, organizationId, (user.email ?? '').toLowerCase())
+    : 0;
+  // One conditional update, so concurrent joins cannot both pass the seat check; it runs inside the
+  // caller's transaction, so a later acceptRecipient failure rolls the join back.
+  const added = await db.organization.addMemberIfUnderCeiling(
+    organizationId,
+    { userId: user.id, permissions },
+    reservedSeats
+  );
+  if (!added) {
+    const current = await db.organization.findById(organizationId);
+    if (!current) throw new NotFoundError('Organization not found');
+    if (isMemberOf(current, user.id)) throw new ConflictError('You are already a member of this organization');
     throw new ForbiddenError('Organization is full');
   }
-
-  pushShareable(organization, { userId: user.id, permissions });
-
-  // Persist ONLY the users[] edit with a targeted write. A whole-document write would $set the entire
-  // userDetails array from this stale snapshot and could revert a concurrent credit increment
-  // (updateUserDetails' atomic positional $inc); see organizationService/addMember.
-  await db.organization.update({ id: organization.id, users: organization.users });
 
   // Seed the credit side-table via the idempotent guarded $push - keeps users[]/userDetails[] in sync
   // and, unlike the previous unconditional push, never creates a duplicate row on a re-accept.

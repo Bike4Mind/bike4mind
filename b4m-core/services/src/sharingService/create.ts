@@ -28,6 +28,11 @@ import { assertCanManageOrgGroups } from '../organizationService/groupMembership
 
 const defaultExpiration = () => new Date(new Date().getFullYear() + 100, new Date().getMonth(), new Date().getDate());
 export const DEFAULT_AVAILABLE = 1;
+// Most joins a single Organization share link may admit; also its default when seats allow.
+export const MAX_ORG_LINK_AVAILABLE = 1000;
+export const MAX_INVITE_ALLOWED_DOMAINS = 10;
+const HOSTNAME_PATTERN =
+  /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
 const createInviteSchema = z.object({
   id: z.string(),
@@ -38,7 +43,13 @@ const createInviteSchema = z.object({
   expiresAt: z.date().prefault(defaultExpiration()),
   // No prefault here: the default depends on recipients.length (below), which this schema
   // cannot see. No caller currently sets this explicitly.
-  available: z.number().optional(),
+  available: z.number().int().min(1).optional(),
+  // An Organization share link: names nobody, joins whoever holds its token (see accept.ts).
+  link: z.boolean().optional(),
+  allowedDomains: z
+    .array(z.string().trim().toLowerCase().max(253).regex(HOSTNAME_PATTERN, 'Invalid domain'))
+    .max(MAX_INVITE_ALLOWED_DOMAINS)
+    .optional(),
 });
 
 interface CreateInviteAdapters {
@@ -65,7 +76,16 @@ export const createInvite = async (
   parameters: z.input<typeof createInviteSchema>,
   { db }: CreateInviteAdapters
 ) => {
-  const { id, type, available, recipients, ...rest } = secureParameters(parameters, createInviteSchema);
+  const { id, type, available, recipients, link, allowedDomains, ...rest } = secureParameters(
+    parameters,
+    createInviteSchema
+  );
+  const isOrgLink = link === true && type === InviteType.Organization;
+  if (link && !isOrgLink) throw new BadRequestError('Share links with these options are only for organizations');
+  if (allowedDomains?.length && !isOrgLink) {
+    throw new BadRequestError('Allowed domains apply only to organization share links');
+  }
+  if (isOrgLink && recipients?.length) throw new BadRequestError('A share link cannot name recipients');
 
   // When no expiration date is given, default to 100 years from now.
 
@@ -87,7 +107,7 @@ export const createInvite = async (
       name = doc?.name;
       break;
     case InviteType.Organization: {
-      const organizationInvite = await inviteToOrg(user, { id, recipients }, db);
+      const organizationInvite = await inviteToOrg(user, { id, recipients: isOrgLink ? [] : recipients }, db);
       organizationForInvite = organizationInvite.organization;
       doc = organizationForInvite;
       pendingOrganizationRecipients = organizationInvite.pendingRecipients;
@@ -161,7 +181,8 @@ export const createInvite = async (
   // Type-aware so it agrees with `isLinkOnlyInvite`'s legacy inference in @bike4mind/common: only
   // FabFile and Session are shareable by link. A recipientless invite of any other type is a
   // mistake, not a share link, and is refused below - this keeps the flag fail-closed regardless.
-  const namesNobody = recipientsArray.length === 0 && (type === InviteType.FabFile || type === InviteType.Session);
+  const namesNobody =
+    recipientsArray.length === 0 && (type === InviteType.FabFile || type === InviteType.Session || isOrgLink);
 
   // Every other type always names people, so a recipientless invite there is a mistake, and one
   // that persists: it stores isLinkOnly false with an empty `pending`, which both the view gate and
@@ -204,6 +225,8 @@ export const createInvite = async (
     // Dedupe: two recipient strings (an email and that same person's username) can resolve to
     // the same one user, and pending.length below counts unique resolved users, not raw entries.
     pending = Array.from(new Set(resolved));
+  } else if (isOrgLink) {
+    pending = [];
   } else if (type === InviteType.Project || type === InviteType.Organization) {
     // Project and Organization invites carry raw user ids (the add-members modals send
     // `recipients: [userId]`), which findAllByEmailsOrUsernames cannot resolve - it queries email
@@ -250,6 +273,7 @@ export const createInvite = async (
     }
   }
 
+  let seatsLeft = 0;
   if (organizationForInvite) {
     pending = Array.from(new Set(pending.map(email => email.trim().toLowerCase())));
     const alreadyInvited = new Set(pendingOrganizationRecipients.map(email => email.trim().toLowerCase()));
@@ -260,6 +284,11 @@ export const createInvite = async (
     const totalUsers = organizationForInvite.users.length + 1;
     if (totalUsers + pendingOrganizationRecipients.length + pending.length > organizationForInvite.seats) {
       throw new BadRequestError('Organization is full');
+    }
+    // A link holds no seat at mint: each join is seat-checked on accept, with named invites reserved.
+    if (isOrgLink) {
+      seatsLeft = organizationForInvite.seats - totalUsers - pendingOrganizationRecipients.length;
+      if (seatsLeft <= 0) throw new BadRequestError('Organization is full');
     }
   }
 
@@ -275,7 +304,9 @@ export const createInvite = async (
   // them succeeded - so the default has to track how many people this invite is actually for.
   // pending.length (not recipientsArray.length): two recipient strings that resolve to the
   // same person, or an org/project id that resolves to nobody, must not inflate the count.
-  const resolvedAvailable = available ?? (isLinkOnlyInvite ? 1000 : Math.max(pending.length, DEFAULT_AVAILABLE));
+  const resolvedAvailable = isOrgLink
+    ? Math.min(available ?? seatsLeft, MAX_ORG_LINK_AVAILABLE)
+    : (available ?? (isLinkOnlyInvite ? 1000 : Math.max(pending.length, DEFAULT_AVAILABLE)));
 
   const build: Omit<IInvite, 'id'> = {
     // We suggest that it's a FabFile so that permissions is a valid/required field
@@ -302,6 +333,7 @@ export const createInvite = async (
     // (refusing or capping the grant) and caps a notebook's propagated file grants to what they hold.
     inviterId: user.id,
     typedRecipients,
+    ...(isOrgLink && allowedDomains?.length ? { allowedDomains: Array.from(new Set(allowedDomains)) } : {}),
   };
 
   const invite = await db.invites.create(build);
