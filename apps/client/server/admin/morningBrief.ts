@@ -1,3 +1,4 @@
+import { morningBriefHrefSchema } from '@client/shared/adminMorningBrief';
 import { AdminAiConfigSchema } from '@bike4mind/common';
 import {
   AdminAiSuggestionModel,
@@ -16,20 +17,20 @@ import { getAlarms } from '../security/incidentSignals';
 import { Resource } from 'sst';
 
 const QUEUE_TABS = {
-  waitingSubscribers: 12,
-  unreviewedAudit: 66,
-  moderationReview: 74,
-  heldSignupGrants: 70,
-  signupDomainHolds: 68,
-  signupRiskReview: 69,
-  approvals: 76,
-  publishedPages: 54,
-  stripeDisputes: 75,
-  modelLifecycle: 58,
-  secretRotation: 16,
-  sreAgent: 44,
-  feedback: 2,
-  deadLetters: 42,
+  waitingSubscribers: 'waitlist',
+  unreviewedAudit: 'audit-log',
+  moderationReview: 'moderation-incidents',
+  heldSignupGrants: 'held-signup-grants',
+  signupDomainHolds: 'signup-domain-holds',
+  signupRiskReview: 'signup-risk-review',
+  approvals: 'approvals',
+  publishedPages: 'published-pages',
+  stripeDisputes: 'disputes',
+  modelLifecycle: 'model-lifecycle',
+  secretRotation: 'secrets-rotation',
+  sreAgent: 'sre-agent',
+  feedback: 'feedback',
+  deadLetters: 'dlq-replay',
 } as const;
 
 export type BriefFacts = Pick<AdminMorningBrief, 'facts' | 'needsHuman'>;
@@ -50,7 +51,9 @@ export function renderMorningBrief(brief: AdminMorningBrief, appUrl: string): st
     brief.summary ? `AI summary (advisory only): ${escapeSlack(brief.summary)}` : null,
     escapeSlack(brief.facts),
     'Needs a human today:',
-    ...brief.needsHuman.slice(0, 5).map(link => `<${new URL(link.href, base).href}|${escapeSlack(link.label)}>`),
+    ...brief.needsHuman
+      .slice(0, 5)
+      .map(link => `<${new URL(morningBriefHrefSchema.parse(link.href), base).href}|${escapeSlack(link.label)}>`),
     `<${new URL('/admin', base).href}|Open admin dashboard>`,
   ]
     .filter(Boolean)
@@ -153,7 +156,7 @@ export async function gatherMorningBriefFacts(now: Date): Promise<BriefFacts> {
     'Counts stop at 100. Audit and approval counts use the system viewer, not an individual admin.'
   );
   if (!alarms || alarms.error || alarms.inAlarm.length) {
-    needsHuman.unshift({ label: 'Check security signals and alarms', href: '/admin?tab=26' });
+    needsHuman.unshift({ label: 'Check security signals and alarms', href: '/admin?tab=security-dashboard' });
   }
   return { facts: lines.join('\n'), needsHuman };
 }

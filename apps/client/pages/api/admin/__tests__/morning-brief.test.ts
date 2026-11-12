@@ -31,4 +31,23 @@ describe('latest morning brief route', () => {
     expect(res._getJSONData()).toEqual({ brief: null });
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
+  it.each(['sent', 'unconfirmed', 'sending', 'ready'])(
+    'normalizes historical %s links without writing delivery state',
+    async delivery => {
+      h.latest.mockResolvedValue({
+        environment: 'dev',
+        day: '2026-11-12',
+        generatedAt: new Date('2026-11-12T08:00:00Z'),
+        facts: 'Existing facts',
+        summary: null,
+        delivery,
+        needsHuman: [{ label: 'Disputes', href: '/admin?tab=75' }],
+      });
+      const res = await call({ id: 'admin', isAdmin: true });
+      expect(res._getJSONData().brief).toMatchObject({
+        delivery,
+        needsHuman: [{ label: 'Disputes', href: '/admin?tab=disputes' }],
+      });
+    }
+  );
 });

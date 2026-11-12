@@ -1,4 +1,5 @@
 import { DEFAULT_LAMBDA_ENVIRONMENT, runsScheduledJobs } from './constants';
+import { lambdaVpc } from './vpc';
 import { allSecrets } from './secrets';
 import { appUrlForLambdaEnv } from './router';
 import { createEventBusDeadLetter } from './eventBusDeadLetter';
@@ -16,6 +17,7 @@ export const adminMorningBrief = deadLetter
       function: {
         handler: 'apps/workers/src/cron/adminMorningBrief.handler',
         runtime: 'nodejs24.x',
+        vpc: lambdaVpc,
         timeout: '3 minutes',
         link: [...allSecrets],
         permissions: [

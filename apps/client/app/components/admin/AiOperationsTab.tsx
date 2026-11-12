@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { api } from '@client/app/contexts/ApiContext';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, FormControl, FormLabel, Input, Option, Select, Stack, Switch, Typography } from '@mui/joy';
 import { ADMIN_AI_FEATURES, ADMIN_AI_LADDER_COPY, type AdminAiConfig, type AdminAiFeature } from '@bike4mind/common';
@@ -22,17 +23,6 @@ const EMPTY_CLASS = {
   replayAgreed: 0,
   replayArtifact: '',
 };
-async function request<T>(method = 'GET', body?: unknown, path = '/api/admin/ai-operations'): Promise<T> {
-  const response = await fetch(path, {
-    method,
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
-  if (!response.ok)
-    throw new Error(`Could not ${method === 'GET' ? 'load' : 'save'} AI operations (${response.status})`);
-  return response.json();
-}
 const usd = (value: number) => `$${value.toFixed(4)}`;
 const agreement = (accepted: number, overridden: number) =>
   accepted + overridden > 0
@@ -41,19 +31,23 @@ const agreement = (accepted: number, overridden: number) =>
 
 export default function AiOperationsTab() {
   const cache = useQueryClient();
-  const query = useQuery({ queryKey: KEY, queryFn: () => request<AdminAiOperations>() });
+  const query = useQuery({
+    queryKey: KEY,
+    queryFn: async () => (await api.get<AdminAiOperations>('/api/admin/ai-operations')).data,
+  });
   const [draft, setDraft] = useState<AdminAiConfig | null>(null);
   const [classDraft, setClassDraft] = useState(EMPTY_CLASS);
   const [classDirty, setClassDirty] = useState(false);
   const save = useMutation({
-    mutationFn: (config: AdminAiConfig) => request<AdminAiOperations>('PUT', config),
+    mutationFn: async (config: AdminAiConfig) =>
+      (await api.put<AdminAiOperations>('/api/admin/ai-operations', config)).data,
     onSuccess: data => {
       cache.setQueryData(KEY, data);
       setDraft(null);
     },
   });
   const saveClass = useMutation({
-    mutationFn: () => request<AdminAiOperations>('POST', classDraft),
+    mutationFn: async () => (await api.post<AdminAiOperations>('/api/admin/ai-operations', classDraft)).data,
     onSuccess: data => {
       cache.setQueryData(KEY, data);
       setClassDraft(EMPTY_CLASS);
@@ -61,9 +55,10 @@ export default function AiOperationsTab() {
     },
   });
   const undo = useMutation({
-    mutationFn: ({ path, id }: { path: string; id: string }) => request('POST', { aiSuggestionId: id }, path),
+    mutationFn: ({ path, id }: { path: string; id: string }) => api.post(path, { aiSuggestionId: id }),
     onSuccess: () => cache.invalidateQueries({ queryKey: KEY }),
   });
+  const saving = save.isPending || saveClass.isPending;
   const data = query.data;
   const config = draft ?? data?.config;
   const configDirty = Boolean(draft && JSON.stringify(draft) !== JSON.stringify(data?.config));
@@ -118,6 +113,7 @@ export default function AiOperationsTab() {
               <FormControl orientation="horizontal">
                 <FormLabel>Enable admin AI</FormLabel>
                 <Switch
+                  disabled={saving}
                   checked={config.enabled}
                   onChange={event => edit({ enabled: event.target.checked })}
                   slotProps={{ input: { 'data-testid': 'ai-operations-global-switch' } }}
@@ -126,6 +122,7 @@ export default function AiOperationsTab() {
               <FormControl>
                 <FormLabel>Monthly cap (USD)</FormLabel>
                 <Input
+                  disabled={saving}
                   type="number"
                   value={config.monthlyCapUsd}
                   onChange={event => edit({ monthlyCapUsd: Number(event.target.value) })}
@@ -184,6 +181,7 @@ export default function AiOperationsTab() {
                     <FormControl orientation="horizontal">
                       <FormLabel>Enabled</FormLabel>
                       <Switch
+                        disabled={saving}
                         checked={config.features[feature].mode !== 'off'}
                         onChange={event => editFeature(feature, { mode: event.target.checked ? 'shadow' : 'off' })}
                         slotProps={{ input: { 'data-testid': `ai-operations-${feature}-switch` } }}
@@ -192,6 +190,7 @@ export default function AiOperationsTab() {
                     <FormControl>
                       <FormLabel>Mode</FormLabel>
                       <Select
+                        disabled={saving}
                         value={config.features[feature].mode}
                         data-testid={`ai-operations-${feature}-mode`}
                         onChange={(_, mode) => {
@@ -217,6 +216,7 @@ export default function AiOperationsTab() {
                     <FormControl>
                       <FormLabel>Daily budget (USD)</FormLabel>
                       <Input
+                        disabled={saving}
                         type="number"
                         value={config.features[feature].dailyBudgetUsd}
                         onChange={event => editFeature(feature, { dailyBudgetUsd: Number(event.target.value) })}
@@ -226,6 +226,7 @@ export default function AiOperationsTab() {
                     <FormControl>
                       <FormLabel>Daily call cap</FormLabel>
                       <Input
+                        disabled={saving}
                         type="number"
                         value={config.features[feature].maxCallsPerDay}
                         onChange={event => editFeature(feature, { maxCallsPerDay: Number(event.target.value) })}
@@ -259,6 +260,7 @@ export default function AiOperationsTab() {
               <FormControl>
                 <FormLabel>Feature</FormLabel>
                 <Select
+                  disabled={saving}
                   value={classDraft.feature}
                   data-testid="ai-operations-class-feature"
                   onChange={(_, feature) => {
@@ -275,6 +277,7 @@ export default function AiOperationsTab() {
               <FormControl>
                 <FormLabel>Action class</FormLabel>
                 <Input
+                  disabled={saving}
                   value={classDraft.actionClass}
                   onChange={event => editClass({ actionClass: event.target.value })}
                   data-testid="ai-operations-class-name"
@@ -283,6 +286,7 @@ export default function AiOperationsTab() {
               <FormControl>
                 <FormLabel>Policy version</FormLabel>
                 <Input
+                  disabled={saving}
                   value={classDraft.policyVersion}
                   onChange={event => editClass({ policyVersion: event.target.value })}
                   data-testid="ai-operations-class-policy"
@@ -291,6 +295,7 @@ export default function AiOperationsTab() {
               <FormControl>
                 <FormLabel>Replay artifact reference</FormLabel>
                 <Input
+                  disabled={saving}
                   value={classDraft.replayArtifact}
                   onChange={event => editClass({ replayArtifact: event.target.value })}
                   data-testid="ai-operations-class-artifact"
@@ -299,6 +304,7 @@ export default function AiOperationsTab() {
               <FormControl>
                 <FormLabel>Replay cases</FormLabel>
                 <Input
+                  disabled={saving}
                   type="number"
                   value={classDraft.replayCases}
                   onChange={event => editClass({ replayCases: Number(event.target.value) })}
@@ -308,6 +314,7 @@ export default function AiOperationsTab() {
               <FormControl>
                 <FormLabel>Agreed cases</FormLabel>
                 <Input
+                  disabled={saving}
                   type="number"
                   value={classDraft.replayAgreed}
                   onChange={event => editClass({ replayAgreed: Number(event.target.value) })}
@@ -317,6 +324,7 @@ export default function AiOperationsTab() {
               <FormControl>
                 <FormLabel>Class mode</FormLabel>
                 <Select
+                  disabled={saving}
                   value={classDraft.mode}
                   data-testid="ai-operations-class-mode"
                   onChange={(_, mode) => {
@@ -398,7 +406,7 @@ export default function AiOperationsTab() {
           />
           <SaveBar
             count={Number(configDirty) + Number(classDirty)}
-            pending={save.isPending || saveClass.isPending}
+            pending={saving}
             error={save.error?.message ?? saveClass.error?.message}
             onSave={async () => {
               try {
@@ -416,7 +424,7 @@ export default function AiOperationsTab() {
           />
           <UnsavedChangesGuard
             dirty={dirty}
-            pending={save.isPending || saveClass.isPending}
+            pending={saving}
             isLeaving={(current, next) =>
               current.pathname !== next.pathname || JSON.stringify(current.search) !== JSON.stringify(next.search)
             }

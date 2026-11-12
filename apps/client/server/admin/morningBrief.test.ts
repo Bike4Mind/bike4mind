@@ -5,21 +5,24 @@ import { AdminAiConfigSchema } from '@bike4mind/common';
 const gate = vi.hoisted(() => ({ readiness: vi.fn(), run: vi.fn(), settings: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
-  AdminAiSuggestionModel: {},
+  AdminAiSuggestionModel: { aggregate: vi.fn(async () => []) },
   adminMorningBriefRepository: {},
   adminSettingsRepository: {},
 }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlackWithOutcome: vi.fn() }));
-vi.mock('./actionCounts', () => ({ computeAdminActionCounts: vi.fn() }));
+vi.mock('./actionCounts', () => ({
+  computeAdminActionCounts: vi.fn(async () => ({ feedback: 3, stripeDisputes: 1 })),
+  computeAdminActionOldest: vi.fn(async () => ({})),
+}));
 vi.mock('./ai/runAdminAi', () => ({ adminAiTextOutputSchema: {}, runAdminAi: gate.run }));
 vi.mock('./ai/readiness', () => ({ getAdminAiClassReadiness: gate.readiness }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: gate.settings,
   getSettingsValue: (_key: string, settings: unknown) => settings,
 }));
-vi.mock('./ai/budget', () => ({ readAdminAiSpend: vi.fn() }));
-vi.mock('../security/incidentSignals', () => ({ getAlarms: vi.fn() }));
-import { morningBriefDeps, runMorningBrief, type MorningBriefDeps } from './morningBrief';
+vi.mock('./ai/budget', () => ({ readAdminAiSpend: vi.fn(async () => null) }));
+vi.mock('../security/incidentSignals', () => ({ getAlarms: vi.fn(async () => null) }));
+import { gatherMorningBriefFacts, morningBriefDeps, runMorningBrief, type MorningBriefDeps } from './morningBrief';
 
 const options = {
   enabled: true,
@@ -65,6 +68,14 @@ function setup() {
 }
 
 describe('morning brief', () => {
+  it('generates canonical queue destinations for fresh records', async () => {
+    gate.settings.mockResolvedValue(AdminAiConfigSchema.parse({}));
+    const facts = await gatherMorningBriefFacts(options.now);
+    expect(facts.needsHuman).toContainEqual({ label: expect.any(String), href: '/admin?tab=feedback' });
+    expect(facts.needsHuman).toContainEqual({ label: expect.any(String), href: '/admin?tab=disputes' });
+    expect(facts.needsHuman).toContainEqual({ label: expect.any(String), href: '/admin?tab=security-dashboard' });
+    for (const link of facts.needsHuman) expect(link.href).not.toMatch(/tab=\d/);
+  });
   it('does no work in a disabled environment', async () => {
     const { deps } = setup();
     expect(await runMorningBrief({ ...options, enabled: false }, deps)).toBe('disabled');
@@ -76,8 +87,27 @@ describe('morning brief', () => {
     if (state === 'failed') vi.mocked(deps.summarize).mockRejectedValue(new Error('provider down'));
     expect(await runMorningBrief(options, deps)).toBe('sent');
     expect(deps.deliver).toHaveBeenCalledWith(expect.stringContaining('new feedback items: 3'));
-    expect(deps.deliver).toHaveBeenCalledWith(expect.stringContaining('https://example.test/admin?tab=2'));
+    expect(deps.deliver).toHaveBeenCalledWith(expect.stringContaining('https://example.test/admin?tab=feedback'));
     expect(rows.get('dev:2026-11-12')?.summary).toBeNull();
+  });
+  it('normalizes a stored ready brief before sending without replacing its delivery claim', async () => {
+    const { deps, rows } = setup();
+    rows.set('dev:2026-11-12', {
+      _id: 'dev:2026-11-12',
+      environment: 'dev',
+      day: '2026-11-12',
+      generatedAt: options.now,
+      facts: 'Existing facts',
+      summary: null,
+      delivery: 'ready',
+      needsHuman: [{ label: 'Disputes', href: '/admin?tab=75' }],
+    });
+    expect(await runMorningBrief(options, deps)).toBe('sent');
+    expect(deps.gather).not.toHaveBeenCalled();
+    expect(deps.deliver).toHaveBeenCalledWith(expect.stringContaining('/admin?tab=disputes'));
+    expect(deps.store.claimDelivery).toHaveBeenCalledTimes(1);
+    expect(await runMorningBrief(options, deps)).toBe('already_attempted');
+    expect(deps.deliver).toHaveBeenCalledTimes(1);
   });
   it('claims delivery once for concurrent jobs and reruns, separately by day/environment', async () => {
     const { deps } = setup();

@@ -58,7 +58,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'schedule:infra/adminMorningBrief.ts:adminMorningBrief',
-    '8f39213e20daf6df6bcc88a7548d0c275721d82c4a345805dafec8f3abb60fbd',
+    '1b5ed24c369a01d8495f89deb746b27f0e9d34463bf8cc1c035b7e6fcedefe5c',
     'Opt-in admin brief uses hosted CloudWatch alarms and the LiveOps destination; self-host scheduling and alternate alarm capability are not wired.',
     ['cloudwatch:DescribeAlarms']
   ),
