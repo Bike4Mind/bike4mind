@@ -69,6 +69,8 @@ export const ApiRequestsSection: React.FC<{ userId: string; apiKeys: readonly IU
         error={timeline.isError ? 'API requests could not be loaded.' : undefined}
         onRetry={() => void timeline.refetch()}
         testId="user-api-requests-table"
+        minWidth="64rem"
+        framed={false}
         pagination={false}
         pageResetKey={`${apiKeyId ?? ''}:${from}:${to}`}
         empty={

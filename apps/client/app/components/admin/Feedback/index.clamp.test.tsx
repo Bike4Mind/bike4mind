@@ -19,6 +19,7 @@ vi.mock('@client/app/utils/feedbackAPICalls', () => ({
   deleteFeedbackFromServer: mocks.deleteFeedbackFromServer,
   updateFeedbackStatusOnServer: vi.fn(),
   getAllFeedbackForExport: vi.fn(),
+  getFeedbackTrendsFromServer: vi.fn(() => new Promise(() => undefined)),
   FEEDBACK_EXPORT_MAX_ROWS: 5000,
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
@@ -71,8 +72,8 @@ describe('FeedbackTab page clamp after the last page empties', () => {
   it('waits out the same-key refetch, then clamps once to the new last page', async () => {
     let resolveRefetch: (value: unknown) => void = () => undefined;
     let listCalls = 0;
-    mocks.getFeedbackFromServer.mockImplementation((params: { includeOrganizations?: boolean }) => {
-      if (params.includeOrganizations) return Promise.resolve({ items: [], total: 0, organizations: [] });
+    mocks.getFeedbackFromServer.mockImplementation((params: { facetsOnly?: boolean }) => {
+      if (params.facetsOnly) return Promise.resolve({ items: [], total: 0, organizations: [] });
       listCalls += 1;
       if (listCalls === 1) return Promise.resolve({ items: [makeFeedbackItem()], total: 51 });
       return new Promise(resolve => (resolveRefetch = resolve));

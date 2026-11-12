@@ -25,6 +25,7 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }))
 import { UndoToastProvider } from '../../../shared/UndoToast';
 
 import { useFeedbackOperations } from '../useFeedbackOperations';
+import { FEEDBACK_TRENDS_QUERY_KEY } from '../../queryKeys';
 
 const listParams = (page: number): FeedbackListParams => ({
   status: [FeedbackStatus.New],
@@ -33,8 +34,10 @@ const listParams = (page: number): FeedbackListParams => ({
   limit: 20,
 });
 
-const renderOperations = (initialParams: FeedbackListParams) => {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const renderOperations = (
+  initialParams: FeedbackListParams,
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+) => {
   const wrapper = ({ children }: { children: React.ReactNode }) => (
     <QueryClientProvider client={queryClient}>
       <UndoToastProvider>{children}</UndoToastProvider>
@@ -85,6 +88,18 @@ describe('useFeedbackOperations totalSettled', () => {
   });
 });
 
+describe('useFeedbackOperations organizations query', () => {
+  it('asks the server for the facet alone', async () => {
+    mocks.getFeedbackFromServer.mockReset();
+    mocks.getFeedbackFromServer.mockResolvedValue({ items: [], total: 0, organizations: ['Acme'] });
+
+    const { result } = renderOperations(listParams(1));
+
+    await waitFor(() => expect(result.current.organizations).toEqual(['Acme']));
+    expect(mocks.getFeedbackFromServer).toHaveBeenCalledWith(expect.objectContaining({ facetsOnly: true }));
+  });
+});
+
 describe('useFeedbackOperations isError', () => {
   beforeEach(() => {
     mocks.getFeedbackFromServer.mockReset();
@@ -92,7 +107,7 @@ describe('useFeedbackOperations isError', () => {
 
   it('reports a failed list request', async () => {
     mocks.getFeedbackFromServer.mockImplementation((params: FeedbackListParams) =>
-      params.includeOrganizations
+      params.facetsOnly
         ? Promise.resolve({ items: [], total: 0, organizations: [] })
         : Promise.reject(new Error('list failed'))
     );
@@ -223,5 +238,44 @@ describe('useFeedbackOperations confirmDeleteFeedback', () => {
     expect(mocks.deleteFeedbackFromServer).toHaveBeenLastCalledWith('fb-1', 'Duplicate report');
     expect(result.current.openDeleteFeedbackModal).toBe(false);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'action-counts'] });
+  });
+});
+
+describe('useFeedbackOperations trends refresh', () => {
+  const item = {
+    _id: 'fb-3',
+    userId: 'user-3',
+    status: FeedbackStatus.New,
+    username: 'rater',
+    type: FeedbackType.FEEDBACK,
+    content: 'x',
+  } as unknown as IExtendedFeedbackDocument;
+
+  const setup = () => {
+    mocks.getFeedbackFromServer.mockResolvedValue({ items: [item], total: 1, organizations: [] });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    return { ...renderOperations(listParams(1), queryClient), invalidate };
+  };
+
+  it('refetches the trends after a status change', async () => {
+    mocks.updateFeedbackStatusOnServer.mockResolvedValue(statusResponse(FeedbackStatus.Closed, FeedbackStatus.New));
+    const { result, invalidate } = setup();
+    await waitFor(() => expect(result.current.feedback).toHaveLength(1));
+
+    await act(() => result.current.handleStatusChange(item, FeedbackStatus.Closed));
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: FEEDBACK_TRENDS_QUERY_KEY });
+  });
+
+  it('refetches the trends after a delete', async () => {
+    mocks.deleteFeedbackFromServer.mockResolvedValue({ ok: true });
+    const { result, invalidate } = setup();
+    await waitFor(() => expect(result.current.feedback).toHaveLength(1));
+
+    act(() => result.current.handleDeleteFeedbackClick(item));
+    await act(() => result.current.confirmDeleteFeedback('Duplicate report'));
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: FEEDBACK_TRENDS_QUERY_KEY });
   });
 });

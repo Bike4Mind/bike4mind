@@ -25,6 +25,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { shareable: { findAccessibleById: vi.fn() } },
 }));
 vi.mock('@server/dataLakes', () => ({
+  adminBypassLakeIds: vi.fn(async () => []),
   grantingLakes: vi.fn(),
   resolveAccessibleLakes: vi.fn(),
 }));

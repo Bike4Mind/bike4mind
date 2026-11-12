@@ -12,6 +12,7 @@ import {
   FEEDBACK_STATUS_ORDER,
   FEEDBACK_TYPE_ORDER,
 } from './constants';
+import { FEEDBACK_RECEIVED_WINDOWS, type FeedbackReceivedWindow } from './feedbackTrends';
 
 /**
  * The Feedback tab's `/admin` search params and their coercion. Pure and React-free: adminTabParams.ts
@@ -25,6 +26,7 @@ export const FEEDBACK_STATUS_PARAM = 'feedbackStatus';
 export const FEEDBACK_SUBJECT_PARAM = 'feedbackSubject';
 export const FEEDBACK_TYPE_PARAM = 'feedbackType';
 export const FEEDBACK_ORG_PARAM = 'feedbackOrg';
+export const FEEDBACK_RECEIVED_PARAM = 'feedbackReceived';
 export const FEEDBACK_ORDER_PARAM = 'feedbackOrder';
 export const FEEDBACK_PAGE_PARAM = 'feedbackPage';
 export const FEEDBACK_LIMIT_PARAM = 'feedbackLimit';
@@ -35,6 +37,7 @@ const FEEDBACK_VIEW_PARAMS = [
   FEEDBACK_SUBJECT_PARAM,
   FEEDBACK_TYPE_PARAM,
   FEEDBACK_ORG_PARAM,
+  FEEDBACK_RECEIVED_PARAM,
   FEEDBACK_ORDER_PARAM,
   FEEDBACK_PAGE_PARAM,
   FEEDBACK_LIMIT_PARAM,
@@ -55,6 +58,7 @@ export type FeedbackSearch = {
   [FEEDBACK_SUBJECT_PARAM]?: FeedbackSubject;
   [FEEDBACK_TYPE_PARAM]?: FeedbackType[];
   [FEEDBACK_ORG_PARAM]?: string[];
+  [FEEDBACK_RECEIVED_PARAM]?: FeedbackReceivedWindow;
   [FEEDBACK_ORDER_PARAM]?: FeedbackOrder;
   [FEEDBACK_PAGE_PARAM]?: number;
   [FEEDBACK_LIMIT_PARAM]?: number;
@@ -69,6 +73,8 @@ export type FeedbackView = {
   types: FeedbackType[];
   /** Organization names; empty is every organization. */
   organizations: string[];
+  /** Undefined is any age. */
+  received: FeedbackReceivedWindow | undefined;
   sortAscending: boolean;
   page: number;
   limit: number;
@@ -88,6 +94,7 @@ export const DEFAULT_FEEDBACK_VIEW: FeedbackView = {
   subject: undefined,
   types: [],
   organizations: [],
+  received: undefined,
   sortAscending: false,
   page: 1,
   limit: FEEDBACK_DEFAULT_PAGE_SIZE,
@@ -136,6 +143,7 @@ export const FEEDBACK_SEARCH_PARSERS: {
   [FEEDBACK_SUBJECT_PARAM]: oneOf(FEEDBACK_SUBJECTS),
   [FEEDBACK_TYPE_PARAM]: parseTypes,
   [FEEDBACK_ORG_PARAM]: parseStringList,
+  [FEEDBACK_RECEIVED_PARAM]: oneOf(FEEDBACK_RECEIVED_WINDOWS),
   [FEEDBACK_ORDER_PARAM]: parseOrder,
   [FEEDBACK_PAGE_PARAM]: parsePage,
   [FEEDBACK_LIMIT_PARAM]: parseLimit,
@@ -150,6 +158,7 @@ export function feedbackViewFromSearch(search: Record<string, unknown>): Feedbac
     subject: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SUBJECT_PARAM](search[FEEDBACK_SUBJECT_PARAM]),
     types: parseTypes(search[FEEDBACK_TYPE_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.types,
     organizations: parseStringList(search[FEEDBACK_ORG_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.organizations,
+    received: FEEDBACK_SEARCH_PARSERS[FEEDBACK_RECEIVED_PARAM](search[FEEDBACK_RECEIVED_PARAM]),
     sortAscending: search[FEEDBACK_ORDER_PARAM] === 'asc',
     page: parsePage(search[FEEDBACK_PAGE_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.page,
     limit: parseLimit(search[FEEDBACK_LIMIT_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.limit,
@@ -170,6 +179,7 @@ export function feedbackViewToSearch(view: FeedbackView): {
     [FEEDBACK_SUBJECT_PARAM]: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SUBJECT_PARAM](view.subject),
     [FEEDBACK_TYPE_PARAM]: parseTypes(view.types),
     [FEEDBACK_ORG_PARAM]: parseStringList(view.organizations),
+    [FEEDBACK_RECEIVED_PARAM]: FEEDBACK_SEARCH_PARSERS[FEEDBACK_RECEIVED_PARAM](view.received),
     [FEEDBACK_ORDER_PARAM]: view.sortAscending ? 'asc' : undefined,
     [FEEDBACK_PAGE_PARAM]: view.page === DEFAULT_FEEDBACK_VIEW.page ? undefined : parsePage(view.page),
     [FEEDBACK_LIMIT_PARAM]: view.limit === DEFAULT_FEEDBACK_VIEW.limit ? undefined : parseLimit(view.limit),

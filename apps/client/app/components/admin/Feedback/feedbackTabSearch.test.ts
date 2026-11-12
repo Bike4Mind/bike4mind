@@ -117,6 +117,18 @@ describe('the order param', () => {
   });
 });
 
+describe('the received param', () => {
+  it.each(['24h', '7d', '30d'] as const)('round-trips %s', window => {
+    const view = feedbackViewFromSearch({ feedbackReceived: window });
+    expect(view.received).toBe(window);
+    expect(feedbackViewToSearch(view).feedbackReceived).toBe(window);
+  });
+
+  it.each([['90d'], ['24H'], [''], [7], [undefined]])('reads %j as any age', value => {
+    expect(feedbackViewFromSearch({ feedbackReceived: value }).received).toBeUndefined();
+  });
+});
+
 describe('feedbackViewFromSearch', () => {
   it('is the default view for a bare feedback URL', () => {
     expect(feedbackViewFromSearch({ tab: 'feedback' })).toEqual(DEFAULT_FEEDBACK_VIEW);
@@ -203,6 +215,7 @@ describe('feedbackViewToSearch', () => {
         'feedbackOrder',
         'feedbackOrg',
         'feedbackPage',
+        'feedbackReceived',
         'feedbackStatus',
         'feedbackSubject',
         'feedbackType',

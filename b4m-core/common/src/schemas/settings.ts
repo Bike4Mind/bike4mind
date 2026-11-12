@@ -374,7 +374,6 @@ export const SettingKeySchema = z.enum([
   'defaultTags',
   'EnableReferralToSlack',
   'EnableReferralToEmail',
-  'ReferralCreditsAmount',
   'ReferralFirstAnswerCredits',
   'ReferralFirstPaymentCredits',
   'ReferralSecondPaymentCredits',
@@ -560,6 +559,7 @@ export const SettingKeySchema = z.enum([
   'signupGrantSignupPoolDaily',
   'signupGrantTricklePoolDaily',
   'signupGrantRiskPolicy',
+  'signupGrantUnprotectedMaxCredits',
   'signupGrantActivityMinActiveSeconds',
   'signupGrantActivityPreviewTestMode',
   'signupUnlockPaymentHoldHours',
@@ -2724,6 +2724,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
       { key: 'signupGrantRiskPolicy', order: 8 },
+      { key: 'signupGrantUnprotectedMaxCredits', order: 8.1 },
       { key: 'signupGrantActivityMinActiveSeconds', order: 11.5 },
       { key: 'signupGrantActivityPreviewTestMode', order: 14.5 },
       { key: 'signupUnlockPaymentHoldHours', order: 14.6 },
@@ -4344,17 +4345,6 @@ export const settingsMap = {
     description: 'Sends a notification to Slack when a referral is sent.',
     category: 'Referrals',
   }),
-  ReferralCreditsAmount: makeNumberSetting({
-    key: 'ReferralCreditsAmount',
-    name: 'Referral Credits Amount',
-    defaultValue: 10000,
-    description:
-      'Credits a user who signs up with a referral invite receives, as a floor: a larger amount on the invite wins. Other self-serve signups receive the signup grant schedule (Signup Grant Initial Credits) instead.',
-    category: 'Referrals',
-    // ReferralModal renders this for every non-admin sender - no secret, just the number
-    // displayed in the "invited person gets N credits" line.
-    userReadable: true,
-  }),
   ReferralFirstAnswerCredits: makeNumberSetting({
     key: 'ReferralFirstAnswerCredits',
     name: 'Referral Reward: First Answer',
@@ -5434,7 +5424,18 @@ export const settingsMap = {
     defaultValue: { enabled: false },
     schema: z.record(z.string(), z.unknown()),
     description:
-      'Private server assessment policy for new staged signup tranches. Invalid or unavailable enabled policies hold the tranche.',
+      'Private server assessment policy for new staged signup tranches. Saving an invalid policy is refused; an enabled policy that is unavailable at payout holds the tranche.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantUnprotectedMaxCredits: makeNumberSetting({
+    key: 'signupGrantUnprotectedMaxCredits',
+    name: 'Unprotected Signup Grant Limit (credits)',
+    defaultValue: 1000,
+    min: 0,
+    int: true,
+    description:
+      'Largest Signup Grant Initial Credits or Invite Bonus Credits that can be saved while the Signup Grant Assessment Policy is off. A larger grant needs a valid, enabled policy, and the policy cannot be turned off while a grant is above this limit. While the policy is off, the first signup tranche paid at verification is also capped at this limit and the rest waits for the unlock. Full administrators only.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -5503,7 +5504,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero disables the drip and pays an invite in full at signup. While unset, nothing drips and an invite pays its initial share at signup, the rest on unlock.',
+      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero, or unset, disables the drip.',
     category: 'Users',
   }),
   signupGrantInviteBonusCredits: makeNumberSetting({

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
 
 import {
@@ -23,8 +23,7 @@ import { useGetReferralSummary } from '@client/app/hooks/data/referralSummary';
 import type { IReferralResult } from '@client/app/utils/regInviteAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { create } from 'zustand';
-import { useTranslation } from 'react-i18next';
-import { useServerSettings } from '@client/app/contexts/UserSettingsContext';
+import { Trans, useTranslation } from 'react-i18next';
 import { green, blue, blackAlpha } from '@client/app/utils/themes/colors';
 
 export enum ReferralInviteType {
@@ -63,7 +62,6 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
   // The /api/reg-invites/user-invite endpoint isn't implemented yet, so userInvitation mode is
   // wired but not yet served - no current caller passes it (all use referral).
   const userInvitation = inviteType === ReferralInviteType.referral ? submitReferral : submitUserInvitation;
-  const { serverSettings } = useServerSettings();
 
   const currentUser = useUser(s => s.currentUser);
   const userId = currentUser?.id;
@@ -74,19 +72,13 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
 
   const [friendEmail, setFriendEmail] = useState<string>('');
   const [numReferralsAvailable, setNumReferralsAvailable] = useState<number>(0);
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [loading, setLoading] = React.useState<boolean>(false);
 
   const [emailTitle, setEmailTitle] = useState<string>(t('referral.email_title_default'));
   const [emailBody, setEmailBody] = useState<string>(
     t('referral.email_body_default').replace('USER_NAME', currentUser?.name || '')
   );
-
-  const referralCreditsAmount = useMemo(() => {
-    return serverSettings.find(
-      (setting: { settingName: string; settingValue: string }) => setting.settingName === 'ReferralCreditsAmount'
-    );
-  }, [serverSettings]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -235,9 +227,39 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
             }}
           >
             Enter the email of the person you want to refer to {t('app_name')}
-            <br />
-            Invited person gets <strong>{referralCreditsAmount?.settingValue} credits</strong>.
           </Typography>
+
+          {referralSummary?.enabled && referralSummary.rewards && (
+            <Box data-testid="referral-modal-rewards" sx={{ mb: 2, textAlign: 'center' }}>
+              {[
+                {
+                  testId: 'first-answer',
+                  i18nKey: 'referral.reward_first_answer',
+                  credits: referralSummary.rewards.firstAnswer,
+                },
+                {
+                  testId: 'first-payment',
+                  i18nKey: 'referral.reward_first_payment',
+                  credits: referralSummary.rewards.firstPayment,
+                },
+                {
+                  testId: 'second-payment',
+                  i18nKey: 'referral.reward_second_payment',
+                  credits: referralSummary.rewards.secondPayment,
+                },
+              ]
+                .filter(({ credits }) => credits > 0)
+                .map(({ testId, i18nKey, credits }) => (
+                  <Typography key={testId} level="body-sm" data-testid={`referral-modal-reward-${testId}`}>
+                    <Trans
+                      i18nKey={i18nKey}
+                      values={{ credits: credits.toLocaleString(i18n.language) }}
+                      components={{ strong: <strong /> }}
+                    />
+                  </Typography>
+                ))}
+            </Box>
+          )}
 
           {referralSummary?.enabled && (
             <Box

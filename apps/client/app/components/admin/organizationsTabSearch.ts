@@ -14,6 +14,8 @@ export const ORGS_SORT_PARAM = 'orgsSort';
 export const ORGS_ORDER_PARAM = 'orgsOrder';
 export const ORGS_PERSONAL_PARAM = 'orgsPersonal';
 export const ORGS_ORG_ID_PARAM = 'orgId';
+/** The open organization's Billing window (`30d`, `365d`); absent is the default. */
+export const ORGS_BILLING_RANGE_PARAM = 'orgsBillingRange';
 
 /** The params that describe the list view; `orgId` (the open organization) is separate. */
 const ORGS_VIEW_PARAMS = [
@@ -24,7 +26,7 @@ const ORGS_VIEW_PARAMS = [
   ORGS_PERSONAL_PARAM,
 ] as const;
 
-export const ORGS_TAB_PARAMS = [...ORGS_VIEW_PARAMS, ORGS_ORG_ID_PARAM] as const;
+export const ORGS_TAB_PARAMS = [...ORGS_VIEW_PARAMS, ORGS_ORG_ID_PARAM, ORGS_BILLING_RANGE_PARAM] as const;
 
 /** The admin console URL that opens one organization's profile. */
 export const adminOrganizationHref = (orgId: string): string =>
