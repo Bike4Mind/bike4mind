@@ -21,7 +21,7 @@ describe('usageCsv', () => {
       byApiKey: [
         { apiKeyId: 'k1', keyName: 'Key, "one"', requests: 2, creditsSpent: 20, inputTokens: 100, outputTokens: 50 },
       ],
-      bySource: [],
+      bySource: [{ source: 'web', requests: 2, creditsSpent: 20 }],
       ledger: { creditsCharged: 20, transactions: 2 },
     };
     const csv = usageCsv(data);
@@ -31,5 +31,6 @@ describe('usageCsv', () => {
     expect(csv).toContain('"\'=SUM(1,2)"');
     expect(csv).toContain('"day","2026-11-01"');
     expect(csv).toContain('"model","provider/model"');
+    expect(csv).toContain('"source_ledger","web","web","2","20",""');
   });
 });

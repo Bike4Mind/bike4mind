@@ -7473,6 +7473,7 @@ describe('ChatCompletionProcess', () => {
       ['org1', '665000000000000000000001'],
       ['other-org', undefined],
       [undefined, undefined],
+      ['lookup-fails', undefined],
     ])(
       'records only matching explicit org project context through completion settlement: %s',
       async (binding, expected) => {
@@ -7503,6 +7504,11 @@ describe('ChatCompletionProcess', () => {
           userDetails: [],
         });
         mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: 100_000 });
+        if (binding === 'lookup-fails') {
+          mockDb.projects.shareable.findAccessibleById
+            .mockResolvedValueOnce(null)
+            .mockRejectedValueOnce(new Error('offline'));
+        }
         await service.process({
           body: { ...startQuestParams, tools: [], projectId, organizationId: 'org1' },
           logger: mockLogger,

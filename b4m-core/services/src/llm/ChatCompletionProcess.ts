@@ -5069,6 +5069,9 @@ export class ChatCompletionProcess {
           projects: this.db.projects,
           ownerId: reservationOwnerId,
           ownerType: reservationOwnerType,
+        }).catch(() => {
+          logger.warn('Project usage attribution unavailable; recording as Unassigned');
+          return undefined;
         });
         const holderAfterReservation = await reservationMethods.incrementCredits(reservationOwnerId, -requiredCredits);
 

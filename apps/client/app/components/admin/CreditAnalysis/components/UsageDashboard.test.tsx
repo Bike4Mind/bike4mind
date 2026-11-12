@@ -132,6 +132,16 @@ describe('UsageDashboard owner type', () => {
     expect(screen.getByTestId('usage-export-btn')).toBeEnabled();
   });
 
+  it('does not export cached data for a different selected period', () => {
+    setData({ days: 30 });
+    render(
+      <TestWrapper>
+        <UsageDashboard ownerType={CreditHolderType.Organization} ownerId="org-1" days={7} />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('usage-export-btn')).toBeDisabled();
+  });
+
   it('hides the by-member cut for a User owner and shows no org picker', () => {
     setData({ ownerType: CreditHolderType.User, ownerId: 'user-1' });
     render(

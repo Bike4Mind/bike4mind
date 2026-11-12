@@ -54,6 +54,20 @@ export const usageCsv = (data: IUsageDashboardResponse): string => {
       row.outputTokens,
     ])
   );
+  data.bySource.forEach(row =>
+    rows.push([
+      data.ownerId,
+      data.days,
+      'source_ledger',
+      row.source,
+      row.source === 'unclassified' ? 'Unclassified' : row.source,
+      row.requests,
+      row.creditsSpent,
+      '',
+      '',
+      '',
+    ])
+  );
   return rows.map(row => row.map(cell).join(',')).join('\r\n');
 };
 
