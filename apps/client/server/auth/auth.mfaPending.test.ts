@@ -1,4 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({
+  recordOrganizationAuditEvent: vi.fn(),
+  organizationLifecycleAuditActions: {},
+}));
 vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
   requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
 }));

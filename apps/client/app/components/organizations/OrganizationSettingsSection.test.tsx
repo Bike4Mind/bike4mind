@@ -5,6 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 import OrganizationSettingsSection from './OrganizationSettingsSection';
+vi.mock('./OrganizationServiceKeys', () => ({ default: () => null }));
 
 const currentUser = vi.fn();
 const transfer = vi.hoisted(() => vi.fn());

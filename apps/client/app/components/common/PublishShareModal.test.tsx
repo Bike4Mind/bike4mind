@@ -68,7 +68,7 @@ describe('PublishShareModal organization policy', () => {
       'does not allow public links'
     );
     expect(radio('public')).toBeDisabled();
-    expect(radio('private')).toBeChecked();
+    await waitFor(() => expect(radio('private')).toBeChecked());
     expect(publish).not.toHaveBeenCalled();
   });
 });

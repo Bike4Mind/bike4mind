@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({ recordOrganizationAuditEvent: vi.fn() }));
 vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
   outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
   assertOutboundActionAllowed: async () => undefined,

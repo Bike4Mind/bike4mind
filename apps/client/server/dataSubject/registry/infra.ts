@@ -325,6 +325,11 @@ export const infraHolders = {
     ],
     unrelatedPaths: ['userDetails.email', 'maxCreditsPerMember', 'signupGrantUnlockCount', 'signupInviteBonusCount'],
   },
+  OrganizationAuditEvent: {
+    kind: 'holder',
+    references: [{ path: 'actorUserId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG }],
+    unrelatedPaths: ['organizationId', 'targetId'],
+  },
   OverwatchProduct: { kind: 'noUserData', note: 'Tracked product catalogue entry.' },
   // The event `userId` is an HMAC of the Bike4Mind user id under a server-side salt (`pseudonymizeUserId`), not the id.
   OverwatchRawEvent: {

@@ -8,6 +8,11 @@ const declarationsPath = fileURLToPath(new URL('./adminAudit.consumer.d.ts', imp
 const ipStubPath = fileURLToPath(new URL('./ip.ts', import.meta.url));
 // Stands in for the helper's relative `./ip` import, which noResolve would otherwise leave unresolved.
 const ipStub = `export declare function getClientIp(req: import('express').Request): string;\n`;
+const orgAuditStubPath = fileURLToPath(new URL('./organizationAudit.ts', import.meta.url));
+const orgAuditStub = `
+export declare const organizationLifecycleAuditActions: Readonly<Record<string, string>>;
+export declare function recordOrganizationAuditEvent(input: { organizationId: string; actorUserId: string; action: string }): Promise<void>;
+`;
 
 // Isolate the consumer's request type from the client's ambient Express augmentation and the
 // dependencies' own declaration graphs. Only the impersonation claim is intentionally absent.
@@ -47,8 +52,8 @@ declare module '@bike4mind/common' {
     route: string;
     source: 'admin_ui' | 'api_key' | 'script' | 'worker';
   };
-  export type AuditEntry = { id: string };
-  export type AdminAuditAction = 'user.role.admin_granted' | 'user.role.denied';
+  export type AuditEntry = { id: string; actor: AuditActor };
+  export type AdminAuditAction = 'user.role.admin_granted' | 'user.role.denied' | 'org.owner.transferred';
   export type AuditTarget = { kind: string; id: string; displayName: string };
   export const AdminActionReasonSchema: {
     safeParse(
@@ -123,6 +128,7 @@ const checkConsumer = (helperSource: string) => {
     [helperPath, helperSource],
     [declarationsPath, consumerDeclarations],
     [ipStubPath, ipStub],
+    [orgAuditStubPath, orgAuditStub],
   ]);
   const host = ts.createCompilerHost(options);
   const getSourceFile = host.getSourceFile.bind(host);
@@ -133,7 +139,7 @@ const checkConsumer = (helperSource: string) => {
       : ts.createSourceFile(fileName, source, languageVersion, true);
   };
 
-  const program = ts.createProgram([helperPath, declarationsPath, ipStubPath], options, host);
+  const program = ts.createProgram([helperPath, declarationsPath, ipStubPath, orgAuditStubPath], options, host);
   return ts.getPreEmitDiagnostics(program).map(diagnostic => ({
     code: diagnostic.code,
     message: ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'),

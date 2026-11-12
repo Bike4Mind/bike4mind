@@ -1,10 +1,11 @@
 import mongoose from 'mongoose';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { OrganizationAuditEventModel } from '@bike4mind/database/infra';
 import { recordOrganizationAuditEvent } from './organizationAudit';
 import { organizationAuditCsv, organizationAuditFilter, organizationAuditQuerySchema } from './organizationAuditRead';
 
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let stop: () => Promise<unknown>;
 beforeAll(async () => {
   const server = await createMongoServer();
