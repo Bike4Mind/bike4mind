@@ -26,8 +26,8 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
     },
   }),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => 'limiter' }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => 'limiter' }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: vi.fn() }));
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
   isChatModelUsable: vi.fn(),
   resolveDefaultChatModel: (...a: unknown[]) => mockResolveDefaultChatModel(...a),

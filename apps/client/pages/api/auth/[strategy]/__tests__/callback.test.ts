@@ -36,7 +36,7 @@ vi.mock('@server/middlewares/oauthIpRateLimit', () => ({
   },
 }));
 const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown[] }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (opts: unknown) => {
     rateLimitOptions.push(opts);
     mockChain.order.push('rateLimit');

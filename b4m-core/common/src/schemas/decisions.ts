@@ -105,7 +105,9 @@ export const DecisionsRequestSchema = z.strictObject({
     .min(1)
     .max(64)
     .optional()
-    .describe('A stable, non-identifying id for your end user. Defaults to a hash of the B4M user id.'),
+    .describe(
+      'Deprecated and ignored: the provider always receives a hash of the calling B4M user id. Accepted so existing callers keep working.'
+    ),
 });
 
 const ProbabilitySchema = z.number().min(0).max(1);

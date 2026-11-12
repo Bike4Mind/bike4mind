@@ -36,7 +36,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/database/ai', () => ({ McpServer: { findOneAndDelete: h.findOneAndDelete } }));
 vi.mock('@bike4mind/common', () => ({ McpServerName: { Atlassian: 'atlassian' } }));
-vi.mock('@server/integrations/jira/revokeAtlassianGrant', () => ({ revokeAtlassianGrant: h.revokeAtlassian }));
+vi.mock('@bike4mind/server-utils/integrations/jira/revokeAtlassianGrant', () => ({
+  revokeAtlassianGrant: h.revokeAtlassian,
+}));
 vi.mock('@bike4mind/server-utils/integrations/jira/atlassianConfig', () => ({
   getAtlassianOAuthConfig: vi.fn().mockResolvedValue({}),
 }));

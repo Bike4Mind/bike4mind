@@ -41,6 +41,7 @@ import { ApiKeysTab } from './tabs/keys/ApiKeysTab';
 import { ActivityTab } from './tabs/ActivityTab';
 import { AdminLogTab } from './tabs/AdminLogTab';
 import { SignInsTab } from './tabs/SignInsTab';
+import { UserBillingTab } from './tabs/UserBillingTab';
 import { USER_PROFILE_TAB_LABELS, type UserProfileTab } from './userProfileSearch';
 import { DELETION_SOURCE_LABELS, displayName, formatDeletionDay, type AdminUserProfile } from './userProfileModel';
 
@@ -292,6 +293,8 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
         return <ActivityTab userId={user.id} onOpenCredits={() => onTabChange('credits')} />;
       case 'credits':
         return <CreditsTab user={user} onAdjust={() => setAction('credits')} />;
+      case 'billing':
+        return <UserBillingTab userId={user.id} />;
       case 'keys':
         return <ApiKeysTab user={user} />;
       case 'signins':

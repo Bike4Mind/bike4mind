@@ -422,6 +422,13 @@ describe('GET /api/v1/skills/{id} and /mine', () => {
     expect((await get())._getStatusCode()).toBe(404);
   });
 
+  it('lists claude_code_model on mine only for skills that have one', async () => {
+    h.search.mockResolvedValue({ data: [{ ...SKILL, claudeCodeModel: 'opus' }, SKILL], hasMore: false, total: 2 });
+    const body = MySkillsResponseSchema.strict().parse((await mine())._getJSONData());
+    expect(body.data[0].claude_code_model).toBe('opus');
+    expect(body.data[1]).not.toHaveProperty('claude_code_model');
+  });
+
   it('lists your own skills without bodies, filtered to the caller', async () => {
     const res = await mine({ q: 'review' });
     const body = MySkillsResponseSchema.strict().parse(res._getJSONData());

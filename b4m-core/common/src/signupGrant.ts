@@ -147,8 +147,6 @@ export interface SignupGrantSchedule {
   dripCap: number;
   /** Locked at enrollment and released by a verification unlock. */
   unlockCredits: number;
-  /** A stored cap of 0: nothing is locked, so a referral invite pays whole as the pre-staging flat grant did. */
-  paysFlat: boolean;
   inviteBonusCredits: number;
   dripCapSource: SignupGrantDripCapSource;
 }
@@ -173,8 +171,6 @@ export function runtimeSignupGrantSchedule(
     dailyCredits: read('signupGrantDailyCredits') ?? 0,
     dripCap,
     unlockCredits: dripCap,
-    // An unset cap drips nothing but still locks an invite's remainder, as the empty pre-schedule config did.
-    paysFlat: cap === 0,
     inviteBonusCredits: read('signupGrantInviteBonusCredits') ?? 0,
     dripCapSource: cap === undefined ? 'default' : 'setting',
   };
@@ -211,28 +207,16 @@ export async function resolveSignupGrantSettings(adminSettings: ScheduleSettings
 }
 
 /**
- * Every signup enrolls a staged grant. A drip cap of 0 (seeded where staging used to be off) locks nothing,
- * so the grant pays the flat path's amount; unlike the flat path, an invite-resolved amount now takes the
- * canonical-inbox claim and the risk policy on payout, as a staged referral grant always did.
- * `totalCredits` sets the enrolled entitlement (tranche first, remainder locked) instead of the signup settings.
- * It is a floor, not a ceiling: the drip and verification unlocks still grow the pool to the live drip cap
- * (signupGrantUnlockCredits, the drip branch in stagedSignupGrant.ts), so an invitee gets the larger of
- * `totalCredits` and the open-signup unlock pool; with a drip cap of 0 the grant pays `totalCredits` as
- * given, even below the open-signup initial credits. signupGrantInviteBonusCredits is the on-top invite bonus
- * (payInviteBonus).
+ * Every signup enrolls a staged grant from the signup settings; a drip cap of 0 (seeded where staging used to
+ * be off) locks nothing. Referral invitees take the same grant. signupGrantInviteBonusCredits is the on-top
+ * invite bonus (payInviteBonus).
  */
-export async function newSignupGrant(adminSettings: ScheduleSettingsReader, totalCredits?: number) {
+export async function newSignupGrant(adminSettings: ScheduleSettingsReader) {
   const schedule = await resolveSignupGrantSchedule(adminSettings);
-  const signupCredits =
-    totalCredits === undefined
-      ? schedule.initialCredits
-      : schedule.paysFlat
-        ? totalCredits
-        : Math.min(schedule.initialCredits, totalCredits);
   return {
     stage: 'pending_email',
-    signupCredits,
-    unlockCredits: totalCredits === undefined ? schedule.unlockCredits : totalCredits - signupCredits,
+    signupCredits: schedule.initialCredits,
+    unlockCredits: schedule.unlockCredits,
     creditsReleased: 0,
     nextCondition: 'email_verification',
   } satisfies SignupGrant;

@@ -6,7 +6,7 @@ vi.mock('@server/middlewares/adminApi', async () =>
   (await import('@server/middlewares/__tests__/adminApiMock')).adminApiMock()
 );
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockExport = vi.fn();
 vi.mock('@server/admin/usersList/listAdminUsers', () => ({

@@ -26,8 +26,8 @@ import {
   SCOPE_STAGING_ENV_VAR,
 } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
-import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
-import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
+import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
+import { resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRouteTemplate';
 import { refuseIfSuspendedOwner } from '@server/auth/suspendedApiKeyRefusal';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveUntrustedKeyLimits } from '@bike4mind/server-utils/utils/apiKeyTrust';
@@ -70,8 +70,15 @@ const hashApiKeyForLogging = (apiKey: string): string => {
  *   of these scopes (AND / "all of" semantics), independent of how
  *   requiredScopes resolves. No staging grace period - see decideScopeGate's
  *   doc comment (apiKeyScopeGate.ts).
+ * @param options.recordUse - `false` for routes the app calls on its own (baseApi's
+ *   `recordsActivity: false`): the key's `lastUsedAt` is not stamped and no USED event is
+ *   counted. ApiKeyUsageLog still records the call, as it does every authenticated request.
  */
-export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScopes?: ApiKeyScopeValue[]) => {
+export const apiKeyAuth = (
+  requiredScopes?: ApiKeyScopeValue[],
+  alsoRequiredScopes?: ApiKeyScopeValue[],
+  { recordUse = true }: { recordUse?: boolean } = {}
+) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // If already authenticated via JWT, skip API key auth
     if (req.user) {
@@ -94,11 +101,11 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
       const startTime = Date.now();
       const endpointPath = resolveRouteTemplate(req);
 
-      const validation = await userApiKeyService.validateUserApiKey(apiKey, {
-        db: {
-          userApiKeys: userApiKeyRepository,
-        },
-      });
+      const validation = await userApiKeyService.validateUserApiKey(
+        apiKey,
+        { db: { userApiKeys: userApiKeyRepository } },
+        { recordUse }
+      );
 
       if (!validation.isValid) {
         const failIp = getClientIp(req);
@@ -236,7 +243,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
       // Log API key usage to analytics (fire and forget). Ingest keys are machine telemetry at
       // thousands of POSTs per hour, not user activity; ApiKeyUsageLog below still records them.
       // Note: keyPrefix is named for type compatibility but contains a hash for security
-      if (!validation.scopes?.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE)) {
+      if (recordUse && !validation.scopes?.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE)) {
         const responseTime = Date.now() - startTime;
         logEvent(
           {

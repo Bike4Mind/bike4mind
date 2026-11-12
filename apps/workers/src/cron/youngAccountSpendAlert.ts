@@ -4,7 +4,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { escapeSlackLine, escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
 import { connectDB, counterLogRepository, adminSettingsRepository } from '@bike4mind/database';
 import type { YoungAccountSpendSummary, YoungAccountSpender } from '@bike4mind/database';
-import { stripeCustomerSlackLink } from '@server/integrations/slack/accountLinks';
+import { stripeCustomerSlackLink } from '@bike4mind/server-utils/integrations/slack/accountLinks';
 import {
   ADMIN_LINKS,
   appUrlFromEnv,
@@ -64,7 +64,7 @@ function slackLink(url: string, label: string): string {
   return `<${escapeSlackText(url)}|${label}>`;
 }
 
-/** Same path as adminOwnerPath in apps/client/server/integrations/slack/subscriptionLifecycle.ts. */
+/** Same path as adminOwnerPath in packages/server-utils/src/integrations/slack/subscriptionLifecycle.ts. */
 function adminUserLink(userId: string, appUrl: string | undefined): string | null {
   if (!appUrl) return null;
   return slackLink(toAbsoluteUrl(appUrl, `/admin/users/${encodeURIComponent(userId)}`), 'admin');

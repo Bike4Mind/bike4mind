@@ -24,6 +24,36 @@ beforeEach(() => {
 });
 
 describe('ApiRequestsSection', () => {
+  it('shows cap refusals separately from transport status and includes the correlation id', async () => {
+    mocks.get.mockResolvedValue({
+      data: {
+        entries: [
+          {
+            ...entry,
+            request: {
+              ...entry.request,
+              method: 'POST',
+              endpoint: '/api/ai/v1/completions',
+              statusCode: 429,
+              completionObservation: {
+                requestId: 'synthetic-request',
+                requestedModel: 'model-alpha',
+                startedAt: '2026-01-01T12:00:00Z',
+                outcome: 'daily_cap_rejected',
+              },
+            },
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+    show();
+    expect(await screen.findByText('Stopped: daily free-tier cap')).toBeInTheDocument();
+    expect(screen.getByText('synthetic-request')).toBeInTheDocument();
+    expect(screen.getByText('Requested: model-alpha')).toBeInTheDocument();
+    expect(screen.getByText('429')).toBeInTheDocument();
+  });
+
   it('shows every loaded request without a second client-side pager', async () => {
     mocks.get.mockResolvedValue({
       data: {

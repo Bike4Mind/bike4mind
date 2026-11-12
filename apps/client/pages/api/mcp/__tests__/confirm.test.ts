@@ -24,7 +24,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
   return { getFilesStorage: () => storage };
 });
 
-vi.mock('@server/mcpConnections/customMcpAccess', () => ({ assertCustomMcpEnabled: vi.fn() }));
+vi.mock('@bike4mind/server-utils/mcpConnections/customMcpAccess', () => ({ assertCustomMcpEnabled: vi.fn() }));
 vi.mock('@server/mcpConnections/customMcpToolHost', () => ({
   customMcpToolHost: { callTool: vi.fn() },
   isCustomToolStillOffered: vi.fn(),
@@ -53,7 +53,7 @@ import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrati
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { customMcpToolHost, isCustomToolStillOffered } from '@server/mcpConnections/customMcpToolHost';
-import { assertCustomMcpEnabled } from '@server/mcpConnections/customMcpAccess';
+import { assertCustomMcpEnabled } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { RemoteMcpProtocolError } from '@bike4mind/mcp/remote';
 import handler from '../confirm';
 

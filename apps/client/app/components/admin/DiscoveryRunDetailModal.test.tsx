@@ -67,6 +67,13 @@ const RUN = {
     applied: { inputPerMTok: number; outputPerMTok: number };
     detail: string;
   }>,
+  longContextGaps: [] as Array<{
+    modelId: string;
+    source: string;
+    base: { inputPerMTok: number; outputPerMTok: number };
+    brackets: Array<{ aboveTokens: number; inputPerMTok: number; outputPerMTok: number }>;
+    detail: string;
+  }>,
   priceSkips: [],
   lifecycleTransitions: [],
   catalogDiff: [],
@@ -337,6 +344,49 @@ describe('DiscoveryRunDetailModal', () => {
 
     expect(await screen.findByTestId('discovery-run-price-flags-table')).toBeInTheDocument();
     expect(screen.queryByTestId('discovery-run-price-overrides-table')).not.toBeInTheDocument();
+  });
+
+  it('shows a flat row whose source publishes a long-context ladder in its own section, apart from the flags', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        run: runWith({
+          priceFlags: [],
+          longContextGaps: [
+            {
+              modelId: 'gpt-5.6-luna',
+              source: 'openai',
+              base: { inputPerMTok: 2.5, outputPerMTok: 15 },
+              brackets: [{ aboveTokens: 272000, inputPerMTok: 5, outputPerMTok: 22.5 }],
+              detail:
+                'openai publishes in 2.5/out 15 $/MTok, above 272000 in 5/out 22.5 $/MTok but the row is flat at ' +
+                'in 2.5/out 15 $/MTok, so prompts above 272000 tokens bill at the base rate',
+            },
+          ],
+        }),
+      },
+    });
+    renderModal();
+
+    const row = await screen.findByTestId('discovery-run-long-context-gap-row-gpt-5.6-luna');
+    expect(row).toHaveTextContent('$2.5 in / $15 out');
+    expect(row).toHaveTextContent('>272000: $5 in / $22.5 out');
+    expect(row).toHaveTextContent('openai');
+    expect(screen.getByTestId('discovery-run-long-context-gap-detail-gpt-5.6-luna')).toHaveTextContent(
+      'bill at the base rate'
+    );
+    const modal = screen.getByTestId('discovery-run-modal');
+    expect(modal).toHaveTextContent('Long-context rates not stored (1)');
+    // A gap is not a refusal: it must not surface as a price flag.
+    expect(screen.queryByTestId('discovery-run-price-flags-table')).not.toBeInTheDocument();
+  });
+
+  it('renders a run document written before long-context gaps existed', async () => {
+    const { longContextGaps: _dropped, ...older } = RUN;
+    mockGet.mockResolvedValue({ data: { run: older } });
+    renderModal();
+
+    expect(await screen.findByTestId('discovery-run-price-flags-table')).toBeInTheDocument();
+    expect(screen.queryByTestId('discovery-run-long-context-gaps-table')).not.toBeInTheDocument();
   });
 
   it('calls out planned price rows that never landed, even on a run reporting ok', async () => {

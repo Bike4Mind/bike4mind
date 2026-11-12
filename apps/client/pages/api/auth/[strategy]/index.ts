@@ -11,7 +11,7 @@ import { oauthIpRateLimit } from '@server/middlewares/oauthIpRateLimit';
 import { OAUTH_NONCE_HASH_REQ_KEY } from '@server/auth/passportOAuthStateStore';
 import { requireOAuthStartTurnstile } from '@server/utils/auth/oauthStartTurnstile';
 import { getAppleConfig } from '@bike4mind/server-utils/auth/appleConfig';
-import { isLocalAppUrl } from '@server/utils/validators';
+import { isLocalAppUrl } from '@bike4mind/server-utils/utils/validators';
 
 const SERVICES: { [service: string]: { scope: string[] | string } } = {
   google: {

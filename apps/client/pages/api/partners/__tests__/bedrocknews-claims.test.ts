@@ -11,11 +11,13 @@ const { mockFindById, mockPreview, mockRedeem, mockRungCredits, mockPayableRungC
   mockPayableRungCredits: vi.fn(),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/middlewares/csrfProtection', () => ({
   csrfProtection: () => (_q: unknown, _r: unknown, n: () => void) => n(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_q: unknown, _r: unknown, n: () => void) => n() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_q: unknown, _r: unknown, n: () => void) => n(),
+}));
 vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   isMfaEnrollmentOwed: async () => false,

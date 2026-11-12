@@ -71,7 +71,7 @@ vi.mock('@bike4mind/common', async () => {
   return { ...actual, isSupportedEmbeddingModel: () => true };
 });
 vi.mock('@bike4mind/utils', () => ({ BadRequestError: class BadRequestError extends Error {} }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 

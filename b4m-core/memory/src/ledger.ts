@@ -96,7 +96,7 @@ export interface MemoryEvent extends MemoryEventInput {
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
 
 /** Salted commitment to the fact - binds the (shreddable) plaintext into the chain via a hash. */
-const commit = (salt: string, fact?: string): string => sha256(`${salt} ${JSON.stringify(fact ?? null)}`);
+export const commitFact = (salt: string, fact?: string): string => sha256(`${salt} ${JSON.stringify(fact ?? null)}`);
 
 /**
  * Canonical form used for the chain hash. An ARRAY (not an object) so field order is fixed by
@@ -124,7 +124,7 @@ const chainCanonical = (e: MemoryEventInput, commitment: string, prevHash: strin
  */
 export function sealEvent(prevHash: string | null, input: MemoryEventInput): MemoryEvent {
   const salt = input.salt ?? randomBytes(16).toString('hex');
-  const commitment = commit(salt, input.fact);
+  const commitment = commitFact(salt, input.fact);
   return {
     ...input,
     salt,
@@ -181,7 +181,7 @@ export function verifyChain(chain: readonly MemoryEvent[]): ChainVerification {
     // Only a LIVE event (not shredded, fact present) can have its commitment recomputed - and such an
     // event always carries its salt. A shredded event has neither fact nor salt; its commitment stands
     // on the chain hash alone, which is the whole point of shred-safety.
-    if (!e.shredded && e.fact !== undefined && e.salt !== undefined && e.commitment !== commit(e.salt, e.fact)) {
+    if (!e.shredded && e.fact !== undefined && e.salt !== undefined && e.commitment !== commitFact(e.salt, e.fact)) {
       return { ok: false, brokenAt: i };
     }
     prevHash = e.hash;

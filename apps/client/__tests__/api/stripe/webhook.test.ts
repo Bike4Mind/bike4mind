@@ -117,8 +117,8 @@ vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
 }));
 
 // The real event builders and admin links run; only the subscriptions-channel post is captured.
-vi.mock('@server/integrations/slack/subscriptionLifecycle', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/integrations/slack/subscriptionLifecycle')>()),
+vi.mock('@bike4mind/server-utils/integrations/slack/subscriptionLifecycle', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/integrations/slack/subscriptionLifecycle')>()),
   postSubscriptionLifecycleToSlack: (...args: unknown[]) => mockPostSubscriptionLifecycleToSlack(...args),
 }));
 
@@ -168,7 +168,7 @@ vi.mock('@server/billing/paymentRisk', () => ({
 }));
 
 const mockAutoApproveAfterPayment = vi.fn();
-vi.mock('@server/security/riskReviewAutoApproval', () => ({
+vi.mock('@bike4mind/server-utils/security/riskReviewAutoApproval', () => ({
   autoApproveRiskReviewAfterPayment: (...args: unknown[]) => mockAutoApproveAfterPayment(...args),
 }));
 
@@ -193,7 +193,7 @@ vi.mock('@server/billing/purchaseReversal', () => ({
 vi.mock('@server/billing/earlyFraudWarning', () => ({
   respondToEarlyFraudWarning: (...args: unknown[]) => mockRespondToEarlyFraudWarning(...args),
 }));
-vi.mock('@server/billing/linkedAccounts', () => ({
+vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({
   propagateAccountRisk: (...args: unknown[]) => mockPropagateAccountRisk(...args),
 }));
 

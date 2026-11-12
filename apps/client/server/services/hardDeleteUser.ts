@@ -4,15 +4,15 @@ import type { Logger } from '@bike4mind/observability';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { erasureIdHash, erasureKeyId, erasurePseudonym } from '@bike4mind/server-utils/privacy/erasureHash';
 import { emitBillingEvent } from '@bike4mind/server-utils/analytics/signupEvents';
-import { wholeDaysBetween } from '@server/analytics/billingEventDetails';
-import { resolveUserType } from '@server/analytics/resolveUserType';
+import { wholeDaysBetween } from '@bike4mind/server-utils/analytics/billingEventDetails';
+import { resolveUserType } from '@bike4mind/server-utils/analytics/resolveUserType';
 import {
   cancelAccountSubscriptions,
   SINGLE_USER_CANCEL_BUDGET_MS,
   NO_SUBSCRIPTIONS_CANCELED,
   readAccountSubscriptionCustomerIds,
   type AccountSubscriptionCancellation,
-} from '@server/billing/cancelAccountSubscriptions';
+} from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 import {
   purgeDeletedUserData,
   readUserIntegrationGrants,

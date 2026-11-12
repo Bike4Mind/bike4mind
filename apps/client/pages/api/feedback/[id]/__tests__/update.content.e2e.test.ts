@@ -76,7 +76,6 @@ describe('PUT /api/feedback/[id] - content write paths (real Mongo)', () => {
       userId: 'owner1',
       content: 'edited content',
       username: 'owner',
-      status: 'InProgress',
     });
     await mockRefs.putHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
@@ -103,7 +102,6 @@ describe('PUT /api/feedback/[id] - content write paths (real Mongo)', () => {
       userId: 'owner1',
       content: '',
       username: 'owner',
-      status: 'InProgress',
     });
     await mockRefs.putHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
@@ -130,7 +128,6 @@ describe('PUT /api/feedback/[id] - content write paths (real Mongo)', () => {
       userId: 'owner1',
       content: 'updated content',
       username: 'owner',
-      status: 'InProgress',
     });
     await mockRefs.putHandler!(req, res);
 
@@ -151,7 +148,6 @@ describe('PUT /api/feedback/[id] - content write paths (real Mongo)', () => {
       userId: 'owner1',
       content: 'attempted edit on expired content',
       username: 'owner',
-      status: 'InProgress',
     });
     await mockRefs.putHandler!(req, res);
 
@@ -173,7 +169,7 @@ describe('PUT /api/feedback/[id] - content write paths (real Mongo)', () => {
       expiresAt: feedbackContentExpiresAt(new Date()),
     });
 
-    const { req, res } = mockRequest(doc.id, { userId: 'owner1', username: 'owner', status: 'InProgress' });
+    const { req, res } = mockRequest(doc.id, { userId: 'owner1', username: 'owner' });
     await mockRefs.putHandler!(req, res);
 
     expect(res._getJSONData().contentApplied).toBe(true);
@@ -190,7 +186,6 @@ describe('PUT /api/feedback/[id] - content write paths (real Mongo)', () => {
       userId: 'owner1',
       content: 'should not survive',
       username: 'owner',
-      status: 'InProgress',
     });
     await expect(mockRefs.putHandler!(req, res)).rejects.toThrow('write failed');
 
@@ -211,7 +206,6 @@ describe('PUT /api/feedback/[id] - content write paths (real Mongo)', () => {
       userId: 'owner1',
       content: 'should not survive either',
       username: 'owner',
-      status: 'InProgress',
     });
     await expect(mockRefs.putHandler!(req, res)).rejects.toThrow(/not found/i);
 

@@ -6,9 +6,11 @@ import { getThemeConfig } from '@client/app/utils/themes';
 
 const exportMutation = vi.hoisted(() => ({ mutate: vi.fn(), isPending: false }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+const websocket = vi.hoisted(() => ({ subscribeToAction: vi.fn(() => vi.fn()) }));
 const STEP_UP_CANCELLED = 'step-up cancelled';
 vi.mock('@client/app/hooks/data/user', () => ({ useRequestAccountDataExport: () => exportMutation }));
 vi.mock('sonner', () => ({ toast }));
+vi.mock('@client/app/contexts/WebsocketContext', () => ({ useWebsocket: () => websocket }));
 vi.mock('@client/app/utils/stepUpInterceptor', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/utils/stepUpInterceptor')>()),
   isStepUpCancelled: (error: unknown) => error instanceof Error && error.message === STEP_UP_CANCELLED,
@@ -30,6 +32,8 @@ beforeEach(() => {
   exportMutation.mutate.mockReset();
   toast.success.mockReset();
   toast.error.mockReset();
+  websocket.subscribeToAction.mockClear();
+  Object.assign(exportMutation, { data: undefined });
 });
 
 describe('DownloadAccountDataRow', () => {
@@ -52,5 +56,20 @@ describe('DownloadAccountDataRow', () => {
     requestExport(({ onError }) => onError?.(new Error(STEP_UP_CANCELLED)));
     expect(toast.error).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('only announces completion for the export requested in this settings view', async () => {
+    const callback = vi.fn();
+    websocket.subscribeToAction.mockImplementation((_action, handler) => {
+      callback.mockImplementation(handler);
+      return vi.fn();
+    });
+    exportMutation.mutate.mockReset();
+    Object.assign(exportMutation, { data: { exportJobId: 'job-1' } });
+    wrap(<DownloadAccountDataRow />);
+    await callback({ action: 'account_data_export_ready', exportJobId: 'job-2' });
+    expect(toast.success).not.toHaveBeenCalled();
+    await callback({ action: 'account_data_export_ready', exportJobId: 'job-1' });
+    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('archive is ready'));
   });
 });

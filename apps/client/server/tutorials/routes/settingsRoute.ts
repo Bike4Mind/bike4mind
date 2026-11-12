@@ -3,7 +3,7 @@ import { ForbiddenError, type SettingKey } from '@bike4mind/common';
 import { AdminSettings, withTransaction } from '@bike4mind/database';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { invalidateSettingsCache } from '@bike4mind/utils';
-import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
+import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import type { AdminCheck, ApiBuilder } from './types';
 
 const PutSchema = z.object({ enabled: z.boolean() });

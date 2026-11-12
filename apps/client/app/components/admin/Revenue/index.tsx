@@ -60,7 +60,7 @@ const RANGE_OPTIONS: readonly { value: RevenueRange; label: string }[] = [
 
 const rangeLabel = (range: RevenueRange) => `Last ${RANGE_OPTIONS.find(option => option.value === range)?.label}`;
 
-// Must stay in sync with docs/admin-subscriptions-spec.md section 5.3 and server/admin/revenue/revenueSnapshot.ts.
+// Must stay in sync with docs/admin-subscriptions-spec.md section 5.3 and packages/server-utils/src/admin/revenue/revenueSnapshot.ts.
 const NEW_MRR_DEFINITION =
   'MRR of subscriptions started in the range that count toward MRR today. Upgrades and seat changes are not included.';
 const CHURNED_MRR_DEFINITION =

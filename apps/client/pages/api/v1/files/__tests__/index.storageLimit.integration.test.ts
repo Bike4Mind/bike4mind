@@ -28,7 +28,7 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: vi.fn(async () =
 vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({
   createFabFile: (...a: unknown[]) => mockCreateFabFile(...a),
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (req: { user: { id: string } }) => ({
     userId: req.user.id,
     isAdmin: false,

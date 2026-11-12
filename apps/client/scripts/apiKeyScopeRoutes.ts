@@ -264,6 +264,13 @@ export function resolvePageFile(routePath: string): string | undefined {
   return walk(PAGES_DIR, segments);
 }
 
+/** True when `code` calls `baseApi` and every call declares `auth: 'jwtOnly'`, so no handler accepts an API key. */
+export function admitsNoApiKey(code: string): boolean {
+  const calls = code.match(/\bbaseApi\(/g)?.length ?? 0;
+  const jwtOnlyCalls = code.match(/\bbaseApi\(\s*\{[^{}]*?\bauth\s*:\s*['"]jwtOnly['"]/g)?.length ?? 0;
+  return calls > 0 && jwtOnlyCalls === calls;
+}
+
 /** How one method on one route is gated: a contract door (one method) or one source file read for that method. */
 export type RouteGates = { key: string; doors: Gate[]; gates: Gate[] } | { key?: undefined; problem: string };
 
@@ -285,6 +292,9 @@ export function gatesForRoute(method: string, routePath: string): RouteGates {
   if (!file) return { problem: 'no contract or pages/ route serves this path' };
   if (!offPages && !servesVerb(source, method))
     return { problem: `${path.relative(CLIENT_DIR, file)} does not serve this method` };
+  // A jwtOnly route never installs the api-key chain (baseApi), so no key gets through whatever
+  // `requiredScopes` it also declares. With no gate at all, no scope opens it.
+  if (!offPages && admitsNoApiKey(source)) return { key: path.relative(CLIENT_DIR, file), doors: [], gates: [] };
   return { key: path.relative(CLIENT_DIR, file), doors: offPages ? [] : doorsIn(source), gates: fileGates };
 }
 

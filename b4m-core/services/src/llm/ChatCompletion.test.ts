@@ -86,6 +86,7 @@ import {
   getTurnsCost,
   type IMessage,
   type ModelInfo,
+  type UserReasoningEffort,
 } from '@bike4mind/common';
 import {
   ToolBuilder,
@@ -5806,6 +5807,78 @@ describe('ChatCompletionProcess', () => {
         expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
       });
 
+      it.each(['haiku-to-opus', 'opus-to-haiku'] as const)(
+        'sizes a substituted research request on the execution model: %s',
+        async direction => {
+          const { complete } = reservationOrgSetup();
+          const [base] = (await mockedGetAvailableModels()) as unknown as ModelInfo[];
+          const requestedId = direction === 'haiku-to-opus' ? ChatModels.CLAUDE_5_5_HAIKU : ChatModels.CLAUDE_5_5_OPUS;
+          const runId = direction === 'haiku-to-opus' ? ChatModels.CLAUDE_5_5_OPUS : ChatModels.CLAUDE_5_5_HAIKU;
+          const requested: ModelInfo = {
+            ...base,
+            id: requestedId,
+            name: requestedId,
+            backend: ModelBackend.Anthropic,
+            can_think: true,
+            thinkingStyle: 'adaptive',
+          };
+          const runModel: ModelInfo = {
+            ...requested,
+            id: runId,
+            name: runId,
+            pricing: { 200000: { input: 0, output: 3 / 1_000_000 } },
+          };
+          mockedGetAvailableModels.mockResolvedValue([requested, runModel]);
+          service.user = { ...mockUser, throttle: { tier: 'shadow' }, preferredReasoningEffort: 'none' };
+          const previous = mockedGetSettingsValue.getMockImplementation();
+          mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) => {
+            if (key === 'shadowTierModelAllowlist') return [runId];
+            if (key === 'shadowTierDailyTokenCap') return 20000;
+            return previous?.(key as never, settings);
+          }) as typeof getSettingsValue);
+          onTestFinished(() => {
+            if (previous) mockedGetSettingsValue.mockImplementation(previous);
+          });
+          mockDb.caches = {
+            tryAddWithinLimitFixedWindow: vi.fn().mockResolvedValue({ success: true, count: 1, expiresAt: new Date() }),
+          };
+          complete.mockImplementation(
+            async (
+              _model: string,
+              _messages: unknown,
+              _options: unknown,
+              callback: (texts: string[], info: { inputTokens: number; outputTokens: number }) => Promise<void>
+            ) => {
+              await callback(['Answer'], { inputTokens: 10, outputTokens: 100 });
+            }
+          );
+          fundedOrg();
+          mockQuest.sessionId = 'session1';
+          const body = researchReservationBody();
+          body.researchMode.configurations = [{ id: 'cfg-1', enabled: true, model: requestedId, parameters: {} }];
+          body.params = {
+            ...body.params,
+            model: requestedId,
+            max_tokens: 800,
+            thinking: { enabled: true, budget_tokens: 8000 },
+          };
+          await service.process({ body: body as never, logger: mockLogger });
+          const expected = direction === 'haiku-to-opus' ? expectedReasoningHold : outputOnlyCredits(800);
+          expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expected);
+          expect(complete.mock.calls[0][0]).toBe(runId);
+          expect(complete.mock.calls[0][2]).toMatchObject({
+            reasoningEffort: direction === 'haiku-to-opus' ? 'low' : 'none',
+            thinking: { enabled: direction === 'haiku-to-opus' },
+          });
+          const [[, row]] = mockDb.creditTransactions.createTransaction.mock.calls;
+          expect(row.model).toBe(requestedId);
+          expect(Math.abs(row.credits)).toBeGreaterThanOrEqual(
+            realUsdToCreditsStochastic(getTextModelCost(requested, 10, 100), () => 0)
+          );
+          expect(mockQuest.researchModeResults[0].model).toBe(requestedId);
+        }
+      );
+
       it('prices a substituted configuration at the requested model, records the cost it ran at, and names both on its row', async () => {
         const { complete } = reservationOrgSetup();
         const [requested] = (await mockedGetAvailableModels()) as unknown as ModelInfo[];
@@ -9412,11 +9485,12 @@ describe('ChatCompletionProcess', () => {
   });
 
   describe('reasoningEffort preference', () => {
-    const modelInfo = (id: string, backend: ModelBackend) => ({
+    const modelInfo = (id: string, backend: ModelBackend, extra: Partial<ModelInfo> = {}) => ({
       id,
       type: 'text' as const,
       name: id,
       backend,
+      ...extra,
       max_tokens: 100,
       contextWindow: 200_000,
       can_stream: false,
@@ -9425,12 +9499,14 @@ describe('ChatCompletionProcess', () => {
     });
 
     const succeeds = () =>
-      vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+      vi.fn<ICompletionBackend['complete']>().mockImplementation(async (_model, _messages, _opts, cb) => {
         await cb(['Hi!']);
       });
 
-    const arrange = (primary: ReturnType<typeof modelInfo>) => {
-      (service as any).user = { ...mockUser, preferredReasoningEffort: 'high' };
+    const adaptive = { can_think: true, thinkingStyle: 'adaptive' as const };
+
+    const arrange = (primary: ReturnType<typeof modelInfo>, preferredReasoningEffort: UserReasoningEffort = 'high') => {
+      service.user = { ...service.user, preferredReasoningEffort };
       mockQuest.promptMeta.model = { name: primary.id, backend: primary.backend };
       mockedGetAvailableModels.mockResolvedValue([primary]);
       mockedBuildAndSortMessages.mockResolvedValue({
@@ -9463,7 +9539,225 @@ describe('ChatCompletionProcess', () => {
       expect(complete.mock.calls[0][2].reasoningEffort).toBe('high');
     });
 
-    it('withholds the preferred effort from a Claude model', async () => {
+    it('raises a stored None, which a GPT model rejects, to its lowest level', async () => {
+      const complete = succeeds();
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT5,
+      });
+      const body = arrange(modelInfo(ChatModels.GPT5, ModelBackend.OpenAI), 'none');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete.mock.calls[0][2].reasoningEffort).toBe('low');
+    });
+
+    it('lowers a stored Extra High, which GPT-5 rejects, to high', async () => {
+      const usageEventsRecord = recordUsageEvents();
+      const complete = succeeds();
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT5,
+      });
+      const body = arrange(modelInfo(ChatModels.GPT5, ModelBackend.OpenAI), 'xhigh');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete.mock.calls[0][2].reasoningEffort).toBe('high');
+      expect(recordedEffort(usageEventsRecord)).toBe('high');
+    });
+
+    it('keeps a stored Extra High on GPT-5.2, which takes it', async () => {
+      const complete = succeeds();
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT5_2,
+      });
+      const body = arrange(modelInfo(ChatModels.GPT5_2, ModelBackend.OpenAI), 'xhigh');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete.mock.calls[0][2].reasoningEffort).toBe('xhigh');
+    });
+
+    // The usage-event row is written only under credit enforcement.
+    const recordUsageEvents = () => {
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+      enableAdminFlags('enforceCredits');
+      mockDb.users = {
+        update: vi.fn(),
+        findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
+        incrementCredits: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
+      };
+      mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+      return usageEventsRecord;
+    };
+
+    const recordedEffort = (usageEventsRecord: ReturnType<typeof vi.fn>) =>
+      usageEventsRecord.mock.calls.at(-1)?.[0].requestMeta?.reasoningEffort;
+
+    it.each([
+      [ChatModels.CLAUDE_5_5_HAIKU, ModelBackend.Anthropic],
+      [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, ModelBackend.Bedrock],
+    ] as const)('saved chat effort None overrides Thinking on for %s', async (model, backend) => {
+      const usageEventsRecord = recordUsageEvents();
+      const complete = succeeds();
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: model,
+      });
+      const body = arrange(modelInfo(model, backend, adaptive), 'none');
+      await service.process({
+        body: { ...body, params: { ...body.params, thinking: { enabled: true, budget_tokens: 8000 } } },
+        logger: mockLogger,
+      });
+      expect(complete.mock.calls[0][2]).toMatchObject({ reasoningEffort: 'none', thinking: { enabled: false } });
+      expect(recordedEffort(usageEventsRecord)).toBe('none');
+      expect(usageEventsRecord.mock.calls.at(-1)?.[0].requestMeta?.thinkingBudgetTokens).toBeUndefined();
+    });
+
+    it.each([
+      [ChatModels.CLAUDE_5_5_HAIKU, ModelBackend.Anthropic],
+      [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, ModelBackend.Bedrock],
+    ] as const)('saved chat effort High still wins over Thinking off for %s', async (model, backend) => {
+      const usageEventsRecord = recordUsageEvents();
+      const complete = succeeds();
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: model,
+      });
+      const body = arrange(modelInfo(model, backend, adaptive), 'high');
+      await service.process({
+        body: { ...body, params: { ...body.params, thinking: { enabled: false, budget_tokens: 8000 } } },
+        logger: mockLogger,
+      });
+      expect(complete.mock.calls[0][2].reasoningEffort).toBe('high');
+      expect(recordedEffort(usageEventsRecord)).toBe('high');
+    });
+
+    it.each(['claude-primary', 'claude-fallback'] as const)(
+      'saved chat effort resolves None per attempt: %s',
+      async direction => {
+        const usageEventsRecord = recordUsageEvents();
+        mockedShouldTriggerFallback.mockReturnValue(true);
+        mockedIsOverloadedError.mockReturnValue(false);
+        const claude = modelInfo(ChatModels.CLAUDE_5_5_HAIKU, ModelBackend.Anthropic, adaptive);
+        const gpt = modelInfo(ChatModels.GPT5, ModelBackend.OpenAI, { can_think: true });
+        const primary = direction === 'claude-primary' ? claude : gpt;
+        const fallback = direction === 'claude-primary' ? gpt : claude;
+        const primaryComplete = vi
+          .fn<ICompletionBackend['complete']>()
+          .mockRejectedValue(new Error('ServiceUnavailableException: primary down'));
+        mockedGetLlmByModel.mockReturnValue({
+          complete: primaryComplete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: primary.id,
+        });
+        const fallbackComplete = succeeds();
+        mockedGetLlmWithFallback
+          .mockResolvedValueOnce({
+            model: fallback,
+            backend: {
+              complete: fallbackComplete,
+              getModelInfo: vi.fn().mockResolvedValue([]),
+              currentModel: fallback.id,
+              pushToolMessages: vi.fn(),
+            },
+            attempt: 1,
+          })
+          .mockResolvedValue(null);
+        const body = arrange(primary, 'none');
+        await service.process({
+          body: { ...body, params: { ...body.params, thinking: { enabled: true, budget_tokens: 8000 } } },
+          logger: mockLogger,
+        });
+        const primaryOptions = primaryComplete.mock.calls[0][2];
+        const fallbackOptions = fallbackComplete.mock.calls[0][2];
+        expect(primaryOptions.reasoningEffort).toBe(direction === 'claude-primary' ? 'none' : 'low');
+        expect(primaryOptions.thinking?.enabled).toBe(direction !== 'claude-primary');
+        expect(fallbackOptions.reasoningEffort).toBe(direction === 'claude-primary' ? 'low' : 'none');
+        expect(fallbackOptions.thinking?.enabled).toBe(direction === 'claude-primary');
+        expect(recordedEffort(usageEventsRecord)).toBe(fallbackOptions.reasoningEffort);
+        if (direction === 'claude-fallback')
+          expect(usageEventsRecord.mock.calls.at(-1)?.[0].requestMeta?.thinkingBudgetTokens).toBeUndefined();
+      }
+    );
+
+    it('passes the preferred effort to an adaptive Claude model and records it', async () => {
+      const usageEventsRecord = recordUsageEvents();
+      const complete = succeeds();
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_5_OPUS,
+      });
+      const body = arrange(modelInfo(ChatModels.CLAUDE_5_5_OPUS, ModelBackend.Anthropic, adaptive), 'xhigh');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(complete.mock.calls[0][2].reasoningEffort).toBe('xhigh');
+      expect(recordedEffort(usageEventsRecord)).toBe('xhigh');
+    });
+
+    it('clamps a preferred level an adaptive Claude model does not list', async () => {
+      const usageEventsRecord = recordUsageEvents();
+      const complete = succeeds();
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_5_OPUS,
+      });
+      const body = arrange(modelInfo(ChatModels.CLAUDE_5_5_OPUS, ModelBackend.Anthropic, adaptive), 'minimal');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete.mock.calls[0][2].reasoningEffort).toBe('low');
+      expect(recordedEffort(usageEventsRecord)).toBe('low');
+    });
+
+    it('records the auto-classified complexity, not the preference, when the Claude model takes no effort', async () => {
+      const usageEventsRecord = recordUsageEvents();
+      mockedGetLlmByModel.mockReturnValue({
+        complete: succeeds(),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_SONNET,
+      });
+      const body = arrange(modelInfo(ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic));
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(recordedEffort(usageEventsRecord)).toBe('auto:simple');
+    });
+
+    it('leaves an adaptive Claude model to the adapter on Auto, recording nothing without a classified complexity', async () => {
+      const usageEventsRecord = recordUsageEvents();
+      const complete = succeeds();
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_5_OPUS,
+      });
+      const body = arrange(modelInfo(ChatModels.CLAUDE_5_5_OPUS, ModelBackend.Anthropic, adaptive), 'auto');
+
+      await service.process({ body: { ...body, queryComplexity: '' }, logger: mockLogger });
+
+      expect(complete.mock.calls[0][2].reasoningEffort).toBeUndefined();
+      expect(usageEventsRecord).toHaveBeenCalled();
+      expect(recordedEffort(usageEventsRecord)).toBeUndefined();
+    });
+
+    it('withholds the preferred effort from a Claude model that takes no effort', async () => {
       const complete = succeeds();
       mockedGetLlmByModel.mockReturnValue({
         complete,
@@ -9506,6 +9800,70 @@ describe('ChatCompletionProcess', () => {
       expect(primaryComplete.mock.calls[0][2].reasoningEffort).toBe('high');
       expect(fallbackComplete).toHaveBeenCalledTimes(1);
       expect(fallbackComplete.mock.calls[0][2].reasoningEffort).toBeUndefined();
+    });
+
+    it('decides per attempt: an adaptive Claude fallback gets the effort too', async () => {
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      const primaryComplete = vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: primary down'));
+      mockedGetLlmByModel.mockReturnValue({
+        complete: primaryComplete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT5,
+      });
+      const fallbackComplete = succeeds();
+      mockedGetLlmWithFallback
+        .mockResolvedValueOnce({
+          model: modelInfo(ChatModels.CLAUDE_5_5_HAIKU, ModelBackend.Anthropic, adaptive),
+          backend: {
+            complete: fallbackComplete,
+            getModelInfo: vi.fn().mockResolvedValue([]),
+            currentModel: ChatModels.CLAUDE_5_5_HAIKU,
+          },
+          attempt: 1,
+        } as never)
+        .mockResolvedValue(null);
+      const body = arrange(modelInfo(ChatModels.GPT5, ModelBackend.OpenAI));
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(primaryComplete.mock.calls[0][2].reasoningEffort).toBe('high');
+      expect(fallbackComplete.mock.calls[0][2].reasoningEffort).toBe('high');
+    });
+
+    it('lowers Extra High on an OpenAI fallback while keeping it on the adaptive Claude primary', async () => {
+      const usageEventsRecord = recordUsageEvents();
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      const primaryComplete = vi
+        .fn<ICompletionBackend['complete']>()
+        .mockRejectedValue(new Error('ServiceUnavailableException: primary down'));
+      mockedGetLlmByModel.mockReturnValue({
+        complete: primaryComplete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_5_OPUS,
+      });
+      const fallbackComplete = succeeds();
+      mockedGetLlmWithFallback
+        .mockResolvedValueOnce({
+          model: modelInfo(ChatModels.GPT5, ModelBackend.OpenAI),
+          backend: {
+            complete: fallbackComplete,
+            getModelInfo: vi.fn().mockResolvedValue([]),
+            currentModel: ChatModels.GPT5,
+            pushToolMessages: vi.fn(),
+          },
+          attempt: 1,
+        })
+        .mockResolvedValue(null);
+      const body = arrange(modelInfo(ChatModels.CLAUDE_5_5_OPUS, ModelBackend.Anthropic, adaptive), 'xhigh');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(primaryComplete.mock.calls[0][2].reasoningEffort).toBe('xhigh');
+      expect(fallbackComplete).toHaveBeenCalledTimes(1);
+      expect(fallbackComplete.mock.calls[0][2].reasoningEffort).toBe('high');
+      expect(recordedEffort(usageEventsRecord)).toBe('high');
     });
   });
 

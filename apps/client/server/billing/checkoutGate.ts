@@ -4,9 +4,9 @@ import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { hashSignupNetwork } from '@bike4mind/server-utils/auth/signupNetworkSignals';
-import { findLinkedAccounts } from '@server/billing/linkedAccounts';
-import { alertFraudBlock } from '@server/billing/fraudBlockAlert';
-import { adminUserSlackRef } from '@server/integrations/slack/accountLinks';
+import { findLinkedAccounts } from '@bike4mind/server-utils/billing/linkedAccounts';
+import { alertFraudBlock } from '@bike4mind/server-utils/billing/fraudBlockAlert';
+import { adminUserSlackRef } from '@bike4mind/server-utils/integrations/slack/accountLinks';
 import { escapeSlackText } from '@bike4mind/common';
 
 const MINUTE_MS = 60_000;

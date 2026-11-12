@@ -17,7 +17,7 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { withEventContext } from '@workers/utils/eventContext';
 import { NotificationEvents } from '@bike4mind/server-utils/utils/eventBus';
-import { truncateForPush } from '@server/utils/pushNotifications';
+import { truncateForPush } from '@bike4mind/server-utils/utils/pushNotifications';
 import {
   apnsSigningKeyError,
   createHttp2ApnsTransport,
@@ -109,7 +109,7 @@ export type SendPushDeps = {
   loadRecipient(userId: string): Promise<PushRecipient | null>;
   transport: ApnsTransport;
   topic: string;
-  /** Resolves a path-only deepLink (see sessionDeepLink in apps/client/server/utils/pushNotifications.ts). */
+  /** Resolves a path-only deepLink (see sessionDeepLink in packages/server-utils/src/utils/pushNotifications.ts). */
   appUrl?: string;
 };
 

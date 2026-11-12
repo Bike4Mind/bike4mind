@@ -256,6 +256,7 @@ export function compileRule(
 export interface ShellSubjectCommand {
   text: string;
   words?: string;
+  expanded?: string;
   coverable: boolean;
   opaque?: string;
 }
@@ -489,7 +490,9 @@ export class PermissionRuleSet {
       case 'shell':
         return (subject.shell?.commands ?? []).some(
           command =>
-            matcher.pattern.test(command.text) || (command.words !== undefined && matcher.pattern.test(command.words))
+            matcher.pattern.test(command.text) ||
+            (command.words !== undefined && matcher.pattern.test(command.words)) ||
+            (command.expanded !== undefined && matcher.pattern.test(command.expanded))
         );
       case 'path':
         // The probe makes `Read(~/.ssh/**)` refuse a search rooted at ~/.ssh itself.
@@ -506,22 +509,30 @@ export class PermissionRuleSet {
     }
   }
 
+  /**
+   * The allow rule covering each sub-command of a shell call, or null for one no rule covers; null as a whole
+   * when a floor holds for the whole script (see `allowing`), when no rule could cover any part, and for a call
+   * a deny or ask rule names. Folders outside the shared ones are not checked here: see `coversFolder`.
+   */
+  shellParts(subject: PermissionSubject): (CompiledRule | null)[] | null {
+    const shell = subject.shell;
+    const rules = this.byTool.get(subject.tool) ?? [];
+    if (!shell || subject.irreversible || rules.length === 0 || this.unresolvedProtected().length > 0) return null;
+    if (shell.ungranted?.length || floorRefuses(shell, this.guardRoots)) return null;
+    if (rules.some(rule => rule.list !== 'allow' && this.touches(rule, subject))) return null;
+    const allows = rules.filter(rule => rule.list === 'allow');
+    return shell.commands.map(command => allows.find(rule => this.coversCommand(rule, command)) ?? null);
+  }
+
   /** allow: EVERY part of the call is covered, and no floor applies. The first covering rule, for the report. */
   private allowing(rules: readonly CompiledRule[], subject: PermissionSubject): CompiledRule | null {
     if (rules.length === 0) return null;
     if (this.unresolvedProtected().length > 0) return null;
     if (subject.shell) {
-      const { commands, directories } = subject.shell;
-      if (commands.length === 0 || subject.shell.ungranted?.length) return null;
-      if (floorRefuses(subject.shell, this.guardRoots)) return null;
-      if (!directories.every(directory => this.coversFolder(directory))) return null;
-      let first: CompiledRule | null = null;
-      for (const command of commands) {
-        const rule = rules.find(each => this.coversCommand(each, command));
-        if (!rule) return null;
-        first ??= rule;
-      }
-      return first;
+      const parts = this.shellParts(subject);
+      if (!parts?.length || parts.some(rule => rule === null)) return null;
+      if (!subject.shell.directories.every(directory => this.coversFolder(directory))) return null;
+      return parts[0];
     }
     if (subject.paths) {
       const { paths } = subject;

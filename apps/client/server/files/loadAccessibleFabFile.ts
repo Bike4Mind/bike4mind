@@ -7,10 +7,10 @@ import {
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
+import { adminBypassLakeIds, grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
-import type { EntitlementRequest } from '@server/entitlements';
+import type { EntitlementRequest } from '@bike4mind/server-utils/entitlements/index';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { fileContentUrl } from '@server/files/browserFileSigner';
 import type { Logger } from '@bike4mind/observability';
@@ -100,17 +100,18 @@ export async function loadAccessibleFabFile(
     // recorded; preserve the original 404 exactly as getFabFile raised it.
     if (!candidate || grantors.length === 0) throw error;
     const fabFile = await fabFilesService.generateSignedUrl(candidate, adapter);
-    // Best-effort audit write - this is the same single-file metadata + URL read as the
-    // articles `?id=` deep link, just reached through the direct-fetch fallback door instead.
-    // Awaited (never rethrows): a per-request serverless route must not race a post-response
-    // freeze of the execution environment.
+    const resolvedLakeIds = grantors.map(lake => lake.id);
+    const bypass = await adminBypassLakeIds(req, resolvedLakeIds);
+    // Same single-file read as the articles `?id=` deep link, via the direct-fetch fallback;
+    // strict for an admin-bypass read.
     await dataLakeService.recordLakeAccessEvent(
       lakeAccessEventRepository,
       {
         ...resolveAuditPrincipal(user, req.apiKeyInfo),
         organizationId: normalizeId(user.organizationId),
-        resolvedLakeIds: grantors.map(lake => lake.id),
+        resolvedLakeIds,
         fileIds: [candidate.id],
+        ...(bypass.length ? { adminBypassLakeIds: bypass } : {}),
         surface: 'data-lake-file-fallback',
       },
       req.logger,

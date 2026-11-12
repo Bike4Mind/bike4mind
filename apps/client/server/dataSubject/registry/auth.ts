@@ -183,6 +183,8 @@ export const authHolders = {
       'conversationContext.github.repos.owner',
       'conversationContext.github.prs.owner',
       'conversationContext.github.issues.owner',
+      // Which code owns a tutorial walk ('core'), not a person.
+      'tutorial.owner',
     ],
   },
   SignupDomainReview: {
@@ -289,6 +291,8 @@ export const authHolders = {
       'resetPasswordToken',
       'emailVerificationToken',
       'pendingEmailToken',
+      // A hash of the user id that only resolves provider safety notices; the export already has the id.
+      'providerEndUserId',
     ],
   },
   UserActivityCounter: {

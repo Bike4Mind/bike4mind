@@ -38,8 +38,8 @@ import {
   lakeAccessEventRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
-import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
-import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
+import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
@@ -48,7 +48,7 @@ import { Logger } from '@bike4mind/observability';
 // Register global error handlers for enhanced observability of network errors
 registerLambdaErrorHandlers();
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { getUserEntitlements } from '@server/entitlements';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { z } from 'zod';

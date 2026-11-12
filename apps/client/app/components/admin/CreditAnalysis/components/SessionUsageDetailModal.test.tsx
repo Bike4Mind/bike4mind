@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -59,5 +59,24 @@ describe('SessionUsageDetailModal by-model table', () => {
     expect(table.getByText('bedrock / claude-sonnet-4-5 (ran: openai / gpt-4o-mini)')).toBeTruthy();
     const plain = table.getByText('openai / gpt-4o');
     expect(plain.textContent).not.toContain('(ran:');
+  });
+
+  it('offers retry on failure without showing zero-valued usage as if loaded', () => {
+    const refetch = vi.fn();
+    mockUseSessionUsage.mockReturnValue({
+      isLoading: false,
+      error: new Error('Unavailable'),
+      data: undefined,
+      refetch,
+    });
+    render(
+      <TestWrapper>
+        <SessionUsageDetailModal sessionId="session-1" onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Unavailable');
+    expect(screen.queryByTestId('session-usage-total-credits')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(refetch).toHaveBeenCalledOnce();
   });
 });

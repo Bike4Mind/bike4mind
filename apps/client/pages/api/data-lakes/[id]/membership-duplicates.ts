@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 
 /**
  * GET /api/data-lakes/:id/membership-duplicates

@@ -1,6 +1,6 @@
 import { ConflictError, ForbiddenError, HTTPError, type AuditChange } from '@bike4mind/common';
 import { userService } from '@bike4mind/services';
-import type { AdminUsersBulkUndoResult } from '@client/app/utils/adminUsersBulk';
+import type { AdminUsersBulkUndoResult } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import {
   EXECUTE_BUDGET_MS,
   UNDO_RECORD_GRACE_MS,

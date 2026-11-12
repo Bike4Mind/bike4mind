@@ -1,16 +1,21 @@
 import {
   abuseAssessmentStoredItemSchema,
+  completionSequenceEvidenceSchema,
+  completionSynchronyEvidenceSchema,
   accountCampaignGroupSchema,
   accountCampaignMemberSchema,
   shadowDetectionItemSchema,
   shadowDetectionVerdictEntrySchema,
   type AbuseAssessmentRunResponse,
+  SHADOW_DETECTION_BULK_VERDICT_LIMIT,
   type ShadowDetectionBulkVerdictRequest,
   type ShadowDetectionList,
   type ShadowDetectionListQuery,
   type ShadowDetectionVerdictRequest,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { getErrorMessage } from '@client/app/utils/error';
+import { AI_ADVISORY_QUERY_KEY } from './aiAdvisory';
 import { verdictEvalReportSchema, type VerdictEvalWindowDays } from '@client/app/utils/verdictEval';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
@@ -30,6 +35,12 @@ export type CampaignGroupRow = z.infer<typeof campaignGroupRowSchema>;
 /** A detection as it arrives over JSON: the dates are ISO strings. */
 export const shadowDetectionRowSchema = shadowDetectionItemSchema.extend({
   detectedAt: z.string(),
+  completionSynchrony: completionSynchronyEvidenceSchema
+    .extend({ firstObservedAt: z.string(), lastObservedAt: z.string(), scannedAt: z.string() })
+    .optional(),
+  completionSequence: completionSequenceEvidenceSchema
+    .extend({ firstObservedAt: z.string(), lastObservedAt: z.string() })
+    .optional(),
   group: campaignGroupRowSchema.nullable(),
   verdicts: z.array(shadowDetectionVerdictEntrySchema.extend({ reviewedAt: z.string() })),
 });
@@ -71,27 +82,64 @@ export function useShadowDetectionVerdict() {
         return { status: 'conflict', item: body.data.item, message: body.data.error?.trim() || null };
       }
     },
-    // A conflict also means the list is stale.
-    onSettled: () => queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+    // A conflict also means the list is stale. A graded detection also drops out of the AI advisory.
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: AI_ADVISORY_QUERY_KEY }),
+      ]),
   });
 }
 
-/** Records changed since they were selected come back in `conflicts`, ungraded. */
+/**
+ * The merged server responses. Records changed since they were selected come back in `conflicts`,
+ * ungraded; `failureMessage` is set when a batch request itself failed and its ids are in `failed`.
+ */
 export type ShadowDetectionBulkVerdictResult = {
   graded: ShadowDetectionRow[];
   conflicts: ShadowDetectionRow[];
   missing: string[];
   failed: string[];
+  failureMessage?: string;
 };
 
+/**
+ * One verdict and reason for several detections. Selections larger than the server's per-request
+ * limit go out in sequential batches and their results are merged.
+ */
 export function useShadowDetectionBulkVerdict() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (
       request: Omit<ShadowDetectionBulkVerdictRequest, 'reason'> & { reason: string }
-    ): Promise<ShadowDetectionBulkVerdictResult> =>
-      (await api.post<ShadowDetectionBulkVerdictResult>(`${ENDPOINT}/bulk-verdict`, request)).data,
-    onSettled: () => queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+    ): Promise<ShadowDetectionBulkVerdictResult> => {
+      const merged: ShadowDetectionBulkVerdictResult = { graded: [], conflicts: [], missing: [], failed: [] };
+      for (let start = 0; start < request.items.length; start += SHADOW_DETECTION_BULK_VERDICT_LIMIT) {
+        const items = request.items.slice(start, start + SHADOW_DETECTION_BULK_VERDICT_LIMIT);
+        try {
+          const { data } = await api.post<ShadowDetectionBulkVerdictResult>(`${ENDPOINT}/bulk-verdict`, {
+            ...request,
+            items,
+          });
+          merged.graded.push(...data.graded);
+          merged.conflicts.push(...data.conflicts);
+          merged.missing.push(...data.missing);
+          merged.failed.push(...data.failed);
+        } catch (error) {
+          return {
+            ...merged,
+            failed: [...merged.failed, ...request.items.slice(start).map(item => item.id)],
+            failureMessage: getErrorMessage(error),
+          };
+        }
+      }
+      return merged;
+    },
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: AI_ADVISORY_QUERY_KEY }),
+      ]),
   });
 }
 

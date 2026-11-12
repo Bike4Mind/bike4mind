@@ -41,6 +41,9 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
 }));
 
 import { Permission } from '@bike4mind/common';
+const mockRecordUserActivity = vi.hoisted(() => vi.fn());
+vi.mock('@server/users/recordUserActivity', () => ({ recordUserActivity: mockRecordUserActivity }));
+
 import { func } from '../voiceSessionSendTranscript';
 
 /**
@@ -73,6 +76,24 @@ describe('voiceSessionSendTranscript authorization', () => {
   });
 
   const run = () => func(event as never, {} as never, logger as never);
+
+  it("stamps the user active for their own speech, but not for the assistant's side of the call", async () => {
+    await run();
+    expect(mockRecordUserActivity).toHaveBeenCalledWith('user-1', logger);
+
+    mockRecordUserActivity.mockClear();
+    const output = { ...event, body: JSON.stringify({ ...JSON.parse(event.body), type: 'response' }) };
+    await func(output as never, {} as never, logger as never);
+    expect(mockRecordUserActivity).not.toHaveBeenCalled();
+  });
+
+  it('does not stamp a caller who cannot write to the session', async () => {
+    mocks.sessionFindOne.mockResolvedValue(null);
+
+    await run();
+
+    expect(mockRecordUserActivity).not.toHaveBeenCalled();
+  });
 
   it('gates the write on update permission, not read accessibility', async () => {
     await run();

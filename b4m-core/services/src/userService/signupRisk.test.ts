@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IUserDocument } from '@bike4mind/common';
 import {
   assessSignupGrant,
+  capUnassessedSignupGrant,
   evaluateSignupRisk,
   isSignupGrantHeldForReview,
   signupRiskPolicySchema,
@@ -50,18 +51,48 @@ describe('evaluateSignupRisk', () => {
     expect(evaluateSignupRisk(policy, { ipSignups: value }, 10).band).toBe('review');
   });
 
-  it.each(['datacenter', 'canonicalEmailCollision', 'disposableDomain', 'blockedDomain', 'challengeVerified'] as const)(
-    'accepts only boolean observations for %s',
-    signal => {
-      const booleanPolicy = {
-        ...policy,
-        rules: [{ ...policy.rules[0], signal, comparison: 'eq', threshold: 1 }],
-      };
-      expect(evaluateSignupRisk(booleanPolicy, { [signal]: false }, 10).band).toBe('full');
-      expect(evaluateSignupRisk(booleanPolicy, { [signal]: true }, 10).band).toBe('reduced');
-      expect(evaluateSignupRisk(booleanPolicy, { [signal]: 0 }, 10).band).toBe('review');
-    }
-  );
+  it.each([
+    'datacenter',
+    'canonicalEmailCollision',
+    'disposableDomain',
+    'blockedDomain',
+    'plusAddressTag',
+    'randomPlusAddressTag',
+    'challengeVerified',
+  ] as const)('accepts only boolean observations for %s', signal => {
+    const booleanPolicy = {
+      ...policy,
+      rules: [{ ...policy.rules[0], signal, comparison: 'eq', threshold: 1 }],
+    };
+    expect(evaluateSignupRisk(booleanPolicy, { [signal]: false }, 10).band).toBe('full');
+    expect(evaluateSignupRisk(booleanPolicy, { [signal]: true }, 10).band).toBe('reduced');
+    expect(evaluateSignupRisk(booleanPolicy, { [signal]: 0 }, 10).band).toBe('review');
+  });
+
+  it('can hold a grant for review on a generated plus tag alone while a plain tag keeps the full grant', () => {
+    const plusTagPolicy = {
+      ...policy,
+      rules: [
+        { ...policy.rules[0], signal: 'plusAddressTag' as const, comparison: 'eq' as const, threshold: 1, weight: 1 },
+        {
+          ...policy.rules[0],
+          signal: 'randomPlusAddressTag' as const,
+          comparison: 'eq' as const,
+          threshold: 1,
+          weight: 7,
+        },
+      ],
+    };
+    expect(evaluateSignupRisk(plusTagPolicy, { plusAddressTag: true, randomPlusAddressTag: false }, 10)).toMatchObject({
+      band: 'full',
+      credits: 10,
+    });
+    expect(evaluateSignupRisk(plusTagPolicy, { plusAddressTag: true, randomPlusAddressTag: true }, 10)).toMatchObject({
+      band: 'review',
+      credits: 0,
+      reasons: ['plusAddressTag', 'randomPlusAddressTag'],
+    });
+  });
 
   it('accumulates independent signals before choosing the review band', () => {
     const combinedPolicy = {
@@ -125,6 +156,35 @@ describe('evaluateSignupRisk', () => {
       expect(decision.credits).toBeGreaterThanOrEqual(0);
       expect(decision.credits).toBeLessThanOrEqual(amount);
     }
+  });
+});
+
+describe('capUnassessedSignupGrant', () => {
+  it('caps a tranche paid with the policy off at the unprotected limit', () => {
+    const decision = evaluateSignupRisk({ enabled: false }, {}, 10_000);
+    expect(capUnassessedSignupGrant(decision, 1_000)).toMatchObject({
+      band: 'full',
+      status: 'disabled',
+      credits: 1_000,
+    });
+  });
+
+  it('leaves a tranche within the limit unchanged', () => {
+    const decision = evaluateSignupRisk({ enabled: false }, {}, 500);
+    expect(capUnassessedSignupGrant(decision, 1_000)).toBe(decision);
+  });
+
+  it('leaves an evaluated or held tranche to the policy', () => {
+    const evaluated = evaluateSignupRisk(policy, { ipSignups: 0, datacenter: false }, 10_000);
+    const held = evaluateSignupRisk('not a policy', {}, 10_000);
+    expect(capUnassessedSignupGrant(evaluated, 1_000)).toBe(evaluated);
+    expect(capUnassessedSignupGrant(held, 1_000)).toBe(held);
+  });
+
+  it('rejects an invalid limit', () => {
+    const decision = evaluateSignupRisk({ enabled: false }, {}, 500);
+    expect(() => capUnassessedSignupGrant(decision, -1)).toThrow('Invalid unprotected limit');
+    expect(() => capUnassessedSignupGrant(decision, 1.5)).toThrow('Invalid unprotected limit');
   });
 });
 

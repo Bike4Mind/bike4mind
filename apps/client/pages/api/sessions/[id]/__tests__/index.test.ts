@@ -51,7 +51,7 @@ const {
 vi.mock('@server/sessions/purgeDeletedNotebookMedia', () => ({
   purgeDeletedNotebookMedia: (...a: unknown[]) => mockPurgeMedia(...a),
 }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: (...a: unknown[]) => mockUnpublish(...a),
 }));
 

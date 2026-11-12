@@ -11,7 +11,7 @@ import {
   AdminUsersBulkUndoRequestSchema,
   type AdminUsersBulkActionType,
   type AdminUsersBulkUndoResult,
-} from '@client/app/utils/adminUsersBulk';
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 
 const ONE_MINUTE_MS = 60_000;
 export const USERS_BULK_UNDO_RATE_LIMIT = 10;

@@ -826,3 +826,4 @@ export class NotebookExportService {
 
 // Re-export types for external consumption
 export * from './types';
+export * from './bundle';

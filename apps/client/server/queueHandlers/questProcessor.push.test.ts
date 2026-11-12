@@ -8,7 +8,7 @@ vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
   isPushDeliveryConfigured: () => pushDelivery.configured,
 }));
 
-import type { WatchedConnectionRow } from '@server/utils/pushNotifications';
+import type { WatchedConnectionRow } from '@bike4mind/server-utils/utils/pushNotifications';
 import { createChatLiveActivity, publishChatCompletedPush } from './questProcessor.push';
 
 const logger = { warn: vi.fn() };

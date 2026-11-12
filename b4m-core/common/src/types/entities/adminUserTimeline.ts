@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { apiCompletionObservationSchema } from '../../schemas/completionSynchrony';
 import type { AuditEntry } from './AdminAuditLogTypes';
 import type { IActiveSessionDto } from './AuthSessionTypes';
 import type { ShadowDetectionVerdict } from '../../schemas/shadowDetection';
@@ -72,6 +73,7 @@ export type UserTimelineAuditEntry = UserTimelineEntryBase & {
 export type UserTimelineUsageEntry = UserTimelineEntryBase & { type: 'usage'; notebookId: string };
 
 export const AdminApiRequestSchema = z.object({
+  completionObservation: apiCompletionObservationSchema.optional(),
   keyId: z.string(),
   method: z.string(),
   endpoint: z.string(),
@@ -148,7 +150,7 @@ export type UserTimelineEntry =
 
 /**
  * Limits and refusals worth showing an admin. Recorded at the refusal sites through
- * recordUserLimitEvent (apps/client/server/billing/userLimitEvents.ts).
+ * recordUserLimitEvent (packages/server-utils/src/billing/userLimitEvents.ts).
  */
 export const USER_LIMIT_EVENT_KINDS = [
   'new_account_hourly_cap',
@@ -202,7 +204,7 @@ export type UserSignupCluster = {
 
 /**
  * Accounts linked to a user through payments or signup: the same card (strong), or only the same
- * signup or payment IP (weak). Built by apps/client/server/billing/linkedAccounts.ts.
+ * signup or payment IP (weak). Built by packages/server-utils/src/billing/linkedAccounts.ts.
  */
 export type UserLinkedAccount = {
   id: string;

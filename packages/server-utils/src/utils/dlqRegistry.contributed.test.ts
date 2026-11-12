@@ -63,11 +63,20 @@ describe('contributed DLQ registry', () => {
       sourceQueue: 'exampleJobQueue',
     });
     expect(registry.getDlqUrl(entry!.label)).toBe(DLQ_URLS['example-job']);
-    expect(registry.getSourceQueueUrl(entry!.sourceQueue)).toBe(SOURCE_URLS.exampleJobQueue);
+    expect(registry.getSourceQueueUrl(registry.contributedSourceQueueName(entry!.sourceQueue!))).toBe(
+      SOURCE_URLS.exampleJobQueue
+    );
     expect(registry.getDlqUrl(registry.contributedDlqLabel('example-job'))).toBe(DLQ_URLS['example-job']);
     expect(registry.getSourceQueueUrl(registry.contributedSourceQueueName('exampleJobQueue'))).toBe(
       SOURCE_URLS.exampleJobQueue
     );
+  });
+
+  it('registers a contributed entry without queue help', async () => {
+    const entry = (await load([QUEUE])).getDlqByLabel('example-job');
+    expect(entry).toBeDefined();
+    expect(entry!.description).toBeUndefined();
+    expect(entry!.replay).toBeUndefined();
   });
 
   it('appends contributed entries and leaves the core labels and order alone', async () => {
@@ -91,7 +100,7 @@ describe('contributed DLQ registry', () => {
     const registry = await load(
       core.flatMap((d, i) => [
         { ...QUEUE, name: `redeclared${i}Queue`, label: d.label },
-        { ...QUEUE, name: d.sourceQueue, label: `redeclared-${i}` },
+        ...(d.sourceQueue ? [{ ...QUEUE, name: d.sourceQueue, label: `redeclared-${i}` }] : []),
       ])
     );
     expect(registry.getDlqRegistry()).toEqual(core);

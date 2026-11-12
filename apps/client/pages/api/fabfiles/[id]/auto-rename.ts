@@ -118,7 +118,7 @@ const handler = baseApi()
           }
 
           // Get the operations model (optimized for fast operations like gpt-4o-mini)
-          const { llm, modelId, modelInfo } = await OperationsModelService.getOperationsModel();
+          const { llm, modelId, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: user.id });
 
           // Get file extension to preserve it (including compound extensions like .tar.gz, .test.ts)
           const getFileExtension = (filename: string): string => {

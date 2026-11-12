@@ -67,7 +67,8 @@ vi.mock('@bike4mind/database', () => ({
   CounterLog: {},
 }));
 
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 
@@ -77,7 +78,11 @@ import '@pages/api/admin/user-api-keys/[id]/reset-rate-limit';
 const admin = { id: 'admin-1', username: 'admin', isAdmin: true };
 
 function request(method: 'PATCH' | 'POST') {
-  const { req, res } = createMocks({ method, query: { id: 'key-1' }, body: { requestsPerDay: 5000 } });
+  const { req, res } = createMocks({
+    method,
+    query: { id: 'key-1' },
+    body: { requestsPerDay: 5000, reason: 'Support request' },
+  });
   (req as any).user = admin;
   (req as any).ability = {};
   (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };

@@ -1,11 +1,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { Quest, TelemetryAuditLogModel } from '@bike4mind/database';
+import { TelemetryAuditLogModel } from '@bike4mind/database';
 import { z } from 'zod';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { TELEMETRY_EXPORT_PROJECTION } from '@server/utils/telemetryProjection';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
-import { regenerateUserTelemetryHashes } from '@server/utils/telemetryHashLookup';
+import { collectAccountTelemetry } from '@server/utils/accountArchiveTelemetry';
 
 const paramsSchema = z.object({
   id: z.string().min(1),
@@ -34,21 +33,7 @@ const handler = baseApi().get(
       throw new ForbiddenError('You can only export your own telemetry data.');
     }
 
-    const hashes = await regenerateUserTelemetryHashes(userId);
-
-    // Find all telemetry records using safe projection (no userId leakage)
-    const records = await Quest.find({
-      'promptMeta.contextTelemetry.anonymousSessionId.hash': { $in: hashes },
-    })
-      .select(TELEMETRY_EXPORT_PROJECTION)
-      .lean();
-
-    const telemetryData = records
-      .filter(r => r.promptMeta?.contextTelemetry)
-      .map(r => ({
-        timestamp: r.timestamp?.toISOString() ?? '',
-        telemetry: r.promptMeta!.contextTelemetry,
-      }));
+    const telemetryData = await collectAccountTelemetry(userId);
 
     const durationMs = Date.now() - startTime;
 

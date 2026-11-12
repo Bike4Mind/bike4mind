@@ -1,6 +1,7 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
 import {
   FeedbackStatus,
+  FEEDBACK_CLIENT_PLATFORMS,
   FEEDBACK_SUBJECTS,
   HELP_FEEDBACK_REPORT_TYPES,
   HELP_FEEDBACK_SURFACES,
@@ -47,7 +48,31 @@ const feedbackSchema = new Schema<IFeedbackDocument>(
       ),
       required: false,
     },
+    // Diagnostic only - never read for authorization. Reports from before it existed have none.
+    clientContext: {
+      type: new Schema(
+        {
+          path: { type: String, required: false },
+          appVersion: { type: String, required: false },
+          platform: { type: String, enum: FEEDBACK_CLIENT_PLATFORMS, required: false },
+          viewport: {
+            type: new Schema(
+              { width: { type: Number, required: true }, height: { type: Number, required: true } },
+              { _id: false }
+            ),
+            required: false,
+          },
+          model: { type: String, required: false },
+          userAgent: { type: String, required: false },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
     contentStored: { type: Boolean, required: true, default: false },
+    handledBy: { type: String, required: false },
+    handledAt: { type: Date, required: false },
+    handledAuditEntryId: { type: String, required: false },
   },
   {
     timestamps: true,

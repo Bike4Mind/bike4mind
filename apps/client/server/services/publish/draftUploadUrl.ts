@@ -21,6 +21,9 @@ import { Config } from '@bike4mind/server-utils/utils/config';
  */
 const DRAFT_UPLOAD_TOKEN_AUDIENCE = 'publish-draft-upload';
 
+/** Request header the self-host proxy route reads the upload token from (draft-upload.ts). */
+export const DRAFT_UPLOAD_TOKEN_HEADER = 'x-upload-token';
+
 /** Proxy-token validity window (seconds). Mirrors the presigned URL expiry in
  *  upload-url.ts so a self-host token expires exactly when a hosted presigned
  *  URL would; both are surfaced to the client as the draft's `expiresAt`. */
@@ -89,20 +92,30 @@ export interface MintDraftUploadUrlInput {
   expiresIn: number;
 }
 
+export type DraftUploadTarget = { url: string; headers?: Record<string, string> };
+
 /**
- * Return the URL the browser PUTs a single draft file to. Hosted: a presigned S3
- * PUT (unchanged behavior). Self-host: a same-origin proxy URL with a signed
- * token. The browser PUT itself is identical in both cases (publishApi.ts).
+ * Return where the client PUTs a single draft file. Hosted: a presigned S3 PUT
+ * with no extra headers. Self-host: a same-origin proxy URL plus the signed token
+ * as a header. Every caller sends the returned headers (publishApi.ts, the CLI's
+ * b4mApiClient.ts, desktop's SharePublisher.ts).
  */
-export async function mintDraftUploadUrl(input: MintDraftUploadUrlInput): Promise<string> {
+export async function mintDraftUploadUrl(input: MintDraftUploadUrlInput): Promise<DraftUploadTarget> {
   if (process.env.B4M_SELF_HOST === 'true') {
     const token = signDraftUploadToken({ draftId: input.draftId, path: input.path, size: input.size }, input.expiresIn);
+    // `token` stays in the URL only for CLI and desktop builds that replay `url` without headers;
+    // drop it together with draft-upload.ts's deprecated `?token=` fallback. The route prefers the
+    // header, and request logs redact the query value (requestLogUrl.ts).
     const params = new URLSearchParams({ draftId: input.draftId, path: input.path, token });
-    return `/api/publish/artifact/draft-upload?${params.toString()}`;
+    return {
+      url: `/api/publish/artifact/draft-upload?${params.toString()}`,
+      headers: { [DRAFT_UPLOAD_TOKEN_HEADER]: token },
+    };
   }
-  return input.storage.getSignedUrl(input.key, 'put', {
+  const url = await input.storage.getSignedUrl(input.key, 'put', {
     expiresIn: input.expiresIn,
     ContentType: input.mimeType,
     ContentLength: input.size,
   });
+  return { url };
 }

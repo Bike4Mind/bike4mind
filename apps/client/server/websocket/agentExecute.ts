@@ -20,12 +20,13 @@ import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailu
 import { adminSettingsRepository, agentExecutionRepository, sessionToolApprovalRepository } from '@bike4mind/database';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
+import { recordUserActivity } from '@server/users/recordUserActivity';
 import { endAgentRunLiveActivity } from '@server/utils/liveActivityPush';
-import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { reopenLowConfidenceAnswer } from '@bike4mind/server-utils/utils/reopenLowConfidenceAnswer';
 import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
-import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
+import { resolveAndPublishMementoCompletion } from '@bike4mind/server-utils/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 import {
   verifyJwtToken,
@@ -221,11 +222,14 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     return { statusCode: 200 };
   }
 
+  // Re-attaching to a running execution is the client reconnecting, not the user acting.
+  const isUserAction = body.command !== 'reconnect';
+
   // Authenticate
   let userId: string;
   let apiKeyInfo: ApiKeyInfo | undefined;
   try {
-    apiKeyInfo = await verifyApiKey({ authorization: `Bearer ${body.accessToken}` });
+    apiKeyInfo = await verifyApiKey({ authorization: `Bearer ${body.accessToken}` }, { recordUse: isUserAction });
     userId = apiKeyInfo.userId;
     await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
       userId: apiKeyInfo.userId,
@@ -253,6 +257,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   }
 
   logger.updateMetadata({ userId, command: body.command });
+  if (isUserAction) recordUserActivity(userId, logger);
 
   // Route command
   const rawBody = JSON.parse(event.body ?? '');

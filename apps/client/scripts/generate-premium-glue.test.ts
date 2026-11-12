@@ -202,4 +202,38 @@ describe('generate-premium-glue.mjs', () => {
       expect(read(root, ROUTES)).toContain('PremiumRouteDescriptor[] = [];');
     });
   });
+
+  describe('core migrations registry', () => {
+    const MIGRATIONS_DIR = 'packages/scripts/migrate/migrations';
+    const CORE = `${MIGRATIONS_DIR}/core.generated.ts`;
+
+    it('statically imports every migration file in sorted order, skipping tests and non-migrations', () => {
+      const root = makeTree({ premiumDir: false });
+      const dir = path.join(root, MIGRATIONS_DIR);
+      fs.mkdirSync(dir, { recursive: true });
+      for (const f of [
+        '20250704005300-add-filename-lowercase.ts',
+        '2024052201905_demo_to_paid.ts',
+        '20250704005300-add-filename-lowercase.test.ts',
+        'index.ts',
+        'legacySignupGrantSchedule.ts',
+        'premium.generated.ts',
+      ]) {
+        fs.writeFileSync(path.join(dir, f), 'export default {};\n');
+      }
+
+      expect(run(root).status).toBe(0);
+      const content = read(root, CORE);
+      expect(content).toContain("import migration0 from './2024052201905_demo_to_paid';");
+      expect(content).toContain("import migration1 from './20250704005300-add-filename-lowercase';");
+      expect(content).toContain('export const coreMigrations: MigrationFile[] = [\n  migration0,\n  migration1,\n];');
+      expect(content.match(/^import migration/gm)).toHaveLength(2);
+    });
+
+    it('writes nothing when the migrations directory is absent', () => {
+      const root = makeTree({ premiumDir: false });
+      expect(run(root).status).toBe(0);
+      expect(exists(root, CORE)).toBe(false);
+    });
+  });
 });

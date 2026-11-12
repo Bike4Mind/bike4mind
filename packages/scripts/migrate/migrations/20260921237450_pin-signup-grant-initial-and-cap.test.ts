@@ -34,7 +34,11 @@ describe('pin signup grant initial and cap migration', () => {
     await migration.up();
 
     expect([await value('signupGrantInitialCredits'), await value('signupGrantDripCap')]).toEqual(['500', '0']);
-    expect(await resolveSignupGrantSchedule(repo)).toMatchObject({ initialCredits: 500, paysFlat: true });
+    expect(await resolveSignupGrantSchedule(repo)).toMatchObject({
+      initialCredits: 500,
+      dripCap: 0,
+      dripCapSource: 'setting',
+    });
   });
 
   it('fills an emptied initial credits row from the old fallback and keeps a stored cap', async () => {
