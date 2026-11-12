@@ -68,6 +68,17 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     return Object.fromEntries(rows.map(row => [String(row._id), row.count]));
   }
 
+  /** When each user created their first key, deleted keys included; users with no key are absent. */
+  async findFirstCreatedAtByUserIds(userIds: string[]): Promise<Record<string, Date>> {
+    if (userIds.length === 0) return {};
+    // aggregate skips the soft-delete filter, so a deleted first key still counts.
+    const rows = await this.model.aggregate<{ _id: string; firstCreatedAt: Date }>([
+      { $match: { userId: { $in: userIds } } },
+      { $group: { _id: '$userId', firstCreatedAt: { $min: '$createdAt' } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.firstCreatedAt]));
+  }
+
   findByUserIdAndId(userId: string, id: string) {
     return this.model.findOne({ _id: id, userId }).exec();
   }
@@ -241,6 +252,37 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       }
     );
     return live.map(key => ({ id: String(key._id), status: key.status }));
+  }
+
+  /**
+   * Disables the member's live keys billed to this org when their membership ends. Personal
+   * (User-billed) keys, legacy rows with no billingOwnerType, and embed keys (bound to an agent;
+   * they serve the org's embedded widget, not the member) are left alone. No batch id: a
+   * removal is not undoable, so these must not be restorable through `reactivateByIds`.
+   * Returns the selected live ids. Call within withTransaction when these ids are used as an
+   * exact audit receipt, so a concurrent revocation retries the read and write together.
+   */
+  // Keep the selection in sync with orgBilledKeyFilter in b4m-core/services/src/organizationService/offboardingScope.ts.
+  async revokeLiveOrgBilledByUserId(
+    userId: string,
+    organizationId: string,
+    { revokedBy, revokedReason }: { revokedBy: string; revokedReason: string }
+  ): Promise<string[]> {
+    const filter = {
+      userId,
+      organizationId,
+      billingOwnerType: CreditHolderType.Organization,
+      status: { $ne: ApiKeyStatus.DISABLED },
+      agentId: null,
+    };
+    const live = await this.model.find(filter).select('_id').lean<{ _id: unknown }[]>();
+    if (live.length === 0) return [];
+    const ids = live.map(key => key._id);
+    await this.model.updateMany(
+      { ...filter, _id: { $in: ids } },
+      { $set: { status: ApiKeyStatus.DISABLED, revokedAt: new Date(), revokedBy, revokedReason } }
+    );
+    return ids.map(String);
   }
 
   /**
@@ -464,6 +506,14 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // No index: the only read is by the key's own id (already indexed), never a bulk lookup by
     // lake. `default: undefined` so an ordinary key does not materialize an empty array.
     preauthorizedLakeIds: { type: [String], default: undefined },
+    // Org-owned key (see IUserApiKey.orgOwned). Set on insert only.
+    orgOwned: {
+      type: new mongoose.Schema<{ createdByUserId: string }>(
+        { createdByUserId: { type: String, required: true } },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     branding: {
       type: new mongoose.Schema<IEmbedBranding>(
         {

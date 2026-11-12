@@ -531,7 +531,12 @@ async function resolveRunBillingOrg(input: StartAgentExecutionInput, logger: Log
     const user = await userRepository.findById(userId);
     const billing = await resolveApiKeyBillingOrg({
       apiKeyInfo: input.apiKeyInfo,
-      user: { id: userId, isAdmin: user?.isAdmin ?? false },
+      user: {
+        id: userId,
+        isAdmin: user?.isAdmin ?? false,
+        isSystem: user?.isSystem,
+        serviceAccountOrganizationId: user?.serviceAccountOrganizationId,
+      },
       requestedOrgId: input.organizationId,
     });
     switch (billing.kind) {

@@ -18,7 +18,9 @@ const mockRefs = vi.hoisted(() => ({
 
 // Set by the withTransaction mock only after the wrapped callback resolves, so a test can assert the
 // notifier saw a committed transaction rather than merely that both were called in some order.
-const txState = vi.hoisted(() => ({ committed: false }));
+// `staged` collects the writes a callback makes; they reach `persisted` only if the callback resolves,
+// which is how the real transaction behaves when any step throws.
+const txState = vi.hoisted(() => ({ committed: false, staged: [] as string[], persisted: [] as string[] }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
@@ -39,11 +41,34 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const revokeAccess = vi.hoisted(() =>
-  vi.fn(async () => ({ id: 'org1', userId: 'owner1', name: 'Acme', stripeCustomerId: 'cus_SECRET', users: [] }))
+  vi.fn(async () => {
+    txState.staged.push('revoke');
+    return {
+      organization: { id: 'org1', userId: 'owner1', name: 'Acme', stripeCustomerId: 'cus_SECRET', users: [] },
+      revokedOrgBilledApiKeyIds: ['key-1', 'key-2'],
+    };
+  })
 );
+const reassignedCounts = { files: 2, artifacts: 1, projects: 1, notebooks: 3, agents: 0 };
+const reassignMemberContent = vi.hoisted(() =>
+  vi.fn(async (): Promise<Record<string, number>> => {
+    txState.staged.push('reassign');
+    return reassignedCounts;
+  })
+);
+const recordAdminActionFromRequest = vi.hoisted(() =>
+  vi.fn(async () => {
+    if (txState.committed) throw new Error('audit written outside the transaction');
+    return {};
+  })
+);
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest,
+  userAuditTarget: async (id: string) => ({ kind: 'user', id, displayName: 'Member Two' }),
+}));
 const reportAndNotifyKeptPersonalLakeShares = vi.hoisted(() => vi.fn().mockResolvedValue(2));
 vi.mock('@server/utils/keptPersonalLakeSharesNotifier', () => ({ reportAndNotifyKeptPersonalLakeShares }));
-vi.mock('@bike4mind/services', () => ({ organizationService: { revokeAccess } }));
+vi.mock('@bike4mind/services', () => ({ organizationService: { revokeAccess, reassignMemberContent } }));
 
 const lakeConfigAuditPrincipal = vi.hoisted(() => vi.fn(() => undefined as unknown));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal }));
@@ -56,17 +81,24 @@ vi.mock('@server/dataLakes/dataLakeScopes', () => ({
 // audit pair behind `lakeConfigAuditDb` throws at IMPORT time, taking the suite to zero tests.
 vi.mock('@bike4mind/database', () => ({
   withTransaction: async (fn: any) => {
+    txState.staged = [];
     const result = await fn();
+    txState.persisted.push(...txState.staged);
     txState.committed = true;
     return result;
   },
   dataLakeRepository: {},
+  agentRepository: {},
+  artifactRepository: {},
+  fabFileRepository: {},
+  projectRepository: {},
+  sessionRepository: {},
   dataLakeAccessGrantRepository: {},
   lakeConfigChangeEventRepository: {},
   adminSettingsRepository: {},
 }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
-vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
+vi.mock('@bike4mind/database/auth', () => ({ userRepository: {}, userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository: {} }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
@@ -80,12 +112,17 @@ const request = (over: Record<string, unknown> = {}) => {
   return { req, res };
 };
 
+beforeEach(() => {
+  txState.committed = false;
+  txState.staged = [];
+  txState.persisted = [];
+});
+
 describe('DELETE /api/organizations/[id]/members/[userId]', () => {
   beforeEach(() => {
     revokeAccess.mockClear();
     lakeConfigAuditPrincipal.mockClear();
     lakeConfigAuditPrincipal.mockReturnValue(undefined);
-    txState.committed = false;
   });
 
   it('declares datalake:share at the door', () => {
@@ -124,6 +161,38 @@ describe('DELETE /api/organizations/[id]/members/[userId]', () => {
       expect.anything(),
       expect.anything(),
       expect.objectContaining({ auditPrincipal: undefined })
+    );
+  });
+
+  it('records the removal as an org-scoped audit row inside the transaction', async () => {
+    recordAdminActionFromRequest.mockClear();
+    const { req, res } = request();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.member.removed',
+        actorScope: 'organization',
+        target: expect.objectContaining({ kind: 'user', id: 'member2' }),
+        organizationId: 'org1',
+        details: { organizationName: 'Acme', revokedOrgBilledKeys: 2 },
+      })
+    );
+    expect(res._getJSONData().revokedOrgBilledKeys).toBe(2);
+  });
+
+  it('passes the API-key repository so the purge can revoke org-billed keys', async () => {
+    const { req, res } = request();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(revokeAccess).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ userApiKeys: expect.anything() }) })
     );
   });
 
@@ -170,5 +239,123 @@ describe('DELETE /api/organizations/[id]/members/[userId] - personal-lake shares
     await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('boom');
 
     expect(reportAndNotifyKeptPersonalLakeShares).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/organizations/[id]/members/[userId] - content transfer', () => {
+  beforeEach(() => {
+    revokeAccess.mockClear();
+    reassignMemberContent.mockClear();
+    recordAdminActionFromRequest.mockClear();
+  });
+
+  it('keeps content with the member when no target is given', async () => {
+    const { req, res } = request();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(reassignMemberContent).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(res._getJSONData().reassigned).toBeNull();
+  });
+
+  it('treats an empty body as a plain removal', async () => {
+    const { req, res } = request({ body: '' });
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(reassignMemberContent).not.toHaveBeenCalled();
+    expect(revokeAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('transfers before revoking, in one transaction, and audits both', async () => {
+    const { req, res } = request({ body: { reassignTo: 'member3' } });
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(reassignMemberContent).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'owner1' }),
+      { id: 'org1', userId: 'member2', reassignTo: 'member3' },
+      expect.objectContaining({ db: expect.objectContaining({ fabFiles: expect.anything() }) })
+    );
+    expect(txState.persisted).toEqual(['reassign', 'revoke']);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(2);
+    expect(recordAdminActionFromRequest).toHaveBeenLastCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.member.content_reassigned',
+        actorScope: 'organization',
+        target: expect.objectContaining({ kind: 'user', id: 'member2' }),
+        organizationId: 'org1',
+        details: { organizationName: 'Acme', toUserId: 'member3', counts: reassignedCounts },
+      })
+    );
+    expect(res._getJSONData().reassigned).toEqual(reassignedCounts);
+  });
+
+  it('records no content_reassigned audit when nothing moved', async () => {
+    reassignMemberContent.mockImplementationOnce(async () => {
+      txState.staged.push('reassign');
+      return { files: 0, artifacts: 0, projects: 0, notebooks: 0, agents: 0 };
+    });
+    const { req, res } = request({ body: { reassignTo: 'member3' } });
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ action: 'org.member.content_reassigned' })
+    );
+    expect(res._getJSONData().reassigned).toMatchObject({ files: 0 });
+  });
+
+  it('rolls back the removal when the transfer fails', async () => {
+    reassignMemberContent.mockImplementationOnce(async () => {
+      txState.staged.push('reassign');
+      throw new Error('transfer failed');
+    });
+    const { req, res } = request({ body: { reassignTo: 'member3' } });
+
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('transfer failed');
+
+    expect(revokeAccess).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+    expect(txState.persisted).toEqual([]);
+  });
+
+  it('rolls back the transfer when the removal or its audit fails', async () => {
+    recordAdminActionFromRequest.mockRejectedValueOnce(new Error('audit down'));
+    const { req, res } = request({ body: { reassignTo: 'member3' } });
+
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('audit down');
+
+    expect(reassignMemberContent).toHaveBeenCalledTimes(1);
+    expect(txState.persisted).toEqual([]);
+  });
+
+  it.each([
+    ['an empty target', { reassignTo: '' }],
+    ['an unknown field', { reassignTo: 'member3', moveKeys: true }],
+    ['a non-object body', 'member3'],
+  ])('rejects %s before touching anything', async (_label, body) => {
+    const { req, res } = request({ body });
+
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toMatchObject({ statusCode: 400 });
+
+    expect(reassignMemberContent).not.toHaveBeenCalled();
+    expect(revokeAccess).not.toHaveBeenCalled();
+  });
+
+  it('refuses a transfer requested with an API key', async () => {
+    const { req, res } = request({
+      body: { reassignTo: 'member3' },
+      apiKeyInfo: { keyId: 'key-7', scopes: ['datalake:share'] },
+    });
+
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+
+    expect(reassignMemberContent).not.toHaveBeenCalled();
+    expect(revokeAccess).not.toHaveBeenCalled();
   });
 });
