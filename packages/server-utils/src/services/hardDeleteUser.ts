@@ -6,7 +6,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import type { IUserDocument, IUserRepository } from '@bike4mind/common';
-import type { Logger } from '@bike4mind/observability';
+import { Logger } from '@bike4mind/observability';
 import { pseudonymizeUserId } from '../analytics/pseudonymize';
 import { erasureIdHash, erasureKeyId, erasurePseudonym } from '../privacy/erasureHash';
 import { emitBillingEvent } from '../analytics/signupEvents';
@@ -63,7 +63,7 @@ async function emitAccountDeleted(account: IUserDocument | null, initiatedBy: Ha
       },
     });
   } catch {
-    console.warn('[b4m-analytics] account_deleted not sent');
+    Logger.warn('[b4m-analytics] account_deleted not sent');
   }
 }
 

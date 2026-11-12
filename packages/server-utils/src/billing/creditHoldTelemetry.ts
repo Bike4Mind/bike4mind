@@ -16,6 +16,7 @@ function emitHoldMetric(
     const Stage = resolveStage();
     const isLatency = metric === 'HoldLatency';
     // Owner ids remain log fields, never high-cardinality CloudWatch dimensions.
+    // eslint-disable-next-line no-console -- an EMF line must reach stdout as top-level JSON; Logger would nest it under `message`
     console.info(
       JSON.stringify({
         event: 'creditHoldTelemetry',

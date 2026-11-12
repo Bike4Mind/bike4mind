@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
+import { Logger } from '@bike4mind/observability';
 import {
   BadGatewayError,
   ConflictError,
@@ -359,7 +360,7 @@ async function recordCallBookkeeping(
       await mcpConnectionRepository.update({ id: connection.id, detectedTransport });
     }
   } catch (error) {
-    console.warn(`[invokeRemoteMcp] Could not record use of connection ${connection.id}:`, error);
+    Logger.warn(`[invokeRemoteMcp] Could not record use of connection ${connection.id}:`, error);
   }
 }
 
