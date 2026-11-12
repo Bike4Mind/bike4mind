@@ -9,6 +9,9 @@ export * from './FavoriteModel';
 export * from './ImageGenerationTemplateModel';
 export * from './ImageModerationIncidentModel';
 export {
+  OWNER_MIRROR_COVERAGE,
+  OWNER_MIRROR_COVERAGE_COMPLETE,
+  OWNER_MIRROR_UNINSTRUMENTED_RECORDS,
   OwnerMutationCoverageError,
   OwnerMutationCursorError,
   OwnerMutationHead,

@@ -1,9 +1,30 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import {
+  OWNER_MIRROR_COVERAGE,
+  OWNER_MIRROR_COVERAGE_COMPLETE,
+  OWNER_MIRROR_UNINSTRUMENTED_RECORDS,
+} from '../../../../packages/database/src/models/content/OwnerMutationLogModel';
 import { ACCOUNT_ARCHIVE_METADATA_MODELS } from './accountDataExportCollections';
 import { accountArchiveFilter, accountArchiveMetadata } from './accountDataExportCollections';
 
 describe('account archive coverage', () => {
+  it('keeps the feed closed until every included write path and deployment fence is covered', () => {
+    const exported = readFileSync(new URL('accountDataExport.ts', import.meta.url), 'utf8');
+    expect(exported).toContain("completeness: 'partial'");
+    expect(ACCOUNT_ARCHIVE_METADATA_MODELS.every(name => OWNER_MIRROR_UNINSTRUMENTED_RECORDS.includes(name))).toBe(
+      true
+    );
+    expect(OWNER_MIRROR_UNINSTRUMENTED_RECORDS.length).toBeGreaterThanOrEqual(ACCOUNT_ARCHIVE_METADATA_MODELS.length);
+    expect(OWNER_MIRROR_COVERAGE).toEqual({
+      databasePrivilegesEnforced: false,
+      accountSnapshotFenced: false,
+      immutableByteReferencesFenced: false,
+      includedWritersInstrumented: false,
+    });
+    expect(OWNER_MIRROR_COVERAGE_COMPLETE).toBe(false);
+  });
+
   it('requires an explicit adapter policy for every direct purge-listed model', () => {
     const purge = readFileSync(new URL('../../../client/server/users/purgeAccountContent.ts', import.meta.url), 'utf8');
     const loops = [

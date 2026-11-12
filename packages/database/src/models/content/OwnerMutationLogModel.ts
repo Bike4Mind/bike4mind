@@ -2,7 +2,65 @@ import { createHash } from 'node:crypto';
 import mongoose, { Schema, type ClientSession } from 'mongoose';
 import { withTransaction } from '@bike4mind/db-core';
 
-export const OWNER_MIRROR_COVERAGE_COMPLETE = false;
+export const OWNER_MIRROR_COVERAGE = {
+  databasePrivilegesEnforced: false,
+  accountSnapshotFenced: false,
+  immutableByteReferencesFenced: false,
+  includedWritersInstrumented: false,
+} as const;
+
+export const OWNER_MIRROR_UNINSTRUMENTED_RECORDS = [
+  'User',
+  'Session',
+  'Quest',
+  'FabFile',
+  'Artifact',
+  'ArtifactContent',
+  'Agent',
+  'Project',
+  'MemoryLedgerEvent',
+  'ToolModel',
+  'Memento',
+  'ResearchAgent',
+  'ResearchTask',
+  'WorkItem',
+  'AgentExecution',
+  'Favorite',
+  'Tag',
+  'BriefcasePrompt',
+  'ImageGenerationTemplate',
+  'ResearchData',
+  'StockPortfolio',
+  'StockTrade',
+  'TavernQuest',
+  'QuestMasterPlan',
+  'QuestExternalLink',
+  'GearStamp',
+  'AuthSession',
+  'TrustedDevice',
+  'PasskeyCredential',
+  'OAuthGrant',
+  'OAuthRefreshToken',
+  'OAuthAuthorizationCode',
+  'UserApiKey',
+  'ApiKey',
+  'PushToken',
+  'DeviceAuthorization',
+  'CcBridgeDevice',
+  'CcBridgePairingToken',
+  'WsConnectTicket',
+  'PasskeyChallenge',
+  'UserActivityCounter',
+  'UserUsagePatternSignals',
+  'AdminUserNote',
+  'AdminUserNoteRevision',
+  'ActiveCodeAgent',
+  'CodeAgentEvent',
+  'SessionAgentConfig',
+  'SessionToolApproval',
+] as const;
+
+export const OWNER_MIRROR_COVERAGE_COMPLETE = Object.values(OWNER_MIRROR_COVERAGE).every(Boolean);
 
 type MutationKind = 'upsert' | 'delete';
 type OwnerMutation = {
@@ -192,7 +250,9 @@ export async function readOwnerMutationsInternal(ownerId: string, limit: number,
 }
 
 export async function readOwnerMutations(ownerId: string, limit: number, cursor?: string) {
-  if (!OWNER_MIRROR_COVERAGE_COMPLETE) throw new OwnerMutationCoverageError('Account mirror feed is not available');
+  if (!OWNER_MIRROR_COVERAGE_COMPLETE) {
+    throw new OwnerMutationCoverageError('Account mirror feed is not available');
+  }
   return readOwnerMutationsInternal(ownerId, limit, cursor);
 }
 
