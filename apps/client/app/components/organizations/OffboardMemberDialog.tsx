@@ -15,8 +15,10 @@ import {
   Typography,
 } from '@mui/joy';
 import { FC, useEffect, useState } from 'react';
+import { isOrgMember } from '@bike4mind/common';
 import {
   MemberOffboardingInventory,
+  useGetOrganization,
   useMemberOffboardingInventory,
   useRemoveMemberFromOrganization,
 } from '@client/app/hooks/data/organizations';
@@ -46,6 +48,7 @@ const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, m
   const [reassignTo, setReassignTo] = useState<string | null>(null);
   const inventory = useMemberOffboardingInventory(organizationId, member?.id ?? null);
   const { data: members = [] } = useGetOrganizationUsers(member ? organizationId : null);
+  const { data: organization } = useGetOrganization(member ? organizationId : null);
   const removeMember = useRemoveMemberFromOrganization();
 
   useEffect(() => {
@@ -55,11 +58,14 @@ const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, m
 
   if (!member) return null;
 
-  const candidates = members.filter(candidate => candidate.id !== member.id);
+  // Same rule the transfer enforces server-side: only roster rows that confer membership qualify.
+  const candidates = organization
+    ? members.filter(candidate => candidate.id !== member.id && isOrgMember({ id: candidate.id }, organization))
+    : [];
   const contentCount = inventory.data ? CONTENT_ROWS.reduce((sum, row) => sum + inventory.data[row.key].count, 0) : 0;
   const keyCount = inventory.data?.orgBilledApiKeys.count ?? 0;
   const transferring = disposition === 'transfer';
-  const canConfirm = !inventory.isLoading && !removeMember.isPending && (!transferring || !!reassignTo);
+  const canConfirm = !!inventory.data && !removeMember.isPending && (!transferring || !!reassignTo);
 
   const handleConfirm = async () => {
     try {

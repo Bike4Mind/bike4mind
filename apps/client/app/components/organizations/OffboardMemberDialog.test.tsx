@@ -24,6 +24,17 @@ const hooks = vi.hoisted(() => ({
 }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useMemberOffboardingInventory: () => hooks.inventory,
+  useGetOrganization: () => ({
+    data: {
+      id: 'org1',
+      userId: 'owner1',
+      users: [
+        { userId: 'b', permissions: ['read'] },
+        { userId: 'c', permissions: ['read'] },
+        { userId: 'pending', permissions: [] },
+      ],
+    },
+  }),
   useRemoveMemberFromOrganization: () => ({ mutateAsync: hooks.mutateAsync, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/user', () => ({
@@ -32,6 +43,7 @@ vi.mock('@client/app/hooks/data/user', () => ({
       { id: 'owner1', name: 'Owner' },
       { id: 'b', name: 'Bea' },
       { id: 'c', name: 'Cal' },
+      { id: 'pending', name: 'Pat' },
     ],
   }),
 }));
@@ -96,6 +108,8 @@ describe('OffboardMemberDialog', () => {
 
     fireEvent.click(within(screen.getByTestId('offboard-dialog-target-select')).getByRole('combobox'));
     expect(screen.queryByTestId('offboard-dialog-target-b')).toBeNull();
+    // A roster row without a membership permission is not offered as a recipient.
+    expect(screen.queryByTestId('offboard-dialog-target-pending')).toBeNull();
     fireEvent.click(await screen.findByTestId('offboard-dialog-target-c'));
     expect(confirmButton().disabled).toBe(false);
     fireEvent.click(confirmButton());
@@ -115,10 +129,11 @@ describe('OffboardMemberDialog', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('shows the load error', () => {
+  it('shows the load error and blocks removal until the content has loaded', () => {
     hooks.inventory = { data: undefined, isLoading: false, error: new Error('boom') };
     renderDialog();
 
     expect(screen.getByTestId('offboard-dialog-error').textContent).toContain('boom');
+    expect(confirmButton().disabled).toBe(true);
   });
 });

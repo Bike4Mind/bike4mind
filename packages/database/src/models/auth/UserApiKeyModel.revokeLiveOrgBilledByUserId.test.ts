@@ -61,19 +61,21 @@ describe('UserApiKeyRepository.revokeLiveOrgBilledByUserId', () => {
     expect(await userApiKeyRepository.findActiveByKeyPrefix(active.keyPrefix)).toBeNull();
   });
 
-  it('leaves personal, legacy, other-org and other-member keys alone', async () => {
+  it('leaves personal, legacy, embed, other-org and other-member keys alone', async () => {
     const personal = await seed({ billingOwnerType: CreditHolderType.User });
     const legacy = await seed({ billingOwnerType: undefined });
     const otherOrg = await seed({ organizationId: 'org-2' });
     const otherMember = await seed({ userId: 'member-2' });
+    // An embed key serves the org's widget, so it outlives the member who created it.
+    const embed = await seed({ agentId: 'agent-1' });
 
     const ids = await userApiKeyRepository.revokeLiveOrgBilledByUserId('member-1', 'org-1', stamp);
 
     expect(ids).toEqual([]);
     const statuses = await UserApiKey.find({
-      _id: { $in: [personal.id, legacy.id, otherOrg.id, otherMember.id] },
+      _id: { $in: [personal.id, legacy.id, otherOrg.id, otherMember.id, embed.id] },
     }).lean();
-    expect(statuses.map(doc => doc.status)).toEqual(Array(4).fill(ApiKeyStatus.ACTIVE));
+    expect(statuses.map(doc => doc.status)).toEqual(Array(5).fill(ApiKeyStatus.ACTIVE));
   });
 
   it('keeps the original stamp on an already-disabled key', async () => {

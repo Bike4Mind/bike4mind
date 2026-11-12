@@ -1,7 +1,6 @@
-import { IGroupRepository, IOrganizationRepository, IUserDocument } from '@bike4mind/common';
+import { IGroupRepository, IOrganizationRepository, isOrgMember, IUserDocument } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
-import { isCurrentOrgMember } from './orgAuthority';
 import {
   loadOffboardableOrganization,
   orgAgentFilter,
@@ -20,7 +19,7 @@ const parametersSchema = z.object({
 type Filter = Record<string, unknown>;
 
 interface Reassignable {
-  updateMany: (filter: Filter, data: { userId: string }) => Promise<unknown>;
+  updateMany: (filter: Filter, data: { userId: string; name?: string }) => Promise<unknown>;
 }
 
 export interface ReassignMemberContentAdapters {
@@ -30,7 +29,7 @@ export interface ReassignMemberContentAdapters {
     fabFiles: Reassignable;
     artifacts: Reassignable;
     projects: Reassignable & {
-      find: (filter: Filter, options?: Record<string, unknown>) => Promise<{ id: string; sessionIds?: string[] }[]>;
+      find: (filter: Filter, options?: Record<string, unknown>) => Promise<{ id: string; name: string }[]>;
     };
     sessions: Reassignable;
     agents: Reassignable;
@@ -67,24 +66,14 @@ export async function reassignMemberContent(
   if (reassignTo === memberId) {
     throw new BadRequestError('Content cannot be transferred to the member being removed.');
   }
-  if (!isCurrentOrgMember(organization, reassignTo)) {
+  // isOrgMember, not isCurrentOrgMember: a roster row that confers no membership permission must not
+  // receive content.
+  if (!isOrgMember({ id: reassignTo }, organization)) {
     throw new BadRequestError('Content can only be transferred to a current member of the organization.');
   }
 
   const orgGroupIds = (await db.groups.findByOrganization(organizationId)).map(group => String(group.id));
   const scope: OffboardingScope = { organizationId, memberId, orgGroupIds };
-
-  // Notebook and agent scope hangs off the member's projects, so resolve it before projects move.
-  const projectFilter = orgProjectFilter(scope);
-  const projects = projectFilter ? await db.projects.find(projectFilter, { sessionIds: 1 }) : [];
-  const sessionFilter = orgSessionFilter(
-    scope,
-    projects.flatMap(project => project.sessionIds ?? [])
-  );
-  const agentFilter = orgAgentFilter(
-    scope,
-    projects.map(project => String(project.id))
-  );
 
   const move = async (repo: Reassignable, filter: Filter | null) =>
     filter ? modifiedCount(await repo.updateMany(filter, { userId: reassignTo })) : 0;
@@ -92,9 +81,36 @@ export async function reassignMemberContent(
   // Sequential so a caller's transaction sees one write at a time.
   const files = await move(db.fabFiles, orgStampedFilter(scope));
   const artifacts = await move(db.artifacts, orgStampedFilter(scope));
-  const notebooks = await move(db.sessions, sessionFilter);
-  const agents = await move(db.agents, agentFilter);
-  const movedProjects = await move(db.projects, projectFilter);
+  const notebooks = await move(db.sessions, orgSessionFilter(scope));
+  const agents = await move(db.agents, orgAgentFilter(scope));
+  const movedProjects = await moveProjects(db.projects, orgProjectFilter(scope), reassignTo);
 
   return { files, artifacts, projects: movedProjects, notebooks, agents };
+}
+
+/**
+ * Project names are unique per owner among live projects (ProjectModel's partial unique index), so
+ * a project whose name the recipient already uses moves under a suffixed name instead of failing
+ * the whole transfer.
+ */
+async function moveProjects(
+  projects: ReassignMemberContentAdapters['db']['projects'],
+  filter: Filter | null,
+  reassignTo: string
+): Promise<number> {
+  if (!filter) return 0;
+  const moving = await projects.find(filter, { name: 1 });
+  if (moving.length === 0) return 0;
+  const taken = new Set((await projects.find({ userId: reassignTo, deletedAt: null }, { name: 1 })).map(p => p.name));
+  let moved = 0;
+  for (const project of moving) {
+    let name = project.name;
+    for (let n = 1; taken.has(name); n++) {
+      name = n === 1 ? `${project.name} (transferred)` : `${project.name} (transferred ${n})`;
+    }
+    taken.add(name);
+    const data = name === project.name ? { userId: reassignTo } : { userId: reassignTo, name };
+    moved += modifiedCount(await projects.updateMany({ ...filter, _id: project.id }, data));
+  }
+  return moved;
 }

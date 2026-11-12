@@ -22,7 +22,7 @@ const makeAdapters = () => ({
     groups: { findByOrganization: vi.fn().mockResolvedValue([{ id: 'g1' }]) },
     fabFiles: repo([{ id: 'f1', fileName: 'plan.pdf' }]),
     artifacts: repo([{ id: 'a1', title: 'Spec' }]),
-    projects: repo([{ id: 'p1', name: 'Launch', sessionIds: ['s-in-project'] }]),
+    projects: repo([{ id: 'p1', name: 'Launch' }]),
     sessions: repo([{ id: 's1', name: 'Notes' }]),
     agents: repo([{ id: 'ag1', name: 'Helper' }]),
     userApiKeys: { count: vi.fn().mockResolvedValue(1) },
@@ -74,17 +74,18 @@ describe('getMemberOffboardingInventory', () => {
       {
         userId: 'member1',
         deletedAt: null,
-        $or: [{ 'groups.groupId': { $in: ['g1'] } }, { _id: { $in: ['s-in-project'] } }],
+        'groups.groupId': { $in: ['g1'] },
       },
       expect.anything()
     );
-    // Org-owned agents (organizationId set) are excluded; only member-owned ones are in scope.
+    // Org-owned agents (organizationId set) are excluded; only member-owned ones are in scope. A
+    // project's group share does not reach the notebooks or agents inside it.
     expect(db.agents.find).toHaveBeenCalledWith(
       {
         userId: 'member1',
         organizationId: null,
         deletedAt: null,
-        $or: [{ 'groups.groupId': { $in: ['g1'] } }, { projectId: { $in: ['p1'] } }],
+        'groups.groupId': { $in: ['g1'] },
       },
       expect.anything()
     );
@@ -113,7 +114,7 @@ describe('getMemberOffboardingInventory', () => {
     expect(OFFBOARDING_SAMPLE_LIMIT).toBe(25);
   });
 
-  it('counts only the member live org-billed keys, the set removal revokes', async () => {
+  it('counts only the member live org-billed non-embed keys, the set removal revokes', async () => {
     await run();
 
     expect(adapters.db.userApiKeys.count).toHaveBeenCalledWith({
@@ -121,6 +122,7 @@ describe('getMemberOffboardingInventory', () => {
       organizationId: 'org1',
       billingOwnerType: CreditHolderType.Organization,
       status: { $ne: ApiKeyStatus.DISABLED },
+      agentId: null,
     });
   });
 

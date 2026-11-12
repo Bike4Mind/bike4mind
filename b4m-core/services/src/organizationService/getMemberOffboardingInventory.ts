@@ -33,7 +33,7 @@ export interface MemberOffboardingInventoryAdapters {
     groups: Pick<IGroupRepository, 'findByOrganization'>;
     fabFiles: Countable;
     artifacts: Countable;
-    projects: Listable<Named & { sessionIds?: string[] }>;
+    projects: Countable;
     sessions: Countable;
     agents: Countable;
     userApiKeys: Pick<IUserApiKeyRepository, 'count'>;
@@ -82,25 +82,19 @@ export async function getMemberOffboardingInventory(
   const orgGroupIds = (await db.groups.findByOrganization(organizationId)).map(group => String(group.id));
   const scope: OffboardingScope = { organizationId, memberId, orgGroupIds };
 
-  // Every in-scope project id is needed to scope notebooks and agents, so projects load in full,
-  // projected down to what that and the sample use.
-  const projectFilter = orgProjectFilter(scope);
-  const projects = projectFilter ? await db.projects.find(projectFilter, { name: 1, sessionIds: 1 }) : [];
-  const projectIds = projects.map(project => String(project.id));
-  const projectSessionIds = projects.flatMap(project => project.sessionIds ?? []);
-
-  const [files, artifacts, notebooks, agents, orgBilledKeyCount] = await Promise.all([
+  const [files, artifacts, projects, notebooks, agents, orgBilledKeyCount] = await Promise.all([
     summarize(db.fabFiles, orgStampedFilter(scope)),
     summarize(db.artifacts, orgStampedFilter(scope)),
-    summarize(db.sessions, orgSessionFilter(scope, projectSessionIds)),
-    summarize(db.agents, orgAgentFilter(scope, projectIds)),
+    summarize(db.projects, orgProjectFilter(scope)),
+    summarize(db.sessions, orgSessionFilter(scope)),
+    summarize(db.agents, orgAgentFilter(scope)),
     db.userApiKeys.count(orgBilledKeyFilter(scope)),
   ]);
 
   return {
     files,
     artifacts,
-    projects: { count: projects.length, sample: toSample(projects) },
+    projects,
     notebooks,
     agents,
     orgBilledApiKeys: { count: orgBilledKeyCount },

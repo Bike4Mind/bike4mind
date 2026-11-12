@@ -245,7 +245,8 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
 
   /**
    * Disables the member's live keys billed to this org when their membership ends. Personal
-   * (User-billed) keys and legacy rows with no billingOwnerType are left alone. No batch id: a
+   * (User-billed) keys, legacy rows with no billingOwnerType, and embed keys (bound to an agent;
+   * they serve the org's embedded widget, not the member) are left alone. No batch id: a
    * removal is not undoable, so these must not be restorable through `reactivateByIds`.
    * Returns the ids it flipped.
    */
@@ -259,6 +260,7 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       organizationId,
       billingOwnerType: CreditHolderType.Organization,
       status: { $ne: ApiKeyStatus.DISABLED },
+      agentId: null,
     };
     const live = await this.model.find(filter).select('_id').lean<{ _id: unknown }[]>();
     if (live.length === 0) return [];

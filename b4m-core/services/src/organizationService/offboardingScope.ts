@@ -13,8 +13,9 @@ import { canAdministerOrganization, isCurrentOrgMember } from './orgAuthority';
  * inventory and the reassignment so the list an admin is shown is exactly what a transfer moves.
  *
  * - Files and artifacts carry `organizationId`, so they are in scope when stamped with this org.
- * - Projects, notebooks and agents have no org stamp; they are in scope when shared into one of the
- *   org's groups, plus notebooks inside an in-scope project and agents attached to one.
+ * - Projects, notebooks and agents have no org stamp; they are in scope only through their own share
+ *   into one of the org's groups. A project's group share does not reach the notebooks or agents
+ *   inside it (project grants cascade per user, not per group), so those stay with the member.
  * - Agents that carry `organizationId` are already org-owned (an agent has exactly one owner
  *   scope) and stay out: only member-owned agents move.
  *
@@ -38,26 +39,24 @@ export const orgStampedFilter = ({ organizationId, memberId }: OffboardingScope)
 export const orgProjectFilter = ({ memberId, orgGroupIds }: OffboardingScope) =>
   orgGroupIds.length === 0 ? null : { userId: memberId, deletedAt: null, ...inOrgGroups(orgGroupIds) };
 
-export const orgSessionFilter = ({ memberId, orgGroupIds }: OffboardingScope, projectSessionIds: string[]) => {
-  const arms: Record<string, unknown>[] = [];
-  if (orgGroupIds.length > 0) arms.push(inOrgGroups(orgGroupIds));
-  if (projectSessionIds.length > 0) arms.push({ _id: { $in: projectSessionIds } });
-  return arms.length === 0 ? null : { userId: memberId, deletedAt: null, $or: arms };
-};
+export const orgSessionFilter = ({ memberId, orgGroupIds }: OffboardingScope) =>
+  orgGroupIds.length === 0 ? null : { userId: memberId, deletedAt: null, ...inOrgGroups(orgGroupIds) };
 
-export const orgAgentFilter = ({ memberId, orgGroupIds }: OffboardingScope, projectIds: string[]) => {
-  const arms: Record<string, unknown>[] = [];
-  if (orgGroupIds.length > 0) arms.push(inOrgGroups(orgGroupIds));
-  if (projectIds.length > 0) arms.push({ projectId: { $in: projectIds } });
-  return arms.length === 0 ? null : { userId: memberId, organizationId: null, deletedAt: null, $or: arms };
-};
+export const orgAgentFilter = ({ memberId, orgGroupIds }: OffboardingScope) =>
+  orgGroupIds.length === 0
+    ? null
+    : { userId: memberId, organizationId: null, deletedAt: null, ...inOrgGroups(orgGroupIds) };
 
-/** Must stay in sync with UserApiKeyModel.revokeLiveOrgBilledByUserId, which revokes these on removal. */
+/**
+ * Must stay in sync with UserApiKeyModel.revokeLiveOrgBilledByUserId, which revokes these on removal.
+ * Embed keys (bound to an agent) are excluded: they serve the org's widget, not the member.
+ */
 export const orgBilledKeyFilter = ({ organizationId, memberId }: OffboardingScope) => ({
   userId: memberId,
   organizationId,
   billingOwnerType: CreditHolderType.Organization,
   status: { $ne: ApiKeyStatus.DISABLED },
+  agentId: null,
 });
 
 /**

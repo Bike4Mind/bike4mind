@@ -8,7 +8,11 @@ const org = () => ({
   userId: 'owner1',
   name: 'Acme',
   adminUserIds: [] as string[],
-  users: [{ userId: 'member1' }, { userId: 'member2' }],
+  users: [
+    { userId: 'member1', permissions: ['read'] },
+    { userId: 'member2', permissions: ['read'] },
+    { userId: 'no-permission-row', permissions: [] as string[] },
+  ],
 });
 
 const writable = (modified = 1) => ({ updateMany: vi.fn().mockResolvedValue({ modifiedCount: modified }) });
@@ -19,7 +23,12 @@ const makeAdapters = () => ({
     groups: { findByOrganization: vi.fn().mockResolvedValue([{ id: 'g1' }]) },
     fabFiles: writable(2),
     artifacts: writable(1),
-    projects: { ...writable(1), find: vi.fn().mockResolvedValue([{ id: 'p1', sessionIds: ['s-in-project'] }]) },
+    projects: {
+      ...writable(1),
+      find: vi.fn(async (filter: { userId: string }) =>
+        filter.userId === 'member1' ? [{ id: 'p1', name: 'Roadmap' }] : [{ id: 'p9', name: 'Other' }]
+      ),
+    },
     sessions: writable(3),
     agents: writable(1),
   },
@@ -47,27 +56,11 @@ describe('reassignMemberContent', () => {
 
     expect(db.fabFiles.updateMany).toHaveBeenCalledWith(stamped, to);
     expect(db.artifacts.updateMany).toHaveBeenCalledWith(stamped, to);
-    expect(db.projects.updateMany).toHaveBeenCalledWith(
-      { userId: 'member1', deletedAt: null, 'groups.groupId': { $in: ['g1'] } },
-      to
-    );
-    expect(db.sessions.updateMany).toHaveBeenCalledWith(
-      {
-        userId: 'member1',
-        deletedAt: null,
-        $or: [{ 'groups.groupId': { $in: ['g1'] } }, { _id: { $in: ['s-in-project'] } }],
-      },
-      to
-    );
-    expect(db.agents.updateMany).toHaveBeenCalledWith(
-      {
-        userId: 'member1',
-        organizationId: null,
-        deletedAt: null,
-        $or: [{ 'groups.groupId': { $in: ['g1'] } }, { projectId: { $in: ['p1'] } }],
-      },
-      to
-    );
+    const grouped = { userId: 'member1', deletedAt: null, 'groups.groupId': { $in: ['g1'] } };
+    expect(db.projects.updateMany).toHaveBeenCalledWith({ ...grouped, _id: 'p1' }, to);
+    // A project's group share does not reach the notebooks or agents inside it.
+    expect(db.sessions.updateMany).toHaveBeenCalledWith(grouped, to);
+    expect(db.agents.updateMany).toHaveBeenCalledWith({ ...grouped, organizationId: null }, to);
   });
 
   it('moves only org-billed files, so no personal storage counter changes', async () => {
@@ -104,8 +97,31 @@ describe('reassignMemberContent', () => {
     await expect(run()).resolves.toEqual({ files: 0, artifacts: 0, projects: 0, notebooks: 0, agents: 0 });
   });
 
+  it('renames a project whose name the target already uses instead of failing the transfer', async () => {
+    adapters.db.projects.find.mockImplementation(async (filter: { userId: string }) =>
+      filter.userId === 'member1'
+        ? [
+            { id: 'p1', name: 'Roadmap' },
+            { id: 'p2', name: 'Notes' },
+          ]
+        : [
+            { id: 'p8', name: 'Roadmap' },
+            { id: 'p9', name: 'Roadmap (transferred)' },
+          ]
+    );
+
+    await run();
+
+    const writes = adapters.db.projects.updateMany.mock.calls.map(([filter, data]) => [filter._id, data]);
+    expect(writes).toEqual([
+      ['p1', { userId: 'member2', name: 'Roadmap (transferred 2)' }],
+      ['p2', { userId: 'member2' }],
+    ]);
+  });
+
   it('refuses the departing member, a non-member or an empty target before writing', async () => {
     await expect(run('member1')).rejects.toThrow('member being removed');
+    await expect(run('no-permission-row')).rejects.toThrow('current member');
     await expect(run('pending-or-stranger')).rejects.toThrow('current member');
     await expect(run('')).rejects.toThrow();
     expect(adapters.db.fabFiles.updateMany).not.toHaveBeenCalled();
