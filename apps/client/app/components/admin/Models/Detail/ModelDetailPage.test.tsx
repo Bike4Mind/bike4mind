@@ -224,6 +224,24 @@ describe('ModelDetailPage', () => {
     );
   });
 
+  it('opens the audit entry in place, keeping the toast and its Undo', async () => {
+    serve([offRow]);
+    patch.mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-detail-fix-btn'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+
+    const audit = await screen.findByTestId('undo-toast-audit-btn');
+    expect(audit.tagName).toBe('BUTTON');
+    expect(audit).not.toHaveAttribute('target');
+    fireEvent.click(audit);
+
+    expect(await screen.findByTestId('model-admin-log')).toBeInTheDocument();
+    expect(screen.getByTestId('undo-toast-undo-btn')).toBeInTheDocument();
+  });
+
   it('keeps an open toggle on the row it opened with when the row refetches', async () => {
     serve([offRow]);
     patch.mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });

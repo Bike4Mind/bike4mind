@@ -33,6 +33,8 @@ type Props = {
   confirmLabel: string;
   onClose: () => void;
   onDone?: (result: ModelAccessPatchResult) => void;
+  /** Open the audit entry in a new tab instead of in place. Set where leaving the page would unmount the Undo toast. */
+  auditInNewTab?: boolean;
   /** An editor shown above the preview; it builds `change`. */
   children?: ReactNode;
 };
@@ -41,10 +43,19 @@ type Props = {
  * One model's access write (PATCH /api/admin/models/access): before/after preview, required reason, the
  * admins-only confirm, the stale-entry 409 and an Undo toast that writes the inverse change.
  */
-export function ModelAccessDialog({ target, change, title, confirmLabel, onClose, onDone, children }: Props) {
+export function ModelAccessDialog({
+  target,
+  change,
+  title,
+  confirmLabel,
+  onClose,
+  onDone,
+  auditInNewTab = false,
+  children,
+}: Props) {
   const invalidate = useInvalidateModelAccess();
   const showUndo = useUndoToast();
-  const { modelHref } = useModelsNavigation();
+  const { openModel, modelHref } = useModelsNavigation();
   const [adminOnlyConfirmed, setAdminOnlyConfirmed] = useState(false);
   const [serverAskedAdminOnly, setServerAskedAdminOnly] = useState(false);
 
@@ -104,7 +115,9 @@ export function ModelAccessDialog({ target, change, title, confirmLabel, onClose
           });
           await invalidate();
         },
-        auditHref: modelHref(target.id, 'admin'),
+        ...(auditInNewTab
+          ? { auditHref: modelHref(target.id, 'admin') }
+          : { onViewAudit: () => void openModel(target.id, 'admin') }),
       });
     }
     onDone?.(result);

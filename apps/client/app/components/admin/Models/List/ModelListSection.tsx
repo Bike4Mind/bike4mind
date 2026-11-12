@@ -923,6 +923,7 @@ export function ModelListSection() {
         title={accessEdit?.title ?? ''}
         confirmLabel={accessEdit?.confirmLabel ?? ''}
         onClose={() => setAccessEdit(null)}
+        auditInNewTab
       />
       <ModelBulkAccessDialog
         request={bulk}
