@@ -94,6 +94,18 @@ export function runResult(run: RunOutcome, now: Date = new Date()): { label: str
   return { label: lead, tone: run.mode === 'report' ? 'neutral' : 'good' };
 }
 
+/** The status card's last-run clause, matching the Result column's words for an unfinished run. */
+export function lastRunCopy(
+  run: Pick<DiscoveryRunListItem, 'startedAt' | 'finishedAt'> & { sources: ReadonlyArray<{ ok: boolean }> },
+  now: Date = new Date()
+): string {
+  const progress = runProgress(run, now);
+  const started = formatRunTime(run.startedAt, now);
+  if (progress === 'running') return `Last run started ${started}, still running`;
+  if (progress === 'did-not-finish') return `Last run ${started}, did not finish`;
+  return `Last run ${started}, ${sourceTally(run.sources)}`;
+}
+
 /** The Summary column, from a listed run's counts. */
 export function runChangeSummary(changes: DiscoveryChangeCounts, mode: DiscoveryRunListItem['mode']): string {
   const parts = [

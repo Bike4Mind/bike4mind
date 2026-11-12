@@ -232,7 +232,15 @@ export const fetchDiscoveryStatus = async (): Promise<DiscoveryStatus> =>
   (await api.get<DiscoveryStatus>(DISCOVERY_STATUS_PATH)).data;
 
 export const useDiscoveryStatus = () =>
-  useQuery({ queryKey: DISCOVERY_STATUS_QUERY_KEY, queryFn: fetchDiscoveryStatus });
+  useQuery({
+    queryKey: DISCOVERY_STATUS_QUERY_KEY,
+    queryFn: fetchDiscoveryStatus,
+    // Polls only while the last run is unfinished. No structural sharing, so every poll re-renders the card and the
+    // 20 minute limit is noticed even when the payload is unchanged.
+    structuralSharing: false,
+    refetchInterval: query =>
+      query.state.data?.lastRun && runProgress(query.state.data.lastRun) === 'running' ? RUNNING_REFETCH_MS : false,
+  });
 
 export const useDiscoveryRun = (runId: string) =>
   useQuery({

@@ -10,13 +10,13 @@ import {
   RUN_RETENTION_NOTE,
   formatClock,
   formatRunTime,
+  lastRunCopy,
   modeLabel,
   nextScheduledRun,
   policyLabel,
   runChangeSummary,
   runResult,
   sourceSkipCopy,
-  sourceTally,
   triggerLabel,
 } from './discoveryCopy';
 import { LifecycleSuggestions } from './LifecycleSuggestions';
@@ -68,7 +68,7 @@ function RunNowButton({
   );
 }
 
-function StatusLine({ status }: { status: DiscoveryStatus }) {
+function StatusLine({ status, now }: { status: DiscoveryStatus; now: Date }) {
   const { openSection } = useModelsNavigation();
   const lastRun = status.lastRun;
   const failed = lastRun?.sources.filter(source => !source.ok) ?? [];
@@ -78,7 +78,7 @@ function StatusLine({ status }: { status: DiscoveryStatus }) {
     'On',
     modeLabel(status.mode),
     policyLabel(status.autoEnable),
-    lastRun ? `Last run ${formatRunTime(lastRun.startedAt)}, ${sourceTally(lastRun.sources)}` : 'Never run',
+    lastRun ? lastRunCopy(lastRun, now) : 'Never run',
     ...(status.selfHost ? ['Self-hosted'] : []),
   ];
   return (
@@ -152,7 +152,7 @@ export function DiscoverySection() {
   ) : (
     <Stack gap={1.5}>
       <Stack direction={{ xs: 'column', sm: 'row' }} gap={2} justifyContent="space-between" alignItems="flex-start">
-        <StatusLine status={data} />
+        <StatusLine status={data} now={new Date()} />
         <Box sx={{ flexShrink: 0 }}>
           <RunNowButton onClick={startRun} busy={busy} testId="discovery-run-now-btn" />
         </Box>

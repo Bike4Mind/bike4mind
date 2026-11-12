@@ -78,6 +78,62 @@ describe('DiscoverySection status', () => {
     expect(await screen.findByTestId('discovery-status-line')).toHaveTextContent(expected);
   });
 
+  describe('last run clause', () => {
+    const NOW = new Date('2026-07-26T12:30:00.000Z');
+    const startedMinutesAgo = (minutes: number) => new Date(NOW.getTime() - minutes * 60_000).toISOString();
+
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(NOW);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('says a run started minutes ago and not finished is still running', async () => {
+      m.get.mockResolvedValue({
+        data: statusWith(runLike({ startedAt: startedMinutesAgo(5), finishedAt: null, sources: [] })),
+      });
+      renderSection();
+
+      const line = await screen.findByTestId('discovery-status-line');
+      expect(line).toHaveTextContent(/Last run started .*, still running/);
+      expect(line).not.toHaveTextContent('no sources attempted');
+    });
+
+    it('says a run past the limit that never finished did not finish', async () => {
+      m.get.mockResolvedValue({
+        data: statusWith(runLike({ startedAt: startedMinutesAgo(25), finishedAt: null, sources: [] })),
+      });
+      renderSection();
+
+      const line = await screen.findByTestId('discovery-status-line');
+      expect(line).toHaveTextContent(/Last run .*, did not finish/);
+      expect(line).not.toHaveTextContent('still running');
+    });
+
+    it('keeps the source tally for a finished run', async () => {
+      m.get.mockResolvedValue({
+        data: statusWith(runLike({ startedAt: startedMinutesAgo(25), finishedAt: startedMinutesAgo(24) })),
+      });
+      renderSection();
+
+      expect(await screen.findByTestId('discovery-status-line')).toHaveTextContent('2 of 3 sources ok');
+    });
+
+    it('moves from still running to did not finish when polling crosses the limit', async () => {
+      m.get.mockResolvedValue({
+        data: statusWith(runLike({ startedAt: startedMinutesAgo(19), finishedAt: null, sources: [] })),
+      });
+      renderSection();
+      expect(await screen.findByTestId('discovery-status-line')).toHaveTextContent('still running');
+
+      await tick(2 * 60_000);
+
+      expect(screen.getByTestId('discovery-status-line')).toHaveTextContent('did not finish');
+    });
+  });
+
   it('names skipped sources apart from the attempt tally', async () => {
     const lastRun = runLike({ skippedSources: [{ name: 'xai', reason: 'not-configured' }] });
     m.get.mockResolvedValue({ data: statusWith(lastRun) });
