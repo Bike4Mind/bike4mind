@@ -76,14 +76,14 @@ describe('GET /api/admin/dlq/messages', () => {
     h.sourceQueue = null;
     const body = await peek(['settings:manage']);
 
-    expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, 120);
+    expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, 120, 2);
     expect(body.messages[0].receiptHandle).toBe('handle-1');
   });
 
   it('leaves messages visible and omits receipt handles for a support:read caller', async () => {
     const body = await peek(['support:read']);
 
-    expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, 0);
+    expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, 0, 2);
     expect(body.messages[0].receiptHandle).toBeUndefined();
   });
 
@@ -188,7 +188,7 @@ describe('GET /api/admin/dlq/messages', () => {
     async (permission, visibility, receiptHandle) => {
       h.findForMessages.mockRejectedValue(new Error('private diagnostic failure'));
       const body = await peek([permission]);
-      expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, visibility);
+      expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, visibility, 2);
       expect(h.findForMessages).toHaveBeenCalledWith('physical-source', ['m1']);
       expect(body.messages).toHaveLength(1);
       expect(body.messages[0]).toMatchObject({ messageId: 'm1', body: '{}', failureLookupFailed: true });
