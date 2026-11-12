@@ -1,10 +1,11 @@
 import { VIDEO_PROMPT_MAX_LENGTH, type VideoModel } from '@bike4mind/common';
 import {
+  flagged,
   withCurrentValue,
   type CapabilityControl,
   type CapabilityField,
 } from '@client/app/components/Studio/capabilityFields';
-import { videoFieldProblems, type VideoFieldProblem, type VideoFieldProblems } from './videoCreateV2';
+import { videoFieldProblems, type VideoFieldProblems } from './videoCreateV2';
 import { MODE_LABELS, type VideoFormState } from './videoForm';
 
 export type VideoFieldActions = {
@@ -15,9 +16,6 @@ export type VideoFieldActions = {
 // `legacy`: the Studio tabs, where a model switch has already moved every value onto the model. `createV2`: a
 // switch keeps the values, so one the model does not take is shown marked, with its reason and a fix.
 export type VideoFieldsLayout = 'legacy' | 'createV2';
-
-const flagged = (problem: VideoFieldProblem | undefined, update: VideoFieldActions['update']) =>
-  problem ? { invalidReason: problem.reason, fix: { label: problem.fixLabel, apply: () => update(problem.fix) } } : {};
 
 const durationField = (
   model: VideoModel,

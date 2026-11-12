@@ -12,12 +12,13 @@ import {
   type VideoModel,
   type VideoProviderId,
 } from '@bike4mind/common';
+import type { FieldProblem } from '@client/app/components/Studio/capabilityFields';
 import type { StudioModelCard } from '@client/app/components/Studio/StudioModelCards';
 import { MODE_LABELS, estimateCredits, initialFormFor, snapDuration, type VideoFormState } from './videoForm';
 
 export type VideoProblemField = 'mode' | 'duration' | 'aspect' | 'resolution';
 
-export type VideoFieldProblem = { reason: string; fixLabel: string; fix: Partial<VideoFormState> };
+export type VideoFieldProblem = FieldProblem<Partial<VideoFormState>>;
 
 export type VideoFieldProblems = Partial<Record<VideoProblemField, VideoFieldProblem>>;
 

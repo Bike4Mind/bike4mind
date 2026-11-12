@@ -128,3 +128,10 @@ export const withCurrentValue = (
 /** Whether any field holds a value the selected model does not take. */
 export const hasInvalidField = (fields: readonly CapabilityField[]): boolean =>
   fields.some(field => (field.kind === 'group' ? hasInvalidField(field.fields) : field.invalidReason !== undefined));
+
+/** A kept value the model does not take: the why-not reason and the patch its one-click fix applies. */
+export type FieldProblem<TPatch> = { reason: string; fixLabel: string; fix: TPatch };
+
+/** The invalidReason and fix to spread onto a field for `problem`; nothing when the value fits. */
+export const flagged = <TPatch>(problem: FieldProblem<TPatch> | undefined, update: (patch: TPatch) => void) =>
+  problem ? { invalidReason: problem.reason, fix: { label: problem.fixLabel, apply: () => update(problem.fix) } } : {};

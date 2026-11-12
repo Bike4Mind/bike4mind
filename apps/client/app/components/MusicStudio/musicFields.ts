@@ -1,6 +1,6 @@
 import { MUSIC_PROMPT_MAX_LENGTH, type PublicMusicModel } from '@bike4mind/common';
-import type { CapabilityControl, CapabilityField } from '@client/app/components/Studio/capabilityFields';
-import { musicFieldProblems, type MusicFieldProblem, type MusicFieldProblems } from './musicCreateV2';
+import { flagged, type CapabilityControl, type CapabilityField } from '@client/app/components/Studio/capabilityFields';
+import { musicFieldProblems, type MusicFieldProblems } from './musicCreateV2';
 import { LYRIC_SECTION_TAGS, acceptsLyrics, lyricsProblem, type MusicFormState } from './musicForm';
 
 type Update = (patch: Partial<MusicFormState>) => void;
@@ -8,9 +8,6 @@ type Update = (patch: Partial<MusicFormState>) => void;
 // `legacy`: the Studio tabs, where a model switch has already moved every value onto the model. `createV2`: a
 // switch keeps the values, so one the model does not take is shown marked, with its reason and a fix.
 export type MusicFieldsLayout = 'legacy' | 'createV2';
-
-const flagged = (problem: MusicFieldProblem | undefined, update: Update) =>
-  problem ? { invalidReason: problem.reason, fix: { label: problem.fixLabel, apply: () => update(problem.fix) } } : {};
 
 const instrumentalField = (
   model: PublicMusicModel,

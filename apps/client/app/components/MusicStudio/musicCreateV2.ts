@@ -12,12 +12,13 @@ import {
   type MusicProviderId,
   type PublicMusicModel,
 } from '@bike4mind/common';
+import type { FieldProblem } from '@client/app/components/Studio/capabilityFields';
 import type { StudioModelCard } from '@client/app/components/Studio/StudioModelCards';
 import { clampDuration, estimateCredits, initialFormFor, type MusicFormState } from './musicForm';
 
 export type MusicProblemField = 'instrumental' | 'lyrics' | 'duration';
 
-export type MusicFieldProblem = { reason: string; fixLabel: string; fix: Partial<MusicFormState> };
+export type MusicFieldProblem = FieldProblem<Partial<MusicFormState>>;
 
 export type MusicFieldProblems = Partial<Record<MusicProblemField, MusicFieldProblem>>;
 
