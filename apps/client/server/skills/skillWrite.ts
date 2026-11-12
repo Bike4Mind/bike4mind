@@ -9,7 +9,7 @@ import type { ISkill, ISkillDocument } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import {
   validateSkillName,
   validateSkillDescription,
@@ -53,8 +53,8 @@ export async function resolveCreateScope(
     return { isSystem: true };
   }
 
-  // verifyOrgAccess admits the same set that can later manage the skill (skillAccess.isOrgAdminFor).
-  await verifyOrgAccess(user, scope.organizationId as string);
+  // verifyOrgPermission (manageContent) admits the same set that can later manage the skill (skillAccess.isOrgAdminFor).
+  await verifyOrgPermission(user, scope.organizationId as string, 'manageContent');
   return { organizationId: scope.organizationId as string };
 }
 

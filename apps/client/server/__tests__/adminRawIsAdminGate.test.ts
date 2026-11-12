@@ -271,7 +271,7 @@ const FULL_ADMIN_ONLY = new Map<string, string>([
 // Helpers that gate on the raw flag internally, so a route calling them is raw-gated even
 // though its own source never names isAdmin. Add any new helper that wraps isAdmin here.
 const RAW_GATE_HELPER =
-  /\b(?:verifyOrgOwner|verifyOrgAccess|verifyOrgAdminRead|verifyOrgMemberOrManager|verifyOrgMembership|isFullAdmin|assertFullAdmin|assertFullAdminForMembership|requireFullAdmin|isCoreAdmin)\s*\(/;
+  /\b(?:verifyOrgPermission|verifyOrgAdminRead|verifyOrgMemberOrManager|verifyOrgMembership|isFullAdmin|assertFullAdmin|assertFullAdminForMembership|requireFullAdmin|isCoreAdmin)\s*\(/;
 // A user-like binding (`req.user`, `user`, `currentUser`) that is not followed by a further member access.
 const USER_BINDING = String.raw`(?:req\.)?\w*[uU]ser\b(?!\s*[?!]*\s*\.)`;
 const RAW_GATE = new RegExp(
@@ -375,8 +375,7 @@ describe('usesRawIsAdminGate', () => {
   });
 
   it.each([
-    ['verifyOrgOwner(', 'await verifyOrgOwner(req.user, organizationId);'],
-    ['verifyOrgAccess(', 'await verifyOrgAccess(req.user, organizationId);'],
+    ['verifyOrgPermission(', "await verifyOrgPermission(req.user, organizationId, 'manageMembers');"],
     ['verifyOrgAdminRead(', 'await verifyOrgAdminRead(req.user, organizationId);'],
     ['verifyOrgMemberOrManager(', 'await verifyOrgMemberOrManager(req.user, organizationId);'],
     ['isFullAdmin(', 'if (!isFullAdmin(req.user)) throw new Error();'],
@@ -396,7 +395,7 @@ describe('usesRawIsAdminGate', () => {
     ['requireAdminPermission(', "requireAdminPermission(req, 'support:read');"],
     ['hasAdminPermission(', "const admin = hasAdminPermission(req.user, 'support:read');"],
   ])('does not flag a route whose admin branch checks %s', (_label, check) => {
-    const code = `baseApi().get(async (req) => { ${check} await verifyOrgOwner(req.user, orgId); });`;
+    const code = `baseApi().get(async (req) => { ${check} await verifyOrgPermission(req.user, orgId); });`;
     expect(usesRawIsAdminGate(code)).toBe(false);
   });
 
