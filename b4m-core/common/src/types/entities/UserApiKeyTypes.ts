@@ -376,6 +376,9 @@ export interface IUserApiKeyRateLimit {
   requestsPerDay: number;
 }
 
+export const API_KEY_RATE_LIMIT_MAX_PER_MINUTE = 10_000;
+export const API_KEY_RATE_LIMIT_MAX_PER_DAY = 1_000_000;
+
 /**
  * Ceilings a key gets when minted without explicit ones. Lives here rather than
  * in services so the public OpenAPI overview (openapi/document.ts) can quote the
