@@ -5,14 +5,7 @@
 
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { adminSettingsRepository, agentRepository, loopRepository, skillRepository } from '@bike4mind/database';
-import { authorizeOrgChannelPost } from '@bike4mind/server-utils/integrations/slack/orgChannelPost';
-import {
-  isAgentUsableBy,
-  LOOP_TRIGGERS_MAX,
-  SLACK_CHANNEL_ID_PATTERN,
-  type ILoopStageConfig,
-  type ILoopTrigger,
-} from '@bike4mind/common';
+import { isAgentUsableBy, LOOP_TRIGGERS_MAX, type ILoopStageConfig, type ILoopTrigger } from '@bike4mind/common';
 import { ID_MAX, STAGE_NAME_MAX, validateString, validateStringList } from '@bike4mind/common/loops';
 
 export {
@@ -151,29 +144,4 @@ export async function validateLoopTriggers(
     result.push(trigger);
   }
   return result;
-}
-
-/**
- * A Slack channel the loop's runs may post to: the loop bills an org, the channel is opted in for API posting by
- * that org, the owner is a member of it, and the channel does not limit posting to specific API keys (a loop has
- * none). `null` or '' clears it. `loop_slack_post` re-runs the same checks at post time.
- */
-export async function validateLoopSlackChannel(
-  value: unknown,
-  organizationId: string | undefined,
-  userId: string
-): Promise<string | null> {
-  if (value === null || value === '') return null;
-  if (typeof value !== 'string' || !SLACK_CHANNEL_ID_PATTERN.test(value.trim())) {
-    throw new BadRequestError('slackChannelId must be a Slack channel id (like C0123ABCD)');
-  }
-  const channelId = value.trim();
-  if (!organizationId) throw new BadRequestError('slackChannelId needs the loop to bill an organization');
-  const authorization = await authorizeOrgChannelPost({ channelId, userId });
-  if (!authorization.ok || authorization.organizationId !== organizationId) {
-    throw new BadRequestError(
-      "this channel is not opted in for posting by the loop's organization, or it only allows specific API keys"
-    );
-  }
-  return channelId;
 }

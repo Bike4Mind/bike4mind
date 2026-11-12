@@ -70,7 +70,7 @@ const SLACK_POST_LIMITERS: RequestHandler[] = [
 ];
 
 /**
- * 60 posts a minute per channel (shared with loops via spendSlackChannelBudget), spent only once a post is authorized: if refused requests counted,
+ * 60 posts a minute per channel, spent only once a post is authorized: if refused requests counted,
  * anyone who knows a channel id could exhaust the window of the org that opted the channel in.
  */
 const channelRateLimit = rateLimit({

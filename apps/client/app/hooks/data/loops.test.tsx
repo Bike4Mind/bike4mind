@@ -140,7 +140,11 @@ describe('loop mutations', () => {
       await keysAfter(() =>
         result.current.ticket.mutateAsync({ loopId: 'l3', title: 't', stage: 'todo', priority: 'p2' })
       )
-    ).toEqual([{ queryKey: loopKeys.detail('l3') }]);
+    ).toEqual([
+      { queryKey: loopKeys.detail('l3') },
+      { queryKey: loopKeys.stats('l3') },
+      { queryKey: loopKeys.coach('l3') },
+    ]);
   });
 
   it('does not wait for the refetch to settle', async () => {
@@ -188,7 +192,7 @@ describe('useMoveLoopTicket', () => {
     return { ...ctx, result, cached };
   }
 
-  it('moves the card in the cache before the save returns, then refetches only that loop', async () => {
+  it('moves the card in the cache before the save returns, then refetches only that loop, its stats and its coach', async () => {
     let resolve!: (value: unknown) => void;
     patch.mockReturnValue(new Promise(r => (resolve = r)));
     const { result, cached, invalidate } = seeded();
@@ -204,6 +208,8 @@ describe('useMoveLoopTicket', () => {
     expect(invalidate.mock.calls.map(([filters]) => filters)).toEqual([
       { queryKey: loopKeys.tickets('l1') },
       { queryKey: loopKeys.detail('l1'), exact: true },
+      { queryKey: loopKeys.stats('l1') },
+      { queryKey: loopKeys.coach('l1') },
     ]);
   });
 

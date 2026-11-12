@@ -15,6 +15,8 @@ import type {
   ILoopsBudget,
   ILoopStats,
   IWorkItemOwnerRating,
+  LoopCoachResponse,
+  LoopConfigChangeBy,
   LoopStatsWindow,
   ILoopWithUsage,
   LoopDirectiveOwnerAction,
@@ -80,6 +82,8 @@ export type ILoopUnsureRow = Pick<
   | 'handoff'
 > & {
   resolution?: { outcome: LoopEventOutcome; by?: string; at: string; note?: string };
+  /** A `config_changed` row: who changed the settings. Absent on changes logged before versioning. */
+  configBy?: LoopConfigChangeBy;
   createdAt: string;
 };
 
@@ -116,9 +120,12 @@ export const loopKeys = {
   detail: (id: string) => ['loops', id] as const,
   tickets: (id: string) => ['loops', id, 'tickets'] as const,
   events: (id: string) => ['loops', id, 'events'] as const,
-  // Outside `['loops', id]`, so a run's push does not recompute a loop's stats while the panel is open.
+  // Outside `['loops', id]`, so a run's push does not recompute a loop's stats while the panel is open;
+  // owner ticket writes (create, move, hand-off, rating) invalidate it themselves.
   stats: (id: string, days?: LoopStatsWindow) =>
     days ? (['loopStats', id, days] as const) : (['loopStats', id] as const),
+  // Outside too: the coach reads the same stats.
+  coach: (id: string) => ['loopCoach', id] as const,
   budget: ['loops', 'budget'] as const,
 };
 
@@ -135,7 +142,6 @@ export type LoopFormPayload = Pick<ILoop, 'name' | 'goal' | 'intervalMinutes' | 
   handoffTargets?: string[] | null;
   triggers?: ILoop['triggers'] | null;
   wakeMode?: ILoop['wakeMode'] | null;
-  slackChannelId?: string | null;
 };
 
 const LIST_POLL_MS = 30_000;
@@ -204,12 +210,42 @@ export const useLoopStats = (id: string, days: LoopStatsWindow) =>
     staleTime: 60_000,
   });
 
+/** Loaded once the Coach panel has been opened; refetched when stale (a minute) or after a coach action or rating. */
+export const useLoopCoach = (id: string, enabled: boolean) =>
+  useQuery({
+    queryKey: loopKeys.coach(id),
+    queryFn: async () => (await api.get<LoopCoachResponse>(`/api/loops/${id}/coach`)).data,
+    enabled: !!id && enabled,
+    staleTime: 60_000,
+  });
+
+/** One owner action on the coach (apps/client/pages/api/loops/[id]/coach.ts). */
+export type LoopCoachAction =
+  | { action: 'apply'; key: string }
+  | { action: 'trial'; key: string; tickets: number }
+  | { action: 'dismiss'; key: string; reason: string }
+  | { action: 'restore'; key: string }
+  | { action: 'undo'; eventId: string }
+  | { action: 'keep' }
+  | { action: 'revert' };
+
+/** Refetches the whole loop (detail, tickets, log), its stats and the coach: a settings change can move any of them. */
+export const useLoopCoachAction = (id: string) =>
+  useLoopMutation(
+    (body: LoopCoachAction) => api.post(`/api/loops/${id}/coach`, body),
+    () => [...oneLoop(id), { queryKey: loopKeys.stats(id) }, { queryKey: loopKeys.coach(id) }]
+  );
+
 /** `value: null` clears the rating. Only a closed ticket can be rated. */
 export const useRateLoopTicket = () =>
   useLoopMutation(
     ({ loopId, ticketId, ...body }: { loopId: string; ticketId: string; value: 'up' | 'down' | null; note?: string }) =>
       api.put(`/api/loops/${loopId}/tickets/${ticketId}/rating`, body),
-    ({ loopId }) => [{ queryKey: loopKeys.tickets(loopId) }, { queryKey: loopKeys.stats(loopId) }]
+    ({ loopId }) => [
+      { queryKey: loopKeys.tickets(loopId) },
+      { queryKey: loopKeys.stats(loopId) },
+      { queryKey: loopKeys.coach(loopId) },
+    ]
   );
 
 export const useLoopEvents = (id: string) =>
@@ -293,7 +329,11 @@ export const useCreateLoopTicket = () =>
   useLoopMutation(
     (body: { loopId: string; title: string; description?: string; stage: string; priority?: WorkItemPriority }) =>
       api.post('/api/work-items', body),
-    ({ loopId }) => [{ queryKey: loopKeys.detail(loopId) }]
+    ({ loopId }) => [
+      { queryKey: loopKeys.detail(loopId) },
+      { queryKey: loopKeys.stats(loopId) },
+      { queryKey: loopKeys.coach(loopId) },
+    ]
   );
 
 export type HandoffLoopTicketVars = { loopId: string; id: string; toLoopId: string; stage?: string; note?: string };
@@ -307,7 +347,14 @@ export const useHandoffLoopTicket = () =>
         ...(stage && { stage }),
         ...(note && { handoffNote: note }),
       }),
-    ({ loopId, toLoopId }) => [...oneLoop(loopId), ...oneLoop(toLoopId)]
+    ({ loopId, toLoopId }) => [
+      ...oneLoop(loopId),
+      ...oneLoop(toLoopId),
+      { queryKey: loopKeys.stats(loopId) },
+      { queryKey: loopKeys.stats(toLoopId) },
+      { queryKey: loopKeys.coach(loopId) },
+      { queryKey: loopKeys.coach(toLoopId) },
+    ]
   );
 
 export type MoveLoopTicketVars = { loopId: string; id: string; stage?: string; priority?: WorkItemPriority };
@@ -355,6 +402,8 @@ export const useMoveLoopTicket = () => {
       if (queryClient.isMutating({ mutationKey: MOVE_LOOP_TICKET_KEY }) > 1) return;
       void queryClient.invalidateQueries({ queryKey: loopKeys.tickets(loopId) });
       void queryClient.invalidateQueries({ queryKey: loopKeys.detail(loopId), exact: true });
+      void queryClient.invalidateQueries({ queryKey: loopKeys.stats(loopId) });
+      void queryClient.invalidateQueries({ queryKey: loopKeys.coach(loopId) });
     },
   });
 };

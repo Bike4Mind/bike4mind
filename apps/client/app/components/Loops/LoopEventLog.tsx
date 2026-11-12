@@ -382,13 +382,16 @@ function AutoResumedRow({ event, onViewRun }: { event: ILoopEventRow; onViewRun:
 }
 
 /** An owner edit to the loop's stages, models, budget, lanes or tools; the Stats charts mark each as an era. */
+const CONFIG_BY_LABEL = { owner: 'you', coach: 'the coach', trial: 'a trial', undo: 'undo' } as const;
+
 function ConfigChangedRow({ event }: { event: ILoopEventRow }) {
   return (
     <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap" data-testid="loop-log-config-row">
       <Chip size="sm" variant="soft" color="neutral">
-        Config changed
+        Settings changed
       </Chip>
       <Typography level="body-sm" sx={{ flex: 1, minWidth: 0 }}>
+        {'configBy' in event && event.configBy ? `by ${CONFIG_BY_LABEL[event.configBy]}: ` : ''}
         {event.reason} - {relativeTimeFormat(new Date(event.createdAt))}
       </Typography>
     </Stack>

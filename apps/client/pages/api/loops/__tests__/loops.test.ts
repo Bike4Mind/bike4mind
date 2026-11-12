@@ -65,6 +65,9 @@ const loopEvents = vi.hoisted(() => ({
   reopenAsked: vi.fn(),
   recordConfigChanged: vi.fn(),
   listForLoopSince: vi.fn(),
+  listConfigChanges: vi.fn(),
+  findConfigChange: vi.fn(),
+  markConfigUndone: vi.fn(),
   listUnresolvedUnsure: vi.fn(),
 }));
 const directives = vi.hoisted(() => ({
@@ -94,6 +97,7 @@ vi.mock('@bike4mind/database', () => ({
   loopRunnerPresenceRepository: presence,
   agentRepository: agents,
   skillRepository: skills,
+  apiKeyRepository: {},
   adminSettingsRepository: {
     getSettingsValue: async (key: string) => settings[key as keyof typeof settings],
     findAll: async () => [],
@@ -117,8 +121,13 @@ vi.mock('@server/utils/loopBudget', async importOriginal => ({
   p2RunsLeft,
 }));
 
-const authorizeOrgChannelPost = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/server-utils/integrations/slack/orgChannelPost', () => ({ authorizeOrgChannelPost }));
+const getCallerModelList = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/callerModelList', () => ({ getCallerModelList }));
+const resolveToolAvailability = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/services/llm/toolAvailability', () => ({
+  resolveToolAvailability,
+  isToolOfferable: (tool: string, availability: Record<string, boolean>) => availability[tool] !== false,
+}));
 
 const resolveDefaultChatModel = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/chatCompletionDefaults', () => ({ resolveDefaultChatModel }));
@@ -143,6 +152,8 @@ currentModule.name = 'stats';
 await import('@pages/api/loops/[id]/stats');
 currentModule.name = 'rating';
 await import('@pages/api/loops/[id]/tickets/[ticketId]/rating');
+currentModule.name = 'coach';
+await import('@pages/api/loops/[id]/coach');
 
 const OID = '507f1f77bcf86cd799439011';
 
@@ -187,14 +198,22 @@ beforeEach(() => {
   repo.countInFlight.mockResolvedValue(0);
   repo.countLanesForUser.mockResolvedValue(0);
   repo.makeDueNow.mockResolvedValue(true);
-  loopEvents.recordConfigChanged.mockResolvedValue(undefined);
+  loopEvents.recordConfigChanged.mockResolvedValue('event-new');
+  loopEvents.listConfigChanges.mockResolvedValue([]);
+  loopEvents.listForLoopSince.mockResolvedValue([]);
+  loopEvents.listUnresolvedUnsure.mockResolvedValue([]);
+  directives.listToLoop.mockResolvedValue([]);
+  executions.listLoopRunsSince.mockResolvedValue({ runs: [], truncated: false });
+  tickets.listForLoopStats.mockResolvedValue({ items: [], truncated: false });
+  getCallerModelList.mockResolvedValue({ models: [] });
+  resolveToolAvailability.mockResolvedValue({});
   loopAdmission.mockResolvedValue({ ok: true });
   p2RunsLeft.mockResolvedValue(Infinity);
   tickets.listUntriagedForLoop.mockResolvedValue([]);
   tickets.listReadyForLoop.mockResolvedValue([]);
 });
 
-it.each(['collection', 'item', 'run', 'budget'])('%s route refuses API keys (jwtOnly)', mod => {
+it.each(['collection', 'item', 'run', 'budget', 'coach'])('%s route refuses API keys (jwtOnly)', mod => {
   expect(baseApiOptions[mod]).toEqual({ auth: 'jwtOnly' });
 });
 
@@ -207,6 +226,8 @@ describe('EnableLoops gate', () => {
     ['item', 'delete'],
     ['run', 'post'],
     ['override', 'post'],
+    ['coach', 'get'],
+    ['coach', 'post'],
   ];
 
   it.each(routes)('%s %s is a 404 while the setting is off, before touching the repository', async (mod, method) => {
@@ -786,7 +807,7 @@ describe('oversees', () => {
   });
 });
 
-describe('hand-offs, triggers, wake mode and Slack channel', () => {
+describe('hand-offs, triggers and wake mode', () => {
   const OTHER = '507f1f77bcf86cd799439022';
   const ownLoops = (...ids: string[]) =>
     repo.findByIdAndUserId.mockImplementation(async (id: string) =>
@@ -886,37 +907,9 @@ describe('hand-offs, triggers, wake mode and Slack channel', () => {
     expect(repo.updateForUser.mock.calls[0][2]).toMatchObject({ status: 'live', nextRunAt: null });
   });
 
-  it('accepts a Slack channel only when its org opted it in for posting without a key list', async () => {
-    repo.findByIdAndUserId.mockResolvedValue(loop({ organizationId: 'org-1' }));
-    authorizeOrgChannelPost.mockResolvedValue({ ok: true, organizationId: 'org-1' });
-    await call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD' } }).result;
-    expect(authorizeOrgChannelPost).toHaveBeenCalledWith({ channelId: 'C0123ABCD', userId: 'u1' });
-    expect(repo.updateForUser.mock.calls[0][2]).toEqual({ slackChannelId: 'C0123ABCD' });
-
-    authorizeOrgChannelPost.mockResolvedValue({ ok: false, reason: 'key_not_allowlisted' });
-    await expect(
-      call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD' } }).result
-    ).rejects.toMatchObject({ statusCode: 400 });
-    authorizeOrgChannelPost.mockResolvedValue({ ok: true, organizationId: 'org-2' });
-    await expect(
-      call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD' } }).result
-    ).rejects.toMatchObject({ statusCode: 400 });
-    await expect(
-      call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'not a channel' } }).result
-    ).rejects.toMatchObject({ statusCode: 400 });
-
-    repo.findByIdAndUserId.mockResolvedValue(loop());
-    await expect(
-      call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD' } }).result
-    ).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/organization/) });
-  });
-
-  it('an unchanged Slack channel is saved without re-authorising it', async () => {
-    repo.findByIdAndUserId.mockResolvedValue(loop({ organizationId: 'org-1', slackChannelId: 'C0123ABCD' }));
-    authorizeOrgChannelPost.mockResolvedValue({ ok: false, reason: 'not_enabled' });
+  it('ignores a slackChannelId in the body', async () => {
     await call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD', name: 'Renamed' } }).result;
-    expect(authorizeOrgChannelPost).not.toHaveBeenCalled();
-    expect(repo.updateForUser.mock.calls[0][2]).toMatchObject({ name: 'Renamed' });
+    expect(repo.updateForUser.mock.calls[0][2]).toEqual({ name: 'Renamed' });
   });
 });
 
@@ -1580,14 +1573,70 @@ describe('PATCH /api/loops/:id config_changed events', () => {
       loopId: OID,
       userId: 'u1',
       reason: 'stage "review" added; model m1 -> m2; budget 200 -> 300',
+      config: {
+        by: 'owner',
+        before: { stages: ['todo', 'done'], model: 'm1', budgetCreditsPerDay: 200 },
+        after: { stages: ['todo', 'review', 'done'], model: 'm2', budgetCreditsPerDay: 300 },
+      },
       at: expect.any(Date),
     });
+  });
+
+  it('ends a coach trial when the owner changes that stage model, and keeps it otherwise', async () => {
+    const coachTrial = { stage: 'todo', model: 'cheap', baselineModel: 'm1', tickets: 10, startedAt: new Date() };
+    const trialing = loop({ stageConfig: [{ stage: 'todo', model: 'cheap' }], coachTrial });
+    repo.findByIdAndUserId.mockResolvedValue(trialing);
+    await call('item', 'patch', { query: { id: OID }, body: { budgetCreditsPerDay: 50 } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).not.toHaveProperty('coachTrial');
+
+    await call('item', 'patch', {
+      query: { id: OID },
+      body: { stageConfig: [{ stage: 'todo', model: 'other' }] },
+    }).result;
+    expect(repo.updateForUser.mock.calls[1][2]).toMatchObject({ coachTrial: null });
   });
 
   it('logs nothing for an edit outside the tracked fields', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop());
     await call('item', 'patch', { query: { id: OID }, body: { name: 'Renamed', goal: 'Another goal' } }).result;
     expect(loopEvents.recordConfigChanged).not.toHaveBeenCalled();
+  });
+
+  it('logs nothing when a save only reorders stageConfig or tools, or sets unset lanes to 1', async () => {
+    const existing = loop({
+      stages: ['todo', 'build', 'done'],
+      stageConfig: [
+        { stage: 'build', model: 'b' },
+        { stage: 'todo', model: 't' },
+      ],
+      tools: ['web_search', 'github'],
+    });
+    repo.findByIdAndUserId.mockResolvedValue(existing);
+    repo.updateForUser.mockImplementation(async (_id: string, _u: string, patch: Record<string, unknown>) => ({
+      ...existing,
+      ...patch,
+    }));
+    await call('item', 'patch', {
+      query: { id: OID },
+      body: {
+        stageConfig: [
+          { stage: 'todo', model: 't' },
+          { stage: 'build', model: 'b' },
+        ],
+        tools: ['github', 'web_search'],
+        maxConcurrent: 1,
+      },
+    }).result;
+    expect(loopEvents.recordConfigChanged).not.toHaveBeenCalled();
+  });
+
+  it('ends a coach trial when the owner removes the trial stage', async () => {
+    const coachTrial = { stage: 'build', model: 'cheap', baselineModel: 'm1', tickets: 10, startedAt: new Date() };
+    repo.findByIdAndUserId.mockResolvedValue(
+      loop({ stages: ['todo', 'build', 'done'], stageConfig: [{ stage: 'build', model: 'cheap' }], coachTrial })
+    );
+    await call('item', 'patch', { query: { id: OID }, body: { stages: ['todo', 'done'] } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).toMatchObject({ coachTrial: null });
   });
 });
 
@@ -1689,5 +1738,317 @@ describe('PUT /api/loops/:id/tickets/:ticketId/rating', () => {
     await expect(put({ value: 'up' }).result).rejects.toMatchObject({ statusCode: 404 });
     tickets.setOwnerRating.mockResolvedValueOnce(null);
     await expect(put({ value: 'up' }).result).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
+describe('/api/loops/:id/coach', () => {
+  const coachLoop = (overrides: Record<string, unknown> = {}) =>
+    loop({ stages: ['todo', 'build', 'done'], escalationModel: 'huge', ...overrides });
+  const coach = (method: Method, body: Record<string, unknown> = {}) =>
+    call('coach', method, { query: { id: OID }, body });
+  /** The write returns the loop it was read as, with the patch applied, so only real changes are versioned. */
+  const stored = (existing: Record<string, unknown>) => {
+    repo.findByIdAndUserId.mockResolvedValue(existing);
+    repo.updateForUser.mockImplementation(async (_id: string, _u: string, patch: Record<string, unknown>) => {
+      const next = { ...existing };
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) delete next[key];
+        else next[key] = value;
+      }
+      return next;
+    });
+  };
+  const runs = (count: number, overrides: Record<string, unknown> = {}) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `r${i}`,
+      createdAt: new Date(Date.now() - 60_000),
+      model: 'm1',
+      ...overrides,
+    }));
+  const idleRuns = () =>
+    executions.listLoopRunsSince.mockResolvedValue({ runs: runs(20, { loopOutcome: 'idle' }), truncated: false });
+  const failingBuild = () =>
+    executions.listLoopRunsSince.mockResolvedValue({
+      runs: runs(10, { loopStage: 'build', loopOutcome: 'failed' }),
+      truncated: false,
+    });
+  const lastEvent = () => loopEvents.recordConfigChanged.mock.calls.at(-1)?.[0];
+
+  it("is a 404 for another user's loop", async () => {
+    repo.findByIdAndUserId.mockResolvedValue(null);
+    await expect(coach('get').result).rejects.toMatchObject({ statusCode: 404 });
+    await expect(coach('post', { action: 'apply', key: 'slower_schedule' }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('GET lists suggestions, the active dismissals and recent changes with Undo on the newest change in force', async () => {
+    idleRuns();
+    stored(
+      coachLoop({
+        model: 'a',
+        coachDismissed: [
+          { key: 'old', reason: 'stale', at: new Date(Date.now() - 40 * 86_400_000) },
+          { key: 'raise_budget', reason: 'not now', at: new Date() },
+        ],
+      })
+    );
+    const change = (id: string, config?: Record<string, unknown>) => ({
+      id,
+      reason: 'r',
+      createdAt: new Date(),
+      config,
+    });
+    loopEvents.listConfigChanges.mockResolvedValue([
+      change('e4', { by: 'owner', before: { budgetCreditsPerDay: 1 }, after: { budgetCreditsPerDay: 2 } }),
+      change('e3', { by: 'undo', before: { model: 'b' }, after: { model: 'a' } }),
+      change('e2', { by: 'coach', before: { model: 'a' }, after: { model: 'b' }, undoneBy: 'e3' }),
+      change('e1', { by: 'owner', before: { model: 'z' }, after: { model: 'a' } }),
+      change('e0'),
+    ]);
+    const { res, result } = coach('get');
+    await result;
+    const body = res._getJSONData();
+    expect(body.suggestions.map((s: { key: string }) => s.key)).toEqual(['slower_schedule']);
+    expect(body.suggestions[0].evidence).toBe('20 of 20 runs found no work');
+    expect(body.dismissed).toEqual([{ key: 'raise_budget', reason: 'not now', at: expect.any(String) }]);
+    expect(
+      body.versions.map((v: { id: string; undoable: boolean; undone: boolean; by: string }) => [
+        v.id,
+        v.by,
+        v.undone,
+        v.undoable,
+      ])
+    ).toEqual([
+      // e4 is no longer in force (budget moved on), so Undo would only 409.
+      ['e4', 'owner', false, false],
+      ['e3', 'undo', false, false],
+      ['e2', 'coach', true, false],
+      ['e1', 'owner', false, true],
+      ['e0', 'owner', false, false],
+    ]);
+    expect(body.trial).toBeUndefined();
+  });
+
+  it('apply writes the recomputed patch (ignoring a client patch) exactly as PATCH would, and logs it as the coach', async () => {
+    idleRuns();
+    stored(coachLoop());
+    await coach('post', { action: 'apply', key: 'slower_schedule', patch: { intervalMinutes: 5, model: 'x' } }).result;
+    const applied = repo.updateForUser.mock.calls[0][2];
+    expect(applied).toEqual({ intervalMinutes: 30 });
+    expect(lastEvent()).toMatchObject({
+      config: {
+        by: 'coach',
+        suggestionKey: 'slower_schedule',
+        before: { intervalMinutes: 15 },
+        after: { intervalMinutes: 30 },
+      },
+    });
+    expect(loopEvents.recordConfigChanged).toHaveBeenCalledTimes(1);
+
+    await call('item', 'patch', { query: { id: OID }, body: { intervalMinutes: 30 } }).result;
+    expect(repo.updateForUser.mock.calls[1][2]).toEqual(applied);
+    expect(lastEvent().config.by).toBe('owner');
+  });
+
+  it('apply is a 409 for a disabled suggestion, with its reason', async () => {
+    executions.listLoopRunsSince.mockResolvedValue({
+      runs: runs(20, { loopStage: 'todo', loopOutcome: 'done' }),
+      truncated: false,
+    });
+    tickets.listForLoopStats.mockResolvedValue({
+      items: [{ id: 't1', status: 'open', stage: 'todo', createdAt: new Date() }],
+      truncated: false,
+    });
+    stored(coachLoop());
+    await expect(coach('post', { action: 'apply', key: 'remove_stage:todo' }).result).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('dismiss and restore are a 404 when the loop is deleted mid-request', async () => {
+    stored(coachLoop());
+    repo.updateForUser.mockResolvedValue(null);
+    await expect(coach('post', { action: 'dismiss', key: 'raise_budget', reason: 'no' }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await expect(coach('post', { action: 'restore', key: 'raise_budget' }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
+  });
+
+  it('apply is a 404 for a key that no longer fires', async () => {
+    stored(coachLoop());
+    await expect(coach('post', { action: 'apply', key: 'slower_schedule' }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('undo restores before, logs an undo and marks the change; a drifted field is a 409', async () => {
+    const event = {
+      id: 'e1',
+      config: {
+        by: 'coach',
+        before: { intervalMinutes: 15, budgetCreditsPerDay: null },
+        after: { intervalMinutes: 30, budgetCreditsPerDay: 50 },
+      },
+    };
+    loopEvents.findConfigChange.mockResolvedValue(event);
+    stored(coachLoop({ intervalMinutes: 30, budgetCreditsPerDay: 50 }));
+    await coach('post', { action: 'undo', eventId: 'e1' }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).toEqual({ intervalMinutes: 15, budgetCreditsPerDay: null });
+    expect(lastEvent().config).toEqual({
+      by: 'undo',
+      before: { intervalMinutes: 30, budgetCreditsPerDay: 50 },
+      after: { intervalMinutes: 15, budgetCreditsPerDay: null },
+    });
+    expect(loopEvents.markConfigUndone).toHaveBeenCalledWith('e1', 'event-new');
+
+    vi.clearAllMocks();
+    stored(coachLoop({ intervalMinutes: 30, budgetCreditsPerDay: 60 }));
+    loopEvents.findConfigChange.mockResolvedValue(event);
+    await expect(coach('post', { action: 'undo', eventId: 'e1' }).result).rejects.toMatchObject({ statusCode: 409 });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('undo refuses an undo, an undone change, and a change with nothing to restore', async () => {
+    stored(coachLoop());
+    for (const config of [
+      { by: 'undo', before: { model: 'a' }, after: { model: 'm1' } },
+      { by: 'owner', before: { model: 'a' }, after: { model: 'm1' }, undoneBy: 'x' },
+      { by: 'trial', before: {}, after: {} },
+    ]) {
+      loopEvents.findConfigChange.mockResolvedValueOnce({ id: 'e', config });
+      await expect(coach('post', { action: 'undo', eventId: 'e' }).result).rejects.toMatchObject({ statusCode: 400 });
+    }
+    loopEvents.findConfigChange.mockResolvedValueOnce(null);
+    await expect(coach('post', { action: 'undo', eventId: 'e' }).result).rejects.toMatchObject({ statusCode: 404 });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('trial start sets the stage model and the trial, logged as a trial; one at a time, 5 to 50 tickets', async () => {
+    failingBuild();
+    stored(coachLoop());
+    await expect(
+      coach('post', { action: 'trial', key: 'stronger_model:build', tickets: 4 }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    await coach('post', { action: 'trial', key: 'stronger_model:build', tickets: 12 }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).toEqual({
+      stageConfig: [{ stage: 'build', model: 'huge' }],
+      coachTrial: { stage: 'build', model: 'huge', baselineModel: 'm1', tickets: 12, startedAt: expect.any(Date) },
+    });
+    expect(lastEvent().config).toMatchObject({ by: 'trial', suggestionKey: 'stronger_model:build' });
+    // Conditional on no trial running, so a concurrent start loses with a 409.
+    expect(repo.updateForUser.mock.calls[0][4]).toMatchObject({ noTrial: true });
+
+    stored(
+      coachLoop({ coachTrial: { stage: 'todo', model: 'a', baselineModel: 'm1', tickets: 5, startedAt: new Date() } })
+    );
+    await expect(
+      coach('post', { action: 'trial', key: 'stronger_model:build', tickets: 10 }).result
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  const onTrial = (overrides: Record<string, unknown> = {}) =>
+    coachLoop({
+      stageConfig: [{ stage: 'build', model: 'huge' }],
+      coachTrial: {
+        stage: 'build',
+        model: 'huge',
+        baselineModel: 'm1',
+        tickets: 2,
+        startedAt: new Date(Date.now() - 3_600_000),
+        ...overrides,
+      },
+    });
+
+  it('GET shows progress on that stage and model only, and the comparison at N, without reverting', async () => {
+    stored(onTrial());
+    const at = new Date(Date.now() - 60_000);
+    executions.listLoopRunsSince.mockResolvedValue({
+      runs: [
+        { id: 'a', createdAt: at, model: 'huge', loopStage: 'build', loopOutcome: 'done', workItemId: 't1' },
+        { id: 'b', createdAt: at, model: 'huge', loopStage: 'todo', loopOutcome: 'done', workItemId: 't2' },
+        { id: 'c', createdAt: at, model: 'm1', loopStage: 'build', loopOutcome: 'done', workItemId: 't3' },
+        { id: 'd', createdAt: at, model: 'huge', loopStage: 'build', loopOutcome: 'blocked', workItemId: 't4' },
+      ],
+      truncated: false,
+    });
+    const { res, result } = coach('get');
+    await result;
+    expect(res._getJSONData().trial).toMatchObject({
+      done: 2,
+      complete: true,
+      trial: { runs: 2, doneRate: 0.5 },
+      baseline: { runs: 0 },
+    });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('keep clears the trial and logs it; revert restores the previous model or clears an inherited one', async () => {
+    stored(onTrial());
+    await coach('post', { action: 'keep' }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).toEqual({ coachTrial: null });
+    expect(lastEvent()).toMatchObject({
+      reason: 'trial kept: build stays on huge',
+      config: { by: 'trial', before: {}, after: {} },
+    });
+
+    stored(onTrial());
+    await coach('post', { action: 'revert' }).result;
+    expect(repo.updateForUser.mock.calls[1][2]).toEqual({ stageConfig: null, coachTrial: null });
+    expect(lastEvent().config).toMatchObject({
+      by: 'trial',
+      before: { stageConfig: [{ stage: 'build', model: 'huge' }] },
+      after: { stageConfig: null },
+    });
+
+    stored(onTrial({ previousModel: 'mid' }));
+    await coach('post', { action: 'revert' }).result;
+    expect(repo.updateForUser.mock.calls[2][2]).toEqual({
+      stageConfig: [{ stage: 'build', model: 'mid' }],
+      coachTrial: null,
+    });
+
+    stored({ ...onTrial(), stageConfig: [{ stage: 'build', model: 'other' }] });
+    await expect(coach('post', { action: 'revert' }).result).rejects.toMatchObject({ statusCode: 409 });
+    stored(coachLoop());
+    await expect(coach('post', { action: 'keep' }).result).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('dismiss needs a reason of 300 characters or fewer; restore drops it', async () => {
+    stored(coachLoop());
+    await expect(coach('post', { action: 'dismiss', key: 'raise_budget', reason: '  ' }).result).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    await expect(
+      coach('post', { action: 'dismiss', key: 'raise_budget', reason: 'x'.repeat(301) }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    await coach('post', { action: 'dismiss', key: 'raise_budget', reason: ' not now ' }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).toEqual({
+      coachDismissed: [{ key: 'raise_budget', reason: 'not now', at: expect.any(Date) }],
+    });
+
+    stored(
+      coachLoop({
+        coachDismissed: [
+          { key: 'raise_budget', reason: 'x', at: new Date() },
+          { key: 'b', reason: 'y', at: new Date() },
+        ],
+      })
+    );
+    await coach('post', { action: 'restore', key: 'raise_budget' }).result;
+    expect(repo.updateForUser.mock.calls[1][2]).toEqual({
+      coachDismissed: [{ key: 'b', reason: 'y', at: expect.any(Date) }],
+    });
+    expect(loopEvents.recordConfigChanged).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown action', async () => {
+    stored(coachLoop());
+    await expect(coach('post', { action: 'rewrite' }).result).rejects.toMatchObject({ statusCode: 400 });
   });
 });

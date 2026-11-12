@@ -4,16 +4,14 @@ const h = vi.hoisted(() => ({
   findByChannelId: vi.fn(),
   findWorkspace: vi.fn(),
   memberOrgIds: vi.fn(),
-  tryIncrement: vi.fn(),
 }));
-vi.mock('@bike4mind/database', () => ({ cacheRepository: { tryIncrementWithinLimitFixedWindow: h.tryIncrement } }));
 vi.mock('@bike4mind/database/infra', () => ({
   slackChannelConfigRepository: { findByChannelId: h.findByChannelId },
   orgSlackWorkspaceRepository: { findBySlackTeamIdWithToken: h.findWorkspace },
   organizationRepository: { findMembershipOrgIds: h.memberOrgIds },
 }));
 
-import { authorizeOrgChannelPost, spendSlackChannelBudget } from './orgChannelPost';
+import { authorizeOrgChannelPost } from './orgChannelPost';
 
 const CHANNEL = 'C0123ABC';
 
@@ -55,17 +53,5 @@ describe('authorizeOrgChannelPost', () => {
   ])('refuses with %s', async (reason, arrange) => {
     arrange();
     expect(await authorizeOrgChannelPost({ channelId: CHANNEL, userId: 'u1' })).toMatchObject({ ok: false, reason });
-  });
-});
-
-describe('spendSlackChannelBudget', () => {
-  it("spends from the v1 route's per-channel window", async () => {
-    h.tryIncrement.mockResolvedValue({ success: false });
-    expect(await spendSlackChannelBudget(CHANNEL)).toBe(false);
-    expect(h.tryIncrement).toHaveBeenCalledWith(
-      `rate-limit:channel:${CHANNEL}:POST /api/v1/slack/messages:channel-minute`,
-      60,
-      60_000
-    );
   });
 });

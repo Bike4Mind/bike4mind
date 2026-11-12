@@ -10,6 +10,15 @@ export const formatCreditAmount = (credits: number): string => credits.toLocaleS
 export const purchaseCreditsAriaLabel = (credits: number, priceDollars: number): string =>
   `Purchase ${formatCreditAmount(credits)} credits for $${priceDollars}`;
 
+/**
+ * i18n params for a balance shown through a plural `{{amount}} credit(s)` key: the same rounding
+ * as formatCreditBalance, so the plural form is picked on the number the user actually sees.
+ */
+export const creditBalanceParams = (credits: number): { count: number; amount: string } => {
+  const whole = Math.max(0, Math.floor(credits));
+  return { count: whole, amount: formatCreditAmount(whole) };
+};
+
 /** A balance: "9,982 credits". Fractions round down, negatives show 0. */
 export function formatCreditBalance(credits: number): string {
   const whole = Math.max(0, Math.floor(credits));

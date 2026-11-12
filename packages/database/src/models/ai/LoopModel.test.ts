@@ -248,6 +248,38 @@ describe('LoopRepository', () => {
     expect((await loopRepository.updateForUser(loop.id, USER, { name: 'x' }, 'draft'))?.name).toBe('x');
   });
 
+  it('updateForUser stores and clears the coach trial and dismissals', async () => {
+    const loop = await create();
+    const startedAt = new Date(1000);
+    const trial = { stage: 'todo', model: 'cheap', baselineModel: 'big', tickets: 10, startedAt };
+    const dismissed = [{ key: 'raise_budget', reason: 'not now', at: startedAt }];
+    const set = await loopRepository.updateForUser(loop.id, USER, { coachTrial: trial, coachDismissed: dismissed });
+    expect(set?.coachTrial).toEqual(trial);
+    expect(set?.coachDismissed).toEqual(dismissed);
+    const cleared = await loopRepository.updateForUser(loop.id, USER, { coachTrial: null, coachDismissed: null });
+    expect(cleared?.coachTrial).toBeUndefined();
+    expect(cleared?.coachDismissed).toBeUndefined();
+  });
+
+  it('updateForUser with guard.noTrial only applies while no trial is running', async () => {
+    const loop = await create();
+    const trial = { stage: 'todo', model: 'cheap', baselineModel: 'big', tickets: 10, startedAt: new Date(1000) };
+    const started = await loopRepository.updateForUser(loop.id, USER, { coachTrial: trial }, undefined, {
+      noTrial: true,
+    });
+    expect(started?.coachTrial).toEqual(trial);
+    const second = await loopRepository.updateForUser(
+      loop.id,
+      USER,
+      { coachTrial: { ...trial, stage: 'b' } },
+      undefined,
+      {
+        noTrial: true,
+      }
+    );
+    expect(second).toBeNull();
+  });
+
   it('markErroredIfFailing only moves a live loop at the limit', async () => {
     const atLimit = await create({ status: 'live', consecutiveFailures: 3 });
     const below = await create({ status: 'live', consecutiveFailures: 2 });

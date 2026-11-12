@@ -24,7 +24,7 @@ describe('LOOP_TEMPLATES', () => {
     }
     // One run's admission price depends on the owner's model, so the owner sets the budget (see BUDGET_NOTE).
     expect(t.setupNotes.at(-1)).toMatch(/^Set a daily budget before you set it live/);
-    for (const key of ['model', 'budgetCreditsPerDay', 'slackChannelId', 'handoffTargets', 'triggers', 'oversees']) {
+    for (const key of ['model', 'budgetCreditsPerDay', 'handoffTargets', 'triggers', 'oversees']) {
       expect(key in t).toBe(false);
     }
     expect(JSON.stringify(t)).toMatch(/^[\x20-\x7e]*$/);

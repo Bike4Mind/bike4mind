@@ -176,6 +176,7 @@ export const unsureRow = (event: ILoopEvent) => ({
   reason: event.reason,
   resolution: event.resolution,
   handoff: event.handoff,
+  ...(event.config && { configBy: event.config.by }),
   createdAt: event.createdAt,
 });
 

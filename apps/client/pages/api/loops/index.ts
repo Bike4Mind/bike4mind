@@ -27,7 +27,6 @@ import {
   validateLoopOrganizationId,
   validateLoopOversees,
   validateLoopPriorityPolicy,
-  validateLoopSlackChannel,
   validateLoopStageConfig,
   validateLoopStages,
   validateLoopTools,
@@ -94,10 +93,6 @@ const handler = baseApi({ auth: 'jwtOnly' })
       await verifyOrgAccess({ id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) }, organizationId);
     }
 
-    const slackChannelId =
-      body.slackChannelId === undefined
-        ? null
-        : await validateLoopSlackChannel(body.slackChannelId, organizationId, req.user!.id);
     await validateLoopAgentsAndSkills({ userId: req.user!.id, organizationId }, agentId, stageConfig ?? []);
 
     // Same default as POST /api/v1/agent-executions, resolved once so every run uses the same model.
@@ -132,7 +127,6 @@ const handler = baseApi({ auth: 'jwtOnly' })
       ...(handoffTargets && { handoffTargets }),
       ...(triggers && { triggers }),
       ...(wakeMode && { wakeMode }),
-      ...(slackChannelId && { slackChannelId }),
       ...policy,
       status: 'draft',
     } as Omit<ILoop, 'id' | 'createdAt' | 'updatedAt'>);

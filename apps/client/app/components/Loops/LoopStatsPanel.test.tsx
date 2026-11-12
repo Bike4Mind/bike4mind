@@ -5,6 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ILoop, ILoopStats } from '@bike4mind/common';
 import LoopStatsPanel from './LoopStatsPanel';
+import { loopTicketElementId } from './loopUi';
 
 // ResponsiveContainer measures 0x0 in jsdom and renders no children; give the chart a fixed size.
 vi.mock('recharts', async importOriginal => ({
@@ -162,6 +163,37 @@ describe('LoopStatsPanel', () => {
     expect(map).toContain('human gate');
     expect(map).toContain('Needs you (1)');
     expect(map).toContain('o0["Overseer"] -.->|oversees| loop');
+  });
+
+  it('jumps to the board card for a queue row with no run', () => {
+    useLoopStats.mockReturnValue({
+      data: {
+        ...stats,
+        humanQueue: [
+          {
+            workItemId: 't2',
+            title: 'Blocked one',
+            stage: 'build',
+            reason: 'blocked',
+            since: stats.humanQueue[0].since,
+          },
+        ],
+      },
+      isLoading: false,
+    });
+    const card = document.createElement('div');
+    card.id = loopTicketElementId('t2');
+    card.tabIndex = -1;
+    card.scrollIntoView = vi.fn();
+    document.body.appendChild(card);
+    const onViewRun = vi.fn();
+    renderPanel(onViewRun);
+
+    fireEvent.click(screen.getByText('Blocked one'));
+    expect(card.scrollIntoView).toHaveBeenCalled();
+    expect(document.activeElement).toBe(card);
+    expect(onViewRun).not.toHaveBeenCalled();
+    card.remove();
   });
 
   it('asks for the chosen window', () => {

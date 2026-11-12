@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -56,6 +56,10 @@ vi.mock('@client/app/components/Loops/LoopTicketBoard', () => ({
 vi.mock('@client/app/components/Session/AgentExecution/AgentRunViewer', () => ({
   default: ({ executionId }: { executionId: string }) => <div data-testid="agent-run-viewer">{executionId}</div>,
 }));
+const coachState = { suggestions: [{ key: 'raise_budget' }, { key: 'slower_schedule' }] };
+vi.mock('@client/app/components/Loops/LoopCoach', () => ({
+  default: () => <div data-testid="loop-coach" />,
+}));
 vi.mock('@client/app/hooks/data/loops', async importOriginal => ({
   countNeedsYou: (await importOriginal<typeof import('@client/app/hooks/data/loops')>()).countNeedsYou,
   useLoop: () => loopState,
@@ -65,6 +69,7 @@ vi.mock('@client/app/hooks/data/loops', async importOriginal => ({
   useOverrideDirective: () => overrideDirective,
   useResolveUnsure: () => resolveUnsure,
   useLoopRunInfo: () => runInfo,
+  useLoopCoach: (_id: string, enabled: boolean) => ({ data: enabled ? coachState : undefined }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: config }) }));
 
@@ -263,6 +268,16 @@ describe('LoopDetailPage log', () => {
     reason: 'thin',
     createdAt: '2026-10-29T10:00:00.000Z',
     ...(resolution ? { resolution } : {}),
+  });
+
+  it('loads the coach only once opened, then shows its suggestion count', () => {
+    renderPage();
+    expect(screen.getByTestId('loop-detail-coach-toggle')).toHaveTextContent(/^Coach$/);
+    expect(screen.queryByTestId('loop-coach')).toBeNull();
+    // The test id sits on the summary's root; the toggle is its button.
+    fireEvent.click(within(screen.getByTestId('loop-detail-coach-toggle')).getByRole('button'));
+    expect(screen.getByTestId('loop-coach')).toBeInTheDocument();
+    expect(screen.getByTestId('loop-detail-coach-toggle')).toHaveTextContent('Coach (2)');
   });
 
   it('counts the unsure runs that need the owner', () => {

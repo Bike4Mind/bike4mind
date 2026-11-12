@@ -85,6 +85,20 @@ describe('LoopEventLog', () => {
     expect(screen.queryByTestId('loop-log-view-run-btn')).toBeNull();
   });
 
+  it('says who changed the settings when the change is versioned', () => {
+    renderLog([
+      event({
+        kind: 'config_changed',
+        executionId: 'config:l1:2',
+        reason: 'interval 30 -> 60',
+        configBy: 'coach',
+        iteration: undefined,
+        confidence: undefined,
+      }),
+    ]);
+    expect(screen.getByTestId('loop-log-config-row')).toHaveTextContent('by the coach: interval 30 -> 60');
+  });
+
   it('opens the run from "View run"', () => {
     const onViewRun = vi.fn();
     renderLog([event()], onViewRun);

@@ -141,7 +141,6 @@ import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAcce
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 import { resolveLoopTicketTools } from './agentExecutor.loopTicketTools';
 import { resolveLoopDirectiveTools } from './agentExecutor.loopDirectiveTools';
-import { resolveLoopSlackTools } from './agentExecutor.loopSlackTools';
 import { requestLoopDispatch } from '@server/utils/loopDispatch';
 // Artifact launch-gate. Same admin-AND-caller resolution the chat pipeline uses; see that module's
 // header for why the start-payload/doc precedence is the part worth pinning in a test.
@@ -2400,12 +2399,6 @@ async function runExecution(
       userId: execution.userId,
       executionId,
     });
-    const { loopSlackEnabledTools, loopSlackExternalTools } = await resolveLoopSlackTools({
-      loopId: execution.loopId,
-      loopsEnabled,
-      userId: execution.userId,
-      executionId,
-    });
 
     const subagentToolConfig = buildSubagentToolConfig({
       model: agentModel,
@@ -2493,7 +2486,6 @@ async function runExecution(
           ...latticeEnabledTools,
           ...loopTicketEnabledTools,
           ...loopDirectiveEnabledTools,
-          ...loopSlackEnabledTools,
         ]),
       ],
       session,
@@ -2524,7 +2516,6 @@ async function runExecution(
         ...latticeExternalTools,
         ...loopTicketExternalTools,
         ...loopDirectiveExternalTools,
-        ...loopSlackExternalTools,
       },
       config: subagentToolConfig,
       mcpToolsByServer,

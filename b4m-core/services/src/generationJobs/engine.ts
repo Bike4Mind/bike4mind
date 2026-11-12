@@ -11,6 +11,7 @@ import type {
   CancelRequestOutcome,
   GenerationJobEngineDeps,
   GenerationJobHandler,
+  GenerationJobSubmitMode,
   GenerationJobStepContext,
   StepOutcome,
   StepResult,
@@ -18,9 +19,13 @@ import type {
 
 const isTerminal = (state: GenerationJobState) => TERMINAL_GENERATION_JOB_STATES.includes(state);
 
+const submitModeOf = (handler: GenerationJobHandler, job: IGenerationJobDocument): GenerationJobSubmitMode =>
+  typeof handler.submitMode === 'function' ? handler.submitMode(job) : handler.submitMode;
+
 // A sync submit always commits the job out of running, so a sync job leased while still running died mid-call.
 const isOrphanedSubmit = (job: IGenerationJobDocument, handler: GenerationJobHandler) =>
-  !!job.submitAttemptedAt && (job.state === 'pending' || (job.state === 'running' && handler.submitMode === 'sync'));
+  !!job.submitAttemptedAt &&
+  (job.state === 'pending' || (job.state === 'running' && submitModeOf(handler, job) === 'sync'));
 
 // SQS delayed delivery can land slightly early; dropping an on-time message would stall the job until the sweep.
 const EARLY_DELIVERY_GRACE_MS = 2000;
@@ -63,8 +68,8 @@ export class GenerationJobEngine {
     this.handlers = new Map(deps.handlers.map(handler => [handler.kind, handler as GenerationJobHandler]));
   }
 
-  async requestCancel(target: Pick<IGenerationJobDocument, 'id' | 'kind'>): Promise<CancelRequestOutcome> {
-    const options = { beforeSubmitOnly: this.handlerFor(target).submitMode === 'sync' };
+  async requestCancel(target: IGenerationJobDocument): Promise<CancelRequestOutcome> {
+    const options = { beforeSubmitOnly: submitModeOf(this.handlerFor(target), target) === 'sync' };
     const requested = await this.deps.repository.requestCancel(target.id, options);
     if (requested) return this.cancelRequested(requested);
     const job = await this.deps.repository.findById(target.id);
@@ -196,7 +201,7 @@ export class GenerationJobEngine {
     lease: Lease,
     context: GenerationJobStepContext
   ): Promise<StepOutcome> {
-    const markRunning = handler.submitMode === 'sync';
+    const markRunning = submitModeOf(handler, job) === 'sync';
     const attempted = await this.deps.repository.markSubmitAttempted(job.id, this.deps.now(), { markRunning });
     // A cancel that landed after this step's own check. The provider was never called, so nothing is billed.
     if (!attempted) return this.toTerminal(job, handler, lease, CANCELLED_BY_USER);

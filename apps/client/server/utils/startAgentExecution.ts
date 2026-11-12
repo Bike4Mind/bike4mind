@@ -25,12 +25,7 @@ import {
   type IAgentExecution,
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
-import {
-  LOOP_DIRECTIVE_TOOL_NAMES,
-  LOOP_OVERSEER_TOOL_NAMES,
-  LOOP_SLACK_TOOL_NAMES,
-  LOOP_TICKET_TOOL_NAMES,
-} from '@bike4mind/common';
+import { LOOP_DIRECTIVE_TOOL_NAMES, LOOP_OVERSEER_TOOL_NAMES, LOOP_TICKET_TOOL_NAMES } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
 import type { ApiKeyInfo } from '@server/cli/auth';
@@ -48,12 +43,7 @@ import { pinFilesToSessionKnowledge } from '@server/managers/sessionCrud';
 import { admitApiKeyCompletion } from '@server/utils/untrustedCompletionQuota';
 import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
 
-const LOOP_RUN_TOOL_NAMES = [
-  ...LOOP_TICKET_TOOL_NAMES,
-  ...LOOP_DIRECTIVE_TOOL_NAMES,
-  ...LOOP_OVERSEER_TOOL_NAMES,
-  ...LOOP_SLACK_TOOL_NAMES,
-];
+const LOOP_RUN_TOOL_NAMES = [...LOOP_TICKET_TOOL_NAMES, ...LOOP_DIRECTIVE_TOOL_NAMES, ...LOOP_OVERSEER_TOOL_NAMES];
 
 /**
  * Per-user, in-container memoization of the stale-active sweep. The sweep is an
@@ -568,7 +558,12 @@ async function resolveRunBillingOrg(input: StartAgentExecutionInput, logger: Log
     const user = await userRepository.findById(userId);
     const billing = await resolveApiKeyBillingOrg({
       apiKeyInfo: input.apiKeyInfo,
-      user: { id: userId, isAdmin: user?.isAdmin ?? false },
+      user: {
+        id: userId,
+        isAdmin: user?.isAdmin ?? false,
+        isSystem: user?.isSystem,
+        serviceAccountOrganizationId: user?.serviceAccountOrganizationId,
+      },
       requestedOrgId: input.organizationId,
     });
     switch (billing.kind) {

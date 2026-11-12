@@ -6,6 +6,7 @@ import {
   type NonEmptyList,
   type StudioFormRules,
 } from '@client/app/components/Studio/useCapabilityFormState';
+import { musicModelCards } from './musicCreateV2';
 import { musicCapabilityFields } from './musicFields';
 import {
   canSubmit,
@@ -26,21 +27,31 @@ type MusicStudioFormProps = {
   models: NonEmptyList<PublicMusicModel>;
   isSubmitting: boolean;
   onSubmit: (body: CreateMusicGenerationBody) => void;
+  // Create v2: model cards and a model switch that keeps every value (marking the ones the model rejects).
+  createV2?: boolean;
 };
 
-const MusicStudioForm = ({ models, isSubmitting, onSubmit }: MusicStudioFormProps) => {
-  const { form, model, changes, update, selectModel } = useCapabilityFormState(models, MUSIC_FORM_RULES);
+const MusicStudioForm = ({ models, isSubmitting, onSubmit, createV2 = false }: MusicStudioFormProps) => {
+  const { form, model, changes, update, selectModel } = useCapabilityFormState(
+    models,
+    MUSIC_FORM_RULES,
+    createV2 ? 'keep' : 'clamp'
+  );
 
   if (!model) return null;
+
+  const picker = createV2
+    ? { modelCards: musicModelCards(models, form) }
+    : { models: models.map(candidate => ({ value: candidate.id, label: candidate.display_name })) };
 
   return (
     <CapabilityForm
       testIdPrefix="music-form"
-      models={models.map(candidate => ({ value: candidate.id, label: candidate.display_name }))}
+      {...picker}
       modelId={form.modelId}
       onModelChange={selectModel}
       changes={changes}
-      fields={musicCapabilityFields(model, form, update)}
+      fields={musicCapabilityFields(model, form, update, createV2 ? 'createV2' : 'legacy')}
       estimateCredits={estimateCredits(form)}
       submitLabel="Generate song"
       canSubmit={canSubmit(form, model)}

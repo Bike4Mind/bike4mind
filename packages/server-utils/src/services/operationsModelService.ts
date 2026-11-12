@@ -8,12 +8,13 @@ import {
   type ICompletionBackend,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { ChatModels, ModelBackend, type ModelInfo } from '@bike4mind/common';
+import { ChatModels, ModelBackend, SpeechToTextModels, type ModelInfo } from '@bike4mind/common';
 import { apiKeyRepository, adminSettingsRepository, AdminSettings } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import {
   OperationsModelConfig,
   OperationsModelResult,
+  DEFAULT_OPERATIONS_IMAGE_MODEL,
   getDefaultImageModel,
   getApiKeyTypeFromBackend,
 } from '../utils/modelResolvers';
@@ -31,6 +32,9 @@ type OperationsApiKeyTable = ApiKeyTable;
  * model this deployment cannot run. Cheapest current-generation OpenAI text model.
  */
 export const DEFAULT_OPERATIONS_TEXT_MODEL = ChatModels.GPT5_6_LUNA;
+
+/** Operations speech-to-text model when none is configured; the catalog has no newer option. */
+export const DEFAULT_OPERATIONS_SPEECH_MODEL = SpeechToTextModels.WHISPER_1;
 
 /** Tried in order after the preferred model, before falling back to any available text model. */
 const OPERATIONS_TEXT_MODEL_FALLBACKS: readonly string[] = [
@@ -370,8 +374,8 @@ export class OperationsModelService {
   ): Promise<OperationsModelResult> {
     const defaultConfig: OperationsModelConfig = {
       modelId: DEFAULT_OPERATIONS_TEXT_MODEL,
-      imageModelId: 'flux-pro-1.1',
-      speechModelId: 'whisper-1',
+      imageModelId: DEFAULT_OPERATIONS_IMAGE_MODEL,
+      speechModelId: DEFAULT_OPERATIONS_SPEECH_MODEL,
     };
 
     const dbAdapters = {
@@ -468,8 +472,8 @@ export class OperationsModelService {
   private static async getDefaultOperationsModel(options: OperationsModelOptions): Promise<OperationsModelResult> {
     const defaultConfig: OperationsModelConfig = {
       modelId: DEFAULT_OPERATIONS_TEXT_MODEL,
-      imageModelId: 'flux-pro-1.1',
-      speechModelId: 'whisper-1',
+      imageModelId: DEFAULT_OPERATIONS_IMAGE_MODEL,
+      speechModelId: DEFAULT_OPERATIONS_SPEECH_MODEL,
     };
 
     // Seed the default setting, but don't fail if database is unavailable. $setOnInsert:

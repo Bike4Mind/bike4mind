@@ -40,7 +40,7 @@ import {
   type MoveLoopTicketVars,
   type ILoopTicketsResponse,
 } from '@client/app/hooks/data/loops';
-import { LoopMarkdown } from './loopUi';
+import { LoopMarkdown, loopTicketElementId } from './loopUi';
 import LoopTicketRating from './LoopTicketRating';
 
 const TITLE_MAX = 300;
@@ -105,7 +105,14 @@ function TicketCard({
   const moveTicket = useMoveLoopTicket();
   const [handingOff, setHandingOff] = useState(false);
   return (
-    <Card size="sm" variant="outlined" data-testid={`loop-ticket-${ticket.id}`}>
+    <Card
+      size="sm"
+      variant="outlined"
+      id={loopTicketElementId(ticket.id)}
+      tabIndex={-1}
+      sx={{ '&:focus': { outline: '2px solid', outlineColor: 'primary.500' } }}
+      data-testid={`loop-ticket-${ticket.id}`}
+    >
       <Typography level="title-sm">{ticket.title}</Typography>
       <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
         {ticket.priority ? (

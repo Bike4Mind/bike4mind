@@ -1,3 +1,4 @@
+import { recommendDlqAction } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ send: vi.fn(), record: vi.fn() }));
@@ -76,5 +77,10 @@ describe('final DLQ failure recording', () => {
     ['Other', 'unclassified', 'unknown'],
   ])('categorizes %s as %s', (type, message, category) => {
     expect(failureCategory(type, message)).toBe(category);
+  });
+  it.each(['AccessDeniedException', 'UnauthorizedException'])('keeps ambiguous %s refusals inspectable', errorType => {
+    const category = failureCategory(errorType, 'Authorization failed');
+    expect(category).toBe('refused');
+    expect(recommendDlqAction({ category, errorType, replayAttempts: 0, replaySafety: 'safe' }).action).toBe('inspect');
   });
 });
