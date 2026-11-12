@@ -189,10 +189,16 @@ const SlackIntegrationSection = () => {
   const updateSlackSettings = useMutation({
     mutationFn: async (settings: SlackSettings) => {
       const response = await api.patch(`/api/users/${currentUser?.id}/slack-settings`, settings);
-      return response.data as { removed?: Array<{ field: string; id: string }> };
+      return response.data as { slackSettings?: SlackSettings; removed?: Array<{ field: string; id: string }> };
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['user'] });
+      // currentUser lives in the UserContext store, which the ['user'] invalidation does not refresh;
+      // without this, ids the server dropped stay in the form and are resent on the next save.
+      const { currentUser: storedUser, setCurrentUser } = useUser.getState();
+      if (storedUser && data?.slackSettings) {
+        setCurrentUser({ ...storedUser, slackSettings: data.slackSettings });
+      }
       // Update savedSlackUserId to reflect the saved value (for manual entry)
       if (variables.slackUserId !== undefined) {
         setSavedSlackUserId(variables.slackUserId);
