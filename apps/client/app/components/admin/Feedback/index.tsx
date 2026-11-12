@@ -620,11 +620,9 @@ const FeedbackTab: React.FC = () => {
           )
         }
         reasonPresets={ADMIN_REASON_PRESETS.feedbackDeletion}
-        // DELETE /api/feedback/:id/delete takes no reason, so the one picked here is neither sent nor stored.
-        reasonAudited={false}
         confirmLabel="Delete feedback"
         tone="danger"
-        onConfirm={() => confirmDeleteFeedback()}
+        onConfirm={confirmDeleteFeedback}
         data-testid="feedback-delete-dialog"
       />
 

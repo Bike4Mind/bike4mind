@@ -1,14 +1,17 @@
 import { useCallback, useState } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { FeedbackStatus } from '@bike4mind/common';
+import { useNavigate } from '@tanstack/react-router';
+import { FeedbackStatus, adminAuditLogPath } from '@bike4mind/common';
 import {
   deleteFeedbackFromServer,
   getFeedbackFromServer,
-  updateFeedbackOnServer,
+  updateFeedbackStatusOnServer,
 } from '@client/app/utils/feedbackAPICalls';
 import useToggle from '@client/app/hooks/useToggle';
 import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCounts';
+import { getErrorMessage } from '@client/app/utils/error';
+import { useUndoToast } from '../../shared/UndoToast';
 import { FeedbackListParams, IExtendedFeedbackDocument } from '../types';
 import { UseFeedbackOperationsReturn } from '../types';
 import {
@@ -58,6 +61,8 @@ const getNextStatus = (currentStatus: FeedbackStatus): FeedbackStatus => {
  */
 export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOperationsReturn => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const showUndo = useUndoToast();
   const [feedbackToDelete, setFeedbackToDelete] = useState<string | null>(null);
   const [openDeleteFeedbackModal, toggleDeleteFeedbackModal] = useToggle();
 
@@ -94,6 +99,7 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: FEEDBACK_LIST_QUERY_KEY }),
       queryClient.invalidateQueries({ queryKey: FEEDBACK_ORGANIZATIONS_QUERY_KEY }),
+      queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
       // The detail drawer reads its record from its own query, so a delete that refreshed only
       // the list would leave the drawer showing a report that no longer exists.
       queryClient.invalidateQueries({ queryKey: FEEDBACK_RECORD_QUERY_KEY }),
@@ -101,36 +107,71 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
     ]);
   }, [queryClient]);
 
+  const invalidateAfterStatusChange = useCallback(
+    // Refetch rather than patch in place: the row may no longer match the active status filter, in
+    // which case it belongs off this page entirely. The detail drawer reads the same record from a
+    // separate query and has to move with it. The organization facet does not: a status change
+    // cannot add or remove an org from the set that has any feedback.
+    () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: FEEDBACK_LIST_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: FEEDBACK_RECORD_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: FEEDBACK_TRENDS_QUERY_KEY }),
+      ]),
+    [queryClient]
+  );
+
+  const openAuditEntry = useCallback(
+    (entryId: string) => {
+      const search = Object.fromEntries(new URL(adminAuditLogPath({}, entryId), 'http://local').searchParams);
+      void navigate({ to: '/admin', search: search as never });
+    },
+    [navigate]
+  );
+
   const handleStatusChange = useCallback(
     async (feedbackItem: IExtendedFeedbackDocument, newValue: FeedbackStatus | null) => {
-      const updatedStatus = newValue ?? getNextStatus(feedbackItem.status);
+      const previousStatus = feedbackItem.status;
+      const updatedStatus = newValue ?? getNextStatus(previousStatus);
+      if (updatedStatus === previousStatus) return;
 
       try {
-        // Only what a status change needs: sending `content` back would rewrite the report's text.
-        const { userId, username } = feedbackItem;
-        const response = await updateFeedbackOnServer(feedbackItem._id, { userId, username, status: updatedStatus });
-        if (!response) throw new Error('Failed to update feedback status');
+        const result = await updateFeedbackStatusOnServer(feedbackItem._id, {
+          status: updatedStatus,
+          expectedStatus: previousStatus,
+        });
+        await invalidateAfterStatusChange();
 
-        // Refetch rather than patch in place: the row may no longer match the active status
-        // filter, in which case it belongs off this page entirely. The detail drawer reads the
-        // same record from a separate query and has to move with it. The organization facet does
-        // not: a status change cannot add or remove an org from the set that has any feedback.
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: FEEDBACK_LIST_QUERY_KEY }),
-          queryClient.invalidateQueries({ queryKey: FEEDBACK_RECORD_QUERY_KEY }),
-          queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
-          queryClient.invalidateQueries({ queryKey: FEEDBACK_TRENDS_QUERY_KEY }),
-        ]);
-
-        showFeedbackToast.success(
-          `${feedbackTypeLabel(feedbackItem)} from ${formatReporter(feedbackItem)} set to ${FEEDBACK_STATUS_LABELS[updatedStatus]}`
-        );
+        const { auditEntryId } = result;
+        const label = `${feedbackTypeLabel(feedbackItem)} from ${formatReporter(feedbackItem)}`;
+        showUndo({
+          message: `${label} set to ${FEEDBACK_STATUS_LABELS[updatedStatus]}`,
+          // Resolves even on failure: a retry would resend the same expectedStatus and fail again
+          // (a 409 means the report moved), so the toast closes and the error goes to a plain toast.
+          onUndo: async () => {
+            try {
+              await updateFeedbackStatusOnServer(feedbackItem._id, {
+                status: previousStatus,
+                expectedStatus: updatedStatus,
+                ...(auditEntryId ? { undoOf: auditEntryId } : {}),
+              });
+              showFeedbackToast.success(`${label} set back to ${FEEDBACK_STATUS_LABELS[previousStatus]}`);
+            } catch (error) {
+              showFeedbackToast.error(`Could not undo: ${getErrorMessage(error)}`);
+            }
+            await invalidateAfterStatusChange();
+          },
+          ...(auditEntryId ? { onViewAudit: () => openAuditEntry(auditEntryId) } : {}),
+        });
       } catch (error) {
         console.error('Error updating feedback status:', error);
-        showFeedbackToast.error('Failed to update feedback status.');
+        showFeedbackToast.error(`Failed to update feedback status: ${getErrorMessage(error)}`);
+        // A 409 means someone else moved the report; show where it is now.
+        await invalidateAfterStatusChange();
       }
     },
-    [queryClient]
+    [invalidateAfterStatusChange, openAuditEntry, showUndo]
   );
 
   const handleDeleteFeedbackClick = useCallback(
@@ -141,25 +182,27 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
     [toggleDeleteFeedbackModal]
   );
 
-  const confirmDeleteFeedback = useCallback(async () => {
-    if (feedbackToDelete) {
-      const deletedItem = feedback.find(item => item._id === feedbackToDelete);
-      try {
-        const response = await deleteFeedbackFromServer(feedbackToDelete);
-        if (response) {
-          await refreshFeedback();
-
-          showFeedbackToast.success(`${feedbackTypeLabel(deletedItem)} from ${formatReporter(deletedItem)} deleted`);
+  /** Rejects on failure so the ActionDialog stays open with the reason the admin entered. */
+  const confirmDeleteFeedback = useCallback(
+    async (reason: string) => {
+      if (feedbackToDelete) {
+        const deletedItem = feedback.find(item => item._id === feedbackToDelete);
+        try {
+          await deleteFeedbackFromServer(feedbackToDelete, reason);
+        } catch (error) {
+          console.error('Error deleting feedback:', error);
+          showFeedbackToast.error(`Failed to delete feedback: ${getErrorMessage(error)}`);
+          throw error;
         }
-      } catch (error) {
-        console.error('Error deleting feedback:', error);
-        showFeedbackToast.error('Failed to delete feedback.');
+        await refreshFeedback();
+        showFeedbackToast.success(`${feedbackTypeLabel(deletedItem)} from ${formatReporter(deletedItem)} deleted`);
       }
-    }
 
-    toggleDeleteFeedbackModal();
-    setFeedbackToDelete(null);
-  }, [feedbackToDelete, feedback, refreshFeedback, toggleDeleteFeedbackModal]);
+      toggleDeleteFeedbackModal();
+      setFeedbackToDelete(null);
+    },
+    [feedbackToDelete, feedback, refreshFeedback, toggleDeleteFeedbackModal]
+  );
 
   return {
     feedback,
