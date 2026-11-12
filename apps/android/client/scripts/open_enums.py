@@ -1,11 +1,11 @@
-"""Drops `enum` from string schemas before the OpenAPI snapshot reaches swift-openapi-generator.
+"""Drops `enum` from string schemas before the OpenAPI snapshot reaches openapi-generator.
 
-The generator renders a string enum as a `@frozen` Swift enum whose decoding throws on any value it
-does not list, so one new server value (a quest status, an error code) would fail the decode of the
-whole response on every installed binary, and shipped binaries cannot be hot-fixed. Plain strings
-decode anything; B4MKit maps them onto its own enums and treats unknown values as unknown.
+The generator renders a string enum as a Kotlin `enum class`, and kotlinx.serialization throws on any value
+the class does not list, so one new server value (a quest status, an error code) would fail the decode of the
+whole response on every installed build, and shipped builds cannot be hot-fixed. Plain strings decode
+anything; the app maps them onto its own types and treats unknown values as unknown.
 
-GeneratedClientTests.testNoGeneratedEnumIsClosed guards the output. Run by `make generate-client`.
+GeneratedClientTest.noGeneratedModelEnumIsClosed guards the output. Run by `make generate-client`.
 Usage: python3 open_enums.py <input.json> <output.json>
 """
 
