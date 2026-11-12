@@ -38,9 +38,10 @@ export function NeedsYouCard({
       data-testid="mini-needs-you-card"
       sx={{
         display: 'flex',
-        flexDirection: 'column',
-        gap: 0.5,
-        p: 1,
+        alignItems: 'center',
+        gap: 1,
+        px: 1,
+        py: 0.75,
         borderRadius: 'sm',
         bgcolor: 'background.surface',
         border: '1px solid',
@@ -48,17 +49,22 @@ export function NeedsYouCard({
         boxShadow: 'sm',
       }}
     >
-      <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="mini-needs-you-orchestration">
-        {pending.orchestrationTitle}
-        {more > 0 ? ` (+${more} more)` : ''}
-      </Typography>
-      <Typography level="body-sm" fontWeight="lg" noWrap>
-        {pending.agentTitle}
-      </Typography>
-      <Typography level="body-xs" noWrap sx={{ fontFamily: 'code' }} data-testid="mini-needs-you-summary">
-        {pending.summary}
-      </Typography>
-      <Box sx={{ display: 'flex', gap: 0.5, mt: 0.5 }}>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography level="body-xs" noWrap>
+          <Typography fontWeight="lg" textColor="text.primary">
+            {pending.agentTitle}
+          </Typography>
+          {' in '}
+          <Typography textColor="text.tertiary" data-testid="mini-needs-you-orchestration">
+            {pending.orchestrationTitle}
+          </Typography>
+          {more > 0 ? ` (+${more} more)` : ''}
+        </Typography>
+        <Typography level="body-xs" noWrap sx={{ fontFamily: 'code' }} data-testid="mini-needs-you-summary">
+          {pending.summary}
+        </Typography>
+      </Box>
+      <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
         {pending.quick ? (
           <>
             <Button

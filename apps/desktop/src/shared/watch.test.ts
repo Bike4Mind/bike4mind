@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChatSessionStatus, ChatSessionSummary, ChatToolCall } from './chat';
 import { needsYouCount } from './needsYou';
 import {
+  approvalSummary,
   EMPTY_WATCH_SNAPSHOT,
   buildWatchSnapshot,
   isQuickApproval,
@@ -223,5 +224,15 @@ describe('parseWatchPreferences', () => {
   it('keeps valid values', () => {
     const value = { showInMenuBar: false, miniOpen: true, miniBounds: { x: 10, y: 20, width: 360, height: 220 } };
     expect(parseWatchPreferences(value)).toEqual(value);
+  });
+});
+
+describe('approvalSummary', () => {
+  it('keeps only the command line of a detail that carries warnings below it', () => {
+    const call = {
+      name: 'bash_execute',
+      approvalDetail: '$ node -e "1"\n\nCan send data off this computer (node -e).',
+    } as Parameters<typeof approvalSummary>[0];
+    expect(approvalSummary(call)).toBe('bash_execute $ node -e "1"');
   });
 });

@@ -6,7 +6,7 @@ import type { WatchBounds, WatchSnapshot } from '@shared/watch';
 import { markCompanionWindow } from '../windows';
 import type { WatchPreferencesStore } from './WatchPreferencesStore';
 
-export const MINI_DEFAULT_SIZE = { width: 360, height: 220 } as const;
+export const MINI_DEFAULT_SIZE = { width: 420, height: 300 } as const;
 export const MINI_MIN_SIZE = { width: 220, height: 56 } as const;
 /** Moves and resizes arrive per frame while dragging; the file only needs the last one. */
 export const BOUNDS_SAVE_DELAY_MS = 400;
@@ -119,8 +119,15 @@ export function createMiniWindowController({ preferences, rendererDevUrl }: Mini
       if (url === created.webContents.getURL()) return;
       event.preventDefault();
     });
-    created.on('moved', saveBounds);
-    created.on('resized', saveBounds);
+    // 'moved'/'resized' fire only at the end of a user drag on macOS, not for a resize by the system
+    // or another app, so the debounced continuous events are the ones that never miss.
+    created.on('move', saveBounds);
+    created.on('resize', saveBounds);
+    created.on('close', () => {
+      if (saveTimer !== undefined) clearTimeout(saveTimer);
+      saveTimer = undefined;
+      void preferences.update({ miniBounds: created.getBounds() });
+    });
     created.on('closed', () => {
       if (window === created) window = null;
       if (!quitting) void preferences.update({ miniOpen: false });

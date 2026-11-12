@@ -73,6 +73,8 @@ export function MiniTavern({ api = miniApi() }: { api?: MiniTavernApi }) {
           py: 0.5,
           minWidth: 0,
           flex: strip ? '0 1 auto' : 'none',
+          // In the strip the dots lead and the close button trails.
+          order: strip ? 1 : 0,
           WebkitAppRegion: 'drag',
         }}
       >
@@ -156,6 +158,9 @@ export function MiniTavern({ api = miniApi() }: { api?: MiniTavernApi }) {
               sx={{
                 position: 'absolute',
                 inset: 0,
+                // TavernView's frame is a flex: 1 size container.
+                display: 'flex',
+                flexDirection: 'column',
                 animation: prefersReducedMotion() ? 'none' : `${fadeIn} 300ms ease-out`,
               }}
             >

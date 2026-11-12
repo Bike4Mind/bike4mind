@@ -138,11 +138,10 @@ export default defineConfig(({ mode }) => {
       resolve: { alias: { '@shared': sharedDir } },
       plugins: [externalizeDepsPlugin()],
       build: {
-        // Two sandboxed preloads: the app's (index) and the mini Tavern's narrow one (mini; see
-        // main/watch/miniWindow.ts). A sandboxed preload cannot load a shared chunk, so each entry
-        // is bundled on its own.
-        isolatedEntries: true,
         rollupOptions: {
+          // The app's preload and the mini Tavern's narrow one (main/watch/miniWindow.ts). Both are
+          // sandboxed, which cannot load a shared chunk, so mini.ts imports nothing at runtime but
+          // electron (see its MINI_CHANNELS).
           input: {
             index: resolve(__dirname, 'src/preload/index.ts'),
             mini: resolve(__dirname, 'src/preload/mini.ts'),

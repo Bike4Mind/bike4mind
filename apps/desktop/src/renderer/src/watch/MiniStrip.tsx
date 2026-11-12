@@ -25,7 +25,16 @@ export function MiniStrip({
   return (
     <Box
       data-testid="mini-strip"
-      sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, minWidth: 0, overflowX: 'auto' }}
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        px: 1,
+        minWidth: 0,
+        overflowX: 'auto',
+        flex: 1,
+        scrollbarWidth: 'none',
+      }}
     >
       {orchestrations.map(orchestration => {
         const states = orchestration.agents.map(agent => agent.state);

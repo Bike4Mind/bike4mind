@@ -107,8 +107,10 @@ export function isQuickApproval(call: ChatToolCall): boolean {
   );
 }
 
-function approvalSummary(call: ChatToolCall): string {
-  return `${call.name} ${call.approvalDetail ?? describeToolInput(call)}`.trim();
+/** One line: an approval detail can carry its warnings below the command, which the app card shows. */
+export function approvalSummary(call: ChatToolCall): string {
+  const detail = (call.approvalDetail ?? describeToolInput(call)).split('\n')[0] ?? '';
+  return `${call.name} ${detail}`.trim();
 }
 
 const isBusy = (status: ChatSessionStatus | undefined) => status === 'processing' || status === 'needs-action';
