@@ -27,6 +27,7 @@ export function classifyPayment(e: FulfillmentEvidence, now: Date): FulfillmentF
     if (
       expected > 0 &&
       (deductions.length !== 1 ||
+        deductions[0].type !== 'generic_deduct' ||
         Math.abs(deductions[0].credits) !== expected ||
         deductions[0].ownerId !== e.owner.id ||
         deductions[0].ownerType !== e.owner.type)

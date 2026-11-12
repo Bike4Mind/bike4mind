@@ -66,6 +66,7 @@ describe('payment fulfillment evidence', () => {
     expect(state({ refunds: [{ ...refund, createdAt: recent }] })).toBe('pending');
     expect(state({ refunds: [refund], rows: [deduction, grant] })).toBe('consistent');
     expect(state({ refunds: [refund], rows: [grant, { ...deduction, credits: -24 }] })).toBe('reversal');
+    expect(state({ refunds: [refund], rows: [grant, { ...deduction, type: 'generic_add' }] })).toBe('reversal');
   });
   it('requires the full refund reversal marker, not for a partial refund', () => {
     const refund = { id: 're_1', amount: 1000, status: 'succeeded', createdAt: old };
