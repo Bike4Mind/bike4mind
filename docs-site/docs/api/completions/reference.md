@@ -19,7 +19,7 @@ This page covers the concepts. Use the in-app reference for field names, types a
 POST https://app.bike4mind.com/api/ai/v1/completions
 ```
 
-Send a JSON body with a `model` and a `messages` array. Other options (tools, extended thinking, token limits) are listed in the in-app reference. Message `content` can be a string or an array of parts, including images.
+Send a JSON body with a `model` and a `messages` array. Other options (tools, extended thinking, token limits) are listed in the in-app reference. Message `content` can be a string or an array of parts, including images. To attribute requests to a run, send an optional `run` object; see [Runs](./streaming.md#runs).
 
 ## Authentication
 

@@ -65,6 +65,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 
 | Handler | Declared in | Reaches | VPC required | Justification |
 |---|---|---|---|---|
+| `apps/workers/src/cron/adminMorningBrief.handler` | `infra/adminMorningBrief.ts` | MongoDB; linked: `allSecrets` | Yes | Reads and persists morning brief facts and delivery claims in MongoDB. |
 | `apps/client/server/s3/notebookImportComplete.dispatch` | `infra/buckets.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `appFilesBucket`, `generatedImagesBucket`, `historyImportBucket`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/agentExecute.func` | `infra/agentExecutor.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `agentExecutor` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/ccAgentDisconnect.func` | `infra/websocket.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |

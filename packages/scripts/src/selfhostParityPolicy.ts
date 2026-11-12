@@ -52,6 +52,16 @@ const wired = (
 
 // Reviewed snapshots, never automatically refreshed by CI. Portable means wiring only.
 export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
+  broker(
+    'queue:infra/adminMorningBrief.ts:adminMorningBriefDlq',
+    '02f77874c10969d8ede24d54d660f8722b34b4826b403446b8a06ca17bceae54'
+  ),
+  gapBecause(
+    'schedule:infra/adminMorningBrief.ts:adminMorningBrief',
+    '1b5ed24c369a01d8495f89deb746b27f0e9d34463bf8cc1c035b7e6fcedefe5c',
+    'Opt-in admin brief uses hosted CloudWatch alarms and the LiveOps destination; self-host scheduling and alternate alarm capability are not wired.',
+    ['cloudwatch:DescribeAlarms']
+  ),
   hostedOnly(
     'eventRule:infra/accountCreationAlarms.ts:AccountCreationMetricsSchedule',
     '9ecd499546afefc96b5204f91ccaa0292f7eaf73bce58d0bf91a30adda3497e7',
@@ -1199,10 +1209,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'e876499c1871279537ace45c49baf97513df5b6a5b4b61b152f70671ac237d18',
+    '7f82c9a6daf1298781ec962e6a7ecff9022aa54eaf8c2b4d02c82cdc40d12ab7',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
-  gap('service:infra/searxng.ts:Searxng', 'f770feff3bf1d7bc5b100114b4f63a7a7d0422c00d0ee855093b25c5db982268'),
+  gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),
   gap(
     'service:infra/subscriberFanout.ts:subscriberFanoutV2',
     'f22fd878b4415013dafdb60fd0699f5d6c10695f02eccb2450ff66d0388323d6'
