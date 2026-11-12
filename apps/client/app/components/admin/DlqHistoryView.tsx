@@ -6,7 +6,7 @@ import {
   type DlqQueueInfo,
   type DlqReplayLogEntry,
 } from '@client/app/hooks/data/dlqManagement';
-import { DataTable, EmptyState, FilterChip, StatusChip } from './shared';
+import { CopyValue, DataTable, EmptyState, FilterChip, StatusChip } from './shared';
 import { AdminSearchInput } from './shared/FilterBar';
 import type { DataColumn } from './shared/DataTable';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
@@ -46,13 +46,15 @@ const columns: DataColumn<DlqReplayLogEntry>[] = [
     id: 'entity',
     label: 'Entity',
     render: entry => (
-      <Typography
-        level="body-xs"
-        title={`History ID: ${entry.id}`}
-        sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}
-      >
-        {entry.messageId}
-      </Typography>
+      <Stack gap={0.5} title={`History ID: ${entry.id}`}>
+        <CopyValue
+          value={entry.messageId}
+          label="message ID"
+          mono
+          truncate
+          data-testid={`dlq-history-copy-id-${entry.id}`}
+        />
+      </Stack>
     ),
   },
   {

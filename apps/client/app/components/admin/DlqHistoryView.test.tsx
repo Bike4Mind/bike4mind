@@ -96,3 +96,20 @@ it('preserves loaded rows and retries the same cursor after a load-more failure'
   await screen.findByTestId('dlq-history-row-log-1');
   expect(get).toHaveBeenLastCalledWith('/api/admin/dlq/history', { params: { cursor: 'next' } });
 });
+
+it('copies the complete entity ID while retaining its history ID', async () => {
+  const messageId = 'full-dead-letter-message-identifier-beyond-twenty-characters';
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+  try {
+    get.mockResolvedValue({ data: { history: [{ ...entry(0), messageId }], nextCursor: null } });
+    renderHistory();
+    const row = await screen.findByTestId('dlq-history-row-log-0');
+    expect(within(row).getByText(messageId)).toBeInTheDocument();
+    expect(within(row).getByTitle('History ID: log-0')).toBeInTheDocument();
+    fireEvent.click(within(row).getByTestId('dlq-history-copy-id-log-0'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(messageId));
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
