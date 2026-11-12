@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -28,6 +28,8 @@ describe('ChatService images shown by tools', () => {
   let streams: PassThrough[];
   let root: string;
   let store: SessionStore;
+  let media: MediaStore;
+  let mediaRoot: string;
   let capture: ReturnType<typeof vi.fn<ScreenCapturer['capture']>>;
 
   beforeEach(async () => {
@@ -50,11 +52,13 @@ describe('ChatService images shown by tools', () => {
       capture,
     };
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-images-sessions-')), 'test-model');
+    mediaRoot = await mkdtemp(join(tmpdir(), 'b4m-images-media-'));
+    media = new MediaStore(mediaRoot);
     service = new ChatService({
       store,
       approvals: new ApprovalGate(),
       access: { list: async () => [root] } as unknown as AccessStore,
-      media: new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-images-media-'))),
+      media,
       models: {
         list: async () => ({ models: [{ id: 'test-model', name: 'Test', backend: 'anthropic' }] }),
         cached: () => [],
@@ -155,6 +159,38 @@ describe('ChatService images shown by tools', () => {
       .flatMap(call => call.media ?? [])
       .map(item => item.url);
     expect(urls).toEqual([first?.[0].url, first?.[0].url, changed?.[0].url]);
+  });
+
+  it('does not keep an image whose file read finishes after conversation deletion', async () => {
+    const id = await codeSession();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const saveForContent = media.saveForContent.bind(media);
+    const keep = vi.spyOn(media, 'saveForContent').mockImplementation(async (...args) => {
+      started.resolve();
+      await release.promise;
+      return saveForContent(...args);
+    });
+    await service.send(id, 'look at it');
+    await vi.waitUntil(() => streams.length === 1);
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'read', name: 'file_read', arguments: JSON.stringify({ path: join(root, 'shot.png') }) }],
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+    await started.promise;
+    try {
+      await service.deleteSession(id);
+    } finally {
+      release.resolve();
+    }
+    const attempt = keep.mock.results[0];
+    if (attempt.type !== 'return') throw new Error('Image save did not start');
+    await expect(attempt.value).rejects.toThrow(/deleted/);
+    expect(await readdir(mediaRoot)).toEqual([]);
+    expect(await store.get(id)).toBeNull();
   });
 
   it('caps the images one round sends and tells the model how many were left out', async () => {

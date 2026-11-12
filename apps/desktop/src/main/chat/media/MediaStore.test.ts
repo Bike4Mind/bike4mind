@@ -1,8 +1,8 @@
 import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Readable } from 'node:stream';
-import { describe, expect, it } from 'vitest';
+import { PassThrough, Readable } from 'node:stream';
+import { describe, expect, it, vi } from 'vitest';
 import { isSupportedMediaType, MAX_MEDIA_BYTES, MediaStore, parseMediaUrl } from './MediaStore';
 
 async function store(): Promise<{ store: MediaStore; base: string }> {
@@ -122,6 +122,39 @@ describe('MediaStore.saveStream', () => {
 });
 
 describe('MediaStore.saveForContent', () => {
+  it('does not recreate deleted media when a pending file read finishes later', async () => {
+    const { store: media, base } = await store();
+    await media.forgetSession(SESSION);
+    await expect(
+      media.saveForContent(SESSION, Buffer.from('source'), Buffer.from('fitted'), 'image/png')
+    ).rejects.toThrow(/deleted/);
+    expect(await readdir(base)).toEqual([]);
+  });
+
+  it('stops an in-flight stream before removing the session folder', async () => {
+    const { store: media, base } = await store();
+    const source = new PassThrough();
+    const saving = media.saveStream(SESSION, source, 'video/mp4', 1024);
+    const rejected = expect(saving).rejects.toThrow(/aborted/);
+    source.write(Buffer.from('partial'));
+    await vi.waitUntil(async () => (await readdir(base)).includes(SESSION));
+    await media.forgetSession(SESSION);
+    await rejected;
+    expect(source.destroyed).toBe(true);
+    expect(await readdir(base)).toEqual([]);
+  });
+
+  it('can delete immediately after a stream save begins', async () => {
+    const { store: media, base } = await store();
+    const source = new PassThrough();
+    const saving = media.saveStream(SESSION, source, 'video/mp4', 1024);
+    const rejected = expect(saving).rejects.toThrow(/aborted/);
+    await media.forgetSession(SESSION);
+    await rejected;
+    expect(source.destroyed).toBe(true);
+    expect(await readdir(base)).toEqual([]);
+  });
+
   it('keeps one copy per source content and serves it like any other', async () => {
     const { store: media, base } = await store();
     const source = Buffer.from('original screenshot');
