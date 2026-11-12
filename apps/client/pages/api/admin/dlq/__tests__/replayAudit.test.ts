@@ -185,6 +185,36 @@ describe('POST /api/admin/dlq/replay by message ID', () => {
     ]);
   });
 
+  it('uses the latest receipt handle when a target is delivered again during the search', async () => {
+    h.receiveFromQueue
+      .mockResolvedValueOnce([{ ...msg('first'), ReceiptHandle: 'old-first' }])
+      .mockResolvedValueOnce([{ ...msg('first'), ReceiptHandle: 'new-first' }, msg('second')]);
+
+    const body = await post(['first', 'second']);
+
+    expect(body).toMatchObject({ replayed: 2, notFound: 0 });
+    expect(h.sendToQueue).toHaveBeenCalledTimes(2);
+    expect(h.deleteFromQueue.mock.calls).toEqual([
+      ['dlq-url', 'new-first'],
+      ['dlq-url', 'rh-second'],
+    ]);
+  });
+
+  it('releases all acquired messages if a later receive fails, preserving the receive error', async () => {
+    const failure = new Error('receive unavailable');
+    h.receiveFromQueue.mockResolvedValueOnce([msg('other'), msg('first')]).mockRejectedValueOnce(failure);
+    h.changeMessageVisibility.mockRejectedValue(new Error('release unavailable'));
+
+    await expect(post(['first', 'second'])).rejects.toBe(failure);
+
+    expect(h.changeMessageVisibility.mock.calls).toEqual([
+      ['dlq-url', 'rh-other', 0],
+      ['dlq-url', 'rh-first', 0],
+    ]);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.deleteFromQueue).not.toHaveBeenCalled();
+  });
+
   it('reports not found once the queue has nothing left, and still releases what it received', async () => {
     h.receiveFromQueue.mockResolvedValueOnce([msg('other-1')]).mockResolvedValue([]);
 

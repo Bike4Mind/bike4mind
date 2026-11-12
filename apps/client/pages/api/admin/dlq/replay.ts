@@ -43,6 +43,27 @@ interface ReplayResult {
   reason?: string;
 }
 
+async function releaseReceivedMessages(
+  dlqUrl: string,
+  queueLabel: string,
+  messages: readonly Message[],
+  kind: 'untargeted' | 'acquired'
+): Promise<void> {
+  const released = await Promise.allSettled(
+    messages.filter(m => m.ReceiptHandle).map(m => changeMessageVisibility(dlqUrl, m.ReceiptHandle!, 0))
+  );
+  const releaseErrors = released.flatMap(r =>
+    r.status === 'rejected' ? [r.reason instanceof Error ? r.reason.message : String(r.reason)] : []
+  );
+  if (releaseErrors.length > 0) {
+    Logger.warn(`[DLQ Replay] Could not release ${releaseErrors.length} ${kind} messages early`, {
+      queueLabel,
+      // Distinct messages only: a missing permission fails every release the same way.
+      errors: [...new Set(releaseErrors)],
+    });
+  }
+}
+
 /**
  * POST /api/admin/dlq/replay
  *
@@ -246,37 +267,30 @@ const handler = adminApi({
   if (messageIdSet) {
     // SQS cannot fetch a message by ID and a receive returns an arbitrary subset, often a
     // single message on a small queue. Each receive hides what it returned, so the next one
-    // surfaces different messages; keep going until every target is found. Long polling makes
-    // an empty response mean nothing visible is left, not just an unlucky sample.
+    // surfaces different messages; keep going until every target is found. Long polling reduces
+    // empty responses caused by short-poll sampling.
     const found = new Map<string, Message>();
     const others: Message[] = [];
-    for (let i = 0; i < TARGETED_MAX_RECEIVES && found.size < messageIdSet.size; i++) {
-      const messages = await receiveFromQueue(dlqUrl, 10, 60, 1);
-      if (messages.length === 0) break;
-      allMessages.push(...messages);
-      for (const m of messages) {
-        const id = m.MessageId ?? '';
-        if (!messageIdSet.has(id)) others.push(m);
-        else if (!found.has(id)) found.set(id, m);
+    try {
+      for (let i = 0; i < TARGETED_MAX_RECEIVES && found.size < messageIdSet.size; i++) {
+        const messages = await receiveFromQueue(dlqUrl, 10, 60, 1);
+        if (messages.length === 0) break;
+        allMessages.push(...messages);
+        for (const m of messages) {
+          const id = m.MessageId ?? '';
+          if (!messageIdSet.has(id)) others.push(m);
+          else found.set(id, m);
+        }
       }
+    } catch (error) {
+      await releaseReceivedMessages(dlqUrl, queueLabel, allMessages, 'acquired');
+      throw error;
     }
     messagesToReplay = [...found.values()];
 
     // Hand back the messages the search picked up but was not asked to replay,
     // so they do not stay hidden for the rest of the visibility timeout.
-    const released = await Promise.allSettled(
-      others.filter(m => m.ReceiptHandle).map(m => changeMessageVisibility(dlqUrl, m.ReceiptHandle!, 0))
-    );
-    const releaseErrors = released.flatMap(r =>
-      r.status === 'rejected' ? [r.reason instanceof Error ? r.reason.message : String(r.reason)] : []
-    );
-    if (releaseErrors.length > 0) {
-      Logger.warn(`[DLQ Replay] Could not release ${releaseErrors.length} untargeted messages early`, {
-        queueLabel,
-        // Distinct messages only: a missing permission fails every release the same way.
-        errors: [...new Set(releaseErrors)],
-      });
-    }
+    await releaseReceivedMessages(dlqUrl, queueLabel, others, 'untargeted');
   } else {
     const iterations = Math.ceil(batchSize / 10);
     for (let i = 0; i < iterations; i++) {
