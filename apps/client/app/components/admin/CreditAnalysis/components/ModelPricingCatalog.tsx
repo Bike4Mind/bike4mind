@@ -127,10 +127,13 @@ const TOKENS_PER_MILLION = 1_000_000;
 
 // per_token rates are USD per single token and read best scaled to 1M; other
 // units are already human-scale and must NOT be inflated.
+const formatUsd = (value: number) =>
+  `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+
 const formatRate = (unit: string, value: number | undefined) => {
   if (value === undefined) return '-';
   const scaled = unit === 'per_token' ? value * TOKENS_PER_MILLION : value;
-  return `$${scaled.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
+  return formatUsd(scaled);
 };
 
 // Both directions trim to 10 significant digits: the 1e6 round trip leaves
@@ -156,7 +159,7 @@ export const toStoredRate = (unit: string, displayed: number) =>
 export const markedUpRate = (displayed: string | undefined) => {
   const value = Number(displayed);
   if (displayed === undefined || !Number.isFinite(value)) return '-';
-  return `$${(value * getPriceMargin()).toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
+  return formatUsd(value * getPriceMargin());
 };
 
 const firstTier = (row: PriceRow): IModelPriceTier => Object.values(row.pricing)[0] ?? { input: 0, output: 0 };
@@ -244,8 +247,7 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
   const [history, setHistory] = useState<PriceRow[] | null>(null);
   // Held apart from `error` so a failed history load shows in its drawer and never replaces the table.
   const [historyError, setHistoryError] = useState<string | null>(null);
-  // Latest requested history model; a slower earlier response must not
-  // overwrite the drawer for the model currently displayed.
+  // Counts history requests; a slower earlier response must not overwrite the drawer for the latest one.
   const historyRequestRef = useRef(0);
 
   // Loads overlap (refresh, post-write reload, a finished discovery run); only the latest may land.

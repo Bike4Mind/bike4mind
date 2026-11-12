@@ -75,6 +75,27 @@ describe('ModelPricingCatalog', () => {
     mockPost.mockResolvedValue({ data: { row: {} } });
   });
 
+  it('shows rates with at least two decimals and keeps the digits of small rates', async () => {
+    const priced = (modelId: string, input: number, output: number) => ({
+      modelId,
+      unit: 'per_token',
+      pricing: { '0': { input, output } },
+      effectiveFrom: '2026-07-01T00:00:00.000Z',
+      note: 'adapter-seed',
+    });
+    mockGet.mockResolvedValue({
+      data: { seeded: [], rows: [priced('mid-model', 1.5e-6, 0.8e-6), priced('tiny-model', 0.075e-6, 15e-6)] },
+    });
+    renderCatalog();
+
+    const mid = await screen.findByTestId('model-pricing-row-mid-model-per_token');
+    expect(mid).toHaveTextContent(/\$1\.50(?!\d)/);
+    expect(mid).toHaveTextContent(/\$0\.80(?!\d)/);
+    const tiny = screen.getByTestId('model-pricing-row-tiny-model-per_token');
+    expect(tiny).toHaveTextContent(/\$0\.075(?!\d)/);
+    expect(tiny).toHaveTextContent(/\$15\.00(?!\d)/);
+  });
+
   it('names each source in plain words on a neutral chip, with what it means on hover', async () => {
     renderCatalog();
     expect(await screen.findByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
@@ -251,12 +272,12 @@ describe('ModelPricingCatalog', () => {
     fireEvent.click(await screen.findByTestId('model-pricing-reprice-gpt-x-per_token'));
     // gpt-x stores 4e-6 / 16e-6 -> $4 and $16 per 1M cost, x1.2 default markup.
     const derived = screen.getByTestId('reprice-markup-0');
-    expect(derived).toHaveTextContent('$4.8');
-    expect(derived).toHaveTextContent('$19.2');
+    expect(derived).toHaveTextContent('$4.80');
+    expect(derived).toHaveTextContent('$19.20');
     expect(derived).toHaveTextContent('markup');
     // Editing the cost re-derives it without changing what gets posted.
     fireEvent.change(screen.getByTestId('reprice-rate-0-input'), { target: { value: '10' } });
-    expect(screen.getByTestId('reprice-markup-0')).toHaveTextContent('$12');
+    expect(screen.getByTestId('reprice-markup-0')).toHaveTextContent('$12.00');
     expect(screen.getByTestId('reprice-rate-0-input')).toHaveValue('10');
   });
 
@@ -441,10 +462,10 @@ describe('ModelPricingCatalog', () => {
     expect(newest.getByTestId('history-who')).toHaveTextContent('admin-1');
     expect(newest.getByText('invoice X')).toBeInTheDocument();
     // Diff against the older row: input $4 -> $9, output $16 -> $27.
-    expect(newest.getByTestId('history-diff-0-input')).toHaveTextContent('$4');
-    expect(newest.getByTestId('history-diff-0-input')).toHaveTextContent('$9');
-    expect(newest.getByTestId('history-diff-0-output')).toHaveTextContent('$16');
-    expect(newest.getByTestId('history-diff-0-output')).toHaveTextContent('$27');
+    expect(newest.getByTestId('history-diff-0-input')).toHaveTextContent('$4.00');
+    expect(newest.getByTestId('history-diff-0-input')).toHaveTextContent('$9.00');
+    expect(newest.getByTestId('history-diff-0-output')).toHaveTextContent('$16.00');
+    expect(newest.getByTestId('history-diff-0-output')).toHaveTextContent('$27.00');
 
     const oldest = within(rows[1]);
     expect(oldest.getByTestId('history-who')).toHaveTextContent('Default');
