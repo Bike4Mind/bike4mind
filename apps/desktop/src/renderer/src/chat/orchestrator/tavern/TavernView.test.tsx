@@ -6,7 +6,7 @@ import type { AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query, typeInto } from '../testUtils';
 import { assignPersonas } from '@shared/agentPersona';
 import { ANNOUNCE_DEBOUNCE_MS } from './announcements';
-import { BAR_COUNTER, DOOR_POINT, INNKEEPER_POINT, TAVERN_SLOTS, hiddenByCounter } from './scene';
+import { BAR_COUNTER, DOOR_POINT, INNKEEPER_POINT, OVERFLOW_POINTS, TAVERN_SLOTS, hiddenByCounter } from './scene';
 import { UNFOCUSED_PAUSE_MS } from './useScenePause';
 import { TavernView } from './TavernView';
 
@@ -298,6 +298,16 @@ describe('TavernView', () => {
       await nextFrames();
       expect(el('orchestrator-tavern-agent-b').style.left).toBe(`${TAVERN_SLOTS.hearth[0].x}%`);
       expect(el('orchestrator-tavern-agent-a').style.left).toBe(`${TAVERN_SLOTS.workbench[0].x}%`);
+    });
+
+    it('walks from its stack, not the door, when a stacked agent takes a seat', async () => {
+      const working = Array.from({ length: 7 }, (_, index) => agentFixture(`w${index}`, 'working'));
+      await renderTavern(working);
+      await renderTavern([agentFixture('w0', 'done'), ...working.slice(1)]);
+      expect(el('orchestrator-tavern-agent-w6').style.left).toBe(`${OVERFLOW_POINTS.workbench.x}%`);
+      expect(el('orchestrator-tavern-agent-w6').style.top).toBe(`${OVERFLOW_POINTS.workbench.y}%`);
+      await nextFrames();
+      expect(el('orchestrator-tavern-agent-w6').style.left).toBe(`${TAVERN_SLOTS.workbench[0].x}%`);
     });
 
     it('appears at its seat directly under reduced motion', async () => {

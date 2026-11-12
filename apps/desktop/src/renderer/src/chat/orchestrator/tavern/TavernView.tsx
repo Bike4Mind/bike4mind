@@ -126,7 +126,7 @@ function usePlacements(agents: readonly AgentView[]) {
   useEffect(() => {
     previous.current = placements;
   }, [placements]);
-  return placements;
+  return { placements, previous: previous.current };
 }
 
 /** Recomputed only when the cast changes (ids, ages, epithets), not on every status tick. */
@@ -336,7 +336,7 @@ function Sprite({
   persona,
   character,
   via,
-  walkIn,
+  walkFrom,
   selected,
   visited,
   cheering,
@@ -349,16 +349,17 @@ function Sprite({
   character: CharacterId;
   /** The agent that spawned this one, below the first level; kept off the nameplate to keep it short. */
   via?: string;
-  /** Mount at the door and walk to `point`; read on mount only. */
-  walkIn: boolean;
+  /** Mount here (the door, or the stack it waited in) and walk to `point`; read on mount only. */
+  walkFrom: SlotPoint | undefined;
   selected: boolean;
   /** The Innkeeper is checking on this agent but, under reduced motion, does not walk over. */
   visited: boolean;
   cheering: boolean;
   onSelect(id: string): void;
 }) {
-  const entered = useAfterFirstPaint(!walkIn);
-  const at = entered ? point : DOOR_POINT;
+  const [start] = useState(walkFrom);
+  const entered = useAfterFirstPaint(!start);
+  const at = entered || !start ? point : start;
   const pose = poseFor(agent.state);
   const bubble = bubbleText(agent);
   const displayName = persona?.label ?? agent.title;
@@ -445,6 +446,8 @@ function useHeldVisit(target: string | undefined): string | undefined {
   }, [target, held]);
   return held;
 }
+
+const walkStart = (before: Placement | undefined) => (before?.kind === 'overflow' ? before.point : DOOR_POINT);
 
 function standBeside(point: SlotPoint): SlotPoint {
   return { x: point.x + (point.x < 50 ? VISIT_OFFSET : -VISIT_OFFSET), y: point.y };
@@ -593,7 +596,7 @@ export function TavernView({
 }: OrchestratorViewProps) {
   const mode = useTheme().palette.mode;
   const mood: TavernMood = settled ? 'last-call' : mode === 'dark' ? 'night' : 'day';
-  const placements = usePlacements(agents);
+  const { placements, previous } = usePlacements(agents);
   const characters = useCharacters(agents, personas);
   const arrived = useArrived(introPlaying);
   const act = innkeeperAct(parent, agents);
@@ -757,7 +760,7 @@ export function TavernView({
             persona={personas.get(agent.id)}
             character={characters.get(agent.id) ?? 1}
             via={spawnerName(agent, agents, spawner => personas.get(spawner.id)?.label ?? spawner.title)}
-            walkIn={mounted.current && !prefersReducedMotion()}
+            walkFrom={mounted.current && !prefersReducedMotion() ? walkStart(previous.get(agent.id)) : undefined}
             selected={agent.id === selectedId}
             visited={reducedMotion && agent.id === visit}
             cheering={celebrating}
