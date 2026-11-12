@@ -25,6 +25,7 @@ on:
           - Signup
           - MFA
           - Referrals
+          - Launch Readiness
           - Admin
           - Notebook
           - Prompts
@@ -87,6 +88,7 @@ jobs:
             "Signup")           ARGS="--project=unauthenticated e2e/signup.spec.ts" ;;
             "MFA")              ARGS="--project=unauthenticated e2e/mfa.spec.ts" ;;
             "Referrals")        ARGS="--project=referrals" ;;
+            "Launch Readiness") ARGS="--project=launch-readiness" ;;
             "Admin")            ARGS="--project=admin" ;;
             "Notebook")         ARGS="--project=notebook" ;;
             "Prompts")          ARGS="--project=prompts" ;;

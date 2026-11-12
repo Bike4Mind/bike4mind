@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1110 routes: 91 contracted, 11 aliases of another route, 277 with no static caller in `apps/client/app`.
+1112 routes: 91 contracted, 11 aliases of another route, 277 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | [type] | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | account | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 323 | 0 | 202 | 114 | 0 | 7 | 58 |
+| admin | 324 | 0 | 202 | 115 | 0 | 7 | 58 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -54,7 +54,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | app-files | 7 | 0 | 6 | 0 | 0 | 1 | 3 |
 | artifact-sandbox | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | artifacts | 6 | 0 | 6 | 0 | 0 | 0 | 1 |
-| auth | 34 | 0 | 7 | 17 | 0 | 10 | 5 |
+| auth | 35 | 0 | 7 | 18 | 0 | 10 | 5 |
 | blog | 6 | 0 | 6 | 0 | 0 | 0 | 0 |
 | blog-integration | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | briefcase | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
@@ -231,6 +231,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/context-telemetry/test-config` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/useContextTelemetry.ts` |
 | `/api/admin/create-user` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/Users/CreateUserModal.tsx` |
 | `/api/admin/credit-adjustments` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `components/admin/CreditAnalysis/hooks/useCreditAdjustmentsLog.ts` |
+| `/api/admin/dlq/discard` | POST | jwt | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/dlqManagement.ts` |
 | `/api/admin/dlq/history` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/dlqManagement.ts` |
 | `/api/admin/dlq/messages` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/dlqManagement.ts` |
 | `/api/admin/dlq/queues` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/dlqManagement.ts` |
@@ -626,6 +627,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/auth/impersonation` | GET, POST | jwt | - | - | no | - | 1: `components/ImpersonationBanner.tsx` |
 | `/api/auth/mfa/cancel-setup` | POST | jwt | - | - | no | - | 1: `hooks/data/mfa.ts` |
 | `/api/auth/mfa/disable` | POST | jwt | - | - | no | - | 1: `hooks/data/mfa.ts` |
+| `/api/auth/mfa/enrollment-abandoned` | POST | jwt | - | - | no | - | 1: `utils/mfaEnrollmentFunnel.ts` |
 | `/api/auth/mfa/force-reset` | POST | jwt+key | `admin:*` | POST: `users:moderate` | no | - | 1: `hooks/data/mfa.ts` |
 | `/api/auth/mfa/passkey` | GET | jwt | - | - | no | - | 1: `hooks/data/passkeys.ts` |
 | `/api/auth/mfa/passkey/[id]` | DELETE | jwt | - | - | no | - | 1: `hooks/data/passkeys.ts` |

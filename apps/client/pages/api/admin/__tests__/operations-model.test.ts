@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   stored: vi.fn(),
   update: vi.fn(),
   getModel: vi.fn(),
+  getConfig: vi.fn(),
   audit: vi.fn(),
 }));
 
@@ -32,11 +33,12 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
+  DEFAULT_OPERATIONS_SPEECH_MODEL: 'whisper-1',
   DEFAULT_OPERATIONS_TEXT_MODEL: 'gpt-5.6-luna',
   OperationsModelService: {
     updateOperationsModel: h.update,
     getOperationsModel: h.getModel,
-    getOperationsModelConfig: vi.fn(),
+    getOperationsModelConfig: h.getConfig,
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
@@ -93,6 +95,23 @@ describe('PUT /api/admin/operations-model admin audit', () => {
     expect(res._getStatusCode()).toBe(500);
     expect(res._getJSONData()).not.toHaveProperty('success');
     expect(h.getModel).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/admin/operations-model', () => {
+  it('reports the shared defaults when no operations model is configured', async () => {
+    h.getConfig.mockResolvedValue(null);
+    const { req, res } = createMocks({ method: 'GET' });
+    (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({
+      modelId: 'gpt-5.6-luna',
+      imageModelId: 'flux-3-image-klein',
+      speechModelId: 'whisper-1',
+    });
   });
 });
 

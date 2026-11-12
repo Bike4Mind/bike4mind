@@ -261,6 +261,61 @@ describe('PermissionsSettings collapsing', () => {
   const all = (testId: string) => host.querySelectorAll(`[data-testid="${testId}"]`);
   const click = (element: Element) => act(() => (element as HTMLElement).click());
 
+  it('shows one permission view at a time without losing the other views', () => {
+    const panel = (view: string) => host.querySelector<HTMLElement>(`#permissions-panel-${view}`);
+    expect(panel('desktop')?.hidden).toBe(false);
+    expect(panel('claude')?.hidden).toBe(true);
+    expect(panel('activity')?.hidden).toBe(true);
+    click(all('permissions-tab-claude')[0]);
+    expect(panel('desktop')?.hidden).toBe(true);
+    expect(panel('claude')?.hidden).toBe(false);
+    click(all('permissions-tab-activity')[0]);
+    expect(panel('claude')?.hidden).toBe(true);
+    expect(panel('activity')?.hidden).toBe(false);
+  });
+
+  it('filters rules by decision and search text', async () => {
+    click(all('permissions-filter-deny')[0]);
+    expect(all('permissions-rule-row')).toHaveLength(1);
+    expect(all('permissions-rule-row')[0].textContent).toContain('Bash(rm:*)');
+    const input = all('permissions-search-input')[0];
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'GH PR');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(all('permissions-no-matches')).toHaveLength(1);
+    click(all('permissions-filter-all')[0]);
+    expect(all('permissions-rule-row')).toHaveLength(1);
+    expect(all('permissions-rule-row')[0].textContent).toContain('Bash(gh pr view:*)');
+  });
+
+  it('bounds long rule lists and resets pagination when filtering', async () => {
+    await act(async () =>
+      root.render(
+        <CssVarsProvider>
+          <PermissionsSettings
+            state={{
+              ...state,
+              user: Array.from({ length: 20 }, (_, i) => ({
+                rule: `Bash(command-${i}:*)`,
+                list: i === 19 ? 'deny' : 'allow',
+              })),
+            }}
+            onState={() => {}}
+          />
+        </CssVarsProvider>
+      )
+    );
+    expect(all('permissions-rule-row')).toHaveLength(6);
+    expect(all('permissions-pagination')[0].textContent).toContain('1-6 of 20');
+    click(all('permissions-next-btn')[0]);
+    expect(all('permissions-pagination')[0].textContent).toContain('7-12 of 20');
+    click(all('permissions-filter-deny')[0]);
+    expect(all('permissions-rule-row')).toHaveLength(1);
+    expect(all('permissions-rule-row')[0].textContent).toContain('command-19');
+    expect(all('permissions-pagination')).toHaveLength(0);
+  });
+
   it('opens a Claude Code file read-only, dims an unmapped entry and offers copy only for mapped ones', () => {
     click(all('permissions-source-toggle-btn')[0]);
     expect(all('permissions-source-toggle-btn')[0].getAttribute('aria-expanded')).toBe('true');
