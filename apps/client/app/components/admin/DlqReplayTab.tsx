@@ -552,7 +552,11 @@ const DlqReplayTab: React.FC = () => {
                 <th style={{ width: 160 }}>Sent at</th>
                 <th style={{ width: 80 }}>Age</th>
                 <th style={{ width: 100 }}>Expires in</th>
-                <th style={{ width: 100, textAlign: 'right' }}>Receives</th>
+                <th style={{ width: 100, textAlign: 'right' }}>
+                  <Tooltip title="Approximate SQS receives, including views in this browser; not a count of handler failures">
+                    <span>Receives</span>
+                  </Tooltip>
+                </th>
                 <th style={{ width: 80 }} aria-label="Actions" />
               </tr>
             </thead>

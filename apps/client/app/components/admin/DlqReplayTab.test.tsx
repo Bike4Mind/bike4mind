@@ -268,6 +268,24 @@ describe('DlqReplayTab replay permission', () => {
   });
 });
 
+describe('DlqReplayTab messages table', () => {
+  it('labels the SQS receive count accurately after selecting a queue', async () => {
+    await renderWithQueueSelected();
+    const table = screen.getByTestId('dlq-messages-table');
+    expect(within(table).getByText('Receives')).toBeInTheDocument();
+    expect(within(table).queryByText('Attempts')).toBeNull();
+  });
+
+  it('explains that browser views contribute to the receive count', async () => {
+    await renderWithQueueSelected();
+    const receivesHeader = within(screen.getByTestId('dlq-messages-table')).getByText('Receives');
+    const tooltipWrapper = receivesHeader.closest('[aria-label], [title]') ?? receivesHeader.parentElement;
+    const titleAttr = tooltipWrapper?.getAttribute('title') ?? tooltipWrapper?.getAttribute('aria-label') ?? '';
+    expect(titleAttr).toContain('including views in this browser');
+    expect(titleAttr).toContain('not a count of handler failures');
+  });
+});
+
 describe('DlqReplayTab consumer log links', () => {
   const queueUrl = 'https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#queue';
   const rowUrl = 'https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#m1';
