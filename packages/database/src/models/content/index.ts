@@ -8,7 +8,16 @@ export * from './FabFileModel';
 export * from './FavoriteModel';
 export * from './ImageGenerationTemplateModel';
 export * from './ImageModerationIncidentModel';
-export * from './OwnerMutationLogModel';
+export {
+  OwnerMutationCoverageError,
+  OwnerMutationCursorError,
+  OwnerMutationHead,
+  OwnerMutationLog,
+  pruneOwnerMutations,
+  readOwnerMutations,
+  writeOwnerMutation,
+} from './OwnerMutationLogModel';
+export type { OwnerMutationInput } from './OwnerMutationLogModel';
 export * from './ReleaseNoteModel';
 export * from './ImportHistoryJobModel';
 export * from './AnnotationModel';
