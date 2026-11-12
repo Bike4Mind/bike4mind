@@ -1,5 +1,13 @@
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { analyze, makePlan } from '../adaptive-effort-eval.mjs';
+
+const script = fileURLToPath(new URL('../adaptive-effort-eval.mjs', import.meta.url));
+const runCli = (...args) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
 
 function observations() {
   const plan = makePlan();
@@ -67,6 +75,55 @@ describe('adaptive effort offline evaluation', () => {
     row.toolCorrect = false;
     expect(analyze(input).regressions).toEqual(['tools-1']);
     expect(analyze(input).decision).toBe('keep-default-quality-regression');
+  });
+
+  it('retains a quality-only regression', () => {
+    const input = observations();
+    input.rows.find(item => item.promptId === 'longform-1' && item.arm === 'medium').quality = 3;
+    const result = analyze(input);
+    expect(result.regressions).toEqual(['longform-1']);
+    expect(result.decision).toBe('keep-default-quality-regression');
+  });
+
+  it('retains a correctness-only regression', () => {
+    const input = observations();
+    input.rows.find(item => item.promptId === 'reasoning-1' && item.arm === 'medium').correct = false;
+    const result = analyze(input);
+    expect(result.regressions).toEqual(['reasoning-1']);
+    expect(result.decision).toBe('keep-default-quality-regression');
+  });
+
+  it('reports a labelled error for non-string evidence', () => {
+    const input = observations();
+    input.rows[0].classifierEvidence = 42;
+    expect(() => analyze(input)).toThrow(/^Unverified production complexity/);
+  });
+
+  describe('CLI', () => {
+    it('prints the plan', () => {
+      const result = runCli('plan');
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).corpusHash).toBe(makePlan().corpusHash);
+    });
+
+    it('analyzes an observations file', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'adaptive-effort-eval-'));
+      try {
+        const file = join(dir, 'observations.json');
+        writeFileSync(file, JSON.stringify(observations()));
+        const result = runCli('analyze', file);
+        expect(result.status).toBe(0);
+        expect(JSON.parse(result.stdout).decision).toBe('manual-quality-and-uncertainty-review-required');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('exits non-zero with usage on a bad command', () => {
+      const result = runCli('analyze');
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(/^Usage:/);
+    });
   });
 
   it.each([
