@@ -15,13 +15,14 @@ import {
   Tooltip,
   Typography,
 } from '@mui/joy';
-import { RotateCcw, X, Copy, Eye, Search, FileText } from 'lucide-react';
+import { RotateCcw, X, Copy, Eye, Search, FileText, Trash2 } from 'lucide-react';
 import useMediaQuery from '@mui/system/useMediaQuery';
 import { toast } from 'sonner';
 import {
   useDlqQueues,
   useDlqMessages,
   useDlqReplay,
+  useDlqDiscard,
   useDlqHistory,
   DlqMessage,
   DlqReplayLogEntry,
@@ -45,6 +46,7 @@ import { ADMIN_REGION_GAP } from '@client/app/components/admin/shared/adminStyle
 import type { DataColumn } from './shared/DataTable';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { AdminPermissionAction } from './shared/MissingPermission';
+import { ADMIN_REASON_PRESETS } from './shared/adminReason';
 import { formatDuration, formatExpiresIn, getDlqExpiry } from './dlqExpiry';
 import { requiresDlqReplayReason } from '@bike4mind/common';
 import { DlqRecommendation } from './DlqRecommendation';
@@ -79,6 +81,8 @@ const REPLAY_STATUS: Record<DlqReplayLogEntry['status'], { tone: AdminStatusTone
   success: { tone: 'good', label: 'Success' },
   failed: { tone: 'bad', label: 'Failed' },
   skipped: { tone: 'warn', label: 'Skipped' },
+  discarded: { tone: 'neutral', label: 'discarded' },
+  pending: { tone: 'warn', label: 'Discard outcome unconfirmed' },
 };
 
 const MessageExpiry: React.FC<{
@@ -246,8 +250,9 @@ const DlqReplayTab: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [singleReplayConfirm, setSingleReplayConfirm] = useState<DlqMessage | null>(null);
+  const [discardConfirm, setDiscardConfirm] = useState<DlqMessage | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [historyStatus, setHistoryStatus] = useState<'success' | 'failed' | 'skipped' | ''>('');
+  const [historyStatus, setHistoryStatus] = useState<DlqReplayLogEntry['status'] | ''>('');
   const [historyDateRange, setHistoryDateRange] = useState<'24h' | '7d' | '30d' | 'all'>('7d');
   const [historySearch, setHistorySearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -281,6 +286,7 @@ const DlqReplayTab: React.FC = () => {
     refetch: refetchMessages,
   } = useDlqMessages(selectedQueue);
   const replayMutation = useDlqReplay();
+  const discardMutation = useDlqDiscard();
   const {
     data: history,
     isLoading: historyLoading,
@@ -412,6 +418,22 @@ const DlqReplayTab: React.FC = () => {
           </Tooltip>
         )}
       </AdminPermissionAction>
+      <AdminPermissionAction requirement="settings:manage">
+        {permissionDisabled => (
+          <Tooltip title="Discard this message">
+            <IconButton
+              size="sm"
+              color="danger"
+              aria-label="Discard this message"
+              onClick={() => setDiscardConfirm(msg)}
+              disabled={permissionDisabled || !msg.receiptHandle || !msg.body || discardMutation.isPending}
+              data-testid={`dlq-discard-single-${msg.messageId}`}
+            >
+              <Trash2 size={16} />
+            </IconButton>
+          </Tooltip>
+        )}
+      </AdminPermissionAction>
     </Stack>
   );
   const failure = (msg: DlqMessage) => (
@@ -500,7 +522,11 @@ const DlqReplayTab: React.FC = () => {
           label: 'Receives',
           width: '6rem',
           numeric: true,
-          render: msg => msg.approximateReceiveCount ?? '-',
+          render: msg => (
+            <Tooltip title="Approximate SQS receives, including views in this browser; not a count of handler failures">
+              <span>{msg.approximateReceiveCount ?? '-'}</span>
+            </Tooltip>
+          ),
         },
       ];
   const historyColumns: DataColumn<DlqReplayLogEntry>[] = [
@@ -517,14 +543,29 @@ const DlqReplayTab: React.FC = () => {
     {
       id: 'status',
       label: 'Status',
-      render: entry => <StatusChip tone={REPLAY_STATUS[entry.status].tone} label={REPLAY_STATUS[entry.status].label} />,
+      render: entry => (
+        <StatusChip
+          tone={REPLAY_STATUS[entry.status].tone}
+          label={
+            entry.operation === 'discard' && entry.status === 'failed'
+              ? 'Discard request failed'
+              : REPLAY_STATUS[entry.status].label
+          }
+        />
+      ),
     },
     {
       id: 'error',
-      label: 'Error',
+      label: 'Details',
       render: entry => (
         <Typography level="body-xs" sx={{ overflowWrap: 'anywhere' }}>
-          {entry.errorMessage || '-'}
+          {entry.errorMessage || entry.reason || '-'}
+          {entry.errorMessage && entry.reason && (
+            <>
+              <br />
+              Reason: {entry.reason}
+            </>
+          )}
         </Typography>
       ),
     },
@@ -537,8 +578,41 @@ const DlqReplayTab: React.FC = () => {
         </Typography>
       ),
     },
-    { id: 'time', label: 'Replayed at', render: entry => new Date(entry.createdAt).toLocaleString() },
+    { id: 'time', label: 'Recorded at', render: entry => new Date(entry.createdAt).toLocaleString() },
   ];
+
+  const confirmDiscard = async (reason: string) => {
+    if (!selectedQueue || !discardConfirm?.receiptHandle || !discardConfirm.body) return;
+    try {
+      const result = await discardMutation.mutateAsync({
+        queueLabel: selectedQueue,
+        reason,
+        messages: [
+          {
+            messageId: discardConfirm.messageId,
+            receiptHandle: discardConfirm.receiptHandle,
+            body: discardConfirm.body,
+          },
+        ],
+      });
+      if (result.failed) {
+        toast.error(
+          `Discard failed: ${result.results[0]?.reason ?? 'Unknown error'}${result.results[0]?.historyPending ? '. History outcome is unconfirmed.' : ''}`
+        );
+        return;
+      }
+      setDiscardConfirm(null);
+      if (result.results.some(message => message.historyPending)) {
+        toast.warning(
+          'Deletion acknowledged. History outcome is unconfirmed; the body is kept for 30 days for manual recovery.'
+        );
+      } else {
+        toast.success('Message discarded. Its body is kept for 30 days for manual recovery.');
+      }
+    } catch (error) {
+      toast.error(`Discard failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
 
   return (
     <Stack gap={ADMIN_REGION_GAP}>
@@ -739,6 +813,8 @@ const DlqReplayTab: React.FC = () => {
                 <Option value="success">Success</Option>
                 <Option value="failed">Failed</Option>
                 <Option value="skipped">Skipped</Option>
+                <Option value="discarded">Discarded</Option>
+                <Option value="pending">Discard outcome unconfirmed</Option>
               </Select>
             </FormControl>
             <FormControl size="sm">
@@ -758,7 +834,7 @@ const DlqReplayTab: React.FC = () => {
             <FormControl size="sm">
               <FormLabel>Search</FormLabel>
               <Input
-                placeholder="Search message ID or error"
+                placeholder="Search message ID, error or reason"
                 value={historySearch}
                 onChange={e => setHistorySearch(e.target.value)}
                 startDecorator={<Search size={16} />}
@@ -860,6 +936,18 @@ const DlqReplayTab: React.FC = () => {
       >
         <DlqReplaySummary queue={selectedQueueInfo} count={1} />
       </ActionDialog>
+      <ActionDialog
+        open={!!discardConfirm}
+        onClose={() => setDiscardConfirm(null)}
+        title="Discard dead letter?"
+        description="This removes the message from the DLQ. It cannot be undone from this page. The message body is kept for 30 days for manual recovery."
+        reasonPresets={ADMIN_REASON_PRESETS.dlqDiscard}
+        confirmLabel="Discard message"
+        tone="danger"
+        pending={discardMutation.isPending}
+        onConfirm={confirmDiscard}
+        data-testid="dlq-discard-dialog"
+      />
     </Stack>
   );
 };
