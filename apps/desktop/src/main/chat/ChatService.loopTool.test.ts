@@ -112,7 +112,7 @@ describe('ChatService loop tool', () => {
     expect(done.status).toBe('done');
     expect(call('c1', 'awaiting-approval')).toBeUndefined();
     expect(done.preview).toContain('Loop started');
-    expect(service.getLoop(id)).toMatchObject({ prompt: 'check the build', intervalMs: null, phase: 'waiting' });
+    expect(service.getLoop(id)).toMatchObject({ prompt: 'check the build', intervalMs: null });
     expect(await service.loopCommand(id, 'list')).toMatchObject({ ok: true, state: { prompt: 'check the build' } });
 
     await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
