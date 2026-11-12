@@ -364,6 +364,7 @@ export type ApiKeyStoredSecret = { keyDigest: string } | { keyHash: string };
 export interface IUserApiKey {
   id: string;
   userId: string;
+  serviceAccount?: boolean;
   name: string; // Human-friendly name
   /**
    * Legacy bcrypt hash, present only on keys minted before `keyDigest` existed. New and
