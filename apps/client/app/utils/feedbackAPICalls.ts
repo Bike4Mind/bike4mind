@@ -1,11 +1,18 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { FEEDBACK_LIST_MAX_LIMIT } from '@bike4mind/common';
-import type { IFeedbackDocument, CreateFeedbackResponse, FeedbackRollupResponse } from '@bike4mind/common';
+import type {
+  IFeedbackDocument,
+  CreateFeedbackResponse,
+  FeedbackRollupResponse,
+  UpdateFeedbackStatusRequest,
+  UpdateFeedbackStatusResponse,
+} from '@bike4mind/common';
 import type {
   FeedbackListParams,
   FeedbackListResponse,
   IExtendedFeedbackDocument,
 } from '@client/app/components/admin/Feedback/types';
+import type { FeedbackTrends } from '@client/app/components/admin/Feedback/feedbackTrends';
 
 /**
  * Hard ceiling on rows a CSV export will page through. The export has to cover every row matching
@@ -14,6 +21,11 @@ import type {
  * partial file.
  */
 export const FEEDBACK_EXPORT_MAX_ROWS = 5000;
+
+export const getFeedbackTrendsFromServer = async (): Promise<FeedbackTrends> => {
+  const response = await api.get<FeedbackTrends>('/api/admin/feedback-trends');
+  return response.data;
+};
 
 export const getFeedbackFromServer = async (params: FeedbackListParams): Promise<FeedbackListResponse> => {
   const response = await api.get<FeedbackListResponse>('/api/feedback', { params });
@@ -64,19 +76,26 @@ export const createFeedbackOnServer = async (
   return response.data;
 };
 
-export const updateFeedbackOnServer = async (
+/** Admin triage: status only, audited server-side against the acting admin. */
+export const updateFeedbackStatusOnServer = async (
   feedbackId: string,
-  updatedFeedbackData: Partial<IFeedbackDocument>
-): Promise<IFeedbackDocument> => {
-  const response = await api.put<IFeedbackDocument>(
-    `/api/feedback/${encodeURIComponent(feedbackId)}/update`,
-    updatedFeedbackData
+  body: UpdateFeedbackStatusRequest
+): Promise<UpdateFeedbackStatusResponse> => {
+  const response = await api.patch<UpdateFeedbackStatusResponse>(
+    `/api/admin/feedback/${encodeURIComponent(feedbackId)}/status`,
+    body
   );
   return response.data;
 };
 
-export const deleteFeedbackFromServer = async (feedbackId: string): Promise<{ msg: string } | null> => {
-  const response = await api.delete(`/api/feedback/${encodeURIComponent(feedbackId)}/delete`);
+/** `reason` is required when deleting someone else's report (an admin delete); a reporter retracting their own omits it. */
+export const deleteFeedbackFromServer = async (
+  feedbackId: string,
+  reason?: string
+): Promise<{ msg: string } | null> => {
+  const response = await api.delete(`/api/feedback/${encodeURIComponent(feedbackId)}/delete`, {
+    ...(reason !== undefined ? { data: { reason } } : {}),
+  });
   return response.data;
 };
 

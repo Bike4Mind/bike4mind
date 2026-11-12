@@ -11,13 +11,18 @@ export const isAccountDeletionPending = (user: Pick<DeletionGateUser, 'deletion'
 
 /**
  * What a deletion-pending session may still reach: the cancel screen's reads, the cancel itself,
- * sign-out, and the download of a data export it requested. Exact (path, method) pairs plus that one
+ * sign-out, the step-up proof the export download requires, and the download of a data export it
+ * requested. Exact (path, method) pairs plus that one
  * download pattern; every other route answers 403 ACCOUNT_DELETION_PENDING.
  */
 const DELETION_PENDING_ALLOWLIST: ReadonlyArray<{ path: string; methods: readonly string[] }> = [
   { path: '/api/account/deletion', methods: ['GET', 'DELETE'] },
   { path: '/api/identify', methods: ['GET'] },
   { path: '/api/logout', methods: ['GET'] },
+  { path: '/api/auth/step-up', methods: ['POST'] },
+  { path: '/api/auth/step-up/options', methods: ['GET'] },
+  { path: '/api/auth/step-up/passkey-options', methods: ['POST'] },
+  { path: '/api/auth/step-up/email/send', methods: ['POST'] },
 ];
 
 // GET /api/users/me/data-export/[jobId]: an export requested before the deletion stays downloadable

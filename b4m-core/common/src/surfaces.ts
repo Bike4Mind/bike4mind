@@ -1,5 +1,5 @@
 import { hasDeveloperUserTag } from './schemas/user';
-import type { IChatHistoryItem } from './types/entities/SessionTypes';
+import type { IChatHistoryItem, SessionTutorialMarker } from './types/entities/SessionTypes';
 
 /**
  * Client-safe product-surface name literals.
@@ -265,6 +265,53 @@ export interface WorkspaceSessionSettingsEntry {
    * stored session, before `resolve` applies.
    */
   answersTurns?: (ctx: WorkspaceSessionSettingsContext) => Promise<boolean>;
+}
+
+/**
+ * Core's own scripted tutorial turns, injected because the services package cannot import the client's server
+ * code. Both calls are made only for a session carrying a core `tutorial` marker, so ordinary chat does no
+ * tutorial read. The hook re-checks its own switch and the user's access on every call.
+ */
+export interface CoreTutorialTurnHook {
+  respond: (ctx: CoreTutorialTurnContext) => Promise<WorkspaceTurnReply | null>;
+  answersTurns: (ctx: Omit<CoreTutorialTurnContext, 'quest'>) => Promise<boolean>;
+}
+
+export interface CoreTutorialTurnContext {
+  user: unknown;
+  session: { id: string; tutorial?: SessionTutorialMarker | null };
+  quest: WorkspaceTurnContext['quest'];
+  logger?: { warn: (...args: unknown[]) => void };
+}
+
+/** A core tutorial's recorded answer, or null for the model: no marker, no hook, or any failure. */
+export async function respondFromCoreTutorial(
+  ctx: CoreTutorialTurnContext,
+  hook: CoreTutorialTurnHook | undefined
+): Promise<WorkspaceTurnReply | null> {
+  if (!hook || ctx.session.tutorial?.owner !== 'core') return null;
+  try {
+    const reply = await hook.respond(ctx);
+    return reply && Array.isArray(reply.replies) && reply.replies.length > 0 ? reply : null;
+  } catch (error) {
+    ctx.logger?.warn('Core tutorial turn responder failed; the model answers', error);
+    return null;
+  }
+}
+
+/** Whether a core tutorial still has recorded turns for this session, so an agent run must not answer one. */
+export async function coreTutorialAnswersTurns(
+  ctx: Omit<CoreTutorialTurnContext, 'quest'>,
+  hook: CoreTutorialTurnHook | undefined,
+  whenPredicateFails = true
+): Promise<boolean> {
+  if (!hook || ctx.session.tutorial?.owner !== 'core') return false;
+  try {
+    return await hook.answersTurns(ctx);
+  } catch (error) {
+    ctx.logger?.warn('Core tutorial turn predicate failed', error);
+    return whenPredicateFails;
+  }
 }
 
 /**

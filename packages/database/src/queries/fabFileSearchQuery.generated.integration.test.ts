@@ -12,7 +12,9 @@ import { FabFile, fabFileRepository } from '../models/content/FabFileModel';
 
 const OWNER = 'owner-1';
 
-const list = async (filters: { tags?: string[]; generated?: boolean } = {}) => {
+const list = async (
+  filters: { tags?: string[]; generated?: boolean; uploaded?: boolean; generationModelId?: string } = {}
+) => {
   const result = await fabFileRepository.search(
     OWNER,
     '',
@@ -31,18 +33,21 @@ beforeAll(async () => {
   await mongoose.connect(server.getUri());
   await FabFile.create(
     [
-      { fileName: 'song', tags: [GENERATED_ASSET_TAG, 'music'] },
-      { fileName: 'work-song', tags: [GENERATED_ASSET_TAG, 'music', 'work'] },
+      { fileName: 'song', tags: [GENERATED_ASSET_TAG, 'music'], modelId: 'music-v1' },
+      { fileName: 'work-song', tags: [GENERATED_ASSET_TAG, 'music', 'work'], modelId: 'music-v2' },
       { fileName: 'work-notes', tags: ['work'] },
       { fileName: 'notes', tags: [] },
       { fileName: 'cased', tags: ['Generated'] },
       { fileName: 'lookalike', tags: [`${GENERATED_ASSET_TAG}-x`] },
-      { fileName: 'foreign-song', tags: [GENERATED_ASSET_TAG], userId: 'owner-2' },
-    ].map(file => ({
+      { fileName: 'foreign-song', tags: [GENERATED_ASSET_TAG], userId: 'owner-2', modelId: 'music-v1' },
+    ].map((file: { fileName: string; tags: string[]; userId?: string; modelId?: string }) => ({
       userId: file.userId ?? OWNER,
       fileName: file.fileName,
       type: KnowledgeType.FILE,
       tags: file.tags.map(name => ({ name, strength: 1 })),
+      ...(file.modelId && {
+        sourceMetadata: { generation: { generator: 'music', provider: 'p', modelId: file.modelId, prompt: '' } },
+      }),
     }))
   );
 }, 30000);
@@ -77,5 +82,31 @@ describe('fabFileRepository.search generated filter', () => {
 
   it('still scopes to the owner', async () => {
     await expect(list({ generated: true })).resolves.not.toContain('foreign-song');
+  });
+});
+
+describe('fabFileRepository.search uploaded filter', () => {
+  it('lists only files no generation tool saved', async () => {
+    await expect(list({ uploaded: true })).resolves.toEqual(['lookalike', 'notes', 'work-notes']);
+  });
+
+  it('narrows the selected tags', async () => {
+    await expect(list({ tags: ['work'], uploaded: true })).resolves.toEqual(['work-notes']);
+  });
+});
+
+describe('fabFileRepository.search generation model filter', () => {
+  it('matches the exact model, owner-scoped', async () => {
+    await expect(list({ generationModelId: 'music-v1' })).resolves.toEqual(['song']);
+  });
+
+  it('composes with the generated filter', async () => {
+    await expect(list({ generated: true, generationModelId: 'music-v2' })).resolves.toEqual(['work-song']);
+  });
+});
+
+describe('fabFileRepository.listGenerationModelIds', () => {
+  it("lists the distinct models of the owner's files, sorted", async () => {
+    await expect(fabFileRepository.listGenerationModelIds(OWNER)).resolves.toEqual(['music-v1', 'music-v2']);
   });
 });

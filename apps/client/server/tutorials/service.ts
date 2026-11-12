@@ -79,6 +79,12 @@ export interface TutorialTurnDeps {
     ): Promise<void>;
   };
   now(): Date;
+  /**
+   * Marks the session as walking this module, or clears the mark with null. Absent for an owner whose
+   * turns are answered by a workspace hook instead of the session marker.
+   */
+  setSessionMarker?(sessionId: string, userId: string, moduleId: string | null): Promise<void>;
+  warn?(message: string): void;
 }
 
 export interface TutorialDeps extends TutorialTurnDeps {
@@ -105,6 +111,14 @@ const fail = (status: number, error: string, code?: string) => ({ ok: false as c
 export const TUTORIAL_UPDATED_REPLY = 'This tutorial was updated. Start it again from the Tutorials panel.';
 /** The one reply a walk gets after its module was switched off under it; the panel no longer lists it. */
 export const TUTORIAL_OFF_REPLY = 'This tutorial was switched off for now. Your conversation carries on.';
+
+async function markSession(deps: TutorialTurnDeps, sessionId: string, userId: string, moduleId: string | null) {
+  try {
+    await deps.setSessionMarker?.(sessionId, userId, moduleId);
+  } catch (error) {
+    deps.warn?.(`tutorial: could not ${moduleId ? 'mark' : 'unmark'} session ${sessionId}: ${String(error)}`);
+  }
+}
 
 function markerOf(moduleId: string, turn: number) {
   return { type: TUTORIAL_MARKER_TYPE, payload: { moduleId, turn } };
@@ -218,6 +232,9 @@ export async function startModule(
   const prior = await deps.progress.read(userId, moduleId);
   const session = await deps.createSession(mod);
   const at = deps.now();
+  // Not best effort: an unmarked session would be answered by the model, so a failed mark fails the start,
+  // and marking first leaves no progress pointing at an unmarked session.
+  await deps.setSessionMarker?.(session.id, userId, moduleId);
   await deps.progress.begin(userId, moduleId, {
     status: 'in_progress',
     sessionId: session.id,
@@ -227,6 +244,8 @@ export async function startModule(
     turnClaimedAt: at,
     updatedAt: at,
   });
+  // A kept prior session (it holds the user's own messages) must stop being answered by the script.
+  if (prior && prior.sessionId !== session.id) await markSession(deps, prior.sessionId, userId, null);
   await discardUntouchedSession(deps, userId, moduleId, prior, session.id);
   return { ok: true, sessionId: session.id, turn: -1, version: mod.version, revision: mod.revision };
 }
@@ -256,6 +275,8 @@ export async function resumeModule(
     }
   }
   const stepId = entry.stepId && mod.steps.some(s => s.id === entry.stepId) ? entry.stepId : mod.steps[0].id;
+  // Leaving cleared the marker. Not best effort, as in startModule; marked first so a failure changes nothing.
+  await deps.setSessionMarker?.(entry.sessionId, userId, moduleId);
   if (!(await deps.progress.setPosition(userId, moduleId, stepId, 'in_progress', deps.now()))) {
     return fail(404, 'No tutorial to resume', 'NOT_STARTED');
   }
@@ -372,12 +393,14 @@ export async function answerTurn(
   if (scripted.stale) {
     // Said once: the walk is left, so the next message is the model's. No marker, so no turn is spent.
     await deps.progress.setPosition(userId, scripted.moduleId, scripted.entry.stepId ?? '', 'left', deps.now());
+    await markSession(deps, sessionId, userId, null);
     return { replies: [scripted.off ? TUTORIAL_OFF_REPLY : TUTORIAL_UPDATED_REPLY], uiSideEffects: [] };
   }
   const { mod, entry, from, turn } = scripted;
   if (!samePrompt(quest.prompt, mod.transcript[turn].prompt)) {
     // Recorded here as well as by the page, which may be closed, so agent runs stop being refused.
     await deps.progress.setPosition(userId, mod.id, entry.stepId ?? '', 'left', deps.now());
+    await markSession(deps, sessionId, userId, null);
     return null;
   }
   const questId = quest.id;
@@ -414,7 +437,9 @@ export async function recordPosition(
     if (changed) return fail(409, 'Tutorial was updated, start over', 'VERSION_CHANGED');
   }
   if (!mod.steps.some(s => s.id === input.stepId)) return fail(404, 'Unknown tutorial step');
+  const walking = input.status === 'in_progress' ? undefined : await deps.progress.read(userId, input.moduleId);
   const updated = await deps.progress.setPosition(userId, input.moduleId, input.stepId, input.status, deps.now());
+  if (updated && walking) await markSession(deps, walking.sessionId, userId, null);
   return updated ? { ok: true, moduleId: input.moduleId } : fail(404, 'No tutorial in progress');
 }
 
@@ -453,6 +478,7 @@ export interface TutorialServiceDeps {
   quests?: TutorialDeps['quests'];
   now?: () => Date;
   warn?: (message: string) => void;
+  setSessionMarker?: TutorialDeps['setSessionMarker'];
 }
 
 export interface TutorialServiceOptions {
@@ -462,16 +488,49 @@ export interface TutorialServiceOptions {
   deps: TutorialServiceDeps;
 }
 
+/** What the chat path needs: the turn answers, with no sheet or session deps. */
+export function tutorialTurnService({
+  modules,
+  models,
+  quests,
+  now,
+  setSessionMarker,
+  warn,
+}: {
+  modules: readonly TutorialModule[];
+  models: Pick<TutorialModels, 'Progress'>;
+  quests?: TutorialServiceDeps['quests'];
+  now?: () => Date;
+  setSessionMarker?: TutorialTurnDeps['setSessionMarker'];
+  warn?: TutorialTurnDeps['warn'];
+}) {
+  const deps: TutorialTurnDeps = {
+    modules,
+    progress: progressStoreFor(models.Progress),
+    quests: quests ?? defaultQuests,
+    now: now ?? (() => new Date()),
+    setSessionMarker,
+    warn,
+  };
+  return {
+    answerTurn: (userId: string, sessionId: string, quest: { id: string; prompt: string }) =>
+      answerTurn(deps, userId, sessionId, quest),
+    sessionIsScripted: (userId: string, sessionId: string) => sessionIsScripted(deps, userId, sessionId),
+  };
+}
+
+const defaultQuests: NonNullable<TutorialServiceDeps['quests']> = {
+  create: async quest => (await questRepository.create(quest as never)) as unknown as TutorialQuest,
+  findAllBySessionId: async sessionId =>
+    (await questRepository.findAllBySessionId(sessionId)) as unknown as TutorialQuest[],
+};
+
 /** One caller's view of an owner's tutorials: the route actions and the chat path's turn answers. */
 export function tutorialService({ modules, models, deps: injected }: TutorialServiceOptions) {
   const deps: TutorialDeps = {
     modules,
     progress: progressStoreFor(models.Progress),
-    quests: injected.quests ?? {
-      create: async quest => (await questRepository.create(quest as never)) as unknown as TutorialQuest,
-      findAllBySessionId: async sessionId =>
-        (await questRepository.findAllBySessionId(sessionId)) as unknown as TutorialQuest[],
-    },
+    quests: injected.quests ?? defaultQuests,
     canvas: injected.canvas,
     ensureSheet: injected.ensureSheet,
     createSession: injected.createSession,
@@ -479,6 +538,7 @@ export function tutorialService({ modules, models, deps: injected }: TutorialSer
     deleteSession: injected.deleteSession,
     now: injected.now ?? (() => new Date()),
     warn: injected.warn ?? (() => {}),
+    setSessionMarker: injected.setSessionMarker,
   };
   return {
     deps,

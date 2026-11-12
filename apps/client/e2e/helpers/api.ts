@@ -155,7 +155,7 @@ export async function apiCreateThrowawayUser(
   label: string,
   // Pass includePredefinedTags: false for a free-tier account: the predefined Developer tag bypasses
   // the free-tier rate limit and daily caps.
-  options: Pick<Parameters<typeof apiCreateTestUser>[1], 'includePredefinedTags'> = {}
+  options: { initialCredits?: number; includePredefinedTags?: boolean } = {}
 ) {
   const e2eId = getE2ETestId();
   const idSuffix = e2eId ? `${e2eId}-${getTestRunId()}` : getTestRunId();
@@ -168,7 +168,8 @@ export async function apiCreateThrowawayUser(
     name: `Auth ${label} ${idSuffix}`,
     password: `E2eAuth${label}Pass123!`,
     isAdmin: false,
-    ...options,
+    ...(options.initialCredits !== undefined && { initialCredits: options.initialCredits }),
+    ...(options.includePredefinedTags !== undefined && { includePredefinedTags: options.includePredefinedTags }),
   });
   return {
     email,

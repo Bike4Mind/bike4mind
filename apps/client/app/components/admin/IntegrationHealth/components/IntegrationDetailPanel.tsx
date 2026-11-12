@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Alert, Box, Button, Card, CardContent, Chip, LinearProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
+import { Box, Button, Chip, Divider, Stack, Table, Typography } from '@mui/joy';
 import {
   LineChart,
   Line,
@@ -13,13 +13,18 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-
-// Hardcoded chart colors - Recharts renders via SVG and cannot resolve CSS variables
-const CHART_COLORS = {
-  primary: '#1976d2',
-  warning: '#ed6c02',
-  danger: '#d32f2f',
-};
+import { ErrorState, InlineBar, LoadingState, StatusChip } from '@client/app/components/admin/shared';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
+import {
+  ACCENT,
+  BAD,
+  BORDER,
+  COMPARISON_OPACITY,
+  INK_MUTED,
+  WARN,
+  xAxisProps,
+  yAxisProps,
+} from '@client/app/components/admin/Revenue/chartParts';
 import { useIntegrationHistory } from '../hooks/useIntegrationHistory';
 import { buildLatencyTimeSeries, buildErrorRateSeries } from '../utils/chartDataProcessor';
 import type { IntegrationDashboardEntry, CircuitBreakerMode, IntegrationName, InMemoryBreakerState } from '../types';
@@ -32,17 +37,42 @@ interface IntegrationDetailPanelProps {
   isUpdatingOverride: boolean;
 }
 
-function statusColor(status: string): 'success' | 'warning' | 'danger' {
-  if (status === 'healthy' || status === 'CLOSED') return 'success';
-  if (status === 'degraded' || status === 'HALF_OPEN') return 'warning';
-  return 'danger';
+const BREAKER_TONE: Record<InMemoryBreakerState['state'], AdminStatusTone> = {
+  CLOSED: 'good',
+  HALF_OPEN: 'warn',
+  OPEN: 'bad',
+};
+
+const MODE_LABEL: Record<CircuitBreakerMode, string> = {
+  auto: 'Auto (all users)',
+  force_open: 'Force open',
+  force_block: 'Force block',
+};
+
+function rateLimitTone(usagePercent: number): AdminStatusTone {
+  if (usagePercent >= 90) return 'bad';
+  if (usagePercent >= 70) return 'warn';
+  return 'good';
 }
 
-function rateLimitColor(usagePercent: number | null): 'success' | 'warning' | 'danger' {
-  if (usagePercent === null) return 'success';
-  if (usagePercent >= 90) return 'danger';
-  if (usagePercent >= 70) return 'warning';
-  return 'success';
+/** A subsection of the expanded row: a section heading, then its body. No box of its own. */
+function Section({ title, children, testId }: { title: string; children: React.ReactNode; testId?: string }) {
+  return (
+    <Stack gap={1} data-testid={testId}>
+      <Typography level="title-sm" component="h3" sx={{ color: 'admin.ink' }}>
+        {title}
+      </Typography>
+      {children}
+    </Stack>
+  );
+}
+
+function MutedNote({ children }: { children: React.ReactNode }) {
+  return (
+    <Typography level="body-sm" sx={{ color: 'admin.inkMuted', py: 2 }}>
+      {children}
+    </Typography>
+  );
 }
 
 export const IntegrationDetailPanel: React.FC<IntegrationDetailPanelProps> = ({
@@ -56,51 +86,46 @@ export const IntegrationDetailPanel: React.FC<IntegrationDetailPanelProps> = ({
     checks,
     isLoading: historyLoading,
     isError: historyError,
+    refetch: refetchHistory,
+    isRefetching: historyRefetching,
   } = useIntegrationHistory(isExpanded ? entry.name : null, isExpanded);
 
   const latencyData = useMemo(() => buildLatencyTimeSeries(checks), [checks]);
   const errorRateData = useMemo(() => buildErrorRateSeries(checks), [checks]);
 
-  // Find in-memory breaker states for this integration
   const readBreaker = inMemoryBreakers[`${entry.name}:read`];
   const writeBreaker = inMemoryBreakers[`${entry.name}:write`];
 
+  const historyState = historyError ? (
+    <ErrorState
+      message="Probe history failed to load."
+      onRetry={() => void refetchHistory()}
+      retrying={historyRefetching}
+    />
+  ) : historyLoading ? (
+    <LoadingState label="Loading probe history" />
+  ) : null;
+
   return (
-    <Box sx={{ pt: 2 }}>
-      <Stack spacing={3}>
-        {/* Latency Chart */}
-        <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm' }} data-testid={`latency-chart-${entry.name}`}>
-          <Typography level="title-sm" sx={{ mb: 1 }}>
-            Latency (P50 / P95)
-          </Typography>
-          {historyError ? (
-            <Alert color="danger" variant="soft" size="sm">
-              Failed to load history data
-            </Alert>
-          ) : historyLoading ? (
-            <LinearProgress />
-          ) : latencyData.length > 0 ? (
+    <Stack gap={2} divider={<Divider />} sx={{ pt: 2 }}>
+      <Section title="Latency (p50 and p95)" testId={`latency-chart-${entry.name}`}>
+        {historyState ??
+          (latencyData.length > 0 ? (
             <ResponsiveContainer width="100%" height={220}>
               <LineChart data={latencyData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--joy-palette-divider, #e0e0e0)" />
-                <XAxis dataKey="time" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} unit="ms" />
+                <CartesianGrid strokeDasharray="3 3" stroke={BORDER} vertical={false} />
+                <XAxis dataKey="time" {...xAxisProps} />
+                <YAxis {...yAxisProps} unit="ms" />
                 <Tooltip />
                 <Legend />
-                <ReferenceLine y={2000} stroke={CHART_COLORS.warning} strokeDasharray="4 4" label="Warning" />
-                <ReferenceLine y={5000} stroke={CHART_COLORS.danger} strokeDasharray="4 4" label="Critical" />
-                <Line
-                  type="monotone"
-                  dataKey="p50"
-                  stroke={CHART_COLORS.primary}
-                  strokeWidth={2}
-                  dot={false}
-                  name="P50"
-                />
+                <ReferenceLine y={2000} stroke={WARN} strokeDasharray="4 4" label="Warning" />
+                <ReferenceLine y={5000} stroke={BAD} strokeDasharray="4 4" label="Critical" />
+                <Line type="monotone" dataKey="p50" stroke={ACCENT} strokeWidth={2} dot={false} name="P50" />
                 <Line
                   type="monotone"
                   dataKey="p95"
-                  stroke={CHART_COLORS.warning}
+                  stroke={INK_MUTED}
+                  strokeOpacity={COMPARISON_OPACITY}
                   strokeWidth={2}
                   dot={false}
                   strokeDasharray="5 5"
@@ -109,157 +134,110 @@ export const IntegrationDetailPanel: React.FC<IntegrationDetailPanelProps> = ({
               </LineChart>
             </ResponsiveContainer>
           ) : (
-            <Typography level="body-sm" color="neutral" sx={{ py: 4, textAlign: 'center' }}>
-              No latency data available for this time range
-            </Typography>
-          )}
-        </Sheet>
+            <MutedNote>No latency data for this time range.</MutedNote>
+          ))}
+      </Section>
 
-        {/* Error Rate Chart */}
-        <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm' }}>
-          <Typography level="title-sm" sx={{ mb: 1 }}>
-            Error Rate
-          </Typography>
-          {historyError ? (
-            <Alert color="danger" variant="soft" size="sm">
-              Failed to load error rate data
-            </Alert>
-          ) : historyLoading ? (
-            <LinearProgress />
-          ) : errorRateData.length > 0 ? (
+      <Section title="Error rate">
+        {historyState ??
+          (errorRateData.length > 0 ? (
             <ResponsiveContainer width="100%" height={180}>
               <BarChart data={errorRateData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--joy-palette-divider, #e0e0e0)" />
-                <XAxis dataKey="time" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                <Tooltip />
-                <Bar dataKey="failures" fill={CHART_COLORS.danger} name="Failures" />
+                <CartesianGrid strokeDasharray="3 3" stroke={BORDER} vertical={false} />
+                <XAxis dataKey="time" {...xAxisProps} />
+                <YAxis {...yAxisProps} allowDecimals={false} />
+                <Tooltip cursor={{ fill: 'var(--joy-palette-admin-hover)' }} />
+                <Bar dataKey="failures" fill={BAD} name="Failures" />
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <Typography level="body-sm" color="neutral" sx={{ py: 4, textAlign: 'center' }}>
-              No error data available for this time range
+            <MutedNote>No errors in this time range.</MutedNote>
+          ))}
+      </Section>
+
+      {entry.rateLimit && (
+        <Section title="Rate limit usage">
+          <Stack direction="row" alignItems="center" gap={2} flexWrap="wrap">
+            <InlineBar value={entry.rateLimit.usagePercent ?? 0} max={100} />
+            <Typography level="body-sm" sx={{ color: 'admin.ink', fontVariantNumeric: 'tabular-nums' }}>
+              {entry.rateLimit.remaining?.toLocaleString() ?? '-'} / {entry.rateLimit.limit?.toLocaleString() ?? '-'}{' '}
+              remaining
+            </Typography>
+            {entry.rateLimit.usagePercent != null && (
+              <StatusChip
+                tone={rateLimitTone(entry.rateLimit.usagePercent)}
+                label={`${entry.rateLimit.usagePercent}% used`}
+              />
+            )}
+            {entry.rateLimit.wasThrottled && <StatusChip tone="bad" label="Throttled" />}
+          </Stack>
+          {entry.rateLimit.resetAt && (
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+              Resets at {new Date(entry.rateLimit.resetAt).toLocaleTimeString()}
             </Typography>
           )}
-        </Sheet>
+        </Section>
+      )}
 
-        {/* Rate Limit Usage */}
-        {entry.rateLimit && (
-          <Card variant="outlined">
-            <CardContent>
-              <Typography level="title-sm" sx={{ mb: 1 }}>
-                Rate Limit Usage
-              </Typography>
-              <Stack direction="row" alignItems="center" spacing={2}>
-                <Box sx={{ flex: 1 }}>
-                  <LinearProgress
-                    determinate
-                    value={entry.rateLimit.usagePercent ?? 0}
-                    color={rateLimitColor(entry.rateLimit.usagePercent)}
-                    sx={{ height: 8, borderRadius: 4 }}
-                  />
-                </Box>
-                <Typography level="body-sm">
-                  {entry.rateLimit.remaining ?? '--'} / {entry.rateLimit.limit ?? '--'}
-                </Typography>
-                {entry.rateLimit.usagePercent != null && (
-                  <Chip size="sm" variant="soft" color={rateLimitColor(entry.rateLimit.usagePercent)}>
-                    {entry.rateLimit.usagePercent}%
-                  </Chip>
-                )}
-                {entry.rateLimit.wasThrottled && (
-                  <Chip size="sm" color="danger" variant="soft">
-                    Throttled
-                  </Chip>
-                )}
-              </Stack>
-              {entry.rateLimit.resetAt && (
-                <Typography level="body-xs" color="neutral" sx={{ mt: 0.5 }}>
-                  Resets at {new Date(entry.rateLimit.resetAt).toLocaleTimeString()}
-                </Typography>
-              )}
-            </CardContent>
-          </Card>
+      <Section title="Circuit breaker" testId={`circuit-breaker-override-${entry.name}`}>
+        <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+          <Typography level="body-sm" sx={{ color: 'admin.inkSecondary' }}>
+            Override:
+          </Typography>
+          <StatusChip
+            tone={entry.circuitBreaker.available ? 'good' : 'bad'}
+            label={MODE_LABEL[entry.circuitBreaker.mode]}
+          />
+          {entry.circuitBreaker.autoTripped && <StatusChip tone="bad" label="Auto-tripped" />}
+          {entry.circuitBreaker.reason && (
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+              {entry.circuitBreaker.reason}
+            </Typography>
+          )}
+        </Stack>
+
+        <Stack direction="row" gap={1} flexWrap="wrap">
+          {(['auto', 'force_open', 'force_block'] as const).map(mode => {
+            const selected = entry.circuitBreaker.mode === mode;
+            return (
+              <Button
+                key={mode}
+                size="sm"
+                variant={selected ? 'solid' : 'outlined'}
+                // Force block cuts the integration off for every user, so it reads as destructive until it is the active mode.
+                color={mode === 'force_block' && !selected ? 'danger' : 'neutral'}
+                onClick={() => onOverride(entry.name, mode)}
+                loading={isUpdatingOverride}
+                title={mode === 'auto' ? 'Also resets the in-memory MCP breakers for all users' : undefined}
+                data-testid={`circuit-breaker-${mode}-btn-${entry.name}`}
+              >
+                {MODE_LABEL[mode]}
+              </Button>
+            );
+          })}
+        </Stack>
+
+        {(readBreaker || writeBreaker) && (
+          <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+            <Typography
+              level="body-xs"
+              sx={{ color: 'admin.inkMuted' }}
+              title="Worst state across users: OPEN means open for at least one user"
+            >
+              In-memory MCP (worst across users):
+            </Typography>
+            {readBreaker && <StatusChip tone={BREAKER_TONE[readBreaker.state]} label={`Read: ${readBreaker.state}`} />}
+            {writeBreaker && (
+              <StatusChip tone={BREAKER_TONE[writeBreaker.state]} label={`Write: ${writeBreaker.state}`} />
+            )}
+          </Stack>
         )}
+      </Section>
 
-        {/* Circuit Breaker Controls */}
-        <Card variant="outlined" data-testid={`circuit-breaker-override-${entry.name}`}>
-          <CardContent>
-            <Typography level="title-sm" sx={{ mb: 1 }}>
-              Circuit Breaker
-            </Typography>
-            <Stack spacing={1.5}>
-              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-                <Typography level="body-sm">DB-backed override:</Typography>
-                <Chip
-                  size="sm"
-                  variant="soft"
-                  color={statusColor(entry.circuitBreaker.available ? 'healthy' : 'unhealthy')}
-                >
-                  {entry.circuitBreaker.mode}
-                </Chip>
-                {entry.circuitBreaker.autoTripped && (
-                  <Chip size="sm" color="danger" variant="soft">
-                    Auto-tripped
-                  </Chip>
-                )}
-                {entry.circuitBreaker.reason && (
-                  <Typography level="body-xs" color="neutral">
-                    {entry.circuitBreaker.reason}
-                  </Typography>
-                )}
-              </Stack>
-
-              <Stack direction="row" spacing={0.5}>
-                {(['auto', 'force_open', 'force_block'] as const).map(mode => (
-                  <Button
-                    key={mode}
-                    size="sm"
-                    variant={entry.circuitBreaker.mode === mode ? 'solid' : 'outlined'}
-                    color={mode === 'force_block' ? 'danger' : mode === 'force_open' ? 'success' : 'neutral'}
-                    onClick={() => onOverride(entry.name, mode)}
-                    loading={isUpdatingOverride}
-                    title={mode === 'auto' ? 'Also resets the in-memory MCP breakers for all users' : undefined}
-                    data-testid={`circuit-breaker-${mode}-btn-${entry.name}`}
-                  >
-                    {mode === 'auto' ? 'Auto (all users)' : mode === 'force_open' ? 'Force Open' : 'Force Block'}
-                  </Button>
-                ))}
-              </Stack>
-
-              {/* In-memory breaker states (per-operation CircuitBreaker snapshots) */}
-              {(readBreaker || writeBreaker) && (
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <Typography
-                    level="body-xs"
-                    color="neutral"
-                    title="Worst state across users: OPEN means open for at least one user"
-                  >
-                    In-memory MCP (worst across users):
-                  </Typography>
-                  {readBreaker && (
-                    <Chip size="sm" variant="soft" color={statusColor(readBreaker.state)}>
-                      Read: {readBreaker.state}
-                    </Chip>
-                  )}
-                  {writeBreaker && (
-                    <Chip size="sm" variant="soft" color={statusColor(writeBreaker.state)}>
-                      Write: {writeBreaker.state}
-                    </Chip>
-                  )}
-                </Stack>
-              )}
-            </Stack>
-          </CardContent>
-        </Card>
-
-        {/* Recent Errors Table */}
-        {entry.recentErrors.length > 0 && (
-          <Sheet variant="outlined" sx={{ borderRadius: 'sm' }}>
-            <Typography level="title-sm" sx={{ p: 2, pb: 1 }}>
-              Recent Errors ({entry.recentErrors.length})
-            </Typography>
-            <Table size="sm" stripe="odd" sx={{ '& th': { py: 1 }, '& td': { py: 0.5 } }}>
+      <Section title={`Recent errors (${entry.recentErrors.length})`}>
+        {entry.recentErrors.length > 0 ? (
+          <Box sx={{ overflowX: 'auto' }}>
+            <Table size="sm" sx={{ minWidth: 560, '& th': { py: 1 }, '& td': { py: 0.5 } }}>
               <thead>
                 <tr>
                   <th>Time</th>
@@ -276,7 +254,7 @@ export const IntegrationDetailPanel: React.FC<IntegrationDetailPanelProps> = ({
                       <Typography level="body-xs">{new Date(err.occurredAt).toLocaleString()}</Typography>
                     </td>
                     <td>
-                      <Chip size="sm" variant="soft" color={err.source === 'health_check' ? 'primary' : 'neutral'}>
+                      <Chip size="sm" variant="soft" color="neutral">
                         {err.source === 'health_check' ? 'Probe' : 'Audit'}
                       </Chip>
                     </td>
@@ -286,26 +264,22 @@ export const IntegrationDetailPanel: React.FC<IntegrationDetailPanelProps> = ({
                       </Typography>
                     </td>
                     <td>
-                      <Typography level="body-xs" sx={{ fontFamily: 'monospace' }}>
-                        {err.errorCode || '--'}
+                      <Typography level="body-xs" sx={{ fontFamily: 'monospace', color: 'admin.inkMuted' }}>
+                        {err.errorCode || '-'}
                       </Typography>
                     </td>
                     <td>
-                      <Typography level="body-xs">{err.action || '--'}</Typography>
+                      <Typography level="body-xs">{err.action || '-'}</Typography>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </Table>
-          </Sheet>
+          </Box>
+        ) : (
+          <MutedNote>No recent errors.</MutedNote>
         )}
-
-        {entry.recentErrors.length === 0 && (
-          <Typography level="body-sm" color="neutral" sx={{ textAlign: 'center', py: 2 }}>
-            No recent errors
-          </Typography>
-        )}
-      </Stack>
-    </Box>
+      </Section>
+    </Stack>
   );
 };

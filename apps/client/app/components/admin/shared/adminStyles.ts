@@ -39,7 +39,7 @@ export const adminPageFrame = {
  * Rows-per-page sizes the DataTable footer offers. Feedback/constants.ts derives the page sizes its URL
  * parser accepts from this, so the footer never offers one the URL would drop.
  */
-export const ADMIN_PAGE_SIZES = [25, 50, 100] as const;
+export { ADMIN_PAGE_SIZES } from './adminPagination';
 
 /** Max content width for detail and settings pages; list pages stay full width. */
 export const ADMIN_DETAIL_MAX_WIDTH = 1280;

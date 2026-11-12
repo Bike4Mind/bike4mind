@@ -154,6 +154,13 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     temperature: { type: Number, required: false },
     maxToolCalls: { type: Number, required: false, min: 1 },
     autoNamePlaceholder: { type: String, required: false },
+    tutorial: {
+      type: new Schema(
+        { owner: { type: String, enum: ['core'], required: true }, moduleId: { type: String, required: true } },
+        { _id: false }
+      ),
+      required: false,
+    },
     openaiConversationId: { type: String, required: false },
     claudeConversationId: { type: String, required: false },
     summary: { type: String, required: false },

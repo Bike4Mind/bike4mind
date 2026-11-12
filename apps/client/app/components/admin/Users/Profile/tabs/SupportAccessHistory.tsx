@@ -41,6 +41,7 @@ export function SupportAccessHistory({ userId }: { userId: string }) {
         onRetry={() => void records.refetch()}
         empty={<Typography>No support sessions recorded.</Typography>}
         testId="admin-support-access-table"
+        framed={false}
       />
     </SectionCard>
   );

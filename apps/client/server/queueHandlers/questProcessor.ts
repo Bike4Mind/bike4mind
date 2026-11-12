@@ -48,6 +48,7 @@ import { adminAssistantToolDefinitions } from '@server/adminAssistant';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { coreTutorialTurns } from '@server/tutorials/chatTurns';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -178,6 +179,7 @@ export const getStaticOptions = () => {
     abilityGetter: defineAbilitiesFor,
     workspaceDeniedTools: premiumWorkspaceDeniedTools,
     workspaceSessionSettings: premiumWorkspaceSessionSettings,
+    coreTutorialTurns,
     getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) =>
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Resolve the caller's entitlement keys so retrieval can reach entitlement-gated lakes

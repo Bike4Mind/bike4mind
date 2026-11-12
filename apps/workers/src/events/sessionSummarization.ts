@@ -103,7 +103,7 @@ export const handler = withEventContext(async (event, logger) => {
 
   logger.info(`Handling summarization job for session ${sessionId} (as user ${userId ?? session.userId})`);
 
-  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: user.id });
   logger.info(`Using operations model for summarizing: ${modelInfo.name} (${modelInfo.backend})`);
 
   const modelHasChanged = session.summaryModelId && session.summaryModelId !== modelId;

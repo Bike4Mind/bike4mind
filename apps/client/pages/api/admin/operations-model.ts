@@ -2,7 +2,10 @@ import { Request, Response } from 'express';
 import { AdminSettings, withTransaction } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
-import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
+import {
+  DEFAULT_OPERATIONS_TEXT_MODEL,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { z } from 'zod';
 import { ApiKeyScope, SpeechToTextModels } from '@bike4mind/common';
 
@@ -23,7 +26,7 @@ const handler = adminApi({
       if (!config) {
         // Return default config
         return res.json({
-          modelId: 'gpt-4o-mini',
+          modelId: DEFAULT_OPERATIONS_TEXT_MODEL,
           imageModelId: 'flux-pro',
           speechModelId: 'whisper-1',
         });

@@ -8,6 +8,8 @@ import type { VerdictEvalReport } from '@client/app/utils/verdictEval';
 const m = vi.hoisted(() => ({ useVerdictEval: vi.fn() }));
 vi.mock('@client/app/hooks/data/shadowDetections', () => ({ useVerdictEval: m.useVerdictEval }));
 
+vi.mock('./VerdictEvalSetsPanel', () => ({ VerdictEvalSetsPanel: () => <div data-testid="eval-sets-panel" /> }));
+
 import { VerdictEvalPanel } from './VerdictEvalPanel';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -23,6 +25,38 @@ const report: VerdictEvalReport = {
   detections: 4,
   labelledDetections: 2,
   labelledAccounts: 4,
+  excludedAutoApprovals: 3,
+  operations: [
+    {
+      detector: 'accountCampaign',
+      detections: 4,
+      reviewed: 3,
+      conclusive: 2,
+      reviewYield: 0.5,
+      timeToDetection: { n: 2, medianHours: 5, p90Hours: 6 },
+      spend: { accounts: 3, creditsBeforeDetection: 17, creditsAfterDetection: 14 },
+    },
+  ],
+  cohorts: [
+    {
+      cohort: 'mobile',
+      measurable: true,
+      flaggedAccounts: 4,
+      labelledAccounts: 2,
+      abuse: 1,
+      legit: 1,
+      falsePositiveShare: 0.5,
+    },
+    {
+      cohort: 'assistive',
+      measurable: false,
+      flaggedAccounts: 0,
+      labelledAccounts: 0,
+      abuse: 0,
+      legit: 0,
+      falsePositiveShare: null,
+    },
+  ],
   scores: [
     {
       grader: 'signupVerdict',
@@ -71,6 +105,22 @@ describe('VerdictEvalPanel', () => {
     expect(within(table).getByText('Missed abuse')).toBeTruthy();
     expect(within(table).getByText('abuse (Suspended by an admin)')).toBeTruthy();
     expect(within(table).getByText('farm-1')).toBeTruthy();
+  });
+
+  it('shows operations per detector and the cohorts with their denominators', () => {
+    renderPanel();
+
+    const operations = screen.getByTestId('verdict-eval-operations');
+    expect(within(operations).getByText('accountCampaign')).toBeTruthy();
+    expect(within(operations).getByText('50% of 2')).toBeTruthy();
+    expect(within(operations).getByText('5 / 6 (2)')).toBeTruthy();
+    expect(within(operations).getByText('17 / 14 (3 accounts)')).toBeTruthy();
+    const cohorts = screen.getByTestId('verdict-eval-cohorts');
+    expect(within(cohorts).getByText('Mobile or tablet')).toBeTruthy();
+    expect(within(cohorts).getByText('2 of 4')).toBeTruthy();
+    expect(within(cohorts).getByText('50% of 2')).toBeTruthy();
+    expect(within(cohorts).getByText('Not measurable: no stored signal')).toBeTruthy();
+    expect(screen.getByTestId('verdict-eval-auto-approvals').textContent).toContain('3 accounts approved');
   });
 
   it('starts at 30 days and switches the window', () => {

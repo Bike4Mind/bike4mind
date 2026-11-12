@@ -81,7 +81,7 @@ export interface ModelLogSummary {
   messageHistoryLength?: number;
   completedStepCount: number;
   failedStepCount: number;
-  artifacts: Array<{ type: string; preview: string }>;
+  artifacts: Array<{ type: string }>;
 }
 
 interface UseModelLogsOptions {
