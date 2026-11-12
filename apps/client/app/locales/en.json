@@ -110,7 +110,7 @@
   "deleteVoiceConfirm": "Are you sure you want to delete this Voice?",
   "organization": {
     "organizations": "Teams",
-    "defaultName": "My Organization",
+    "defaultName": "My Team",
     "shared": "Shared with Me",
     "create": "Create Team",
     "search": "Search teams...",
@@ -121,9 +121,68 @@
     "active_subscription": "Active Subscription",
     "no_subscription": "No Subscription",
     "payment_issue": "Payment Issue",
-    "x_members": "{{count}} members",
-    "x_credits": "{{count}} credits",
-    "owner": "Owner"
+    "team_plan": "Team Plan",
+    "no_active_plan": "No Active Plan",
+    "x_members_one": "{{count}} member",
+    "x_members_other": "{{count}} members",
+    "x_credits_one": "{{count}} credit",
+    "x_credits_other": "{{count}} credits",
+    "credits_amount": "{{amount}} credits",
+    "personal_team": "Personal team",
+    "shared_team": "Shared team",
+    "learn_about": "Learn about Teams",
+    "document_title_suffix": " | Team",
+    "roles": {
+      "owner": "Owner",
+      "manager": "Manager",
+      "member": "Member"
+    },
+    "admin_preview": {
+      "title": "Explore Team administration before subscribing",
+      "description": "See sample members, monthly credit limits and usage, plus which controls each role can access.",
+      "button": "Preview Team administration"
+    },
+    "tabs": {
+      "overview": "Overview",
+      "members": "Members",
+      "groups": "Groups",
+      "usage": "Usage",
+      "analysis": "Analysis",
+      "billing": "Billing",
+      "integrations": "Integrations",
+      "github_api": "GitHub API",
+      "webhooks": "Webhooks",
+      "connectors": "Connectors",
+      "settings": "Settings"
+    },
+    "headings": {
+      "members_seats": "Members ({{current}} / {{max}})",
+      "groups": "Groups",
+      "usage": "Usage & Spend",
+      "analysis": "Feedback Analysis",
+      "billing": "Billing & Subscription",
+      "integrations": "Integrations",
+      "webhooks": "GitHub Webhooks",
+      "connectors": "Custom Connectors",
+      "settings": "Team Settings",
+      "overview": "Team Overview"
+    },
+    "overview": {
+      "total_members": "Total Members",
+      "available_credits": "Available Credits",
+      "subscription_status": "Subscription Status",
+      "plan": "Plan",
+      "status": "Status",
+      "canceling": "Canceling",
+      "active": "Active",
+      "next_billing": "Next Billing",
+      "not_available": "N/A",
+      "seats_utilization": "Seats Utilization",
+      "seats_utilization_label": "Seats utilization: {{current}} of {{max}} seats used",
+      "x_active": "{{count}} Active",
+      "x_pending": "{{count}} Pending",
+      "x_available": "{{count}} Available"
+    }
   },
   "session": {
     "typeYourMessage": "Type your message here",

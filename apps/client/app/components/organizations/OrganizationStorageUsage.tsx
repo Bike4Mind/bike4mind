@@ -41,7 +41,7 @@ const OrganizationStorageUsage: FC<{ organizationId: string }> = ({ organization
           By uploader
         </Typography>
         {data.uploaders.length === 0 ? (
-          <Typography level="body-sm">No files are stored in this organization yet.</Typography>
+          <Typography level="body-sm">No files are stored in this team yet.</Typography>
         ) : (
           <Stack spacing={1.5}>
             {data.uploaders.map(uploader => (
