@@ -136,7 +136,7 @@ describe('POST /api/organizations/[id]/invite-resend', () => {
     expect(mocks.notify).not.toHaveBeenCalled();
   });
 
-  it('refunds the send reservation when acquiring the cooldown throws, without releasing someone else’s cooldown', async () => {
+  it('refunds the send reservation when acquiring the cooldown throws, without releasing another request cooldown', async () => {
     mocks.tryAdd.mockRejectedValue(new Error('cooldown cache unavailable'));
     mocks.release.mockRejectedValue(new Error('refund unavailable'));
     await expect(resend({ email: 'new@example.test' })).rejects.toThrow('cooldown cache unavailable');
