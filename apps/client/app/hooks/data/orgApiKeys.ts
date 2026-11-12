@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { IOrgApiKeySecretResponse, IOrgApiKeyView } from '@bike4mind/common';
+import type { IOrgApiKeySecretResponse, IOrgApiKeyView, IOrgMemberApiKeyView } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 
 /** Org-owned API keys (pages/api/organizations/[id]/api-keys). */
 const orgApiKeysQueryKey = (organizationId: string) => ['organizations', organizationId, 'api-keys'] as const;
+
+/** Members' org-billed keys (pages/api/organizations/[id]/api-keys/members). */
+const orgMemberApiKeysQueryKey = (organizationId: string) =>
+  ['organizations', organizationId, 'api-keys', 'members'] as const;
 
 const errorMessage = (error: unknown, fallback: string): string => {
   const data = (error as { response?: { data?: { error?: unknown; message?: unknown } } }).response?.data;
@@ -51,6 +55,24 @@ export function useRevokeOrgApiKey(organizationId: string) {
       await api.post(`/api/organizations/${organizationId}/api-keys/${keyId}/revoke`, {});
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: orgApiKeysQueryKey(organizationId) }),
+    onError: error => toast.error(errorMessage(error, 'Failed to revoke the API key')),
+  });
+}
+
+export function useOrgMemberApiKeys(organizationId: string) {
+  return useQuery<IOrgMemberApiKeyView[]>({
+    queryKey: orgMemberApiKeysQueryKey(organizationId),
+    queryFn: async () => (await api.get(`/api/organizations/${organizationId}/api-keys/members`)).data,
+  });
+}
+
+export function useRevokeOrgMemberApiKey(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, unknown, string>({
+    mutationFn: async keyId => {
+      await api.post(`/api/organizations/${organizationId}/api-keys/members/${keyId}/revoke`, {});
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: orgMemberApiKeysQueryKey(organizationId) }),
     onError: error => toast.error(errorMessage(error, 'Failed to revoke the API key')),
   });
 }
