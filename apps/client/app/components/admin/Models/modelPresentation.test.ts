@@ -62,6 +62,15 @@ describe('priceSummary', () => {
     expect(priceSummary(price, 'text')).toBe(shown);
   });
 
+  it.each([
+    [0.9999, '$0.9999 / image'],
+    [1, '$1.00 / image'],
+    [0.99995, '$1.00 / image'],
+  ])('shows a per-image price of %s as %s at the one dollar boundary', (value, shown) => {
+    const pricing = { '0': { input: value, output: 0 } };
+    expect(priceSummary({ source: 'row', unit: 'per_image', pricing, effectiveFrom: '' }, 'image')).toBe(shown);
+  });
+
   it('shows an image price per image and a non-text build literal by source', () => {
     const tier = { '0': { input: 0.04, output: 0 } };
     expect(priceSummary({ source: 'row', unit: 'per_image', pricing: tier, effectiveFrom: '' }, 'image')).toBe(
