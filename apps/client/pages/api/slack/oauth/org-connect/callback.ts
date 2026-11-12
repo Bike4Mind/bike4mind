@@ -24,6 +24,7 @@ import { consumeStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oaut
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { recordAdminActionForActor } from '@bike4mind/server-utils/utils/adminAudit';
+import { recordOrganizationAuditEventSafe } from '@bike4mind/server-utils/utils/organizationAudit';
 import { randomUUID } from 'crypto';
 import type { Response } from 'express';
 
@@ -238,6 +239,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     }
 
     auditLogger.setWorkspaceId(slackTeamId);
+    await recordOrganizationAuditEventSafe({ organizationId, actorUserId: userId, action: 'connector.connected' });
     auditLogger.success({ slackTeamId, slackTeamName, organizationId });
 
     return sendClientRedirect(res, `${orgRedirectBase}?tab=integrations&slack_connected=true`);

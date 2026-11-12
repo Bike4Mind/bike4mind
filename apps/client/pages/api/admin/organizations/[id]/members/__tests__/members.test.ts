@@ -100,11 +100,11 @@ const call = async (
   key: string,
   method: string,
   body: unknown,
-  { isAdmin = true, permissions = [] as string[], userId = USER } = {}
+  { isAdmin = true, permissions = [] as string[], userId = USER, impersonatedBy = undefined as string | undefined } = {}
 ) => {
   const { req, res } = createMocks({ method: method as 'POST', body, query: { id: ORG, userId } });
   const request = Object.assign(req, {
-    user: { id: 'admin1', username: 'admin', isAdmin, adminPermissions: permissions },
+    user: { id: 'admin1', username: 'admin', isAdmin, adminPermissions: permissions, impersonatedBy },
     logger: { info: vi.fn(), error: vi.fn() },
   }) as unknown as Request;
   mocks.guards[key](request, res as unknown as Response, () => {});
@@ -126,6 +126,20 @@ beforeEach(() => {
 });
 
 describe('admin org membership routes', () => {
+  it.each([
+    ['POST', 'POST', { userId: USER, reason: 'Membership update' }],
+    ['DELETE,PATCH', 'DELETE', { reason: 'Membership update' }],
+  ] as const)('attributes %s membership events to the real admin', async (key, method, body) => {
+    if (method === 'POST') mocks.findById.mockResolvedValue(buildOrg({ users: [] }));
+    await call(key, method, body, { impersonatedBy: 'real-admin' });
+    expect(mocks.logEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'admin1', metadata: expect.objectContaining({ userId: USER }) }),
+      expect.objectContaining({ organizationAuditActorUserId: 'real-admin' }),
+      expect.anything(),
+      ORG
+    );
+  });
+
   it('declares first-party JWT-only authentication behind users:moderate', () => {
     expect(mocks.options.POST).toMatchObject({ auth: 'jwtOnly' });
     expect(mocks.options['DELETE,PATCH']).toMatchObject({ auth: 'jwtOnly' });
