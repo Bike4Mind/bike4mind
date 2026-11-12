@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Types } from 'mongoose';
 
 const { findByIdMock, findMock, distinctMock } = vi.hoisted(() => ({
   findByIdMock: vi.fn(),
@@ -97,5 +98,23 @@ describe('excludeNonLiveOwners', () => {
     distinctMock.mockReturnValue(['ABCDEF000000000000000001']);
     findMock.mockReturnValue([{ _id: 'abcdef000000000000000001' }]);
     expect(await excludeNonLiveOwners(FILTER, 'caller')).toBeNull();
+  });
+  it('compares BSON owners canonically but preserves their stored values in the exclusion', async () => {
+    const live = new Types.ObjectId(LIVE);
+    const suspended = new Types.ObjectId(SUSPENDED);
+    distinctMock.mockReturnValue([live, suspended, null, 42]);
+    findMock.mockReturnValue([{ _id: LIVE }]);
+
+    const result = await excludeNonLiveOwners(FILTER, 'caller');
+    expect(result).toEqual({ ownerId: { $nin: [suspended, null, 42] } });
+    expect(result?.ownerId.$nin[0]).toBe(suspended);
+    expect(findMock.mock.calls[0][0]._id).toEqual({ $in: [LIVE, SUSPENDED] });
+  });
+
+  it('keeps the caller own legacy casing or BSON ID without consulting its live state', async () => {
+    const caller = 'abcdef000000000000000001';
+    distinctMock.mockReturnValue([caller.toUpperCase(), new Types.ObjectId(caller)]);
+    expect(await excludeNonLiveOwners(FILTER, caller)).toBeNull();
+    expect(findMock).not.toHaveBeenCalled();
   });
 });

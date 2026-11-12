@@ -1,5 +1,10 @@
 import { PublishedArtifact, User } from '@bike4mind/database';
-import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { Types } from 'mongoose';
+import { z } from 'zod';
+
+const OwnerIdSchema = z
+  .union([z.string().regex(/^[a-f\d]{24}$/i), z.instanceof(Types.ObjectId).transform(id => id.toHexString())])
+  .transform(id => id.toLowerCase());
 
 interface OwnerFields {
   name?: string;
@@ -36,17 +41,24 @@ export async function loadLiveOwner(ownerId: string): Promise<{ name?: string; u
 export async function excludeNonLiveOwners(
   filter: Record<string, unknown>,
   callerId: string
-): Promise<{ ownerId: { $nin: string[] } } | null> {
-  const ownerIds = (await PublishedArtifact.distinct('ownerId', {
+): Promise<{ ownerId: { $nin: unknown[] } } | null> {
+  const ownerIds: unknown[] = await PublishedArtifact.distinct('ownerId', {
     $and: [filter, { ownerId: { $ne: callerId } }],
-  })) as string[];
-  if (ownerIds.length === 0) return null;
+  });
+  const caller = OwnerIdSchema.safeParse(callerId);
+  const owners = ownerIds
+    .map(value => ({ value, parsed: OwnerIdSchema.safeParse(value) }))
+    .filter(owner => !caller.success || !owner.parsed.success || owner.parsed.data !== caller.data);
+  if (owners.length === 0) return null;
 
-  const live = await User.find({ _id: { $in: ownerIds.filter(id => isValidObjectId(id)) }, ...LIVE_OWNER_QUERY })
+  const canonicalOwnerIds = owners.flatMap(owner => (owner.parsed.success ? [owner.parsed.data] : []));
+  const live = await User.find({ _id: { $in: canonicalOwnerIds }, ...LIVE_OWNER_QUERY })
     .select('_id')
     .lean<Array<{ _id: unknown }>>();
-  const liveIds = new Set(live.map(owner => String(owner._id)));
-  // _id stringifies lowercase; a stored ownerId in other casing still matched the $in above.
-  const hidden = ownerIds.filter(id => !liveIds.has(id.toLowerCase()));
+  const liveIds = new Set(live.map(owner => String(owner._id).toLowerCase()));
+  // This clause is used in a raw aggregation: preserve BSON values instead of stringifying them.
+  const hidden = owners
+    .filter(owner => !owner.parsed.success || !liveIds.has(owner.parsed.data))
+    .map(owner => owner.value);
   return hidden.length > 0 ? { ownerId: { $nin: hidden } } : null;
 }
