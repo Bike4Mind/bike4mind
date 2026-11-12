@@ -98,9 +98,9 @@ private struct ChoiceRow: View {
 
   private var picker: some View {
     Picker(control.title, selection: $value) {
-      // A nil default means the model or provider decides; offer that as a real choice so it can be restored.
+      // A nil default means the server picks; offer that as a real choice so it can be restored.
       if control.defaultValue == nil {
-        Text("Auto").tag(ParamValue?.none)
+        Text("Default").tag(ParamValue?.none)
       }
       ForEach(options, id: \.value) { option in
         Text(option.value == control.defaultValue ? "\(option.label) (default)" : option.label)

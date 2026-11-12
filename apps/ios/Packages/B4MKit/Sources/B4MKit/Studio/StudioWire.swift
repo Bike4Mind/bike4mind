@@ -215,8 +215,8 @@ enum StudioWire {
         let sizes = sizing.map { Self.sizeTakingKinds.contains($0.kind) ? $0.presets ?? [] : [] } ?? []
         return ImageCapabilities(
           sizes: sizes, defaultSize: sizes.isEmpty ? nil : sizing?.defaultSize,
-          // `auto` is what an omitted quality means; offering it as a choice would only duplicate the default.
-          qualities: (supports?.qualities ?? []).filter { $0 != "auto" },
+          // An omitted quality is the server's default (GPT-Image renders at medium), not `auto`, so `auto` stays a choice.
+          qualities: supports?.qualities ?? [],
           maxImages: max(1, supports?.maxImages ?? 1), seed: supports?.seed ?? false,
           transparentBackground: supports?.transparentBackground ?? false,
           maxReferenceImages: supports?.maxReferenceImages ?? 0, edit: supports?.edit ?? false,

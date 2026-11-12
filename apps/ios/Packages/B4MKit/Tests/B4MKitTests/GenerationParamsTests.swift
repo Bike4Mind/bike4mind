@@ -100,8 +100,10 @@ final class GenerationParamsTests: XCTestCase {
     XCTAssertEqual(gpt.map(\.key), [.size, .quality, .count, .transparentBackground])
     XCTAssertEqual(gpt[0].defaultValue, .text("1024x1024"))
     XCTAssertEqual(
-      gpt[1].kind, .choice(["low", "medium", "high"].map { ParamOption(value: .text($0), label: $0.capitalized) }),
-      "auto is the omitted default, not a separate choice")
+      gpt[1].kind,
+      .choice(["low", "medium", "high", "auto"].map { ParamOption(value: .text($0), label: $0.capitalized) }),
+      "auto is a real choice: an omitted quality is the server's default, not auto")
+    XCTAssertNil(gpt[1].defaultValue, "no quality is sent until one is picked")
     XCTAssertEqual(gpt[2].kind, .range(min: 1, max: 4, step: 1))
     XCTAssertEqual(
       ParamControls.controls(for: list[1].capabilities, params: GenerationParams()).map(\.key), [.seed],
