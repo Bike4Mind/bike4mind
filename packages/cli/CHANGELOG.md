@@ -1,5 +1,37 @@
 # @bike4mind/cli
 
+## 4.5.0
+
+### Minor Changes
+
+- [#6820](https://github.com/Bike4Mind/bike4mind/pull/6820) [`e5e1e29`](https://github.com/Bike4Mind/bike4mind/commit/e5e1e29ed9ddc60d4fae0d506861f67c1a7d5c98) Thanks [@onoya](https://github.com/onoya)! - explain and streamline detection review
+
+- [#6820](https://github.com/Bike4Mind/bike4mind/pull/6820) [`e5e1e29`](https://github.com/Bike4Mind/bike4mind/commit/e5e1e29ed9ddc60d4fae0d506861f67c1a7d5c98) Thanks [@onoya](https://github.com/onoya)! - account-level abuse assessment evidence and corroborated signup bursts
+
+- [#7153](https://github.com/Bike4Mind/bike4mind/pull/7153) [`ac0acb7`](https://github.com/Bike4Mind/bike4mind/commit/ac0acb7376cc558020dc3b81fd45d7f5559e0af8) Thanks [@maconard](https://github.com/maconard)! - retry refused Claude Fable 5.1 and 5.2 chats on Opus 4.8
+
+- [#7170](https://github.com/Bike4Mind/bike4mind/pull/7170) [`187b924`](https://github.com/Bike4Mind/bike4mind/commit/187b924b017417548b5e3d508ee79d9e9d356891) Thanks [@vinchi777](https://github.com/vinchi777)! - add MCP file upload tool
+
+- [#7190](https://github.com/Bike4Mind/bike4mind/pull/7190) [`88facf4`](https://github.com/Bike4Mind/bike4mind/commit/88facf4cd9c0f8d507cb6f4ddfa749f78fa0c1d5) Thanks [@onoya](https://github.com/onoya)! - accept share and upload tokens in headers and redact path tokens from request logs
+
+### Patch Changes
+
+- [#6822](https://github.com/Bike4Mind/bike4mind/pull/6822) [`721f320`](https://github.com/Bike4Mind/bike4mind/commit/721f3209c2275c6a707daec02ece734362eee923) Thanks [@maconard](https://github.com/maconard)! - show unusable saved SSH servers instead of hiding them
+
+- [#6827](https://github.com/Bike4Mind/bike4mind/pull/6827) [`40310ef`](https://github.com/Bike4Mind/bike4mind/commit/40310ef445c722e3d585037585d2a70ba6685187) Thanks [@maconard](https://github.com/maconard)! - show SSH servers saved without an address and lock their settings
+
+- [#6829](https://github.com/Bike4Mind/bike4mind/pull/6829) [`dbea457`](https://github.com/Bike4Mind/bike4mind/commit/dbea4575b2356cc0b4c627450c71477c61d81780) Thanks [@onoya](https://github.com/onoya)! - retry right after breaking a stale lock
+
+- [#6933](https://github.com/Bike4Mind/bike4mind/pull/6933) [`81e9ca1`](https://github.com/Bike4Mind/bike4mind/commit/81e9ca121b7668616b2efa7714b2f8e4aa9f1fc6) Thanks [@jjmarfa](https://github.com/jjmarfa)! - return a viewer-only shape to readers of a public artifact they have no grant on
+
+- [#6971](https://github.com/Bike4Mind/bike4mind/pull/6971) [`c957dbe`](https://github.com/Bike4Mind/bike4mind/commit/c957dbec656f7b243081a2b3b38c6b40dddcfa33) Thanks [@ken-b4m](https://github.com/ken-b4m)! - round-trip SKILL.md model and stop false missing-file warnings
+
+- [#7060](https://github.com/Bike4Mind/bike4mind/pull/7060) [`9874eac`](https://github.com/Bike4Mind/bike4mind/commit/9874eac7faff3d6680beb0834a2e7f80afddf35c) Thanks [@maconard](https://github.com/maconard)! - offer reasoning effort for gpt-oss under any model name
+
+- [#7064](https://github.com/Bike4Mind/bike4mind/pull/7064) [`ddbd189`](https://github.com/Bike4Mind/bike4mind/commit/ddbd189176458f2436b64b6eb9ace2dfa28553ff) Thanks [@maconard](https://github.com/maconard)! - keep llama-server's no-GPU warning after a restart
+
+- [#7131](https://github.com/Bike4Mind/bike4mind/pull/7131) [`6c3ca64`](https://github.com/Bike4Mind/bike4mind/commit/6c3ca64b29468e19b6091bb8f7579763df25c5fb) Thanks [@maconard](https://github.com/maconard)! - stale composer settings after switching chats
+
 ## 4.4.0
 
 ### Minor Changes

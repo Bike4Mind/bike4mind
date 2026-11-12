@@ -27,6 +27,7 @@ vi.mock('./EventMetrics/components/UsageBySourceCard', () => ({
   UsageBySourceCard: () => <div data-testid="usage-by-source-card" />,
 }));
 vi.mock('./AiAdvisory/AiAdvisoryStrip', () => ({ AiAdvisoryStrip: () => null }));
+vi.mock('./MorningBriefCard', () => ({ MorningBriefCard: () => <div data-testid="admin-morning-brief" /> }));
 vi.mock('./CampaignWatches/CampaignWatchesPanel', () => ({
   CampaignWatchesPanel: () => <div data-testid="persistent-watches">Persistent watches</div>,
 }));

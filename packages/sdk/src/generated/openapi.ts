@@ -140,13 +140,35 @@ export interface paths {
     put?: never;
     /**
      * Create a chat completion
-     * @description OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. A final non-blank assistant message is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. Check the model's `supports_assistant_prefill` field from `GET /api/v1/models` before sending one. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, then one `settled` event once credits are committed (the charge can be 0), terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. A final non-blank assistant message is an assistant prefill, except a server-tool continuation ending in `server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. Check the model's `supports_assistant_prefill` field from `GET /api/v1/models` before sending one. Authenticate with an API key (`b4m_live_`) or a JWT.
+     *
+     *     RUNS AND SETTLEMENT. To group the spend of a multi-agent run (a root session and the workers it spawns), mint a run id with `POST /api/v1/completion-runs` and send it as `run` on each request. Spend is recorded against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) arrives after the last content event and before `[DONE]`, once the charge is committed: `creditsCharged` is what the ledger recorded, which can be below the terminal event's `credits.used` when the balance capped it, and `requestId` is the `X-Request-ID` you sent (or a generated one). Use it to count a settled charge once when your client sees the same event twice (replay or reconnect). Send a fresh `X-Request-ID` per request: reusing one does not deduplicate charges, since the server charges every request.
      *
      *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
      *
-     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
+     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
      */
     post: operations['createCompletion'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/completion-runs': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Create a completion run
+     * @description Mints a run id that groups the spend of several `POST /api/ai/v1/completions` requests, such as a root session and the workers it spawns. Send the returned `runId` as `run.runId` on each of those requests. The run is bound to the credential that minted it: the same user and the same billing owner (the organization for an organization-billed API key, otherwise the user), and a completion naming a run minted by anyone else is refused with `404` (`errorCode: "run_not_found"`). Minting a run charges nothing, and attributing a completion to it never charges that completion twice.
+     */
+    post: operations['createCompletionRun'];
     delete?: never;
     options?: never;
     head?: never;
@@ -2691,6 +2713,14 @@ export interface components {
         }
       | {
           /** @enum {string} */
+          type: 'settled';
+          requestId: string;
+          creditsCharged: number;
+          usdCost?: number;
+          runId?: string;
+        }
+      | {
+          /** @enum {string} */
           type: 'error';
           message: string;
           requestId?: string;
@@ -2723,6 +2753,17 @@ export interface components {
         | 'unknown_tool_reference'
         | 'tool_changes_unsupported'
         | 'invalid_tool_change';
+    };
+    createCompletionResponse404: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode: 'run_not_found';
     };
     createCompletionResponse422: {
       error: string;
@@ -2938,6 +2979,30 @@ export interface components {
       max_tokens?: number;
       /** @description Your own identifier for the conversation this request belongs to. Recorded with the request's credit usage so spend can be grouped by conversation. Not interpreted otherwise. */
       sessionId?: string;
+      /** @description Groups this request's spend under a run you created with `POST /api/v1/completion-runs`. A run you did not create is refused with `404` (`errorCode: "run_not_found"`). */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
       options?: {
         temperature?: number;
         maxTokens?: number;
@@ -3017,6 +3082,32 @@ export interface components {
          */
         cacheTtl?: '5m' | '1h';
       };
+    };
+    /**
+     * @example {
+     *       "runId": "0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80",
+     *       "rootSessionId": "session-42",
+     *       "createdAt": "2026-11-10T12:00:00.000Z"
+     *     }
+     */
+    createCompletionRunResponse201: {
+      /**
+       * Format: uuid
+       * @description A run id issued by `POST /api/v1/completion-runs`.
+       */
+      runId: string;
+      rootSessionId?: string;
+      /** Format: date-time */
+      createdAt: string;
+    };
+    /**
+     * @example {
+     *       "rootSessionId": "session-42"
+     *     }
+     */
+    createCompletionRunRequest: {
+      /** @description Your own id for the conversation that starts the run. A conversation can start many runs; each gets its own id. */
+      rootSessionId?: string;
     };
     /**
      * @example {
@@ -10563,6 +10654,17 @@ export interface operations {
           'application/json': components['schemas']['ScopeForbiddenResponse'];
         };
       };
+      /** @description The `run` does not exist, or another user or billing owner minted it (`errorCode: "run_not_found"`). Mint one with `POST /api/v1/completion-runs` using the same credential. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createCompletionResponse404'];
+        };
+      };
       /** @description The path does not serve this HTTP method. */
       405: {
         headers: {
@@ -10642,6 +10744,148 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['createCompletionResponse503'];
+        };
+      };
+    };
+  };
+  createCompletionRun: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['createCompletionRunRequest'];
+      };
+    };
+    responses: {
+      /** @description The created run. */
+      201: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createCompletionRunResponse201'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
     };

@@ -100,6 +100,9 @@ export interface ChatMedia {
    * is how the user finds the same file in the web app's file browser.
    */
   fabFileId?: string;
+  /** Pixel size of a kept image, so its thumbnail holds its box before it loads. */
+  width?: number;
+  height?: number;
 }
 
 /**
@@ -737,6 +740,12 @@ export interface ChatMessage {
   model?: string;
   /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
   usage?: ChatUsage;
+  /**
+   * A plain reply's one request: its server request id and settled charge, which a reply with
+   * `rounds` keeps per round instead (see ChatReplyRound.requestId). Absent on older replies.
+   */
+  requestId?: string;
+  settled?: ChatSettledCharge;
   /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
   promptCache?: ChatPromptCacheStamp;
   contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
@@ -2052,6 +2061,24 @@ export interface ChatReplyRound {
    * Persisted with the session, but stripped before the renderer sees it (sessionForRenderer).
    */
   sent?: ChatSentRound;
+  /**
+   * The server's id for this round's request: the `X-Request-ID` it was sent with, as the stream's
+   * `meta` event echoed it. The key that counts the round's charge exactly once. Absent on older
+   * rounds and on servers that send no `meta`.
+   */
+  requestId?: string;
+  /** What the server's ledger recorded for this round's request; see ChatSettledCharge. */
+  settled?: ChatSettledCharge;
+}
+
+/**
+ * The charge the server committed for one request, from the stream's `settled` event. Unlike
+ * `usage.creditsUsed`, computed before settlement, this is what the ledger holds. Stored only:
+ * totals still come from `usage`.
+ */
+export interface ChatSettledCharge {
+  creditsCharged: number;
+  usdCost?: number;
 }
 
 /** A round's assistant message as sent, plus any app text appended to its last tool result. */

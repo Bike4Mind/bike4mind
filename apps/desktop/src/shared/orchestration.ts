@@ -28,6 +28,12 @@ export const inheritancePolicy = (): RolePolicy => ({
 export const rootPolicySchema = z.strictObject({
   rootSessionId: z.string().min(1),
   rootRunId: z.string().min(1),
+  /**
+   * The run id `POST /api/v1/completion-runs` issued for this root, sent with each agent turn so
+   * the server can group the run's spend. Absent until that request succeeds, and on sessions
+   * stored before it existed. `rootRunId` stays the local identity; this one is the server's.
+   */
+  serverRunId: z.string().min(1).optional(),
   policy: rolePolicySchema,
 });
 export type RootPolicy = z.infer<typeof rootPolicySchema>;

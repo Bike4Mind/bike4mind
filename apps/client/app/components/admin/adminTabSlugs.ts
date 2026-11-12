@@ -1,5 +1,6 @@
 import {
   ADMIN_AUDIT_LOG_TAB_SLUG,
+  ADMIN_DLQ_REPLAY_TAB_SLUG,
   ADMIN_FEEDBACK_TAB_SLUG,
   ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
   ADMIN_USERS_TAB_SLUG,
@@ -12,6 +13,7 @@ import {
   ADMIN_MODEL_LOGS_TAB_SLUG,
   ADMIN_MODEL_METRICS_TAB_SLUG,
   ADMIN_ORGANIZATIONS_TAB_SLUG,
+  ADMIN_REVENUE_TAB_SLUG,
   ADMIN_SECURITY_DASHBOARD_TAB_SLUG,
   ADMIN_SETTINGS_TAB_SLUG,
   ADMIN_SHADOW_DETECTIONS_TAB_SLUG,
@@ -45,7 +47,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.WorldTime]: 'world-time',
   [AdminTab.Waitlist]: ADMIN_WAITLIST_TAB_SLUG,
   [AdminTab.Subscriptions]: ADMIN_SUBSCRIPTIONS_TAB_SLUG,
-  [AdminTab.Revenue]: 'revenue',
+  [AdminTab.Revenue]: ADMIN_REVENUE_TAB_SLUG,
   [AdminTab.Organizations]: ADMIN_ORGANIZATIONS_TAB_SLUG,
   [AdminTab.CreditAnalytics]: 'credit-analytics',
   [AdminTab.SecretsRotation]: 'secrets-rotation',
@@ -73,7 +75,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.HelpAnalytics]: 'help-analytics',
   [AdminTab.ContextInspector]: 'context-inspector',
   [AdminTab.RateLimits]: 'rate-limits',
-  [AdminTab.DlqReplay]: 'dlq-replay',
+  [AdminTab.DlqReplay]: ADMIN_DLQ_REPLAY_TAB_SLUG,
   [AdminTab.IntegrationHealth]: 'integration-health',
   [AdminTab.SreAgent]: 'sre-agent',
   [AdminTab.ManageGears]: 'manage-gears',
@@ -105,6 +107,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.AuditLog]: ADMIN_AUDIT_LOG_TAB_SLUG,
   [AdminTab.Approvals]: 'approvals',
   [AdminTab.Tutorials]: 'tutorials',
+  [AdminTab.AiOperations]: 'ai-operations',
 };
 
 /**

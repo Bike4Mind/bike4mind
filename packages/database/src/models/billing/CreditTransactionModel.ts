@@ -160,6 +160,12 @@ CreditTransactionSchema.index(
   }
 );
 CreditTransactionSchema.index({ stripeRefundId: 1 }, { unique: true, sparse: true });
+// Serves the cross-owner purchase reads of the admin Payments report (server/admin/payments). Partial on
+// purchases, so a query must say `type: 'purchase'`. Built by the 20260921241030 ensure migration.
+CreditTransactionSchema.index(
+  { createdAt: -1, _id: -1 },
+  { name: 'credit_tx_purchases_by_date', partialFilterExpression: { type: 'purchase' } }
+);
 CreditTransactionSchema.index({ transactionId: 1 }, { unique: true, sparse: true });
 
 export type ICreditTransactionModel = Model<ICreditTransactionDocument>;
