@@ -57,6 +57,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES }).delete(async
             db: {
               organizations: organizationRepository,
               groups: groupRepository,
+              users: userRepository,
               fabFiles: fabFileRepository,
               artifacts: artifactRepository,
               projects: projectRepository,

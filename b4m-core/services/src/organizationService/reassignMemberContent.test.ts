@@ -21,6 +21,7 @@ const makeAdapters = () => ({
   db: {
     organizations: { findById: vi.fn().mockResolvedValue(org()) },
     groups: { findByOrganization: vi.fn().mockResolvedValue([{ id: 'g1' }]) },
+    users: { findById: vi.fn().mockResolvedValue({ id: 'member2', isBanned: false }) },
     fabFiles: writable(2),
     artifacts: writable(1),
     projects: {
@@ -124,6 +125,16 @@ describe('reassignMemberContent', () => {
     await expect(run('no-permission-row')).rejects.toThrow('current member');
     await expect(run('pending-or-stranger')).rejects.toThrow('current member');
     await expect(run('')).rejects.toThrow();
+    expect(adapters.db.fabFiles.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a recipient whose user is missing, banned or pending deletion', async () => {
+    adapters.db.users.findById.mockResolvedValueOnce(null);
+    await expect(run()).rejects.toThrow('active member');
+    adapters.db.users.findById.mockResolvedValueOnce({ id: 'member2', isBanned: true });
+    await expect(run()).rejects.toThrow('active member');
+    adapters.db.users.findById.mockResolvedValueOnce({ id: 'member2', deletion: { scheduledFor: new Date() } });
+    await expect(run()).rejects.toThrow('active member');
     expect(adapters.db.fabFiles.updateMany).not.toHaveBeenCalled();
   });
 

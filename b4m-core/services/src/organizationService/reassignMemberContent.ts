@@ -1,4 +1,11 @@
-import { IGroupRepository, IOrganizationRepository, isOrgMember, IUserDocument } from '@bike4mind/common';
+import {
+  ConflictError,
+  IGroupRepository,
+  IOrganizationRepository,
+  isOrgMember,
+  IUserDocument,
+  IUserRepository,
+} from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import {
@@ -26,6 +33,7 @@ export interface ReassignMemberContentAdapters {
   db: {
     organizations: Pick<IOrganizationRepository, 'findById'>;
     groups: Pick<IGroupRepository, 'findByOrganization'>;
+    users: Pick<IUserRepository, 'findById'>;
     fabFiles: Reassignable;
     artifacts: Reassignable;
     projects: Reassignable & {
@@ -70,6 +78,10 @@ export async function reassignMemberContent(
   // receive content.
   if (!isOrgMember({ id: reassignTo }, organization)) {
     throw new BadRequestError('Content can only be transferred to a current member of the organization.');
+  }
+  const recipient = await db.users.findById(reassignTo);
+  if (!recipient || recipient.isBanned || recipient.deletion?.scheduledFor) {
+    throw new BadRequestError('Content can only be transferred to an active member of the organization.');
   }
 
   const orgGroupIds = (await db.groups.findByOrganization(organizationId)).map(group => String(group.id));

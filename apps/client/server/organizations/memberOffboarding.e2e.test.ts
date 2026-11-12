@@ -46,6 +46,7 @@ const organization = {
 const db = {
   organizations: { findById: async () => organization },
   groups: { findByOrganization: async () => [{ id: GROUP }] },
+  users: { findById: async (id: string) => ({ id, isBanned: false }) },
   fabFiles: fabFileRepository,
   artifacts: artifactRepository,
   projects: projectRepository,
