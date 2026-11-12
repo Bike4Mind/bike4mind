@@ -25,7 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-// verifyOrgOwner runs for real against a stubbed organizationRepository, so the owner gate itself is under test.
+// verifyOrgPermission runs for real against a stubbed organizationRepository, so the owner gate itself is under test.
 const mockOrgFindById = vi.fn();
 const mockFindWorkspace = vi.fn();
 const mockFindWorkspaceWithToken = vi.fn();

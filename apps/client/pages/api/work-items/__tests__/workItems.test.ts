@@ -45,8 +45,8 @@ const repo = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/database', () => ({ workItemRepository: repo }));
 
-const verifyOrgAccess = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
+const verifyOrgPermission = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission }));
 
 currentModule.name = 'collection';
 await import('@pages/api/work-items/index');
@@ -77,7 +77,7 @@ const item = (overrides: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  verifyOrgAccess.mockResolvedValue(undefined);
+  verifyOrgPermission.mockResolvedValue(undefined);
 });
 
 describe('GET /api/work-items', () => {
@@ -131,7 +131,7 @@ describe('GET /api/work-items', () => {
   it('filters by organization without an org-access check', async () => {
     await call('collection', 'get', { query: { organizationId: 'org1' } }).result;
 
-    expect(verifyOrgAccess).not.toHaveBeenCalled();
+    expect(verifyOrgPermission).not.toHaveBeenCalled();
     expect(repo.listForUser).toHaveBeenCalledWith(
       'u1',
       { organizationId: 'org1' },
@@ -159,6 +159,12 @@ describe('POST /api/work-items', () => {
       dependencies: [],
     });
     expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('gates org-scoped creation on the manageContent permission', async () => {
+    await call('collection', 'post', { body: { title: 'Ship it', organizationId: 'org1' } }).result;
+
+    expect(verifyOrgPermission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'org1', 'manageContent');
   });
 
   it('requires a title', async () => {
