@@ -22,6 +22,33 @@ afterAll(async () => {
 
 describe('persisted organization MFA content boundary', () => {
   it(
+    'measures repeated child reads with thousands of bound parents',
+    async () => {
+      const userId = String(new mongoose.Types.ObjectId());
+      const org = await Organization.create({
+        name: 'Volume MFA',
+        userId,
+        mfaPolicy: { required: true, graceDays: 0, enforceAfter: new Date(0) },
+      });
+      await Project.collection.insertMany(
+        Array.from({ length: 5000 }, (_, index) => ({ name: `volume-${index}`, userId, organizationId: org.id }))
+      );
+      const started = performance.now();
+      await withOrganizationMfaContext(
+        () => userId,
+        async () => {
+          for (let index = 0; index < 20; index++)
+            expect(await ArtifactVersion.find({ createdBy: userId }).lean()).toEqual([]);
+        }
+      );
+      console.info(
+        `organization-mfa-volume: 5000 bound projects, 20 child reads, ${Math.round(performance.now() - started)}ms`
+      );
+    },
+    MONGO_TEST_TIMEOUT_MS
+  );
+
+  it(
     'denies bound by-id, list, aggregate and mutation paths while retaining personal data',
     async () => {
       const userId = new mongoose.Types.ObjectId();
@@ -178,14 +205,12 @@ describe('persisted organization MFA content boundary', () => {
         userId: String(userId),
         mfaPolicy: { required: true, graceDays: 0, enforceAfter: new Date(0) },
       });
-      await mongoose.connection
-        .db!.collection('users')
-        .insertOne({
-          _id: userId,
-          username: String(userId),
-          isSystem: true,
-          orgServiceAccount: { organizationId: org.id },
-        });
+      await mongoose.connection.db!.collection('users').insertOne({
+        _id: userId,
+        username: String(userId),
+        isSystem: true,
+        orgServiceAccount: { organizationId: org.id },
+      });
       const project = await Project.create({ name: 'service', userId: String(userId), organizationId: org.id });
       await withOrganizationMfaContext(
         () => String(userId),
