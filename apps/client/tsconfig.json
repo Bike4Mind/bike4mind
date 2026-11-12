@@ -16,6 +16,7 @@
     "public/sw.js",
     "app/sw.ts",
     "e2e",
+    "visual-admin",
     "playwright.config.ts",
     "ios",
     "android",

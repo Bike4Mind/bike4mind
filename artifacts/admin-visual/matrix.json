@@ -1,0 +1,420 @@
+[
+  {
+    "name": "dlq-table-light-1440.png",
+    "width": 1440,
+    "theme": "light",
+    "state": "table",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "dlq-batch-light-1440.png",
+    "width": 1440,
+    "theme": "light",
+    "state": "batch",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "dlq-single-light-1440.png",
+    "width": 1440,
+    "theme": "light",
+    "state": "single",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "dlq-table-dark-1440.png",
+    "width": 1440,
+    "theme": "dark",
+    "state": "table",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "dlq-batch-dark-1440.png",
+    "width": 1440,
+    "theme": "dark",
+    "state": "batch",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "dlq-single-dark-1440.png",
+    "width": 1440,
+    "theme": "dark",
+    "state": "single",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "dlq-table-light-768.png",
+    "width": 768,
+    "theme": "light",
+    "state": "table",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "dlq-batch-light-768.png",
+    "width": 768,
+    "theme": "light",
+    "state": "batch",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "dlq-single-light-768.png",
+    "width": 768,
+    "theme": "light",
+    "state": "single",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "dlq-table-dark-768.png",
+    "width": 768,
+    "theme": "dark",
+    "state": "table",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "dlq-batch-dark-768.png",
+    "width": 768,
+    "theme": "dark",
+    "state": "batch",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "dlq-single-dark-768.png",
+    "width": 768,
+    "theme": "dark",
+    "state": "single",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "dlq-table-light-390.png",
+    "width": 390,
+    "theme": "light",
+    "state": "table",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  {
+    "name": "dlq-batch-light-390.png",
+    "width": 390,
+    "theme": "light",
+    "state": "batch",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  {
+    "name": "dlq-single-light-390.png",
+    "width": 390,
+    "theme": "light",
+    "state": "single",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  {
+    "name": "dlq-table-dark-390.png",
+    "width": 390,
+    "theme": "dark",
+    "state": "table",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  {
+    "name": "dlq-batch-dark-390.png",
+    "width": 390,
+    "theme": "dark",
+    "state": "batch",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  {
+    "name": "dlq-single-dark-390.png",
+    "width": 390,
+    "theme": "dark",
+    "state": "single",
+    "evidence": "real-component fixture, not full app/E2E",
+    "overflow": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  {
+    "name": "ai-light-1440.png",
+    "width": 1440,
+    "theme": "light",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "ai-dark-1440.png",
+    "width": 1440,
+    "theme": "dark",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "ai-light-768.png",
+    "width": 768,
+    "theme": "light",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "ai-dark-768.png",
+    "width": 768,
+    "theme": "dark",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "brief-light-1440.png",
+    "width": 1440,
+    "theme": "light",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "brief-dark-1440.png",
+    "width": 1440,
+    "theme": "dark",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "brief-light-768.png",
+    "width": 768,
+    "theme": "light",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "brief-dark-768.png",
+    "width": 768,
+    "theme": "dark",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "feedback-close-light-1440.png",
+    "width": 1440,
+    "theme": "light",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "feedback-close-dark-1440.png",
+    "width": 1440,
+    "theme": "dark",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "feedback-close-light-768.png",
+    "width": 768,
+    "theme": "light",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "feedback-close-dark-768.png",
+    "width": 768,
+    "theme": "dark",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "feedback-history-light-1440.png",
+    "width": 1440,
+    "theme": "light",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "feedback-history-dark-1440.png",
+    "width": 1440,
+    "theme": "dark",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "feedback-history-light-768.png",
+    "width": 768,
+    "theme": "light",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "feedback-history-dark-768.png",
+    "width": 768,
+    "theme": "dark",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "setting-row-light-1440.png",
+    "width": 1440,
+    "theme": "light",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "setting-row-dark-1440.png",
+    "width": 1440,
+    "theme": "dark",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "setting-row-light-768.png",
+    "width": 768,
+    "theme": "light",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  },
+  {
+    "name": "setting-row-dark-768.png",
+    "width": 768,
+    "theme": "dark",
+    "evidence": "real-component fixture, not full app/E2E",
+    "errors": [],
+    "overflow": {
+      "viewport": 768,
+      "document": 768
+    }
+  }
+]
