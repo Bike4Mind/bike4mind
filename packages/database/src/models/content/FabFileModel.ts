@@ -996,6 +996,20 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return modelIds.filter((id): id is string => typeof id === 'string' && id.length > 0).sort();
   }
 
+  /**
+   * Ids of the live generated files that list `fileId` in their `derivedFrom`, newest first, at most
+   * `limit`. No access check: the caller filters the ids through a read door. The `sourceType` and
+   * `deletedAt` conjuncts match the partial `derivedFrom.fileId` index.
+   */
+  async findDerivedChildIds(fileId: string, limit: number): Promise<string[]> {
+    const children = await this.fabFileModel
+      .find({ 'derivedFrom.fileId': fileId, sourceType: FabFileSourceType.TOOL_GENERATED, deletedAt: null }, { _id: 1 })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(limit)
+      .lean();
+    return children.map(child => String(child._id));
+  }
+
   async executeSearch(
     query: {
       filter: Record<string, unknown>;
