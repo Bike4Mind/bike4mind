@@ -115,6 +115,22 @@ const ROWS: [string, string, string][] = [
   ['git add .', '', 'rrrr'],
   ['git add src/', '', 'rrrr'],
   ['git add -u', '', 'rrrr'],
+  ['git add *.ts', '', 'rrrr'],
+  ['git add src/*.ts', '', 'rrrr'],
+  ['git add -A *.md', '', 'rrrr'],
+  ['git status -- *.ts', '', 'rrrr'],
+  ["git diff -- '*.ts'", '', 'rrrr'],
+  ['git diff -- *.ts', '', 'rrrr'],
+  ['git log -- src/*.ts', '', 'rrrr'],
+  ['git commit -m x -- *.ts', '', 'rrrr'],
+  ['git fetch origin -o [+-]*', '', 'aaaa'],
+  ['git fetch -o [+-]* origin', '', 'aaaa'],
+  ['git commit -m [+-]*', '', 'aaaa'],
+  ['git log -n [+-]*', '', 'aaaa'],
+  ['git commit -m x *', '', 'aaaa'],
+  ['git commit -m x -*', '', 'aaaa'],
+  ['git fetch origin ?x', '', 'aaaa'],
+  ['git push origin [+-]*', '', 'aaaa'],
   ["git commit -m 'fix: handle empty input'", '', 'rrrr'],
   ["git commit -am 'chore: update'", '', 'rrrr'],
   ['git commit --amend --no-edit', '', 'rrrr'],
@@ -291,6 +307,28 @@ describe('shell approval of common agent git commands', () => {
 
   it.each(ROWS)('decides %s (in proj/%s) as %s', async (command, folder, expected) => {
     expect(await cells(command, folder)).toBe(expected);
+  });
+
+  it.each([
+    'git frobnicate',
+    'git status --frobnicate',
+    'git log --oneline && git frobnicate -x',
+    'pnpm exec git frobnicate',
+  ])('asks in every mode for %s, which the safe table does not list', async command => {
+    expect(await cells(command, '')).toBe('aaaa');
+  });
+
+  it('names the git form the safe table does not list, and asks about that part alone', async () => {
+    const context = {
+      roots: [proj],
+      workingDirectory: proj,
+      signal: new AbortController().signal,
+      protectedPaths: [userData],
+      uncoverablePaths: roots,
+    } as ToolContext;
+    const prompt = await shellApproval('bash_execute', { command: 'git log -1 && git frobnicate', cwd: proj }, context);
+    expect(prompt.detail).toContain('Runs git in a form Desktop does not list as safe (git frobnicate).');
+    expect(prompt.always?.commands.map(part => part.ask?.kinds ?? [])).toEqual([[], ['gitUnlisted']]);
   });
 
   // GIT_CELLS=<file> appends every row's current cells to that file, to compare two versions of the scan.

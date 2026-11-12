@@ -12,6 +12,7 @@ import {
 } from './bashArity';
 import { parseBash } from './bashParser';
 import { isEnvFile } from './envFiles';
+import { gitListed, type GitWord } from './gitTable';
 import { own } from '@shared/ownKeys';
 import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
 import {
@@ -81,6 +82,8 @@ export interface ShellCommand {
   outbound?: { reason: string; target: RepositoryWrite | null };
   /** `.env` files this part names as an argument. */
   envFiles?: string[];
+  /** Why the git form this part runs is not one gitTable.ts lists, e.g. `git cleen`. */
+  gitUnlisted?: string;
 }
 
 export interface ShellScan {
@@ -1213,6 +1216,61 @@ function operandWords(raw: string, scope: WordScope): OperandWord[] | null {
     return each.some(words => words === null) ? null : each.flatMap(words => words ?? []);
   }
   return expandBraces(wordPieces(raw))?.map(pieces => resolveWord(pieces, scope)) ?? null;
+}
+
+const OPEN_GIT_WORD: GitWord = { text: '', whole: false, splits: true };
+// `"$@"`, `"${a[@]}"` and the like expand to several words even inside double quotes.
+const QUOTED_SPLIT = /^\$\{?[@*]|\[[@*]\]/;
+
+type GitFill = { placeholder: string; prefix: string };
+
+/**
+ * One shell word as the words gitTable reads, one per brace variant. A word holding `fill.placeholder` (an xargs or
+ * find replace string) stands for input starting with `fill.prefix`.
+ */
+function gitWords(raw: string, scope: WordScope, fill?: GitFill): GitWord[] {
+  if (fill !== undefined) {
+    const value = wordValue(raw);
+    const at = value.indexOf(fill.placeholder);
+    if (at !== -1) {
+      const before = isDynamic(raw) || /[*?[{~]/.test(value.slice(0, at)) ? '' : value.slice(0, at);
+      return [{ text: before || fill.prefix, whole: false, splits: false }];
+    }
+  }
+  const variants = expandBraces(wordPieces(raw));
+  if (variants === null) return [OPEN_GIT_WORD];
+  const plain: WordScope = { ...scope, lost: false, homeUsed: () => undefined };
+  return variants.map(pieces => {
+    const { text, glob, expandAt } = resolveWord(pieces, plain);
+    const globAt = glob.indexOf(true);
+    if (expandAt === null && globAt === -1) return { text, whole: true, splits: false };
+    const end = Math.min(expandAt ?? text.length, globAt === -1 ? text.length : globAt);
+    const splits = pieces.some(
+      piece => 'expansion' in piece && (piece.unquoted === true || QUOTED_SPLIT.test(piece.expansion))
+    );
+    return { text: text.slice(0, end), whole: false, splits, ...(globAt === -1 ? {} : { glob: true }) };
+  });
+}
+
+/** The calls git gets from `args`: one per combination of the values each `for` variable among them takes. */
+function gitCalls(args: readonly string[], scope: WordScope, fill?: GitFill): GitWord[][] {
+  let calls: GitWord[][] = [[]];
+  for (const raw of args) {
+    const bound = boundWords(raw, scope.bindings);
+    const choices = bound ? bound.map(word => gitWords(word, scope, fill)) : [gitWords(raw, scope, fill)];
+    calls =
+      calls.length * choices.length > 16
+        ? calls.map(call => [...call, OPEN_GIT_WORD])
+        : calls.flatMap(call => choices.map(choice => [...call, ...choice]));
+  }
+  return calls;
+}
+
+/** The one plain start point a find names before its expression, which each `{}` it fills starts with; else ''. */
+function findStart(args: readonly string[]): string {
+  const [first, second] = args;
+  if (first === undefined || /[$`*?[{~\\'"]/.test(first) || /^[-(!,]/.test(first)) return '';
+  return second === undefined || /^[-(!,]/.test(wordValue(second)) ? first : '';
 }
 
 /** A word already as the program sees it, as a Windows program's operand is: no quotes, and no expansion left. */
@@ -6380,6 +6438,25 @@ export async function scanShell(
       };
     };
 
+    /** Why git, run with `args` (its words after `git`) by the command `tokens`, runs a form gitTable does not list. */
+    const gitUnlistedReason = (tokens: readonly string[], args: readonly string[]): string | null => {
+      const feeds = xargsFeeds(tokens) !== null;
+      const replace = feeds ? xargsReplace(tokens) : null;
+      const [first = '', ...rest] = withoutWrappers(tokens);
+      const fill =
+        replace !== null
+          ? { placeholder: replace, prefix: '' }
+          : programName(unquote(first)) === 'find'
+            ? { placeholder: '{}', prefix: findStart(rest) }
+            : undefined;
+      for (const words of gitCalls(args, scope(), fill)) {
+        // xargs adds the words it reads after the ones it was given.
+        const listing = gitListed(feeds && replace === null ? [...words, OPEN_GIT_WORD] : words);
+        if (!listing.listed) return listing.reason;
+      }
+      return null;
+    };
+
     /**
      * Records `folder` as reached whole, and a write there as reaching the settings of a session folder in it.
      * `dotless` when only names without a leading dot are reached directly under it.
@@ -7337,11 +7414,14 @@ export async function scanShell(
       if (expanded === null) unreadOperands++;
       const launches = launchedGitCommands(written);
       if (launches.unread) unreadOperands++;
+      let unlisted: string | null = null;
       for (const launched of launches.runs) {
         const launchedExpansion = await gitAliasExpansion(node, launched);
         const checked = launchedExpansion ?? launched;
         if (launchedExpansion === null || untrackableCommand(checked) || programEnvironment(node, checked))
           unreadOperands++;
+        if (launchedExpansion !== null)
+          unlisted ??= gitUnlistedReason(written, withoutWrappers(launchedExpansion).slice(1));
         const git = gitSubcommand(withoutWrappers(checked).slice(1).map(unquote), state.cwd);
         if (git !== null && !git.unread) await checkGitPrograms(node, git);
         if (expanded !== null && launchedExpansion !== null && launchedExpansion.join(' ') !== launched.join(' ')) {
@@ -7442,6 +7522,7 @@ export async function scanShell(
       if (LAUNCHES_COMMANDS.has(inner) && dropsBareRepositoryBehind(tokens)) unreadOperands++;
       if (inner === 'git') {
         gitCommands.add(node.id);
+        if (expanded !== null) unlisted ??= gitUnlistedReason(tokens, wrappedRest);
         if (dropsBareRepository(tokens) || setsBareRepository(wrappedRest) || unsetsConfig) {
           unreadOperands++;
         }
@@ -7770,6 +7851,7 @@ export async function scanShell(
       for (const place of cloned) createdLinks.add(guardForm(place));
       // The window includes any substitution in its words: output the scan cannot read decides this part too.
       if (unreadOperands > unreadBefore) Object.assign(entry, { coverable: false, words: original, unread: true });
+      if (unlisted !== null) Object.assign(entry, { coverable: false, words: original, gitUnlisted: unlisted });
       return entry;
     };
 
