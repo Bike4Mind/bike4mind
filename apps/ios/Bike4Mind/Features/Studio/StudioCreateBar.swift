@@ -73,9 +73,9 @@ struct StudioCreateBar: View {
       .padding(.horizontal, Tokens.Spacing.m)
       .padding(.vertical, Tokens.Spacing.s + 2)
       .background(Tokens.Palette.groupedBackground)
-      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous))
+      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous))
       .overlay {
-        RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous)
+        RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous)
           .strokeBorder(Tokens.Palette.divider, lineWidth: 1)
       }
       .accessibilityIdentifier("studio-create-prompt")
