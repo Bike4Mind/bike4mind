@@ -77,7 +77,8 @@ async function seedDetection(
   userIds: string[],
   verdict: string | null,
   groupMembers: string[] = [],
-  detectedAt = daysAgo(2)
+  detectedAt = daysAgo(2),
+  verdicts: Record<string, unknown>[] = []
 ): Promise<string> {
   const _id = new mongoose.Types.ObjectId();
   await ShadowDetectionModel.collection.insertOne({
@@ -88,6 +89,7 @@ async function seedDetection(
     ...(groupMembers.length > 0 ? { group: { members: groupMembers.map(userId => ({ userId })) } } : {}),
     detectedAt,
     verdict,
+    verdicts,
   });
   return _id.toString();
 }
@@ -193,6 +195,30 @@ describe('drawEvalSet', () => {
     const direct = byUser.get(world.legitFlagged);
     expect(member.campaignKey).toBe(direct?.campaignKey);
     expect(member.split).toBe(direct?.split);
+  });
+
+  it('does not freeze an automation verdict as an admin verdict', async () => {
+    await seedWorld();
+    const automated = await seedUser({});
+    await seedDetection([automated], 'confirmed_abuse', [], daysAgo(2), [
+      {
+        verdict: 'confirmed_abuse',
+        source: 'automation',
+        reviewerId: 'automation',
+        reason: 'auto-graded',
+        reviewedAt: daysAgo(1),
+      },
+    ]);
+
+    const id = await drawEvalSet(request, ADMIN_ID, deps('seed-a'), NOW);
+    const set = await abuseEvalSetRepository.findById(id);
+    if (!set) throw new Error('set was not stored');
+
+    const example = set.examples.find(candidate => candidate.userId === automated);
+    if (!example) throw new Error('the automated account was not drawn');
+    expect(example.kind).toBe('flagged');
+    expect(example.frozenLabel).not.toMatchObject({ source: 'adminVerdict' });
+    expect(example.frozenLabel).toBeNull();
   });
 });
 
