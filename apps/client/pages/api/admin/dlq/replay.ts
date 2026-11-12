@@ -11,7 +11,7 @@ import { z } from 'zod';
 
 const MAX_REPLAY_ATTEMPTS = 3;
 const MAX_BATCH_SIZE = 100;
-// Short polling can return fewer messages than the queue holds, ending the receive loop early or missing the fallback match.
+// Short polling samples a subset of SQS servers, so a receive can miss messages the queue holds (including the fallback match).
 const RECEIVE_WAIT_SECONDS = 2;
 
 const DirectMessageSchema = z.object({
@@ -238,13 +238,12 @@ const handler = adminApi({
   // to request specific messages. When targeting specific messageIds, we over-fetch
   // by 2x to increase the probability of receiving them.
   const receiveCount = messageIds ? Math.max(messageIds.length * 2, 10) : batchSize;
-  const iterations = Math.ceil(receiveCount / 10);
   const allMessages: Message[] = [];
   const messageIdSet = messageIds ? new Set(messageIds) : null;
 
-  for (let i = 0; i < iterations; i++) {
-    const remaining = receiveCount - allMessages.length;
-    const toReceive = Math.min(remaining, 10);
+  // Each non-empty receive adds at least one message, so receiveCount calls is a hard upper bound.
+  for (let i = 0; i < receiveCount && allMessages.length < receiveCount; i++) {
+    const toReceive = Math.min(receiveCount - allMessages.length, 10);
     const messages = await receiveFromQueue(dlqUrl, toReceive, 60, RECEIVE_WAIT_SECONDS);
     allMessages.push(...messages);
 
@@ -254,8 +253,8 @@ const handler = adminApi({
       if (foundAll) break;
     }
 
-    // Stop if no more messages
-    if (messages.length < toReceive) break;
+    // SQS can return fewer messages than it holds, so only an empty receive means the queue is drained.
+    if (messages.length === 0) break;
   }
 
   // Filter to only requested messages when messageIds is specified
