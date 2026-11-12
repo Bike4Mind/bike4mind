@@ -27,6 +27,20 @@ export const AGENT_STATE_PRIORITY: readonly AgentState[] = [
   'done',
 ];
 
+/** "4 agents: 1 needs you, 2 working, 1 done", most urgent first; idle and stopped count as done. */
+export function describeAgentStates(states: readonly AgentState[]): string {
+  if (states.length === 0) return 'No agents yet';
+  const counts = new Map<AgentState, number>();
+  for (const state of states) {
+    const bucket = state === 'idle' || state === 'stopped' ? 'done' : state;
+    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+  }
+  const parts = AGENT_STATE_PRIORITY.filter(state => counts.has(state)).map(
+    state => `${counts.get(state)} ${AGENT_STATE_LABEL[state].toLowerCase()}`
+  );
+  return `${states.length} ${states.length === 1 ? 'agent' : 'agents'}: ${parts.join(', ')}`;
+}
+
 export interface AgentView {
   id: string;
   title: string;

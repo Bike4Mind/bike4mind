@@ -29,6 +29,18 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'decidedBy.userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['decidedBy.name'] }],
   },
+  AdminAiAttempt: {
+    kind: 'noUserData',
+    note: 'Platform AI call accounting and outcome metadata; suggestionId links a suggestion, not a user account.',
+  },
+  AdminAiClass: {
+    kind: 'noUserData',
+    note: 'Operator-maintained action-class modes and aggregate replay evidence; replayArtifact is free text and is not scanned.',
+  },
+  AdminMorningBrief: {
+    kind: 'noUserData',
+    note: 'Environment/day operational counts, alarm names, aggregate AI activity and admin page links; no user references or source queue content are stored.',
+  },
   // An admin's request for a second admin's sign-off on a privileged action, kept with the audit trail.
   // `summary` and `paramsJson` (which may name the target account) are free text and not scanned.
   AdminApproval: {
