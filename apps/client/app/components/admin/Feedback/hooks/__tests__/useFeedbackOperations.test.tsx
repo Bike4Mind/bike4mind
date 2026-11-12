@@ -220,6 +220,17 @@ describe('useFeedbackOperations handleStatusChange', () => {
     expect(mocks.toastError).toHaveBeenCalledWith(expect.stringContaining('already Closed'), expect.anything());
     expect(screen.queryByTestId('undo-toast')).toBeNull();
   });
+
+  it('asks for a resolution when Undo would close a legacy unresolved report', async () => {
+    mocks.updateFeedbackStatusOnServer.mockResolvedValue(statusResponse(FeedbackStatus.New, FeedbackStatus.Closed));
+    const { result } = renderOperations(listParams(1));
+    await act(() =>
+      result.current.handleStatusChange({ ...reportItem, status: FeedbackStatus.Closed }, FeedbackStatus.New)
+    );
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await waitFor(() => expect(result.current.feedbackToClose?.status).toBe(FeedbackStatus.New));
+    expect(mocks.updateFeedbackStatusOnServer).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('useFeedbackOperations confirmDeleteFeedback', () => {

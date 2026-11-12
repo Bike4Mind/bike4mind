@@ -157,6 +157,10 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
           // Resolves even on failure: a retry would resend the same expectedStatus and fail again
           // (a 409 means the report moved), so the toast closes and the error goes to a plain toast.
           onUndo: async () => {
+            if (previousStatus === FeedbackStatus.Closed && !feedbackItem.resolution) {
+              setFeedbackToClose({ ...feedbackItem, status: updatedStatus });
+              return;
+            }
             try {
               await updateFeedbackStatusOnServer(feedbackItem._id, {
                 status: previousStatus,
