@@ -90,11 +90,7 @@ interface BulkDeleteResponse {
     deleted: string[];
     unshared: string[];
     notFound: string[];
-    /**
-     * Files that exist but whose access is only through a group or data lake - the user can see
-     * them in the browser but cannot delete or unshare them individually. Surfaced separately so
-     * the UI can explain the limitation rather than leaving those files silently stuck.
-     */
+    /** Readable shared or read-only files the caller cannot remove individually. */
     denied?: string[];
     /** @deprecated Use deleted/unshared instead */
     success?: string[];
@@ -121,19 +117,17 @@ export function useBulkDeleteFiles(options?: { onSuccess?: () => void; onError?:
       const removedSomething = data.results.deleted.length > 0 || data.results.unshared.length > 0;
       const hasFailures = data.results.failed.length > 0;
       const deniedCount = data.results.denied?.length ?? 0;
-      if (!removedSomething) {
+      if (deniedCount > 0) {
+        toast.warning(
+          `${data.message}. Shared or read-only files remain visible. Contact the owner to change your access.`,
+          { duration: 8000 }
+        );
+      } else if (!removedSomething) {
         toast.error(data.message);
       } else if (hasFailures) {
         toast.warning(data.message);
       } else {
         toast.success(data.message);
-      }
-      // Warn separately for denied files so the user understands why they keep reappearing.
-      if (deniedCount > 0) {
-        toast.warning(
-          `${deniedCount} file${deniedCount === 1 ? '' : 's'} could not be removed \u2014 ${deniedCount === 1 ? 'it is' : 'they are'} shared with you via a group or data lake. Contact the owner to remove your access.`,
-          { duration: 8000 }
-        );
       }
       options?.onSuccess?.();
     },

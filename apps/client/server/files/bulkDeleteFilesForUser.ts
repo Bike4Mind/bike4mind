@@ -20,6 +20,7 @@ import { createCdnInvalidationBatch } from '@bike4mind/server-utils/services/cdn
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { FileEvents, storageOwnerOf, sumStorageDeltaByOwner, type StorageOwner } from '@bike4mind/common';
+import { buildRequestFileScope } from '@server/utils/userFileScope';
 import type { Request } from 'express';
 
 export interface BulkDeleteFilesResult {
@@ -31,10 +32,25 @@ export interface BulkDeleteFilesResult {
    * share: the caller can see them in the browser but cannot delete or unshare them individually.
    * Kept separate from `notFound` on the internal endpoint so the SPA can surface a specific
    * message rather than silently leaving these files stuck in the user's browser.
-   * The public v1 API collapses `denied` into `not_found` (via `toPublicDeleteAction`).
+   * The public v1 route folds `denied` into its published `not_found` bucket.
    */
   denied: string[];
   failed: { id: string; error: string }[];
+}
+
+async function canReadFileForRemoval(req: Request, fileId: string): Promise<boolean> {
+  const scope = buildRequestFileScope(req, req.user);
+  try {
+    const readable = await fabFileRepository.findAccessibleInIds(
+      [fileId],
+      { userId: req.user.id, userGroups: scope.userGroups },
+      { dataLakeTags: scope.dataLakeTags }
+    );
+    return readable.some(file => file.id === fileId);
+  } catch (error) {
+    req.logger.warn('Could not verify file read access during bulk removal', { error });
+    return false;
+  }
 }
 
 /**
@@ -136,9 +152,8 @@ export async function bulkDeleteFilesForUser(req: Request, fileIds: string[]): P
           );
           results.unshared.push(fileId);
         } else if (result.action === 'denied') {
-          // File exists but user's access is only via group/data-lake, not a direct share.
-          // Keep separate from genuine not-found so the SPA can warn the user specifically.
-          results.denied.push(fileId);
+          const readable = await canReadFileForRemoval(req, fileId);
+          (readable ? results.denied : results.notFound).push(fileId);
         } else if (result.action === 'not_found') {
           results.notFound.push(fileId);
         }
