@@ -682,6 +682,48 @@ describe('verifyApiKey scope gate', () => {
   });
 });
 
+describe('verifyApiKey exchange keys', () => {
+  const exchangeKey = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'k1',
+    scopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ],
+    rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    oauthExchangeClientId: 'client-1',
+  };
+
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_somekey');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+  });
+
+  it('refuses an exchange key by default', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+    const rejection = verifyApiKey({});
+    await expect(rejection).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(rejection).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('admits an exchange key when the caller allows them', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+    await expect(verifyApiKey({}, { allowExchangeKeys: true })).resolves.toMatchObject({
+      keyId: 'k1',
+      oauthExchangeClientId: 'client-1',
+    });
+  });
+
+  it('leaves a personal key with the same scopes unchanged either way', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...exchangeKey,
+      oauthExchangeClientId: undefined,
+    });
+    await expect(verifyApiKey({})).resolves.toMatchObject({ keyId: 'k1' });
+    await expect(verifyApiKey({}, { allowExchangeKeys: true })).resolves.toMatchObject({ keyId: 'k1' });
+  });
+});
+
 describe('rate-limit errors carry their status and retry window', () => {
   beforeEach(() => {
     cacheStore.clear();

@@ -7,6 +7,7 @@ import {
   IEmbedBranding,
   IUserApiKeyDocument,
   IUserApiKeyRepository,
+  isExchangeKeyMetadata,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import { KEY_PREFIX_LENGTH, LEGACY_KEY_PREFIX_LENGTH } from './constants';
@@ -60,6 +61,8 @@ export interface ValidationResult {
   createdByUserId?: string;
   /** When the key was minted; rotation keeps it. Decides legacy status for grandfathered scope gates. */
   createdAt?: Date;
+  /** OAuth client that minted the key, present only for a federated exchange key. */
+  oauthExchangeClientId?: string;
   reason?: 'not_found' | 'invalid_hash' | 'expired' | 'disabled' | 'rate_limited';
 }
 
@@ -125,6 +128,7 @@ function finalizeApiKeyValidation(
     currentSpend: apiKey.usage?.totalSpendCredits,
     createdByUserId: apiKey.metadata?.createdByUserId,
     createdAt: apiKey.createdAt,
+    oauthExchangeClientId: isExchangeKeyMetadata(apiKey.metadata) ? apiKey.metadata.oauthClientId : undefined,
   };
 }
 

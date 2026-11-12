@@ -682,3 +682,41 @@ describe('apiKeyAuth suspended owner', () => {
     expect(findOwnerOfDisabledUserApiKeyMock).not.toHaveBeenCalled();
   });
 });
+
+describe('apiKeyAuth with an exchange key', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env[SCOPE_STAGING_ENV_VAR];
+    findByIdMock.mockResolvedValue({ id: 'user-1', isBanned: false });
+  });
+
+  const keyWith = (extra: Record<string, unknown>) => ({
+    isValid: true,
+    keyId: 'key-1',
+    userId: 'user-1',
+    scopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ],
+    rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    ...extra,
+  });
+
+  it('refuses it on a scope-less route', async () => {
+    validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+    const { passed, error } = await run(undefined, makeReq());
+    expect(passed).toBe(false);
+    expect(error).toBeInstanceOf(ForbiddenError);
+  });
+
+  it('admits it on a route that declares one of its scopes and exposes the marker', async () => {
+    validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+    const req = makeReq();
+    expect((await run([ApiKeyScope.ME_READ], req)).passed).toBe(true);
+    expect(
+      (req as unknown as { apiKeyInfo: { oauthExchangeClientId?: string } }).apiKeyInfo.oauthExchangeClientId
+    ).toBe('client-1');
+  });
+
+  it('still admits a personal key with the same scopes on a scope-less route', async () => {
+    validateUserApiKeyMock.mockResolvedValue(keyWith({}));
+    expect((await run(undefined, makeReq())).passed).toBe(true);
+  });
+});
