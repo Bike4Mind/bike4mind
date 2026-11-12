@@ -110,6 +110,15 @@ export class TeamsPage extends BasePage {
     await expect(this.page.getByTestId('confirmation-modal')).toBeHidden({ timeout: TIMEOUTS.MODAL });
   }
 
+  async confirmOffboarding() {
+    const dialog = this.page.getByTestId('offboard-dialog');
+    await expect(dialog).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    const confirmButton = dialog.getByTestId('offboard-dialog-confirm-btn');
+    await expect(confirmButton).toBeEnabled({ timeout: TIMEOUTS.VISIBLE });
+    await confirmButton.click();
+    await expect(dialog).toBeHidden({ timeout: TIMEOUTS.MODAL });
+  }
+
   /** Add Member -> search -> pick the user by name -> Add. The pick sends an invite, not a membership. */
   async inviteMember(searchTerm: string, name: string) {
     await this.page.getByTestId('organization-members-add-btn').click();
