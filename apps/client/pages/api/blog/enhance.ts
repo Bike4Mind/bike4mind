@@ -32,7 +32,7 @@ async function enhanceContent(
   logger: Logger
 ): Promise<BlogEnhanceResponse> {
   try {
-    const operationsModel = await OperationsModelService.getOperationsModel();
+    const operationsModel = await OperationsModelService.getOperationsModel({ endUserId: user.id });
     const operationsModelInfo = operationsModel.modelInfo;
 
     const apiKey = await getEffectiveApiKeyByBackend(user.id, operationsModelInfo.backend);

@@ -291,6 +291,8 @@ export const authHolders = {
       'resetPasswordToken',
       'emailVerificationToken',
       'pendingEmailToken',
+      // A hash of the user id that only resolves provider safety notices; the export already has the id.
+      'providerEndUserId',
     ],
   },
   UserActivityCounter: {

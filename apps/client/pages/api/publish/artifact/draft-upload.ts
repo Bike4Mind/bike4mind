@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { PUBLISH_LIMITS } from '@bike4mind/common';
-import { verifyDraftUploadToken } from '@server/services/publish';
+import { DRAFT_UPLOAD_TOKEN_HEADER, verifyDraftUploadToken } from '@server/services/publish';
 
 /**
  * PUT /api/publish/artifact/draft-upload - SELF-HOST proxy for step 2 of the
@@ -13,8 +13,9 @@ import { verifyDraftUploadToken } from '@server/services/publish';
  * decides which URL the browser gets (draftUploadUrl.ts).
  *
  * Anonymous by design - the signed capability token IS the auth (same posture as
- * the presigned URL it replaces). The token pins {draftId, path}; we upload only
- * to the claim's key, so a tampered query string cannot redirect the write.
+ * the presigned URL it replaces). The token arrives in the `x-upload-token` header
+ * and pins {draftId, path}; we upload only to the claim's key, so a tampered query
+ * string cannot redirect the write.
  * Inert (404) unless B4M_SELF_HOST is set, so it adds no surface to hosted stages.
  *
  * bodyParser is disabled so the raw file bytes reach us unparsed; we read the
@@ -37,9 +38,16 @@ const handler = baseApi({ auth: false, maxBodySize: PUBLISH_LIMITS.maxFileBytes 
       return res.status(404).json({ error: 'Not found' });
     }
 
-    // A well-formed mint URL carries exactly one string `token`; anything else
-    // (missing, repeated, or a nested query object) is malformed -> reject.
-    const token = typeof req.query.token === 'string' ? req.query.token : undefined;
+    // Exactly one string token; a missing or repeated value is malformed -> reject.
+    // `?token=` is DEPRECATED, kept for CLI and desktop builds that predate the
+    // header; remove after one release of each.
+    const headerToken = req.headers[DRAFT_UPLOAD_TOKEN_HEADER];
+    const token =
+      typeof headerToken === 'string' && headerToken
+        ? headerToken
+        : typeof req.query.token === 'string'
+          ? req.query.token
+          : undefined;
     if (!token) {
       return res.status(401).json({ error: 'Missing upload token' });
     }

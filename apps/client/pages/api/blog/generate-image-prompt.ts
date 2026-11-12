@@ -30,7 +30,7 @@ async function generateImagePrompt(
   logger: Logger
 ): Promise<GenerateImagePromptResponse> {
   try {
-    const operationsModel = await OperationsModelService.getOperationsModel();
+    const operationsModel = await OperationsModelService.getOperationsModel({ endUserId: user.id });
     const operationsModelInfo = operationsModel.modelInfo;
 
     const apiKey = await getEffectiveApiKeyByBackend(user.id, operationsModelInfo.backend);

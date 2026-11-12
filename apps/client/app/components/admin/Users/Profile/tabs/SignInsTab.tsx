@@ -85,13 +85,16 @@ const SignupCluster: React.FC<{ userId: string }> = ({ userId }) => {
   if (cluster.isError || !cluster.data) return <>Could not be checked</>;
   const { fingerprintAvailable, matches, truncated, windowDays } = cluster.data;
   if (!fingerprintAvailable) return <>No signup fingerprint recorded</>;
-  if (matches.length === 0) return <>No other account from this client within {windowDays} days</>;
+  if (matches.length === 0) return <>No other signup with this JA4 fingerprint within {windowDays} days</>;
   return (
     <Stack gap={0.5} data-testid="user-signup-cluster">
       <StatusChip
         tone="warn"
-        label={`${matches.length}${truncated ? '+' : ''} other account${matches.length === 1 ? '' : 's'} from this client within ${windowDays} days`}
+        label={`${matches.length}${truncated ? '+' : ''} other signup${matches.length === 1 ? '' : 's'} with matching JA4 within ${windowDays} days`}
       />
+      <Typography level="body-sm">
+        A JA4 match is a shared TLS fingerprint. It does not prove the same device or operator.
+      </Typography>
       {matches.map(match => (
         <Link
           key={match.id}

@@ -17,6 +17,10 @@ export interface DlqQueueInfo {
   owner?: string;
   approximateMessageCount: number;
   approximateNotVisibleCount: number;
+  /** Consumer Lambda log groups; null when the consumer could not be resolved. */
+  logGroups?: string[] | null;
+  /** CloudWatch Logs Insights link over the consumer's last 24h of logs. */
+  logsUrl?: string | null;
   /** Absent when the queue attributes could not be read. */
   messageRetentionSeconds?: number;
 }
@@ -30,6 +34,8 @@ export interface DlqMessage {
   sentTimestamp?: string;
   approximateReceiveCount?: string;
   approximateFirstReceiveTimestamp?: string;
+  /** CloudWatch Logs Insights link over the consumer's logs around this message's send time. */
+  logsUrl?: string | null;
 }
 
 export interface DlqReplayResult {

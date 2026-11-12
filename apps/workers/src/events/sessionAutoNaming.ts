@@ -64,7 +64,7 @@ export const handler = withEventContext(async (event, logger) => {
   let lastCompletionInfo: CompletionInfo | undefined;
   const startTime = Date.now();
   try {
-    const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+    const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: user.id });
     logger.info(`Using operations model for auto-naming: ${modelId}`);
 
     updatedSession = await sessionService.autoName(

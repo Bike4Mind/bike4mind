@@ -142,7 +142,7 @@ const handler = nextRouteForContract(searchSessionsContract).post(
       let throwIfExpansionRefused = () => {};
       try {
         const expansionStart = Date.now();
-        const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+        const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: userId });
         // The provider promise owns settlement even when SmallLLM's timeout returns a fallback first.
         const metered = meterSearchBackend(req, llm, modelInfo, 'semantic search expansion', quotaContext);
         throwIfExpansionRefused = metered.throwIfRefused;
@@ -469,7 +469,7 @@ const handler = nextRouteForContract(searchSessionsContract).post(
         let throwIfReRankRefused = () => {};
 
         try {
-          const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+          const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: userId });
           const metered = meterSearchBackend(req, llm, modelInfo, 'semantic search reranking', quotaContext);
           throwIfReRankRefused = metered.throwIfRefused;
           const reRankService = new ReRankService({ llm: metered.llm, modelId }, req.logger);

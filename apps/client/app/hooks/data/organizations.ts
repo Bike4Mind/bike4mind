@@ -123,9 +123,9 @@ export function useSearchOrganizations(
           totalPages: Math.ceil(response.data.total / params.limit),
           totalOrganizations: response.data.total,
         };
-      } catch (e) {
+      } catch (error) {
         signal.throwIfAborted();
-        return { data: [], totalPages: 0, totalOrganizations: 0 };
+        throw error;
       }
     },
     enabled: options?.enabled ?? true,

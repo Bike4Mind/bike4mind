@@ -44,12 +44,21 @@ describe('GET /api/admin/shadow-detections/ai-advisory', () => {
   });
 
   it('returns the advisory summary uncached', async () => {
-    const summary = { since: SINCE, advisories: [], networks: [], mailDomains: [], truncated: false };
+    const summary = {
+      since: SINCE,
+      advisories: [],
+      networks: [],
+      mailDomains: [],
+      linkedAccounts: [],
+      linkedAccountsStatus: 'complete',
+      truncated: false,
+    };
     h.listAiAbuseAdvisories.mockResolvedValue(summary);
     const { req, res } = createMocks({ method: 'GET' });
 
     await h.get!(req, res);
 
+    expect(h.listAiAbuseAdvisories).toHaveBeenCalledWith(undefined, { includeLinkedAccounts: true });
     expect(res._getStatusCode()).toBe(200);
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(JSON.parse(res._getData())).toEqual({ ...summary, since: SINCE.toISOString() });

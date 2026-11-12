@@ -235,7 +235,7 @@
   "devDependencies": {
     "@bike4mind/eslint-config": "workspace:*",
     "@bike4mind/typescript-config": "workspace:*",
-    "@playwright/test": "^1.64.0",
+    "@playwright/test": "^1.65.0",
     "@serwist/turbopack": "9.5.3",
     "@tanstack/react-query-devtools": "^5.104.2",
     "@tanstack/router-cli": "^1.167.43",
