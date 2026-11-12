@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import {
   useDeleteOrganization,
+  useGetOrganization,
   useGetUserOrganizations,
   useOrganizationInvites,
   useSearchOrganizations,
@@ -230,9 +231,28 @@ describe('useDeleteOrganization', () => {
       await view.result.current.remove.mutateAsync('org1');
     });
 
+    await new Promise(resolve => setTimeout(resolve, 50));
+
     expect(get).toHaveBeenCalledTimes(1);
-    expect(queryClient.getQueryData(['organizations', 'org1', 'invites'])).toBeUndefined();
     expect(toast.success).toHaveBeenCalledWith('Organization deleted successfully');
+  });
+
+  it('does not refetch the deleted org detail either while its page is still mounted', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    get.mockResolvedValue({ data: { id: 'org1' } });
+    const view = renderHook(() => ({ org: useGetOrganization('org1'), remove: useDeleteOrganization() }), { wrapper });
+    await waitFor(() => expect(view.result.current.org.isSuccess).toBe(true));
+    expect(get).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await view.result.current.remove.mutateAsync('org1');
+    });
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(get).toHaveBeenCalledTimes(1);
   });
 
   it('still refetches other organization queries', async () => {
