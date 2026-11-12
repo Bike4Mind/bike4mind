@@ -233,9 +233,10 @@ export async function findReadableArtifactId(
     if (typeof id === 'string') return id;
   } catch (error) {
     console.warn('Error finding readable artifact:', error);
+    return findExistingArtifactId(type, identifier, sessionId);
   }
-  // Rows that carry the identifier only as an id segment, which the by-identifier lookup cannot match.
-  return findExistingArtifactId(type, identifier, sessionId);
+  // The route answered with no match, so only rows that carry the identifier as an id segment remain.
+  return findArtifactIdByIdSegment(type, identifier, sessionId);
 }
 
 /**
@@ -256,8 +257,19 @@ export async function findExistingArtifactId(
       return byIdentifier;
     }
 
-    // A legacy row with neither the field nor metadata.originalIdentifier carries the identifier
-    // only as an id segment.
+    return await findArtifactIdByIdSegment(type, identifier, sessionId);
+  } catch (error) {
+    console.warn('Error finding existing artifact:', error);
+    return null;
+  }
+}
+
+/**
+ * A legacy row with neither the field nor metadata.originalIdentifier carries the identifier only
+ * as an id segment; this scans the caller's recent rows for it.
+ */
+async function findArtifactIdByIdSegment(type: string, identifier: string, sessionId: string): Promise<string | null> {
+  try {
     const response = await api.get(`/api/artifacts`, {
       params: {
         sessionId,
