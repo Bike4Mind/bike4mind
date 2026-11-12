@@ -233,7 +233,7 @@ export function useDeleteOrganization() {
         queryKey: ['organizations'],
         predicate: query => query.queryKey[1] !== orgId,
       });
-      toast.success('Organization deleted successfully');
+      toast.success('Team deleted successfully');
     },
     onError: (error: unknown) => {
       toast.error(getErrorMessage(error));
