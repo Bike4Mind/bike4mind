@@ -13,7 +13,7 @@ const ByIdentifierSchema = z.object({
   identifier: z.string().min(1),
 });
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   /**
    * GET /api/artifacts/by-identifier
    * The session's artifact for a type + identifier that the caller may read (owner, shared or public)
