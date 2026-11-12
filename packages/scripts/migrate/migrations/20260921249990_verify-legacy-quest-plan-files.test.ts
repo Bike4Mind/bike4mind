@@ -9,7 +9,7 @@ vi.mock('../legacyQuestPlanConversion', () => ({
   verifyLegacyQuestPlanCoverage: h.verify,
 }));
 
-import migration from './20260921241030_verify-legacy-quest-plan-files';
+import migration from './20260921249990_verify-legacy-quest-plan-files';
 
 const coverage = (expected: number, files: number, over: Record<string, unknown> = {}) => ({
   expected,

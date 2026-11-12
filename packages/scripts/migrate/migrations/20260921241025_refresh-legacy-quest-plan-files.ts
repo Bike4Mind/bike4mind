@@ -5,7 +5,7 @@ import { type MigrationFile } from './index';
 /**
  * Final pass of ConvertLegacyQuestPlansToFiles (20260921239990), run now that nothing writes the
  * legacy plans and graphs any more: refreshes the files whose source was edited after the first
- * pass. VerifyLegacyQuestPlanFiles (20260921241030) checks coverage once this one is applied; they
+ * pass. VerifyLegacyQuestPlanFiles (20260921249990) checks coverage once this one is applied; they
  * are separate ids so each full walk gets the whole run budget on its own deploy if it needs it.
  */
 const migration: MigrationFile = {

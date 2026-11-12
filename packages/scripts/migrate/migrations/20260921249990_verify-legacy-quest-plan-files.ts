@@ -15,7 +15,7 @@ const migration: MigrationFile = {
   // Backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001), which must sort
   // last. The runner stops at the first throw, so a coverage failure also holds back every pending
   // id above this one: today only 20260922000000/1, plus any migration later backdated in between.
-  id: 20260921241030,
+  id: 20260921249990,
   name: 'verify legacy quest plan file coverage',
 
   up: async ctx => {
