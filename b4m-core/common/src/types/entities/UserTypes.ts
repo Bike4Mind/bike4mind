@@ -139,8 +139,15 @@ export interface IKeywordRoutingRule {
  * that will not be present on the client side.
  */
 export interface IMFAConfig {
-  totpSecret: string;
+  /** Absent for a passkey-only user, who never set up an authenticator app. */
+  totpSecret?: string;
   totpEnabled: boolean;
+  /**
+   * True once a passkey was enrolled as a factor. Denormalized from the passkey collection so the
+   * per-request "has MFA" check stays synchronous; set and cleared only through dotted writes
+   * (see the user model's secret-less `mfa` guard).
+   */
+  passkeyEnabled?: boolean;
   backupCodes: string[];
   setupAt: Date;
   lastUsedAt?: Date;
@@ -156,7 +163,7 @@ export interface IMFAConfig {
 }
 
 /**
- * A WebAuthn credential (passkey) enrolled as an additional MFA method. Lives in its own
+ * A WebAuthn credential (passkey) enrolled as an MFA factor. Lives in its own
  * collection rather than on `IMFAConfig`: the user model's guard strips any `mfa` write that
  * lacks the select:false `totpSecret`, which a credential write would routinely trip.
  * Binary fields are base64url-encoded.
@@ -1100,6 +1107,12 @@ export interface IUserRepository
    * superseded secret never enables a secret the user's authenticator does not hold.
    */
   atomicEnableMfa: (userId: string, totpSecret: string) => Promise<IUserDocument | null>;
+  /**
+   * Make a passkey the user's first factor: set `mfa.passkeyEnabled` and store `hashedBackupCodes`,
+   * discarding any unconfirmed app setup. Only while the user has no factor yet; returns null when
+   * a concurrent enrollment got there first, so backup codes are never issued twice.
+   */
+  atomicEnablePasskeyMfa: (userId: string, hashedBackupCodes: string[]) => Promise<IUserDocument | null>;
   findAllByEmailsOrUsernames: (emails: string[], usernames: string[]) => Promise<IUserDocument[]>;
   findByStripeCustomerId: (stripeCustomerId: string) => Promise<IUserDocument | null>;
   // `id` is included so callers can map results back to the requested ids (Mongoose adds the

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import speakeasy from 'speakeasy';
-import { PENDING_SECRET_REUSE_MS, setupMFA, verifyMFASetup } from './setup';
+import { PENDING_SECRET_REUSE_MS, cancelMFASetup, setupMFA, verifyMFASetup } from './setup';
 import { MfaAttemptRejectedError } from './attempt';
 import { hashBackupCode } from './utils';
 import type { IUserDocument } from '@bike4mind/common';
@@ -133,6 +133,66 @@ describe('setupMFA', () => {
 
     expect(result.secret).toMatch(/^[A-Z2-7]+$/);
     expect(result.secret).not.toBe(SECRET);
+  });
+});
+
+describe('setupMFA for a passkey-only user', () => {
+  const passkeyOnly = {
+    id: 'user-1',
+    mfa: { totpEnabled: false, passkeyEnabled: true, backupCodes: ['h'], setupAt: new Date() },
+  } as unknown as IUserDocument;
+
+  it('keeps passkeyEnabled: true in the mfa write so the passkey factor survives the unconfirmed app', async () => {
+    const update = vi.fn(async (u: unknown) => u as IUserDocument);
+    await setupMFA({ user: passkeyOnly, appName: 'Test App' }, { update });
+    const data = update.mock.calls[0][0] as unknown as { mfa: Record<string, unknown> };
+    expect(data.mfa).toMatchObject({ totpEnabled: false, passkeyEnabled: true });
+  });
+
+  it('writes passkeyEnabled: false for a user with no passkey', async () => {
+    const update = vi.fn(async (u: unknown) => u as IUserDocument);
+    await setupMFA({ user: { id: 'user-1' } as unknown as IUserDocument, appName: 'Test App' }, { update });
+    const data = update.mock.calls[0][0] as unknown as { mfa: Record<string, unknown> };
+    expect(data.mfa.passkeyEnabled).toBe(false);
+  });
+
+  it('does not re-serve a secret the passkey-only user never had', async () => {
+    const update = vi.fn(async (u: unknown) => u as IUserDocument);
+    const result = await setupMFA({ user: passkeyOnly, appName: 'Test App' }, { update });
+    expect(result.secret).toMatch(/^[A-Z2-7]+$/);
+  });
+});
+
+describe('cancelMFASetup', () => {
+  const makeUpdate = () => vi.fn(async (u: unknown, _options?: unknown) => u as IUserDocument);
+
+  it('drops only the unconfirmed app secret for a passkey user, never the whole mfa subdocument', async () => {
+    const update = makeUpdate();
+    const user = makePendingUser({ passkeyEnabled: true });
+    await expect(cancelMFASetup(user, { update })).resolves.toEqual({ success: true });
+    const [data, options] = update.mock.calls[0];
+    expect(data).not.toHaveProperty('mfa');
+    expect(data).toMatchObject({ id: 'user-1' });
+    expect(options).toEqual({ unset: ['mfa.totpSecret', 'mfa.pendingBackupCodes'] });
+  });
+
+  it('clears the whole mfa subdocument for a user with no passkey', async () => {
+    const update = makeUpdate();
+    await cancelMFASetup(makePendingUser(), { update });
+    expect(update).toHaveBeenCalledWith({ id: 'user-1', mfa: null });
+  });
+
+  it('refuses once the authenticator app is enabled', async () => {
+    const update = makeUpdate();
+    const user = { id: 'user-1', mfa: { totpEnabled: true, passkeyEnabled: true } } as unknown as IUserDocument;
+    await expect(cancelMFASetup(user, { update })).rejects.toThrow(/already enabled/);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('refuses when there is no setup to cancel', async () => {
+    await expect(
+      cancelMFASetup({ id: 'user-1' } as unknown as IUserDocument, { update: makeUpdate() })
+    ).rejects.toThrow(/No MFA setup/);
   });
 });
 

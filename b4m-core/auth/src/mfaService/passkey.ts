@@ -16,7 +16,7 @@ import type {
   IUserDocument,
   IUserRepository,
 } from '@bike4mind/common';
-import { clearFailedAttempts, userHasMFAConfigured } from './utils';
+import { generateBackupCodes, hashBackupCode, userHasMFAConfigured } from './utils';
 
 export type {
   AuthenticationResponseJSON,
@@ -74,16 +74,13 @@ export interface PasskeyDeps {
 }
 
 /**
- * Phase 1 treats a passkey as an alternative to the TOTP code, not a replacement for MFA
- * enrollment, so enrolling one requires authenticator-app MFA to already be on.
+ * A passkey is a factor in its own right: the first one enrolled turns MFA on, exactly as
+ * confirming an authenticator app does. Callers gate who may enroll (see the register routes).
  */
 export async function startPasskeyRegistration(
   { user, rp }: { user: IUserDocument; rp: PasskeyRelyingParty },
   { credentials, challenges }: PasskeyDeps
 ): Promise<PublicKeyCredentialCreationOptionsJSON> {
-  if (!userHasMFAConfigured(user)) {
-    throw new PasskeyError('Turn on authenticator-app MFA before adding a passkey.', 'mfa_not_enabled');
-  }
   const existing = await credentials.listByUser(user.id);
   if (existing.length >= MAX_PASSKEYS_PER_USER) {
     throw new PasskeyError(`You can register at most ${MAX_PASSKEYS_PER_USER} passkeys.`, 'limit_reached');
@@ -106,6 +103,17 @@ export async function startPasskeyRegistration(
   return options;
 }
 
+export interface FinishPasskeyRegistrationResult {
+  credential: IPasskeyCredential;
+  /**
+   * True when this passkey turned MFA on (the user had no factor before). The caller must then
+   * do what confirming an authenticator app does: rotate sessions, audit, record the enrollment.
+   */
+  firstFactor: boolean;
+  /** Plaintext backup codes issued with a first-factor passkey, shown once; null otherwise. */
+  backupCodes: string[] | null;
+}
+
 export async function finishPasskeyRegistration(
   {
     user,
@@ -113,14 +121,15 @@ export async function finishPasskeyRegistration(
     response,
     name,
   }: { user: IUserDocument; rp: PasskeyRelyingParty; response: RegistrationResponseJSON; name?: string },
-  { credentials, challenges }: PasskeyDeps
-): Promise<IPasskeyCredential> {
+  {
+    credentials,
+    challenges,
+    users,
+  }: PasskeyDeps & { users: Pick<IUserRepository, 'atomicEnablePasskeyMfa' | 'update'> }
+): Promise<FinishPasskeyRegistrationResult> {
   const expectedChallenge = await challenges.consume(user.id, 'registration');
   if (!expectedChallenge) {
     throw new PasskeyError('Passkey registration timed out. Please try again.', 'challenge_expired');
-  }
-  if (!userHasMFAConfigured(user)) {
-    throw new PasskeyError('Turn on authenticator-app MFA before adding a passkey.', 'mfa_not_enabled');
   }
 
   let verification: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
@@ -145,8 +154,9 @@ export async function finishPasskeyRegistration(
   }
 
   const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
+  let created: IPasskeyCredential;
   try {
-    return await credentials.create({
+    created = await credentials.create({
       userId: user.id,
       credentialId: credential.id,
       publicKey: isoBase64URL.fromBuffer(credential.publicKey),
@@ -162,6 +172,19 @@ export async function finishPasskeyRegistration(
     }
     throw error;
   }
+
+  if (!userHasMFAConfigured(user)) {
+    // Backup codes are the passkey-only user's recovery path when the device is lost, the same
+    // as for an app user. Null means a concurrent enrollment turned MFA on first.
+    const backupCodes = generateBackupCodes();
+    if (await users.atomicEnablePasskeyMfa(user.id, backupCodes.map(hashBackupCode))) {
+      return { credential: created, firstFactor: true, backupCodes };
+    }
+  }
+  if (!user.mfa?.passkeyEnabled) {
+    await users.update({ id: user.id, 'mfa.passkeyEnabled': true, updatedAt: new Date() });
+  }
+  return { credential: created, firstFactor: false, backupCodes: null };
 }
 
 export async function startPasskeyAuthentication(
@@ -182,11 +205,7 @@ export async function startPasskeyAuthentication(
   return options;
 }
 
-/**
- * Satisfy the MFA challenge with a passkey. `user` must be loaded via findByIdWithMfaSecrets:
- * the success write below rebuilds the whole `mfa` subdocument to clear the lockout state, and
- * one built without the select:false secrets would be dropped by the user model's guard.
- */
+/** Satisfy the MFA challenge (or a step-up) with a passkey. */
 export async function finishPasskeyAuthentication(
   { user, rp, response }: { user: IUserDocument; rp: PasskeyRelyingParty; response: AuthenticationResponseJSON },
   { credentials, challenges, users }: PasskeyDeps & { users: Pick<IUserRepository, 'update'> }
@@ -228,9 +247,12 @@ export async function finishPasskeyAuthentication(
 
   await credentials.recordUse(stored.id, verification.authenticationInfo.newCounter);
 
-  const updatedMFA = clearFailedAttempts(user.mfa);
-  updatedMFA.lastUsedAt = new Date();
-  const updatedUser = await users.update({ id: user.id, mfa: updatedMFA, updatedAt: new Date() });
+  // Field-level write, as in verifyMFA: a passkey-only user has no totpSecret, so a whole-`mfa`
+  // write would be dropped by the user model's secret-less guard and the lockout never cleared.
+  const updatedUser = await users.update(
+    { id: user.id, 'mfa.failedAttempts': 0, 'mfa.lastUsedAt': new Date(), updatedAt: new Date() },
+    { unset: ['mfa.lastFailedAttempt', 'mfa.lockedUntil'] }
+  );
   if (!updatedUser) {
     throw new Error('Failed to update user MFA data');
   }

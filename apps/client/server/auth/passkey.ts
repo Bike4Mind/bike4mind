@@ -1,8 +1,9 @@
 import type { Response } from 'express';
 import * as z from 'zod';
-import type { IPasskeyCredential } from '@bike4mind/common';
+import type { IPasskeyCredential, IUserDocument } from '@bike4mind/common';
 import { mfaService } from '@bike4mind/services';
 import { passkeyChallengeRepository, passkeyCredentialRepository } from '@bike4mind/database';
+import { readSignInOrigin } from '@server/auth/signInSecondFactor';
 
 export const passkeyDeps = { credentials: passkeyCredentialRepository, challenges: passkeyChallengeRepository };
 
@@ -37,6 +38,24 @@ export function sendPasskeyError(res: Response, error: unknown): Response {
   const passkeyError = asPasskeyError(error);
   if (!passkeyError) throw error;
   return res.status(passkeyError.status).json({ error: passkeyError.message, code: passkeyError.code });
+}
+
+/**
+ * Why this request may not enroll a passkey, or null when it may. `credential` is req.user (the
+ * token's view: mfaPending, sign-in origin); `user` is the fresh database read.
+ * - A pending token whose user already has a factor owes the challenge, not an enrollment: the
+ *   register routes are reachable pre-challenge only so a first factor can be enrolled.
+ * - Emergency sign-in never enrolls a first factor, matching the app setup route.
+ */
+export function refusePasskeyEnrollment(credential: unknown, user: IUserDocument): string | null {
+  const configured = mfaService.userHasMFAConfigured(user);
+  if (configured && (credential as { mfaPending?: unknown } | undefined)?.mfaPending) {
+    return 'Complete two-step verification before adding a passkey.';
+  }
+  if (!configured && readSignInOrigin(credential)?.createdVia === 'emergency') {
+    return 'Passkey enrollment is not available during emergency sign-in.';
+  }
+  return null;
 }
 
 export const toPasskeySummary = (credential: IPasskeyCredential) => ({

@@ -328,6 +328,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     markInviteBonusPaid: vi.fn().mockResolvedValue(true),
     restoreReleasedGrantState: vi.fn().mockResolvedValue(true),
     atomicEnableMfa: vi.fn(),
+    atomicEnablePasskeyMfa: vi.fn(),
     findOrCreateByEmail: vi.fn(),
     recordModerationHit: vi.fn(),
     pullSystemFilesForUsers: vi.fn(),

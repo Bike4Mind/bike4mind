@@ -1710,11 +1710,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/auth/mfa/passkey/__tests__/passkeyRoutes.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 40
-    }
-  },
   "apps/client/pages/api/auth/mfa/regenerate-backup-codes.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1

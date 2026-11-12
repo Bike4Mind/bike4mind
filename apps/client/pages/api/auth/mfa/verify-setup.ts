@@ -1,17 +1,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { mfaService, userService } from '@bike4mind/services';
-import {
-  userRepository,
-  authSessionRepository,
-  passkeyCredentialRepository,
-  realtimeConnectionRepository,
-} from '@bike4mind/database';
-import { issueBrowserSession } from '@server/auth/issueSession';
-import { logAuthAudit } from '@server/utils/authAudit';
-import { logSecondFactorSignIn, readSignInOrigin } from '@server/auth/signInSecondFactor';
-import { MfaEnrollmentEvents, redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
-import { recordForcedEnrollmentStep } from '@server/auth/mfaEnrollmentFunnel';
+import { mfaService } from '@bike4mind/services';
+import { userRepository, passkeyCredentialRepository } from '@bike4mind/database';
+import { readSignInOrigin } from '@server/auth/signInSecondFactor';
+import { completeMfaEnrollment } from '@server/auth/completeMfaEnrollment';
+import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import * as z from 'zod';
 
@@ -61,10 +54,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
         });
       }
 
-      // Passkeys only satisfy MFA alongside an enabled TOTP, so any still on file while setup is
-      // pending are orphans of an earlier MFA that a failed cleanup left behind. Purge them so a
-      // fresh enrollment never revives them.
-      if (!freshUser.mfa?.totpEnabled) {
+      // With no factor configured, any passkey still on file is an orphan of an earlier MFA that a
+      // failed cleanup left behind. Purge them so a fresh enrollment never revives them. A
+      // passkey-only user adding an app keeps theirs.
+      if (!mfaService.userHasMFAConfigured(freshUser)) {
         await passkeyCredentialRepository.removeAllForUser(freshUser.id);
       }
 
@@ -74,32 +67,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         // secret-preserving write - a separate clear here (built from the not-+selected
         // `result.user`) would wipe the select:false totpSecret/backupCodes and brick MFA.
         const result = await mfaService.verifyMFASetup(freshUser, cleanToken, userRepository);
-
-        // Enabling MFA is a security-relevant change: revoke every existing session (bumps
-        // tokenVersion AND clears session rows, so other devices can't silently refresh back in),
-        // then mint a fresh session for THIS device with the new version.
-        const newTokenVersion = await userService.revokeUserSessions(result.user.id, {
-          db: {
-            users: userRepository,
-            authSessions: authSessionRepository,
-            realtimeConnections: realtimeConnectionRepository,
-          },
-          logger: req.logger,
-        });
-        // Enrollment that finishes a sign-in (enforceMFA) is that sign-in's session, so it keeps
-        // the first-factor origin exactly as completeMfaLogin does. Enrolling from an existing
-        // session carries no origin, and there the session is the enrollment itself.
-        const signInOrigin = readSignInOrigin(req.user);
-        const { accessToken } = await issueBrowserSession(req, res, result.user.id, {
-          createdVia: signInOrigin?.createdVia ?? 'mfa-setup',
-          tokenVersion: newTokenVersion,
-        });
-        const tokens = { accessToken };
-
-        await logAuthAudit(req, { userId: result.user.id, event: 'mfa_enrolled' });
-        // Judged on freshUser, read before this enrollment, so a forced one still counts as forced.
-        await recordForcedEnrollmentStep(req, freshUser, MfaEnrollmentEvents.COMPLETED);
-        if (signInOrigin) await logSecondFactorSignIn(req, result.user.id, signInOrigin);
+        const tokens = await completeMfaEnrollment(req, res, freshUser);
 
         setupBody = {
           success: result.success,

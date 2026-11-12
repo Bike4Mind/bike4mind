@@ -108,10 +108,12 @@ const MFASchema = new Schema(
     // TOTP secret (encrypted at rest, see encryptTotpSecretInUpdate) + hashed backup codes -
     // never serialize to a client. select:false keeps them out of every default
     // query/response; the MFA subsystem loads them explicitly via findByIdWithMfaSecrets
-    // (+select), which decrypts the secret. `totpEnabled` (not select:false) is the flag
-    // callers use to detect that MFA is configured.
-    totpSecret: { type: String, required: true, select: false },
+    // (+select), which decrypts the secret. `totpEnabled` and `passkeyEnabled` (not select:false)
+    // are the flags callers use to detect that MFA is configured (see userHasMFAConfigured).
+    // A passkey-only user has no totpSecret.
+    totpSecret: { type: String, select: false },
     totpEnabled: { type: Boolean, default: false },
+    passkeyEnabled: { type: Boolean, default: false },
     backupCodes: { type: [String], default: [], select: false },
     // Encrypted like totpSecret; only present between setup and enable.
     pendingBackupCodes: { type: String, select: false },
@@ -364,8 +366,9 @@ export type UserAccountRiskProfile = {
   signupAsn: number | null;
   signupDatacenter: boolean | null;
   signupWafAnonIp: boolean | null;
-  totpEnabled: boolean;
-  /** When TOTP setup began; enabling follows within the same setup flow. */
+  /** Either factor (authenticator app or passkey) is on. */
+  mfaEnabled: boolean;
+  /** When the first factor's setup began; enabling follows within the same setup flow. */
   mfaSetupAt: Date | null;
 };
 
@@ -782,6 +785,41 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result ? result.toJSON() : null;
   }
 
+  async atomicEnablePasskeyMfa(userId: string, hashedBackupCodes: string[]): Promise<IUserDocument | null> {
+    const now = new Date();
+    // A pipeline update, because `mfa` is usually null here: a dotted $set cannot create a field
+    // inside null, and a whole-`mfa` $set has no totpSecret, so stripSecretlessMfaFromUpdate would
+    // drop it. $literal keeps the stored values from being read as expressions.
+    const result = await this.model.findOneAndUpdate(
+      { _id: userId, 'mfa.totpEnabled': { $ne: true }, 'mfa.passkeyEnabled': { $ne: true } },
+      [
+        {
+          $set: {
+            mfa: {
+              $mergeObjects: [
+                { $ifNull: ['$mfa', {}] },
+                {
+                  $literal: {
+                    passkeyEnabled: true,
+                    totpEnabled: false,
+                    backupCodes: hashedBackupCodes,
+                    setupAt: now,
+                    lastUsedAt: now,
+                    failedAttempts: 0,
+                  },
+                },
+              ],
+            },
+            updatedAt: now,
+          },
+        },
+        { $unset: ['mfa.totpSecret', 'mfa.pendingBackupCodes', 'mfa.lastFailedAttempt', 'mfa.lockedUntil'] },
+      ],
+      { new: true }
+    );
+    return result ? result.toJSON() : null;
+  }
+
   async findByStripeCustomerId(stripeCustomerId: string) {
     const result = await this.model.findOne({ stripeCustomerId });
     return result?.toJSON() ?? null;
@@ -921,7 +959,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .find({ _id: { $in: convertIds(validIds) } })
       .select(
         'createdAt email signupMeta.ip signupMeta.ja4 signupMeta.asn signupMeta.isDatacenter signupMeta.wafAnonIp ' +
-          'acquisition.signupMethod authProviders.strategy mfa.totpEnabled mfa.setupAt'
+          'acquisition.signupMethod authProviders.strategy mfa.totpEnabled mfa.passkeyEnabled mfa.setupAt'
       )
       .lean();
     return docs.map(doc => ({
@@ -935,7 +973,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       signupAsn: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0 ? doc.signupMeta.asn : null,
       signupDatacenter: doc.signupMeta?.isDatacenter ?? null,
       signupWafAnonIp: doc.signupMeta?.wafAnonIp ?? null,
-      totpEnabled: doc.mfa?.totpEnabled === true,
+      mfaEnabled: doc.mfa?.totpEnabled === true || doc.mfa?.passkeyEnabled === true,
       mfaSetupAt: doc.mfa?.setupAt ?? null,
     }));
   }
@@ -2345,6 +2383,8 @@ function mfaAttemptPipeline(now: Date): PipelineStage.Set[] {
  * every write path, present and future. Deliberate MFA writes load the secrets first
  * (`findByIdWithMfaSecrets`) and therefore carry `totpSecret`, so they pass through unchanged;
  * deliberate teardowns pass `mfa: null` (falsy, not an object), which also passes through.
+ * A passkey-only user has no secret at all, so every write for them must be field-level (dotted)
+ * or a pipeline (see atomicEnablePasskeyMfa), never a whole `mfa` object.
  */
 function stripSecretlessMfaFromUpdate(this: Query<unknown, IUserDocument>) {
   const update = this.getUpdate() as Record<string, unknown> | null;

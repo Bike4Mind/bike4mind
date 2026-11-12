@@ -39,7 +39,8 @@ export async function setupMFA(
 
   // A repeat call (reload, second tab, step-up retry) re-serves a recent unconfirmed secret AND its
   // backup codes, so the QR code scanned and the codes saved from the first call both stay valid.
-  // Needs the user loaded via findByIdWithMfaSecrets. Rows missing either value get a fresh pair.
+  // Needs the user loaded via findByIdWithMfaSecrets. Rows missing either value get a fresh pair
+  // (as does a passkey-only user adding an app, who has no secret to re-serve).
   const pending = user.mfa && user.mfa.totpEnabled === false ? user.mfa : null;
   const pendingCodes = pending?.pendingBackupCodes?.split(',').filter(Boolean) ?? [];
   const reused =
@@ -65,6 +66,8 @@ export async function setupMFA(
     mfa: {
       totpSecret: setup.secret,
       totpEnabled: false,
+      // A passkey-only user adding an app keeps their passkey factor while the app is unconfirmed.
+      passkeyEnabled: user.mfa?.passkeyEnabled ?? false,
       backupCodes: hashedBackupCodes,
       pendingBackupCodes: backupCodes.join(','),
       // Kept on reuse so repeat calls cannot stretch the reuse window indefinitely.
@@ -103,9 +106,9 @@ export async function verifyMFASetup(
     throw new Error('MFA is already enabled for this user.');
   }
 
-  const mfa = user.mfa;
+  const { totpSecret } = user.mfa;
   return withReservedMfaAttempt(user.id, userRepository, async attemptState => {
-    if ((await claimTOTPCode(user.id, mfa.totpSecret, token, userRepository)) === null) {
+    if ((await claimTOTPCode(user.id, totpSecret, token, userRepository)) === null) {
       throw new MfaAttemptRejectedError('Invalid TOTP code.', attemptState);
     }
 
@@ -115,7 +118,7 @@ export async function verifyMFASetup(
     // attempt/lockout state touches only those fields, leaving the secrets untouched. It is
     // conditional on the verified secret so a setup that replaced it in the meantime is not
     // enabled behind the user's back.
-    const updatedUser = await userRepository.atomicEnableMfa(user.id, mfa.totpSecret);
+    const updatedUser = await userRepository.atomicEnableMfa(user.id, totpSecret);
 
     if (!updatedUser) {
       throw new MfaAttemptRejectedError('MFA setup changed. Please restart enrollment.', attemptState);
@@ -140,10 +143,17 @@ export async function cancelMFASetup(
     throw new Error('Cannot cancel MFA setup - MFA is already enabled. Use disable instead.');
   }
 
-  const updatedUser = await userRepository.update({
-    id: user.id,
-    mfa: null,
-  });
+  // A passkey-only user abandoning an app setup keeps their passkey factor: drop only the
+  // unconfirmed app secret. Everyone else has no factor yet, so the whole subdocument goes.
+  const updatedUser = user.mfa.passkeyEnabled
+    ? await userRepository.update(
+        { id: user.id, updatedAt: new Date() },
+        { unset: ['mfa.totpSecret', 'mfa.pendingBackupCodes'] }
+      )
+    : await userRepository.update({
+        id: user.id,
+        mfa: null,
+      });
 
   if (!updatedUser) {
     throw new Error('Failed to cancel MFA setup.');
