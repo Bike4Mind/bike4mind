@@ -5,6 +5,7 @@ import '../by-identifier';
 
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: NextApiRequest, res: NextApiResponse) => unknown),
+  baseApiOptions: undefined as unknown,
   findArgs: undefined as unknown[] | undefined,
   match: null as null | { id: string },
 }));
@@ -16,7 +17,12 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options?: unknown) => {
+      mockRefs.baseApiOptions = options;
+      return chain;
+    },
+  };
 });
 
 vi.mock('@bike4mind/database', () => ({
@@ -57,6 +63,10 @@ describe('GET /api/artifacts/by-identifier', () => {
     expect(mockRefs.findArgs?.[0]).toBe('user-1');
     expect(mockRefs.findArgs?.[1]).toEqual({ sessionId: 's1', type: 'react', identifier: 'app' });
     expect(res._getJSONData()).toEqual({ artifact: { id: 'artifact_react_app_1_0' } });
+  });
+
+  it('accepts a signed-in session only, never an API key', () => {
+    expect(mockRefs.baseApiOptions).toEqual({ auth: 'jwtOnly' });
   });
 
   it('answers with a null artifact when nothing readable matches', async () => {
