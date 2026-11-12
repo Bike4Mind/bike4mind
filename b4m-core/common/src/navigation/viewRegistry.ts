@@ -327,7 +327,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
     section: 'admin',
     label: 'Credit Analytics',
     description:
-      'Credits per user and adjustments, the model pricing catalog, margins against provider invoices, org and API usage, and the transaction ledger',
+      'Credits per user and adjustments, margins against provider invoices, org and API usage, and the transaction ledger',
     navigationType: 'tab',
     target: '15', // AdminTab.CreditAnalytics
     keywords: ['credits', 'billing', 'usage', 'add credits', 'balance', 'cost'],
@@ -366,6 +366,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
       'models',
       'model access',
       'model pricing',
+      'prices',
       'rank',
       'ai',
       'dashboard',
