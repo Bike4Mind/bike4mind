@@ -141,6 +141,10 @@ AdminAuditLogSchema.index({ category: 1, occurredAt: -1, _id: -1 });
 AdminAuditLogSchema.index({ action: 1, occurredAt: -1, _id: -1 });
 AdminAuditLogSchema.index({ severity: 1, occurredAt: -1, _id: -1 });
 AdminAuditLogSchema.index(
+  { 'details.feedbackId': 1, occurredAt: -1, _id: -1 },
+  { name: 'feedback_history', partialFilterExpression: { 'details.feedbackId': { $exists: true } } }
+);
+AdminAuditLogSchema.index(
   { 'context.requestId': 1, occurredAt: -1, _id: -1 },
   { partialFilterExpression: { 'context.requestId': { $exists: true } } }
 );
