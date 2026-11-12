@@ -124,6 +124,8 @@ const defaultFiltersReturn: UseFeedbackFiltersReturn = {
   setSubject: vi.fn(),
   setTypes: vi.fn(),
   setReceived: vi.fn(),
+  setCreatedRange: vi.fn(),
+  setComment: vi.fn(),
   showOnly: vi.fn(),
   toggleSortDirection: vi.fn(),
   filterParams: { sort: 'desc' },
@@ -320,6 +322,118 @@ describe('FeedbackTab', () => {
       await userEvent.click(screen.getByTestId('admin-filter-clear-feedback-received-btn'));
 
       expect(defaultFiltersReturn.setReceived).toHaveBeenCalledWith(undefined);
+    });
+
+    it('applies a custom range from the dialog', async () => {
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-received'));
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-received-custom'));
+      expect(defaultFiltersReturn.setReceived).not.toHaveBeenCalled();
+
+      fireEvent.change(screen.getByTestId('feedback-created-range-from-input'), { target: { value: '2026-11-01' } });
+      fireEvent.change(screen.getByTestId('feedback-created-range-to-input'), { target: { value: '2026-11-08' } });
+      await userEvent.click(screen.getByTestId('feedback-created-range-apply-btn'));
+
+      expect(defaultFiltersReturn.setCreatedRange).toHaveBeenCalledWith({
+        createdFrom: '2026-11-01',
+        createdTo: '2026-11-08',
+      });
+      expect(screen.queryByTestId('feedback-created-range-dialog')).not.toBeInTheDocument();
+    });
+
+    it('keeps Apply disabled while the range ends before it starts', async () => {
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-received'));
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-received-custom'));
+      fireEvent.change(screen.getByTestId('feedback-created-range-from-input'), { target: { value: '2026-11-08' } });
+      fireEvent.change(screen.getByTestId('feedback-created-range-to-input'), { target: { value: '2026-11-01' } });
+
+      expect(screen.getByTestId('feedback-created-range-apply-btn')).toBeDisabled();
+      expect(screen.getByText('Ends before it starts.')).toBeInTheDocument();
+    });
+
+    it('shows a set custom range on the chip, and clearing it clears the range', async () => {
+      mocks.useFeedbackFilters.mockReturnValue({
+        ...defaultFiltersReturn,
+        filters: { ...defaultFiltersReturn.filters, createdFrom: '2020-03-01', createdTo: '2020-03-09' },
+      });
+
+      renderFeedbackTab();
+
+      expect(screen.getByTestId('admin-filter-feedback-received')).toHaveTextContent(
+        'Received: Mar 1, 2020 \u2013 Mar 9, 2020'
+      );
+      await userEvent.click(screen.getByTestId('admin-filter-clear-feedback-received-btn'));
+
+      expect(defaultFiltersReturn.setReceived).toHaveBeenCalledWith(undefined);
+    });
+  });
+
+  describe('comment filter', () => {
+    beforeEach(() => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem()]));
+    });
+
+    it.each([
+      ['with', 'Has comment'],
+      ['without', 'No comment'],
+    ] as const)('sends %s to the filter hook', async (comment, label) => {
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-comment'));
+      const option = screen.getByTestId(`admin-filter-feedback-comment-${comment}`);
+      expect(option).toHaveTextContent(label);
+      await userEvent.click(option);
+
+      expect(defaultFiltersReturn.setComment).toHaveBeenCalledWith(comment);
+    });
+  });
+
+  describe('status views', () => {
+    beforeEach(() => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem()]));
+    });
+
+    it('lights New for the default status filter', () => {
+      renderFeedbackTab();
+
+      expect(screen.getByTestId('feedback-status-views-new-btn')).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByTestId('feedback-status-views-open-btn')).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('sets New and In progress for Open, and nothing else', async () => {
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('feedback-status-views-open-btn'));
+
+      expect(defaultFiltersReturn.setStatusFilters).toHaveBeenCalledWith({
+        [FeedbackStatus.New]: true,
+        [FeedbackStatus.InProgress]: true,
+        [FeedbackStatus.Closed]: false,
+      });
+      expect(defaultFiltersReturn.showOnly).not.toHaveBeenCalled();
+    });
+
+    it('lights no view for a status set none of them match', () => {
+      mocks.useFeedbackFilters.mockReturnValue({
+        ...defaultFiltersReturn,
+        filters: {
+          ...defaultFiltersReturn.filters,
+          statusFilters: {
+            [FeedbackStatus.New]: false,
+            [FeedbackStatus.InProgress]: false,
+            [FeedbackStatus.Closed]: true,
+          },
+        },
+      });
+
+      renderFeedbackTab();
+
+      for (const id of ['new', 'open', 'all']) {
+        expect(screen.getByTestId(`feedback-status-views-${id}-btn`)).toHaveAttribute('aria-pressed', 'false');
+      }
     });
   });
 

@@ -2,7 +2,7 @@ import { useCallback, useMemo } from 'react';
 import { FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { FeedbackFilters, FeedbackListFilterParams, UseFeedbackFiltersReturn } from '../types';
-import { DEFAULT_FEEDBACK_VIEW } from '../feedbackTabSearch';
+import { calendarDayBoundary, DEFAULT_FEEDBACK_VIEW, type FeedbackCommentFilter } from '../feedbackTabSearch';
 import type { FeedbackReceivedWindow } from '../feedbackTrends';
 import { useFeedbackView } from './useFeedbackView';
 
@@ -30,7 +30,18 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     setValueImmediately: clearSearchTerm,
   } = useDebounceValue('');
   const [view, updateView] = useFeedbackView();
-  const { statusFilters, organizations: selectedOrganizations, subject, types, received, sortAscending, page } = view;
+  const {
+    statusFilters,
+    organizations: selectedOrganizations,
+    subject,
+    types,
+    received,
+    createdFrom,
+    createdTo,
+    comment,
+    sortAscending,
+    page,
+  } = view;
 
   const setSearchTerm = useCallback(
     (term: string) => {
@@ -62,8 +73,20 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
 
   const setTypes = useCallback((next: FeedbackType[]) => updateView({ types: next, page: 1 }), [updateView]);
 
+  // A preset window and a custom range are one filter, so setting either clears the other.
   const setReceived = useCallback(
-    (next: FeedbackReceivedWindow | undefined) => updateView({ received: next, page: 1 }),
+    (next: FeedbackReceivedWindow | undefined) =>
+      updateView({ received: next, createdFrom: undefined, createdTo: undefined, page: 1 }),
+    [updateView]
+  );
+
+  const setCreatedRange = useCallback<UseFeedbackFiltersReturn['setCreatedRange']>(
+    range => updateView({ ...range, received: undefined, page: 1 }),
+    [updateView]
+  );
+
+  const setComment = useCallback(
+    (next: FeedbackCommentFilter | undefined) => updateView({ comment: next, page: 1 }),
     [updateView]
   );
 
@@ -76,6 +99,9 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
         types: DEFAULT_FEEDBACK_VIEW.types,
         organizations: DEFAULT_FEEDBACK_VIEW.organizations,
         received: DEFAULT_FEEDBACK_VIEW.received,
+        createdFrom: DEFAULT_FEEDBACK_VIEW.createdFrom,
+        createdTo: DEFAULT_FEEDBACK_VIEW.createdTo,
+        comment: DEFAULT_FEEDBACK_VIEW.comment,
         ...next,
         page: 1,
       });
@@ -95,6 +121,9 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     subject,
     types,
     received,
+    createdFrom,
+    createdTo,
+    comment,
     sortAscending,
   };
 
@@ -109,10 +138,24 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
       ...(subject ? { subject } : {}),
       ...(types.length > 0 ? { type: types } : {}),
       ...(received ? { received } : {}),
+      ...(createdFrom ? { createdFrom: calendarDayBoundary(createdFrom, 'start') } : {}),
+      ...(createdTo ? { createdTo: calendarDayBoundary(createdTo, 'end') } : {}),
+      ...(comment ? { hasComment: comment === 'with' } : {}),
       ...(debouncedSearchTerm.trim() ? { search: debouncedSearchTerm.trim() } : {}),
       sort: sortAscending ? 'asc' : 'desc',
     };
-  }, [statusFilters, selectedOrganizations, subject, types, received, debouncedSearchTerm, sortAscending]);
+  }, [
+    statusFilters,
+    selectedOrganizations,
+    subject,
+    types,
+    received,
+    createdFrom,
+    createdTo,
+    comment,
+    debouncedSearchTerm,
+    sortAscending,
+  ]);
 
   return {
     filters,
@@ -122,6 +165,8 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     setSubject,
     setTypes,
     setReceived,
+    setCreatedRange,
+    setComment,
     showOnly,
     toggleSortDirection,
     filterParams,

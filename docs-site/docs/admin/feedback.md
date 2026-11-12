@@ -38,7 +38,9 @@ The page opens with the title **Feedback** and the number of reports matching th
 
 ## Filters
 
-Below the header, one row holds the search box followed by the **Status**, **Subject** and **Organization** filter chips. A filter applies as soon as you pick a value; there is no Apply button. An unset chip is dashed and shows only its name; a set chip reads "Name: Value" and has an x that clears it. Changing any filter returns the list to its first page.
+Above the filters, three status views switch the list between common queues: **New** (the default), **Open** (New and In progress) and **All**. The view that matches the current status filter is highlighted; picking a view changes only the status filter and keeps every other filter.
+
+Below them, one row holds the search box followed by the **Status**, **Type**, **Received**, **Comment**, **Subject** and **Organization** filter chips. A filter applies as soon as you pick a value; there is no Apply button. An unset chip is dashed and shows only its name; a set chip reads "Name: Value" and has an x that clears it. Changing any filter returns the list to its first page.
 
 ### Search
 
@@ -83,6 +85,16 @@ A report's subject is decided when it is filed, narrowest first: one that names 
 Unlike the organization filter, only one subject can be selected at a time -- the server takes one subject or none. Click the x on the chip to clear it.
 
 The subject filter combines with search, status and organization rather than replacing them, and the CSV export respects it along with the rest.
+
+### Received Filter
+
+The **Received** chip limits the list to reports created in a time window: the **Last 24 hours**, **Last 7 days** or **Last 30 days**, or a **Custom range**. Custom range opens a dialog with **From** and **To** dates. Both dates are inclusive and use your own time zone, and you can leave either one empty to get an open-ended range ("Since Nov 1" or "Until Nov 8"). The chip shows the range you picked; pick **Custom range** again to change it. A window and a custom range are one filter, so picking one replaces the other.
+
+### Comment Filter
+
+The **Comment** chip separates reports written with text from those without, such as a thumbs-down with no comment. **Has comment** shows reports that were submitted with text and **No comment** shows the rest. A report whose text has expired (see Data Retention below) still counts as having a comment.
+
+All filters are kept in the page URL, so a copied link reopens the list with the same filters, and they combine with each other and with search. The CSV export uses the same filters.
 
 ### Sorting
 

@@ -124,6 +124,12 @@ feedbackSchema.index(
 feedbackSchema.index({ organizationId: 1, createdAt: -1 }, { name: 'feedback_org_createdAt' });
 // The admin triage queue: reports still in a status, newest first, and the sidebar's count of New ones.
 feedbackSchema.index({ status: 1, createdAt: -1 }, { name: 'feedback_status_createdAt' });
+// The triage queue's has-comment filter. `contentStored` is the permanent "had text" fact (the text
+// itself expires), and is always present, so the filter is an equality on this middle key.
+feedbackSchema.index(
+  { status: 1, contentStored: 1, createdAt: -1 },
+  { name: 'feedback_status_contentStored_createdAt' }
+);
 
 export const FeedbackModel: Model<IFeedbackDocument> =
   mongoose.models.Feedback ?? model<IFeedbackDocument>('Feedback', feedbackSchema);

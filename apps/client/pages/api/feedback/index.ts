@@ -96,33 +96,45 @@ export const FEEDBACK_LIST_FIELDS = [
  * page, defeating the four `{ key, createdAt }` indexes this endpoint exists to use. The status
  * *filter* below covers the triage need the grouping was standing in for.
  */
-const ListFeedbackQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).prefault(1),
-  limit: z.coerce.number().int().min(1).max(FEEDBACK_LIST_MAX_LIMIT).prefault(FEEDBACK_LIST_DEFAULT_LIMIT),
-  userId: z.string().min(1).optional(),
-  sessionId: z.string().min(1).optional(),
-  questId: z.string().min(1).optional(),
-  organizationId: z.string().refine(isValidObjectId, { error: 'Invalid organizationId format' }).optional(),
-  // Legacy free-text org label. The admin dropdown builds its options out of the documents
-  // themselves, so it still selects on this; `organizationId` is the key programmatic callers
-  // (rollups, deep links) should use.
-  organization: z.union([z.string(), z.array(z.string())]).optional(),
-  status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
-  subject: z.enum(FEEDBACK_SUBJECTS).optional(),
-  type: z.union([z.enum(FeedbackType), z.array(z.enum(FeedbackType))]).optional(),
-  received: z.enum(FEEDBACK_RECEIVED_WINDOWS).optional(),
-  // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
-  search: z.string().min(1).max(200).optional(),
-  sort: z.enum(['asc', 'desc']).prefault('desc'),
-  // Opt-in because the facet is a `distinct` over the caller's WHOLE accessible set, which for an
-  // admin is the unindexed full collection - and every caller but the admin org-filter menu throws
-  // the result away (the paged list, the CSV export loop, the per-session "Reported" read).
-  // An explicit enum rather than z.coerce.boolean(), which reads the string "false" as true.
-  includeOrganizations: z.enum(['true', 'false']).optional(),
-  // Serves the facet alone: no rows are read or audited, so the org filter menu does not page a
-  // report through the audit trail just to learn the organization names.
-  facetsOnly: z.enum(['true', 'false']).optional(),
-});
+const ListFeedbackQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).prefault(1),
+    limit: z.coerce.number().int().min(1).max(FEEDBACK_LIST_MAX_LIMIT).prefault(FEEDBACK_LIST_DEFAULT_LIMIT),
+    userId: z.string().min(1).optional(),
+    sessionId: z.string().min(1).optional(),
+    questId: z.string().min(1).optional(),
+    organizationId: z.string().refine(isValidObjectId, { error: 'Invalid organizationId format' }).optional(),
+    // Legacy free-text org label. The admin dropdown builds its options out of the documents
+    // themselves, so it still selects on this; `organizationId` is the key programmatic callers
+    // (rollups, deep links) should use.
+    organization: z.union([z.string(), z.array(z.string())]).optional(),
+    status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
+    subject: z.enum(FEEDBACK_SUBJECTS).optional(),
+    type: z.union([z.enum(FeedbackType), z.array(z.enum(FeedbackType))]).optional(),
+    received: z.enum(FEEDBACK_RECEIVED_WINDOWS).optional(),
+    // A custom created-date range, both ends inclusive. Instants rather than calendar days: the
+    // admin picks days in their own time zone, so the client resolves them to instants.
+    createdFrom: z.iso.datetime().optional(),
+    createdTo: z.iso.datetime().optional(),
+    // Whether the report was submitted with text, which `contentStored` records permanently (the
+    // text itself expires). An explicit enum for the same reason as includeOrganizations below.
+    hasComment: z.enum(['true', 'false']).optional(),
+    // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
+    search: z.string().min(1).max(200).optional(),
+    sort: z.enum(['asc', 'desc']).prefault('desc'),
+    // Opt-in because the facet is a `distinct` over the caller's WHOLE accessible set, which for an
+    // admin is the unindexed full collection - and every caller but the admin org-filter menu throws
+    // the result away (the paged list, the CSV export loop, the per-session "Reported" read).
+    // An explicit enum rather than z.coerce.boolean(), which reads the string "false" as true.
+    includeOrganizations: z.enum(['true', 'false']).optional(),
+    // Serves the facet alone: no rows are read or audited, so the org filter menu does not page a
+    // report through the audit trail just to learn the organization names.
+    facetsOnly: z.enum(['true', 'false']).optional(),
+  })
+  .refine(query => !query.createdFrom || !query.createdTo || new Date(query.createdFrom) <= new Date(query.createdTo), {
+    error: 'createdFrom must not be after createdTo',
+    path: ['createdFrom'],
+  });
 
 /** Distinct, non-empty organization names, sorted for the filter menu. */
 async function readOrganizationFacet(readable: FilterQuery<unknown>): Promise<string[]> {
@@ -288,6 +300,18 @@ const handler = baseApi()
     }
 
     if (query.received) clauses.push({ createdAt: { $gt: feedbackReceivedSince(query.received, new Date()) } });
+    if (query.createdFrom || query.createdTo) {
+      clauses.push({
+        createdAt: {
+          ...(query.createdFrom ? { $gte: new Date(query.createdFrom) } : {}),
+          ...(query.createdTo ? { $lte: new Date(query.createdTo) } : {}),
+        },
+      });
+    }
+
+    // `false`, not `$ne: true`: the field is always present (schema default, and the text-split
+    // migration backfilled it), and an equality keeps feedback_status_contentStored_createdAt usable.
+    if (query.hasComment) clauses.push({ contentStored: query.hasComment === 'true' });
 
     if (query.search) {
       const pattern = new RegExp(escapeRegex(query.search), 'i');

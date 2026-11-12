@@ -1,5 +1,5 @@
 import { IFeedbackDocument, FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
-import type { FeedbackView } from './feedbackTabSearch';
+import type { FeedbackCommentFilter, FeedbackView } from './feedbackTabSearch';
 import type { FeedbackReceivedWindow } from './feedbackTrends';
 
 // Extended feedback document with MongoDB _id field. `contentExpired` is added by the API's
@@ -35,6 +35,10 @@ export interface FeedbackFilters {
   types: FeedbackType[];
   /** Undefined is any age. */
   received?: FeedbackReceivedWindow;
+  /** `YYYY-MM-DD` viewer-local days, both inclusive. */
+  createdFrom?: string;
+  createdTo?: string;
+  comment?: FeedbackCommentFilter;
   sortAscending: boolean;
 }
 
@@ -59,6 +63,10 @@ export interface FeedbackListFilterParams {
   type?: FeedbackType[];
   organization?: string[];
   received?: FeedbackReceivedWindow;
+  /** ISO instants, both inclusive. */
+  createdFrom?: string;
+  createdTo?: string;
+  hasComment?: boolean;
   search?: string;
   sort: 'asc' | 'desc';
 }
@@ -101,6 +109,10 @@ export interface UseFeedbackFiltersReturn {
   setTypes: (types: FeedbackType[]) => void;
   /** Undefined clears the filter back to any age. */
   setReceived: (received: FeedbackReceivedWindow | undefined) => void;
+  /** Sets a custom created range (clearing any preset window); both undefined clears it. */
+  setCreatedRange: (range: { createdFrom: string | undefined; createdTo: string | undefined }) => void;
+  /** Undefined clears the filter back to reports with or without a comment. */
+  setComment: (comment: FeedbackCommentFilter | undefined) => void;
   /** Replaces every filter with the defaults plus `view`, and clears the search box. */
   showOnly: (view: Partial<Pick<FeedbackView, 'statusFilters' | 'types' | 'received'>>) => void;
   toggleSortDirection: () => void;
