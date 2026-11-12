@@ -1,7 +1,6 @@
 /**
- * Posting to an org's opted-in Slack channel as the Bike4Mind bot, shared by POST /api/v1/slack/messages
- * (apps/client/pages/api/v1/slack/messages.ts) and the loop run's `loop_slack_post` tool
- * (apps/workers/src/queueHandlers/agentExecutor.loopSlackTools.ts). The org owner opts a channel in through
+ * Posting to an org's opted-in Slack channel as the Bike4Mind bot, for POST /api/v1/slack/messages
+ * (apps/client/pages/api/v1/slack/messages.ts). The org owner opts a channel in through
  * pages/api/organizations/[id]/integrations/slack/channels.ts.
  */
 import {
@@ -11,7 +10,6 @@ import {
   UnauthorizedError,
   UnprocessableEntityError,
 } from '@bike4mind/common';
-import { cacheRepository } from '@bike4mind/database';
 import {
   organizationRepository,
   orgSlackWorkspaceRepository,
@@ -33,7 +31,7 @@ export type OrgChannelPostAuthorization =
 
 /**
  * Whether `userId` may post to `channelId`, in the route's order of checks: the channel is opted in (and, when it
- * lists allowed keys, for `keyId`; a caller with no key, like a loop, is then refused), its workspace is connected
+ * lists allowed keys, for `keyId`; a caller with no key is then refused), its workspace is connected
  * to the org that granted the opt-in, a key billing an org bills that org, and the user is a member of it (no admin
  * bypass). The bot token is returned still encrypted, so a caller spends its budget before decrypting.
  */
@@ -68,22 +66,8 @@ export async function authorizeOrgChannelPost({
 }
 
 export const SLACK_POSTS_PER_CHANNEL_PER_MINUTE = 60;
-/** The v1 messages route's rate-limit bucket prefix; the channel budget below shares its `channel-minute` bucket. */
+/** The v1 messages route's rate-limit bucket prefix. */
 export const SLACK_MESSAGES_POST_BUCKET = 'POST /api/v1/slack/messages';
-/** Must match the route's `channelRateLimit` key (`rate-limit:<subject>:<bucket>`), so every poster shares it. */
-const CHANNEL_BUDGET_KEY = (channelId: string) =>
-  `rate-limit:channel:${channelId}:${SLACK_MESSAGES_POST_BUCKET}:channel-minute`;
-
-/** Spends one post of the channel's per-minute budget; false when it is used up. */
-export async function spendSlackChannelBudget(channelId: string): Promise<boolean> {
-  const { success } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
-    CHANNEL_BUDGET_KEY(channelId),
-    SLACK_POSTS_PER_CHANNEL_PER_MINUTE,
-    60 * 1000
-  );
-  return success;
-}
-
 /** chat.postMessage with no SDK retries: a Lambda must not sit out Slack's back-off, and the caller can retry. */
 export function postOrgSlackMessage(botToken: string, message: ChatPostMessageArguments) {
   const client = new WebClient(botToken, {

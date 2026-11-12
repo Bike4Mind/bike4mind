@@ -135,10 +135,10 @@ describe('validateLoopForm', () => {
   });
 });
 
-describe('validateLoopForm hand-offs, triggers, wake mode and Slack', () => {
+describe('validateLoopForm hand-offs, triggers and wake mode', () => {
   it('omits them when empty on create and clears them on edit', () => {
     const created = validateLoopForm(values(), 'create').payload!;
-    for (const key of ['handoffTargets', 'triggers', 'wakeMode', 'slackChannelId']) {
+    for (const key of ['handoffTargets', 'triggers', 'wakeMode']) {
       expect(created).not.toHaveProperty(key);
     }
     expect(validateLoopForm(values(), 'edit').payload).toMatchObject({
@@ -146,12 +146,6 @@ describe('validateLoopForm hand-offs, triggers, wake mode and Slack', () => {
       triggers: null,
       wakeMode: null,
     });
-    // The Slack field is only sent when the form shows it.
-    expect(validateLoopForm(values(), 'edit').payload).not.toHaveProperty('slackChannelId');
-    expect(validateLoopForm(values({ slackChannelId: '' }), 'edit').payload?.slackChannelId).toBeNull();
-    expect(validateLoopForm(values({ slackChannelId: ' C0123ABCD ' }), 'edit').payload?.slackChannelId).toBe(
-      'C0123ABCD'
-    );
   });
 
   it('sends triggers, dropping a toStage that is not a non-last stage, and checks them', () => {
@@ -407,7 +401,6 @@ describe('LoopFormModal', () => {
     fireEvent.click(within(screen.getByTestId('loop-form-trigger-stage-0')).getByRole('combobox'));
     fireEvent.click(screen.getByRole('option', { name: 'shipped' }));
     fireEvent.click(within(screen.getByTestId('loop-form-wake-tickets')).getByRole('radio'));
-    expect(screen.queryByTestId('loop-form-slack-channel')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
     expect(updateLoop.mutate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -418,20 +411,6 @@ describe('LoopFormModal', () => {
       }),
       expect.anything()
     );
-  });
-
-  it('shows the Slack channel field for a loop that bills an organization', () => {
-    renderForm({
-      id: 'l1',
-      name: 'Digest',
-      goal: 'Summarize',
-      intervalMinutes: 30,
-      tools: [],
-      stages: ['todo', 'doing', 'done'],
-      organizationId: 'org-1',
-      slackChannelId: 'C0123ABCD',
-    } as never);
-    expect(screen.getByTestId('loop-form-slack-channel')).toHaveValue('C0123ABCD');
   });
 
   it('drops an oversees id whose loop was deleted, so the edit still saves', () => {
@@ -601,7 +580,6 @@ describe('LoopFormModal templates', () => {
   it.each(LOOP_TEMPLATES)('$id prefills a form that saves as is', template => {
     const { errors, payload } = validateLoopForm(initialValues(template), 'create');
     expect(errors).toEqual({});
-    expect(payload).not.toHaveProperty('slackChannelId');
     expect(payload).not.toHaveProperty('model');
     expect(payload?.budgetCreditsPerDay).toBe(template.budgetCreditsPerDay);
     for (const config of template.stageConfig) {

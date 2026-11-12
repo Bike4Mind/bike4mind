@@ -33,9 +33,6 @@ export const LOOP_TICKET_TOOL_NAMES = [
   'loop_ticket_handoff',
 ] as const;
 
-/** Offered only on runs of a loop with a `slackChannelId` (`agentExecutor.loopSlackTools.ts`); pre-approved like the rest. */
-export const LOOP_SLACK_TOOL_NAMES = ['loop_slack_post'] as const;
-
 /** `interval`, the default: runs on its interval and when tickets arrive. `tickets`: only when tickets arrive. */
 export const LOOP_WAKE_MODES = ['interval', 'tickets'] as const;
 export type LoopWakeMode = (typeof LOOP_WAKE_MODES)[number];
@@ -356,8 +353,6 @@ export interface ILoop {
   triggers?: ILoopTrigger[];
   /** Absent means `interval`. In `tickets` mode `nextRunAt` is set only when a ticket makes the loop due. */
   wakeMode?: LoopWakeMode;
-  /** An opted-in org Slack channel its runs may post to (`loop_slack_post`). */
-  slackChannelId?: string;
 
   createdAt: Date;
   updatedAt: Date;

@@ -531,7 +531,6 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
       },
     },
     wakeMode: { type: String, enum: LOOP_WAKE_MODES },
-    slackChannelId: { type: String },
     hold: {
       type: new Schema(
         {

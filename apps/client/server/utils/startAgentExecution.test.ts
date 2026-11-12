@@ -580,7 +580,6 @@ describe('startAgentExecution', () => {
           'loop_directive_issue',
           'loop_run_now',
           'loop_resume',
-          'loop_slack_post',
         ],
       })
     );
