@@ -369,7 +369,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:dataLakeResearchQueue',
-    '731536174082da500869942ee0e77bafc8d1935d3662362fb4c6b5789c32908d',
+    'c7246a0a232128a250244202c6edf6384cb6604deac094cc58fd9706a35af2e2',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:dataLakeResearchQueue',
