@@ -36,7 +36,6 @@ vi.mock('@client/app/components/WebsocketReactQueryInvalidateListener', () => ({
 vi.mock('@client/app/components/GenerationUpdatesListener', () => ({ default: none }));
 vi.mock('@client/app/components/CreditBalanceSyncListener', () => ({ default: none }));
 vi.mock('@client/app/components/AgentExecutionSubscriber', () => ({ default: none }));
-vi.mock('@client/app/components/Studio/completion/StudioJobCompletedListener', () => ({ default: none }));
 vi.mock('@client/app/components/stripe/StripeCheckoutSuccessHandler', () => ({ default: none }));
 vi.mock('@client/app/components/stripe/StripePaymentReturnHandler', () => ({ default: none }));
 vi.mock('@client/app/components/CookieConsentBanner', () => ({ CookieConsentBanner: none }));

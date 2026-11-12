@@ -18,7 +18,6 @@ import ConfirmationModal from '@client/app/components/ConfirmationModal';
 import StepUpModal from '@client/app/components/auth/StepUpModal';
 import WebsocketReactQueryInvalidateListener from '@client/app/components/WebsocketReactQueryInvalidateListener';
 import GenerationUpdatesListener from '@client/app/components/GenerationUpdatesListener';
-import StudioJobCompletedListener from '@client/app/components/Studio/completion/StudioJobCompletedListener';
 import CreditBalanceSyncListener from '@client/app/components/CreditBalanceSyncListener';
 import AgentExecutionSubscriber from '@client/app/components/AgentExecutionSubscriber';
 import StripeCheckoutSuccessHandler from '@client/app/components/stripe/StripeCheckoutSuccessHandler';
@@ -216,7 +215,6 @@ export function ClientProviders({ children }: { children: ReactNode }) {
               <StripePaymentReturnHandler />
             </Suspense>
             <UserProvider>
-              <StudioJobCompletedListener />
               <ServerStatusProvider>
                 <QuestPreparationOverlay />
                 <Box sx={{ display: 'flex', flexDirection: 'column', height: '100dvh' }}>
