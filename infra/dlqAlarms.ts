@@ -1,7 +1,7 @@
 /**
  * DLQ Health Monitoring - Alarms and Dashboard
  *
- * Unified monitoring for all 28 Dead Letter Queues across the application.
+ * Unified monitoring for registered dead-letter queues across the application.
  * Uses a single shared SNS topic for all DLQ alarm notifications.
  *
  * Default alarm thresholds (per-queue overrides available via DlqDescriptor):
@@ -19,6 +19,7 @@
  */
 
 import { secrets } from './secrets';
+import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { llmSpendLogSources } from './llmSpendLogGroups';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
@@ -83,7 +84,7 @@ import {
   buildDlqAgeMetricQueries,
   buildDlqAlarmSpecs,
 } from '@bike4mind/infra';
-import type { DlqDescriptor } from '@bike4mind/infra';
+import type { InspectableDlqDescriptor } from '@bike4mind/infra';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
 import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
@@ -98,7 +99,7 @@ const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process
 
 /**
  * Shared SNS topic for all DLQ alarm notifications.
- * Subscribe once to receive alerts from all 28 DLQs.
+ * Subscribe once to receive the fleet's DLQ alerts.
  */
 export const dlqAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('DlqAlarmTopic') : undefined;
 
@@ -109,11 +110,12 @@ export const oobAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('OobAlarmTo
  * Wire DLQ alarm SNS topic → Slack.
  * Only ALARM state transitions are forwarded; OK (resolved) events are suppressed.
  */
-if (isMonitoredStage) {
-  const dlqAlarmHandlerDlq = new aws.sqs.Queue('DlqAlarmHandlerDlq', {
-    messageRetentionSeconds: 14 * 24 * 3600,
-  });
-
+if (isMonitoredStage && dlqAlarmHandlerDlq) {
+  const alarmHandlerDescriptor = {
+    label: 'alarm-handler',
+    displayName: 'DLQ Alarm Handler',
+    application: 'AlarmPipeline',
+  };
   // Policy not captured — SST's subscribe() has no dependsOn surface, so explicit sequencing
   // isn't achievable here. SNS validates DLQ permissions lazily on first SendMessage, not at
   // subscribe time, so convergence order is safe in practice.
@@ -221,7 +223,7 @@ if (isMonitoredStage) {
     treatMissingData: 'ignore',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
     alarmActions: [oobAlarmTopic!.arn],
-    tags: { Application: 'AlarmPipeline', Severity: 'Critical', MonitoringType: 'DLQ' },
+    tags: { Application: alarmHandlerDescriptor.application, Severity: 'Critical', MonitoringType: 'DLQ' },
   });
 
   // Age alarm: same 1-hour threshold as the standard DLQ fleet. period is 60s (vs fleet
@@ -238,11 +240,11 @@ if (isMonitoredStage) {
     // b4m-core/infra/src/dlqAlarmSpecs.ts for why and its residuals.
     metricQueries: buildDlqAgeMetricQueries(60, { QueueName: dlqAlarmHandlerDlq.name }),
     alarmActions: [oobAlarmTopic!.arn],
-    tags: { Application: 'AlarmPipeline', Severity: 'High', MonitoringType: 'DLQ' },
+    tags: { Application: alarmHandlerDescriptor.application, Severity: 'High', MonitoringType: 'DLQ' },
   });
 }
 
-type InfraDlqDescriptor = DlqDescriptor & {
+type InfraDlqDescriptor = InspectableDlqDescriptor & {
   /** The sst.aws.Queue resource for this DLQ */
   queue: sst.aws.Queue;
   /** Override message count alarm evaluation periods (default: 3) */
@@ -589,8 +591,7 @@ const ALARMED_DLQS: InfraDlqDescriptor[] = [
 
 /**
  * Creates the standard pair of CloudWatch alarms (message count + message age) for a DLQ,
- * wired to the shared dlqAlarmTopic. Shared by the ALARMED_DLQS loop below and by any
- * alarm-only DLQ (one with no DLQ_REGISTRY/admin-replay counterpart — see fabFileModerationDLQ).
+ * wired to the shared dlqAlarmTopic, including DLQs without an SQS replay destination.
  * `sourceQueue` is omitted: this function only alarms on the DLQ itself and never needs it.
  */
 function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
@@ -684,16 +685,7 @@ if (isMonitoredStage) {
     });
   }
 
-  // FabFile Moderation DLQ — deliberately NOT added to DLQ_DESCRIPTORS above.
-  // It backs apps/workers/src/s3/objectCreated's Lambda async-invocation dead-letter
-  // target (see infra/queues.ts), not an sst.aws.Queue `.subscribe()` consumer. Every
-  // DLQ_DESCRIPTORS entry has a `sourceQueue` that DLQ_REGISTRY (apps/client/server/utils/
-  // dlqRegistry.ts) resolves to a real SQS queue URL for the admin "replay" UI — but this
-  // DLQ has no such source: S3 invokes the Lambda directly, so there is no queue to replay
-  // a recovered message into. Adding a fake `sourceQueue` would either break
-  // dlqRegistrySync.test.ts's DLQ_DESCRIPTORS/DLQ_REGISTRY parity check or wire a
-  // non-functional "Replay" button into the admin UI. Ops still gets full alarm coverage
-  // via this standalone call.
+  // S3 invokes the Lambda directly; the registry exposes this DLQ without a replay destination.
   createDlqAlarms({
     label: 'fab-file-moderation',
     displayName: 'FabFile Moderation',

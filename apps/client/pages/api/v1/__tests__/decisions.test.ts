@@ -179,12 +179,13 @@ describe('POST /api/v1/decisions', () => {
     expect(JSON.stringify(recordUsage.mock.calls)).not.toContain('Payouts failing');
   });
 
-  it('defaults the safety identifier to a hash of the user id, and passes a caller value through', async () => {
+  it('sends a hash of the caller id as the safety identifier and ignores a body value', async () => {
+    const ownHash = createHash('sha256').update('u1').digest('hex');
     await run({ input: 'x' });
-    expect(providerSpy.mock.calls[0][0].safetyIdentifier).toBe(createHash('sha256').update('u1').digest('hex'));
+    expect(providerSpy.mock.calls[0][0].safetyIdentifier).toBe(ownHash);
 
     await run({ input: 'x', safety_identifier: 'end-user-7' });
-    expect(providerSpy.mock.calls[1][0].safetyIdentifier).toBe('end-user-7');
+    expect(providerSpy.mock.calls[1][0].safetyIdentifier).toBe(ownHash);
   });
 
   it('keeps a refusal as an answer instead of failing the request', async () => {

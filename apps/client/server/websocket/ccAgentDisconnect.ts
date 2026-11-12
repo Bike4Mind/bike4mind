@@ -40,6 +40,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     endpoint: 'ws/cc_agent_disconnect',
     logger,
     handlerName: 'CC_AGENT_DISCONNECT',
+    recordKeyUse: false,
   });
   if (!auth) return { statusCode: 401 };
   const { userId, apiKeyId } = auth;

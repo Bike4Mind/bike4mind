@@ -184,6 +184,22 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(Object.prototype.hasOwnProperty.call(storedFalse as object, 'servedNothing')).toBe(false);
     });
 
+    it('stores adminBypassLakeIds filtered to resolvedLakeIds', async () => {
+      const event = await repo.record(
+        baseInput({ resolvedLakeIds: ['lake-1'], adminBypassLakeIds: ['lake-1', 'other'] })
+      );
+      const stored = await LakeAccessEventModel.findById(event.id).lean();
+      expect(stored?.adminBypassLakeIds).toEqual(['lake-1']);
+    });
+
+    it('leaves adminBypassLakeIds absent when omitted, empty, or fully filtered out', async () => {
+      for (const adminBypassLakeIds of [undefined, [], ['other']]) {
+        const event = await repo.record(baseInput({ resolvedLakeIds: ['lake-1'], adminBypassLakeIds }));
+        const stored = await LakeAccessEventModel.findById(event.id).lean();
+        expect(Object.prototype.hasOwnProperty.call(stored as object, 'adminBypassLakeIds')).toBe(false);
+      }
+    });
+
     it('is absent updatedAt - an audit row that reports being updated is a lie', async () => {
       const event = await repo.record(baseInput());
       expect((event as unknown as { updatedAt?: Date }).updatedAt).toBeUndefined();

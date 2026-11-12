@@ -5,6 +5,7 @@ import {
   embedConversationRepository,
   hideDeletedAuthorAnnotations,
   integrationRequestRepository,
+  abuseEvalSetRepository,
   shadowDetectionRepository,
   campaignWatchRepository,
 } from '@bike4mind/database';
@@ -141,6 +142,14 @@ export async function purgeDeletedUserData(
     await campaignWatchRepository.removeUser(userId);
   } catch (err) {
     logger.error(`Failed to remove deleted user ${userId} from campaign watches: ${String(err)}`);
+  }
+
+  // Evaluation sets hold the account as a labelled example: the example leaves every set.
+  try {
+    const changed = await abuseEvalSetRepository.removeUser(userId);
+    logger.info(`Removed deleted user ${userId} from ${changed} evaluation set(s)`);
+  } catch (err) {
+    logger.error(`Failed to remove deleted user ${userId} from evaluation sets: ${String(err)}`);
   }
 
   // Last: the revokes call out to the providers, and a slow provider must not cost the local steps above.

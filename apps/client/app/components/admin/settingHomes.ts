@@ -51,8 +51,7 @@ export const SETTING_HOMES: readonly SettingHome[] = [
   {
     id: 'growth-pricing',
     label: 'Growth and Pricing',
-    summary:
-      'Signup, starter credits, usage metering, credit pricing, team-plan limits and the preference arena are edited on',
+    summary: 'Signup, usage metering, credit pricing, team-plan limits and the preference arena are edited on',
     keys: GROWTH_PRICING_SECTIONS.flatMap(section => section.keys),
   },
   {

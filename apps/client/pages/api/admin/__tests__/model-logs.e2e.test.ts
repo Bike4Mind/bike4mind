@@ -207,7 +207,7 @@ describe('GET /api/admin/model-logs', () => {
     );
   });
 
-  it('derives the card counts and artifact previews in the projection', async () => {
+  it('derives the card counts and artifact types in the projection', async () => {
     await Quest.create({
       sessionId: 'session-7',
       type: 'message',
@@ -242,8 +242,9 @@ describe('GET /api/admin/model-logs', () => {
       attachedFileCount: 2,
       completedStepCount: 3,
       failedStepCount: 1,
-      artifacts: [{ type: 'html', preview: 'x'.repeat(100) }],
+      artifacts: [{ type: 'html' }],
     });
+    expect(log.artifacts[0]).not.toHaveProperty('preview');
   });
 
   it('pages newest first, with total counting every match', async () => {

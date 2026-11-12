@@ -306,10 +306,20 @@ export const VIEW_REGISTRY: NavigableView[] = [
     section: 'admin',
     label: 'User Management',
     description:
-      'View and manage user accounts, roles, and permissions; the AI advisory filter lists accounts the AI advisory flagged, with bulk Contain',
+      'View and manage user accounts, roles, and permissions; the profile Billing tab shows payments, subscription standing and credit funding; the AI advisory filter lists accounts the AI advisory flagged, with bulk Contain',
     navigationType: 'tab',
     target: '0', // AdminTab.Users
-    keywords: ['users', 'accounts', 'roles', 'permissions', 'manage users', 'ai advisories', 'flagged accounts'],
+    keywords: [
+      'users',
+      'accounts',
+      'roles',
+      'permissions',
+      'manage users',
+      'ai advisories',
+      'flagged accounts',
+      'billing',
+      'payments',
+    ],
     requiresAdmin: true,
   },
   {
@@ -373,7 +383,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
       'List, create and edit organizations: members, top up credits, adjust seats, sync from Stripe, grant a free org, convert a granted org to paid or revoke the grant',
     navigationType: 'tab',
     target: '14', // AdminTab.Organizations
-    keywords: ['organizations', 'teams', 'tenants', 'companies'],
+    keywords: ['organizations', 'teams', 'tenants', 'companies', 'billing', 'payments'],
     requiresAdmin: true,
   },
   {

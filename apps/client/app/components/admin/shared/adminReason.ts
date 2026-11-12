@@ -37,6 +37,8 @@ export const ADMIN_REASON_PRESETS = {
   apiKeyAdminScope: ['Partner integration', 'Internal service', 'Requested by the account owner'],
   embedKeyRevoke: ['Compromised or leaked key', 'Site no longer embeds the agent', 'Customer request'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
+  orgGroupTypes: ['Pilot or partner access', 'Plan change', 'Support request'],
+  rateLimitReset: ['Support request', 'Key locked out', 'Counter correction'],
   productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
   systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],
   permissionsChange: ['Joined the support rotation', 'Role change on the team', 'Access no longer needed'],

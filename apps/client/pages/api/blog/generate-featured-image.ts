@@ -86,7 +86,7 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
         imageLogger.info(`[Blog Image] Using user-selected image model: ${imageModelId}`);
       } else {
         // Fall back to operations model
-        const operationsResult = await OperationsModelService.getOperationsModel();
+        const operationsResult = await OperationsModelService.getOperationsModel({ endUserId: userId });
         imageModelId = operationsResult.imageModelId;
         imageModelInfo = operationsResult.imageModelInfo;
 

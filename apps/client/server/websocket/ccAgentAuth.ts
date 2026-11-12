@@ -35,14 +35,20 @@ export async function resolveBridgeWsAuth(params: {
   endpoint: string;
   logger: Logger;
   handlerName: string;
+  /** Whether this message is a use of the bridge key (stamps its `lastUsedAt`). Registering an agent
+   *  is; the event and disconnect stream that follows is the daemon reporting, so it is not. */
+  recordKeyUse: boolean;
 }): Promise<ResolvedBridgeAuth | null> {
-  const { accessToken, connectionId, endpoint, logger, handlerName } = params;
+  const { accessToken, connectionId, endpoint, logger, handlerName, recordKeyUse } = params;
 
   let userId: string | null = null;
   let apiKeyId: string | null = null;
 
   try {
-    const apiKeyInfo = await verifyBridgeApiKey({ authorization: `Bearer ${accessToken}` });
+    const apiKeyInfo = await verifyBridgeApiKey(
+      { authorization: `Bearer ${accessToken}` },
+      { recordUse: recordKeyUse }
+    );
     await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
       userId: apiKeyInfo.userId,
       endpoint,

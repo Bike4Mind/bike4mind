@@ -30,10 +30,13 @@ vi.mock('@bike4mind/database', () => ({
     findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
   },
 }));
-vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getRequestEntitlements: mockGetRequestEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
+  getRequestEntitlements: mockGetRequestEntitlements,
+  getCompleteRequestEntitlements: mockGetRequestEntitlements,
+}));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
 
-import { resolveAccessibleLakes } from './index';
+import { resolveAccessibleLakes, adminBypassLakeIds } from './index';
 
 const asReq = (user: Record<string, unknown>) => ({ user }) as unknown as EntitlementRequest;
 
@@ -126,5 +129,48 @@ describe('resolveAccessibleLakes', () => {
 
     const [, adapters] = mockListDataLakes.mock.calls[0] as [unknown, { db: Record<string, unknown> }];
     expect(adapters.db).not.toHaveProperty('users');
+  });
+
+  it('asMember resolves through the member context for an admin: listDataLakes, not listAllDataLakes', async () => {
+    mockListDataLakes.mockResolvedValue([{ id: 'member-lake' }]);
+
+    const lakes = await resolveAccessibleLakes(asReq({ id: 'admin', tags: [], isAdmin: true }), { asMember: true });
+
+    expect(mockListDataLakes).toHaveBeenCalledWith(expect.objectContaining({ isAdmin: false }), expect.anything());
+    expect(mockListAllDataLakes).not.toHaveBeenCalled();
+    expect(lakes.map(l => l.id)).toContain('member-lake');
+  });
+});
+
+describe('adminBypassLakeIds', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListDataLakes.mockResolvedValue([]);
+    mockListAllDataLakes.mockResolvedValue([]);
+    mockGetRequestEntitlements.mockResolvedValue([]);
+    mockFindMembershipOrgIds.mockResolvedValue([]);
+  });
+
+  it('returns [] for a non-admin without resolving any lakes', async () => {
+    await expect(adminBypassLakeIds(asReq({ id: 'u1', tags: [] }), ['lake-a'])).resolves.toEqual([]);
+    expect(mockListDataLakes).not.toHaveBeenCalled();
+    expect(mockListAllDataLakes).not.toHaveBeenCalled();
+  });
+
+  it('returns [] for an admin with no lake ids, without resolving lakes', async () => {
+    await expect(adminBypassLakeIds(asReq({ id: 'admin', tags: [], isAdmin: true }), [])).resolves.toEqual([]);
+    expect(mockListDataLakes).not.toHaveBeenCalled();
+  });
+
+  it('returns only the ids an admin could not reach as a member', async () => {
+    mockListDataLakes.mockResolvedValue([{ id: 'member-lake' }]);
+
+    const result = await adminBypassLakeIds(asReq({ id: 'admin', tags: [], isAdmin: true }), [
+      'member-lake',
+      'other-lake',
+    ]);
+
+    expect(result).toEqual(['other-lake']);
+    expect(mockListAllDataLakes).not.toHaveBeenCalled();
   });
 });
