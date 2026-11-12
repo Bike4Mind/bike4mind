@@ -1258,14 +1258,28 @@ export class SessionStore implements SessionWritesStore {
    * saying "New chat" as soon as there is something to call it.
    */
   async appendMessage(id: string, message: ChatMessage): Promise<ChatSession | null> {
-    return this.serialize(id, () => this.appendNow(id, message));
+    return this.serialize(id, async () => (await this.appendNow(id, message)) || null);
   }
 
-  private async appendNow(id: string, message: ChatMessage): Promise<ChatSession | null> {
+  /** appendMessage, but `false` and nothing written when `admit` rejects the session as stored. */
+  async appendMessageIf(
+    id: string,
+    message: ChatMessage,
+    admit: (session: ChatSession) => boolean
+  ): Promise<ChatSession | null | false> {
+    return this.serialize(id, () => this.appendNow(id, message, admit));
+  }
+
+  private async appendNow(
+    id: string,
+    message: ChatMessage,
+    admit?: (session: ChatSession) => boolean
+  ): Promise<ChatSession | null | false> {
     const directory = await this.directoryFor(false);
     if (!directory) return null;
     const session = await this.read(directory, id);
     if (!session) return null;
+    if (admit && !admit(session)) return false;
 
     // `system` excluded on both sides: a spawned session reporting back is not a prompt, so it
     // neither names the conversation nor counts as the first thing asked in it.

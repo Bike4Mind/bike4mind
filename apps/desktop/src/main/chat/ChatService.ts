@@ -389,6 +389,25 @@ const MID_TURN_NOTE =
 const RELAY_MID_TURN_NOTE =
   'This message from another conversation arrived while you were still working. Weigh it now, then carry on with the task unless it changes what you should do.';
 
+/** Refusal for anything but the user (and auto-fix) starting a turn in a canceled worker session. */
+const CANCELED_TASK_REFUSAL =
+  'This task was canceled, so nothing automatic runs in it any more. Type a message in that conversation to follow up, or start a new task.';
+
+/** Rides with a follow-up the user sends after the task was canceled; see isUserFollowUp. */
+const CLOSED_TASK_NOTE =
+  'The structured task in this conversation was canceled and is closed. This message is a follow-up from the user, not a new attempt at that task: answer it as an ordinary request. task_report is unavailable and nothing from this turn reports back to the orchestrator.';
+
+/**
+ * Whether a turn is the user's own: typed, queued from the composer, run from a suggestion card,
+ * or an auto-fix prompt the user enabled for this session's PR. Only these may run after a task
+ * is canceled; cancellation stays terminal for relays, wakes, loops and spawn seeds.
+ */
+function isUserFollowUp(options: SendOptions): boolean {
+  const { released } = options;
+  if (options.spawnSeed || options.loop || options.seedHops !== undefined || released?.relay) return false;
+  return !released?.automatic || released.automatic.kind === 'auto-fix';
+}
+
 /** Something that reached a running turn between rounds; see takeArrivals. */
 interface MidTurnArrival {
   message: ChatMessage;
@@ -2052,7 +2071,8 @@ export class ChatService {
           };
         }
       } else if (action.kind === 'revise') {
-        if (task.state.status === 'canceled') throw new Error('Canceled tasks cannot restart.');
+        if (task.state.status === 'canceled')
+          throw new Error('Canceled tasks cannot restart. Start a new task for more work.');
         if (action.contract.role !== task.contract.role)
           throw new Error('Keep the task role when revising. Reassign explicitly with a new task.');
         seed = `${action.instruction}\n\n${renderTaskBrief(action.contract)}`;
@@ -2082,7 +2102,7 @@ export class ChatService {
             return { ...current, state: next.state };
           }
           if (current.state.status === 'canceled' && action.kind !== 'cancel')
-            throw new Error('This task was canceled.');
+            throw new Error('This task was canceled. Start a new task for more work.');
           if (action.kind === 'cancel') return { ...current, state: next.state };
           if (current.attempts.at(-1)?.id !== task.attempts.at(-1)?.id)
             throw new Error('A newer task attempt has started. Reload agent details.');
@@ -2737,7 +2757,8 @@ export class ChatService {
     historyScope: string | null
   ): Promise<SendMessageResult> {
     const { released, seedHops } = options;
-    const notes = released?.notes ?? options.notes;
+    const userFollowUp = isUserFollowUp(options);
+    let notes = released?.notes ?? options.notes;
     const api = this.deps.getApiClient();
     if (!api && !isLocalModel(claimed.model) && !this.deviceLocal())
       return { ok: false, error: 'Sign in to send a message.' };
@@ -2751,7 +2772,8 @@ export class ChatService {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
     }
-    if (claimed.workerTask?.state.status === 'canceled') return { ok: false, error: 'This task was canceled.' };
+    if (claimed.workerTask?.state.status === 'canceled' && !userFollowUp)
+      return { ok: false, error: CANCELED_TASK_REFUSAL };
     const settled: SettledModel = this.deviceLocal()
       ? await this.settleDeviceLocal(claimed, await this.localModelsFor(claimed.model))
       : { session: claimed };
@@ -2804,9 +2826,8 @@ export class ChatService {
     // Last before the prompt is stored, so the boundary lands above it and the summary covers
     // everything the prompt follows on from. Every refusal above has already had its say: a
     // turn that will not go out must not cost a summary.
-    if (reconciled.workerTask && !options.spawnSeed) {
-      if (reconciled.workerTask.state.status === 'canceled')
-        return { ok: false, error: 'This task was canceled. Start a new task explicitly.' };
+    let taskClosed = reconciled.workerTask?.state.status === 'canceled';
+    if (reconciled.workerTask && !options.spawnSeed && !taskClosed) {
       const updated = await this.deps.store.updateWorkerTask(sessionId, task =>
         task.state.status === 'canceled'
           ? task
@@ -2819,11 +2840,15 @@ export class ChatService {
               ],
             }
       );
-      if (!updated || updated.workerTask?.state.status === 'canceled')
-        return { ok: false, error: 'The task no longer exists or was canceled.' };
-      this.deps.summaryChanged?.(updated);
-      if (reconciled.origin) this.spawnWatch.set(sessionId, { parentSessionId: reconciled.origin.parentSessionId });
+      if (!updated) return { ok: false, error: 'The task no longer exists.' };
+      taskClosed = updated.workerTask?.state.status === 'canceled';
+      if (taskClosed && !userFollowUp) return { ok: false, error: CANCELED_TASK_REFUSAL };
+      if (!taskClosed) {
+        this.deps.summaryChanged?.(updated);
+        if (reconciled.origin) this.spawnWatch.set(sessionId, { parentSessionId: reconciled.origin.parentSessionId });
+      }
     }
+    if (taskClosed) notes = [...(notes ?? []), CLOSED_TASK_NOTE];
     await this.autoCompact(reconciled);
     timer?.lap('autoCompact');
     if (options.loop) {
@@ -2861,12 +2886,24 @@ export class ChatService {
     const isFirstPrompt =
       !existing.titleLocked && !existing.messages.some(message => message.role === 'user' && !message.system);
 
-    const session = await this.deps.store.appendMessage(sessionId, userMessage);
+    // A cancel can land while this turn was being accepted; for anything but the user's own turn
+    // it is checked in the same write, so a refusal leaves nothing saved without an answer.
+    const session = userFollowUp
+      ? await this.deps.store.appendMessage(sessionId, userMessage)
+      : await this.deps.store.appendMessageIf(
+          sessionId,
+          userMessage,
+          current => current.workerTask?.state.status !== 'canceled'
+        );
     timer?.lap('append');
+    if (session === false) return { ok: false, error: CANCELED_TASK_REFUSAL };
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
     if (options.loop && !(await options.loop.valid(session)))
       return { ok: false, error: 'Loop context changed or stopped.' };
-    if (session.workerTask?.state.status === 'canceled') return { ok: false, error: 'This task was canceled.' };
+    // A follow-up after a cancel (even one landing during the awaits above) reports nothing to
+    // the parent and so never wakes it.
+    const closedTask = session.workerTask?.state.status === 'canceled';
+    if (closedTask) this.spawnWatch.delete(sessionId);
 
     // Now that the conversation's attachments are settled, anything on disk it does not
     // reference was added to the composer and then removed. See AttachmentStore.prune.
@@ -2888,7 +2925,8 @@ export class ChatService {
     } else {
       this.attendedTurns.delete(sessionId);
       const parentSessionId = session.origin?.parentSessionId;
-      if (parentSessionId && isAgentSession(session)) this.spawnWatch.set(sessionId, { parentSessionId });
+      if (parentSessionId && isAgentSession(session) && !closedTask)
+        this.spawnWatch.set(sessionId, { parentSessionId });
     }
     const replyId = this.startReply(
       session,
@@ -2955,8 +2993,8 @@ export class ChatService {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
     }
-    if (session.workerTask) {
-      if (session.workerTask.state.status === 'canceled') return { ok: false, error: 'This task was canceled.' };
+    // A canceled task stays canceled: the Continue carries the conversation on, not the task.
+    if (session.workerTask && session.workerTask.state.status !== 'canceled') {
       const updated = await this.deps.store.updateWorkerTask(sessionId, task =>
         task.state.status === 'canceled'
           ? task
@@ -2965,10 +3003,11 @@ export class ChatService {
               state: { status: 'running' },
             }
       );
-      if (!updated || updated.workerTask?.state.status === 'canceled')
-        return { ok: false, error: 'This task no longer exists or was canceled.' };
-      if (updated) this.deps.summaryChanged?.(updated);
-      if (session.origin) this.spawnWatch.set(sessionId, { parentSessionId: session.origin.parentSessionId });
+      if (!updated) return { ok: false, error: 'This task no longer exists.' };
+      if (updated.workerTask?.state.status !== 'canceled') {
+        this.deps.summaryChanged?.(updated);
+        if (session.origin) this.spawnWatch.set(sessionId, { parentSessionId: session.origin.parentSessionId });
+      }
     }
     // Reached only from the Continue button, so whoever clicked it is there to answer a card.
     this.attendedTurns.add(sessionId);
@@ -3663,7 +3702,7 @@ export class ChatService {
               ask,
               suggestions: !session.origin && !orchestrating,
               delegates: orchestrating,
-              structuredTask: !!session.workerTask,
+              structuredTask: !!session.workerTask && session.workerTask.state.status !== 'canceled',
               managedDelegation: !!session.origin && !!session.orchestrationPolicy,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
@@ -5675,6 +5714,13 @@ export class ChatService {
         ok: false,
         reason: 'archived',
         message: `"${title}" is archived. Ask the user to restore it before sending to it.`,
+      };
+    }
+    if (target.workerTask?.state.status === 'canceled') {
+      return {
+        ok: false,
+        reason: 'unavailable',
+        message: `"${title}" belongs to a canceled task and takes no more relayed work. Start a new task instead.`,
       };
     }
 
