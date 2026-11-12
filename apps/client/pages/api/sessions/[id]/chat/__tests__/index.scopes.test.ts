@@ -124,14 +124,16 @@ describe('/api/sessions/[id]/chat API-key scopes', () => {
     expect(mockGetMessages).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses POST for a notebooks:read key without writing', async () => {
+  // Every key is legacy until the legacy window's cutoff is set, so keys that miss the scopes still
+  // pass here; the refusal they get after the window ends is pinned in apiKeyScopeGate.test.ts.
+  it('lets a legacy notebooks:read key POST, as before scopes', async () => {
     keyWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
+    mockAddMessage.mockResolvedValue({ id: 'm1' });
     const { req, res } = fire('POST');
     await handler(req, res);
 
-    expect(res._getStatusCode()).toBe(403);
-    expect(JSON.stringify(res._getData())).toContain('notebooks:write is required');
-    expect(mockAddMessage).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).not.toBe(403);
+    expect(mockAddMessage).toHaveBeenCalledTimes(1);
   });
 
   it.each(['GET', 'POST'] as const)('admits %s for an admin:* key with no notebook scope', async method => {
@@ -148,8 +150,18 @@ describe('/api/sessions/[id]/chat API-key scopes', () => {
     ['GET', 'an unscoped key', []],
     ['GET', 'a non-notebook key', [ApiKeyScope.ME_READ]],
     ['POST', 'an unscoped key', []],
-  ] as const)('refuses %s at the door for %s', async (method, _label, scopes) => {
+  ] as const)('admits %s for %s while it is legacy', async (method, _label, scopes) => {
     keyWithScopes([...scopes]);
+    mockAddMessage.mockResolvedValue({ id: 'm1' });
+    const { req, res } = fire(method);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).not.toBe(403);
+    expect(method === 'GET' ? mockGetMessages : mockAddMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['GET', 'POST'] as const)('refuses %s at the door for a confined key', async method => {
+    keyWithScopes([ApiKeyScope.EMBED_CHAT]);
     const { req, res } = fire(method);
     await handler(req, res);
 

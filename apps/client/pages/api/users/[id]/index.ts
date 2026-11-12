@@ -9,6 +9,7 @@ import {
   selfUserProfileResponseSchema,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
+import { isLegacyApiKey } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { withSafeOrganization } from '@bike4mind/server-utils/utils/toSafeOrganizationSubdocument';
 import { Request } from 'express';
 
@@ -40,14 +41,15 @@ async function sharesWorkspace(viewer: IUserDocument, subject: IUserDocument): P
   return Boolean(project || notebook);
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN] }).get<
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN], grandfatherLegacyKeys: true }).get<
   Request<{}, unknown, unknown, { id: string }>
 >(async (req, res) => {
   const userId = req.query.id;
 
   // me:read covers only the key owner's own account, so a key reads other users' profiles only
-  // with admin authority. 404, not 403, for the enumeration reason below.
-  if (req.apiKeyInfo && req.user.id !== userId && !req.user.isAdmin) {
+  // with admin authority. 404, not 403, for the enumeration reason below. Legacy keys keep the
+  // public-profile reads they had until the legacy window ends.
+  if (req.apiKeyInfo && !isLegacyApiKey(req.apiKeyInfo.createdAt) && req.user.id !== userId && !req.user.isAdmin) {
     return res.status(404).json({ error: 'User not found' });
   }
 

@@ -44,7 +44,7 @@ export interface GearStatus {
   minAccountAgeDays?: number;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN] }).get(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN], grandfatherLegacyKeys: true }).get(
   asyncHandler(async (req, res) => {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Authentication required' });

@@ -135,17 +135,15 @@ describe('/api/sessions API-key scopes', () => {
     vi.unstubAllEnvs();
   });
 
-  it('refuses DELETE for a notebooks:read key without deleting anything', async () => {
+  // Every key is legacy until the legacy window's cutoff is set, so keys that miss the scopes still
+  // pass here; the refusal they get after the window ends is pinned in apiKeyScopeGate.test.ts.
+  it('lets a legacy notebooks:read key DELETE, as before scopes', async () => {
     keyWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
     const { req, res } = fire('DELETE');
     await handler(req, res);
 
-    expect(res._getStatusCode()).toBe(403);
-    // The message pins which gate refused: CASL's ability check would answer a bare 'Forbidden'.
-    expect(JSON.stringify(res._getData())).toContain('notebooks:write is required');
-    expect(mockDeleteMany).not.toHaveBeenCalled();
-    expect(mockUnpublish).not.toHaveBeenCalled();
-    expect(mockPurgeMedia).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(204);
+    expect(mockDeleteMany).toHaveBeenCalledTimes(1);
   });
 
   it('lets a notebooks:write key delete all notebooks', async () => {
@@ -183,11 +181,19 @@ describe('/api/sessions API-key scopes', () => {
   });
 
   it.each([
-    ['GET', 'an unscoped key', []],
-    ['GET', 'a non-notebook key', [ApiKeyScope.ME_READ]],
-    ['DELETE', 'an unscoped key', []],
-  ] as const)('refuses %s at the door for %s', async (method, _label, scopes) => {
+    ['GET', 'an unscoped key', [], 200],
+    ['GET', 'a non-notebook key', [ApiKeyScope.ME_READ], 200],
+    ['DELETE', 'an unscoped key', [], 204],
+  ] as const)('admits %s for %s while it is legacy', async (method, _label, scopes, status) => {
     keyWithScopes([...scopes]);
+    const { req, res } = fire(method);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(status);
+  });
+
+  it.each(['GET', 'DELETE'] as const)('refuses %s at the door for a confined key', async method => {
+    keyWithScopes([ApiKeyScope.EMBED_CHAT]);
     const { req, res } = fire(method);
     await handler(req, res);
 

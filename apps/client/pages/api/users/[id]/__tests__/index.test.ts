@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFindById, mockFindMembershipOrgIds, mockProjectExists, mockSessionExists } = vi.hoisted(() => ({
-  mockFindById: vi.fn(),
-  mockFindMembershipOrgIds: vi.fn(),
-  mockProjectExists: vi.fn(),
-  mockSessionExists: vi.fn(),
-}));
+const { mockFindById, mockFindMembershipOrgIds, mockProjectExists, mockSessionExists, mockIsLegacy } = vi.hoisted(
+  () => ({
+    mockIsLegacy: vi.fn(),
+    mockFindById: vi.fn(),
+    mockFindMembershipOrgIds: vi.fn(),
+    mockProjectExists: vi.fn(),
+    mockSessionExists: vi.fn(),
+  })
+);
 
 vi.mock('@bike4mind/database', () => ({
   User: {
@@ -25,6 +28,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
     };
     return chain;
   },
+}));
+
+vi.mock('@bike4mind/server-utils/middlewares/apiKeyScopeGate', () => ({
+  isLegacyApiKey: (...a: unknown[]) => mockIsLegacy(...a),
 }));
 
 import handler from '../index';
@@ -54,6 +61,7 @@ describe('GET /api/users/[id] restricted-tier fields', () => {
       username: 'subject',
       name: 'Subject',
       email: 'subject@example.com',
+      photoUrl: 'https://example.com/subject.png',
       throttle,
       riskSignals,
       toObject() {
@@ -79,11 +87,24 @@ describe('GET /api/users/[id] restricted-tier fields', () => {
   });
 
   describe('API-key caller', () => {
+    beforeEach(() => {
+      mockIsLegacy.mockReturnValue(false);
+    });
+
     it("404s another user's profile without looking it up", async () => {
       const res = await fire({ id: 'someone-else', isAdmin: false }, true);
 
       expect(res._getStatusCode()).toBe(404);
       expect(mockFindById).not.toHaveBeenCalled();
+    });
+
+    it("serves a legacy key another user's public profile, as before scopes", async () => {
+      mockIsLegacy.mockReturnValue(true);
+      const res = await fire({ id: 'someone-else', isAdmin: false }, true);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().username).toBe('subject');
+      expect(res._getJSONData()).not.toHaveProperty('throttle');
     });
 
     it('serves the key owner their own profile', async () => {

@@ -24,43 +24,45 @@ const CreditTransactionsQuerySchema = z.object({
   type: z.enum(['all', 'added', 'deducted']).prefault('all'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  const { user } = req;
-  if (!user) {
-    return res.status(401).json({ error: 'Unauthorized' });
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN], grandfatherLegacyKeys: true }).get(
+  async (req, res) => {
+    const { user } = req;
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const validation = CreditTransactionsQuerySchema.safeParse({
+      days: req.query.days ? parseInt(req.query.days as string) : 30,
+      type: req.query.type || 'all',
+    });
+
+    if (!validation.success) {
+      // Just the messages: serializing the ZodError puts a pretty-printed blob of zod's own
+      // issue structure on the wire, and `?days=400`/`0`/negatives now land here routinely.
+      return res
+        .status(400)
+        .json({ error: 'Invalid query parameters', details: validation.error.issues.map(i => i.message) });
+    }
+
+    const { days, type } = validation.data;
+
+    // Determine which transaction types to include based on the filter
+    let transactionTypes: typeof CREDIT_ADD_TRANSACTION_TYPES | typeof CREDIT_DEDUCT_TRANSACTION_TYPES | undefined;
+    if (type === 'added') {
+      transactionTypes = CREDIT_ADD_TRANSACTION_TYPES;
+    } else if (type === 'deducted') {
+      transactionTypes = CREDIT_DEDUCT_TRANSACTION_TYPES;
+    }
+    // If type is 'all', transactionTypes remains undefined (no filter)
+
+    const transactions = await creditTransactionRepository.findByOwnerWithFilters(user.id, CreditHolderType.User, {
+      days,
+      transactionTypes,
+    });
+
+    return res.status(200).json(transactions);
   }
-
-  const validation = CreditTransactionsQuerySchema.safeParse({
-    days: req.query.days ? parseInt(req.query.days as string) : 30,
-    type: req.query.type || 'all',
-  });
-
-  if (!validation.success) {
-    // Just the messages: serializing the ZodError puts a pretty-printed blob of zod's own
-    // issue structure on the wire, and `?days=400`/`0`/negatives now land here routinely.
-    return res
-      .status(400)
-      .json({ error: 'Invalid query parameters', details: validation.error.issues.map(i => i.message) });
-  }
-
-  const { days, type } = validation.data;
-
-  // Determine which transaction types to include based on the filter
-  let transactionTypes: typeof CREDIT_ADD_TRANSACTION_TYPES | typeof CREDIT_DEDUCT_TRANSACTION_TYPES | undefined;
-  if (type === 'added') {
-    transactionTypes = CREDIT_ADD_TRANSACTION_TYPES;
-  } else if (type === 'deducted') {
-    transactionTypes = CREDIT_DEDUCT_TRANSACTION_TYPES;
-  }
-  // If type is 'all', transactionTypes remains undefined (no filter)
-
-  const transactions = await creditTransactionRepository.findByOwnerWithFilters(user.id, CreditHolderType.User, {
-    days,
-    transactionTypes,
-  });
-
-  return res.status(200).json(transactions);
-});
+);
 
 export default handler;
 

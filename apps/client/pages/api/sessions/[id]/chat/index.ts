@@ -27,8 +27,10 @@ const chatMessagePageResponseSchema = z.object({
 });
 
 // Door admits either notebook scope or admin:*; POST narrows to notebooks:write (or admin:*) below.
+// Both admit legacy keys until the legacy window ends: the route was open to every key before.
 const handler = baseApi({
   requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
 })
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -44,7 +46,8 @@ const handler = baseApi({
       assertApiKeyScope(
         req,
         [ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
-        'This API key is read-only for notebooks; notebooks:write is required'
+        'This API key is read-only for notebooks; notebooks:write is required',
+        { grandfatherLegacyKeys: true }
       );
       const { id: sessionId } = req.query ?? {};
       // TODO: zod parse req.body from IChatHistoryItem
