@@ -1,5 +1,6 @@
 import { ForbiddenError, NotFoundError, type IUserDocument } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
+import { assertOrganizationMfa } from '../auth/organizationMfa';
 
 /**
  * Turns a client-supplied "active org" selection (the org id the caller sends with a request)
@@ -58,6 +59,7 @@ export async function resolveActiveOrg(
     if (!org) {
       throw new NotFoundError('Organization not found.');
     }
+    await assertOrganizationMfa(user.id, orgId, org);
     return orgId;
   }
 
@@ -67,5 +69,6 @@ export async function resolveActiveOrg(
   if (!org) {
     throw new ForbiddenError('You are not a member of the selected organization.');
   }
+  await assertOrganizationMfa(user.id, orgId, org);
   return orgId;
 }

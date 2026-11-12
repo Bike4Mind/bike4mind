@@ -14,6 +14,8 @@ const members = vi.hoisted(() => ({
   loaded: true,
 }));
 
+vi.mock('./OrganizationMfaPolicy', () => ({ default: () => <div data-testid="organization-mfa-policy-card" /> }));
+
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useDeleteOrganization: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUpdateOrganization: () => ({ mutateAsync: vi.fn(), isPending: false }),

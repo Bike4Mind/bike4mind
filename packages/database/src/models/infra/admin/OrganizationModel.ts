@@ -166,6 +166,11 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     maxTokens: { type: Number, min: 1, max: 200000 },
     maxCreditsPerMember: { type: Number, required: false },
     redactPushContent: { type: Boolean, default: false },
+    mfaPolicy: {
+      required: { type: Boolean, default: false },
+      graceDays: { type: Number, min: 0, max: 30, default: 7 },
+      enforceAfter: { type: Date, default: null },
+    },
   },
   {
     virtuals: true,

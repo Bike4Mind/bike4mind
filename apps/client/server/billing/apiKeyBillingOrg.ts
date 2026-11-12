@@ -13,6 +13,7 @@ import {
 import { resolveBillingOrgId } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import type { Request } from 'express';
+import { assertOrganizationMfa } from '@bike4mind/server-utils/auth/organizationMfa';
 
 type ApiKeyBillingFields = Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'>;
 
@@ -68,6 +69,7 @@ export async function resolveApiKeyBillingOrg({
   if (isApiKeyOrgMembershipStale({ billingOrg: keyOrg, billingUser: user, isApiKeyCaller: true })) {
     return { kind: 'stale', message: API_KEY_DEPARTED_HOLDER_MESSAGE };
   }
+  await assertOrganizationMfa(user.id, keyOrgId, keyOrg);
   return { kind: 'org', organizationId: keyOrgId };
 }
 

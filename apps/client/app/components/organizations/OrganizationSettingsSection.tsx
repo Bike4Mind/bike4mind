@@ -11,6 +11,7 @@ import { useConfirmationModal } from '@client/app/hooks/useConfirmation';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useNavigate } from '@tanstack/react-router';
 import TransferOwnershipModal, { TransferCandidate } from './TransferOwnershipModal';
+import OrganizationMfaPolicy from './OrganizationMfaPolicy';
 
 const MAX_SYSTEM_PROMPT_LENGTH = 10000; // ~2500 tokens
 
@@ -99,6 +100,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
 
   return (
     <Stack spacing={3} className="organization-settings-container">
+      <OrganizationMfaPolicy organization={organization} />
       {/* Team System Prompt */}
       <Card variant="outlined">
         <Typography level="title-sm" sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>

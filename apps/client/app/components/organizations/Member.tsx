@@ -31,6 +31,7 @@ import { getMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
 import { useOrganizationInvites, useOrganizationSeats } from '@client/app/hooks/data/organizations';
 
 import { z } from 'zod';
+import { useOrganizationMfaPolicy } from './OrganizationMfaPolicy';
 
 interface OrganizationMembersProps {
   organization: IOrganizationDocument;
@@ -38,6 +39,7 @@ interface OrganizationMembersProps {
 
 const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => {
   const { data: users } = useGetOrganizationUsers(organization.id);
+  const mfaPolicy = useOrganizationMfaPolicy(organization.id);
   const [search, setSearch] = useState('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const { currentUser } = useUser();
@@ -535,6 +537,16 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         </Box>
         {filteredUsers.map(user => (
           <Fragment key={user.id}>
+            {canManageCreditBudgets && user.status === 'accepted' && (
+              <Typography level="body-xs" data-testid={`organization-member-mfa-${user.id}`}>
+                {user.name}: MFA{' '}
+                {mfaPolicy.data?.members.find(member => member.userId === user.id)?.enrolled === true
+                  ? 'enrolled'
+                  : mfaPolicy.data
+                    ? 'not enrolled'
+                    : 'status unavailable'}
+              </Typography>
+            )}
             <OrganizationUserCard
               organization={organization}
               user={user}

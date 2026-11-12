@@ -28,6 +28,7 @@ import { BadRequestError, NotFoundError, UnprocessableEntityError } from '@bike4
 import { isValidObjectId } from './objectId';
 import { resolveActiveOrg } from './resolveActiveOrg';
 import type { Logger } from '@bike4mind/observability';
+import { assertOrganizationMfa } from '../auth/organizationMfa';
 
 /**
  * The one owner / manager / platform-admin predicate behind `verifyOrgAccess` (the write gate) and
@@ -64,6 +65,7 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
     throw new NotFoundError('Organization not found');
   }
 
+  await assertOrganizationMfa(user.id, orgId, org);
   return org;
 }
 
@@ -95,6 +97,7 @@ export async function verifyOrgAdminRead(user: { id: string; isAdmin: boolean },
     throw new NotFoundError('Organization not found');
   }
 
+  await assertOrganizationMfa(user.id, orgId, org);
   return { org, canManage };
 }
 
@@ -143,6 +146,7 @@ export async function verifyOrgOwner(user: { id: string; isAdmin: boolean }, org
     throw new NotFoundError('Organization not found');
   }
 
+  await assertOrganizationMfa(user.id, orgId, org);
   return org;
 }
 
@@ -176,6 +180,7 @@ export async function verifyOrgMembership(user: IUserDocument, orgId: string) {
     if (!org) {
       throw new NotFoundError('Organization not found');
     }
+    await assertOrganizationMfa(user.id, orgId, org);
     return org;
   }
 
@@ -183,6 +188,7 @@ export async function verifyOrgMembership(user: IUserDocument, orgId: string) {
   if (!org) {
     throw new NotFoundError('Organization not found');
   }
+  await assertOrganizationMfa(user.id, orgId, org);
   return org;
 }
 
@@ -203,6 +209,7 @@ export async function verifyOrgMemberOrManager(user: IUserDocument, orgId: strin
 
   const member = await organizationRepository.shareable.findAccessibleById(user, orgId);
   if (member) {
+    await assertOrganizationMfa(user.id, orgId, member);
     return member;
   }
 
@@ -210,6 +217,7 @@ export async function verifyOrgMemberOrManager(user: IUserDocument, orgId: strin
   if (!org || !canManageOrg(user, org)) {
     throw new NotFoundError('Organization not found');
   }
+  await assertOrganizationMfa(user.id, orgId, org);
   return org;
 }
 

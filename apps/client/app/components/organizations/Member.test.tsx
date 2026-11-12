@@ -7,6 +7,8 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument, Permission } from '@bike4mind/common';
 import OrganizationMembers from './Member';
 
+vi.mock('./OrganizationMfaPolicy', () => ({ useOrganizationMfaPolicy: () => ({ data: undefined }) }));
+
 const mocks = vi.hoisted(() => ({
   share: vi.fn(),
   search: vi.fn(),
