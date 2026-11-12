@@ -491,6 +491,11 @@ export interface IUser extends ICreditHolder {
    * Queries for human users must use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
    */
   isSystem?: boolean;
+  orgServiceAccount?: {
+    organizationId: string;
+    createdByUserId: string;
+    grants: { resourceType: 'project' | 'organization'; resourceId: string; permission: 'read' | 'compute' }[];
+  };
   subscribedUntil: string | null;
   photoUrl: string | null;
 

@@ -13,6 +13,25 @@ const org = (users: string[]) =>
 const member = { id: 'u1', isAdmin: false };
 
 describe('assertApiKeyOrgMembership', () => {
+  it('admits a non-seat service principal only for its own organization', () => {
+    const billingUser = {
+      id: 'service',
+      isAdmin: false,
+      isSystem: true,
+      orgServiceAccount: { organizationId: 'org1', createdByUserId: 'deleted', grants: [] },
+    };
+    expect(() => assertApiKeyOrgMembership({ billingOrg: org([]), billingUser, isApiKeyCaller: true })).not.toThrow();
+    expect(() =>
+      assertApiKeyOrgMembership({
+        billingOrg: org([]),
+        billingUser: {
+          ...billingUser,
+          orgServiceAccount: { ...billingUser.orgServiceAccount, organizationId: 'other' },
+        },
+        isApiKeyCaller: true,
+      })
+    ).toThrow(BadRequestError);
+  });
   it.each([
     ['a member using an org-billed key', org(['u1']), member, true],
     ['a platform admin off the roster', org([]), { id: 'u1', isAdmin: true }, true],

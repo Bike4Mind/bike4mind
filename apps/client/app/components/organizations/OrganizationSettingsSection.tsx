@@ -1,6 +1,7 @@
 import { FC, useState, useEffect, useMemo } from 'react';
 import { Card, Typography, Box, Button, Stack, Textarea, FormControl, FormLabel, FormHelperText } from '@mui/joy';
-import { IOrganizationDocument, orgAclRowConfersMembership } from '@bike4mind/common';
+import { IOrganizationDocument, orgAclRowConfersMembership, canAdministerOrganization } from '@bike4mind/common';
+import OrganizationServiceKeys from './OrganizationServiceKeys';
 import {
   useDeleteOrganization,
   useTransferOrganizationOwnership,
@@ -103,6 +104,9 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
     <Stack spacing={3} className="organization-settings-container">
       <OrganizationMfaPolicy organization={organization} />
       <OrganizationSharingSettings organization={organization} />
+      {currentUser && canAdministerOrganization(currentUser, organization) && (
+        <OrganizationServiceKeys key={organization.id} organizationId={organization.id} />
+      )}
       {/* Team System Prompt */}
       <Card variant="outlined">
         <Typography level="title-sm" sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>

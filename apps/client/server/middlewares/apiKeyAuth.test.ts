@@ -109,6 +109,33 @@ describe('apiKeyAuth scope gate', () => {
     expect((error as ForbiddenError).additionalInfo).toEqual({ required_scopes: [ApiKeyScope.OPTIHASHI_COMPUTE] });
   });
 
+  it('default-denies service principals on ordinary routes even with matching scopes', async () => {
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'service-key',
+      userId: 'service',
+      serviceAccount: true,
+      organizationId: 'org',
+      billingOwnerType: CreditHolderType.Organization,
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    findByIdMock.mockResolvedValue({
+      id: 'service',
+      isSystem: true,
+      isAdmin: false,
+      orgServiceAccount: {
+        organizationId: 'org',
+        createdByUserId: 'deleted',
+        grants: [{ resourceType: 'organization', resourceId: 'org', permission: 'compute' }],
+      },
+    });
+    const result = await run([ApiKeyScope.AI_CHAT], makeReq());
+    expect(result.passed).toBe(false);
+    expect(result.error).toBeInstanceOf(ForbiddenError);
+    expect(result.error?.message).toBe('Service account resource grant required');
+  });
+
   it('admits a key that holds a required scope', async () => {
     validateUserApiKeyMock.mockResolvedValue({
       isValid: true,

@@ -30,6 +30,7 @@ export interface ValidateUserApiKeyOptions {
 export interface ValidationResult {
   isValid: boolean;
   userId?: string;
+  serviceAccount?: boolean;
   keyId?: string;
   scopes?: ApiKeyScopeValue[];
   rateLimit?: {
@@ -107,6 +108,7 @@ function finalizeApiKeyValidation(
   return {
     isValid: true,
     userId: apiKey.userId,
+    serviceAccount: apiKey.serviceAccount,
     keyId: apiKey.id,
     scopes: apiKey.scopes,
     rateLimit: apiKey.rateLimit,
