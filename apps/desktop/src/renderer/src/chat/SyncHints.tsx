@@ -70,9 +70,9 @@ function HintCard({
       data-testid={testId}
       sx={{ mx: 1, mb: 1, py: 1, pl: 1.25, pr: 0.5, borderRadius: 'sm' }}
     >
-      <Stack direction="row" spacing={0.5} alignItems="flex-start">
+      <Stack direction="row" alignItems="flex-start" sx={{ position: 'relative' }}>
         <Stack spacing={0.75} sx={{ flex: 1, minWidth: 0 }}>
-          <Typography id={headingId} level="body-xs" {...headingProps}>
+          <Typography id={headingId} level="body-xs" sx={{ pr: 4 }} {...headingProps}>
             {heading}
           </Typography>
           {children}
@@ -84,6 +84,7 @@ function HintCard({
           onClick={onClose}
           aria-label={closeLabel}
           data-testid={`${testId}-close-btn`}
+          sx={{ position: 'absolute', top: 0, right: 0 }}
         >
           <CloseIcon />
         </IconButton>
@@ -115,9 +116,9 @@ function SourceHint({
       <Stack direction="row" sx={{ gap: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <Button
           size="sm"
-          variant="solid"
+          variant="soft"
           onClick={onEnable}
-          sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+          sx={{ whiteSpace: 'nowrap', flexShrink: 0, minHeight: 24, fontSize: 12, fontWeight: 500, px: 1 }}
           data-testid={`${testId}-enable-btn`}
         >
           Turn on sync
@@ -127,7 +128,7 @@ function SourceHint({
           variant="plain"
           color="neutral"
           onClick={onDismiss}
-          sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+          sx={{ whiteSpace: 'nowrap', flexShrink: 0, minHeight: 24, fontSize: 12, fontWeight: 500, px: 1 }}
           data-testid={`${testId}-dismiss-btn`}
         >
           Not now

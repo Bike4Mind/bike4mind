@@ -214,6 +214,8 @@ describe('web hint', () => {
       const style = getComputedStyle(button);
       expect(style.whiteSpace).toBe('nowrap');
       expect(style.flexShrink).toBe('0');
+      expect(style.minHeight).toBe('24px');
+      expect(style.fontSize).toBe('12px');
     }
     const actions = getComputedStyle(enable.parentElement!);
     expect(actions.flexWrap).toBe('wrap');
