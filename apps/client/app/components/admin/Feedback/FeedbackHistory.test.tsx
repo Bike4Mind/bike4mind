@@ -31,6 +31,17 @@ beforeEach(() => {
         summary: 'added note',
         note: 'Investigating the issue',
       },
+      {
+        id: 'entry2',
+        occurredAt: '2026-01-02T00:00:00Z',
+        author: 'Admin',
+        summary: 'closed',
+        reason: 'Shipped in release',
+        changes: [
+          { field: 'resolution', before: null, after: 'wont_fix' },
+          { field: 'resolutionDuplicateId', before: null, after: 'abc' },
+        ],
+      },
     ],
     nextCursor: null,
   });
@@ -41,6 +52,10 @@ describe('private feedback history UI', () => {
     renderHistory();
     expect(await screen.findByTestId('feedback-history-entry-entry1')).toHaveTextContent('Admin');
     expect(screen.getByTestId('feedback-history-entry-entry1')).toHaveTextContent('Investigating the issue');
+    const closed = screen.getByTestId('feedback-history-entry-entry2');
+    expect(closed).toHaveTextContent('Reason: Shipped in release');
+    expect(closed).toHaveTextContent("Resolution: None to Won't fix");
+    expect(closed).toHaveTextContent('Duplicate of: None to abc');
     await userEvent.type(screen.getByTestId('feedback-note-input'), 'New reproduction');
     await userEvent.click(screen.getByTestId('feedback-note-add-btn'));
     await waitFor(() => expect(mocks.add).toHaveBeenCalledWith('report1', 'New reproduction'));

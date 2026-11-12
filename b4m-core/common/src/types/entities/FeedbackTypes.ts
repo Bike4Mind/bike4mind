@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { IMongoDocument } from '.';
 import { PromptMeta } from './PromptMetaTypes';
 import { IOrganizationDocument } from './OrganizationTypes';
+import { AdminActionReasonSchema } from './adminActionReason';
+import { AdminNoteBodySchema } from '../../adminUserNotes';
 
 export enum FeedbackStatus {
   New = 'New',
@@ -18,7 +20,7 @@ export const FEEDBACK_RESOLUTION_LABELS: Record<FeedbackResolution, string> = {
   no_action_needed: 'No action needed',
 };
 
-export const AddFeedbackNoteRequestSchema = z.object({ note: z.string().trim().min(1).max(2000) }).strict();
+export const AddFeedbackNoteRequestSchema = z.object({ note: AdminNoteBodySchema }).strict();
 
 export type FeedbackHistoryItem = {
   id: string;
@@ -26,6 +28,7 @@ export type FeedbackHistoryItem = {
   author: string;
   summary: string;
   note?: string;
+  reason?: string;
   changes?: { field: string; before: unknown; after: unknown }[];
 };
 export type FeedbackHistoryPage = { items: FeedbackHistoryItem[]; nextCursor: string | null };
@@ -279,7 +282,7 @@ export const UpdateFeedbackStatusRequestSchema = z
       .string()
       .regex(/^[a-f\d]{24}$/i, 'Enter a valid report id')
       .optional(),
-    reason: z.string().trim().min(5).max(500).optional(),
+    reason: AdminActionReasonSchema.optional(),
   })
   .strict()
   .superRefine((body, ctx) => {

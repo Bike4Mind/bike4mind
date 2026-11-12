@@ -19,8 +19,6 @@ const ADMIN_ONLY_FIELDS = [
   'handledAuditEntryId',
   'resolution',
   'resolutionDuplicateId',
-  'internalNotes',
-  'notes',
 ] as const;
 
 const UpdateFeedbackRequestSchema = z.object({
@@ -44,9 +42,8 @@ const handler = baseApi().put(
     }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-    if (ADMIN_ONLY_FIELDS.some(field => body[field] !== undefined)) {
-      throw new BadRequestError('handledBy and handledAt cannot be set on a report.');
-    }
+    const adminOnly = ADMIN_ONLY_FIELDS.find(field => body[field] !== undefined);
+    if (adminOnly) throw new BadRequestError(`${adminOnly} cannot be set on a report.`);
     const updateData = UpdateFeedbackRequestSchema.parse(body);
 
     const feedback = isValidObjectId(id) ? await FeedbackModel.findById(id) : null;

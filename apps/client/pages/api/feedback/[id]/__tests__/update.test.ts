@@ -90,7 +90,10 @@ describe('PUT /api/feedback/[id] - instance-level authorization', () => {
   it.each(['handledBy', 'handledAt'])('refuses %s, which only the admin status route sets', async field => {
     const { req, res } = mocks(() => true);
     req.body = { ...req.body, [field]: 'admin1' };
-    await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ statusCode: 400 });
+    await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({
+      statusCode: 400,
+      message: `${field} cannot be set on a report.`,
+    });
     expect(model.findOneAndUpdate).not.toHaveBeenCalled();
   });
 

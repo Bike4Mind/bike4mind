@@ -3,7 +3,19 @@ import { Alert, Button, Stack, Textarea, Typography } from '@mui/joy';
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { addFeedbackNoteOnServer, getFeedbackHistoryFromServer } from '@client/app/utils/feedbackAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
+import { ADMIN_NOTE_MAX_LENGTH, FEEDBACK_RESOLUTION_LABELS, type FeedbackResolution } from '@bike4mind/common';
 import { SectionCard, LoadingState, ErrorState } from '../shared';
+
+const FIELD_LABELS: Record<string, string> = {
+  status: 'Status',
+  resolution: 'Resolution',
+  resolutionDuplicateId: 'Duplicate of',
+};
+
+const changeValue = (field: string, value: unknown) =>
+  field === 'resolution' && typeof value === 'string'
+    ? (FEEDBACK_RESOLUTION_LABELS[value as FeedbackResolution] ?? value)
+    : String(value ?? 'None');
 
 export default function FeedbackHistory({ id }: { id: string }) {
   const client = useQueryClient();
@@ -49,9 +61,11 @@ export default function FeedbackHistory({ id }: { id: string }) {
                   <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
                     {item.note ?? item.summary}
                   </Typography>
+                  {item.reason && <Typography level="body-xs">Reason: {item.reason}</Typography>}
                   {item.changes?.map(change => (
                     <Typography key={change.field} level="body-xs">
-                      {change.field}: {String(change.before ?? 'None')} to {String(change.after ?? 'None')}
+                      {FIELD_LABELS[change.field] ?? change.field}: {changeValue(change.field, change.before)} to{' '}
+                      {changeValue(change.field, change.after)}
                     </Typography>
                   ))}
                 </Stack>
@@ -76,7 +90,11 @@ export default function FeedbackHistory({ id }: { id: string }) {
           onChange={event => setNote(event.target.value)}
           minRows={3}
           slotProps={{
-            textarea: { maxLength: 2000, 'aria-label': 'Internal note', 'data-testid': 'feedback-note-input' },
+            textarea: {
+              maxLength: ADMIN_NOTE_MAX_LENGTH,
+              'aria-label': 'Internal note',
+              'data-testid': 'feedback-note-input',
+            },
           }}
         />
         {error && (
@@ -87,7 +105,7 @@ export default function FeedbackHistory({ id }: { id: string }) {
         <Button
           variant="outlined"
           loading={saving}
-          disabled={!note.trim() || note.trim().length > 2000}
+          disabled={!note.trim() || note.trim().length > ADMIN_NOTE_MAX_LENGTH}
           onClick={() => void addNote()}
           data-testid="feedback-note-add-btn"
         >

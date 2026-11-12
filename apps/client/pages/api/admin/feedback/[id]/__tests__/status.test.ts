@@ -121,6 +121,25 @@ describe('PATCH /api/admin/feedback/[id]/status', () => {
     expect(mocks.updateOne.mock.calls[0][1].$set.resolution).toBe('wont_fix');
   });
 
+  it('refuses to undo a reopen of a duplicate whose original report no longer exists', async () => {
+    stored('New');
+    mocks.findAuditEntry.mockResolvedValue({
+      action: 'feedback.status_changed',
+      details: { feedbackId: FEEDBACK_ID },
+      changes: [
+        { field: 'status', before: 'Closed', after: 'New' },
+        { field: 'resolution', before: 'duplicate', after: null },
+        { field: 'resolutionDuplicateId', before: '507f1f77bcf86cd799439000', after: null },
+      ],
+    });
+    mocks.exists.mockResolvedValue(null);
+    await expect(call({ status: 'Closed', undoOf: 'audit1' })).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Original report not found',
+    });
+    expect(mocks.updateOne).not.toHaveBeenCalled();
+  });
+
   it('is first-party JWT only and denies a user without users:moderate', async () => {
     expect(mocks.options).toMatchObject({ auth: 'jwtOnly' });
     await expect(

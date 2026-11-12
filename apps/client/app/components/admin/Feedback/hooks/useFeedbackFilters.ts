@@ -35,9 +35,11 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     next =>
       updateView({
         resolution: next,
-        statusFilters: Object.fromEntries(
-          Object.values(FeedbackStatus).map(status => [status, next ? status === FeedbackStatus.Closed : true])
-        ) as Record<FeedbackStatus, boolean>,
+        statusFilters: next
+          ? (Object.fromEntries(
+              Object.values(FeedbackStatus).map(status => [status, status === FeedbackStatus.Closed])
+            ) as Record<FeedbackStatus, boolean>)
+          : DEFAULT_FEEDBACK_VIEW.statusFilters,
         page: 1,
       }),
     [updateView]

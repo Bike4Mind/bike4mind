@@ -40,6 +40,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'users:mode
       occurredAt: entry.occurredAt.toISOString(),
       author: entry.actor.name,
       summary: entry.summary,
+      ...(entry.reason ? { reason: entry.reason } : {}),
       ...(entry.action === 'feedback.note_added' && typeof entry.details?.note === 'string'
         ? { note: entry.details.note }
         : {}),
