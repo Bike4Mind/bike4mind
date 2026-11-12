@@ -7,8 +7,10 @@ export interface IDlqReplayLog {
   messageId: string;
   messageBody: string;
   sourceQueue: string;
-  status: 'success' | 'failed' | 'skipped';
+  status: 'success' | 'failed' | 'skipped' | 'discarded' | 'pending';
+  operation?: 'replay' | 'discard';
   errorMessage?: string;
+  reason?: string;
   replayedBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -23,10 +25,12 @@ const DlqReplayLogSchema = new mongoose.Schema(
     sourceQueue: { type: String, required: true },
     status: {
       type: String,
-      enum: ['success', 'failed', 'skipped'],
+      enum: ['success', 'failed', 'skipped', 'discarded', 'pending'],
       required: true,
     },
+    operation: { type: String, enum: ['replay', 'discard'] },
     errorMessage: { type: String },
+    reason: { type: String },
     replayedBy: { type: String, required: true },
   },
   {
@@ -47,7 +51,7 @@ DlqReplayLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 });
 
 interface DlqReplayLogFilters {
   queueLabel?: string;
-  status?: 'success' | 'failed' | 'skipped';
+  status?: IDlqReplayLog['status'];
   startDate?: Date;
   endDate?: Date;
   search?: string;
@@ -64,10 +68,15 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
 
   /**
    * Count all replay attempts (successful and failed) for a given SQS message ID.
-   * Skipped attempts are excluded. Used to enforce the max replay attempt limit.
+   * Skipped attempts and discard operations are excluded. Enforces the replay attempt limit.
    */
   async countAttempts(messageId: string): Promise<number> {
-    return this.model.countDocuments({ messageId, status: { $in: ['success', 'failed'] } });
+    return this.model.countDocuments({
+      messageId,
+      status: { $in: ['success', 'failed'] },
+      // Missing operation identifies legacy replay rows and must continue to count.
+      operation: { $ne: 'discard' },
+    });
   }
 
   /**
@@ -76,6 +85,17 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
   async logReplay(data: Omit<IDlqReplayLog, 'id' | 'createdAt' | 'updatedAt'>): Promise<IDlqReplayLog> {
     const result = await this.model.create(data);
     return result.toObject();
+  }
+
+  /** Finalize only the pending discard created before the SQS deletion request. */
+  async finalizeDiscard(id: string, status: 'discarded' | 'failed', errorMessage?: string): Promise<void> {
+    const result = await this.model.updateOne(
+      { _id: id, operation: 'discard', status: 'pending' },
+      { $set: { status, ...(errorMessage !== undefined ? { errorMessage } : {}) } }
+    );
+    if (!result.acknowledged || result.matchedCount !== 1) {
+      throw new Error('Discard history could not be finalized from a pending attempt');
+    }
   }
 
   /**
@@ -99,6 +119,7 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
       query.$or = [
         { messageId: { $regex: escaped, $options: 'i' } },
         { errorMessage: { $regex: escaped, $options: 'i' } },
+        { reason: { $regex: escaped, $options: 'i' } },
       ];
     }
     const projection = filters.includeBody === false ? { messageBody: 0 } : undefined;

@@ -1,5 +1,6 @@
 import type { Logger } from '@bike4mind/observability';
 import { cacheRepository, shadowDetectionRepository, userRepository } from '@bike4mind/database';
+import type { ShadowDetectionSignal } from '@bike4mind/common';
 import type {
   RecordShadowDetectionInput,
   UserAccountRiskProfile,
@@ -8,6 +9,17 @@ import type {
 } from '@bike4mind/database';
 import { groupLinkedAccounts, type AccountLinkKind } from '@bike4mind/server-utils/security/accountLinkSignals';
 import type { YoungAccountSpendThresholds } from './youngAccountSpendAlert';
+import {
+  FARM_SETUP_MINUTES,
+  firedFarmSignals,
+  isApiOnlySpend,
+  loadFarmSignals,
+  networkPeerCount,
+  UNKNOWN_FARM_SIGNALS,
+  type FarmSignalDeps,
+  type FarmSignalKey,
+  type FarmSignals,
+} from './youngAccountSpendFarmSignals';
 
 /**
  * Shadow detections for the young-account spend alert (contract in shadowDetection.ts in
@@ -19,16 +31,27 @@ import type { YoungAccountSpendThresholds } from './youngAccountSpendAlert';
  * detection says which of the others it is linked to (shared signup IP, JA4, mailbox or company mail
  * domain, see accountLinkSignals.ts), and carries the young-account totals as signals only when it is
  * linked to at least one of them.
+ *
+ * From v3 a listed spender is recorded only when its spend coincides with a farm-pattern signal
+ * (youngAccountSpendFarmSignals.ts); the signals, fired or not, are part of the evidence.
  */
 
 const HOUR_MS = 60 * 60 * 1000;
 
 /**
- * A breached window would contain every top spender the alert lists. v2 records whether the listed
- * spenders are linked and drops the window totals from unlinked ones. Bump when the mapping
- * changes, so precision is measured per policy.
+ * A breached window would contain the top spenders the alert lists. v2 records whether the listed
+ * spenders are linked and drops the window totals from unlinked ones. v3 records only spenders with
+ * at least one farm-pattern signal. Bump when the mapping changes, so precision is measured per policy.
  */
-export const YOUNG_ACCOUNT_SPEND_POLICY_VERSION = 2;
+export const YOUNG_ACCOUNT_SPEND_POLICY_VERSION = 3;
+
+const FARM_SIGNAL_LABELS: Record<FarmSignalKey, string> = {
+  apiOnlySpend: 'API-only spend',
+  apiKeySoonAfterSignup: 'API key soon after signup',
+  authenticatorSoonAfterSignup: 'authenticator 2FA soon after signup',
+  youngNetworkPeer: 'another new account on its signup network',
+  linkedToFlaggedAccount: 'linked to a flagged account',
+};
 
 const LINK_KIND_LABELS: Record<AccountLinkKind, string> = {
   signupIp: 'signup IP',
@@ -93,6 +116,80 @@ function formatCount(count: number, noun: string): string {
   return `${count.toLocaleString('en-US')} ${noun}${count === 1 ? '' : 's'}`;
 }
 
+function farmClause(fired: readonly FarmSignalKey[]): string {
+  return fired.length === 0 ? '; no farm signals' : `; ${fired.map(key => FARM_SIGNAL_LABELS[key]).join(', ')}`;
+}
+
+const yesNo = (value: boolean | null): number | null => (value === null ? null : value ? 1 : 0);
+
+/** Every farm signal, fired or not, so a grader sees what was checked; null means it could not be read. */
+function farmSignalEvidence(farmSignals: FarmSignals, fired: readonly FarmSignalKey[]): ShadowDetectionSignal[] {
+  const peers = farmSignals.networkPeers;
+  return [
+    { key: 'farmSignals', label: 'Farm-pattern signals that fired', observed: fired.length, threshold: 1 },
+    {
+      key: 'apiOnlySpend',
+      label: 'All chat-type spend in the window came through the API, none from web, CLI or desktop (1 yes, 0 no)',
+      observed: yesNo(isApiOnlySpend(farmSignals.spendChannels)),
+      threshold: 1,
+    },
+    {
+      key: 'apiSpendCredits',
+      label: 'Credits spent through the API in the window',
+      observed: farmSignals.spendChannels?.apiCredits ?? null,
+      threshold: null,
+    },
+    {
+      key: 'chatSpendCredits',
+      label: 'Credits spent from web, CLI or desktop in the window',
+      observed: farmSignals.spendChannels?.chatCredits ?? null,
+      threshold: null,
+    },
+    {
+      key: 'minutesToApiKey',
+      label: 'Minutes from signup to the first API key (empty when none)',
+      observed: farmSignals.minutesToApiKey,
+      threshold: FARM_SETUP_MINUTES,
+    },
+    {
+      key: 'minutesToAuthenticator',
+      label: 'Minutes from signup to authenticator 2FA setup (empty when not enrolled)',
+      observed: farmSignals.minutesToAuthenticator,
+      threshold: FARM_SETUP_MINUTES,
+    },
+    {
+      key: 'youngNetworkPeers',
+      label: 'Most other accounts signed up within 24 hours on its signup IP, /24, or anonymizing ASN',
+      observed: networkPeerCount(peers),
+      threshold: 1,
+    },
+    {
+      key: 'youngSignupsSameIp',
+      label: 'Other signups within 24 hours on the same IP',
+      observed: peers?.sameIp ?? null,
+      threshold: null,
+    },
+    {
+      key: 'youngSignupsSamePrefix',
+      label: 'Other signups within 24 hours on the same /24',
+      observed: peers?.samePrefix ?? null,
+      threshold: null,
+    },
+    {
+      key: 'youngSignupsSameAsn',
+      label: 'Other signups within 24 hours on the same ASN (counts only on a datacenter or anonymizing network)',
+      observed: peers?.sameAsn ?? null,
+      threshold: null,
+    },
+    {
+      key: 'linkedFlaggedAccounts',
+      label: 'Linked accounts that are blocked or graded confirmed abuse',
+      observed: farmSignals.flaggedLinkedAccounts,
+      threshold: 1,
+    },
+  ];
+}
+
 /** One detection for one listed spender: the account's own spend beside the fleet totals that tripped. */
 function cohortClause(cohort: SpenderCohort, rank: number, summary: YoungAccountSpendSummary): string {
   const position = `#${rank} by spend of ${formatCount(summary.accountCount, 'young account')}`;
@@ -112,8 +209,11 @@ export function buildYoungAccountSpendShadowDetection(input: {
   thresholds: YoungAccountSpendThresholds;
   window: SpendWindow;
   cohort: SpenderCohort;
+  farmSignals: FarmSignals;
 }): RecordShadowDetectionInput {
-  const { spender, rank, summary, thresholds, window, cohort } = input;
+  const { spender, rank, summary, thresholds, window, cohort, farmSignals } = input;
+  const fired = firedFarmSignals(farmSignals);
+  const overdraftCredits = Math.max(0, -spender.currentCredits);
   const windowMinutes = Math.round((window.end.getTime() - window.start.getTime()) / 60_000);
   const accountAgeHours = Math.floor((window.end.getTime() - new Date(spender.accountCreatedAt).getTime()) / HOUR_MS);
   const linked = cohort !== null && cohort.linkedUserIds.length > 0;
@@ -123,7 +223,11 @@ export function buildYoungAccountSpendShadowDetection(input: {
     wouldAction: 'contain',
     summary:
       `${formatCount(spender.creditsSpent, 'credit')} in ${windowMinutes} minutes from a ${accountAgeHours}-hour-old ` +
-      `account (${cohortClause(cohort, rank, summary)})`,
+      `account (${cohortClause(cohort, rank, summary)})` +
+      farmClause(fired) +
+      // Spend past the balance is what a capping fault lets through, not what the account could
+      // buy, so admins grade it knowing that.
+      (overdraftCredits > 0 ? `; ${formatCount(overdraftCredits, 'credit')} of it ran the balance below zero` : ''),
     userIds: [spender.userId],
     network: null,
     signals: [
@@ -144,6 +248,15 @@ export function buildYoungAccountSpendShadowDetection(input: {
         key: 'hasStripeCustomer',
         label: 'Reached Stripe checkout (1 yes, 0 no)',
         observed: spender.stripeCustomerId ? 1 : 0,
+        threshold: null,
+      },
+      // Ahead of the cohort signals: the advisory assessment keeps only the first
+      // ABUSE_ASSESSMENT_MAX_SIGNALS, and the farm signals are what this policy keys on.
+      ...farmSignalEvidence(farmSignals, fired),
+      {
+        key: 'overdraftCredits',
+        label: 'Credits the balance is below zero (spend past what the account held)',
+        observed: overdraftCredits,
         threshold: null,
       },
       {
@@ -203,6 +316,8 @@ export async function recordYoungAccountSpendShadowDetections(input: {
   thresholds: YoungAccountSpendThresholds;
   window: SpendWindow;
   logger: Pick<Logger, 'error'>;
+  /** Overrides the live farm-signal reads; for tests. */
+  farmSignalDeps?: FarmSignalDeps;
   /** Overrides the live link facts read; for tests. */
   findLinkFacts?: (ids: string[]) => Promise<Pick<UserAccountRiskProfile, 'id' | 'email' | 'signupIp' | 'signupJa4'>[]>;
 }): Promise<number> {
@@ -217,8 +332,16 @@ export async function recordYoungAccountSpendShadowDetections(input: {
   } catch (error) {
     logger.error('young-account spend link facts were not read; recording without links', { error });
   }
+  const farmSignals = await loadFarmSignals({
+    spenders: summary.topSpenders,
+    window,
+    logger,
+    deps: input.farmSignalDeps,
+  });
   const recorded = await Promise.all(
     summary.topSpenders.map(async (spender, index) => {
+      const spenderFarmSignals = farmSignals.get(spender.userId) ?? UNKNOWN_FARM_SIGNALS;
+      if (firedFarmSignals(spenderFarmSignals).length === 0) return false;
       const key = youngAccountSpendDedupeKey(spender.userId, window);
       let claimed = false;
       try {
@@ -232,6 +355,7 @@ export async function recordYoungAccountSpendShadowDetections(input: {
             thresholds,
             window,
             cohort: cohorts?.get(spender.userId) ?? null,
+            farmSignals: spenderFarmSignals,
           })
         );
         return true;

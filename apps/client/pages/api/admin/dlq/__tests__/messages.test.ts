@@ -72,12 +72,12 @@ describe('GET /api/admin/dlq/messages', () => {
     h.sourceQueue = 'webhookDeliveryQueue';
   });
 
-  it('keeps an unsafe queue inspectable for a settings:manage caller', async () => {
+  it('keeps an unsafe queue inspectable, visible and without receipt handles for a settings:manage caller', async () => {
     h.sourceQueue = null;
     const body = await peek(['settings:manage']);
 
-    expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, 120);
-    expect(body.messages[0].receiptHandle).toBe('handle-1');
+    expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, 0);
+    expect(body.messages[0]).not.toHaveProperty('receiptHandle');
   });
 
   it('leaves messages visible and omits receipt handles for a support:read caller', async () => {
@@ -180,19 +180,16 @@ describe('GET /api/admin/dlq/messages', () => {
     expect(row.failureLookupFailed).toBeUndefined();
   });
 
-  it.each([
-    ['settings:manage', 120, 'handle-1'],
-    ['support:read', 0, undefined],
-  ])(
+  it.each(['settings:manage', 'support:read'])(
     'preserves the SQS peek for %s when failure details are unavailable',
-    async (permission, visibility, receiptHandle) => {
+    async permission => {
       h.findForMessages.mockRejectedValue(new Error('private diagnostic failure'));
       const body = await peek([permission]);
-      expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, visibility);
+      expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, 0);
       expect(h.findForMessages).toHaveBeenCalledWith('physical-source', ['m1']);
       expect(body.messages).toHaveLength(1);
       expect(body.messages[0]).toMatchObject({ messageId: 'm1', body: '{}', failureLookupFailed: true });
-      expect(body.messages[0].receiptHandle).toBe(receiptHandle);
+      expect(body.messages[0]).not.toHaveProperty('receiptHandle');
       expect(body.messages[0].failure).toBeUndefined();
       expect(JSON.stringify(body)).not.toContain('private diagnostic failure');
     }

@@ -4,6 +4,7 @@ import { createMocks } from 'node-mocks-http';
 const mocks = vi.hoisted(() => ({
   findByIdWithMfaSecrets: vi.fn(),
   setupMFA: vi.fn(),
+  recordForcedEnrollmentStep: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -21,6 +22,8 @@ vi.mock('@bike4mind/services', () => ({ mfaService: { setupMFA: mocks.setupMFA }
 vi.mock('@server/auth/signInSecondFactor', () => ({
   readSignInOrigin: (user: { mfaSignIn?: unknown } | undefined) => user?.mfaSignIn,
 }));
+
+vi.mock('@server/auth/mfaEnrollmentFunnel', () => ({ recordForcedEnrollmentStep: mocks.recordForcedEnrollmentStep }));
 
 import handler from '../setup';
 
@@ -47,6 +50,7 @@ describe('POST /api/auth/mfa/setup - emergency sign-in', () => {
 
     expect(res._getStatusCode()).toBe(403);
     expect(mocks.setupMFA).not.toHaveBeenCalled();
+    expect(mocks.recordForcedEnrollmentStep).not.toHaveBeenCalled();
   });
 
   it('still starts setup for an ordinary sign-in', async () => {
@@ -54,6 +58,11 @@ describe('POST /api/auth/mfa/setup - emergency sign-in', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.setupMFA).toHaveBeenCalledTimes(1);
+    expect(mocks.recordForcedEnrollmentStep).toHaveBeenCalledWith(
+      expect.anything(),
+      { id: 'u1', mfa: { totpEnabled: false } },
+      'mfa_enrollment_shown'
+    );
   });
 
   it('hands setup the user with its pending secret so a repeat call can re-serve it', async () => {

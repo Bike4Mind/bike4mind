@@ -115,7 +115,18 @@ export type YoungAccountSpender = {
   stripeCustomerId: string | null;
   /** Null for an account with no email on file. */
   email: string | null;
+  /** The balance when the alert ran; below zero when spend ran past it. */
+  currentCredits: number;
 };
+
+/**
+ * In-window AI credit spend split by channel (CreditTransaction.source): `api` is third-party API
+ * use, `chat` the interactive surfaces (web, cli, desktop). Agent, system and unclassified rows are
+ * in neither, so a post-turn system charge never reads as chat.
+ */
+export type SpendChannels = { apiCredits: number; chatCredits: number };
+
+const CHAT_SOURCES = ['web', 'cli', 'desktop'] as const;
 
 export type YoungAccountSpendSummary = {
   totalCredits: number;
@@ -167,6 +178,7 @@ function buildYoungAccountSpendPipeline(start: Date, end: Date): mongoose.Pipeli
         accountCreatedAt: '$user.createdAt',
         stripeCustomerId: { $ifNull: ['$user.stripeCustomerId', null] },
         email: { $ifNull: ['$user.email', null] },
+        currentCredits: { $ifNull: ['$user.currentCredits', 0] },
       },
     },
     { $sort: { creditsSpent: -1, userId: 1 } },
@@ -208,6 +220,33 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
       ])
     ).allowDiskUse(true);
     return new Map(spend.map(({ _id, creditsSpent }) => [String(_id), creditsSpent]));
+  }
+
+  /** In-window AI spend per user split by channel; users with no AI spend are absent. */
+  async findSpendChannelsByUsers(userIds: string[], start: Date, end: Date): Promise<Record<string, SpendChannels>> {
+    if (userIds.length === 0) return {};
+    const rows = await CreditTransaction.aggregate<{ _id: string } & SpendChannels>(
+      convertPipelineForDocumentDB([
+        {
+          $match: {
+            ownerType: 'User',
+            ownerId: { $in: userIds },
+            type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
+            createdAt: { $gte: start, $lt: end },
+          },
+        },
+        {
+          $group: {
+            _id: '$ownerId',
+            apiCredits: { $sum: { $cond: [{ $eq: ['$source', 'api'] }, { $abs: '$credits' }, 0] } },
+            chatCredits: { $sum: { $cond: [{ $in: ['$source', [...CHAT_SOURCES]] }, { $abs: '$credits' }, 0] } },
+          },
+        },
+      ])
+    ).allowDiskUse(true);
+    return Object.fromEntries(
+      rows.map(row => [String(row._id), { apiCredits: row.apiCredits, chatCredits: row.chatCredits }])
+    );
   }
 
   async findYoungAccountSpend(start: Date, end: Date, limit: number): Promise<YoungAccountSpendSummary> {

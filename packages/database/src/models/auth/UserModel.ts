@@ -359,6 +359,8 @@ export type UserAccountRiskProfile = {
   signupIp: string | null;
   signupJa4: string | null;
   signupAsnKnown: boolean;
+  /** The signup ASN when known (a positive number); null otherwise. */
+  signupAsn: number | null;
   signupDatacenter: boolean | null;
   signupWafAnonIp: boolean | null;
   totpEnabled: boolean;
@@ -929,6 +931,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       signupIp: doc.signupMeta?.ip ?? null,
       signupJa4: doc.signupMeta?.ja4 ?? null,
       signupAsnKnown: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0,
+      signupAsn: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0 ? doc.signupMeta.asn : null,
       signupDatacenter: doc.signupMeta?.isDatacenter ?? null,
       signupWafAnonIp: doc.signupMeta?.wafAnonIp ?? null,
       totpEnabled: doc.mfa?.totpEnabled === true,
