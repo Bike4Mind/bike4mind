@@ -934,7 +934,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
           }
         }}
       >
-        <ModalDialog variant="outlined" sx={{ minWidth: 500 }}>
+        <ModalDialog variant="outlined" minWidth={500}>
           <DialogTitle>
             <GitHubIcon sx={{ mr: 1 }} />
             Connect GitHub App
@@ -1046,7 +1046,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
           }
         }}
       >
-        <ModalDialog variant="outlined" sx={{ minWidth: 450 }}>
+        <ModalDialog variant="outlined" minWidth={450}>
           <DialogTitle>
             <VpnKey sx={{ mr: 1 }} />
             Connect Service Account PAT
@@ -1186,7 +1186,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
           }
         }}
       >
-        <ModalDialog variant="outlined" sx={{ minWidth: 500 }}>
+        <ModalDialog variant="outlined" minWidth={500}>
           <DialogTitle>
             <VpnKey sx={{ color: 'warning.500', mr: 1 }} />
             Rotate Private Key
@@ -1258,7 +1258,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
           }
         }}
       >
-        <ModalDialog variant="outlined" sx={{ minWidth: 450 }}>
+        <ModalDialog variant="outlined" minWidth={450}>
           <DialogTitle>
             <VpnKey sx={{ color: 'warning.500', mr: 1 }} />
             Rotate Personal Access Token
