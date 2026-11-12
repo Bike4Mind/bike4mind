@@ -32,7 +32,9 @@ import { VideoJobsForCall } from './VideoJobCard';
 import { WebResultCount, WebToolDetail, useWebSearchHits } from './WebResults';
 import {
   diffTotals,
+  displayStatus,
   groupToolCalls,
+  isModelRequestRefusal,
   summarizeInput,
   toolDuration,
   toolRowLabel,
@@ -443,6 +445,10 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
         </Typography>
       )}
 
+      {INLINE_MEDIA_TOOL_NAMES.has(call.name) && (
+        <MediaAttachments media={call.media ?? []} nameHint="image" variant="thumbnail" />
+      )}
+
       {/* `diff`, never `approvalDiff`: this row is a record of a turn that has happened, and
           only the first of those is one. See ChatToolCall.diff. */}
       {diffs.length > 0 && (
@@ -467,7 +473,7 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
             mt: 0.5,
             ...thinScrollbarSx,
           }}
-          textColor={call.error ? 'danger.400' : 'text.tertiary'}
+          textColor={call.error && !isModelRequestRefusal(call) ? 'danger.400' : 'text.tertiary'}
           data-testid={call.error ? 'chat-tool-detail-error' : 'chat-tool-detail-result'}
         >
           {call.error ?? call.preview ?? call.progress ?? 'Running...'}
@@ -537,7 +543,7 @@ function ToolCallEntry({ call, first, onMove }: { call: ChatToolCall; first: boo
           listStyle: 'none',
           px: 1,
           py: 0.5,
-          color: ROW_TONE[call.status],
+          color: ROW_TONE[displayStatus(call)],
           '&::-webkit-details-marker': { display: 'none' },
           '&:hover': { opacity: 0.85 },
         }}
@@ -678,10 +684,12 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
       {group.calls.map(call => (
         <Box key={call.id}>
           {call.notice && <NoticeBanner notice={call.notice} />}
-          <MediaAttachments
-            media={call.media ?? []}
-            nameHint={SCREENSHOT_TOOL_NAMES.has(call.name) ? 'screenshot' : 'image'}
-          />
+          {!INLINE_MEDIA_TOOL_NAMES.has(call.name) && (
+            <MediaAttachments
+              media={call.media ?? []}
+              nameHint={SCREENSHOT_TOOL_NAMES.has(call.name) ? 'screenshot' : 'image'}
+            />
+          )}
           {call.name === GENERATE_VIDEO_TOOL_NAME && <VideoJobsForCall callId={call.id} />}
         </Box>
       ))}
@@ -721,6 +729,11 @@ function ApprovalAttribution({ calls }: { calls: readonly ChatToolCall[] }) {
 
 const GENERATE_VIDEO_TOOL_NAME = 'generate_video';
 const SCREENSHOT_TOOL_NAMES: ReadonlySet<string> = new Set(['browser_screenshot', 'screen_capture']);
+/**
+ * A file the agent read is part of the call's detail, like its text result, so it shows in the
+ * row's body when the row is opened rather than under the row the way a capture does.
+ */
+const INLINE_MEDIA_TOOL_NAMES: ReadonlySet<string> = new Set(['file_read']);
 
 export function ToolCallList({
   calls,

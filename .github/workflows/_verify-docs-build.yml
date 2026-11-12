@@ -8,15 +8,15 @@ env:
 
 jobs:
   verify-docs-build:
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write
-    # Docs reach production on merge, so the build is checked on the PR and again in the merge queue.
+    # Docs reach production on merge, so the build is checked on the PR.
     if: |
       github.repository == (vars.CANONICAL_REPO || 'bike4mind/bike4mind') &&
-      (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+      github.event_name == 'pull_request'
 
     steps:
       - name: Checkout code
@@ -25,7 +25,7 @@ jobs:
       # ci.yml's docs-changed gate also fires for the help tooling, which does not affect the site, so the build
       # runs only when the PR touches docs-site/. The listing comes from the PR files API: a git diff against a
       # shallow clone cannot find the merge base once main has been merged into the branch and skipped the build.
-      # Anything unresolved (merge queue, API error) builds.
+      # Anything unresolved (API error) builds.
       - name: List docs changes
         id: docs-changes
         env:

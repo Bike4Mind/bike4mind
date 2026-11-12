@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Box, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import PeopleIcon from '@mui/icons-material/People';
 import InsightsIcon from '@mui/icons-material/Insights';
@@ -18,18 +18,43 @@ import { UserCreditsManager } from './components/UserCreditsManager';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useCreditAnalysisStore, type CreditAnalysisTab } from './store';
 import { AdminPageHeader } from '../shared';
+import { useNavigate, useSearch } from '@tanstack/react-router';
+import { CreditEconomy } from './components/CreditEconomy';
 
 export const CreditAnalyticsTab: React.FC = () => {
   // Held in the store rather than locally so another admin tab can land the
   // operator on a specific inner tab (Model Lifecycle -> Model Pricing).
   const activeTab = useCreditAnalysisStore(state => state.activeTab);
   const setActiveTab = useCreditAnalysisStore(state => state.setActiveTab);
+  const search = useSearch({ strict: false });
+  const navigate = useNavigate();
+  const pricingModelId = useCreditAnalysisStore(state => state.pricingModelId);
+  const selectedTab = pricingModelId ? 'pricing' : search.creditView === 'economy' ? 'economy' : activeTab;
+  useEffect(() => {
+    if (pricingModelId && search.creditView === 'economy') {
+      void navigate({ to: '/admin', replace: true, search: previous => ({ ...previous, creditView: undefined }) });
+    }
+  }, [pricingModelId, search.creditView, navigate]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
       <AdminPageHeader title="Credits" description="Balances, pricing, margins and credit usage across the platform." />
-      <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as CreditAnalysisTab)} sx={{ mb: 2 }}>
+      <Tabs
+        value={selectedTab}
+        onChange={(_, value) => {
+          setActiveTab(value as CreditAnalysisTab);
+          void navigate({
+            to: '/admin',
+            replace: true,
+            search: previous => ({ ...previous, creditView: value === 'economy' ? 'economy' : undefined }),
+          });
+        }}
+        sx={{ mb: 2 }}
+      >
         <TabList sx={{ overflowX: { xs: 'auto', sm: 'visible' }, minWidth: { xs: 'max-content', sm: 'auto' } }}>
+          <Tab value="economy" data-testid="credit-analysis-economy-tab">
+            Economy
+          </Tab>
           <Tab value="users">
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <PeopleIcon sx={{ fontSize: '18px' }} />
@@ -75,6 +100,9 @@ export const CreditAnalyticsTab: React.FC = () => {
           <ContextHelpButton helpId="admin/credit-analytics" tooltipText="Credit Analytics Help" />
         </TabList>
 
+        <TabPanel value="economy" sx={{ p: 0 }}>
+          <CreditEconomy />
+        </TabPanel>
         <TabPanel value="users" sx={{ p: 0 }}>
           <UserCreditsManager />
         </TabPanel>

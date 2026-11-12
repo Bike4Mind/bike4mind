@@ -5,7 +5,7 @@ import Option from '@mui/joy/Option';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { modelSupportsTools, type ChatModelOption } from '@shared/chat';
-import { inheritancePolicy, WORKER_ROLES, type RolePolicy } from '@shared/orchestration';
+import { inheritancePolicy, resolveModelAlias, WORKER_ROLES, type RolePolicy } from '@shared/orchestration';
 
 export function economicalWorkerPreset(models: readonly ChatModelOption[]): RolePolicy | null {
   const worker = models
@@ -23,6 +23,18 @@ export function economicalWorkerPreset(models: readonly ChatModelOption[]): Role
     )[0];
   if (!worker) return null;
   return { ...inheritancePolicy(), roles: { implementation: worker.id, exploration: worker.id, review: 'inherit' } };
+}
+
+const ROUTING_FAMILIES = ['opus', 'sonnet', 'haiku'];
+
+/** The newest usable model of each family an agent's routing instructions tend to name. */
+export function familyOverrides(models: readonly ChatModelOption[]): string[] {
+  const usable = models
+    .filter(model => !model.unavailable && !model.disabled && modelSupportsTools(model.id, model))
+    .map(model => model.id);
+  return ROUTING_FAMILIES.map(family => resolveModelAlias(family, usable, models)).filter(
+    (id): id is string => id !== null
+  );
 }
 
 export function OrchestrationSettings() {
@@ -138,6 +150,10 @@ export function OrchestrationSettings() {
             </Stack>
           ))}
           <Typography level="title-sm">Permitted spawn overrides</Typography>
+          <Typography level="body-xs">
+            Models an agent may request for a worker instead of the role default. A family name such as sonnet starts
+            the newest model allowed here. With none allowed, agents are not offered a model choice.
+          </Typography>
           <Select
             multiple
             aria-label="Permitted spawn overrides"
@@ -147,6 +163,22 @@ export function OrchestrationSettings() {
           >
             {options('orchestration-overrides', policy.allowedOverrides)}
           </Select>
+          <Button
+            variant="outlined"
+            data-testid="orchestration-overrides-families-btn"
+            disabled={familyOverrides(models).every(id => policy.allowedOverrides.includes(id))}
+            onClick={() =>
+              setPolicy({
+                ...policy,
+                allowedOverrides: Array.from(new Set([...policy.allowedOverrides, ...familyOverrides(models)])).slice(
+                  0,
+                  32
+                ),
+              })
+            }
+          >
+            Allow the newest Opus, Sonnet and Haiku
+          </Button>
           <Typography level="title-sm">Models available for an approved task upgrade</Typography>
           <Select
             multiple

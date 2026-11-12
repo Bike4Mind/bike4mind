@@ -12,6 +12,7 @@ export const OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE = 'output_budget_exhausted';
 export const DAILY_FREE_LIMIT_REACHED_ERROR_CODE = 'daily_free_limit_reached';
 export const UPGRADE_REQUIRED_ERROR_CODE = 'upgrade_required';
 export const ACCOUNT_SUSPENDED_ERROR_CODE = 'account_suspended';
+export const RUN_NOT_FOUND_ERROR_CODE = 'run_not_found';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -66,6 +67,8 @@ export const API_ERROR_CODES = [
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   /** A 426: the declared X-Client-Version is below the minimum set for that X-Client-Name; remediation is upgrading the client. */
   UPGRADE_REQUIRED_ERROR_CODE,
+  /** A 404: the completion's `run` was not created by this user and billing owner (or does not exist); mint one with POST /api/v1/completion-runs. */
+  RUN_NOT_FOUND_ERROR_CODE,
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',

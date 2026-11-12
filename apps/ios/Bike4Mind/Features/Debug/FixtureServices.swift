@@ -18,6 +18,12 @@
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
     static let workingQuestID = "fixture-0-q4"
 
+    /// `B4M_UI_FIXTURE_LINK` opens an app link at launch (e.g. `https://app.bike4mind.com/notebooks/fixture-1`),
+    /// so a screenshot run can land on a screen without driving taps.
+    static var initialLink: URL? {
+      ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_LINK"].flatMap(URL.init(string:))
+    }
+
     /// `B4M_UI_FIXTURE_ACCOUNT` picks the account-deletion story: `org-transfer` (the 409 list),
     /// `pending` (launch on the restore screen) or the default (deletion succeeds and signs out).
     enum AccountScenario: String {
@@ -34,15 +40,51 @@
 
       func models(for kind: GenerationKind) async throws -> [GenerationModel] {
         switch kind {
-        case .image: [GenerationModel(id: "gpt-image-2", name: "GPT Image 2"), GenerationModel.regionEditModels[0]]
-        case .video: [GenerationModel(id: "fixture-video", name: "Fixture Video")]
-        case .music: [GenerationModel(id: "fixture-music", name: "Fixture Music")]
+        case .image:
+          [
+            GenerationModel(
+              id: "gpt-image-2", name: "GPT Image 2",
+              capabilities: .image(
+                ImageCapabilities(
+                  sizes: ["1024x1024", "1536x1024", "1024x1536"], defaultSize: "1024x1024",
+                  qualities: ["low", "medium", "high"], maxImages: 4, transparentBackground: true))),
+            GenerationModel(
+              id: GenerationModel.regionEditModels[0].id, name: GenerationModel.regionEditModels[0].name,
+              capabilities: .image(ImageCapabilities(seed: true, edit: true))),
+          ]
+        case .video:
+          [
+            GenerationModel(
+              id: "fixture-video", name: "Fixture Video",
+              capabilities: .video(
+                VideoCapabilities(
+                  inputRoles: ["first_frame": 1], duration: .range(min: 1, max: 15, step: 1),
+                  aspectRatios: ["16:9", "9:16", "1:1"], resolutions: ["480p", "720p"], defaultDuration: 6,
+                  defaultAspectRatio: "16:9", defaultResolution: "480p", audio: .optional,
+                  creditsPerSecond: ["480p": 160, "720p": 280]))),
+            GenerationModel(
+              id: "fixture-video-short", name: "Fixture Video Short",
+              capabilities: .video(
+                VideoCapabilities(
+                  duration: .discrete([4, 6, 8]), aspectRatios: ["16:9"], resolutions: ["720p", "1080p"],
+                  defaultDuration: 8, defaultAspectRatio: "16:9", defaultResolution: "720p"))),
+          ]
+        case .music:
+          [
+            GenerationModel(
+              id: "fixture-music", name: "Fixture Music",
+              capabilities: .music(
+                MusicCapabilities(
+                  lyricsMaxChars: 10_000, duration: .adjustable(min: 30, max: 180, defaultSeconds: 120, exact: false),
+                  pricing: MusicPricing(unit: .perSong, credits: 160))))
+          ]
         }
       }
 
       func generate(_ request: GenerationRequest) async throws -> GenerationHandle {
         GenerationHandle(
-          kind: request.kind, id: "fixture-\(UUID().uuidString)", prompt: request.prompt, startedAt: Date())
+          kind: request.kind, id: "fixture-\(UUID().uuidString)", prompt: request.prompt, startedAt: Date(),
+          modelID: request.modelID, params: request.params)
       }
 
       func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle {
@@ -187,6 +229,10 @@
               "fixture-1-q2", "Draft two bullet points for the board deck.",
               "- Revenue grew 9% quarter over quarter, led by renewals.\n- Churn fell to its lowest level in two years.",
               ago: 6_900),
+            done(
+              "fixture-1-q3", "Show the churn query.",
+              "This reads the monthly churn rate:\n\n```sql\nSELECT month, churned / active AS rate\nFROM churn_by_month\nWHERE year = 2025;\n```\n\nRun it against the reporting replica.",
+              ago: 6_600),
           ]
         case "fixture-3":
           turns = [

@@ -1,5 +1,8 @@
 export * from './types';
 export * from './registry';
-export { classifyImageProviderError, raceAbort } from './shared';
+export { classifyImageProviderError, MAX_IMAGE_OUTPUT_BYTES, raceAbort } from './shared';
+export { sniffImageFormat } from '../imageGeneration/sniffImageFormat';
 export { OpenAIImageProvider, type OpenAIImageProviderOptions } from './openai/OpenAIImageProvider';
 export { GeminiImageProvider } from './gemini/GeminiImageProvider';
+export { BflImageProvider } from './bfl/BflImageProvider';
+export { XaiImageProvider } from './xai/XaiImageProvider';

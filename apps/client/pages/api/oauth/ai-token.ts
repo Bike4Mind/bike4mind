@@ -258,6 +258,7 @@ const handler = baseApi({ auth: false })
           name: `AI (federated: ${client.name})`,
           scopes: requestedScopes,
           expiresAt: new Date(Date.now() + AI_TOKEN_TTL_SECONDS * 1000),
+          rateLimit: client.rateLimit,
           metadata: {
             clientIP: clientIp,
             userAgent,

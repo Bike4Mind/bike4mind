@@ -141,6 +141,10 @@ AdminAuditLogSchema.index({ category: 1, occurredAt: -1, _id: -1 });
 AdminAuditLogSchema.index({ action: 1, occurredAt: -1, _id: -1 });
 AdminAuditLogSchema.index({ severity: 1, occurredAt: -1, _id: -1 });
 AdminAuditLogSchema.index(
+  { 'details.feedbackId': 1, occurredAt: -1, _id: -1 },
+  { name: 'feedback_history', partialFilterExpression: { 'details.feedbackId': { $exists: true } } }
+);
+AdminAuditLogSchema.index(
   { 'context.requestId': 1, occurredAt: -1, _id: -1 },
   { partialFilterExpression: { 'context.requestId': { $exists: true } } }
 );
@@ -166,7 +170,13 @@ type StoredRecord = AdminAuditLogRecord & { _id: Types.ObjectId };
 
 const toAuditEntry = (record: StoredRecord): AuditEntry => {
   const { _id, ...rest } = record;
-  return { ...rest, id: _id.toString(), source: 'admin' };
+  // During rollout an older writer may still leave an inline note. Only the private history
+  // join may return note bodies; the migration/retention sweep removes these legacy bytes.
+  const details =
+    record.action === 'feedback.note_added' && rest.details
+      ? Object.fromEntries(Object.entries(rest.details).filter(([key]) => key !== 'note'))
+      : rest.details;
+  return { ...rest, ...(details ? { details } : {}), id: _id.toString(), source: 'admin' };
 };
 
 const OBJECT_ID_HEX_PATTERN = /^[0-9a-f]{24}$/i;
@@ -298,6 +308,13 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
         ? { 'target.kind': 'user', 'target.id': owner.id }
         : { $or: [{ organizationId: owner.id }, { 'target.kind': 'organization', 'target.id': owner.id }] };
     return this.listPage([ownerClause, { 'details.subscriptionId': { $in: subscriptionIds } }], page);
+  }
+
+  async listForFeedback(feedbackId: string, page: { limit: number; cursor?: AuditLogCursor }) {
+    return this.listPage(
+      [{ 'details.feedbackId': feedbackId }, { action: { $in: ['feedback.status_changed', 'feedback.note_added'] } }],
+      page
+    );
   }
 
   async listForSubscriptionOrOwner(
@@ -569,6 +586,5 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
   }
 }
 
-export const adminAuditLogRepository: SubscriptionTimelineAuditLogRepository = new AdminAuditLogRepository(
-  AdminAuditLogModel
-);
+export const adminAuditLogRepository: SubscriptionTimelineAuditLogRepository &
+  Pick<AdminAuditLogRepository, 'listForFeedback'> = new AdminAuditLogRepository(AdminAuditLogModel);

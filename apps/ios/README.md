@@ -73,7 +73,8 @@ Screens never use generated types: `B4MKit` maps them to domain models behind th
 
 A DEBUG build launched with `B4M_UI_FIXTURES=1` skips sign-in and serves canned sessions, transcript,
 credits, media, widgets and capture (`Bike4Mind/Features/Debug/FixtureServices.swift`). `B4M_UI_FIXTURE_ACCOUNT=org-transfer`
-shows the delete-account 409 list and `pending` launches on the restore screen:
+shows the delete-account 409 list and `pending` launches on the restore screen. `B4M_UI_FIXTURE_LINK=<app link>`
+opens that link at launch, e.g. `https://app.bike4mind.com/notebooks/fixture-1` for a transcript with a code block:
 
 ```sh
 SIMCTL_CHILD_B4M_UI_FIXTURES=1 xcrun simctl launch booted com.bike4mind.app
