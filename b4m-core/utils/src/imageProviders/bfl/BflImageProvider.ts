@@ -123,6 +123,16 @@ export class BflImageProvider implements AsyncImageProvider {
       case 'failed':
         return { status: 'failed', retryable: false, message: reading.message, raw: { requestId: task.id } };
       case 'pending':
+        // BFL no longer knows the task, so polling it again cannot succeed.
+        if (reading.status === 'Task not found') {
+          ctx.logger.error('BFL task not found', { requestId: task.id });
+          return {
+            status: 'failed',
+            retryable: false,
+            message: 'BFL no longer has this task (task_not_found)',
+            raw: { requestId: task.id, status: reading.status },
+          };
+        }
         // An undocumented status keeps polling, as the chat path does; the job's deadline bounds it.
         if (!BFLImageService.isInProgressStatus(reading.status)) {
           ctx.logger.warn('BFL task reported an undocumented status', { requestId: task.id, status: reading.status });

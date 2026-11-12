@@ -206,10 +206,19 @@ describe('BflImageProvider: the API key stays off redirects', () => {
 });
 
 describe('BflImageProvider.poll', () => {
-  it.each(['Pending', 'Reasoning', 'Generating', 'Task not found'])('reports %s as running', async status => {
+  it.each(['Pending', 'Reasoning', 'Generating'])('reports %s as running', async status => {
     get.mockResolvedValue({ data: { status } });
     await expect(provider.poll(handle(), context())).resolves.toEqual({ status: 'running' });
     expect(get).toHaveBeenCalledWith(POLLING_URL, expect.objectContaining({ headers: expect.anything() }));
+  });
+
+  it('fails a task BFL no longer knows, without retry', async () => {
+    get.mockResolvedValue({ data: { status: 'Task not found' } });
+    await expect(provider.poll(handle(), context())).resolves.toMatchObject({
+      status: 'failed',
+      retryable: false,
+      message: expect.stringContaining('task_not_found'),
+    });
   });
 
   it('reports Ready as succeeded with the delivery URL', async () => {
