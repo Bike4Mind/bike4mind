@@ -107,6 +107,18 @@ describe('creditsTakeaway', () => {
   });
 });
 
+describe('creditsTakeaway without usage', () => {
+  it('says nothing about usage', () => {
+    const points = toCreditCyclePoints([
+      { ...cycle('2026-10-01', 1000, 0), used: null },
+      { ...cycle('2026-11-01', 1500, 0, true), used: null },
+    ]);
+    const takeaway = creditsTakeaway(points);
+    expect(takeaway).toBe('2 plan credit cycles since 1 Oct 2026. Latest grant: 1,500 credits.');
+    expect(takeaway).not.toMatch(/used/i);
+  });
+});
+
 describe('seat points', () => {
   const seats = { paid: 8, members: 6 };
   const changes = [

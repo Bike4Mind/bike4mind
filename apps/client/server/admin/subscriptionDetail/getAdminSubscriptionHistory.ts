@@ -26,12 +26,12 @@ export type LedgerGrant = { at: Date; credits: number };
 
 /**
  * Cycles from grants (oldest first): each grant opens a cycle that the next one closes; the last runs to
- * `windowEnd`. Grants written in the same millisecond are one cycle. `usedByStart` is keyed by start time (ms).
+ * `windowEnd`. Grants written in the same millisecond are one cycle. `usedByStart` is keyed by start time (ms); `null` when usage could not be totaled.
  */
 export function buildCreditCycles(
   grants: readonly LedgerGrant[],
   windowEnd: Date,
-  usedByStart: ReadonlyMap<number, number>,
+  usedByStart: ReadonlyMap<number, number> | null,
   ongoing: boolean
 ): AdminSubscriptionCreditCycle[] {
   const merged: LedgerGrant[] = [];
@@ -47,7 +47,7 @@ export function buildCreditCycles(
       start: grant.at.toISOString(),
       end: end.toISOString(),
       granted: grant.credits,
-      used: usedByStart.get(grant.at.getTime()) ?? 0,
+      used: usedByStart ? (usedByStart.get(grant.at.getTime()) ?? 0) : null,
       current: !next && ongoing,
     };
   });
@@ -68,10 +68,15 @@ type HistoryDoc = Pick<
   'subscriptionId' | 'ownerType' | 'ownerId' | 'status' | 'source' | 'createdAt' | 'periodEndsAt' | 'canceledAt'
 >;
 
+const MONGO_MAX_TIME_MS_EXPIRED = 50;
+
+const isTimeLimitError = (error: unknown) =>
+  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === MONGO_MAX_TIME_MS_EXPIRED;
+
 const creditCyclesOf = async (
   doc: HistoryDoc,
   now: Date
-): Promise<Pick<AdminSubscriptionHistory, 'creditCycles' | 'creditCyclesTruncated'>> => {
+): Promise<Pick<AdminSubscriptionHistory, 'creditCycles' | 'creditCyclesTruncated' | 'creditUsageUnavailable'>> => {
   const ownerId = doc.ownerId;
   const ownerType = doc.ownerType === 'User' ? CreditHolderType.User : CreditHolderType.Organization;
   const terminal = isTerminalSubscriptionStatus(doc.status);
@@ -92,7 +97,7 @@ const creditCyclesOf = async (
     .select('credits createdAt')
     .maxTimeMS(READ_MAX_TIME_MS)
     .lean<{ credits: number; createdAt: Date }[]>();
-  if (rows.length === 0) return { creditCycles: [], creditCyclesTruncated: false };
+  if (rows.length === 0) return { creditCycles: [], creditCyclesTruncated: false, creditUsageUnavailable: false };
 
   const truncated = rows.length > MAX_CREDIT_CYCLES;
   const grants = rows
@@ -102,31 +107,42 @@ const creditCyclesOf = async (
   const starts = [...new Set(grants.map(grant => grant.at.getTime()))];
   // $bucket boundaries must strictly increase, and the last cycle needs a nonzero span.
   const end = new Date(Math.max(windowEnd.getTime(), (starts.at(-1) ?? 0) + 1));
-  const buckets = await CreditTransaction.aggregate<{ _id: Date | string; used: number }>([
-    {
-      $match: {
-        ownerId,
-        ownerType,
-        type: { $in: [...LEDGER_USAGE_TRANSACTION_TYPES] },
-        createdAt: { $gte: new Date(starts[0]), $lt: end },
+  let buckets: { _id: Date | string; used: number }[] | null;
+  try {
+    buckets = await CreditTransaction.aggregate<{ _id: Date | string; used: number }>([
+      {
+        $match: {
+          ownerId,
+          ownerType,
+          type: { $in: [...LEDGER_USAGE_TRANSACTION_TYPES] },
+          createdAt: { $gte: new Date(starts[0]), $lt: end },
+        },
       },
-    },
-    {
-      $bucket: {
-        groupBy: '$createdAt',
-        boundaries: [...starts.map(start => new Date(start)), end],
-        default: 'outside',
-        // Usage rows are stored negative.
-        output: { used: { $sum: { $abs: '$credits' } } },
+      {
+        $bucket: {
+          groupBy: '$createdAt',
+          boundaries: [...starts.map(start => new Date(start)), end],
+          default: 'outside',
+          // Usage rows are stored negative.
+          output: { used: { $sum: { $abs: '$credits' } } },
+        },
       },
-    },
-  ]).option({ maxTimeMS: READ_MAX_TIME_MS });
-  const usedByStart = new Map(
-    buckets.filter(bucket => bucket._id instanceof Date).map(bucket => [(bucket._id as Date).getTime(), bucket.used])
-  );
+    ]).option({ maxTimeMS: READ_MAX_TIME_MS });
+  } catch (error) {
+    if (!isTimeLimitError(error)) throw error;
+    buckets = null;
+  }
+  const usedByStart = buckets
+    ? new Map(
+        buckets
+          .filter(bucket => bucket._id instanceof Date)
+          .map(bucket => [(bucket._id as Date).getTime(), bucket.used])
+      )
+    : null;
   return {
     creditCycles: buildCreditCycles(grants, end, usedByStart, !terminal),
     creditCyclesTruncated: truncated,
+    creditUsageUnavailable: usedByStart === null,
   };
 };
 

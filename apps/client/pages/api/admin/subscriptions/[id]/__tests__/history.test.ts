@@ -22,7 +22,7 @@ vi.mock('@server/admin/subscriptionDetail/getAdminSubscriptionHistory', () => ({
 import handler from '../history';
 
 const ADMIN = { id: 'a'.repeat(24), isAdmin: true };
-const HISTORY = { creditCycles: [], creditCyclesTruncated: false, seatChanges: null };
+const HISTORY = { creditCycles: [], creditCyclesTruncated: false, creditUsageUnavailable: false, seatChanges: null };
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
 async function call() {

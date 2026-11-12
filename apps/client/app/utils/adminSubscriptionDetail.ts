@@ -190,7 +190,8 @@ export type AdminSubscriptionCreditCycle = {
   /** Credits the `subscription` ledger rows starting this cycle granted. */
   granted: number;
   /** Everything the owner spent in [start, end), from any credit source (plan, packs, adjustments). */
-  used: number;
+  /** `null` when the usage total exceeded the read's time limit. */
+  used: number | null;
   /** The cycle still running, so its usage is partial. */
   current: boolean;
 };
@@ -204,6 +205,8 @@ export type AdminSubscriptionHistory = {
   creditCycles: AdminSubscriptionCreditCycle[];
   /** Grants older than the cycles shown exist. */
   creditCyclesTruncated: boolean;
+  /** The usage total timed out, so every cycle's `used` is null and only grants are shown. */
+  creditUsageUnavailable: boolean;
   /** Oldest first, consecutive repeats dropped. `null` for a user-owned row; empty for a comp, which Stripe never bills. */
   seatChanges: AdminSubscriptionSeatChange[] | null;
 };

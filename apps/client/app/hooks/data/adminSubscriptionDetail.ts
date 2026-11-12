@@ -69,12 +69,17 @@ export const useAdminSubscriptionDetail = (id: string) =>
     retry: retryUnlessNotFound,
   });
 
+// Ledger and billing-event data: it changes at most once per cycle.
+const HISTORY_STALE_MS = 5 * 60_000;
+
 /** The detail page's chart history; its own query so the charts load and fail apart from the facts above them. */
 export const useAdminSubscriptionHistory = (id: string) =>
   useQuery({
     queryKey: adminSubscriptionHistoryKey(id),
     queryFn: async (): Promise<AdminSubscriptionHistory> =>
       (await api.get<AdminSubscriptionHistory>(`${subscriptionPath(id)}/history`)).data,
+    staleTime: HISTORY_STALE_MS,
+    refetchOnWindowFocus: false,
     enabled: isSubscriptionObjectId(id),
     retry: retryUnlessNotFound,
   });

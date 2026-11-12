@@ -100,18 +100,25 @@ export const toCreditCyclePoints = (cycles: readonly AdminSubscriptionCreditCycl
 const share = (used: number, granted: number) => (granted > 0 ? ` (${Math.round((used / granted) * 100)}%)` : '');
 
 export function creditsTakeaway(points: readonly CreditCyclePoint[]): string {
+  if (points.some(point => point.used === null)) {
+    const first = points[0];
+    const last = points.at(-1);
+    if (!first || !last) return '';
+    const noun = points.length === 1 ? 'cycle' : 'cycles';
+    return `${points.length} plan credit ${noun} since ${formatDate(first.start)}. Latest grant: ${formatCredits(last.granted)} credits.`;
+  }
   const complete = points.filter(point => !point.current);
   const lastComplete = complete.at(-1);
   const current = points.find(point => point.current);
   const parts: string[] = [];
   if (lastComplete) {
     parts.push(
-      `The last full cycle used ${formatCredits(lastComplete.used)} of ${formatCredits(lastComplete.granted)} credits granted${share(lastComplete.used, lastComplete.granted)}.`
+      `The last full cycle used ${formatCredits(lastComplete.used ?? 0)} of ${formatCredits(lastComplete.granted)} credits granted${share(lastComplete.used ?? 0, lastComplete.granted)}.`
     );
   }
   if (current) {
     parts.push(
-      `${lastComplete ? 'This' : 'The first'} cycle has used ${formatCredits(current.used)} of ${formatCredits(current.granted)} so far.`
+      `${lastComplete ? 'This' : 'The first'} cycle has used ${formatCredits(current.used ?? 0)} of ${formatCredits(current.granted)} so far.`
     );
   }
   return parts.join(' ');

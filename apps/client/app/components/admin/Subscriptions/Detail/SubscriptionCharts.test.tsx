@@ -35,6 +35,7 @@ const HISTORY: AdminSubscriptionHistory = {
     { start: '2026-11-01T00:00:00.000Z', end: '2026-11-12T00:00:00.000Z', granted: 1000, used: 50, current: true },
   ],
   creditCyclesTruncated: false,
+  creditUsageUnavailable: false,
   seatChanges: [
     { at: '2026-10-01T00:00:00.000Z', quantity: 3 },
     { at: '2026-10-20T00:00:00.000Z', quantity: 5 },
@@ -142,6 +143,29 @@ describe('Payment history chart', () => {
     renderCharts(buildDetail());
     expect(screen.queryByTestId(PAYMENT_CHART_ID)).not.toBeInTheDocument();
     expect(screen.getByTestId(CREDITS_CHART_ID)).toBeInTheDocument();
+  });
+});
+
+describe('Credits per cycle chart without usage', () => {
+  const degraded = history({
+    data: {
+      ...HISTORY,
+      creditUsageUnavailable: true,
+      creditCycles: HISTORY.creditCycles.map(cycle => ({ ...cycle, used: null })),
+    },
+  });
+
+  it('shows granted only, a dash for Used, and the note', () => {
+    renderCharts(stripeDetail(), buildStripeState(), degraded);
+    expect(screen.getByTestId(`${CREDITS_CHART_ID}-chart-legend`)).toHaveTextContent('Granted');
+    expect(screen.getByTestId(`${CREDITS_CHART_ID}-chart-legend`)).not.toHaveTextContent('Used');
+    expect(screen.getByTestId(`${CREDITS_CHART_ID}-caption`).textContent).not.toMatch(/used/i);
+    expect(screen.getByTestId(`${CREDITS_CHART_ID}-note`)).toHaveTextContent(
+      'Usage is too large to total here; granted credits only.'
+    );
+    fireEvent.click(screen.getByTestId(`${CREDITS_CHART_ID}-table-toggle-btn`));
+    const table = screen.getByTestId(`${CREDITS_CHART_ID}-table`);
+    expect(within(table).getAllByLabelText('Not totaled')).toHaveLength(2);
   });
 });
 

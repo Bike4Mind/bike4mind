@@ -91,6 +91,7 @@ describe('getAdminSubscriptionHistory', () => {
     const history = await getAdminSubscriptionHistory(String(sub._id), NOW);
 
     expect(history?.creditCyclesTruncated).toBe(false);
+    expect(history?.creditUsageUnavailable).toBe(false);
     expect(history?.creditCycles).toEqual([
       { start: daysAgo(70).toISOString(), end: daysAgo(40).toISOString(), granted: 1000, used: 500, current: false },
       { start: daysAgo(40).toISOString(), end: daysAgo(10).toISOString(), granted: 1000, used: 150, current: false },

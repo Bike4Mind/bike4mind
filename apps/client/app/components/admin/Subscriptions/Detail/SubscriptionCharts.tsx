@@ -232,15 +232,18 @@ const historyError = (testId: string, history: HistoryState, what: string): Char
   ),
 });
 
-const GRANTED_LEGEND: ChartLegendItem[] = [
-  { label: 'Granted', color: INK_MUTED, opacity: COMPARISON_OPACITY },
-  { label: 'Used', color: ACCENT },
-];
+const GRANTED_ITEM: ChartLegendItem = { label: 'Granted', color: INK_MUTED, opacity: COMPARISON_OPACITY };
+const CREDITS_LEGEND: ChartLegendItem[] = [GRANTED_ITEM, { label: 'Used', color: ACCENT }];
+const GRANTED_ONLY_LEGEND: ChartLegendItem[] = [GRANTED_ITEM];
+const USAGE_UNAVAILABLE_NOTE = 'Usage is too large to total here; granted credits only.';
 
-const CreditCyclesPlot: React.FC<{ points: readonly CreditCyclePoint[] }> = ({ points }) => {
+const CreditCyclesPlot: React.FC<{ points: readonly CreditCyclePoint[]; usageUnavailable: boolean }> = ({
+  points,
+  usageUnavailable,
+}) => {
   const chartId = `${CREDITS_CHART_ID}-chart`;
   return (
-    <ChartFrame testId={chartId} legend={GRANTED_LEGEND}>
+    <ChartFrame testId={chartId} legend={usageUnavailable ? GRANTED_ONLY_LEGEND : CREDITS_LEGEND}>
       <BarChart data={[...points]} margin={MARGIN}>
         <CartesianGrid vertical={false} stroke={BORDER} />
         <XAxis dataKey="start" tickFormatter={axisDay} {...xAxisProps} />
@@ -256,7 +259,9 @@ const CreditCyclesPlot: React.FC<{ points: readonly CreditCyclePoint[] }> = ({ p
                 color: INK_MUTED,
                 opacity: COMPARISON_OPACITY,
               },
-              { label: point.current ? 'Used so far' : 'Used', value: formatCredits(point.used), color: ACCENT },
+              ...(point.used === null
+                ? []
+                : [{ label: point.current ? 'Used so far' : 'Used', value: formatCredits(point.used), color: ACCENT }]),
             ],
           }))}
         />
@@ -267,7 +272,7 @@ const CreditCyclesPlot: React.FC<{ points: readonly CreditCyclePoint[] }> = ({ p
           fillOpacity={COMPARISON_OPACITY}
           isAnimationActive={false}
         />
-        <Bar dataKey="used" name="Used" fill={ACCENT} isAnimationActive={false} />
+        {!usageUnavailable && <Bar dataKey="used" name="Used" fill={ACCENT} isAnimationActive={false} />}
       </BarChart>
     </ChartFrame>
   );
@@ -292,8 +297,8 @@ const CREDIT_COLUMNS: DataColumn<CreditCyclePoint>[] = [
     id: 'used',
     label: 'Used (credits)',
     numeric: true,
-    render: point => formatCredits(point.used),
-    sortValue: point => point.used,
+    render: point => (point.used === null ? <Dash title="Not totaled" /> : formatCredits(point.used)),
+    sortValue: point => point.used ?? -1,
   },
 ];
 
@@ -309,7 +314,7 @@ export const CreditCyclesChart: React.FC<{ detail: AdminSubscriptionDetail; hist
     body = {
       kind: 'ready',
       caption: creditsTakeaway(points),
-      chart: <CreditCyclesPlot points={points} />,
+      chart: <CreditCyclesPlot points={points} usageUnavailable={history.data.creditUsageUnavailable} />,
       table: (
         <ChartDataTable
           label="Credits per cycle"
@@ -321,7 +326,9 @@ export const CreditCyclesChart: React.FC<{ detail: AdminSubscriptionDetail; hist
       ),
       footnote: (
         <Note testId={`${CREDITS_CHART_ID}-note`}>
-          {'Used counts everything the owner spent in the cycle, from any credit source.'}
+          {history.data.creditUsageUnavailable
+            ? USAGE_UNAVAILABLE_NOTE
+            : 'Used counts everything the owner spent in the cycle, from any credit source.'}
           {history.data.creditCyclesTruncated && ` Showing the latest ${MAX_CREDIT_CYCLES} cycles.`}
         </Note>
       ),
