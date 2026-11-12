@@ -2,6 +2,7 @@ export * from './ArenaPairModel';
 export * from './ArenaVoteModel';
 export * from './ConnectionModel';
 export * from './FeedbackModel';
+export * from './FeedbackAiModel';
 export * from './FeedbackReportQueries';
 export * from './FeedbackRollupQueries';
 export * from './FeedbackTextModel';

@@ -1,4 +1,10 @@
-import { IFeedbackDocument, FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
+import {
+  IFeedbackDocument,
+  FeedbackStatus,
+  FeedbackSubject,
+  FeedbackType,
+  type FeedbackAiLabels,
+} from '@bike4mind/common';
 import type { FeedbackView } from './feedbackTabSearch';
 import type { FeedbackReceivedWindow } from './feedbackTrends';
 
@@ -26,6 +32,8 @@ export function getFeedbackDisplayContent(
 }
 
 export interface FeedbackFilters {
+  area?: FeedbackAiLabels['area'];
+  severity?: FeedbackAiLabels['severity'];
   searchTerm: string;
   statusFilters: Record<FeedbackStatus, boolean>;
   selectedOrganizations: string[];
@@ -49,6 +57,8 @@ export interface FeedbackFilters {
  * in that group and is now also the triage table's own subject filter.
  */
 export interface FeedbackListFilterParams {
+  area?: FeedbackAiLabels['area'];
+  severity?: FeedbackAiLabels['severity'];
   userId?: string;
   sessionId?: string;
   questId?: string;
@@ -91,6 +101,8 @@ export interface FeedbackListResponse {
 
 // Hook return types
 export interface UseFeedbackFiltersReturn {
+  setArea: (value: FeedbackAiLabels['area'] | undefined) => void;
+  setSeverity: (value: FeedbackAiLabels['severity'] | undefined) => void;
   filters: FeedbackFilters;
   setSearchTerm: (term: string) => void;
   setStatusFilters: React.Dispatch<React.SetStateAction<Record<FeedbackStatus, boolean>>>;
