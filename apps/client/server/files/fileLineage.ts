@@ -153,16 +153,18 @@ export async function buildFileLineage(root: IFabFileDocument, deps: FileLineage
 /** Up to LINEAGE_MAX_CHILDREN readable children, newest first, scanning a bounded number of id pages. */
 async function readChildren(rootId: string, deps: FileLineageDeps) {
   const files: IFabFileDocument[] = [];
+  const scanned = new Set<string>();
   for (let page = 0; page < CHILD_SCAN_MAX_PAGES && files.length < LINEAGE_MAX_CHILDREN; page++) {
-    const childIds = (
-      await deps.findChildIds(rootId, { limit: CHILD_SCAN_PAGE_SIZE, skip: page * CHILD_SCAN_PAGE_SIZE })
-    ).filter(id => id !== rootId);
+    const pageIds = await deps.findChildIds(rootId, { limit: CHILD_SCAN_PAGE_SIZE, skip: page * CHILD_SCAN_PAGE_SIZE });
+    // Skip-paging shifts when a child is created between pages, so the next page can repeat an id.
+    const childIds = pageIds.filter(id => id !== rootId && !scanned.has(id));
+    childIds.forEach(id => scanned.add(id));
     if (childIds.length > 0) {
       const readableById = new Map((await deps.readAccessible(childIds)).map(file => [file.id, file]));
       // Keep the newest-first order of the id query; the access read does not preserve it.
       files.push(...childIds.flatMap(id => readableById.get(id) ?? []));
     }
-    if (childIds.length < CHILD_SCAN_PAGE_SIZE) break;
+    if (pageIds.length < CHILD_SCAN_PAGE_SIZE) break;
   }
   const kept = files.slice(0, LINEAGE_MAX_CHILDREN);
   return { files: kept, nodes: kept.map(file => toVisibleNode(file, -1)) };

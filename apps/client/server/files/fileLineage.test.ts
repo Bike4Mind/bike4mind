@@ -143,6 +143,21 @@ describe('buildFileLineage', () => {
     expect(deps.findChildIds).toHaveBeenCalledTimes(2);
   });
 
+  it('does not repeat a child that a shifted page returns twice', async () => {
+    const root = makeFile(hexId(0));
+    const kids = Array.from({ length: 49 }, (_, n) => makeFile(hexId(n + 1), [{ fileId: root.id, role: 'reference' }]));
+    const ids = kids.map(file => file.id);
+    const deps = depsFor([root, ...kids], { hidden: ids.slice(0, 47) });
+    // A newer child landing between the two reads pushes the last id of page one onto page two.
+    deps.findChildIds.mockImplementation(async (_id: string, { limit, skip }: { limit: number; skip: number }) =>
+      skip === 0 ? ids.slice(0, limit) : ids.slice(skip - 1, skip - 1 + limit)
+    );
+
+    const lineage = await buildFileLineage(root, deps);
+
+    expect(lineage.children.map(node => node.fileId)).toEqual([ids[47], ids[48]]);
+  });
+
   it('ignores a self-reference and repeated entries', async () => {
     const [root, parent] = [0, 1].map(hexId);
     const files = [
