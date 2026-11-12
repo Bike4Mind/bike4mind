@@ -12,6 +12,7 @@ const mockUserHasMFA = vi.fn();
 const mockCountPasskeys = vi.fn();
 const mockJwtVerify = vi.fn();
 const mockJwtSign = vi.fn();
+vi.mock('@server/auth/organizationMfa', () => ({ requiresOrganizationMfaEnrollment: vi.fn(async () => false) }));
 
 class UnprocessableEntityError extends Error {
   constructor(message: string) {
