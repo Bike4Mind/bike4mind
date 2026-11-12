@@ -158,12 +158,19 @@ private struct SeedRow: View {
         .monospacedDigit()
         .accessibilityIdentifier("studio-param-seed")
         .onChange(of: text) { _, newText in
-          let digits = newText.filter(\.isNumber)
-          guard let seed = Double(digits), seed <= ParamControl.maximumSeed else {
-            if digits.isEmpty { value = nil }
-            return
+          // Rewriting the text re-runs this with the cleaned value, so the field always shows the seed that is sent.
+          let digits = String(newText.filter { $0.isASCII && $0.isNumber })
+          if digits != newText {
+            text = digits
+          } else if let seed = Double(digits) {
+            if seed > ParamControl.maximumSeed {
+              text = String(Int(ParamControl.maximumSeed))
+            } else {
+              value = .number(seed)
+            }
+          } else {
+            value = nil
           }
-          value = .number(seed)
         }
       Button {
         text = String(Int.random(in: 0...Int(ParamControl.maximumSeed)))
