@@ -40,6 +40,13 @@ export interface IOrgDomainClaimView {
   recordValue: string | null;
 }
 
+/** An org an existing user may join through their verified email's domain (GET /api/organizations/domain-suggestions). */
+export interface OrgDomainJoinSuggestion {
+  organizationId: string;
+  organizationName: string;
+  claimId: string;
+}
+
 export type MarkOrgDomainClaimVerifiedResult = IOrgDomainClaimDocument | 'conflict' | null;
 
 export interface IOrgDomainClaimRepository extends IBaseRepository<IOrgDomainClaimDocument> {

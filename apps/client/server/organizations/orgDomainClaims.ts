@@ -15,6 +15,7 @@ import {
   type IOrgDomainClaimView,
   type IOrganizationDocument,
   type OrgAuthorityActor,
+  type OrgDomainJoinSuggestion,
   type UpdateOrgDomainPolicyInput,
 } from '@bike4mind/common';
 import {
@@ -284,12 +285,6 @@ async function joinableClaimForEmail(email: string | null | undefined): Promise<
   const partnerRule = await enabledPartnerRule(domain);
   if (partnerRule?.organizationId && partnerRule.organizationId !== claim.organizationId) return null;
   return claim;
-}
-
-export interface OrgDomainJoinSuggestion {
-  organizationId: string;
-  organizationName: string;
-  claimId: string;
 }
 
 /**

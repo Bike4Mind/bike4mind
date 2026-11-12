@@ -1,7 +1,7 @@
 // Typed client for the org-admin domain claim routes (pages/api/organizations/[id]/domains).
 
 import { api } from '@client/app/contexts/ApiContext';
-import type { IOrgDomainClaimView, UpdateOrgDomainPolicyInput } from '@bike4mind/common';
+import type { IOrgDomainClaimView, OrgDomainJoinSuggestion, UpdateOrgDomainPolicyInput } from '@bike4mind/common';
 
 export type VerifyOrgDomainResult =
   { verified: true; claim: IOrgDomainClaimView } | { verified: false; reason: string };
@@ -40,12 +40,6 @@ export const updateOrgDomainClaimPolicy = async (
 export const deleteOrgDomainClaim = async (organizationId: string, claimId: string): Promise<void> => {
   await api.delete(`${base(organizationId)}/${encodeURIComponent(claimId)}`);
 };
-
-export interface OrgDomainJoinSuggestion {
-  organizationId: string;
-  organizationName: string;
-  claimId: string;
-}
 
 export const fetchOrgDomainJoinSuggestions = async (): Promise<OrgDomainJoinSuggestion[]> => {
   const response = await api.get<{ suggestions: OrgDomainJoinSuggestion[] }>('/api/organizations/domain-suggestions');
