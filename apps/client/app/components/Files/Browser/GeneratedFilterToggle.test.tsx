@@ -52,3 +52,13 @@ describe('FileBrowserFilter generated quick filter', () => {
     expect(onChange).toHaveBeenCalledWith({ filters: { tags: ['work'], generated: undefined } });
   });
 });
+
+describe('withGeneratedFilter', () => {
+  it('turning Generated on drops its complement, so the list cannot go empty', async () => {
+    const { withGeneratedFilter } = await import('./GeneratedFilterToggle');
+    expect(withGeneratedFilter({ filters: { uploaded: true } }, true).filters).toEqual({
+      generated: true,
+      uploaded: undefined,
+    });
+  });
+});

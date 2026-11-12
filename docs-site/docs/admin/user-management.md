@@ -9,9 +9,21 @@ tags: [admin, users, management]
 
 ## Reviewing detections and watching accounts
 
-In Admin > Detections, start with **Review evidence**. Inspect the linked accounts and their Activity before recording a judgment. A suggested response describes the detector's recommendation; recording a review does not apply that response to account access.
+The AI advisory also lists **linked accounts to review** separately from accounts with an AI abuse judgment. These candidates share an exact signup or login IP with a flagged account in the recent observation window. Each entry links to the account and explains which signup or login observation matched. Connections are one hop only, common addresses are discounted, and coverage warnings appear when a scan is capped or fails. A connection does not give the candidate its neighbour's AI verdict or probability.
 
-If you need more time, choose **Watch** or **Watch campaign** on a campaign detection (or **Watch these accounts** on the dashboard's AI advisory) and give the watch a name and reason. The watch saves the exact group you selected. You can find open watches on the admin dashboard and in Detections even after the AI advisory expires, changes verdict, or is reviewed. Incomplete groups cannot be saved as a watch; open an individual detection with a complete group instead.
+In a user's Overview, **Signup classification** explains the Users table's **Suspected** label. It shows the matched signal names, plain-language explanations, classification rule, evaluation time and selected signup-chart window. Use the range selector to match the Users chart you are investigating. This is the chart's current heuristic classification, not a historical saved verdict or the AI advisory. Missing classification and incomplete scans are shown explicitly.
+
+In **Risk evidence**, **Observed** means the source returned data. It is not a safe-account judgment. In Sign-ins, matching JA4 values are described as TLS fingerprint matches; they do not prove the same device or operator.
+
+The AI assessment can show an account profile with signup-method and network flags, email-shape signals, time to two-factor setup and first spend, model spending shares, and counts of other accounts sharing recorded traits. Missing profiles or linked-account data remain unknown. Shared network, JA4 or mail-domain counts do not establish common ownership.
+
+**Factors identified by the model** lists up to three fixed evidence statements and the model's confidence that each statement describes the input. These percentages are not each factor's contribution to the overall verdict. A missing factor list does not clear the account; older assessments and unknown results may have none.
+
+In Admin > Detections, start with **Review evidence**. Inspect the linked accounts and their Activity before recording a judgment. A suggested response describes the detector's recommendation; recording a review does not apply that response to account access. The **How this page works** guide combines these steps with the shadow-mode and verdict explanations. You can dismiss it and restore it from the button with the same name.
+
+Use **Group detections by account** to review related rows together. Selecting rows opens a bulk verdict action; the dialog can also grade other loaded, unreviewed detections for the same single account. Group counts distinguish the current page from all loaded rows. **Save and next** follows the displayed order. Revision conflicts and failed writes remain visible, and confirmed successful writes are retained when a later request fails. A verdict and its history show the reviewing admin when available.
+
+If you need more time, choose **Watch** or **Watch campaign** on a campaign detection (or **Watch these accounts** on the dashboard's AI advisory) and give the watch a name and reason. The watch saves the exact group you selected. You can find open watches on the admin dashboard and in Detections even after the AI advisory expires, changes verdict, or is reviewed. Groups with omitted participants cannot be saved as a watch; open an individual detection with a complete group instead. A capped activity scan can still be watched when its selected participant list is complete.
 
 Open a watch to see its owner, current account status and credits, profile and Activity links, and the last manual check. Choose **Refresh account data** to reload the details, **Mark checked** after reviewing activity, or **Assign to me** to take ownership. Close the watch when monitoring is complete; the Closed list lets you reopen it later.
 
@@ -22,6 +34,24 @@ Watches are available only to full administrators, because a watch shows each me
 The Users tab is the primary interface for administering user accounts on the Bike4Mind platform. It is a single server-driven table with search, filters, built-in views, column sorting, grouping by email domain, and CSV export. The header shows the total number of accounts and how many were active this week.
 
 The view, filters, sort, grouping, page, and page size are kept in the URL, so reloading the page or sharing the link restores the same list. The search text is not put in the URL, because it often holds an email address.
+
+### Coordinated API completions
+
+The Detections filter **Coordinated API completions** surfaces repeated ordered groups in retained successful API-completion settlements. The hourly observation job reads the preceding 24 hours, with bounded results and processing. It can discover accounts outside an existing flagged group. The evidence explains the number of participants, repeated rounds, and incomplete coverage when a cap is reached.
+
+Start with **Review evidence**, open each participant's Activity, and use **Watch** for follow-up. Repeated ordering supports coordination; team schedulers can produce it too. Settlement order is not request start order, and this source does not cover failed requests or all API routes. The observation alone does not establish abuse or a shared operator. These detections cannot trigger automatic containment or change automatic risk-review approval. Human review remains available. Their summary shows **Review only** with no progress bar toward automatic enforcement.
+
+The same ordered group updates its unreviewed observation within a UTC activity day. Reviewed observations remain unchanged; a later activity day can produce a new observation. Use a watch to keep the exact group accessible across observations.
+
+### Synchronized API calls
+
+Choose **Synchronized API calls** in Detections to review accounts with repeated closely timed API-key requests and shared requested-model changes. The scan searches the platform's retained request metadata rather than starting only from existing flagged accounts. Repeated subsets can be found even when unrelated requests overlap. These observations support coordination, not proof of a shared person, matching prompts or misuse; legitimate team schedulers can look similar.
+
+Open **Review evidence** to see participant counts, matched bursts, requested-model switches, completed calls, daily-cap refusals and unknown or interrupted outcomes. Cohort spending is a snapshot for the scan's 24-hour API-completion window, separate from requests in matched bursts. Grant-funded credits include rewards and other grants; missing attribution remains unknown. Capped spending and unavailable data are explicit.
+
+In a profile's **API keys > Recent API requests**, you can inspect the correlation id, requested model and completion outcome for newly captured requests. HTTP transport status is separate from completion outcome: HTTP 200 does not prove a successful stream. **No response recorded** means the request start was captured without a terminal response; it does not establish an active request or a failure. Older records show **Not captured** for missing completion metadata.
+
+Use **Watch campaign** for follow-up. If your review supports stopping additional grants, **Review blocking future grants** opens the existing manual dry run for the exact selected accounts. The preview and an audit reason are required before confirmation. This blocks further signup grants and pauses queued rewards; already-paid credits and account access remain unchanged. Watching, grading or AI assessment does not perform this action automatically.
 
 ## Search
 

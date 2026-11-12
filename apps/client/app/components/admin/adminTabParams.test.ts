@@ -57,6 +57,21 @@ describe('adminSearchForTab', () => {
   });
 });
 
+// The alarm's DLQ replay button links here; without the registration validateSearch drops the queue.
+describe('Dead letters tab params', () => {
+  it('keeps dlqQueue through validateSearch', () => {
+    expect(parseAdminSearch({ tab: 'dlq-replay', dlqQueue: 'fab-file-chunk' })).toMatchObject({
+      tab: 'dlq-replay',
+      dlqQueue: 'fab-file-chunk',
+    });
+  });
+
+  it('keeps dlqQueue on the Dead letters tab and drops it on another tab', () => {
+    expect(adminSearchForTab({ dlqQueue: 'fab-file-chunk' }, 'dlq-replay').dlqQueue).toBe('fab-file-chunk');
+    expect(adminSearchForTab({ dlqQueue: 'fab-file-chunk' }, 'users').dlqQueue).toBeUndefined();
+  });
+});
+
 describe('Users tab params', () => {
   const usersSearch = {
     tab: 'users',
@@ -264,7 +279,7 @@ describe('Organizations tab params', () => {
   const organizationsSearch = {
     tab: 'organizations',
     orgsPage: 2,
-    orgsLimit: 20,
+    orgsLimit: 50,
     orgsSort: 'createdAt',
     orgsOrder: 'desc',
     orgsPersonal: false,

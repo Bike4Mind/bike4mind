@@ -2,7 +2,13 @@ import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { COMMAND_ENV, WINDOWS_COMMAND_ARGS, commandEnv, launchCommand } from './commandLaunch';
+import {
+  COMMAND_ENV,
+  WINDOWS_COMMAND_ARGS,
+  commandEnv,
+  launchCommand,
+  withExplicitBareRepositories,
+} from './commandLaunch';
 import { COMMAND_TAG_ENV } from './commandTree';
 
 vi.mock('./gitBash', async importOriginal => ({
@@ -104,6 +110,123 @@ describe('launchCommand in a WSL folder', () => {
     expect(env.B4M_DESKTOP_LINUX_PATH).toBe('/home/me/.nvm/bin:/usr/bin');
     expect(env.WSL_UTF8).toBe('1');
   });
+
+  it('hands the Linux shell safe.bareRepository=explicit, appended after a count that crosses', async () => {
+    onWindows();
+    const launch = await launchCommand('git st', [], [], '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo');
+    const plain = await commandEnv(launch);
+    expect(plain).toMatchObject({
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'safe.bareRepository',
+      GIT_CONFIG_VALUE_0: 'explicit',
+    });
+    expect(plain.WSLENV?.split(':')).toEqual(
+      expect.arrayContaining(['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0'])
+    );
+
+    vi.stubEnv('GIT_CONFIG_COUNT', '3');
+    vi.stubEnv('WSLENV', 'GIT_CONFIG_COUNT:GIT_CONFIG_KEY_0/u');
+    try {
+      const crossing = await commandEnv(launch);
+      expect(crossing).toMatchObject({ GIT_CONFIG_COUNT: '4', GIT_CONFIG_KEY_3: 'safe.bareRepository' });
+      expect(crossing.WSLENV?.split(':')).toContain('GIT_CONFIG_VALUE_3');
+      vi.stubEnv('WSLENV', '');
+      expect(await commandEnv(launch)).toMatchObject({
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'safe.bareRepository',
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('a Windows git count under each WSLENV flag', () => {
+  afterEach(() => {
+    if (platform) Object.defineProperty(process, 'platform', platform);
+  });
+
+  const entries = [
+    ['GIT_CONFIG_COUNT/w', false],
+    ['GIT_CONFIG_COUNT/p', true],
+    ['GIT_CONFIG_COUNT/u', true],
+    ['GIT_CONFIG_COUNT/l', true],
+    ['GIT_CONFIG_COUNT', true],
+    ['git_config_count', true],
+    ['git_config_count/w', false],
+  ] as const;
+
+  it.each(entries)('with WSLENV %s, counts it in Linux: %s', async (entry, crosses) => {
+    onWindows();
+    const launch = await launchCommand('git st', [], [], '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo');
+    vi.stubEnv('GIT_CONFIG_COUNT', '2');
+    vi.stubEnv('WSLENV', entry);
+    try {
+      const env = await commandEnv(launch);
+      const at = crosses ? 2 : 0;
+      expect(env.GIT_CONFIG_COUNT).toBe(String(at + 1));
+      expect(env[`GIT_CONFIG_KEY_${at}`]).toBe('safe.bareRepository');
+      expect(Object.keys(env).filter(key => key.toUpperCase() === 'GIT_CONFIG_COUNT')).toHaveLength(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('drops a lowercase count that does not cross instead of keeping both spellings', async () => {
+    onWindows();
+    const launch = await launchCommand('git st', [], [], '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo');
+    vi.stubEnv('git_config_count', '2');
+    vi.stubEnv('WSLENV', '');
+    try {
+      const env = await commandEnv(launch);
+      expect(Object.keys(env).filter(key => key.toUpperCase() === 'GIT_CONFIG_COUNT')).toEqual(['GIT_CONFIG_COUNT']);
+      expect(env.GIT_CONFIG_COUNT).toBe('1');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('appends to a GIT_CONFIG_PARAMETERS that crosses and drops one that does not', async () => {
+    onWindows();
+    const launch = await launchCommand('git st', [], [], '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo');
+    vi.stubEnv('GIT_CONFIG_PARAMETERS', "'a.b'='c'");
+    try {
+      vi.stubEnv('WSLENV', 'GIT_CONFIG_PARAMETERS/u');
+      expect((await commandEnv(launch)).GIT_CONFIG_PARAMETERS).toBe("'a.b'='c' 'safe.bareRepository=explicit'");
+      vi.stubEnv('WSLENV', 'GIT_CONFIG_PARAMETERS/w');
+      expect((await commandEnv(launch)).GIT_CONFIG_PARAMETERS).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('withExplicitBareRepositories', () => {
+  it('appends to GIT_CONFIG_PARAMETERS only when it is set', () => {
+    expect(withExplicitBareRepositories({}).env.GIT_CONFIG_PARAMETERS).toBeUndefined();
+    expect(withExplicitBareRepositories({ GIT_CONFIG_PARAMETERS: '' }).env.GIT_CONFIG_PARAMETERS).toBe(
+      "'safe.bareRepository=explicit'"
+    );
+    const { env, names } = withExplicitBareRepositories({ GIT_CONFIG_PARAMETERS: "'a.b'='c'" });
+    expect(env.GIT_CONFIG_PARAMETERS).toBe("'a.b'='c' 'safe.bareRepository=explicit'");
+    expect(names).toContain('GIT_CONFIG_PARAMETERS');
+  });
+
+  it.each([
+    [{}, '1', 0],
+    [{ GIT_CONFIG_COUNT: '0' }, '1', 0],
+    [{ GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'a.b', GIT_CONFIG_VALUE_0: 'c' }, '3', 2],
+    [{ GIT_CONFIG_COUNT: 'x' }, '1', 0],
+  ])('appends to %j as entry %#', (env, count, at) => {
+    const { env: out, names } = withExplicitBareRepositories(env);
+    expect(out).toMatchObject({
+      GIT_CONFIG_COUNT: count,
+      [`GIT_CONFIG_KEY_${at}`]: 'safe.bareRepository',
+      [`GIT_CONFIG_VALUE_${at}`]: 'explicit',
+    });
+    expect(names).toEqual(['GIT_CONFIG_COUNT', `GIT_CONFIG_KEY_${at}`, `GIT_CONFIG_VALUE_${at}`]);
+    expect(out).toMatchObject({ ...env, GIT_CONFIG_COUNT: count });
+  });
 });
 
 describe('launchCommand on POSIX', () => {
@@ -113,4 +236,15 @@ describe('launchCommand on POSIX', () => {
     expect(launch.processTag).toBeUndefined();
     expect((await commandEnv(launch))[COMMAND_TAG_ENV]).toBeUndefined();
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'gives the shell safe.bareRepository=explicit through the environment',
+    async () => {
+      const launch = await launchCommand('git st', [], [], '/tmp');
+      expect(await commandEnv(launch)).toMatchObject({
+        GIT_CONFIG_KEY_0: 'safe.bareRepository',
+        GIT_CONFIG_VALUE_0: 'explicit',
+      });
+    }
+  );
 });

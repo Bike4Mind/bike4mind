@@ -1981,7 +1981,11 @@ describe('publishArtifact', () => {
       // UTF-8 byte length, not string length: the e-acute is two bytes.
       files: [{ path: 'index.html', size: 14, mimeType: 'text/html' }],
     });
-    expect(fns.uploadPublishDraftFile).toHaveBeenCalledWith('https://s3/put', BODY, 'text/html');
+    expect(fns.uploadPublishDraftFile).toHaveBeenCalledWith(
+      { path: 'index.html', url: 'https://s3/put', expiresAt: '2026-10-15T00:10:00Z' },
+      BODY,
+      'text/html'
+    );
     expect(fns.finalizePublish).toHaveBeenCalledWith('draft1');
     expect(result).toEqual({
       publicId: 'pub1',

@@ -8,8 +8,10 @@
  */
 
 import { createHash } from 'node:crypto';
+import { z } from 'zod';
 import {
   ACCOUNT_CAMPAIGN_AXIS_OF,
+  ABUSE_ASSESSMENT_EVIDENCE_VERSION,
   ABUSE_ASSESSMENT_MAX_ACCOUNTS,
   ABUSE_ASSESSMENT_MAX_SIGNALS,
   ABUSE_ASSESSMENT_MAX_SUMMARY_CHARS,
@@ -17,24 +19,38 @@ import {
   RISK_EVIDENCE_MISSING_REASONS,
   RISK_EVIDENCE_VERSION,
   abuseAssessmentFeatureSummarySchema,
+  abuseAssessmentAccountSchema,
+  abuseAssessmentAccountProfileSchema,
   riskEvidenceFactValueSchemas,
   type AbuseAssessmentAccount,
+  type AbuseAssessmentAccountProfile,
   type AbuseAssessmentAccountEvidence,
   type AbuseAssessmentFeatureSummary,
   type AbuseAssessmentGroupEvidence,
   type AbuseAssessmentRequestActivity,
   abuseAssessmentRequestActivitySchema,
+  completionSequenceEvidenceSchema,
+  completionSynchronyEvidenceSchema,
   type DecisionModelId,
   type RiskEvidenceFacts,
   type RiskEvidenceSummary,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
 
+const providerSummarySchema = abuseAssessmentFeatureSummarySchema.extend({
+  evidenceVersion: z.literal(ABUSE_ASSESSMENT_EVIDENCE_VERSION),
+  accounts: z
+    .array(abuseAssessmentAccountSchema.extend({ profile: abuseAssessmentAccountProfileSchema.nullable() }))
+    .max(ABUSE_ASSESSMENT_MAX_ACCOUNTS),
+});
+
 export type AssessedAccountSource = {
   id: string;
   createdAt: Date | null;
   summary: RiskEvidenceSummary | null;
   requests?: AbuseAssessmentRequestActivity;
+  /** From accountProfile.ts; null when the account could not be read. */
+  profile?: AbuseAssessmentAccountProfile | null;
 };
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -92,8 +108,77 @@ const projectAccount = (
     evidenceAgeHours: summary ? hoursBetween(detectedAt, summary.computedAt) : null,
     evidence: summary ? projectEvidence(summary.facts) : null,
     ...(source?.requests ? { requests: abuseAssessmentRequestActivitySchema.parse(source.requests) } : {}),
+    profile: source?.profile ?? null,
   };
 };
+
+function projectCompletionSynchrony(detection: ShadowDetectionItem, kept: AbuseAssessmentAccount[]) {
+  if (detection.detector !== 'completionSynchrony') return undefined;
+  const parsed = completionSynchronyEvidenceSchema.safeParse(detection.completionSynchrony);
+  if (!parsed.success)
+    return { status: 'incomplete' as const, reviewOnly: true as const, reason: 'source_missing' as const };
+  if (kept.length !== detection.userIds.length || kept.length < 3)
+    return { status: 'incomplete' as const, reviewOnly: true as const, reason: 'members_omitted' as const };
+  const value = parsed.data;
+  return {
+    status: 'observed' as const,
+    reviewOnly: true as const,
+    memberRefs: kept.map(account => account.ref),
+    source: value.source,
+    windowHours: value.windowHours,
+    eventsScanned: value.eventsScanned,
+    legacyRows: value.legacyRows,
+    scanTruncated: value.scanTruncated,
+    bursts: value.bursts,
+    synchronizedModelSwitches: value.synchronizedModelSwitches,
+    distinctRequestedModels: value.distinctRequestedModels,
+    maxStartSkewMilliseconds: value.maxStartSkewMilliseconds,
+    completedRequests: value.completedRequests,
+    dailyCapRejectedRequests: value.dailyCapRejectedRequests,
+    otherRejectedRequests: value.otherRejectedRequests,
+    interruptedOrUnknownRequests: value.interruptedOrUnknownRequests,
+    ...(value.creditExposure
+      ? {
+          creditExposure: {
+            scope: value.creditExposure.scope,
+            creditsCharged: value.creditExposure.creditsCharged,
+            grantFundedCredits: value.creditExposure.grantFundedCredits,
+            unknownFundingCredits: value.creditExposure.unknownFundingCredits,
+            scanTruncated: value.creditExposure.scanTruncated,
+          },
+        }
+      : {}),
+  };
+}
+
+function projectCompletionSequence(detection: ShadowDetectionItem, kept: AbuseAssessmentAccount[]) {
+  if (detection.detector !== 'completionSequence') return undefined;
+  const source = completionSequenceEvidenceSchema.safeParse(detection.completionSequence);
+  if (!source.success)
+    return { status: 'incomplete' as const, reviewOnly: true as const, reason: 'source_missing' as const };
+  if (kept.length !== detection.userIds.length || kept.length < 3)
+    return {
+      status: 'incomplete' as const,
+      reviewOnly: true as const,
+      reason: 'members_omitted' as const,
+    };
+  const sequence = source.data;
+  return {
+    status: 'observed' as const,
+    reviewOnly: true as const,
+    memberRefs: kept.map(account => account.ref),
+    source: sequence.source,
+    windowHours: sequence.windowHours,
+    eventsScanned: sequence.eventsScanned,
+    scanTruncated: sequence.scanTruncated,
+    rounds: sequence.rounds,
+    minRequestsPerRound: sequence.minRequestsPerRound,
+    maxRequestsPerRound: sequence.maxRequestsPerRound,
+    maxRoundSpanSeconds: sequence.maxRoundSpanSeconds,
+    minGapSeconds: sequence.minGapSeconds,
+    maxGapSeconds: sequence.maxGapSeconds,
+  };
+}
 
 export const accountRef = (index: number) => `acct_${index + 1}`;
 
@@ -150,8 +235,8 @@ export function buildFeatureSummary({
   );
 
   const build = (kept: AbuseAssessmentAccount[]): AbuseAssessmentFeatureSummary =>
-    abuseAssessmentFeatureSummarySchema.parse({
-      evidenceVersion: RISK_EVIDENCE_VERSION,
+    providerSummarySchema.parse({
+      evidenceVersion: ABUSE_ASSESSMENT_EVIDENCE_VERSION,
       detection: {
         detector: detection.detector,
         detectorPolicyVersion: detection.policyVersion,
@@ -168,6 +253,8 @@ export function buildFeatureSummary({
           })),
       },
       accounts: kept,
+      completionSequence: projectCompletionSequence(detection, kept),
+      completionSynchrony: projectCompletionSynchrony(detection, kept),
       accountsOmitted: detection.userIds.length - kept.length,
       group: group
         ? { ...group, memberRefs: group.memberRefs.filter(ref => kept.some(account => account.ref === ref)) }

@@ -520,6 +520,20 @@ const accountCampaignSweepCron = runsScheduledJobs
     })
   : undefined;
 
+const completionSequenceSweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('completionSequenceSweep', {
+      schedule: 'cron(30 * * * ? *)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/completionSequenceSweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
+
 // Credit Lot Sweep — reconciles the CreditLot parallel ledger against
 // currentCredits: assigns cumulative consumption soonest-to-expire-first and
 // expires stale remainders (see #190 design).
@@ -1608,6 +1622,7 @@ export {
   signupIpRetentionCron,
   signupRiskSweepCron,
   accountCampaignSweepCron,
+  completionSequenceSweepCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
   creditHoldSweepCron,

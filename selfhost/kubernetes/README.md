@@ -98,6 +98,36 @@ For agent execution, set `agentExecutor.enabled: true`, supply the matching sour
 - Roll back image/config-only releases with `helm history` and `helm rollback b4m <revision> -n bike4mind-eval --wait --timeout 15m`. Rollback does not reverse database migrations, bucket changes or Secret rotation. Keep compatible previous images and a [backup](#backup-and-restore) before upgrades that change persisted data.
 - `helm uninstall` leaves the three PVCs because of their retention annotations. Reinstallation requires explicit ownership/adoption of retained claims; do not assume a clean install will adopt them. Delete claims only after independently deciding their data can be discarded.
 
+## Upload readability check
+
+A Playwright check signs in, uploads a file through the browser, and compares every byte the browser reads back with what was uploaded: straight after the upload, after a page reload, and after the app pod is replaced. It also requires two reads to fail: the signed URL re-pointed at another object key, and a key that has no object.
+
+It needs `kubectl` access to the release, Chromium for Playwright (`pnpm exec playwright install chromium`), and three things reachable from the machine that runs it: the app (`SELFHOST_URL`), the object store at `config.S3_PRESIGN_ENDPOINT`, and Mailpit's API for the sign-in code:
+
+```sh
+kubectl port-forward --namespace bike4mind-eval deployment/b4m-mail 8025:8025
+```
+
+A port-forward to the app ends when its pod is replaced, and the check then waits for the URL to answer again. Run that forward in a loop, or point `SELFHOST_URL` at an ingress:
+
+```sh
+while true; do kubectl port-forward --namespace bike4mind-eval svc/b4m-app 3000:3000; sleep 1; done
+```
+
+Then, from `apps/client`:
+
+```sh
+SELFHOST_URL=http://localhost:3000 SELFHOST_EMAIL=you@example.com \
+  SELFHOST_KUBE_NAMESPACE=bike4mind-eval SELFHOST_REVISION=$(git rev-parse HEAD) \
+  pnpm exec playwright test -c e2e/selfhost-upload-readable.config.ts --project=live
+```
+
+`SELFHOST_EMAIL` is an account that can sign in with an emailed code; an email with no account yet is registered on the spot, which only works where registration is open to it (a fresh install's first account, for example). Optional: `SELFHOST_KUBE_RELEASE` (default `b4m`), `SELFHOST_KUBE_CONTEXT`, `SELFHOST_MAILPIT_URL` (default `http://localhost:8025`), `SELFHOST_USERNAME`, `SELFHOST_READY_TIMEOUT_MS`. The check replaces the pod with `kubectl rollout restart deployment/<release>-app` and passes that step only when no app pod UID from before the restart remains. `SELFHOST_SKIP_POD_REPLACE=true` runs the first two reads only, for a target without Kubernetes; that is not a pod-replacement proof.
+
+The run prints a JSON receipt: the revision you supplied, the uploaded size and sha256, the verdict and sha256 of each read, the status of the two reads that must fail, and the app pod names, UIDs and images before and after. It holds no credentials, but the image references name your registry; check them before posting a receipt publicly. Each run leaves one small file and one notebook in the account.
+
+For a mutation proof, repeat the command with `SELFHOST_MUTATE_EXPECTED=true`. It flips one bit of the reference bytes, so that run must fail at all three reads. A mutation run also fails if sign-in or the upload breaks, so read its receipt: only `"mutationDetectedAtEveryRead": true` is the proof. Keep it next to the passing receipt. `--project=selftest` runs the comparison's own checks with no target.
+
 ## Backup and restore
 
 `backup.py` backs up the bundled MongoDB (`bike4mind` replica set) and the seven MinIO buckets from your machine through `kubectl`, and writes them off the cluster. Back up the runtime Secret first: it holds `SECRET_ENCRYPTION_KEY`, `SECRET_ENCRYPTION_KEY_PREVIOUS` (if set) and `MEMORY_KEY_SECRET`. The script never writes or copies it (it reads only the bucket names and the S3 endpoint, `AWS_ENDPOINT_URL_S3`, from the helper pod's environment; by default both come from the chart's ConfigMap, and a runtime Secret key of the same name overrides it). Without the same values in the restored release, encrypted data cannot be read. Store the env file encrypted, apart from the backup.
