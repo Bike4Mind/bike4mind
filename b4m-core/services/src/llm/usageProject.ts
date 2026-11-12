@@ -16,8 +16,7 @@ export async function resolveUsageProject({
   if (!projectId || !/^[a-f\d]{24}$/i.test(projectId)) return undefined;
   const project = await projects.shareable.findAccessibleById(user, projectId);
   if (!project || project.deletedAt) return undefined;
-  // organizationId is the immutable creation-time binding owned by the sharing policy.
-  const binding = (project as typeof project & { organizationId?: string }).organizationId;
+  const binding = project.organizationId;
   if (ownerType === CreditHolderType.Organization) {
     return binding === ownerId ? project.id : undefined;
   }
