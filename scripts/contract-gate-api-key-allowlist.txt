@@ -796,6 +796,7 @@ apps/client/pages/api/webhooks/deliveries/[id]/retry.ts
 apps/client/pages/api/webhooks/deliveries/index.ts
 apps/client/pages/api/webhooks/github.ts
 apps/client/pages/api/webhooks/github/[token].ts
+apps/client/pages/api/well-known/assetlinks.ts # public Digital Asset Links statement fetched by Android without credentials
 apps/client/pages/api/webhooks/github/lake.ts
 apps/client/pages/api/webhooks/github/sre.ts
 apps/client/pages/api/webhooks/github/subscriptions/[id].ts
