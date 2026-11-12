@@ -49,7 +49,7 @@ describe('organization MFA policy controls', () => {
     await waitFor(() =>
       expect((screen.getByTestId('organization-mfa-grace-input') as HTMLInputElement).value).toBe('7')
     );
-    expect(screen.getByTestId('organization-mfa-enrollment-alert')).toBeTruthy();
+    expect(await screen.findByTestId('organization-mfa-enrollment-alert')).toBeTruthy();
     fireEvent.change(screen.getByTestId('organization-mfa-grace-input'), { target: { value: '0' } });
     fireEvent.click(screen.getByTestId('organization-mfa-save-btn'));
     await waitFor(() =>

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   findUser: vi.fn(),
   update: vi.fn(),
   audit: vi.fn(),
+  assertMfa: vi.fn(),
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -36,6 +37,7 @@ vi.mock('@bike4mind/services', () => ({
   mfaService: { userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean } }) => !!user.mfa?.totpEnabled },
 }));
 vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({ recordOrganizationAuditEvent: mocks.audit }));
+vi.mock('@bike4mind/server-utils/auth/organizationMfa', () => ({ assertOrganizationMfa: mocks.assertMfa }));
 await import('../mfa-policy');
 
 const org = { id: 'org', userId: 'owner', users: [{ userId: 'member', permissions: ['read'] }], adminUserIds: [] };
@@ -56,6 +58,7 @@ describe('organization MFA policy route', () => {
       filter._id.$in.map(id => ({ _id: id, mfa: { totpEnabled: id === 'owner' } }))
     );
     mocks.audit.mockResolvedValue(undefined);
+    mocks.assertMfa.mockResolvedValue(undefined);
     mocks.update.mockResolvedValue(org);
   });
   it('refuses policy writes by ordinary members without changing or auditing anything', async () => {
@@ -76,6 +79,12 @@ describe('organization MFA policy route', () => {
     mocks.findById.mockResolvedValue({ ...org, mfaPolicy: policy });
     const result = await call('put', 'owner', { required: true, graceDays: 7 });
     expect(result.policy.enforceAfter).toBe(policy.enforceAfter.toISOString());
+    expect(mocks.audit).not.toHaveBeenCalled();
+  });
+  it('does not let an unenrolled administrator disable an enforced policy', async () => {
+    mocks.assertMfa.mockRejectedValueOnce(new Error('Organization requires MFA'));
+    await expect(call('put', 'owner', { required: false, graceDays: 7 })).rejects.toThrow('Organization requires MFA');
+    expect(mocks.update).not.toHaveBeenCalled();
     expect(mocks.audit).not.toHaveBeenCalled();
   });
   it.each([-1, 31, 0.5])('refuses invalid grace days %s', async graceDays => {

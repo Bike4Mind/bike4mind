@@ -6,6 +6,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { recordOrganizationAuditEvent } from '@bike4mind/server-utils/utils/organizationAudit';
 import { NotFoundError } from '@bike4mind/utils';
+import { assertOrganizationMfa } from '@bike4mind/server-utils/auth/organizationMfa';
 
 const bodySchema = z.object({ required: z.boolean(), graceDays: z.number().int().min(0).max(30) }).strict();
 
@@ -39,6 +40,7 @@ export default baseApi()
       const policy = await withTransaction(async () => {
         const org = await organizationRepository.findById(id);
         if (!org || !canAdministerOrganization(req.user!, org)) throw new NotFoundError('Organization not found');
+        await assertOrganizationMfa(req.user!.id, id, org);
         const previous = org.mfaPolicy;
         const unchanged = previous?.required === input.required && previous.graceDays === input.graceDays;
         const policy = {
