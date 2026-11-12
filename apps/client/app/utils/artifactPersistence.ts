@@ -214,6 +214,31 @@ export async function persistArtifacts(
 }
 
 /**
+ * The session's artifact for `type` + `identifier` the caller may READ, including one shared with
+ * them. For resolving a card to its saved row only: the owner-only lookup behind
+ * findExistingArtifactId is what saves and new versions must keep using, so a read grant never
+ * turns into a write onto someone else's row.
+ */
+export async function findReadableArtifactId(
+  type: string,
+  identifier: string,
+  sessionId?: string
+): Promise<string | null> {
+  if (!sessionId || !identifier) {
+    return null;
+  }
+  try {
+    const response = await api.get(`/api/artifacts/by-identifier`, { params: { sessionId, type, identifier } });
+    const id = response.data?.artifact?.id;
+    if (typeof id === 'string') return id;
+  } catch (error) {
+    console.warn('Error finding readable artifact:', error);
+  }
+  // Rows that carry the identifier only as an id segment, which the by-identifier lookup cannot match.
+  return findExistingArtifactId(type, identifier, sessionId);
+}
+
+/**
  * Find the session's artifact for a reply's `type` + `identifier`, newest first.
  */
 export async function findExistingArtifactId(
