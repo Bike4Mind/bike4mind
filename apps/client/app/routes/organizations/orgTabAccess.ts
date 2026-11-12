@@ -1,13 +1,12 @@
 // Tab identity and visibility rules for the organization detail route.
 
 import {
-  canAdministerOrganization,
-  isOrgOwnerOrCurrentAdmin,
-  isOrgOwnerOrPlatformAdmin,
-  type AdministrableOrg,
+  canReadOrganizationAudit,
+  hasOrgPermission,
+  orgMemberHasPermission,
+  type OrgPermission,
+  type OrgRoleSubject,
 } from '@bike4mind/common';
-import { hasOrgUpdateAccess } from '@client/app/utils/orgAccessGate';
-import { orgAclRowConfersMembership } from '@bike4mind/common';
 
 export enum OrganizationTabs {
   Overview = 'overview',
@@ -23,6 +22,9 @@ export enum OrganizationTabs {
   Settings = 'settings',
   Audit = 'audit',
 }
+
+type TabViewer = { id: string; isAdmin?: boolean | null } | null | undefined;
+type TabOrg = OrgRoleSubject | null | undefined;
 
 /**
  * The sub-sections of the Integrations tab, carried in `?section=`. Order is display order, and the
@@ -48,101 +50,78 @@ export const LEGACY_INTEGRATION_TABS: Readonly<Record<string, IntegrationSection
   connectors: IntegrationSections.Connectors,
 };
 
-/** Who may open and edit the Settings tab. Mirrors organizationService.update's team-role gate. */
-export const canManageOrgSettings = (
-  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
-  organization: AdministrableOrg | null | undefined
-): boolean => !!currentUser && !!organization && canAdministerOrganization(currentUser, organization);
-
 /**
- * Who may see the org's feedback analysis. Mirrors the server gate the feedback-report routes run
- * (packages/server-utils/src/utils/orgAccess.ts, verifyOrgAccess): a platform admin, the org owner, or a
- * manager - NOT every member holding manage permissions, so the tab is never offered to someone the
- * API would answer with a 404. Must stay in sync with that function.
- *
- * Exported rather than left inline in $id.tsx so the spec can exercise the predicate the page
- * actually runs; a copy of the logic declared in the test passes whatever the page does.
+ * A tab gate for one org permission, failing closed while the user or org is still loading. Each tab
+ * names the permission its server routes check (`verifyOrgPermission`,
+ * packages/server-utils/src/utils/orgAccess.ts), so the tab is never offered to someone the API would
+ * answer with a 404.
  */
-export const canViewOrgAnalysis = hasOrgUpdateAccess;
-
-export const canViewOrgAudit = (
-  user: { id: string } | null | undefined,
-  org:
-    | (Omit<AdministrableOrg, 'users'> & { users?: { userId: string; permissions?: readonly string[] | null }[] })
-    | null
-    | undefined
-): boolean =>
-  !!user &&
-  !!org &&
-  (org.userId === user.id ||
-    ((org.adminUserIds ?? []).includes(user.id) &&
-      (org.users ?? []).some(row => row.userId === user.id && orgAclRowConfersMembership(row))));
-
-/** `isOrgOwnerOrPlatformAdmin`, failing closed while the user or org is still loading. */
-const ownerTierGate = (
-  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
-  organization: { userId: string } | null | undefined
-): boolean => !!currentUser && !!organization && isOrgOwnerOrPlatformAdmin(currentUser, organization);
+const permissionGate =
+  (permission: OrgPermission) =>
+  (currentUser: TabViewer, organization: TabOrg): boolean =>
+    !!currentUser && !!organization && hasOrgPermission(currentUser, organization, permission);
 
 /**
- * Usage and ledger reads use verifyOrgAccess: owner, current manager or platform admin.
- * Billing actions retain their separate owner-only gate.
+ * Who may open and edit the Settings tab (and the header's Settings button). Mirrors
+ * organizationService.update: every field there is org-wide, so the gate is the team role
+ * (`managePolicies`), never a sharing-ACL row. The page computes it once and passes it down.
  */
-export const canViewOrgUsage = (
-  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
-  organization: AdministrableOrg | null | undefined
-): boolean => !!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+export const canManageOrgSettings = permissionGate('managePolicies');
+
+/** Analysis: the feedback-report routes (`manageContent`). */
+export const canViewOrgAnalysis = permissionGate('manageContent');
+
+/** Usage: the org's credit spend (`usage/index.ts`) and ledger (`admin/transactions.ts`, `admin/session-usage.ts`). */
+export const canViewOrgUsage = permissionGate('viewUsage');
 
 /**
- * Who may see the GitHub, Slack and Webhooks sections of the Integrations tab - Slack wiring
- * (`integrations/slack/*`), the org's GitHub connection, keys and PAT (`organizations/[id]/github/*`)
- * and webhook secrets (`organizations/[id]/webhooks/github*`), all `verifyOrgOwner`. Owner or
- * platform admin. Connecting a GitHub source to a data lake does not go through these routes, so a
- * manager can still do that.
+ * The GitHub, Slack and Webhooks sections of the Integrations tab: Slack wiring (`integrations/slack/*`), the org's GitHub
+ * connection, keys and PAT (`organizations/[id]/github/*`) and webhook secrets
+ * (`organizations/[id]/webhooks/github*`). Connecting a GitHub source to a data lake is
+ * `manageContent`, not this.
  */
-export const canManageOrgIntegrations = ownerTierGate;
+export const canManageOrgIntegrations = permissionGate('manageIntegrations');
+
+/** Groups: `assertCanManageOrgGroups` (`manageMembers`). Personal orgs have no groups. */
+export const canManageOrgGroups = (
+  currentUser: TabViewer,
+  organization: (OrgRoleSubject & { personal?: boolean }) | null | undefined
+): boolean => !!organization && !organization.personal && permissionGate('manageMembers')(currentUser, organization);
+
+/** Connectors: the org's custom MCP connector policy and kill switch (`organizations/[id]/custom-mcp/*`). */
+export const canManageOrgConnectors = permissionGate('managePolicies');
+
+/** Audit: the team audit trail and its export (`viewAudit`, no platform-admin arm). */
+export const canViewOrgAudit = canReadOrganizationAudit;
+
+/** API keys: `organizations/[id]/api-keys/*`. */
+export const canManageOrgApiKeys = permissionGate('manageKeys');
 
 /**
- * Who may see the Billing & Subscription tab. Owner only - NOT `canManageOrg`, which also admits
- * managers. All three of the tab's actions are owner-gated, so a
- * member reaching it saw an enabled control for every one of them and an error back from each:
- * - Subscribe        pages/api/organizations/subscriptions/subscribe.ts (verifyOrgOwner)
+ * Who may see the Billing & Subscription tab: `manageBilling` from the viewer's own role - NOT
+ * `canManageOrg`, which is satisfied by any member holding `share`/`update`. The tab's actions:
+ * - Subscribe        pages/api/organizations/subscriptions/subscribe.ts
  * - Change seats     pages/api/organizations/subscriptions/update-seats.ts
  * - Billing portal   pages/api/stripe/portal.ts
  * Must stay in sync with those three.
  *
- * This decides who gets the real tab. A platform admin who is not the owner is excluded, though the
- * first two routes would admit them: portal.ts has no admin bypass, so they would get a Billing
- * Portal button that rejects them. Everyone else who manages the team (`isOrgOwnerOrCurrentAdmin`:
+ * This decides who gets the real tab. A platform admin who holds no role is deliberately excluded,
+ * though the first two routes would admit them: portal.ts has no admin bypass, so an admin would
+ * still get a Billing Portal button that rejects them. Admins act on an org's billing through the
+ * Admin -> Organizations panel. Everyone else who manages the team (`isOrgOwnerOrCurrentAdmin`:
  * managers, platform admins) gets a locked entry with a read-only summary, see `isOrgTabLocked`.
  */
-export const canViewOrgBilling = (
-  currentUser: { id: string } | null | undefined,
-  organization: { userId: string } | null | undefined
-): boolean => {
-  if (!currentUser || !organization) return false;
-  return currentUser.id === organization.userId;
-};
+export const canViewOrgBilling = (currentUser: TabViewer, organization: TabOrg): boolean =>
+  !!currentUser && !!organization && orgMemberHasPermission(organization, currentUser.id, 'manageBilling');
 
 /**
- * Who may see the Connectors section of the Integrations tab - the org's custom MCP connector policy
- * and kill switch (`organizations/[id]/custom-mcp/*`, `verifyOrgAccess`). Owner, current manager or
- * platform admin; must stay in sync with that gate.
- */
-export const canManageOrgConnectors = (
-  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
-  organization: AdministrableOrg | null | undefined
-): boolean => !!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization);
-
-/**
- * Who may see the Domains tab: the same checks `loadOrgForDomainAdmin` runs for the
- * `organizations/[id]/domains/*` routes (owner, current manager or platform admin; never a personal org).
+ * Who may see the Domains tab: the same `manageMembers` check `loadOrgForDomainAdmin` runs for the
+ * `organizations/[id]/domains/*` routes; never a personal org.
  */
 export const canManageOrgDomains = (
-  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
-  organization: (AdministrableOrg & { personal?: boolean }) | null | undefined
-): boolean =>
-  !!currentUser && !!organization && !organization.personal && canAdministerOrganization(currentUser, organization);
+  currentUser: TabViewer,
+  organization: (OrgRoleSubject & { personal?: boolean }) | null | undefined
+): boolean => !!organization && !organization.personal && permissionGate('manageMembers')(currentUser, organization);
 
 export interface OrgTabAccess {
   canManageOrg: boolean;
@@ -152,6 +131,7 @@ export interface OrgTabAccess {
   canManageGroups: boolean;
   canViewBilling: boolean;
   canManageConnectors: boolean;
+  canManageApiKeys: boolean;
   canManageDomains: boolean;
   canViewAudit?: boolean;
   /**
@@ -205,11 +185,10 @@ export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabA
   if (!access.canViewUsage && selected === OrganizationTabs.Usage) return OrganizationTabs.Overview;
   if (!access.canViewAnalysis && selected === OrganizationTabs.Analysis) return OrganizationTabs.Overview;
   if (!access.canManageGroups && selected === OrganizationTabs.Groups) return OrganizationTabs.Overview;
+  if (!access.canManageApiKeys && selected === OrganizationTabs.ApiKeys) return OrganizationTabs.Overview;
   if (!access.canManageDomains && selected === OrganizationTabs.Domains) return OrganizationTabs.Overview;
-  // Billing has its own gate rather than riding canManageOrg: every action on it is owner-only.
+  // Billing has its own gate rather than riding canManageOrg; see canViewOrgBilling.
   if (!access.canViewBilling && selected === OrganizationTabs.Billing) return OrganizationTabs.Overview;
-  // Same verifyOrgAccess gate as Connectors (pages/api/organizations/[id]/api-keys/*).
-  if (!access.canManageConnectors && selected === OrganizationTabs.ApiKeys) return OrganizationTabs.Overview;
   return selected;
 };
 

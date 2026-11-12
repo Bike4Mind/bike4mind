@@ -22,7 +22,7 @@ import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { Resource } from 'sst';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '@bike4mind/observability';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { classifyReplayability } from '@server/integrations/github/webhookReplayClassifier';
 
@@ -77,7 +77,7 @@ const handler = baseApi().post(
       );
     }
 
-    const org = await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
     if (!webhookConfig) {
