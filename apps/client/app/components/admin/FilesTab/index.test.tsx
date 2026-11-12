@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -131,6 +131,57 @@ describe('AdminFilesTab', () => {
     await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('The file could not be deleted. Try again.'));
     expect(screen.getByTestId('admin-files-delete-dialog')).toBeInTheDocument();
   });
+
+  it.each(['success', 'failure'] as const)(
+    'keeps the pending target and reason through dismissal attempts before %s',
+    async outcome => {
+      let resolve!: (value: { data: { id: string } }) => void;
+      let reject!: (error: Error) => void;
+      mocks.del.mockImplementationOnce(
+        () =>
+          new Promise<{ data: { id: string } }>((complete, fail) => {
+            resolve = complete;
+            reject = fail;
+          })
+      );
+      renderTab();
+      fireEvent.click(await screen.findByTestId('admin-files-row-actions-f1'));
+      fireEvent.click(await screen.findByTestId('admin-files-delete-f1'));
+      const dialog = await screen.findByTestId('admin-files-delete-dialog');
+      const reason = within(dialog).getByTestId('admin-files-delete-dialog-reason-input');
+      fireEvent.change(reason, { target: { value: 'Uploaded in error' } });
+      const confirm = within(dialog).getByTestId('admin-files-delete-dialog-confirm-btn');
+      fireEvent.click(confirm);
+      await waitFor(() => expect(confirm).toBeDisabled());
+      fireEvent.click(confirm);
+      fireEvent.click(within(dialog).getByTestId('admin-files-delete-dialog-close-btn'));
+      expect(screen.getByTestId('admin-files-delete-dialog')).toBe(dialog);
+      fireEvent.keyDown(dialog, { key: 'Escape', code: 'Escape' });
+      expect(screen.getByTestId('admin-files-delete-dialog')).toBe(dialog);
+      const backdrop = document.querySelector('.MuiModal-backdrop');
+      expect(backdrop).not.toBeNull();
+      fireEvent.click(backdrop!);
+      expect(screen.getByTestId('admin-files-delete-dialog')).toBe(dialog);
+      expect(dialog).toHaveTextContent('f1.pdf');
+      expect(reason).toHaveValue('Uploaded in error');
+      expect(mocks.del).toHaveBeenCalledExactlyOnceWith('/api/app-files/delete', { data: { id: 'f1' } });
+      if (outcome === 'failure') {
+        await act(async () => reject(new Error('offline')));
+        await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('The file could not be deleted. Try again.'));
+        expect(screen.getByTestId('admin-files-delete-dialog')).toBe(dialog);
+        expect(reason).toHaveValue('Uploaded in error');
+        await waitFor(() => expect(confirm).toBeEnabled());
+        fireEvent.click(within(dialog).getByTestId('admin-files-delete-dialog-close-btn'));
+        await waitFor(() => expect(screen.queryByTestId('admin-files-delete-dialog')).not.toBeInTheDocument());
+      } else {
+        mocks.get.mockResolvedValue({ data: [file('f2')] });
+        await act(async () => resolve({ data: { id: 'f1' } }));
+        await waitFor(() => expect(screen.queryByTestId('admin-files-delete-dialog')).not.toBeInTheDocument());
+        await waitFor(() => expect(screen.queryByTestId('admin-files-row-f1')).not.toBeInTheDocument());
+        expect(mocks.success).toHaveBeenCalledWith('File deleted');
+      }
+    }
+  );
 
   it('shows an empty state when there are no files', async () => {
     mocks.get.mockResolvedValue({ data: [] });

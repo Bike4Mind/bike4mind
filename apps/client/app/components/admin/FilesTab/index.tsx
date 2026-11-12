@@ -327,7 +327,9 @@ const AdminFilesTab = () => {
       <EditTagModal />
       <ActionDialog
         open={deleting !== null}
-        onClose={() => setDeleting(null)}
+        onClose={() => {
+          if (!deleteAppFile.isPending) setDeleting(null);
+        }}
         title="Delete file"
         description={
           deleting && (
