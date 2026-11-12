@@ -250,7 +250,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.api_keys.revoked_all': { category: 'access', severity: 'notice', write: 'strict' },
   'org.data_lake.embedding_spend_reset': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.storage.recalculated': { category: 'support', severity: 'info', write: 'bestEffort' },
-  // Test personas minted, deleted and expired through the persona key (pages/api/personas).
+  // Test personas minted, deleted and expired (pages/api/v1/personas, server/personas).
   'user.persona.created': { category: 'account', severity: 'notice', write: 'strict' },
   'user.persona.deleted': { category: 'account', severity: 'notice', write: 'strict' },
   'user.persona.expired': { category: 'account', severity: 'info', write: 'bestEffort' },

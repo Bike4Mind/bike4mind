@@ -64,6 +64,8 @@ export function secretUserFields() {
     riskSignals: [{ type: 'signup_honeypot', at: new Date('2026-01-01'), futureField: SECRET_VALUE }],
     signupLanding: { notebookOwnerId: SECRET_VALUE, capturedAt: new Date('2026-01-01') },
     stripeCustomerId: SECRET_VALUE,
+    personaLoginCodeHash: SECRET_VALUE,
+    personaLoginCodeExpiresAt: new Date('2026-01-01'),
     accountDataExportLease: { id: SECRET_VALUE, expiresAt: new Date('2026-01-01') },
     riskScore: { score: 90, signals: [{ signal: 'quickApiKey', points: 15, reason: SECRET_VALUE }] },
     riskEvidence: { summary: { trigger: SECRET_VALUE }, refresh: { lastFailure: SECRET_VALUE } },

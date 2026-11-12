@@ -1,6 +1,9 @@
+import { createHash, randomBytes } from 'crypto';
 import type { Request } from 'express';
-import { z } from 'zod';
 import {
+  ConflictError,
+  PERSONA_NAME_PATTERN,
+  hasDeveloperUserTag,
   PERSONA_MAX_LIVE_DEFAULT,
   PERSONA_MINT_DAILY_LIMIT_DEFAULT,
   PERSONA_TTL_DAYS_DEFAULT,
@@ -14,6 +17,9 @@ import {
   type IUserDocument,
   type StoredAuditContext,
 } from '@bike4mind/common';
+import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { hardDeleteUser } from '@server/services/hardDeleteUser';
 import {
   User,
   adminAuditLogRepository,
@@ -25,20 +31,78 @@ import {
 import { adminAuditService, userService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { entitlementsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@bike4mind/server-utils/entitlements/partnerRules';
-
-/** The name a caller picks; it becomes the username middle and, on production, the mailbox. */
-export const PERSONA_NAME_PATTERN = /^[a-z0-9]{1,24}$/;
 
 /** Every persona username the server builds matches this; nothing else is a persona. */
 export const PERSONA_USERNAME_PATTERN = /^persona-[a-z0-9]{1,24}-\d+$/;
 
-/** The only body the mint route accepts: unknown keys (role, credits, flags, email) are a 400. */
-export const MintPersonaBodySchema = z.strictObject({
-  name: z.string().regex(PERSONA_NAME_PATTERN, 'name must be 1-24 lowercase letters or digits'),
-});
+/** How long a persona login code stays redeemable. A bot redeems it within seconds of the mint. */
+export const PERSONA_LOGIN_CODE_TTL_MS = 5 * 60 * 1000;
+
+/** The login code's wire shape: 32 random bytes, base64url. Anything else is refused before a lookup. */
+export const PERSONA_LOGIN_CODE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+type PersonaCaller = Pick<IUserDocument, 'id' | 'tags' | 'isPersona' | 'isBanned'> & { isAdmin?: boolean | null };
+
+/**
+ * Whether the caller may mint or delete personas: an admin or a developer-tagged user, and never a
+ * persona. Re-checked on every call, so removing the role or tag stops the owner's key at once.
+ * Uses the persisted admin flag, because apiKeyAuth withholds isAdmin from keys without admin:*.
+ */
+export function canMintPersonas(user: PersonaCaller | null | undefined): boolean {
+  if (!user || user.isPersona === true || user.isBanned === true) return false;
+  return persistedIsAdmin(user as Parameters<typeof persistedIsAdmin>[0]) || hasDeveloperUserTag(user.tags);
+}
+
+/** Whether `user` may act on a persona owned by `ownerId`: its owner, or an admin. */
+export function mayManagePersona(user: PersonaCaller, ownerId: string | null | undefined): boolean {
+  return (!!ownerId && ownerId === user.id) || persistedIsAdmin(user as Parameters<typeof persistedIsAdmin>[0]);
+}
+
+export const hashPersonaLoginCode = (code: string) => createHash('sha256').update(code, 'utf8').digest('hex');
+
+/**
+ * Gives the persona a fresh single-use login code, replacing any pending one. Only the hash is
+ * stored; the code itself is returned once, to the minting caller.
+ */
+export async function issuePersonaLoginCode(personaId: string, now: Date): Promise<{ code: string; expiresAt: Date }> {
+  const code = randomBytes(32).toString('base64url');
+  const expiresAt = new Date(now.getTime() + PERSONA_LOGIN_CODE_TTL_MS);
+  const result = await User.updateOne(
+    { _id: personaId, isPersona: true },
+    { $set: { personaLoginCodeHash: hashPersonaLoginCode(code), personaLoginCodeExpiresAt: expiresAt } }
+  );
+  if (result.matchedCount !== 1) throw new ConflictError('This account is no longer a persona account');
+  return { code, expiresAt };
+}
+
+/**
+ * Consumes a login code atomically: the first redemption clears it, so a code signs in once. Returns
+ * the persona, or null when the code is unknown, used, expired, or belongs to a disabled persona.
+ */
+export async function redeemPersonaLoginCode(code: string, now: Date) {
+  if (!PERSONA_LOGIN_CODE_PATTERN.test(code)) return null;
+  const user = await User.findOneAndUpdate(
+    {
+      personaLoginCodeHash: hashPersonaLoginCode(code),
+      personaLoginCodeExpiresAt: { $gt: now },
+      isPersona: true,
+      isBanned: { $ne: true },
+    },
+    { $unset: { personaLoginCodeHash: 1, personaLoginCodeExpiresAt: 1 } },
+    { new: true }
+  ).lean();
+  if (!user) return null;
+  const persona = { ...user, id: String(user._id) };
+  return isPersonaAccount(persona) ? persona : null;
+}
+
+/** The most recent persona minted under `name`, live or not, or null. */
+export async function findPersonaByName(name: string) {
+  const user = await User.findOne({ isPersona: true, personaName: name }).sort({ createdAt: -1 }).lean();
+  return user ? { ...user, id: String(user._id) } : null;
+}
 
 const HOSTNAME_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
@@ -162,29 +226,12 @@ export async function countPersonaCaps(now: Date): Promise<{ mintedLast24h: numb
 
 export const personaExpiresAt = (now: Date, ttlDays: number) => new Date(now.getTime() + ttlDays * DAY_MS);
 
-/** The audit actor for everything done with the persona key; there is no user behind it. */
-export const PERSONA_KEY_ACTOR: AuditActor = {
-  kind: 'script',
-  scope: 'platform',
-  name: 'Persona mint key',
-  wasAdmin: false,
-};
-
 const PERSONA_SWEEP_ACTOR: AuditActor = {
   kind: 'system',
   scope: 'platform',
   name: 'Persona expiry sweep',
   wasAdmin: false,
 };
-
-/** Audit context for a persona-key request: a script caller, not the admin UI or a user API key. */
-export const personaAuditContext = (req: Request): StoredAuditContext => ({
-  ip: getClientIp(req),
-  userAgent: req.headers['user-agent'],
-  requestId: req.requestId,
-  route: req.url?.split('?')[0],
-  source: 'script',
-});
 
 export const personaAuditTarget = (user: { id: string; username?: string | null; email?: string | null }) => ({
   kind: 'user' as const,
@@ -202,6 +249,41 @@ export async function revokePersonaSessions(userId: string, logger?: Logger): Pr
     },
     logger,
   });
+}
+
+/**
+ * Hard-deletes a persona: signs it out everywhere, then deletes through the shared hardDeleteUser
+ * path, which re-checks the persona fence inside the transaction and writes the audit entry there.
+ */
+export async function deletePersonaAccount(
+  req: Request,
+  target: { id: string; username?: string | null; email?: string | null },
+  summary: string
+): Promise<void> {
+  const id = target.id;
+  await revokePersonaSessions(id, req.logger);
+  await hardDeleteUser(
+    id,
+    {
+      deletedBy: req.user?.id ?? 'persona-api',
+      initiatedBy: 'admin',
+      logger: req.logger,
+      assertInTransaction: async () => {
+        if (!isPersonaAccount(await userRepository.findById(id))) {
+          throw new ConflictError('This account is no longer a persona account');
+        }
+      },
+      recordInTransaction: async deleted => {
+        const subject = deleted ?? target;
+        await recordAdminActionFromRequest(req, {
+          action: 'user.persona.deleted',
+          target: personaAuditTarget({ id, username: subject.username, email: subject.email }),
+          summary: `${summary} ${subject.username}`,
+        });
+      },
+    },
+    users => users.delete(id)
+  );
 }
 
 /** PersonaMintEnabled alone, for the sweep: it needs no domain check. */

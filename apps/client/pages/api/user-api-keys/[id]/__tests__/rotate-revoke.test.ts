@@ -54,6 +54,21 @@ vi.mock('@bike4mind/services', () => ({
   userApiKeyService: { rotateUserApiKey, revokeUserApiKey, resolveOwnedApiKey },
 }));
 
+const requireStepUp = vi.hoisted(() => vi.fn(async (_req?: unknown) => undefined));
+vi.mock('@server/auth/stepUp', () => ({ requireStepUp }));
+const scopeAccess = vi.hoisted(() => ({
+  current: {
+    hasOptiAccess: false,
+    hasOverwatchAccess: false,
+    hearthEnabled: false,
+    bypass: true,
+    entitlements: new Set(),
+  },
+}));
+vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
+  resolveApiKeyScopeAccess: vi.fn(async () => scopeAccess.current),
+}));
+
 const notifyApiKeyRotationReown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/apiKeyRotationNotifier', () => ({ notifyApiKeyRotationReown }));
 
@@ -82,6 +97,45 @@ function post(id: string | undefined, body: unknown = {}) {
 
 describe('POST /api/user-api-keys/[id]/rotate', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  describe('a key holding personas:mint', () => {
+    beforeEach(() => {
+      scopeAccess.current = { ...scopeAccess.current, bypass: true };
+      resolveOwnedApiKey.mockResolvedValue({ id: 'key-1', scopes: ['personas:mint'] });
+    });
+
+    it('requires step-up, then rotates', async () => {
+      const { req, res } = post('key-1');
+      await mockRefs.rotateHandler!(req, res);
+      expect(requireStepUp).toHaveBeenCalledWith(req);
+      expect(rotateUserApiKey).toHaveBeenCalled();
+      expect(res._getStatusCode()).toBe(200);
+    });
+
+    it('answers 403 when the owner is no longer offered the scope, without step-up or rotation', async () => {
+      scopeAccess.current = { ...scopeAccess.current, bypass: false };
+      const { req, res } = post('key-1');
+      await expect(mockRefs.rotateHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+      expect(requireStepUp).not.toHaveBeenCalled();
+      expect(rotateUserApiKey).not.toHaveBeenCalled();
+    });
+
+    it('does not rotate when step-up is refused', async () => {
+      requireStepUp.mockRejectedValueOnce(new Error('step-up required'));
+      const { req, res } = post('key-1');
+      await expect(mockRefs.rotateHandler!(req, res)).rejects.toThrow('step-up required');
+      expect(rotateUserApiKey).not.toHaveBeenCalled();
+    });
+  });
+
+  it('skips the persona checks for a key without personas:mint', async () => {
+    resolveOwnedApiKey.mockResolvedValue({ id: 'key-1', scopes: ['me:read'] });
+    scopeAccess.current = { ...scopeAccess.current, bypass: false };
+    const { req, res } = post('key-1');
+    await mockRefs.rotateHandler!(req, res);
+    expect(requireStepUp).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(200);
+  });
 
   it('threads the organizations adapter into rotateUserApiKey and returns 200', async () => {
     const { req, res } = post('key-1');

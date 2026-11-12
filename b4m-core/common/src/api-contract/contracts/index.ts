@@ -13,6 +13,7 @@ import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { getClientConfigContract } from './clientConfig.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
+import { mintPersonaContract, deletePersonaContract } from './personas.contract';
 import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
@@ -262,4 +263,6 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listSkillMarketReviewQueueContract,
   reviewSkillMarketVersionContract,
   postSlackMessageContract,
+  mintPersonaContract,
+  deletePersonaContract,
 ];

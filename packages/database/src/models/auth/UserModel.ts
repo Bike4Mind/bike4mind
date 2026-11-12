@@ -1914,6 +1914,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // See IUser.isPersona. Written only by the persona mint route.
     isPersona: { type: Boolean, required: false },
     personaExpiresAt: { type: Date, required: false },
+    personaName: { type: String, required: false },
+    personaOwnerId: { type: String, required: false },
+    personaLoginCodeHash: { type: String, required: false },
+    personaLoginCodeExpiresAt: { type: Date, required: false },
     firstValueAt: { type: Date, required: false },
   },
   {
@@ -2058,6 +2062,11 @@ UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true },
 UserSchema.index(
   { isPersona: 1, personaExpiresAt: 1 },
   { partialFilterExpression: { isPersona: true }, name: 'user_isPersona_expiresAt' }
+);
+// Login-code redemption looks a persona up by the code's hash; only personas with a pending code carry one.
+UserSchema.index(
+  { personaLoginCodeHash: 1 },
+  { partialFilterExpression: { personaLoginCodeHash: { $type: 'string' } }, name: 'user_personaLoginCodeHash' }
 );
 UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
 // Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration

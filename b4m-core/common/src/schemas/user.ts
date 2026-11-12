@@ -225,6 +225,8 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   isInternal: true,
   isPersona: true,
   personaExpiresAt: true,
+  personaName: true,
+  personaOwnerId: true,
   firstValueAt: true,
   currentCredits: true,
   lastCreditsPurchasedAt: true,

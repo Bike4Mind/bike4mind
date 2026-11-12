@@ -1,8 +1,10 @@
+import { createHash } from 'crypto';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   find: vi.fn(),
   updateOne: vi.fn(),
+  findOneAndUpdate: vi.fn(),
   revokeUserSessions: vi.fn(),
   recordAdminAction: vi.fn(),
 }));
@@ -11,6 +13,7 @@ vi.mock('@bike4mind/database', () => ({
   User: {
     find: (...args: unknown[]) => ({ limit: () => ({ lean: () => h.find(...args) }) }),
     updateOne: h.updateOne,
+    findOneAndUpdate: (...args: unknown[]) => ({ lean: () => h.findOneAndUpdate(...args) }),
     countDocuments: vi.fn(),
   },
   adminAuditLogRepository: {},
@@ -33,8 +36,15 @@ vi.mock('@bike4mind/services', () => ({
   userService: { revokeUserSessions: h.revokeUserSessions },
 }));
 
+import { MintPersonaRequestSchema } from '@bike4mind/common';
+import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import {
-  MintPersonaBodySchema,
+  PERSONA_LOGIN_CODE_TTL_MS,
+  canMintPersonas,
+  hashPersonaLoginCode,
+  issuePersonaLoginCode,
+  mayManagePersona,
+  redeemPersonaLoginCode,
   personaEmailDomainRefusal,
   disableExpiredPersonas,
   readPersonaMintEnabled,
@@ -70,9 +80,9 @@ describe('personaEmailDomainRefusal', () => {
   });
 });
 
-describe('MintPersonaBodySchema', () => {
+describe('MintPersonaRequestSchema', () => {
   it('accepts exactly { name }', () => {
-    expect(MintPersonaBodySchema.safeParse({ name: 'alpha' }).success).toBe(true);
+    expect(MintPersonaRequestSchema.safeParse({ name: 'alpha' }).success).toBe(true);
   });
 
   it.each([
@@ -82,18 +92,18 @@ describe('MintPersonaBodySchema', () => {
     ['a team', { name: 'alpha', team: 'core' }],
     ['credits', { name: 'alpha', initialCredits: 1_000_000 }],
     ['a plan level', { name: 'alpha', level: 'VIPUser' }],
-    ['a username', { name: 'alpha', username: 'erik' }],
-    ['an email', { name: 'alpha', email: 'erik@example.com' }],
+    ['a username', { name: 'alpha', username: 'qauser' }],
+    ['an email', { name: 'alpha', email: 'qauser@example.com' }],
     ['the persona flag', { name: 'alpha', isPersona: false }],
     ['tags', { name: 'alpha', tags: ['Developer'] }],
   ])('rejects a body that also carries %s', (_label, body) => {
-    expect(MintPersonaBodySchema.safeParse(body).success).toBe(false);
+    expect(MintPersonaRequestSchema.safeParse(body).success).toBe(false);
   });
 
-  it.each(['', 'Alpha', 'al pha', 'alpha-1', 'a'.repeat(25), 'admin@x', 'аlpha'])(
+  it.each(['', 'Alpha', 'al pha', 'alpha-1', 'a'.repeat(25), 'admin@x', '\u0430lpha'])(
     'rejects the name %j, which would leave the persona- username shape',
     name => {
-      expect(MintPersonaBodySchema.safeParse({ name }).success).toBe(false);
+      expect(MintPersonaRequestSchema.safeParse({ name }).success).toBe(false);
     }
   );
 });
@@ -134,7 +144,7 @@ describe('isPersonaAccount', () => {
   it.each([
     ['no account', null],
     ['an account without the flag', { ...persona, isPersona: undefined }],
-    ['a flagged account without a persona username', { ...persona, username: 'erik' }],
+    ['a flagged account without a persona username', { ...persona, username: 'qauser' }],
     ['a persona with admin', { ...persona, isAdmin: true }],
     ['a persona with delegated admin permissions', { ...persona, adminPermissions: ['users:delete'] }],
   ])('refuses %s', (_label, user) => {
@@ -227,5 +237,141 @@ describe('readPersonaMintEnabled', () => {
   it('is true when the setting is true', async () => {
     settingsValues.values = { PersonaMintEnabled: true };
     expect(await readPersonaMintEnabled()).toBe(true);
+  });
+});
+
+describe('canMintPersonas', () => {
+  const user = { id: 'u1', tags: [] as string[], isPersona: false, isBanned: false, isAdmin: false };
+
+  it('allows an admin', () => {
+    expect(canMintPersonas({ ...user, isAdmin: true })).toBe(true);
+  });
+
+  it('allows a developer-tagged user', () => {
+    expect(canMintPersonas({ ...user, tags: ['Developer'] })).toBe(true);
+  });
+
+  it('refuses a plain user, and no user at all', () => {
+    expect(canMintPersonas(user)).toBe(false);
+    expect(canMintPersonas(null)).toBe(false);
+    expect(canMintPersonas(undefined)).toBe(false);
+  });
+
+  it('refuses a persona even when it is flagged admin or developer', () => {
+    expect(canMintPersonas({ ...user, isPersona: true, isAdmin: true })).toBe(false);
+    expect(canMintPersonas({ ...user, isPersona: true, tags: ['Developer'] })).toBe(false);
+  });
+
+  it('refuses a banned admin or developer', () => {
+    expect(canMintPersonas({ ...user, isBanned: true, isAdmin: true })).toBe(false);
+    expect(canMintPersonas({ ...user, isBanned: true, tags: ['Developer'] })).toBe(false);
+  });
+
+  it('reads the persisted admin role, which an API key without admin:* has withheld', () => {
+    const owner = { ...user, isAdmin: true };
+    withholdAdminRole(owner);
+    expect(owner.isAdmin).toBe(false);
+    expect(canMintPersonas(owner)).toBe(true);
+  });
+});
+
+describe('mayManagePersona', () => {
+  const user = { id: 'u1', tags: [] as string[], isPersona: false, isBanned: false, isAdmin: false };
+
+  it('allows the owner', () => {
+    expect(mayManagePersona(user, 'u1')).toBe(true);
+  });
+
+  it('refuses another non-admin, and a persona with no recorded owner', () => {
+    expect(mayManagePersona(user, 'u2')).toBe(false);
+    expect(mayManagePersona(user, null)).toBe(false);
+    expect(mayManagePersona(user, undefined)).toBe(false);
+  });
+
+  it('allows an admin on anyone persona, even with the role withheld from the request', () => {
+    const admin = { ...user, id: 'a1', isAdmin: true };
+    withholdAdminRole(admin);
+    expect(mayManagePersona(admin, 'u2')).toBe(true);
+    expect(mayManagePersona(admin, null)).toBe(true);
+  });
+});
+
+describe('persona login codes', () => {
+  const personaDoc = {
+    _id: '64b000000000000000000001',
+    username: 'persona-alpha-123',
+    isPersona: true,
+    isAdmin: false,
+    adminPermissions: [],
+  };
+
+  it('issues a 43-character base64url code and stores only its sha256 hash', async () => {
+    h.updateOne.mockResolvedValue({ matchedCount: 1 });
+    const { code, expiresAt } = await issuePersonaLoginCode(personaDoc._id, NOW);
+
+    expect(code).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(expiresAt).toEqual(new Date(NOW.getTime() + PERSONA_LOGIN_CODE_TTL_MS));
+    expect(hashPersonaLoginCode(code)).toBe(createHash('sha256').update(code).digest('hex'));
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: personaDoc._id, isPersona: true },
+      { $set: { personaLoginCodeHash: hashPersonaLoginCode(code), personaLoginCodeExpiresAt: expiresAt } }
+    );
+    expect(JSON.stringify(h.updateOne.mock.calls[0])).not.toContain(code);
+  });
+
+  it('issues a different code each time', async () => {
+    h.updateOne.mockResolvedValue({ matchedCount: 1 });
+    const a = await issuePersonaLoginCode(personaDoc._id, NOW);
+    const b = await issuePersonaLoginCode(personaDoc._id, NOW);
+    expect(a.code).not.toBe(b.code);
+  });
+
+  it('refuses to issue a code for an account that is not a persona', async () => {
+    h.updateOne.mockResolvedValue({ matchedCount: 0 });
+    await expect(issuePersonaLoginCode(personaDoc._id, NOW)).rejects.toThrow('no longer a persona');
+  });
+
+  it('redeems by hash with an unexpired, enabled, persona-flagged filter, and clears the code', async () => {
+    h.findOneAndUpdate.mockResolvedValue(personaDoc);
+    const code = 'A'.repeat(43);
+
+    const persona = await redeemPersonaLoginCode(code, NOW);
+
+    expect(persona).toMatchObject({ id: personaDoc._id, username: personaDoc.username });
+    expect(h.findOneAndUpdate).toHaveBeenCalledWith(
+      {
+        personaLoginCodeHash: hashPersonaLoginCode(code),
+        personaLoginCodeExpiresAt: { $gt: NOW },
+        isPersona: true,
+        isBanned: { $ne: true },
+      },
+      { $unset: { personaLoginCodeHash: 1, personaLoginCodeExpiresAt: 1 } },
+      { new: true }
+    );
+  });
+
+  it('works once: the second redemption finds nothing and returns null', async () => {
+    h.findOneAndUpdate.mockResolvedValueOnce(personaDoc).mockResolvedValueOnce(null);
+    const code = 'B'.repeat(43);
+    expect(await redeemPersonaLoginCode(code, NOW)).not.toBeNull();
+    expect(await redeemPersonaLoginCode(code, NOW)).toBeNull();
+  });
+
+  it('returns null for an expired, unknown or disabled-persona code (the query matches nothing)', async () => {
+    h.findOneAndUpdate.mockResolvedValue(null);
+    expect(await redeemPersonaLoginCode('C'.repeat(43), NOW)).toBeNull();
+  });
+
+  it.each(['', 'short', 'A'.repeat(42), 'A'.repeat(44), `${'A'.repeat(42)}=`, `${'A'.repeat(42)}+`])(
+    'returns null for the malformed code %j without touching the database',
+    async code => {
+      expect(await redeemPersonaLoginCode(code, NOW)).toBeNull();
+      expect(h.findOneAndUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('returns null when the matched account no longer passes the persona fence', async () => {
+    h.findOneAndUpdate.mockResolvedValue({ ...personaDoc, isAdmin: true });
+    expect(await redeemPersonaLoginCode('D'.repeat(43), NOW)).toBeNull();
   });
 });

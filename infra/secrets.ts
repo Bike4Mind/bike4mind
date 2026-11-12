@@ -148,8 +148,6 @@ export const secrets = {
   // Header secret for the E2E test endpoints (/api/test/*). The deployer seeds a per-tier value
   // on every deploy; local stages: sst secret set E2E_CLEANUP_SECRET <value> --stage <stage>
   E2E_CLEANUP_SECRET: new sst.Secret('E2E_CLEANUP_SECRET', 'not-configured'),
-  // Gates POST/DELETE /api/personas. 'not-configured' keeps the routes 404; set per stage with sst secret set.
-  PERSONA_MINT_KEY: new sst.Secret('PERSONA_MINT_KEY', 'not-configured'),
   // Feature flag for the break-glass emergency-login endpoint.
   // Endpoint returns 404 by default — set to 'true' to activate during an OAuth outage.
   // Set per stage: sst secret set EMERGENCY_LOGIN_ENABLED "true" --stage <stage>

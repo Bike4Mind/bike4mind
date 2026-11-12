@@ -262,6 +262,24 @@ describe('genericApiKeyScopesFor', () => {
     }
   });
 
+  it('offers personas:mint only to the bypass flag (admins and developers), and no product flag opens it', () => {
+    expect(gatedBy('bypass')).toEqual([ApiKeyScope.PERSONAS_MINT]);
+    expect(genericApiKeyScopesFor({ ...NO_ACCESS, bypass: true }).map(s => s.value)).toContain(
+      ApiKeyScope.PERSONAS_MINT
+    );
+    const withEveryProduct = genericApiKeyScopesFor({ ...ALL_ACCESS, bypass: false }).map(s => s.value);
+    expect(withEveryProduct).not.toContain(ApiKeyScope.PERSONAS_MINT);
+  });
+
+  it('keys the cache on bypass, so a bypass viewer never receives the list built for a non-bypass one', () => {
+    const without = genericApiKeyScopesFor({ ...ALL_ACCESS, bypass: false });
+    const withBypass = genericApiKeyScopesFor({ ...ALL_ACCESS, bypass: true });
+    expect(withBypass).not.toBe(without);
+    expect(withBypass.map(s => s.value)).toContain(ApiKeyScope.PERSONAS_MINT);
+    expect(without.map(s => s.value)).not.toContain(ApiKeyScope.PERSONAS_MINT);
+    expect(genericApiKeyScopesFor({ ...ALL_ACCESS, bypass: false })).toBe(without);
+  });
+
   it('registers every optihashi:*, hearth:*, overwatch:* and marketing-reports:* catalog scope as gated', () => {
     const productScopes = USER_API_KEY_SCOPES.map(s => s.value).filter(v =>
       /^(optihashi|hearth|overwatch|marketing-reports):/.test(v)
@@ -284,5 +302,11 @@ describe('isApiKeyScopeOffered', () => {
     expect(isApiKeyScopeOffered(ApiKeyScope.READ_FILES, NO_ACCESS)).toBe(true);
     expect(isApiKeyScopeOffered(ApiKeyScope.HEARTH_READ, NO_ACCESS)).toBe(false);
     expect(isApiKeyScopeOffered(ApiKeyScope.HEARTH_READ, { ...NO_ACCESS, hearthEnabled: true })).toBe(true);
+  });
+
+  it('offers personas:mint when bypass holds and not otherwise', () => {
+    expect(isApiKeyScopeOffered(ApiKeyScope.PERSONAS_MINT, { ...NO_ACCESS, bypass: true })).toBe(true);
+    expect(isApiKeyScopeOffered(ApiKeyScope.PERSONAS_MINT, NO_ACCESS)).toBe(false);
+    expect(isApiKeyScopeOffered(ApiKeyScope.PERSONAS_MINT, { ...ALL_ACCESS, bypass: false })).toBe(false);
   });
 });

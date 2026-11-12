@@ -519,7 +519,7 @@ describe('updateUser', () => {
       existsOtherUserWithUsername: vi.fn().mockResolvedValue(false),
     };
     await expect(
-      updateUser('user-persona', { username: 'erik' }, { db: { users: mockUserRepository as never } })
+      updateUser('user-persona', { username: 'qauser' }, { db: { users: mockUserRepository as never } })
     ).rejects.toThrow(ForbiddenError);
     expect(mockUserRepository.update).not.toHaveBeenCalled();
 
