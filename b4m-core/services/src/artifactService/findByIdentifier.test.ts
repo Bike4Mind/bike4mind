@@ -28,6 +28,12 @@ describe('findByIdentifier', () => {
     await expect(run('sharee', [shared]).result).resolves.toEqual({ id: 'artifact_react_x_1_0' });
   });
 
+  it('projects only the fields the read rule, owner preference and sort need', async () => {
+    const { result, find } = run('owner', [row()]);
+    await result;
+    expect(find.mock.calls[0][1]).toEqual({ id: 1, userId: 1, visibility: 1, permissions: 1, createdAt: 1 });
+  });
+
   it('returns null for a stranger on a private row', async () => {
     await expect(run('stranger', [row()]).result).resolves.toBeNull();
   });
@@ -65,7 +71,8 @@ describe('findByIdentifier', () => {
         type: 'react',
         deletedAt: null,
         $or: [{ identifier: 'x' }, { identifier: { $exists: false }, 'metadata.originalIdentifier': 'x' }],
-      })
+      }),
+      expect.any(Object)
     );
     expect(find.mock.calls[0][0]).not.toHaveProperty('userId');
   });
