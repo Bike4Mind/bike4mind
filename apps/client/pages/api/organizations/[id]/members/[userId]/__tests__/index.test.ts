@@ -93,12 +93,15 @@ const request = (over: Record<string, unknown> = {}) => {
   return { req, res };
 };
 
+beforeEach(() => {
+  txState.committed = false;
+});
+
 describe('DELETE /api/organizations/[id]/members/[userId]', () => {
   beforeEach(() => {
     revokeAccess.mockClear();
     lakeConfigAuditPrincipal.mockClear();
     lakeConfigAuditPrincipal.mockReturnValue(undefined);
-    txState.committed = false;
   });
 
   it('declares datalake:share at the door', () => {

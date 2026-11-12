@@ -10,6 +10,7 @@ import { deleteOrganization, deleteSchema } from './delete';
 import { listOwn } from './listOwn';
 import { listPendingUsers } from './listPendingUsers';
 import { revokeAccess } from './revokeAccess';
+import { getMemberOffboardingInventory } from './getMemberOffboardingInventory';
 import { leave } from './leave';
 import { transferOwnership } from './transferOwnership';
 import type { TransferOwnershipResult } from './transferOwnership';
@@ -56,6 +57,7 @@ export {
   listOwn,
   listPendingUsers,
   revokeAccess,
+  getMemberOffboardingInventory,
   leave,
   transferOwnership,
   setOrganizationManager,
