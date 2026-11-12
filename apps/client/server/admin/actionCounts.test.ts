@@ -33,6 +33,7 @@ vi.mock('@bike4mind/database', () => ({
   modelDiscoveryStateRepository: { countPendingSuggestions: m.countPendingSuggestions },
   sreErrorTrackingRepository: { countFailed: m.countFailed },
   countNewFeedback: m.countNewFeedback,
+  oldestNewFeedbackAt: vi.fn(),
 }));
 vi.mock('@bike4mind/database/infra', () => ({ secretRotationRepository: { countOverdue: m.countOverdue } }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: m.loggerError } }));
