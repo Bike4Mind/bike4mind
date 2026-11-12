@@ -85,8 +85,7 @@ export type ShadowDetectionSignalRule = 'above' | 'atLeast' | 'below' | 'atMost'
  * strongLink (blockedSignupIpLinks, hoursToBlockedLink), accountCampaignSignals (directMembers, axes),
  * signupDomainHoldAssessment (confidence) and youngAccountSpendShadowDetections (farmSignals,
  * apiOnlySpend, minutesToApiKey, minutesToAuthenticator, youngNetworkPeers, linkedFlaggedAccounts).
- * A key not listed here is shown as context, never as
- * the reason a detector fired.
+ * A key not listed here is shown as context, never as the reason a detector fired.
  */
 export const SHADOW_DETECTION_SIGNAL_RULES: Readonly<Record<string, ShadowDetectionSignalRule>> = {
   ipSignups: 'above',
