@@ -52,6 +52,15 @@ export async function getActiveSubscriptionsForUser(
 }
 
 /**
+ * The ACTIVE subscriptions an organization holds itself. What its service account (the principal behind
+ * the org's org-owned API keys) is entitled by: it has no seat, tags or subscriptions of its own, so a
+ * product scope on an org key is judged against the org's plan, at mint and on every request.
+ */
+export async function getActiveSubscriptionsForOrganization(organizationId: string): Promise<ActiveSubscription[]> {
+  return subscriptionRepository.findActiveSubscriptionsByOwners(SubscriptionOwnerType.Organization, [organizationId]);
+}
+
+/**
  * The billing check must distinguish no plan from an unreadable plan: the entitlement fallback
  * above under-grants access, but reusing it here would charge a paid seat as a free-tier holder.
  */
@@ -84,7 +93,9 @@ export async function getRequestActiveSubscriptions(
   if (req.activeSubscriptions && (!options?.strict || req.activeSubscriptionsStrict)) {
     return req.activeSubscriptions;
   }
-  const subscriptions = await getActiveSubscriptionsForUser(user.id, options);
+  const subscriptions = user.serviceAccountOrganizationId
+    ? await getActiveSubscriptionsForOrganization(user.serviceAccountOrganizationId)
+    : await getActiveSubscriptionsForUser(user.id, options);
   req.activeSubscriptions = subscriptions;
   req.activeSubscriptionsStrict = options?.strict === true;
   return subscriptions;

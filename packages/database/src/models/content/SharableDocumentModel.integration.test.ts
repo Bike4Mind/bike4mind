@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
-import { KnowledgeType } from '@bike4mind/common';
+import { KnowledgeType, attachOrgApiKeyReach, type IUserDocument } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { FabFile, fabFileRepository } from './FabFileModel';
 import { Session, sessionRepository } from '../auth/SessionModel';
@@ -270,6 +270,66 @@ describe('ShareableDocumentRepository.findAllUpdateAccessByIds', () => {
     ]);
 
     expect(got.map(doc => doc.id).sort()).toEqual([viaUser.id, viaGroup.id].sort());
+  });
+});
+
+// An org-owned API key's service account is in no group; its granted groups (attached per request,
+// b4m-core/common utils/orgApiKeyReach.ts) open the read arms only.
+describe('ShareableDocumentRepository with an org-owned API key reach (sessions)', () => {
+  afterEach(async () => {
+    await Session.deleteMany({});
+  });
+
+  const seedNotebook = (overrides: Record<string, unknown> = {}) =>
+    Session.create({ name: 'n', userId: 'member-1', lastUpdated: new Date(), firstCreated: new Date(), ...overrides });
+  const keyUser = (readGroupIds: string[]) =>
+    attachOrgApiKeyReach({ id: 'svc-1', groups: [] as string[] } as unknown as IUserDocument, {
+      organizationId: 'org-1',
+      readGroupIds,
+      dataLakeOrgIds: [],
+    });
+  const everyPermission = ['read', 'update', 'delete', 'share'];
+
+  it('reads a notebook shared with a granted group', async () => {
+    const shared = await seedNotebook({ groups: [{ groupId: 'grp-1', permissions: ['read'] }] });
+    const user = keyUser(['grp-1']);
+    expect((await sessionRepository.shareable.findAccessibleById(user, shared.id))?.id).toBe(shared.id);
+    expect((await sessionRepository.shareable.findAllAccessibleByIds(user, [shared.id])).map(doc => doc.id)).toEqual([
+      shared.id,
+    ]);
+    expect((await sessionRepository.shareable.findAllShared(user)).map(doc => doc.id)).toEqual([shared.id]);
+  });
+
+  it('cannot update, delete or reshare through the granted group, even when the share allows it', async () => {
+    const shared = await seedNotebook({ groups: [{ groupId: 'grp-1', permissions: everyPermission }] });
+    const user = keyUser(['grp-1']);
+    expect(await sessionRepository.shareable.findUpdateAccessById(user, shared.id)).toBeNull();
+    expect(await sessionRepository.shareable.findAllUpdateAccessByIds(user, [shared.id])).toEqual([]);
+    expect(await sessionRepository.shareable.findShareAccessById(user, shared.id)).toBeNull();
+  });
+
+  it("cannot read a member's private notebook or one shared with an ungranted group", async () => {
+    const privateNotebook = await seedNotebook();
+    const otherGroup = await seedNotebook({ groups: [{ groupId: 'grp-2', permissions: ['read'] }] });
+    const user = keyUser(['grp-1']);
+    expect(await sessionRepository.shareable.findAccessibleById(user, privateNotebook.id)).toBeNull();
+    expect(await sessionRepository.shareable.findAccessibleById(user, otherGroup.id)).toBeNull();
+    expect(await sessionRepository.shareable.findAllAccessible(user)).toEqual([]);
+  });
+
+  it('refuses the read once the notebook is unshared from the granted group', async () => {
+    const shared = await seedNotebook({ groups: [{ groupId: 'grp-1', permissions: ['read'] }] });
+    const user = keyUser(['grp-1']);
+    expect((await sessionRepository.shareable.findAccessibleById(user, shared.id))?.id).toBe(shared.id);
+
+    await Session.updateOne({ _id: shared.id }, { $set: { groups: [] } });
+
+    expect(await sessionRepository.shareable.findAccessibleById(user, shared.id)).toBeNull();
+  });
+
+  it('reads nothing shared with a group when the reach is empty (default deny)', async () => {
+    const shared = await seedNotebook({ groups: [{ groupId: 'grp-1', permissions: ['read'] }] });
+    expect(await sessionRepository.shareable.findAccessibleById(keyUser([]), shared.id)).toBeNull();
   });
 });
 

@@ -1,4 +1,4 @@
-import { getDataLakeTags } from '@bike4mind/common';
+import { getDataLakeTags, readableGroupIds } from '@bike4mind/common';
 import { holdsDataLakeReadScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import type { ScopedRequest } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 
@@ -31,7 +31,7 @@ export function buildUserFileScope(user: { groups?: string[] | null; tags?: stri
   dataLakeTags: string[];
 } {
   return {
-    userGroups: user.groups ?? [],
+    userGroups: readableGroupIds(user),
     dataLakeTags: getDataLakeTags(user.tags ?? []),
   };
 }

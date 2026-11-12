@@ -1,4 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, attachOrgApiKeyReach, orgApiKeyReachOf } from '@bike4mind/common';
 
 const PERSISTED_ADMIN_ROLE = Symbol('persistedAdminRole');
 
@@ -67,9 +67,31 @@ type UsersById = { findById: (id: string) => PromiseLike<AdminFlagged | null> };
  * back carries the same withheld role as `req.user`. Every other member is passed through unchanged.
  */
 export function ownerWithheldUsers<R extends UsersById>(ownerId: string, users: R): R {
+  return ownerRereadAs(ownerId, users, withholdAdminRole);
+}
+
+/**
+ * The `users` adapter for a service that re-reads the caller by id: the copy it gets back carries
+ * what apiKeyAuth applied to `req.user` - the withheld admin role, and an org-owned key's reach
+ * (b4m-core/common utils/orgApiKeyReach.ts), without which the re-read user would read as the bare
+ * service account and every org-shared resource would 404.
+ */
+export function requesterScopedUsers<R extends UsersById>(req: ApiKeyRequest, users: R): R {
+  if (!req.user) return users;
+  const withhold = adminRoleWithheldFor(req.apiKeyInfo);
+  const reach = orgApiKeyReachOf(req.user);
+  if (!withhold && !reach) return users;
+  return ownerRereadAs(String(req.user.id), users, user => {
+    if (withhold) withholdAdminRole(user);
+    if (reach) attachOrgApiKeyReach(user, reach);
+    return user;
+  });
+}
+
+function ownerRereadAs<R extends UsersById>(ownerId: string, users: R, apply: (user: AdminFlagged) => AdminFlagged): R {
   const findById = async (id: string) => {
     const user = await users.findById(id);
-    return user && String(id) === ownerId ? withholdAdminRole(user) : user;
+    return user && String(id) === ownerId ? apply(user) : user;
   };
   // A Proxy rather than Object.create(users): Mongoose statics such as hydrate() need the real Model as `this`.
   // Only inherited methods are bound; own function-valued fields (a repository's `model`) pass through as-is.
@@ -80,9 +102,4 @@ export function ownerWithheldUsers<R extends UsersById>(ownerId: string, users: 
       return typeof value === 'function' && !Object.hasOwn(target, prop) ? value.bind(target) : value;
     },
   });
-}
-
-export function requesterScopedUsers<R extends UsersById>(req: ApiKeyRequest, users: R): R {
-  if (!req.user || !adminRoleWithheldFor(req.apiKeyInfo)) return users;
-  return ownerWithheldUsers(String(req.user.id), users);
 }

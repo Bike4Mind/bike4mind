@@ -1,8 +1,15 @@
-import { type IOrgApiKeyView, type IUserApiKeyDocument, type IUserDocument } from '@bike4mind/common';
-import { organizationRepository, userRepository } from '@bike4mind/database';
+import {
+  type IOrgApiKeyView,
+  type IUserApiKeyDocument,
+  type IUserDocument,
+  type OrgApiKeyGrant,
+} from '@bike4mind/common';
+import { groupRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userApiKeyService } from '@bike4mind/services';
-import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { genericApiKeyScopesFor, isOrgApiKeyScopeOffered } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { resolveApiKeyScopeAccessForOrganization } from '@server/entitlements/apiKeyScopeAccess';
 
 /**
  * Org-owned API keys: held by the org's service account (b4m-core/common constants/orgServiceAccount.ts)
@@ -54,6 +61,7 @@ export function toOrgApiKeyView(key: IUserApiKeyDocument, creatorNames: Map<stri
     name: key.name,
     keyPrefix: key.keyPrefix,
     scopes: key.scopes,
+    grants: key.orgOwned?.grants ?? [],
     status: key.status,
     createdAt: key.createdAt,
     expiresAt: key.expiresAt,
@@ -62,4 +70,56 @@ export function toOrgApiKeyView(key: IUserApiKeyDocument, creatorNames: Map<stri
     creditsUsed: key.usage?.totalSpendCredits ?? 0,
     createdBy: creatorId ? { id: creatorId, name: creatorNames.get(creatorId) ?? null } : null,
   };
+}
+
+/** What an admin may pick for an org key: the scopes the org is entitled to and the org's live groups. */
+export async function orgApiKeyOptions(
+  organizationId: string
+): Promise<{ scopes: string[]; groups: { id: string; name: string }[] }> {
+  const [access, groups] = await Promise.all([
+    resolveApiKeyScopeAccessForOrganization(organizationId),
+    groupRepository.findByOrganization(organizationId),
+  ]);
+  return {
+    scopes: genericApiKeyScopesFor(access).map(scope => scope.value),
+    groups: groups.map(group => ({ id: String(group.id), name: group.name })),
+  };
+}
+
+/** Refuses any scope whose product gate the org does not pass (judged on the org, never the admin). */
+export async function assertOrgApiKeyScopesOffered(organizationId: string, scopes: readonly string[]): Promise<void> {
+  const access = await resolveApiKeyScopeAccessForOrganization(organizationId);
+  const refused = scopes.filter(scope => !isOrgApiKeyScopeOffered(scope, access));
+  if (refused.length > 0) {
+    throw new ForbiddenError(`Scope not available to this organization: ${refused.join(', ')}`);
+  }
+}
+
+/**
+ * Validates and de-duplicates an org key's grants: an `organization` grant must name this org, a
+ * `group` grant one of its live groups. Anything else is a 400 rather than a silently dead grant.
+ */
+export async function normalizeOrgApiKeyGrants(
+  organizationId: string,
+  grants: readonly OrgApiKeyGrant[]
+): Promise<OrgApiKeyGrant[]> {
+  if (grants.some(grant => grant.resourceType === 'organization' && grant.resourceId !== organizationId)) {
+    throw new BadRequestError('An organization grant must name this organization');
+  }
+  const groupIds = grants.flatMap(grant => (grant.resourceType === 'group' ? [grant.resourceId] : []));
+  if (groupIds.length > 0) {
+    const orgGroupIds = new Set(
+      (await groupRepository.findByOrganization(organizationId)).map(group => String(group.id))
+    );
+    if (groupIds.some(id => !orgGroupIds.has(id))) {
+      throw new BadRequestError("A group grant must name one of this organization's groups");
+    }
+  }
+  const seen = new Set<string>();
+  return grants.filter(grant => {
+    const key = `${grant.resourceType}:${grant.resourceId}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

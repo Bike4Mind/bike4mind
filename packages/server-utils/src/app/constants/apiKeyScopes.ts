@@ -466,16 +466,17 @@ export const isApiKeyScopeOffered = (scope: ApiKeyScopeValue, access: ApiKeyScop
 };
 
 /**
- * The scopes an org-owned key may carry (pages/api/organizations/[id]/api-keys, OrgApiKeysSection's
- * picker): the generic built-in scopes with no product or entitlement gate. Such a key is held by the
- * org's service account, which has no subscription or entitlements, so a gated or contributed scope
- * would be refused at use however it was minted.
+ * Whether an org-owned key may carry `scope`: any generic-modal scope, with product and entitlement
+ * gates judged against the ORG (resolveApiKeyScopeAccessForOrganization), never a member. The key's
+ * principal is the org's service account, whose request-time entitlements are the org plan's
+ * (getRequestActiveSubscriptions), so a scope offered here is one its routes later admit.
+ * Validated by pages/api/organizations/[id]/api-keys on create and edit; the picker lists
+ * `genericApiKeyScopesFor` over the same access.
  */
-export const ORG_API_KEY_SCOPES: readonly ApiKeyScopeOption[] = GENERIC_MODAL_API_KEY_SCOPES.filter(
-  s => isBuiltInApiKeyScope(s.value) && !GATED_API_KEY_SCOPES[s.value] && !s.requiredEntitlement
-);
-
-export const isOrgApiKeyScope = (value: string): boolean => ORG_API_KEY_SCOPES.some(s => s.value === value);
+export const isOrgApiKeyScopeOffered = (scope: string, access: ApiKeyScopeAccess): boolean => {
+  const option = GENERIC_MODAL_API_KEY_SCOPES.find(s => s.value === scope);
+  return !!option && isApiKeyScopeOffered(option.value, access);
+};
 
 // One list per access combination, so callers get a stable reference (NewKeyModal re-seeds its
 // selection when the identity changes).

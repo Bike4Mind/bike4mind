@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { ApiKeyScope, CONFINED_API_KEY_SCOPES, isBuiltInApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
 import {
   USER_API_KEY_SCOPES,
   GENERIC_MODAL_API_KEY_SCOPES,
@@ -11,8 +11,7 @@ import {
   isApiKeyScopeOffered,
   type ApiKeyScopeAccess,
   genericApiKeyScopesFor,
-  ORG_API_KEY_SCOPES,
-  isOrgApiKeyScope,
+  isOrgApiKeyScopeOffered,
 } from './apiKeyScopes';
 
 describe('apiKeyScopes catalog', () => {
@@ -313,25 +312,21 @@ describe('isApiKeyScopeOffered', () => {
   });
 });
 
-describe('ORG_API_KEY_SCOPES', () => {
-  it('offers only ungated built-in generic scopes', () => {
-    expect(ORG_API_KEY_SCOPES.length).toBeGreaterThan(0);
-    for (const scope of ORG_API_KEY_SCOPES) {
-      expect(GENERIC_MODAL_API_KEY_SCOPES).toContain(scope);
-      expect(isBuiltInApiKeyScope(scope.value)).toBe(true);
-      expect(scope.requiredEntitlement).toBeUndefined();
-    }
+describe('isOrgApiKeyScopeOffered', () => {
+  it('offers an ungated generic scope to any organization', () => {
+    expect(isOrgApiKeyScopeOffered(ApiKeyScope.READ_FILES, NO_ACCESS)).toBe(true);
   });
 
-  it('refuses every product scope', () => {
-    for (const scope of Object.keys(GATED_API_KEY_SCOPES)) {
-      expect(isOrgApiKeyScope(scope)).toBe(false);
-    }
+  it('offers a product scope only when the organization holds the product', () => {
+    expect(isOrgApiKeyScopeOffered(ApiKeyScope.HEARTH_READ, NO_ACCESS)).toBe(false);
+    expect(isOrgApiKeyScopeOffered(ApiKeyScope.HEARTH_READ, { ...NO_ACCESS, hearthEnabled: true })).toBe(true);
   });
 
-  it('refuses every contributed scope', () => {
-    for (const scope of USER_API_KEY_SCOPES.filter(s => !isBuiltInApiKeyScope(s.value))) {
-      expect(isOrgApiKeyScope(scope.value)).toBe(false);
+  it('refuses dedicated-flow and unknown scopes whatever the access', () => {
+    const everything: ApiKeyScopeAccess = { ...NO_ACCESS, bypass: true };
+    for (const scope of DEDICATED_FLOW_SCOPES) {
+      expect(isOrgApiKeyScopeOffered(scope, everything)).toBe(false);
     }
+    expect(isOrgApiKeyScopeOffered('not:a-scope', everything)).toBe(false);
   });
 });

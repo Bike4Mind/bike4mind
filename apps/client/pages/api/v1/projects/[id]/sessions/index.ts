@@ -17,6 +17,8 @@ import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { toPublicProject } from '@server/projects/toPublicProject';
 import { toPublicSession } from '@server/sessions/toPublicSession';
 import { attachSessionsToProject } from '@server/projects/attachSessionsToProject';
+import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { projectItemIdsReadableBy } from '@server/projects/projectItemReach';
 
 const CURSOR_SCOPE = 'v1.projects.sessions';
 
@@ -29,7 +31,12 @@ const listRoute = nextRouteForContract(listProjectSessionsContract, {
   const { limit, cursor } = req.validatedQuery;
 
   // Same reach as GET /api/v1/projects/{id}; answers 404 for anything the caller cannot read.
-  const project = await getReadableProject(req.user.id, req.validatedParams.id);
+  // The request-scoped users adapter, so an org-owned key's read grants survive the service's re-read.
+  const project = await projectService.get(
+    req.user.id,
+    { id: req.validatedParams.id },
+    { db: { projects: projectRepository, users: requesterScopedUsers(req, userRepository) } }
+  );
 
   // Scoped to the project, so a cursor minted while paging one project is a 422 on another.
   const cursorScope = `${CURSOR_SCOPE}.${project.id}`;
@@ -39,7 +46,8 @@ const listRoute = nextRouteForContract(listProjectSessionsContract, {
     throw new UnprocessableEntityError('Invalid cursor');
   }
 
-  const page = await sessionRepository.findPageByIds(project.sessionIds, { afterId, limit });
+  const sessionIds = await projectItemIdsReadableBy(req.user, project.sessionIds, sessionRepository);
+  const page = await sessionRepository.findPageByIds(sessionIds, { afterId, limit });
   const lastId = page.data.at(-1)?.id;
 
   return res.json({

@@ -20,6 +20,7 @@ import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKe
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { toPublicProject } from '@server/projects/toPublicProject';
+import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 // Named so every project id shares one bucket per method instead of one per pathname.
 const perUserRateLimit = (bucket: string) =>
@@ -31,7 +32,12 @@ const getAccessibleProject = (userId: string, id: string) =>
 const getRoute = nextRouteForContract(getProjectContract, {
   rateLimit: perUserRateLimit('/api/v1/projects/[id]'),
 }).get(async (req, res) => {
-  const project = await getAccessibleProject(req.user.id, req.validatedParams.id);
+  // The request-scoped users adapter, so an org-owned key's read grants survive the service's re-read.
+  const project = await projectService.get(
+    req.user.id,
+    { id: req.validatedParams.id },
+    { db: { projects: projectRepository, users: requesterScopedUsers(req, userRepository) } }
+  );
   return res.json(toPublicProject(project));
 });
 

@@ -341,11 +341,23 @@ export const isExchangeKeyMetadata = (
  * An org-owned key as the org management surface shows it (pages/api/organizations/[id]/api-keys).
  * A projection, never the stored document: no secret material and no minter location metadata.
  */
+/**
+ * One unit of an org-owned key's reach, read-only. Resolved on every request
+ * (apps/client/server/organizations/orgApiKeyReach.ts), so it never outlives the share it rides on:
+ * - `organization`: everything shared with any of the org's groups, plus the org's data lakes.
+ * - `group`: everything shared with that one org group.
+ * Never a member's personal content: a share to an individual member (`users[]`) is not reached.
+ */
+export type OrgApiKeyGrant =
+  | { resourceType: 'organization'; resourceId: string; permission: 'read' }
+  | { resourceType: 'group'; resourceId: string; permission: 'read' };
+
 export interface IOrgApiKeyView {
   id: string;
   name: string;
   keyPrefix: string;
   scopes: ApiKeyScopeValue[];
+  grants: OrgApiKeyGrant[];
   status: ApiKeyStatus;
   createdAt?: Date;
   expiresAt?: Date;
@@ -507,8 +519,11 @@ export interface IUserApiKey {
    * member, so it outlives whoever created it. Records that creator for audit. Deliberately not
    * `metadata.createdByUserId`, which marks a platform-admin-provisioned key and bypasses the paid
    * access gate. Rotation never re-owns an org-owned key to the rotating admin.
+   *
+   * `grants` is the key's reach into content shared with the org (see {@link OrgApiKeyGrant}).
+   * Absent or empty = default deny: the key reaches only what the service account itself created.
    */
-  orgOwned?: { createdByUserId: string };
+  orgOwned?: { createdByUserId: string; grants?: OrgApiKeyGrant[] };
   /** Optional white-label config for an embed key (see {@link IEmbedBranding}). */
   branding?: IEmbedBranding;
   /**
