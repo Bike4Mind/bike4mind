@@ -213,16 +213,15 @@ export function useDeleteOrganization() {
       return orgId;
     },
     onSuccess: async orgId => {
-      // The settings page stays mounted until the caller navigates away, so any refetch of an
-      // org-scoped query (e.g. invites) hits a now-missing org, 401s, and is read as an expired session.
-      const deletedOrgKey = ['organizations', orgId];
-      await queryClient.cancelQueries({ queryKey: deletedOrgKey });
-      // Not awaited: the toast and the caller's redirect should not wait on the list refetch.
+      // The settings page stays mounted until the caller navigates away. Refetching any org-scoped query
+      // (detail, invites) hits a now-missing org, 401s, and is read as an expired session. removeQueries
+      // is avoided for the same reason: a mounted observer refetches the query it just lost, so the
+      // deleted org's cache entries are left to garbage-collect after the page unmounts.
+      await queryClient.cancelQueries({ queryKey: ['organizations', orgId] });
       void queryClient.invalidateQueries({
         queryKey: ['organizations'],
         predicate: query => query.queryKey[1] !== orgId,
       });
-      queryClient.removeQueries({ queryKey: deletedOrgKey });
       toast.success('Organization deleted successfully');
     },
     onError: (error: unknown) => {
