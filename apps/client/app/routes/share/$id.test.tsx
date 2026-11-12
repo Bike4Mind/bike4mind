@@ -241,6 +241,17 @@ describe('SharePage', () => {
     expect(navigateMock).toHaveBeenCalledWith({ to: '/organizations/$id', params: { id: 'org-1' } });
   });
 
+  it('sends the minter of an org link through accept to the already-member screen', async () => {
+    vi.mocked(fetchInvite).mockResolvedValue({ ...(orgLink as object), username: 'me' } as never);
+    acceptRejects('You are already a member of this organization', 409);
+    renderPage();
+
+    fireEvent.click(await screen.findByLabelText('Accept'));
+
+    expect(await screen.findByTestId('share-accept-member-modal')).toBeTruthy();
+    expect(inviteMutations.accept).toHaveBeenCalledTimes(1);
+  });
+
   it('still goes home on an unmapped accept failure', async () => {
     vi.mocked(fetchInvite).mockResolvedValue(orgLink);
     acceptRejects('Something else', 500);

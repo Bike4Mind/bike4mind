@@ -152,7 +152,7 @@ const SharePage = () => {
     setLoading(true);
 
     const validInvites = invites.filter(item =>
-      action === 'accept' ? item.invite?.username !== currentUser?.username : true
+      action === 'accept' ? isOrgShareLink(item) || item.invite?.username !== currentUser?.username : true
     );
 
     try {
