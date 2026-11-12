@@ -34,6 +34,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import QueueIcon from '@mui/icons-material/Queue';
 import SearchIcon from '@mui/icons-material/Search';
+import ArticleIcon from '@mui/icons-material/Article';
 import { toast } from 'sonner';
 import {
   useDlqQueues,
@@ -211,6 +212,21 @@ const MessageDrawer: React.FC<{
             </Box>
           )}
 
+          {message.logsUrl && (
+            <Button
+              component="a"
+              href={message.logsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              size="sm"
+              variant="outlined"
+              startDecorator={<ArticleIcon />}
+              sx={{ alignSelf: 'flex-start' }}
+              data-testid="dlq-drawer-logs"
+            >
+              View consumer logs
+            </Button>
+          )}
           {expiry && (
             <Box>
               <Typography level="body-sm" fontWeight="bold">
@@ -338,13 +354,15 @@ const DlqReplayTab: React.FC = () => {
     return queues.find(q => q.label === selectedQueue) ?? null;
   }, [queues, selectedQueue]);
 
+  const hasReplayDestination = selectedQueueInfo !== null && selectedQueueInfo.hasReplayDestination !== false;
+
   const handleReplayAll = () => {
-    if (!selectedQueue) return;
+    if (!selectedQueue || !hasReplayDestination) return;
     setConfirmOpen(true);
   };
 
   const confirmReplay = async () => {
-    if (!selectedQueue) return;
+    if (!selectedQueue || !hasReplayDestination) return;
     setConfirmOpen(false);
     try {
       const result = await replayMutation.mutateAsync({
@@ -370,7 +388,7 @@ const DlqReplayTab: React.FC = () => {
   };
 
   const confirmSingleReplay = async () => {
-    if (!selectedQueue || !singleReplayConfirm) return;
+    if (!selectedQueue || !singleReplayConfirm || !hasReplayDestination) return;
     const { messageId, receiptHandle, body } = singleReplayConfirm;
     setSingleReplayConfirm(null);
     try {
@@ -541,22 +559,44 @@ const DlqReplayTab: React.FC = () => {
                   ` (${selectedQueueInfo.approximateNotVisibleCount} in flight)`}
               </Typography>
             </Stack>
-            <AdminPermissionAction requirement="settings:manage">
-              {permissionDisabled => (
+            <Stack direction="row" spacing={1}>
+              {selectedQueueInfo.logsUrl && (
                 <Button
-                  color="warning"
-                  startDecorator={<ReplayIcon />}
-                  onClick={handleReplayAll}
-                  loading={replayMutation.isPending}
-                  disabled={permissionDisabled || !selectedQueueInfo || selectedQueueInfo.approximateMessageCount === 0}
-                  data-testid="dlq-replay-all"
+                  component="a"
+                  href={selectedQueueInfo.logsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  variant="outlined"
+                  startDecorator={<ArticleIcon />}
+                  data-testid="dlq-queue-logs"
                 >
-                  Replay All (up to 100)
+                  View logs
                 </Button>
               )}
-            </AdminPermissionAction>
+              <AdminPermissionAction requirement="settings:manage">
+                {permissionDisabled => (
+                  <Button
+                    color="warning"
+                    startDecorator={<ReplayIcon />}
+                    onClick={handleReplayAll}
+                    loading={replayMutation.isPending}
+                    disabled={
+                      permissionDisabled || !hasReplayDestination || selectedQueueInfo.approximateMessageCount === 0
+                    }
+                    data-testid="dlq-replay-all"
+                  >
+                    Replay All (up to 100)
+                  </Button>
+                )}
+              </AdminPermissionAction>
+            </Stack>
           </Stack>
           {selectedQueueInfo.description !== undefined && <QueueHint queue={selectedQueueInfo} />}
+          {!hasReplayDestination && (
+            <Alert color="neutral" sx={{ mt: 1.5 }} data-testid="dlq-replay-unavailable">
+              No replay destination is available for this queue. You can still inspect its messages.
+            </Alert>
+          )}
         </Card>
       )}
 
@@ -684,6 +724,21 @@ const DlqReplayTab: React.FC = () => {
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
+                      {msg.logsUrl && (
+                        <Tooltip title="View consumer logs around the send time">
+                          <IconButton
+                            size="sm"
+                            component="a"
+                            href={msg.logsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            data-testid={`dlq-logs-${msg.messageId}`}
+                          >
+                            <ArticleIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
                       <AdminPermissionAction requirement="settings:manage">
                         {permissionDisabled => (
                           <Tooltip title="Replay this message">
@@ -692,9 +747,9 @@ const DlqReplayTab: React.FC = () => {
                               color="warning"
                               onClick={e => {
                                 e.stopPropagation();
-                                setSingleReplayConfirm(msg);
+                                if (hasReplayDestination) setSingleReplayConfirm(msg);
                               }}
-                              disabled={permissionDisabled || replayMutation.isPending}
+                              disabled={permissionDisabled || !hasReplayDestination || replayMutation.isPending}
                               data-testid={`dlq-replay-single-${msg.messageId}`}
                             >
                               <ReplayIcon fontSize="small" />
@@ -901,7 +956,12 @@ const DlqReplayTab: React.FC = () => {
             <Button variant="plain" onClick={() => setConfirmOpen(false)} data-testid="dlq-replay-cancel">
               Cancel
             </Button>
-            <Button color="warning" onClick={confirmReplay} data-testid="dlq-replay-confirm">
+            <Button
+              color="warning"
+              disabled={!hasReplayDestination}
+              onClick={confirmReplay}
+              data-testid="dlq-replay-confirm"
+            >
               Replay Messages
             </Button>
           </Stack>
@@ -922,7 +982,12 @@ const DlqReplayTab: React.FC = () => {
             <Button variant="plain" onClick={() => setSingleReplayConfirm(null)} data-testid="dlq-single-replay-cancel">
               Cancel
             </Button>
-            <Button color="warning" onClick={confirmSingleReplay} data-testid="dlq-single-replay-confirm">
+            <Button
+              color="warning"
+              disabled={!hasReplayDestination}
+              onClick={confirmSingleReplay}
+              data-testid="dlq-single-replay-confirm"
+            >
               Replay Message
             </Button>
           </Stack>

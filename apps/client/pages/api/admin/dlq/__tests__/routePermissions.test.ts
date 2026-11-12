@@ -38,7 +38,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/observability', () => ({
   Logger: Object.assign(vi.fn(), { info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
 
 // Each import triggers adminApi() at module level, pushing to `captured` in import order.
 import '../messages';

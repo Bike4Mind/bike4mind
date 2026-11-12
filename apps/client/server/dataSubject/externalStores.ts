@@ -161,15 +161,31 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
   {
     kind: 'logs',
     name: 'CloudWatch function and server logs',
-    holds: 'User ids, IP addresses and request metadata in log lines; console output is redacted by field name',
+    holds:
+      'User ids, IP addresses and request metadata in log lines, and the WebSocket API access log; console output is redacted by field name',
     // Default from `resolveDefaultLogging` (b4m-core/infra); some functions set their own retention in `infra/`.
-    erasure: { action: 'expires', after: '1 month on production and 1 week elsewhere, unless a function sets its own' },
+    erasure: {
+      action: 'expires',
+      after:
+        '1 month on production and 1 week elsewhere, unless a function sets its own; the Next.js server function, which logs every API request, keeps 1 week on all stages (`infra/web.ts`)',
+    },
   },
   {
     kind: 'logs',
     name: 'WAF request logs',
     holds: 'Client IP addresses and request headers',
     erasure: { action: 'expires', after: '30 days (log group retention, `infra/waf.ts`)' },
+  },
+  {
+    kind: 'logs',
+    name: 'Slack error-log channel',
+    // `formatErrorLogSlackMessage` (b4m-core/utils) runs every rendered string through `redactIpAddresses`.
+    holds:
+      'Server error lines relayed from CloudWatch: user, session and request ids, paths and error text, with IP addresses replaced by [IP]',
+    erasure: {
+      action: 'notErased',
+      gap: 'Channel retention is a Slack workspace setting that this repository does not set; messages are kept until an admin sets one',
+    },
   },
   {
     kind: 'queues',

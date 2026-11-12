@@ -2,6 +2,7 @@ import { gzipSync } from 'node:zlib';
 import type { Request, Response } from 'express';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
+import { requestLogUrl } from '../middlewares/requestLogUrl';
 
 /**
  * Send a JSON response, gzip-compressing it in-handler when it's large enough to matter and the
@@ -76,7 +77,7 @@ export async function sendMaybeGzip(req: Request, res: Response, body: unknown):
 
   // Pathname only: the query string would make the metric dimension unbounded. A route with path
   // params (/api/x/[id]) would still be high-cardinality here - give it a static label first.
-  const route = (req.url ?? '').split('?')[0];
+  const route = requestLogUrl((req.url ?? '').split('?')[0]);
 
   req.logger.withMetadata({ uncompressedBytes, route, compressed: shouldCompress }).info('api-response-size');
 

@@ -215,6 +215,18 @@ export interface ChatToolCall {
    */
   approvalRules?: string[];
   /**
+   * Set with `approvalId` when the call can be allowed for its project: the prefix rules "Allow in this
+   * project" saves, which apply to every session in that project and its worktrees.
+   */
+  approvalProjectRules?: string[];
+  /** Set with `approvalProjectRules`: the project folder they are saved for. */
+  approvalProject?: string;
+  /**
+   * Set with `approvalId` on a shell call where only some sub-commands need a decision: those, as
+   * written, each with why. The rest are already allowed, and the card's answers cover only these.
+   */
+  approvalParts?: { text: string; reason?: string }[];
+  /**
    * Set with `approvalId` when the call can be allowed in more than one way, so the card draws
    * a split button rather than a plain "allow". The chosen option is folded into `input` before
    * the tool runs, which is what makes the settled row report what the user actually picked.
@@ -297,6 +309,8 @@ export type ChatApprovalDecidedBy =
       option?: string;
       /** With answer 'always': the derived rules were also saved for every session. */
       everywhere?: true;
+      /** With answer 'always': the derived prefix rules were also saved for every session in the project. */
+      project?: true;
     }
   /** A saved permission rule; `source` names where it lives (desktop or Claude Code settings). */
   | { kind: 'rule'; rule: string; source?: string }
@@ -407,6 +421,8 @@ export interface ChatApprovalAnswer {
    * every later session. Main saves the rules it derived itself; this only says yes to them.
    */
   everywhere?: boolean;
+  /** With decision 'always': also save the card's `approvalProjectRules` for its project. */
+  project?: boolean;
 }
 
 /**

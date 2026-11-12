@@ -48,6 +48,11 @@ export type ActionDialogProps = {
   typedConfirm?: TypedConfirm;
   pending?: boolean;
   /**
+   * A second commit beside the primary one, gated the same way, e.g. "Save and next" in a review queue.
+   * Its button id is `<id>-secondary-btn`; the reason draft is kept for the caller's next item.
+   */
+  secondaryAction?: { label: string; onConfirm: (reason: string) => void | Promise<void> };
+  /**
    * Keeps Cancel enabled while the write is in flight, for a caller whose `onConfirm` stops at
    * `onClose` (a run of writes that checks between them and leaves the rest unsent).
    */
@@ -91,6 +96,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   blockedReason = null,
   typedConfirm,
   pending = false,
+  secondaryAction,
   cancelStopsWrite = false,
   initialReason = EMPTY_ADMIN_REASON,
   'data-testid': testId,
@@ -109,11 +115,11 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
     (!typedMatches && typedConfirm ? `Type the ${typedConfirm.noun} exactly to confirm.` : null);
   const busy = pending || submitting;
 
-  const handleConfirm = async () => {
+  const handleConfirm = async (confirm: (reason: string) => void | Promise<void> = onConfirm) => {
     if (hint || busy) return;
     setSubmitting(true);
     try {
-      await onConfirm(composeAdminReason(reason));
+      await confirm(composeAdminReason(reason));
     } catch {
       // The caller reports its own failure (toast); a rejection only means the dialog stays open.
     } finally {
@@ -123,6 +129,8 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
+    // Portaled child dialogs must not also submit an enclosing admin command.
+    event.stopPropagation();
     void handleConfirm();
   };
 
@@ -198,6 +206,18 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
         >
           Cancel
         </Button>
+        {secondaryAction && (
+          <Button
+            variant="outlined"
+            color="neutral"
+            disabled={!!hint || busy}
+            aria-describedby={hint ? hintId : undefined}
+            onClick={() => void handleConfirm(secondaryAction.onConfirm)}
+            data-testid={`${testId}-secondary-btn`}
+          >
+            {secondaryAction.label}
+          </Button>
+        )}
         <Button
           variant="solid"
           color={tone === 'danger' ? 'danger' : 'primary'}

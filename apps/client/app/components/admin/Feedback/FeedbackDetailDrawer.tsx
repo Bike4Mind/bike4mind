@@ -18,6 +18,7 @@ import ForumIcon from '@mui/icons-material/Forum';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import LinkIcon from '@mui/icons-material/Link';
+import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import PersonIcon from '@mui/icons-material/Person';
 import { useQuery } from '@tanstack/react-query';
@@ -31,7 +32,7 @@ import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import UserIdChip from '../Users/UserIdChip';
 import { getFeedbackDisplayContent, type IExtendedFeedbackDocument } from './types';
 import { feedbackRecordQueryKey } from './queryKeys';
-import { copyFeedbackRecordLink, feedbackConversationPath } from './feedbackLinks';
+import { copyFeedbackRecordLink, feedbackConversationPath, feedbackReporterMailto } from './feedbackLinks';
 import HelpContextChip from './HelpContextChip';
 import ClientContextChips from './ClientContextChips';
 import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER, FEEDBACK_SUBJECT_LABELS } from './constants';
@@ -234,6 +235,7 @@ const FeedbackDetailBody = ({
   const helpSlug = record.helpContext?.surface === 'article' ? record.helpContext.slug : undefined;
   const organization = record.organization && record.organization !== 'Unknown' ? record.organization : undefined;
   const turn = summarizePromptMeta(record.promptMeta);
+  const reporterMailto = feedbackReporterMailto(record);
 
   return (
     <Stack gap={2}>
@@ -317,20 +319,37 @@ const FeedbackDetailBody = ({
         title="Reporter"
         data-testid="feedback-detail-reporter"
         action={
-          record.userId ? (
-            <Button
-              size="sm"
-              variant="plain"
-              component="a"
-              href={adminUserProfilePath(record.userId)}
-              target="_blank"
-              rel="noopener noreferrer"
-              startDecorator={<PersonIcon sx={{ fontSize: 16 }} />}
-              sx={adminFocus}
-              data-testid="feedback-detail-reporter-profile-btn"
-            >
-              Open profile
-            </Button>
+          record.userId || reporterMailto ? (
+            <Stack direction="row" flexWrap="wrap" gap={0.5}>
+              {reporterMailto && (
+                <Button
+                  size="sm"
+                  variant="plain"
+                  component="a"
+                  href={reporterMailto}
+                  startDecorator={<MailOutlineIcon sx={{ fontSize: 16 }} />}
+                  sx={adminFocus}
+                  data-testid="feedback-detail-email-reporter-btn"
+                >
+                  Email reporter
+                </Button>
+              )}
+              {record.userId && (
+                <Button
+                  size="sm"
+                  variant="plain"
+                  component="a"
+                  href={adminUserProfilePath(record.userId)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  startDecorator={<PersonIcon sx={{ fontSize: 16 }} />}
+                  sx={adminFocus}
+                  data-testid="feedback-detail-reporter-profile-btn"
+                >
+                  Open profile
+                </Button>
+              )}
+            </Stack>
           ) : undefined
         }
       >

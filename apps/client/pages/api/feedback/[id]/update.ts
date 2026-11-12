@@ -10,12 +10,16 @@ import { recordFeedbackRead } from '@server/utils/feedbackReadAudit';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { z } from 'zod';
 
+// Triage fields belong to the admin status route (admin/feedback/[id]/status.ts). A `status` equal
+// to the stored one is the whole-report echo older clients send and is ignored; a different one is
+// rejected rather than stripped, so the caller learns the change did not apply.
+const ADMIN_ONLY_FIELDS = ['handledBy', 'handledAt'] as const;
+
 const UpdateFeedbackRequestSchema = z.object({
   userId: z.string(),
   // Optional: content now lives in a TTL'd sibling document. Omit to leave it untouched.
   content: z.string().optional(),
   username: z.string(),
-  status: z.string(),
   promptMeta: z.object({}).optional(),
   type: z.string().optional(),
 });
@@ -31,14 +35,18 @@ const handler = baseApi().put(
       throw new NotFoundError('Ability not found');
     }
 
-    const updateData = UpdateFeedbackRequestSchema.parse(req.body);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (ADMIN_ONLY_FIELDS.some(field => body[field] !== undefined)) {
+      throw new BadRequestError('handledBy and handledAt cannot be set on a report.');
+    }
+    const updateData = UpdateFeedbackRequestSchema.parse(body);
 
     const feedback = isValidObjectId(id) ? await FeedbackModel.findById(id) : null;
 
     if (!feedback) {
       throw new NotFoundError('Feedback not found');
     }
-    const { content, status, username } = updateData;
+    const { content, username } = updateData;
 
     // Authorize against the document instance, not the model class: a by-class
     // CASL check does not evaluate the { userId } ownership condition, so
@@ -49,8 +57,12 @@ const handler = baseApi().put(
       throw new NotFoundError('Feedback not found');
     }
 
+    if (body.status !== undefined && body.status !== feedback.status) {
+      throw new BadRequestError("A report's status cannot be changed here. Admins change it from the Feedback page.");
+    }
+
     // Resolve the sibling write BEFORE the Feedback update, so contentStored (if it changes) can
-    // ride in the same $set as status/username - one write to the permanent document, not two.
+    // ride in the same $set as username - one write to the permanent document, not two.
     // contentApplied stays true when the caller didn't touch content at all - false only signals
     // a genuine no-op (the sibling had already expired under the 90-day TTL).
     let contentApplied = true;
@@ -86,7 +98,7 @@ const handler = baseApi().put(
           // enforces: no expiresAt is written and nothing is upserted, because expiresAt is
           // immutable and a report whose text already expired must not be resurrected by an edit.
           //
-          // Not rolled back if the status/username update below then fails: the sibling would keep
+          // Not rolled back if the username update below then fails: the sibling would keep
           // the caller's edited text while the rest of the document reverts. Left as-is rather than
           // adding a compensating write - the sibling holding what the caller actually submitted is
           // arguably closer to correct than reverting it, and the update failing at all is rare.
@@ -120,7 +132,6 @@ const handler = baseApi().put(
         { _id: id },
         {
           $set: {
-            status,
             username,
             ...(contentStoredChange !== undefined ? { contentStored: contentStoredChange } : {}),
           },
@@ -146,7 +157,7 @@ const handler = baseApi().put(
     // Never log the verbatim report text: CounterLog carries no TTL of its own, and doing so
     // would defeat the 90-day retention this route otherwise enforces.
     await logEvent(
-      { userId, type: FeedbackEvents.UPDATE_FEEDBACK, metadata: { id, status, username } },
+      { userId, type: FeedbackEvents.UPDATE_FEEDBACK, metadata: { id, username } },
       { ability: req.ability }
     );
 

@@ -30,3 +30,43 @@ export const feedbackConversationPath = ({
   questId,
 }: Pick<IExtendedFeedbackDocument, 'sessionId' | 'questId'>): string | null =>
   sessionId ? (questId ? sessionTurnPath(sessionId, questId) : sessionPath(sessionId)) : null;
+
+// A mailto URL travels through the OS to a mail client, and several clients truncate or refuse
+// one past a few thousand characters once percent-encoded; the quote is cut well short of that.
+const MAILTO_QUOTE_MAX_CHARS = 1500;
+
+const quoteForMail = (content: string): string => {
+  const trimmed = content.trim();
+  let excerpt = trimmed.slice(0, MAILTO_QUOTE_MAX_CHARS);
+  // A cut between the two halves of a surrogate pair would encode to a malformed URI.
+  if (/[\uD800-\uDBFF]$/.test(excerpt)) excerpt = excerpt.slice(0, -1);
+  const lines = excerpt.split(/\r?\n/).map(line => `> ${line}`);
+  if (excerpt.length < trimmed.length) lines.push('> ...');
+  return lines.join('\r\n');
+};
+
+/**
+ * A `mailto:` draft to the person who filed a report, with the report quoted so the reply has its
+ * context. Undefined when the report carries no email, so callers can hide the action.
+ *
+ * Quotes `content` directly rather than going through getFeedbackDisplayContent: an expired
+ * report's "[content expired]" placeholder is UI copy, not something to quote back to a reporter.
+ */
+export const feedbackReporterMailto = ({
+  userEmail,
+  content,
+  createdAt,
+}: Pick<IExtendedFeedbackDocument, 'userEmail' | 'content' | 'createdAt'>): string | undefined => {
+  const address = userEmail?.trim();
+  if (!address) return undefined;
+
+  const reportedOn = new Date(createdAt);
+  const subject = Number.isNaN(reportedOn.getTime())
+    ? 'Your Bike4Mind feedback'
+    : `Your Bike4Mind feedback from ${reportedOn.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}`;
+
+  const params = [`subject=${encodeURIComponent(subject)}`];
+  if (content?.trim()) params.push(`body=${encodeURIComponent(quoteForMail(content))}`);
+
+  return `mailto:${encodeURIComponent(address)}?${params.join('&')}`;
+};

@@ -66,6 +66,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
 import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { coreTutorialTurns } from '@server/tutorials/chatTurns';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { buildMcpEnvVariables } from '@bike4mind/server-utils/utils/mcpEnv';
 import { LLMEvents, TelemetryEvents } from '@bike4mind/server-utils/utils/eventBus';
@@ -208,6 +209,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     abilityGetter: defineAbilitiesFor,
     workspaceDeniedTools: premiumWorkspaceDeniedTools,
     workspaceSessionSettings: premiumWorkspaceSessionSettings,
+    coreTutorialTurns,
     getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) =>
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Resolve entitlement keys so ALL chat surfaces (chat/opti/voice/ai-llm/rapid-reply/slack)

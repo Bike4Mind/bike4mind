@@ -29,6 +29,10 @@ describe('CreditAnalyticsTab', () => {
     );
 
     expect(screen.getByTestId('stub-user-credits')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Credits' })).toBeInTheDocument();
+    expect(screen.getByTestId('admin-page-header').nextElementSibling).toContainElement(
+      screen.getByTestId('credit-analysis-ledger-tab')
+    );
 
     fireEvent.click(screen.getByTestId('credit-analysis-ledger-tab'));
 

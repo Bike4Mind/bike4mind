@@ -88,7 +88,7 @@ export const PACKAGES: PackageInfo[] = [
       { name: 'zustand', version: '4.5.4', category: 'UI Framework' },
       { name: 'openai', version: '6.27.0', category: 'AI/LLM' },
       { name: '@anthropic-ai/sdk', version: '0.71.2', category: 'AI/LLM' },
-      { name: '@playwright/test', version: '1.64.0', category: 'Testing' },
+      { name: '@playwright/test', version: '1.65.0', category: 'Testing' },
     ],
     workspaceDependencies: [
       '@bike4mind/database',
