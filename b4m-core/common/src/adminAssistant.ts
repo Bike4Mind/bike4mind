@@ -17,6 +17,7 @@ export const ADMIN_ASSISTANT_TOOL_NAMES = [
   'admin_get_health',
   'admin_get_setting',
   'admin_get_ai_advisories',
+  'admin_search_guide',
 ] as const;
 
 export type AdminAssistantToolName = (typeof ADMIN_ASSISTANT_TOOL_NAMES)[number];

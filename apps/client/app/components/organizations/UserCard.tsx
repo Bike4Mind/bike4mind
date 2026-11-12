@@ -12,6 +12,7 @@ import { Box, Avatar, Stack, IconButton, Dropdown, MenuButton, Menu, MenuItem, C
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { FC, useCallback, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -51,6 +52,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   canManageCreditBudgets,
   canManageManagers,
 }) => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const { currentUser } = useUser();
@@ -85,18 +87,25 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         </Chip>
       ) : isOwner ? (
         <Chip size="sm" variant="soft" color="primary" data-testid="organization-user-card-owner-chip">
-          Owner
+          {t('organization.roles.owner')}
         </Chip>
       ) : isManager ? (
         <Chip size="sm" variant="soft" color="success" data-testid="organization-user-card-manager-chip">
-          Manager
+          {t('organization.roles.manager')}
         </Chip>
       ) : (
-        user.permissions.map(permission => (
-          <Chip key={permission} size="sm" variant="soft">
-            {permission === Permission.share ? 'Admin' : permission === Permission.update ? 'Editor' : 'Viewer'}
+        <>
+          <Chip size="sm" variant="soft" data-testid="organization-user-card-member-chip">
+            {t('organization.roles.member')}
           </Chip>
-        ))
+          {/* Not a role: share/update on the ACL row opens the Settings tab (canManageOrg in
+              routes/organizations/$id.tsx), so the owner needs to see who holds it. */}
+          {user.permissions.some(p => p === Permission.share || p === Permission.update) && (
+            <Chip size="sm" variant="outlined" data-testid="organization-user-card-settings-access-chip">
+              {t('organization.access.can_edit_settings')}
+            </Chip>
+          )}
+        </>
       )}
     </Stack>
   );
@@ -226,7 +235,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       description={
         organization.maxCreditsPerMember == null
           ? 'Overrides the team default, which is currently no limit.'
-          : `Overrides the organization default of ${formatMemberCredits(organization.maxCreditsPerMember)} credits per month.`
+          : `Overrides the team default of ${formatMemberCredits(organization.maxCreditsPerMember)} credits per month.`
       }
       currentValue={creditUsage?.isOverride ? creditUsage.cap : null}
       allowZero

@@ -6,20 +6,34 @@ import { getThemeConfig } from '../../utils/themes';
 
 vi.mock('./SessionCreditsButtons', () => ({
   SECONDARY_CREDIT_BUTTON_PROPS: { variant: 'outlined', color: 'neutral' },
-  SubscribeButton: ({ label = 'Subscribe' }: { label?: string }) => (
-    <button data-testid="session-subscribe-btn">{label}</button>
+  SubscribeButton: ({ label = 'Subscribe', onClick }: { label?: string; onClick?: () => void }) => (
+    <button data-testid="session-subscribe-btn" onClick={onClick}>
+      {label}
+    </button>
   ),
-  SessionCreditsButton: ({ secondary, label = 'Add Credits' }: { secondary?: boolean; label?: string }) => (
-    <button data-testid="session-credits-btn" data-secondary={String(!!secondary)}>
+  SessionCreditsButton: ({
+    secondary,
+    label = 'Add Credits',
+    onClick,
+  }: {
+    secondary?: boolean;
+    label?: string;
+    onClick?: () => void;
+  }) => (
+    <button data-testid="session-credits-btn" data-secondary={String(!!secondary)} onClick={onClick}>
       {label}
     </button>
   ),
 }));
 
-const { accountRef, orgRef, subscriptionsRef } = vi.hoisted(() => ({
+const { trackUpsell } = vi.hoisted(() => ({ trackUpsell: vi.fn() }));
+vi.mock('@client/app/utils/funnelEvents', () => ({ trackUpsell }));
+
+const { accountRef, orgRef, subscriptionsRef, pendingRef } = vi.hoisted(() => ({
   accountRef: { current: null as null | { id: string; personal: boolean } },
   orgRef: { current: undefined as undefined | { name: string; billingContact?: string } },
   subscriptionsRef: { current: [] as Array<{ status: string }> },
+  pendingRef: { current: false },
 }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
   useSelectedAccount: (selector: (s: { selectedAccount: unknown }) => unknown) =>
@@ -32,16 +46,19 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetOrganization: () => ({ data: orgRef.current }),
 }));
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
-  useGetSubscriptions: () => ({ data: subscriptionsRef.current }),
+  useGetSubscriptions: () => ({
+    data: pendingRef.current ? undefined : subscriptionsRef.current,
+    isPending: pendingRef.current,
+  }),
 }));
 
-import { CreditOfferActions, buildAdminRequestMessage } from './CreditOfferActions';
+import { CreditOfferActions, CreditOfferActionsView, buildAdminRequestMessage } from './CreditOfferActions';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderActions = (moment: 'low' | 'out') =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <CreditOfferActions moment={moment} />
+      <CreditOfferActions moment={moment} surface="test_surface" />
     </CssVarsProvider>
   );
 
@@ -49,6 +66,67 @@ beforeEach(() => {
   accountRef.current = { id: 'u1', personal: true };
   orgRef.current = undefined;
   subscriptionsRef.current = [];
+  pendingRef.current = false;
+  trackUpsell.mockClear();
+});
+
+describe('CreditOfferActions upsell tracking', () => {
+  it('reports an impression of the Pro offer to an unsubscribed account', () => {
+    renderActions('low');
+    expect(trackUpsell).toHaveBeenCalledWith('impression', {
+      surface: 'test_surface',
+      trigger: 'low_balance',
+      plan: 'Professional',
+    });
+  });
+
+  it('reports a subscriber as seeing the credit pack, not the plan', () => {
+    subscriptionsRef.current = [{ status: 'active' }];
+    renderActions('out');
+    expect(trackUpsell).toHaveBeenCalledWith('impression', {
+      surface: 'test_surface',
+      trigger: 'insufficient_credits',
+      plan: 'credit_pack',
+    });
+  });
+
+  it('waits for the subscription lookup before reporting an impression', () => {
+    pendingRef.current = true;
+    renderActions('low');
+    expect(trackUpsell).not.toHaveBeenCalled();
+  });
+
+  it('reports nothing for an org member, whose only action is Ask your admin', () => {
+    accountRef.current = { id: 'org1', personal: false };
+    renderActions('out');
+    expect(trackUpsell).not.toHaveBeenCalled();
+  });
+
+  it('reports which offer was clicked', () => {
+    renderActions('out');
+    fireEvent.click(screen.getByTestId('session-subscribe-btn'));
+    expect(trackUpsell).toHaveBeenCalledWith('click', {
+      surface: 'test_surface',
+      trigger: 'insufficient_credits',
+      plan: 'Professional',
+    });
+    fireEvent.click(screen.getByTestId('session-credits-btn'));
+    expect(trackUpsell).toHaveBeenCalledWith('click', {
+      surface: 'test_surface',
+      trigger: 'insufficient_credits',
+      plan: 'credit_pack',
+    });
+  });
+
+  it('sends nothing from a preview rendered without a surface', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <CreditOfferActionsView moment="out" account={{ kind: 'unsubscribed' }} />
+      </CssVarsProvider>
+    );
+    fireEvent.click(screen.getByTestId('session-subscribe-btn'));
+    expect(trackUpsell).not.toHaveBeenCalled();
+  });
 });
 
 describe('CreditOfferActions', () => {

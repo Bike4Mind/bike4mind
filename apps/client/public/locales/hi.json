@@ -102,7 +102,9 @@
     "no_subscription": "कोई सदस्यता नहीं",
     "x_members": "{{count}} सदस्य",
     "x_credits": "{{count}} क्रेडिट",
-    "owner": "स्वामी"
+    "roles": {
+      "owner": "स्वामी"
+    }
   },
   "session": {
     "typeYourMessage": "अपना संदेश यहाँ टाइप करें",

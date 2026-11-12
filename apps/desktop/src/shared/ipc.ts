@@ -155,6 +155,7 @@ import type { LocalHistoryResult, LocalHistoryState } from './history';
  */
 export const IPC_CHANNELS = {
   getAppInfo: 'app:get-info',
+  setTheme: 'app:set-theme',
   authGetState: 'auth:get-state',
   authSignIn: 'auth:sign-in',
   authCancelSignIn: 'auth:cancel-sign-in',
@@ -690,6 +691,7 @@ export type CreateCodeSessionIpcResult = ({ ok: true } & CreatedSession) | { ok:
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
 export interface DesktopApi {
   getAppInfo(): Promise<AppInfo>;
+  setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
   update: {
     getState(): Promise<UpdateState>;
     /** Resolves when the check finishes; the OUTCOME arrives on onStateChanged. */
