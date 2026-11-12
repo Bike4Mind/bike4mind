@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import type { DlqRecommendation } from '@bike4mind/common';
 
 // Must stay in sync with DLQ_REPLAY_SAFETY in packages/server-utils/src/utils/dlqRegistry.ts.
 export type DlqReplaySafety = 'safe' | 'side-effects' | 'unsafe';
@@ -15,8 +16,11 @@ export interface DlqQueueInfo {
   replay?: DlqReplaySafety;
   replayNote?: string;
   owner?: string;
+  /** -1 when unreadable, including on a stage that does not create the queue (deployed is false then). */
   approximateMessageCount: number;
   approximateNotVisibleCount: number;
+  /** False when this stage does not create the queue (stage-gated scheduled jobs); absent otherwise. */
+  deployed?: boolean;
   /** Consumer Lambda log groups; null when the consumer could not be resolved. */
   logGroups?: string[] | null;
   /** CloudWatch Logs Insights link over the consumer's last 24h of logs. */
@@ -26,6 +30,7 @@ export interface DlqQueueInfo {
 }
 
 export interface DlqMessage {
+  recommendation?: DlqRecommendation;
   failureLookupFailed?: boolean;
   messageId: string;
   failure?: { errorMessage: string; category: 'refused' | 'timeout' | 'invalid output' | 'bug' | 'unknown' };
@@ -110,6 +115,7 @@ export const useDlqReplay = () => {
   return useMutation({
     mutationFn: async (params: {
       queueLabel: string;
+      reason?: string;
       batchSize?: number;
       messageIds?: string[];
       messages?: Array<{ messageId: string; receiptHandle: string; body: string }>;
