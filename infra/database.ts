@@ -1,7 +1,7 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
 import { DEFAULT_LAMBDA_ENVIRONMENT, isPreviewStage } from './constants';
 import { appUrlForLambdaEnv } from './router';
-import { allSecrets, secrets } from './secrets';
+import { allSecrets, mirrorDatabaseSecrets, secrets } from './secrets';
 import { lambdaVpc } from './vpc';
 import { fabFileBucketNotification, fabFileChunkQueueSubscription, fabFileVectorizeQueueSubscription } from './queues';
 
@@ -12,7 +12,13 @@ const migrator = new sst.aws.Function('DatabaseMigrator', {
   runtime: 'nodejs24.x',
   timeout: '15 minutes',
   memory: '512 MB',
-  link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket],
+  link: [
+    ...allSecrets,
+    mirrorDatabaseSecrets.MONGODB_MIGRATION_URI,
+    fabFileBucket,
+    generatedImagesBucket,
+    appFilesBucket,
+  ],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     // Operator opt-in for the fail-closed OAuth token-auth-method backfill migration. Empty by

@@ -11,6 +11,7 @@ import {
   coreResourceNames,
 } from './premium-generated/infraResources.generated';
 import { PRODUCTION_STAGES } from './constants';
+import { mirrorReadinessFailures } from './mirrorReadiness';
 
 export const secrets = {
   MONGODB_URI: new sst.Secret('MONGODB_URI', 'my-secret-placeholder-value'),
@@ -209,6 +210,13 @@ export const secrets = {
   QA_ALARM_SLACK_WEBHOOKS: new sst.Secret('QA_ALARM_SLACK_WEBHOOKS', 'not-configured'),
 };
 
+// Do not add these to allSecrets: that would give every runtime every database role.
+export const mirrorDatabaseSecrets = {
+  MONGODB_APP_URI: new sst.Secret('MONGODB_APP_URI', 'not-configured'),
+  MONGODB_WORKER_URI: new sst.Secret('MONGODB_WORKER_URI', 'not-configured'),
+  MONGODB_MIGRATION_URI: new sst.Secret('MONGODB_MIGRATION_URI', 'not-configured'),
+};
+
 // Without core names, nothing stops a contribution from shadowing a core resource or env var.
 if ((coreResourceNames === null || coreEnvNames === null) && contributedInfraResources.secrets.length > 0) {
   throw new Error(
@@ -220,7 +228,12 @@ if ((coreResourceNames === null || coreEnvNames === null) && contributedInfraRes
 const contributedSecretPartition = partitionContributed(
   contributedInfraResources.secrets,
   spec => spec.name,
-  new Set([...(coreResourceNames ?? []), ...(coreEnvNames ?? []), ...Object.keys(secrets)])
+  new Set([
+    ...(coreResourceNames ?? []),
+    ...(coreEnvNames ?? []),
+    ...Object.keys(secrets),
+    ...Object.keys(mirrorDatabaseSecrets),
+  ])
 );
 for (const line of describeDroppedContributions('contributed secret', contributedSecretPartition)) {
   console.warn(`[infra] ${line}`);
@@ -297,3 +310,11 @@ function assertTier1SecretsConfigured(): void {
 }
 
 assertTier1SecretsConfigured();
+
+if (process.env.MIRROR_FEED_ENABLED && process.env.MIRROR_FEED_ENABLED !== 'false') {
+  const failures = mirrorReadinessFailures(readResolvedSecret, {
+    runtimeUsesDedicatedRoles: false,
+    includedWritersInstrumented: false,
+  });
+  if (failures.length) throw new Error(`Account mirror cannot be enabled: ${failures.join('; ')}`);
+}

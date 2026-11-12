@@ -8,6 +8,24 @@ import { Context } from 'aws-lambda';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { contextToLogs } from '@bike4mind/server-utils/utils/logger';
+import { Resource } from 'sst';
+
+function migrationUri(): string {
+  let dedicated: string | undefined;
+  try {
+    dedicated = (Resource as unknown as { MONGODB_MIGRATION_URI: { value: string } }).MONGODB_MIGRATION_URI.value;
+  } catch {
+    // Older/self-host deployments do not link the optional migration role.
+  }
+  if (dedicated && dedicated !== 'not-configured') {
+    if (!/^mongodb(\+srv)?:\/\//.test(dedicated)) throw new Error('Invalid migration database URI');
+    return dedicated;
+  }
+  if (process.env.MIRROR_REQUIRE_DATABASE_ROLES === 'true') {
+    throw new Error('Migration database role is not configured');
+  }
+  return Config.MONGODB_URI;
+}
 
 // The rollup upserts rely on the unique indexes, so create them before the first write.
 export const ensureAnalyticsIndexes = async () => {
@@ -18,7 +36,7 @@ export const ensureAnalyticsIndexes = async () => {
 export const createDatabase = async (_event: unknown, context: Context) => {
   const logger = new Logger().withMetadata(contextToLogs(context));
   logger.log(`createDatabase: ${Config.STAGE}`);
-  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE));
+  await connectDB(migrationUri().replace('%STAGE%', Config.STAGE));
   const manager = new MigrationManager(logger);
   await manager.seed();
   await manager.up(null);
@@ -30,7 +48,7 @@ export const createDatabase = async (_event: unknown, context: Context) => {
 export const updateDatabase = async (_event: unknown, context: Context) => {
   const logger = new Logger().withMetadata(contextToLogs(context));
   logger.log(`updateDatabase: ${Config.STAGE}`);
-  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE));
+  await connectDB(migrationUri().replace('%STAGE%', Config.STAGE));
   await new MigrationManager(logger).up(null);
   await ensureAtlasVectorSearchIndexes(getDB().connection, logger);
   await ensureAnalyticsIndexes();
@@ -40,12 +58,13 @@ export const updateDatabase = async (_event: unknown, context: Context) => {
 export const deleteDatabase = async (_event: unknown, context: Context) => {
   const logger = new Logger().withMetadata(contextToLogs(context));
   logger.log(`deleteDatabase: ${Config.STAGE}`);
-  if (!Config.MONGODB_URI.includes('%STAGE%')) {
+  const uri = migrationUri();
+  if (!uri.includes('%STAGE%')) {
     return;
   }
 
   logger.log(`deleteDatabase: Dropping database for stage ${Config.STAGE}}`);
-  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE));
+  await connectDB(uri.replace('%STAGE%', Config.STAGE));
   const mongoose = getDB();
   const collections = await mongoose.connection.db!.collections();
   for (const collection of collections) {
