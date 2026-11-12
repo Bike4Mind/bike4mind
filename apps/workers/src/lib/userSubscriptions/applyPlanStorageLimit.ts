@@ -7,7 +7,7 @@ import type Stripe from 'stripe';
 /** Stripe price metadata key carrying the plan's storage allowance, in decimal MB (see BYTES_PER_STORAGE_MB). */
 export const STORAGE_LIMIT_PRICE_METADATA_KEY = 'storageLimitMb';
 
-/** A plan's allowance is earned only once Stripe considers the subscription paid for. */
+/** Trialing counts as granting: Stripe has not charged yet, but the plan's access is already live. */
 const STORAGE_GRANTING_STATUSES: ReadonlySet<Stripe.Subscription.Status> = new Set(['active', 'trialing']);
 
 export type PlanStorageLimitReading =
