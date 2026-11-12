@@ -39,6 +39,9 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.role.admin_revoked': 'Revoked the Super Admin role',
   'user.storage.recalculated': 'Recalculated storage',
   'user.created': 'Created the account',
+  'user.persona.created': 'Created the test persona',
+  'user.persona.deleted': 'Deleted the test persona',
+  'user.persona.expired': 'Disabled the expired test persona',
   'user.credits.grant_blocked': 'Blocked signup credit grants and rewards',
   'user.credits.grant_unblocked': 'Resumed signup credit grants and rewards',
 };

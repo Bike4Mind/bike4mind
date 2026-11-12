@@ -20,6 +20,8 @@ const input = (overrides: Partial<CreateDataLakeResearchConfigInput> = {}): Crea
   trustedDomains: [],
   reviewDomains: [],
   unlistedSources: 'review',
+  autoAdmitTrusted: false,
+  maxAutoAdmits: 3,
   allowedDomains: [],
   blockedDomains: [],
   minRelevance: 0.6,
@@ -47,6 +49,19 @@ describe('DataLakeResearchConfigRepository', () => {
       costCeilingMicroUsd: 50_000,
     });
     expect(created.lastRunAt).toBeNull();
+  });
+
+  it('round-trips the auto-admit levers, and an old document reads as off with the default cap', async () => {
+    const on = await repo.createConfig(input({ autoAdmitTrusted: true, maxAutoAdmits: 7 }));
+    expect(on).toMatchObject({ autoAdmitTrusted: true, maxAutoAdmits: 7 });
+
+    const { id } = await repo.createConfig(input({ name: 'old' }));
+    await DataLakeResearchConfigModel.collection.updateOne(
+      { name: 'old' },
+      { $unset: { autoAdmitTrusted: '', maxAutoAdmits: '' } }
+    );
+    const read = await repo.findByIdInLake(id, LAKE);
+    expect(read).toMatchObject({ autoAdmitTrusted: false, maxAutoAdmits: 3 });
   });
 
   it('lists one lake newest first, and never another lake', async () => {

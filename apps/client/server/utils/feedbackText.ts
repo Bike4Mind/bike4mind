@@ -1,7 +1,8 @@
-import { FeedbackTextModel } from '@bike4mind/database';
+import { FeedbackAiModel, FeedbackTextModel, AdminAiSuggestionModel } from '@bike4mind/database';
 import { IFeedbackDocument, feedbackContentExpiresAt } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import mongoose, { HydratedDocument } from 'mongoose';
+import { triageFeedback } from '@server/admin/ai/feedbackTriage';
 
 /**
  * The halves of writing and editing a Feedback report's TTL'd text sibling, shared by every
@@ -99,7 +100,17 @@ export async function reviseFeedbackText({
   content: string;
   contentTruncated: boolean;
 }): Promise<boolean> {
-  const result = await FeedbackTextModel.updateOne({ _id: feedbackId }, { $set: { content, contentTruncated } });
+  const result = await FeedbackTextModel.updateOne(
+    { _id: feedbackId },
+    { $set: { content, contentTruncated }, $inc: { revision: 1 } }
+  );
+  if (result.matchedCount > 0) {
+    await FeedbackAiModel.deleteOne({ feedbackId: String(feedbackId) });
+    await AdminAiSuggestionModel.updateMany(
+      { feature: 'feedbackTriage', entityId: String(feedbackId), status: 'pending' },
+      { $set: { status: 'expired' } }
+    );
+  }
   return result.matchedCount > 0;
 }
 
@@ -127,4 +138,5 @@ export async function saveFeedbackOrRollbackText({
     }
     throw error;
   }
+  await triageFeedback(String(feedback._id));
 }

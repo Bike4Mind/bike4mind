@@ -69,6 +69,31 @@ describe('generateOAuthClientId', () => {
 });
 
 describe('createOAuthClient', () => {
+  it('persists and updates a federated profile independently of trust and scopes', async () => {
+    const rateLimit = { requestsPerMinute: 300, requestsPerDay: 20_000 };
+    const { client } = await createOAuthClient({ ...federated, rateLimit });
+    expect(client.rateLimit).toEqual(rateLimit);
+    expect((await listOAuthClients())[0].rateLimit).toEqual(rateLimit);
+    const updated = await updateOAuthClient(client.id, { rateLimit: { ...rateLimit, requestsPerMinute: 200 } });
+    expect(updated.before.rateLimit).toEqual(rateLimit);
+    expect(updated.after.rateLimit?.requestsPerMinute).toBe(200);
+    expect(updated.after.federatedIdp).toEqual(client.federatedIdp);
+    expect(updated.after.allowedScopes).toEqual(client.allowedScopes);
+    await expect(updateOAuthClient(client.id, { federatedIdp: null })).rejects.toThrow(/requires a federated/);
+    const removed = await updateOAuthClient(client.id, { rateLimit: null, federatedIdp: null });
+    expect(removed.after.rateLimit).toBeUndefined();
+    expect(removed.after.federatedIdp).toBeUndefined();
+  });
+
+  it('requires federation to add a profile to an ordinary client', async () => {
+    const { client } = await createOAuthClient(base);
+    await expect(
+      updateOAuthClient(client.id, {
+        rateLimit: { requestsPerMinute: 300, requestsPerDay: 20_000 },
+      })
+    ).rejects.toThrow(/requires a federated/);
+  });
+
   it('stores only a bcrypt hash that verifies against the returned secret', async () => {
     const { client, clientSecret } = await createOAuthClient(base);
 
