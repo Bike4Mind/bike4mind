@@ -33,6 +33,7 @@ describe('mirror database readiness', () => {
   it('keeps the deploy and feed gates closed while runtime links and writers remain unmigrated', () => {
     const secrets = readFileSync(new URL('./secrets.ts', import.meta.url), 'utf8');
     expect(secrets).toContain("process.env.MIRROR_FEED_ENABLED !== 'false'");
+    expect(secrets).toContain("$cli.command !== 'remove' && process.env.MIRROR_FEED_ENABLED");
     expect(secrets).toContain('runtimeUsesDedicatedRoles: false');
     expect(secrets).toContain('includedWritersInstrumented: false');
     const outbox = readFileSync(
@@ -44,5 +45,11 @@ describe('mirror database readiness', () => {
     expect(
       secrets.slice(secrets.indexOf('export const allSecrets ='), secrets.indexOf('export const allSecrets =') + 110)
     ).not.toContain('mirrorDatabaseSecrets');
+    const databaseInfra = readFileSync(new URL('./database.ts', import.meta.url), 'utf8');
+    expect(databaseInfra).toContain(
+      "MIRROR_REQUIRE_DATABASE_ROLES: process.env.MIRROR_REQUIRE_DATABASE_ROLES === 'true'"
+    );
+    const migrator = readFileSync(new URL('../apps/workers/src/database/manageDatabase.ts', import.meta.url), 'utf8');
+    expect(migrator).toContain('dedicated === Config.MONGODB_URI');
   });
 });

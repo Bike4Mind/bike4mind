@@ -311,7 +311,7 @@ function assertTier1SecretsConfigured(): void {
 
 assertTier1SecretsConfigured();
 
-if (process.env.MIRROR_FEED_ENABLED && process.env.MIRROR_FEED_ENABLED !== 'false') {
+if ($cli.command !== 'remove' && process.env.MIRROR_FEED_ENABLED && process.env.MIRROR_FEED_ENABLED !== 'false') {
   const failures = mirrorReadinessFailures(readResolvedSecret, {
     runtimeUsesDedicatedRoles: false,
     includedWritersInstrumented: false,

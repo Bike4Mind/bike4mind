@@ -19,6 +19,9 @@ function migrationUri(): string {
   }
   if (dedicated && dedicated !== 'not-configured') {
     if (!/^mongodb(\+srv)?:\/\//.test(dedicated)) throw new Error('Invalid migration database URI');
+    if (process.env.MIRROR_REQUIRE_DATABASE_ROLES === 'true' && dedicated === Config.MONGODB_URI) {
+      throw new Error('Migration database role must differ from the legacy credential');
+    }
     return dedicated;
   }
   if (process.env.MIRROR_REQUIRE_DATABASE_ROLES === 'true') {

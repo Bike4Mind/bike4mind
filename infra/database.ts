@@ -21,6 +21,7 @@ const migrator = new sst.aws.Function('DatabaseMigrator', {
   ],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    MIRROR_REQUIRE_DATABASE_ROLES: process.env.MIRROR_REQUIRE_DATABASE_ROLES === 'true' ? 'true' : 'false',
     // Operator opt-in for the fail-closed OAuth token-auth-method backfill migration. Empty by
     // default; set OAUTH_BACKFILL_CONFIRMED=1 on the stage to confirm the backfill after auditing
     // oauthclients. Without this line the var never reaches the migrator and a stage with legacy
