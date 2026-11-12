@@ -29,9 +29,9 @@ vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: { findIdsAdministeredBy: (...a: unknown[]) => mockFindIdsAdministeredBy(...a) },
 }));
 
-const mockVerifyOrgAccess = vi.fn();
+const mockVerifyOrgPermission = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgAccess: (...a: unknown[]) => mockVerifyOrgAccess(...a),
+  verifyOrgPermission: (...a: unknown[]) => mockVerifyOrgPermission(...a),
 }));
 
 import handler from '@pages/api/skills/index';
@@ -52,7 +52,7 @@ describe('/api/skills POST — scope creation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ id: 'new', ...doc }));
-    mockVerifyOrgAccess.mockResolvedValue({ id: ORG, userId: USER });
+    mockVerifyOrgPermission.mockResolvedValue({ id: ORG, userId: USER });
   });
 
   it('defaults to user-scoped when no scope is supplied', async () => {
@@ -68,21 +68,21 @@ describe('/api/skills POST — scope creation', () => {
   it('creates an org-scoped skill when the caller passes org access', async () => {
     const { req, res } = makeReqRes({ ...baseBody, scope: { organizationId: ORG } });
     await handler(req, res);
-    expect(mockVerifyOrgAccess).toHaveBeenCalledWith({ id: USER, isAdmin: false }, ORG);
+    expect(mockVerifyOrgPermission).toHaveBeenCalledWith({ id: USER, isAdmin: false }, ORG, 'manageContent');
     const doc = mockCreate.mock.calls[0][0];
     expect(doc.organizationId).toBe(ORG);
     expect(doc.userId).toBeUndefined();
   });
 
-  it('rejects org-scoped creation when verifyOrgAccess throws', async () => {
-    mockVerifyOrgAccess.mockRejectedValue(new ForbiddenError('no access'));
+  it('rejects org-scoped creation when verifyOrgPermission throws', async () => {
+    mockVerifyOrgPermission.mockRejectedValue(new ForbiddenError('no access'));
     const { req, res } = makeReqRes({ ...baseBody, scope: { organizationId: ORG } });
     await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
   it('allows a platform admin who has no org role', async () => {
-    mockVerifyOrgAccess.mockResolvedValue({ id: ORG, userId: 'owner-1' });
+    mockVerifyOrgPermission.mockResolvedValue({ id: ORG, userId: 'owner-1' });
     const { req, res } = makeReqRes({ ...baseBody, scope: { organizationId: ORG } }, true);
     await handler(req, res);
     expect(mockCreate.mock.calls[0][0].organizationId).toBe(ORG);

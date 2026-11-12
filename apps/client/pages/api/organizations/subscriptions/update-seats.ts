@@ -5,7 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { z } from 'zod';
-import { TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
+import { hasOrgPermission, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import dayjs from 'dayjs';
@@ -36,10 +36,10 @@ const handler = baseApi()
     const organization = await organizationRepository.findById(organizationId);
     if (!organization) throw new NotFoundError('Organization not found');
 
-    // IDOR guard: only the org's billing owner (or an admin) may mutate seats.
+    // IDOR guard: only a holder of manageBilling (the owner, a billing manager, or a platform admin) may mutate seats.
     // Without this, any authenticated user could pass another tenant's org id
     // and trigger stripe.subscriptions.update() against their payment method.
-    if (organization.userId !== req.user.id && !req.user.isAdmin) {
+    if (!hasOrgPermission(req.user, organization, 'manageBilling')) {
       throw new ForbiddenError('Not authorized to change seats for this organization');
     }
 

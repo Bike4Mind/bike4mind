@@ -5,7 +5,7 @@ const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   findByOrganizationId: vi.fn(),
   incrementCounterConditional: vi.fn(),
-  verifyOrgOwner: vi.fn(),
+  verifyOrgPermission: vi.fn(),
   validateTargetUrl: vi.fn(),
   fetchMock: vi.fn(),
   SsrfError: class SsrfError extends Error {},
@@ -27,7 +27,7 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { incrementCounterConditional: h.incrementCounterConditional },
 }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ decryptSecret: () => 'plain-secret' }));
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission: h.verifyOrgPermission }));
 vi.mock('@bike4mind/server-utils/utils/ssrfProtection', () => ({
   validateTargetUrl: h.validateTargetUrl,
   fetchPinned: h.fetchMock,
@@ -66,7 +66,7 @@ describe('POST /api/organizations/[id]/webhooks/github/test', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.incrementCounterConditional.mockResolvedValue({ success: true });
-    h.verifyOrgOwner.mockResolvedValue({ id: 'org-1', name: 'Acme' });
+    h.verifyOrgPermission.mockResolvedValue({ id: 'org-1', name: 'Acme' });
     h.findByOrganizationId.mockResolvedValue({ id: 'cfg-1', secret: 'enc(secret)' });
     h.validateTargetUrl.mockResolvedValue({ valid: true });
     h.fetchMock.mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });

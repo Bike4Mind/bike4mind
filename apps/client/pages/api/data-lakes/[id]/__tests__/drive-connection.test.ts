@@ -7,7 +7,7 @@ const MARK = { stamp: MARK_STAMP, created: true, previousEnabled: true };
 const STALE = new Date(Date.now() - 16 * 60 * 1000);
 
 const h = vi.hoisted(() => ({
-  verifyOrgAccess: vi.fn(),
+  verifyOrgPermission: vi.fn(),
   verifyOrgAdminRead: vi.fn(),
   dlFindById: vi.fn(),
   connFindByDataLakeIdAny: vi.fn(),
@@ -42,7 +42,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgAccess: h.verifyOrgAccess,
+  verifyOrgPermission: h.verifyOrgPermission,
   verifyOrgAdminRead: h.verifyOrgAdminRead,
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
@@ -102,7 +102,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', datalakeTag: 'datalake:lake1' });
-    h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.verifyOrgPermission.mockResolvedValue({ id: 'orgA' });
     h.verifyOrgAdminRead.mockResolvedValue({ org: { id: 'orgA' }, canManage: true });
     h.fabFilesCountByDriveConnectionIdInDataLake.mockResolvedValue(0);
     h.fabFilesFindLiveNonMembersByDriveConnectionId.mockResolvedValue([]);
@@ -288,7 +288,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     const { res, json } = makeRes();
     await run(makeReq('GET'), res);
     expect(h.verifyOrgAdminRead).toHaveBeenCalledWith(expect.anything(), 'orgA');
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
     expect(json.mock.calls[0][0]).toMatchObject({ connection: { id: 'conn1' }, canManage: false });
   });
 
@@ -303,7 +303,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     // Marked before enqueue: the consumer drops a message whose connection carries no pending mark.
     expect(calls).toEqual(['mark', 'enqueue']);
     // Scoped to the LAKE's org, never a caller-supplied one.
-    expect(h.verifyOrgAccess).toHaveBeenCalledWith(expect.anything(), 'orgA');
+    expect(h.verifyOrgPermission).toHaveBeenCalledWith(expect.anything(), 'orgA', 'manageContent');
     expect(h.connMarkDisconnecting).toHaveBeenCalledWith('conn1', orgAOwner);
     expect(h.getSourceQueueUrl).toHaveBeenCalledWith('driveDisconnectPurgeQueue');
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/drive-disconnect-purge', {
@@ -456,7 +456,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
 
   it.each([
     ['GET', 'verifyOrgAdminRead'],
-    ['DELETE', 'verifyOrgAccess'],
+    ['DELETE', 'verifyOrgPermission'],
   ] as const)('%s denies a caller the %s gate refuses', async (method, gate) => {
     h[gate].mockRejectedValue(new Error('Organization not found'));
     const { res } = makeRes();
@@ -485,7 +485,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     await run(makeReq('GET'), res);
     expect(json.mock.calls[0][0].connection).toMatchObject({ id: 'conn1', driveFolderId: 'Folder123' });
     expect(h.verifyOrgAdminRead).not.toHaveBeenCalled();
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
   });
 
   it('GET 404s a non-owner on a personal (org-less) lake', async () => {
@@ -493,7 +493,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     const { res } = makeRes();
     await expect(run(makeReq('GET'), res)).rejects.toThrow(/not found/i);
     expect(h.verifyOrgAdminRead).not.toHaveBeenCalled();
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
     expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
   });
 
@@ -525,6 +525,6 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     const { res } = makeRes();
     await expect(run(makeReq('GET'), res)).rejects.toThrow(/not found/i);
     expect(h.verifyOrgAdminRead).not.toHaveBeenCalled();
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
   });
 });

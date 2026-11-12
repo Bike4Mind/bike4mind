@@ -36,9 +36,9 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-const mockVerifyOrgOwner = vi.fn();
+const mockVerifyOrgPermission = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgAccess: (...a: unknown[]) => mockVerifyOrgOwner(...a),
+  verifyOrgPermission: (...a: unknown[]) => mockVerifyOrgPermission(...a),
 }));
 
 vi.mock('@server/utils/resolveUserNames', () => ({
@@ -85,7 +85,7 @@ const emptySummary = {
 describe('GET /api/usage - access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockVerifyOrgOwner.mockResolvedValue({ id: ORG, userId: SELF });
+    mockVerifyOrgPermission.mockResolvedValue({ id: ORG, userId: SELF });
     mockOwnerUsageSummary.mockResolvedValue(emptySummary);
     mockApiKeyUsageForOwner.mockResolvedValue([]);
     mockSourceUsageForOwner.mockResolvedValue([]);
@@ -119,7 +119,7 @@ describe('GET /api/usage - access', () => {
 
   describe('Organization owner', () => {
     it('returns manager-readable project usage without billing mutations', async () => {
-      mockVerifyOrgOwner.mockResolvedValue({
+      mockVerifyOrgPermission.mockResolvedValue({
         id: ORG,
         userId: 'owner',
         adminUserIds: [SELF],
@@ -131,21 +131,21 @@ describe('GET /api/usage - access', () => {
       });
       const { run, res } = call({ query: { ownerType: 'Organization', ownerId: ORG, days: '7' } });
       await run();
-      expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: SELF, isAdmin: false }, ORG);
+      expect(mockVerifyOrgPermission).toHaveBeenCalledWith({ id: SELF, isAdmin: false }, ORG, 'viewUsage');
       expect(mockOwnerUsageSummary).toHaveBeenCalledWith(ORG, 'Organization', 7);
       expect(res._getJSONData().byProject).toEqual([
         { projectId: null, requests: 1, creditsCharged: 3, cogsUsd: 0.01 },
       ]);
     });
 
-    it('gates access through verifyOrgOwner for the requested org', async () => {
+    it('gates access through verifyOrgPermission for the requested org', async () => {
       const { run } = call({ isAdmin: false });
       await run();
-      expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: SELF, isAdmin: false }, ORG);
+      expect(mockVerifyOrgPermission).toHaveBeenCalledWith({ id: SELF, isAdmin: false }, ORG, 'viewUsage');
     });
 
-    it('propagates verifyOrgOwner denial and never queries usage', async () => {
-      mockVerifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
+    it('propagates verifyOrgPermission denial and never queries usage', async () => {
+      mockVerifyOrgPermission.mockRejectedValue(new NotFoundError('Organization not found'));
       const { run } = call({ isAdmin: false });
       await expect(run()).rejects.toThrow(/not found/i);
       expect(mockOwnerUsageSummary).not.toHaveBeenCalled();
@@ -175,7 +175,7 @@ describe('GET /api/usage - access', () => {
     it('lets a user read their own usage without org access', async () => {
       const { res, run } = call({ isAdmin: false, query: { ownerType: 'User', ownerId: SELF } });
       await run();
-      expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
+      expect(mockVerifyOrgPermission).not.toHaveBeenCalled();
       expect(mockOwnerUsageSummary).toHaveBeenCalledWith(SELF, 'User', 30);
       expect(mockFindByUserId).toHaveBeenCalledWith(SELF);
       expect(res._getJSONData().ownerType).toBe('User');
@@ -219,15 +219,15 @@ describe('GET /api/usage - access', () => {
     });
 
     it('passes the org check once as read-only platform access for a support:read delegate', async () => {
-      mockVerifyOrgOwner.mockResolvedValue({ id: ORG, userId: 'someone-else' });
+      mockVerifyOrgPermission.mockResolvedValue({ id: ORG, userId: 'someone-else' });
       const { run } = call({ isAdmin: false, adminPermissions: ['support:read'] });
       await run();
-      expect(mockVerifyOrgOwner).toHaveBeenCalledTimes(1);
-      expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: SELF, isAdmin: true }, ORG);
+      expect(mockVerifyOrgPermission).toHaveBeenCalledTimes(1);
+      expect(mockVerifyOrgPermission).toHaveBeenCalledWith({ id: SELF, isAdmin: true }, ORG, 'viewUsage');
     });
 
     it('omits key names and prefixes from a delegate org view', async () => {
-      mockVerifyOrgOwner.mockResolvedValue({ id: ORG, userId: 'someone-else' });
+      mockVerifyOrgPermission.mockResolvedValue({ id: ORG, userId: 'someone-else' });
       mockApiKeyUsageForOwner.mockResolvedValue([
         { apiKeyId: 'key-1', requests: 5, creditsSpent: 10, inputTokens: 100, outputTokens: 50 },
       ]);
@@ -239,7 +239,7 @@ describe('GET /api/usage - access', () => {
     });
 
     it('still denies a delegate with a bad org id', async () => {
-      mockVerifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
+      mockVerifyOrgPermission.mockRejectedValue(new NotFoundError('Organization not found'));
       const { run } = call({ isAdmin: false, adminPermissions: ['support:read'] });
       await expect(run()).rejects.toThrow(/not found/i);
       expect(mockOwnerUsageSummary).not.toHaveBeenCalled();
@@ -256,7 +256,7 @@ describe('GET /api/usage - access', () => {
     });
 
     it('keeps key names for a full admin', async () => {
-      mockVerifyOrgOwner.mockResolvedValue({ id: ORG, userId: 'someone-else' });
+      mockVerifyOrgPermission.mockResolvedValue({ id: ORG, userId: 'someone-else' });
       mockApiKeyUsageForOwner.mockResolvedValue([
         { apiKeyId: 'key-1', requests: 5, creditsSpent: 10, inputTokens: 100, outputTokens: 50 },
       ]);
@@ -267,7 +267,7 @@ describe('GET /api/usage - access', () => {
     });
 
     it('denies a delegate API key without the ADMIN scope on both owner types', async () => {
-      mockVerifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
+      mockVerifyOrgPermission.mockRejectedValue(new NotFoundError('Organization not found'));
       const org = call({ isAdmin: false, adminPermissions: ['support:read'], scopes: ['chat:read'] });
       await expect(org.run()).rejects.toThrow(/not found/i);
       const user = call({

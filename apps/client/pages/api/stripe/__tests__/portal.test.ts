@@ -179,4 +179,46 @@ describe('POST /api/stripe/portal - callbackUrl origin guard', () => {
     expect(mockCreateCustomer).not.toHaveBeenCalled();
     expect(mockPortalSessionsCreate).not.toHaveBeenCalled();
   });
+
+  describe('organization billing permission', () => {
+    const orgWith = (over: Record<string, unknown>) => ({
+      id: 'org_1',
+      userId: 'someone_else',
+      name: 'Org One',
+      billingContact: 'billing@example.com',
+      stripeCustomerId: 'cus_org',
+      adminUserIds: [],
+      billingManagerUserIds: [],
+      users: [],
+      ...over,
+    });
+
+    it('admits a billing manager who is neither owner nor platform admin', async () => {
+      mockOrgFindById.mockResolvedValue(orgWith({ billingManagerUserIds: ['user_1'], users: [{ userId: 'user_1' }] }));
+      const { req, res } = makeReq(CALLBACK_URL, 'Organization', ORG_OWNER_ID);
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockPortalSessionsCreate).toHaveBeenCalledWith({ customer: 'cus_org', return_url: CALLBACK_URL });
+    });
+
+    it('still refuses a manager, who holds no billing permission', async () => {
+      mockOrgFindById.mockResolvedValue(orgWith({ adminUserIds: ['user_1'], users: [{ userId: 'user_1' }] }));
+      const { req, res } = makeReq(CALLBACK_URL, 'Organization', ORG_OWNER_ID);
+
+      await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+        constructor: BadRequestError,
+        message: 'User is not authorized to access this organization',
+      });
+      expect(mockPortalSessionsCreate).not.toHaveBeenCalled();
+    });
+
+    it('does not admit a platform admin who holds no role in the org', async () => {
+      mockOrgFindById.mockResolvedValue(orgWith({}));
+      const { req, res } = makeReq(CALLBACK_URL, 'Organization', ORG_OWNER_ID);
+      (req as unknown as { user: Record<string, unknown> }).user.isAdmin = true;
+
+      await expect((handler as HandlerFn)(req, res)).rejects.toBeInstanceOf(BadRequestError);
+    });
+  });
 });

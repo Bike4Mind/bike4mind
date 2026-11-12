@@ -1,6 +1,6 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
-import { DataSubscribeRequestAction, Permission, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
+import { DataSubscribeRequestAction, Permission, canViewOrgMemberCredits } from '@bike4mind/common';
 import { z } from 'zod';
 import {
   AdminSettings,
@@ -133,7 +133,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     typeof requestedOrgId === 'string' && mongoose.isValidObjectId(requestedOrgId)
       ? await Organization.findById(requestedOrgId)
       : null;
-  const isPrivilegedOrgSubscriber = !!subscribedOrg && isOrgOwnerOrCurrentAdmin(user, subscribedOrg);
+  const isPrivilegedOrgSubscriber = !!subscribedOrg && canViewOrgMemberCredits(user, subscribedOrg);
 
   // 'scope' limits the scope of the query, to only things you're allowed to see.
   // mostly it uses the accessibleBy function from the casl/mongoose package.  There

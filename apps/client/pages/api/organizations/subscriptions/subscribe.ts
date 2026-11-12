@@ -16,7 +16,7 @@ import { z } from 'zod';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgStripeCustomer';
 import { assertSeatsWithinPlan, getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { checkoutAcquisitionMetadata } from '@bike4mind/server-utils/analytics/acquisition';
@@ -71,7 +71,7 @@ const handler = baseApi()
     //
     // No id means "create a new org" (the organizationData branch), so there is no existing tenant
     // to authorize against. The schema requires exactly one organization selector.
-    const organization = organizationId ? await verifyOrgOwner(req.user, organizationId) : null;
+    const organization = organizationId ? await verifyOrgPermission(req.user, organizationId, 'manageBilling') : null;
     // The buyer is the signed-in user, whichever org the plan is for.
     await assertCheckoutAllowed(req.user, readNetworkMeta(req), req.logger, 'team_subscription');
 

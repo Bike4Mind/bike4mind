@@ -35,8 +35,8 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   },
 }));
 
-const verifyOrgAccess = vi.hoisted(() => vi.fn(async () => ({ id: 'org1' })));
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
+const verifyOrgPermission = vi.hoisted(() => vi.fn(async () => ({ id: 'org1' })));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission }));
 
 const MEMBERS = { userIds: ['u1', 'u2'], aclOnly: ['u1'], stampOnly: ['u2'] };
 const findMemberUserIds = vi.hoisted(() =>
@@ -85,7 +85,7 @@ const notFound = () => Object.assign(new Error('Organization not found'), { stat
 describe('org feedback report drill-down', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    verifyOrgAccess.mockResolvedValue({ id: 'org1' } as never);
+    verifyOrgPermission.mockResolvedValue({ id: 'org1' } as never);
     findMemberUserIds.mockResolvedValue(MEMBERS as never);
     orgFeedbackItems.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 } as never);
     orgFeedbackItem.mockResolvedValue(ITEM as never);
@@ -93,7 +93,7 @@ describe('org feedback report drill-down', () => {
 
   describe('GET .../feedback-report/items', () => {
     it('answers the org gate first and reads nothing when the caller is not an owner', async () => {
-      verifyOrgAccess.mockRejectedValue(notFound() as never);
+      verifyOrgPermission.mockRejectedValue(notFound() as never);
 
       await expect(invoke(listHandler, {})).rejects.toThrow('Organization not found');
       expect(findMemberUserIds).not.toHaveBeenCalled();
@@ -102,7 +102,7 @@ describe('org feedback report drill-down', () => {
 
     it('refuses an unauthenticated caller before touching the org', async () => {
       await expect(invoke(listHandler, {}, null)).rejects.toThrow('Authentication required');
-      expect(verifyOrgAccess).not.toHaveBeenCalled();
+      expect(verifyOrgPermission).not.toHaveBeenCalled();
     });
 
     it('scopes on the population it re-read, not on anything the client sent', async () => {
@@ -157,7 +157,7 @@ describe('org feedback report drill-down', () => {
     });
 
     it('answers the org gate before saying anything about a feedback id', async () => {
-      verifyOrgAccess.mockRejectedValue(notFound() as never);
+      verifyOrgPermission.mockRejectedValue(notFound() as never);
 
       await expect(invoke(itemHandler, { feedbackId: ITEM.id })).rejects.toThrow('Organization not found');
       expect(findMemberUserIds).not.toHaveBeenCalled();

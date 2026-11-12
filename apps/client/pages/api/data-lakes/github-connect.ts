@@ -21,7 +21,7 @@ import {
   resolveConnectableLake,
 } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 import { clearStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { assertLakePlanAllowed } from '@server/entitlements/lakePlanGate';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { assertLakeConnectorFree } from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
@@ -185,7 +185,7 @@ export function createGitHubConnectHandler(suffix: () => string = newPlaceholder
       }
       const { organizationId } = body.data;
       // A personal lake needs no gate here: the caller becomes its creator, whom every later step admits.
-      if (organizationId) await verifyOrgAccess(req.user, organizationId);
+      if (organizationId) await verifyOrgPermission(req.user, organizationId, 'manageContent');
       await assertLakePlanAllowed(req, organizationId);
       const config = requireGitHubLakeAppConfig(getGitHubLakeAppConfig());
 

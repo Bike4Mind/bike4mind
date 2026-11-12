@@ -36,8 +36,8 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   },
 }));
 
-const verifyOrgAccess = vi.hoisted(() => vi.fn(async () => ({ id: 'org1' })));
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
+const verifyOrgPermission = vi.hoisted(() => vi.fn(async () => ({ id: 'org1' })));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission }));
 
 const MEMBERS = { userIds: ['u1', 'u2'], aclOnly: ['u1'], stampOnly: ['u2'] };
 const findMemberUserIds = vi.hoisted(() =>
@@ -60,23 +60,32 @@ const invoke = async (query: Record<string, string>, user: unknown = { id: 'owne
 describe('GET /api/organizations/[id]/feedback-report', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    verifyOrgAccess.mockResolvedValue({ id: 'org1' } as never);
+    verifyOrgPermission.mockResolvedValue({ id: 'org1' } as never);
     findMemberUserIds.mockResolvedValue(MEMBERS as never);
     orgFeedbackReport.mockResolvedValue({ totals: { count: 7 } } as never);
   });
 
   it('answers a non-enumerating 404 and reads nothing when the caller is not an owner', async () => {
     const notFound = Object.assign(new Error('Organization not found'), { statusCode: 404 });
-    verifyOrgAccess.mockRejectedValue(notFound as never);
+    verifyOrgPermission.mockRejectedValue(notFound as never);
 
     await expect(invoke({})).rejects.toThrow('Organization not found');
     expect(findMemberUserIds).not.toHaveBeenCalled();
     expect(orgFeedbackReport).not.toHaveBeenCalled();
   });
 
+  it('gates on the manageContent permission', async () => {
+    await invoke({});
+    expect(verifyOrgPermission).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'owner1' }),
+      'org1',
+      'manageContent'
+    );
+  });
+
   it('refuses an unauthenticated caller before touching the org', async () => {
     await expect(invoke({}, null)).rejects.toThrow('Authentication required');
-    expect(verifyOrgAccess).not.toHaveBeenCalled();
+    expect(verifyOrgPermission).not.toHaveBeenCalled();
   });
 
   it('rejects an unparseable date with a validation error, not a 500 from a cast', async () => {

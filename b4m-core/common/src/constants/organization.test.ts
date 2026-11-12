@@ -4,7 +4,6 @@ import {
   canManageMemberCreditBudgets,
   canRevokeOrgMember,
   isOrgOwnerOrCurrentAdmin,
-  organizationMemberRole,
   organizationSeatUsage,
   organizationSeatsFullMessage,
 } from './organization';
@@ -16,8 +15,10 @@ describe('isOrgOwnerOrCurrentAdmin', () => {
     users: [{ userId: 'org-admin-id' }, { userId: 'member-id' }, { userId: 'manager-id' }],
   };
 
-  it('is the predicate behind canManageMemberCreditBudgets', () => {
-    expect(canManageMemberCreditBudgets).toBe(isOrgOwnerOrCurrentAdmin);
+  it('gives canManageMemberCreditBudgets the same answer for every pre-roles actor', () => {
+    for (const id of ['owner-id', 'org-admin-id', 'stale-admin-id', 'member-id', 'stranger-id']) {
+      expect(canManageMemberCreditBudgets({ id }, org)).toBe(isOrgOwnerOrCurrentAdmin({ id }, org));
+    }
   });
 
   it('admits the billing owner even without a users[] row', () => {
@@ -132,6 +133,21 @@ describe('canRevokeOrgMember', () => {
     const stale = { ...org, users: [{ userId: 'member-id' }] };
     expect(canRevokeOrgMember({ id: 'mgr-id' }, stale, 'member-id')).toBe(false);
   });
+
+  it('leaves a billing manager for the owner to remove', () => {
+    const withBilling = {
+      ...org,
+      billingManagerUserIds: ['billing-id'],
+      users: [...org.users, { userId: 'billing-id' }],
+    };
+    expect(canRevokeOrgMember({ id: 'mgr-id' }, withBilling, 'billing-id')).toBe(false);
+    expect(canRevokeOrgMember({ id: 'owner-id' }, withBilling, 'billing-id')).toBe(true);
+    expect(canRevokeOrgMember({ id: 'billing-id' }, withBilling, 'member-id')).toBe(false);
+  });
+
+  it('lets a manager revoke a pending invitee, who has no users[] row yet', () => {
+    expect(canRevokeOrgMember({ id: 'mgr-id' }, org, 'invitee-id')).toBe(true);
+  });
 });
 
 describe('organizationSeatUsage', () => {
@@ -167,24 +183,5 @@ describe('organizationSeatsFullMessage', () => {
     expect(organizationSeatsFullMessage('Acme', 3)).toBe(
       'Acme uses all 3 paid seats. Raise the seat count on its profile before adding anyone.'
     );
-  });
-});
-
-describe('organizationMemberRole', () => {
-  const org = {
-    userId: 'owner-id',
-    adminUserIds: ['manager-id', 'stale-admin-id'],
-    users: [{ userId: 'manager-id' }, { userId: 'member-id' }],
-  };
-
-  it('names the owner, a manager and a member', () => {
-    expect(organizationMemberRole(org, 'owner-id')).toBe('owner');
-    expect(organizationMemberRole(org, 'manager-id')).toBe('manager');
-    expect(organizationMemberRole(org, 'member-id')).toBe('member');
-  });
-
-  it('is null off the roster, even for an appointment without a users[] row', () => {
-    expect(organizationMemberRole(org, 'stale-admin-id')).toBeNull();
-    expect(organizationMemberRole(org, 'stranger-id')).toBeNull();
   });
 });

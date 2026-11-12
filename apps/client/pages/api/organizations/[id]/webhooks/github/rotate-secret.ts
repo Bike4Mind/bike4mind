@@ -17,7 +17,7 @@ import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
 import { webhookSubscriptionRepository } from '@bike4mind/database/infra';
 import { generateWebhookSecret } from '@server/integrations/github/webhookUtils';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { NotFoundError, TooManyRequestsError } from '@bike4mind/utils';
@@ -65,7 +65,7 @@ const handler = baseApi().post(
       );
     }
 
-    const org = await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     const existingConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
     if (!existingConfig) {

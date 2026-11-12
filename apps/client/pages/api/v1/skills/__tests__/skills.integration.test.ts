@@ -76,7 +76,7 @@ vi.mock('@server/auth/auth', async orig => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig => ({
   ...(await orig<Record<string, unknown>>()),
-  verifyOrgAccess: (...a: unknown[]) => h.verifyOrg(...a),
+  verifyOrgPermission: (...a: unknown[]) => h.verifyOrg(...a),
 }));
 
 import {
@@ -288,7 +288,7 @@ describe('POST /api/v1/skills', () => {
   it('creates an organization skill only after the organization check passes', async () => {
     const res = await create({ skill_md: SKILL_MD, scope: { organization_id: ORG_ID } });
     expect(res._getStatusCode()).toBe(201);
-    expect(h.verifyOrg).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), ORG_ID);
+    expect(h.verifyOrg).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), ORG_ID, 'manageContent');
     expect(h.create).toHaveBeenCalledWith(expect.objectContaining({ organizationId: ORG_ID }));
     expect(h.create.mock.calls[0][0]).not.toHaveProperty('userId');
   });

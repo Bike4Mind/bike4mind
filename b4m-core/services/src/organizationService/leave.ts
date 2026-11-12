@@ -48,6 +48,7 @@ export const leave = async (
   // own owner can never reach here, since leaving your own organization is refused above.
   const purged = await purgeOrgMembershipArtifacts(user.id, organization, { userId: user.id }, adapters);
   organization.adminUserIds = purged.adminUserIds;
+  organization.billingManagerUserIds = purged.billingManagerUserIds;
 
   await adapters.db.organizations.removeMember(organization.id, user.id);
 

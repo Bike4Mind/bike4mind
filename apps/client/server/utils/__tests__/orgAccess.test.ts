@@ -7,7 +7,8 @@ import {
   editImageContract,
   generateImageContract,
 } from '@bike4mind/common';
-import type { IUserDocument } from '@bike4mind/common';
+import { ORG_PERMISSIONS, ORG_ROLE_PERMISSIONS } from '@bike4mind/common';
+import type { IUserDocument, OrganizationMemberRole } from '@bike4mind/common';
 
 const mockFindById = vi.fn();
 const mockFindAccessibleById = vi.fn();
@@ -29,9 +30,8 @@ vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({
 import {
   assertNoStrayBillingOrgKeys,
   resolveBillingOrgInput,
-  verifyOrgAccess,
+  verifyOrgPermission,
   verifyOrgAdminRead,
-  verifyOrgOwner,
   verifyOrgMembership,
   verifyOrgMemberOrManager,
   resolveBillingOrgId,
@@ -51,7 +51,7 @@ const org = { id: ORG, userId: OWNER, adminUserIds: [MANAGER], users: [{ userId:
 // declared that way; only id/groups/isAdmin are ever read, so the fixtures supply those and cast.
 const asUser = (u: { id: string; groups: string[]; isAdmin: boolean }) => u as unknown as IUserDocument;
 
-describe('verifyOrgOwner', () => {
+describe('verifyOrgPermission', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindById.mockResolvedValue(org);
@@ -65,105 +65,66 @@ describe('verifyOrgOwner', () => {
     { orgId: '', why: 'empty string' },
     { orgId: undefined as unknown as string, why: 'absent, as req.query.id can be' },
   ])('rejects an invalid org id without touching the DB: $why', async ({ orgId }) => {
-    await expect(verifyOrgOwner({ id: OWNER, isAdmin: false }, orgId)).rejects.toBeInstanceOf(BadRequestError);
-    expect(mockFindById).not.toHaveBeenCalled();
-  });
-
-  it('grants the org owner', async () => {
-    const result = await verifyOrgOwner({ id: OWNER, isAdmin: false }, ORG);
-    expect(result).toBe(org);
-  });
-
-  it('grants an admin any org', async () => {
-    const result = await verifyOrgOwner({ id: STRANGER, isAdmin: true }, ORG);
-    expect(result).toBe(org);
-  });
-
-  // The tier boundary, and the only assertion that distinguishes this gate from verifyOrgAccess:
-  // the manager passes there and must not pass here. Deleting the owner check would leave every
-  // other test in this block green.
-  it('404s the team manager, who passes verifyOrgAccess but does not own the billing', async () => {
-    await expect(verifyOrgOwner({ id: MANAGER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
-    await expect(verifyOrgAccess({ id: MANAGER, isAdmin: false }, ORG)).resolves.toBe(org);
-  });
-
-  // Same boundary for an adminUserIds manager on the roster: the owner-only routes (spend,
-  // integration secrets) refuse them although every verifyOrgAccess route admits them.
-  it('404s an org manager on the roster, who passes verifyOrgAccess', async () => {
-    const rostered = { ...org, adminUserIds: [APPOINTED_ADMIN], users: [{ userId: APPOINTED_ADMIN }] };
-    mockFindById.mockResolvedValue(rostered);
-    await expect(verifyOrgOwner({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
-    await expect(verifyOrgAccess({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toBe(rostered);
-  });
-
-  it('404s a non-owner (same error as missing, to prevent enumeration)', async () => {
-    await expect(verifyOrgOwner({ id: STRANGER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
-  });
-
-  // Non-oracular: an outsider must not be able to tell "org exists, not yours" from "no such org".
-  it('answers a missing org with the same error a non-owner gets', async () => {
-    mockFindById.mockResolvedValue(null);
-    const missing = await verifyOrgOwner({ id: STRANGER, isAdmin: false }, OTHER_ORG).catch(e => e);
-
-    mockFindById.mockResolvedValue(org);
-    const forbidden = await verifyOrgOwner({ id: STRANGER, isAdmin: false }, ORG).catch(e => e);
-
-    expect(missing.constructor).toBe(forbidden.constructor);
-    expect(missing.message).toBe(forbidden.message);
-    expect(missing.statusCode).toBe(forbidden.statusCode);
-  });
-
-  it('404s an admin when the org does not exist', async () => {
-    mockFindById.mockResolvedValue(null);
-    await expect(verifyOrgOwner({ id: STRANGER, isAdmin: true }, ORG)).rejects.toBeInstanceOf(NotFoundError);
-  });
-});
-
-describe('verifyOrgAccess', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFindById.mockResolvedValue(org);
-  });
-
-  it('rejects an invalid ObjectId without touching the DB', async () => {
-    await expect(verifyOrgAccess({ id: OWNER, isAdmin: false }, 'not-an-object-id')).rejects.toBeInstanceOf(
+    await expect(verifyOrgPermission({ id: OWNER, isAdmin: false }, orgId, 'manageKeys')).rejects.toBeInstanceOf(
       BadRequestError
     );
     expect(mockFindById).not.toHaveBeenCalled();
   });
 
-  it('grants an admin access to any org', async () => {
-    const result = await verifyOrgAccess({ id: STRANGER, isAdmin: true }, ORG);
-    expect(result).toBe(org);
+  const BILLING_MANAGER = '650000000000000000000666';
+  const MEMBER = '650000000000000000000777';
+  const UNROSTERED_MANAGER = '650000000000000000000888';
+  const roleOrg = {
+    id: ORG,
+    userId: OWNER,
+    adminUserIds: [MANAGER, UNROSTERED_MANAGER],
+    billingManagerUserIds: [BILLING_MANAGER],
+    users: [{ userId: MANAGER }, { userId: BILLING_MANAGER }, { userId: MEMBER }],
+  };
+  const actors: Array<{ who: string; user: { id: string; isAdmin: boolean }; role: OrganizationMemberRole | null }> = [
+    { who: 'owner', user: { id: OWNER, isAdmin: false }, role: 'owner' },
+    { who: 'manager', user: { id: MANAGER, isAdmin: false }, role: 'manager' },
+    { who: 'manager without a users row', user: { id: UNROSTERED_MANAGER, isAdmin: false }, role: null },
+    { who: 'billing manager', user: { id: BILLING_MANAGER, isAdmin: false }, role: 'billingManager' },
+    { who: 'plain member', user: { id: MEMBER, isAdmin: false }, role: 'member' },
+    { who: 'outsider', user: { id: STRANGER, isAdmin: false }, role: null },
+    { who: 'platform admin', user: { id: STRANGER, isAdmin: true }, role: 'owner' },
+  ];
+  const matrix = actors.flatMap(actor => ORG_PERMISSIONS.map(permission => ({ ...actor, permission })));
+
+  // `role: 'owner'` for the platform admin stands for "holds every permission".
+  it.each(matrix)('$who x $permission', async ({ user, role, permission }) => {
+    mockFindById.mockResolvedValue(roleOrg);
+    const allowed = role !== null && ORG_ROLE_PERMISSIONS[role].includes(permission);
+    const outcome = verifyOrgPermission(user, ORG, permission);
+    if (allowed) await expect(outcome).resolves.toBe(roleOrg);
+    else await expect(outcome).rejects.toBeInstanceOf(NotFoundError);
   });
 
-  it('404s an admin when the org does not exist', async () => {
+  // Non-oracular: an outsider must not be able to tell "org exists, not yours" from "no such org".
+  it('answers a missing org with the same error a denied caller gets', async () => {
     mockFindById.mockResolvedValue(null);
-    await expect(verifyOrgAccess({ id: STRANGER, isAdmin: true }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+    const missing = await verifyOrgPermission({ id: STRANGER, isAdmin: false }, OTHER_ORG, 'manageKeys').catch(e => e);
+
+    mockFindById.mockResolvedValue(org);
+    const forbidden = await verifyOrgPermission({ id: STRANGER, isAdmin: false }, ORG, 'manageKeys').catch(e => e);
+
+    expect(missing).toBeInstanceOf(NotFoundError);
+    expect(missing.constructor).toBe(forbidden.constructor);
+    expect(missing.message).toBe(forbidden.message);
+    expect(missing.statusCode).toBe(forbidden.statusCode);
   });
 
-  it('grants the org owner', async () => {
-    const result = await verifyOrgAccess({ id: OWNER, isAdmin: false }, ORG);
-    expect(result).toBe(org);
-  });
-
-  it('grants the team manager', async () => {
-    const result = await verifyOrgAccess({ id: MANAGER, isAdmin: false }, ORG);
-    expect(result).toBe(org);
-  });
-
-  it('404s a non-member (same error as missing, to prevent enumeration)', async () => {
-    await expect(verifyOrgAccess({ id: STRANGER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
-  });
-
-  it('404s a non-admin when the org does not exist', async () => {
+  it('404s a platform admin when the org does not exist', async () => {
     mockFindById.mockResolvedValue(null);
-    await expect(verifyOrgAccess({ id: OWNER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(verifyOrgPermission({ id: STRANGER, isAdmin: true }, ORG, 'manageKeys')).rejects.toBeInstanceOf(
+      NotFoundError
+    );
   });
 });
 
 /**
- * The read-tier sibling of verifyOrgAccess: admits an appointed org admin too, and reports whether the
+ * The read-tier sibling of verifyOrgPermission (manager tier): admits an appointed org admin too, and reports whether the
  * caller would pass the write gate as `canManage`.
  */
 describe('verifyOrgAdminRead', () => {
@@ -192,14 +153,16 @@ describe('verifyOrgAdminRead', () => {
   });
 
   // A manager with a current users[] row operates too: canManage and the write gate both admit them.
-  it('reports canManage for a manager on the roster, whom verifyOrgAccess also admits', async () => {
+  it('reports canManage for a manager on the roster, whom verifyOrgPermission (manager tier) also admits', async () => {
     const rostered = { ...orgWithAdmins, users: [{ userId: APPOINTED_ADMIN }] };
     mockFindById.mockResolvedValue(rostered);
     await expect(verifyOrgAdminRead({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toEqual({
       org: rostered,
       canManage: true,
     });
-    await expect(verifyOrgAccess({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toBe(rostered);
+    await expect(verifyOrgPermission({ id: APPOINTED_ADMIN, isAdmin: false }, ORG, 'manageMembers')).resolves.toBe(
+      rostered
+    );
   });
 
   // The whole point of the tier: a manager whose users[] row has lapsed may read but not operate.
@@ -208,7 +171,9 @@ describe('verifyOrgAdminRead', () => {
       org: orgWithAdmins,
       canManage: false,
     });
-    await expect(verifyOrgAccess({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(
+      verifyOrgPermission({ id: APPOINTED_ADMIN, isAdmin: false }, ORG, 'manageMembers')
+    ).rejects.toBeInstanceOf(NotFoundError);
   });
 
   it('matches an appointed admin stored as a legacy ObjectId rather than a string', async () => {
@@ -219,15 +184,15 @@ describe('verifyOrgAdminRead', () => {
   });
 
   // The read tier restates the write gate's owner/manager/platform-admin condition, so this pins
-  // `canManage` to exactly "verifyOrgAccess would admit this caller" and fails if the two drift.
+  // `canManage` to exactly "verifyOrgPermission (manager tier) would admit this caller" and fails if the two drift.
   it.each([
     { who: 'owner', user: { id: OWNER, isAdmin: false } },
     { who: 'manager', user: { id: MANAGER, isAdmin: false } },
     { who: 'platform admin', user: { id: STRANGER, isAdmin: true } },
     { who: 'appointed admin', user: { id: APPOINTED_ADMIN, isAdmin: false } },
-  ])('reports canManage exactly when verifyOrgAccess admits the $who', async ({ user }) => {
+  ])('reports canManage exactly when verifyOrgPermission (manager tier) admits the $who', async ({ user }) => {
     const { canManage } = await verifyOrgAdminRead(user, ORG);
-    const admittedByWriteGate = await verifyOrgAccess(user, ORG).then(
+    const admittedByWriteGate = await verifyOrgPermission(user, ORG, 'manageMembers').then(
       () => true,
       () => false
     );
@@ -247,8 +212,8 @@ describe('verifyOrgAdminRead', () => {
 });
 
 /**
- * The membership-level sibling of verifyOrgAccess, for org-scoped reads a plain member legitimately
- * makes (their org's subscription plan). Its whole job is to be WIDER than verifyOrgAccess on the
+ * The membership-level sibling of verifyOrgPermission (manager tier), for org-scoped reads a plain member legitimately
+ * makes (their org's subscription plan). Its whole job is to be WIDER than verifyOrgPermission (manager tier) on the
  * member arm while staying non-oracular for everyone else.
  */
 describe('verifyOrgMembership', () => {
@@ -266,9 +231,11 @@ describe('verifyOrgMembership', () => {
     expect(mockFindById).not.toHaveBeenCalled();
   });
 
-  it('grants a plain member, who verifyOrgAccess would refuse', async () => {
+  it('grants a plain member, who verifyOrgPermission (manager tier) would refuse', async () => {
     await expect(verifyOrgMembership(member, ORG)).resolves.toBe(org);
-    await expect(verifyOrgAccess({ id: STRANGER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(verifyOrgPermission({ id: STRANGER, isAdmin: false }, ORG, 'manageMembers')).rejects.toBeInstanceOf(
+      NotFoundError
+    );
   });
 
   it('consults the shareable ACL for a non-admin, not a bare findById', async () => {
