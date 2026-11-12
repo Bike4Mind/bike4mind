@@ -33,8 +33,6 @@ const handler = adminApi({
     })
   )
   .post(async (req, res) => {
-    console.log('🧪 Rapid Reply test configuration API called');
-
     const {
       mainModelId,
       testInput = 'Test message for rapid reply configuration',
@@ -490,8 +488,8 @@ const handler = adminApi({
 
     await recordTestRun(testSuccess);
 
-    console.log(
-      `${testSuccess ? '✅' : '❌'} Test ${testSuccess ? 'completed' : 'failed'} for ${mainModelId} - TTFVT: ${rapidReplyTtfvt}ms, Latency: ${actualRapidReplyLatency}ms, Length: ${actualResponseLength}`
+    req.logger.info(
+      `[RapidReplyTest] Test ${testSuccess ? 'completed' : 'failed'} for ${mainModelId} - TTFVT: ${rapidReplyTtfvt}ms, Latency: ${actualRapidReplyLatency}ms, Length: ${actualResponseLength}`
     );
 
     return res.json({
