@@ -137,20 +137,32 @@ export function placeAgents(
   };
   const freeSlot = (zone: TavernZone) => TAVERN_SLOTS[zone].findIndex((_, slot) => !taken[zone].has(slot));
 
+  const seatAtHome = (agent: AgentView) => {
+    const zone = zoneFor(agent.state);
+    const free = freeSlot(zone);
+    if (free >= 0) seat(agent, zone, free);
+    return free >= 0;
+  };
+
   for (const agent of agents) {
     const before = previous.get(agent.id);
     if (before?.kind !== 'seat' || taken[before.zone].has(before.slot)) continue;
-    const home = before.zone === zoneFor(agent.state);
-    if (home || (agent.state === 'needs-you' && before.borrowed)) seat(agent, before.zone, before.slot);
+    if (before.zone === zoneFor(agent.state)) seat(agent, before.zone, before.slot);
+  }
+
+  // A freed bar seat beats a borrowed one; a borrowed seat is kept over newcomers to its zone.
+  for (const agent of agents) {
+    if (agent.state !== 'needs-you' || placements.has(agent.id) || seatAtHome(agent)) continue;
+    const before = previous.get(agent.id);
+    if (before?.kind === 'seat' && before.borrowed && !taken[before.zone].has(before.slot)) {
+      seat(agent, before.zone, before.slot);
+    }
   }
 
   const unseated: AgentView[] = [];
   for (const agent of agents) {
     if (placements.has(agent.id)) continue;
-    const zone = zoneFor(agent.state);
-    const free = freeSlot(zone);
-    if (free < 0) unseated.push(agent);
-    else seat(agent, zone, free);
+    if (agent.state === 'needs-you' || !seatAtHome(agent)) unseated.push(agent);
   }
 
   const stacked = new Set(unseated.filter(agent => agent.state !== 'needs-you').map(agent => agent.id));

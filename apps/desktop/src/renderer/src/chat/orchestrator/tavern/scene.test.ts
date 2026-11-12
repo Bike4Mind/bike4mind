@@ -213,6 +213,21 @@ describe('placeAgents', () => {
     expect(second.get('f')).toMatchObject({ kind: 'seat', zone: 'benches', slot: 1, borrowed: false });
   });
 
+  it('moves a borrowed needs-you agent back when the bar frees while borrowed', () => {
+    const needing = Array.from({ length: 5 }, (_, index) => agentFixture(`n${index}`, 'needs-you'));
+    const first = placeAgents(needing, noHistory);
+    expect(first.get('n4')).toMatchObject({ kind: 'seat', zone: 'benches', borrowed: true });
+    const failed = Array.from({ length: 6 }, (_, index) => agentFixture(`f${index}`, 'failed'));
+    const second = placeAgents([agentFixture('n0', 'working'), ...needing.slice(1), ...failed], first);
+    expect(second.get('n4')).toMatchObject({
+      kind: 'seat',
+      zone: 'bar',
+      slot: slotOf(first.get('n0')),
+      borrowed: false,
+    });
+    for (const agent of failed) expect(second.get(agent.id)).toMatchObject({ kind: 'seat', zone: 'benches' });
+  });
+
   it("gives a needs-you agent the last calm agent's seat once every other seat is taken", () => {
     const calm = [
       ...Array.from({ length: 6 }, (_, index) => agentFixture(`w${index}`, 'working')),
