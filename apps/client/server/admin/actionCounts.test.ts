@@ -46,7 +46,12 @@ vi.mock('@bike4mind/server-utils/lib/secretRotation/constants', () => ({
   getSecretRotationConfig: () => ({ JWT_SECRET: {}, OTHER_SECRET: {} }),
 }));
 
-import { computeAdminActionCounts, resetDeadLetterCountCacheForTests } from './actionCounts';
+import {
+  ADMIN_ACTION_COUNTERS,
+  computeAdminActionCounts,
+  computeAdminActionOldest,
+  resetDeadLetterCountCacheForTests,
+} from './actionCounts';
 
 const NOW = new Date('2026-11-09T12:00:00.000Z');
 const fullAdmin = { id: 'admin', isAdmin: true };
@@ -76,6 +81,20 @@ beforeEach(() => {
 });
 
 describe('computeAdminActionCounts access gating', () => {
+  it('keeps supported oldest dates, isolates failures and explains unsupported queues', async () => {
+    const original = ADMIN_ACTION_COUNTERS.feedback.oldestAt;
+    ADMIN_ACTION_COUNTERS.feedback.oldestAt = async () => NOW;
+    try {
+      const oldest = await computeAdminActionOldest(fullAdmin);
+      expect(oldest.feedback.at).toBe(NOW.toISOString());
+      expect(oldest.moderationReview.reason).toMatch(/failed/);
+      expect(oldest.deadLetters.reason).toMatch(/SQS/);
+      const denied = await computeAdminActionOldest({ id: 'member' });
+      expect(denied).toEqual({});
+    } finally {
+      ADMIN_ACTION_COUNTERS.feedback.oldestAt = original;
+    }
+  });
   it('gives a full admin every key', async () => {
     const counts = await computeAdminActionCounts(fullAdmin, 'admin', NOW);
 

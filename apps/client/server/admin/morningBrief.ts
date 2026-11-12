@@ -167,8 +167,9 @@ export const morningBriefDeps: MorningBriefDeps = {
       { names: ['adminAiConfig'], skipCache: true }
     );
     const config = getSettingsValue('adminAiConfig', settings, AdminAiConfigSchema.parse({}));
-    if (!config.enabled || config.features.morningBrief.mode === 'off') return null;
-    const result = await runAdminAi('morningBrief', {
+    // Publication stays closed until the operations readiness contract is available.
+    if (!config.enabled || config.features.morningBrief.mode !== 'shadow') return null;
+    await runAdminAi('morningBrief', {
       entityType: 'adminMorningBrief',
       entityId: id,
       policyVersion: 'v1',
@@ -179,6 +180,6 @@ export const morningBriefDeps: MorningBriefDeps = {
         outputSchema: adminAiTextOutputSchema,
       },
     });
-    return config.features.morningBrief.mode !== 'shadow' && result.ok ? result.suggestion.verdict : null;
+    return null;
   },
 };

@@ -2,7 +2,7 @@
 
 Daily delivery is disabled by default. Deploy with `ADMIN_MORNING_BRIEF_ENVIRONMENTS` containing the explicit stage names (comma-separated). Scheduled stages are production and dev; the job runs at 08:00 UTC. It uses the existing LiveOps webhook configuration and `APP_URL` for admin links. Never opt an environment in unless its LiveOps destination is appropriate for that environment.
 
-The job stores facts before model work or Slack delivery. The AI configuration's global and morningBrief switches and budgets control summarization, independently of plain-facts delivery. Shadow summaries are stored as suggestions but not published.
+The job stores facts before model work or Slack delivery. The AI configuration's global and morningBrief switches and budgets control summarization, independently of plain-facts delivery. Only shadow mode runs the model: summaries are stored as suggestions but not published. Other modes remain plain facts pending the operations readiness contract.
 
 Delivery is **at most one attempt**, not exactly once. A persisted environment/UTC-day claim prevents concurrent or repeated sends. A timeout or crash after claiming is unconfirmed, not sent, and is never automatically resent. The Dashboard retains the facts for manual handling. A scheduled-event replay retains the event's original day.
 
