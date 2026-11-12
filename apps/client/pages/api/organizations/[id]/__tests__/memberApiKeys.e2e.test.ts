@@ -41,6 +41,8 @@ const notifyApiKeyOrgRevoke = vi.hoisted(() => vi.fn().mockResolvedValue(undefin
 vi.mock('@server/utils/apiKeyRotationNotifier', () => ({ notifyApiKeyOrgRevoke }));
 
 const { default: listHandler } = await import('@pages/api/organizations/[id]/api-keys/members/index');
+const { apiKeyAuth } = await import('@server/middlewares/apiKeyAuth');
+const { UnauthorizedError } = await import('@bike4mind/server-utils/utils/errors');
 const { default: revokeHandler } = await import('@pages/api/organizations/[id]/api-keys/members/[keyId]/revoke');
 
 type Route = { routes: Record<string, (req: unknown, res: unknown) => Promise<unknown>> };
@@ -211,6 +213,13 @@ describe('org member API keys', () => {
     );
     expect(notifyApiKeyOrgRevoke).toHaveBeenCalledWith(holder.id, 'Leaky', 'Acme', logger);
     expect(await validate(billed.key)).toMatchObject({ isValid: false, reason: 'not_found' });
+    const next = vi.fn();
+    const { req: keyReq, res: keyRes } = createMocks({ method: 'GET', headers: { 'x-api-key': billed.key } });
+    Object.assign(keyReq, { logger });
+    await expect(apiKeyAuth([ApiKeyScope.AI_CHAT])(keyReq as never, keyRes as never, next)).rejects.toBeInstanceOf(
+      UnauthorizedError
+    );
+    expect(next).not.toHaveBeenCalled();
     expect(await userApiKeyRepository.findById(billed.id)).toMatchObject({
       revokedBy: owner.id,
       revokedReason: 'left',
