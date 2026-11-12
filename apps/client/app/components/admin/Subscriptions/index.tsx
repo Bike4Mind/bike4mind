@@ -388,6 +388,12 @@ const AdminSubscriptions: React.FC = () => {
         </Alert>
       )}
       <SubscriptionsToolbar params={params} search={search} onSearchChange={setSearch} onChange={setParams} />
+      <Alert color="neutral" data-testid="admin-subscriptions-usage-definition">
+        Usage covers the last 28 days, billed to the listed user or organization, not its seats. Successful provider
+        requests use the Analytics source definitions; API is separate. Hover a usage cell or open a subscription for
+        the exact window and freshness. New subscriptions, internal/test billing owners and incomplete history are
+        excluded from usage cohorts. No recorded usage is not proof of inactivity or a prediction of churn.
+      </Alert>
       {listQuery.data?.searchTruncated && (
         <Alert color="warning" data-testid="admin-subscriptions-search-truncated">
           This search matches more accounts than the list can resolve. Narrow it to see every match.
