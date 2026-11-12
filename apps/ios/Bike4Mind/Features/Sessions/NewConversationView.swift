@@ -83,16 +83,22 @@ struct NewConversationView: View {
     .accessibilityIdentifier("home-profile-btn")
   }
 
+  /// Web NotebookSplash on a phone: the 48pt brand mark over an h3 greeting.
   private var greeting: some View {
-    VStack(spacing: Tokens.Spacing.xs) {
+    VStack(spacing: Tokens.Spacing.s + Tokens.Spacing.xs) {
+      Image("LaunchMark")
+        .resizable()
+        .scaledToFit()
+        .frame(width: Tokens.Spacing.xxl, height: Tokens.Spacing.xxl)
+        .accessibilityHidden(true)
       Text(StartGreeting.headline(at: Date(), firstName: profile?.firstName))
-        .font(Tokens.Typography.wordmark)
+        .font(Tokens.Typography.greeting)
         .foregroundStyle(Tokens.Palette.primaryText)
         .multilineTextAlignment(.center)
         .accessibilityAddTraits(.isHeader)
         .accessibilityIdentifier("new-conversation-greeting")
       Text(StartGreeting.subline)
-        .font(Tokens.Typography.tagline)
+        .font(Tokens.Typography.caption)
         .foregroundStyle(Tokens.Palette.secondaryText)
         .multilineTextAlignment(.center)
     }
@@ -112,8 +118,11 @@ struct NewConversationView: View {
             .padding(.horizontal, Tokens.Spacing.m)
             .frame(maxWidth: .infinity, minHeight: 44)
             .background(Tokens.Palette.groupedBackground)
-            .clipShape(Capsule())
-            .overlay { Capsule().strokeBorder(Tokens.Palette.divider, lineWidth: 1) }
+            .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous))
+            .overlay {
+              RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous)
+                .strokeBorder(Tokens.Palette.borderSoft, lineWidth: 1)
+            }
         }
         .buttonStyle(.plain)
         .accessibilityLabel(chip.title)

@@ -1,8 +1,10 @@
 import B4MKit
 import SwiftUI
 
-/// One chat bubble. Takes a `TranscriptMessage` and nothing else, so the live chat screen renders
-/// streaming replies with the same view by swapping the message's text.
+/// One transcript message, styled like the web session view: the user's prompt is a right-aligned
+/// bubble (web UserPrompt), the assistant's reply an unframed full-width block (web PromptReplies).
+/// Takes a `TranscriptMessage` and nothing else, so the live chat screen renders streaming replies
+/// with the same view by swapping the message's text.
 struct MessageBubble: View {
   let message: TranscriptMessage
   @Environment(\.openWebPage) private var openWebPage
@@ -11,14 +13,13 @@ struct MessageBubble: View {
   private var isUser: Bool { message.role == .user }
 
   var body: some View {
-    HStack(alignment: .bottom, spacing: 0) {
-      if isUser { Spacer(minLength: Tokens.Spacing.xxl) }
-      VStack(alignment: isUser ? .trailing : .leading, spacing: Tokens.Spacing.xs) {
-        bubble
-          .contextMenu { if !message.text.isEmpty { contextActions } }
-        footer
+    VStack(alignment: isUser ? .trailing : .leading, spacing: Tokens.Spacing.xs) {
+      if isUser {
+        promptBubble
+      } else {
+        reply
       }
-      if !isUser { Spacer(minLength: Tokens.Spacing.xxl) }
+      footer
     }
     .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     .accessibilityElement(children: .ignore)
@@ -31,32 +32,60 @@ struct MessageBubble: View {
     ShareLink(item: message.text) { Label("Share", systemImage: "square.and.arrow.up") }
   }
 
-  @ViewBuilder
-  private var bubble: some View {
-    VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
+  private var promptBubble: some View {
+    TrailingFractionLayout(fraction: Tokens.Layout.promptWidthFraction) { promptText }
+  }
+
+  private var promptText: some View {
+    Text(MarkdownText.attributed(message.text))
+      .font(Tokens.Typography.body)
+      .lineSpacing(Tokens.LineSpacing.body)
+      .foregroundStyle(Tokens.Palette.primaryText)
+      .textSelection(.enabled)
+      .padding(.horizontal, Tokens.Spacing.m)
+      .padding(.vertical, Tokens.Spacing.s + Tokens.Spacing.xs)
+      .background(Tokens.Palette.promptBubble)
+      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous)
+          .strokeBorder(outline ?? Tokens.Palette.borderSoft, lineWidth: 1)
+      }
+      .contextMenu { if !message.text.isEmpty { contextActions } }
+  }
+
+  private var reply: some View {
+    VStack(alignment: .leading, spacing: Tokens.Spacing.m) {
       if message.text.isEmpty {
         // A turn still working has no text yet; the badge below says why.
         Text(" ")
       } else {
-        Text(MarkdownText.attributed(message.text))
-          .textSelection(.enabled)
+        ForEach(Array(MarkdownBlock.split(message.text).enumerated()), id: \.offset) { _, block in
+          switch block {
+          case .prose(let text):
+            Text(MarkdownText.attributed(text))
+              .font(Tokens.Typography.body)
+              .lineSpacing(Tokens.LineSpacing.reply)
+              .foregroundStyle(Tokens.Palette.readingInk)
+              .textSelection(.enabled)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          case .code(let language, let code):
+            CodeBlockView(language: language, code: code)
+          }
+        }
       }
       if let action = message.pendingAction {
         PendingActionCard(action: action, openWeb: { openWebPage(auth.environment.baseURL) })
       }
     }
-    .padding(.horizontal, Tokens.Spacing.m)
-    .padding(.vertical, Tokens.Spacing.s + 2)
-    .foregroundStyle(Tokens.Palette.primaryText)
-    .background(isUser ? Tokens.Palette.userBubble : Tokens.Palette.assistantBubble)
-    .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous))
+    .padding(outline == nil ? 0 : Tokens.Spacing.m)
     .overlay {
       if let outline {
-        RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous)
+        RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous)
           .strokeBorder(outline.opacity(0.6), lineWidth: 1)
       }
     }
-    .frame(maxWidth: Tokens.Layout.bubbleMaxWidth, alignment: isUser ? .trailing : .leading)
+    .contentShape(Rectangle())
+    .contextMenu { if !message.text.isEmpty { contextActions } }
   }
 
   @ViewBuilder
@@ -87,6 +116,86 @@ struct MessageBubble: View {
     case .outOfCredits: Tokens.Palette.warning
     default: nil
     }
+  }
+}
+
+/// Lays its one child out trailing-aligned at no more than `fraction` of the offered width, sized
+/// to its content below that (web: `maxWidth: 78%`, `alignSelf: end`).
+private struct TrailingFractionLayout: Layout {
+  let fraction: CGFloat
+
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    guard let child = subviews.first else { return .zero }
+    let size = child.sizeThatFits(childProposal(proposal.width))
+    return CGSize(width: proposal.width ?? size.width, height: size.height)
+  }
+
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    guard let child = subviews.first else { return }
+    let size = child.sizeThatFits(childProposal(bounds.width))
+    child.place(
+      at: CGPoint(x: bounds.maxX, y: bounds.minY), anchor: .topTrailing, proposal: ProposedViewSize(size))
+  }
+
+  private func childProposal(_ width: CGFloat?) -> ProposedViewSize {
+    ProposedViewSize(width: width.map { $0 * fraction }, height: nil)
+  }
+}
+
+/// A fenced code block in a reply, framed like the web's (CodeBlockHeader + HighlightedCode): the
+/// language and a copy button above a code panel, inside a hairline frame. Long lines scroll
+/// sideways instead of wrapping, as on the web.
+private struct CodeBlockView: View {
+  let language: String?
+  let code: String
+  @State private var copied = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
+      HStack {
+        if let language, !["text", "plain"].contains(language.lowercased()) {
+          Text(language)
+            .font(Tokens.Typography.codeLabel)
+            .foregroundStyle(Tokens.Palette.secondaryText)
+        }
+        Spacer(minLength: 0)
+        Button {
+          UIPasteboard.general.string = code
+          copied = true
+        } label: {
+          Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+            .labelStyle(.iconOnly)
+            .font(Tokens.Typography.meta)
+            .frame(minWidth: 44, minHeight: 32)
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(Tokens.Palette.secondaryText)
+        .sensoryFeedback(.success, trigger: copied) { _, isCopied in isCopied }
+        .accessibilityIdentifier("message-code-copy-btn")
+      }
+      ScrollView(.horizontal, showsIndicators: false) {
+        Text(code)
+          .font(Tokens.Typography.code)
+          .foregroundStyle(Tokens.Palette.readingInk)
+          .textSelection(.enabled)
+          .fixedSize(horizontal: true, vertical: false)
+          .padding(Tokens.Spacing.s + Tokens.Spacing.xs)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(Tokens.Palette.codeSurface)
+      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.sm, style: .continuous))
+    }
+    .padding(.horizontal, Tokens.Spacing.s + Tokens.Spacing.xs)
+    .padding(.bottom, Tokens.Spacing.s + Tokens.Spacing.xs)
+    .padding(.top, Tokens.Spacing.xs)
+    .background(Tokens.Palette.codeFrame.opacity(0.35))
+    .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous)
+        .strokeBorder(Tokens.Palette.codeFrame, lineWidth: 1)
+    }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("Code\(language.map { ", \($0)" } ?? ""): \(code)")
   }
 }
 
@@ -155,7 +264,7 @@ private struct PendingActionCard: View {
     .padding(Tokens.Spacing.s)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(Tokens.Palette.background.opacity(0.6))
-    .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.control, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous))
     .accessibilityIdentifier("message-pending-action")
   }
 }

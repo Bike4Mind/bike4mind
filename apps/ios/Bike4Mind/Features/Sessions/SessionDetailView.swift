@@ -132,7 +132,7 @@ private struct ChatScreen: View {
   private var transcriptList: some View {
     ScrollViewReader { proxy in
       ScrollView {
-        LazyVStack(spacing: Tokens.Spacing.m) {
+        LazyVStack(spacing: Tokens.Spacing.l) {
           if case .failed(let error) = model.transcript.state {
             InlineErrorBanner(message: error.message) { Task { await model.refresh() } }
           }

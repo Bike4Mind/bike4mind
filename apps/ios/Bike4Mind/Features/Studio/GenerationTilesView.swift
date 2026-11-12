@@ -48,12 +48,12 @@ private struct GenerationTile: View {
   var body: some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
       ZStack {
-        RoundedRectangle(cornerRadius: Tokens.Radius.control, style: .continuous)
+        RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous)
           .fill(Tokens.Palette.groupedBackground)
         preview
       }
       .frame(width: side, height: side)
-      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.control, style: .continuous))
+      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous))
       .overlay(alignment: .topTrailing) { cornerButton }
       Text(generation.handle.prompt)
         .font(Tokens.Typography.meta)
