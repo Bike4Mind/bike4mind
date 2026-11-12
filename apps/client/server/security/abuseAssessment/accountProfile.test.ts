@@ -33,6 +33,7 @@ const farmAccount = (overrides: Partial<UserAccountRiskProfile> = {}): UserAccou
   signupIp: '198.51.100.4',
   signupJa4: null,
   signupAsnKnown: true,
+  signupAsn: 64500,
   signupDatacenter: false,
   signupWafAnonIp: true,
   totpEnabled: true,
