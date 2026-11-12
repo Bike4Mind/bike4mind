@@ -95,11 +95,19 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
           {t('organization.roles.manager')}
         </Chip>
       ) : (
-        // The team role, not the sharing ACL in user.permissions: share/update there never made
-        // anyone an administrator, so labelling them Admin/Editor misread what they could do.
-        <Chip size="sm" variant="soft" data-testid="organization-user-card-member-chip">
-          {t('organization.roles.member')}
-        </Chip>
+        <>
+          <Chip size="sm" variant="soft" data-testid="organization-user-card-member-chip">
+            {t('organization.roles.member')}
+          </Chip>
+          {/* Not a role: share/update on the ACL row opens the Settings tab (canManageOrg in
+              routes/organizations/$id.tsx), so the owner needs to see who holds it. */}
+          {user.status === 'accepted' &&
+            user.permissions.some(p => p === Permission.share || p === Permission.update) && (
+              <Chip size="sm" variant="outlined" data-testid="organization-user-card-settings-access-chip">
+                {t('organization.access.can_edit_settings')}
+              </Chip>
+            )}
+        </>
       )}
     </Stack>
   );

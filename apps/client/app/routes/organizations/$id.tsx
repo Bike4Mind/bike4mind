@@ -26,7 +26,7 @@ import {
   pickDisplayedSubscription,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
-import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import { creditBalanceParams, formatCreditAmount } from '@client/app/utils/formatCredits';
 import {
   Avatar,
   Box,
@@ -420,7 +420,7 @@ const OrganizationHeader: FC<{
               variant="soft"
               startDecorator={<CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />}
             >
-              {t('organization.credits_amount', { amount: formatCreditAmount(organization.currentCredits) })}
+              {t('organization.x_credits', creditBalanceParams(organization.currentCredits))}
             </Chip>
             <Chip
               size="sm"

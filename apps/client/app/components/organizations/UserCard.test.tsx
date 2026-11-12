@@ -197,7 +197,7 @@ describe('OrganizationUserCard manager role', () => {
     expect(screen.queryByText('Viewer')).toBeNull();
   });
 
-  it('labels a plain member by team role, whatever sharing permissions their row holds', () => {
+  it('labels a plain member by team role, never by an ACL name', () => {
     renderCard(
       { ...member('a', usage), permissions: [Permission.read, Permission.update, Permission.share] },
       false,
@@ -206,6 +206,21 @@ describe('OrganizationUserCard manager role', () => {
     );
     expect(screen.getByTestId('organization-user-card-member-chip').textContent).toBe('Member');
     for (const aclLabel of ['Admin', 'Editor', 'Viewer']) expect(screen.queryByText(aclLabel)).toBeNull();
+  });
+
+  it.each([[Permission.update], [Permission.share]])(
+    'flags a member whose %s permission opens team settings',
+    permission => {
+      renderCard({ ...member('a', usage), permissions: [Permission.read, permission] }, false, false, {
+        organization: managedOrg,
+      });
+      expect(screen.getByTestId('organization-user-card-settings-access-chip').textContent).toBe('Can edit settings');
+    }
+  );
+
+  it('does not flag a read-only member', () => {
+    renderCard(member('a', usage), false, false, { organization: managedOrg });
+    expect(screen.queryByTestId('organization-user-card-settings-access-chip')).toBeNull();
   });
 
   it('shows the Owner chip, not Manager, on the owner row', () => {

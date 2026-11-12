@@ -34,6 +34,7 @@ import { FC, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ContextHelpButton } from '@client/app/components/help';
 import { getAppFileUrl } from '@client/app/utils/s3';
+import { creditBalanceParams } from '@client/app/utils/formatCredits';
 
 const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organization }) => {
   const { t } = useTranslation();
@@ -101,7 +102,7 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
             {t('organization.x_members', { count: currentSeats })}
           </Chip>
           <Chip size="sm" variant="soft" color="neutral">
-            {t('organization.x_credits', { count: organization.currentCredits })}
+            {t('organization.x_credits', creditBalanceParams(organization.currentCredits))}
           </Chip>
           {organization.billingContact && (
             <Chip size="sm" variant="soft">

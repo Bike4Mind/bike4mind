@@ -125,9 +125,8 @@
     "no_active_plan": "No Active Plan",
     "x_members_one": "{{count}} member",
     "x_members_other": "{{count}} members",
-    "x_credits_one": "{{count}} credit",
-    "x_credits_other": "{{count}} credits",
-    "credits_amount": "{{amount}} credits",
+    "x_credits_one": "{{amount}} credit",
+    "x_credits_other": "{{amount}} credits",
     "personal_team": "Personal team",
     "shared_team": "Shared team",
     "learn_about": "Learn about Teams",
@@ -136,6 +135,9 @@
       "owner": "Owner",
       "manager": "Manager",
       "member": "Member"
+    },
+    "access": {
+      "can_edit_settings": "Can edit settings"
     },
     "admin_preview": {
       "title": "Explore Team administration before subscribing",
