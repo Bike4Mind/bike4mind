@@ -52,7 +52,9 @@ export async function triageFeedback(feedbackId: string): Promise<void> {
       { content: text.content.slice(0, 3000), subject: report.subject, type: report.type },
       ''
     );
-    const inputHash = createHash('sha256').update(JSON.stringify(evidence)).digest('hex');
+    const inputHash = createHash('sha256')
+      .update(JSON.stringify({ evidence, revision: text.revision ?? 0 }))
+      .digest('hex');
     const previous = await FeedbackAiModel.findOne({ feedbackId }).lean();
     if (previous?.inputHash === inputHash && previous.suggestionId) {
       attempt.outcome = 'cached';
@@ -161,7 +163,12 @@ export async function triageFeedback(feedbackId: string): Promise<void> {
       });
     }
     const currentText = await FeedbackTextModel.findById(feedbackId).lean();
-    if (!currentText || currentText.content !== text.content || !(await FeedbackModel.exists({ _id: feedbackId })))
+    if (
+      !currentText ||
+      currentText.content !== text.content ||
+      currentText.revision !== text.revision ||
+      !(await FeedbackModel.exists({ _id: feedbackId }))
+    )
       return;
     await FeedbackAiModel.updateOne(
       { feedbackId },

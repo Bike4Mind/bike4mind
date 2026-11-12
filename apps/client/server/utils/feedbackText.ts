@@ -100,7 +100,10 @@ export async function reviseFeedbackText({
   content: string;
   contentTruncated: boolean;
 }): Promise<boolean> {
-  const result = await FeedbackTextModel.updateOne({ _id: feedbackId }, { $set: { content, contentTruncated } });
+  const result = await FeedbackTextModel.updateOne(
+    { _id: feedbackId },
+    { $set: { content, contentTruncated }, $inc: { revision: 1 } }
+  );
   if (result.matchedCount > 0) {
     await FeedbackAiModel.deleteOne({ feedbackId: String(feedbackId) });
     await AdminAiSuggestionModel.updateMany(
