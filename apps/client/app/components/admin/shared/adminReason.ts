@@ -113,6 +113,15 @@ export const ADMIN_REASON_PRESETS = {
   ],
   identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
   knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
+  slackWorkspaceDeactivate: ['Workspace no longer used', 'Customer request', 'Bot misbehaving', 'Security concern'],
+  slackExportCancel: ['Started by mistake', 'Wrong channel or date range', 'Taking too long'],
+  githubDisconnect: [
+    'Switching to a new connection',
+    'Credentials compromised or leaked',
+    'Connection no longer needed',
+  ],
+  githubKeyRotate: ['Routine rotation', 'Key compromised or leaked', 'Key about to expire'],
+  githubRepoAccess: ['Pausing GitHub automation', 'Repository access under review', 'Security incident'],
   dlqDiscard: ['Account refused', 'Job obsolete', 'Fixed with no replay needed', 'Bad payload', 'Other'],
 } as const satisfies Record<string, readonly string[]>;
 

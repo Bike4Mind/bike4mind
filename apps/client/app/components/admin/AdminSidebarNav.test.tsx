@@ -261,7 +261,7 @@ describe('SidebarNav', () => {
       fireEvent.change(filterInput(), { target: { value: 'log' } });
 
       expect(screen.getByTestId('admin-audit-log-btn')).toBeInTheDocument();
-      expect(screen.getByRole('link', { name: 'Webhook logs' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Webhook audit logs' })).toBeInTheDocument();
       expect(screen.queryByTestId('admin-users-tab-btn')).toBeNull();
       expect(screen.queryByTestId('admin-dashboard-tab-btn')).toBeNull();
     });
@@ -499,5 +499,10 @@ describe('filterSidebarSections', () => {
   it('matches an item by a former name', () => {
     const items = filterSidebarSections(SIDEBAR_SECTIONS, allOpen, 'waitlist').flatMap(section => section.items);
     expect(items.map(item => item.label)).toEqual(['Invite Center']);
+  });
+
+  it('still finds Webhook audit logs by its former name', () => {
+    const items = filterSidebarSections(SIDEBAR_SECTIONS, allOpen, 'webhook logs').flatMap(section => section.items);
+    expect(items.map(item => item.label)).toEqual(['Webhook audit logs']);
   });
 });

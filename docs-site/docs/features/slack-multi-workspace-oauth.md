@@ -72,8 +72,8 @@ If you need to disconnect a workspace:
 
 1. Go to **Admin** → **Slack Workspaces**
 2. Find the workspace in the table
-3. Click the **trash icon** in the Actions column
-4. Confirm deactivation
+3. Open the row's **More actions** (...) menu and choose **Deactivate workspace**
+4. Pick or write a reason (it is not stored yet) and click **Deactivate workspace**
 
 Once deactivated:
 - The bot will stop responding to messages from that workspace

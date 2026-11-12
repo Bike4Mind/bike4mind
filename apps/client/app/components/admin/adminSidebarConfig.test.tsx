@@ -93,6 +93,13 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(labelOf(AdminTab.HelpAnalytics)).toBe('Help analytics');
   });
 
+  it('names the integration items like their page titles', () => {
+    const labelOf = (tab: AdminTab) => allItems.find(i => i.tab === tab)?.label;
+    expect(labelOf(AdminTab.WebhookAuditLogs)).toBe('Webhook audit logs');
+    expect(labelOf(AdminTab.SlackWorkspaces)).toBe('Slack workspaces');
+    expect(labelOf(AdminTab.GitHubConnection)).toBe('GitHub connection');
+  });
+
   it('badges each counted queue once, and Subscriptions with its dot', () => {
     const badges = allItems.flatMap(item => (item.badge ? [item.badge] : []));
     expect(badges.sort()).toEqual([...ADMIN_ACTION_COUNT_KEYS, 'newSubscriptions'].sort());

@@ -559,11 +559,6 @@
       "count": 4
     }
   },
-  "apps/client/app/components/admin/__tests__/SlackExportModal.test.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/app/components/admin/email/EmailJobsPanel.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
