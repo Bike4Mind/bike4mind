@@ -1302,7 +1302,7 @@ async function runExecution(
       await sendWs('failed', { executionId, reason: 'model_not_admitted' });
       return;
     }
-    const reasoningShortfall = runReasoningShortfall(execution, modelInfo, isNewExecution);
+    const reasoningShortfall = runReasoningShortfall(execution, runModelInfo, isNewExecution);
     if (reasoningShortfall) {
       // Honored as set, as on the chat path; logged so an empty answer can be traced to the budget.
       logger.info('[AgentExecutor] max_tokens below reasoning floor', {
@@ -2507,7 +2507,7 @@ async function runExecution(
       // Appended after persona/base in getSystemPrompt(); undefined on
       // continuations (baked into the checkpoint) and when artifacts are off.
       ...(artifactEmissionPrompt && { artifactEmissionPrompt }),
-      ...buildReActAgentRuntimeConfig(execution),
+      ...buildReActAgentRuntimeConfig(execution, runModelInfo),
       thinkingVisibility,
       modelBackend: modelInfo?.backend,
       modelAdapterFamily: modelInfo?.adapterFamily,

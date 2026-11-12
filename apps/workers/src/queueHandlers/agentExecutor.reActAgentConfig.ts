@@ -15,15 +15,19 @@ import { DEFAULT_OUTPUT_MAX_TOKENS } from '@bike4mind/utils';
  *
  * `thinking` is forwarded whenever present, including `enabled: false`: the backends read
  * an explicit `enabled: false` as the off switch for adaptive-by-default models. It is
- * rebuilt as a plain object, never the persisted subdocument.
+ * rebuilt as a plain object, never the persisted subdocument. Only `can_think` models get it,
+ * mirroring chat (ChatCompletionProcess), so a non-thinking model never has a budget reserved.
  *
  * Extracted into its own pure helper so the conditional spread can be unit-tested directly.
  */
-export function buildReActAgentRuntimeConfig(execution: {
-  temperature?: number;
-  maxTokens?: number;
-  thinking?: { enabled: boolean; budget_tokens?: number };
-}): {
+export function buildReActAgentRuntimeConfig(
+  execution: {
+    temperature?: number;
+    maxTokens?: number;
+    thinking?: { enabled: boolean; budget_tokens?: number };
+  },
+  modelInfo: Pick<ModelInfo, 'can_think'> | undefined
+): {
   temperature?: number;
   maxTokens?: number;
   thinking?: { enabled: boolean; budget_tokens: number };
@@ -31,12 +35,13 @@ export function buildReActAgentRuntimeConfig(execution: {
   return {
     ...(execution.temperature !== undefined && { temperature: execution.temperature }),
     ...(execution.maxTokens !== undefined && { maxTokens: execution.maxTokens }),
-    ...(execution.thinking && {
-      thinking: {
-        enabled: execution.thinking.enabled,
-        budget_tokens: execution.thinking.budget_tokens ?? 16000,
-      },
-    }),
+    ...(execution.thinking &&
+      modelInfo?.can_think && {
+        thinking: {
+          enabled: execution.thinking.enabled,
+          budget_tokens: execution.thinking.budget_tokens ?? 16000,
+        },
+      }),
   };
 }
 
@@ -56,6 +61,6 @@ export function runReasoningShortfall(
     fallback: DEFAULT_OUTPUT_MAX_TOKENS,
     modelInfo,
     modelMaxOutputTokens: modelInfo.max_tokens,
-    thinking: buildReActAgentRuntimeConfig(execution).thinking,
+    thinking: buildReActAgentRuntimeConfig(execution, modelInfo).thinking,
   });
 }
