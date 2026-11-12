@@ -14,6 +14,9 @@ export const runsScheduledJobs = ['production', 'dev'].includes($app.stage);
 import { PRODUCTION_STAGES } from '@bike4mind/infra';
 export { PRODUCTION_STAGES };
 
+/** Stage default for log groups set in `infra/`; must match `resolveDefaultLogging` in b4m-core/infra. */
+export const STAGE_LOG_RETENTION = $app.stage === 'production' ? '1 month' : '1 week';
+
 /**
  * Subscriber options for a single-record queue handler (one that reads only
  * `event.Records[0]` rather than iterating `event.Records`).

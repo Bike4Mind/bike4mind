@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { answerClaim, withOwnBalance } from '@server/partners/bedrocknewsClaimRoute';
 import { failureState, isClaimResult, malformedState, type RedeemState } from '@server/partners/bedrocknewsClaimStates';
 import { redeemTicket } from '@server/partners/bedrocknewsTickets';

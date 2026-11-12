@@ -35,10 +35,10 @@ const { mockEmitBillingEvent, mockSubscriptionEventUser } = vi.hoisted(() => ({
 vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: mockEmitBillingEvent }));
 // Which transitions post, and their wording, are covered in subscriptionLifecycle.test.ts.
 const { mockPostSubscriptionChangesToSlack } = vi.hoisted(() => ({ mockPostSubscriptionChangesToSlack: vi.fn() }));
-vi.mock('@server/integrations/slack/subscriptionLifecycle', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/subscriptionLifecycle', () => ({
   postSubscriptionChangesToSlack: mockPostSubscriptionChangesToSlack,
 }));
-vi.mock('@server/analytics/billingEventDetails', () => ({
+vi.mock('@bike4mind/server-utils/analytics/billingEventDetails', () => ({
   planDetails: (priceId: string) => ({ plan: `plan:${priceId}`, interval: 'monthly' }),
   planChangeDirection: () => 'upgrade',
   rowTimestamps: (row: { updatedAt?: Date }) => ({ updatedAt: row.updatedAt }),
@@ -81,7 +81,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 
 // Fixture mapping: the real registry rows and plan ladder are covered by their own tests;
 // here we only need "affects entitlements" (a registry-mapped price or a paid plan) vs "unmapped" prices.
-vi.mock('@server/entitlements/paidStanding', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/paidStanding', () => ({
   priceAffectsEntitlements: (priceId: string) => priceId === 'price_pro' || priceId === 'price_paid_plan',
 }));
 

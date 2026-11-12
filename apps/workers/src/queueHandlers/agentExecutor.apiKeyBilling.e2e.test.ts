@@ -33,8 +33,10 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   },
 }));
 
-vi.mock('@server/utils/persistRunAsQuest', () => ({ persistRunAsQuest: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/utils/publishMementoCompletion', () => ({
+vi.mock('@bike4mind/server-utils/utils/persistRunAsQuest', () => ({
+  persistRunAsQuest: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@bike4mind/server-utils/utils/publishMementoCompletion', () => ({
   resolveAndPublishMementoCompletion: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({

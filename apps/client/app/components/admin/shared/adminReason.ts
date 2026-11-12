@@ -36,7 +36,16 @@ export const ADMIN_REASON_PRESETS = {
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
   apiKeyAdminScope: ['Partner integration', 'Internal service', 'Requested by the account owner'],
   embedKeyRevoke: ['Compromised or leaked key', 'Site no longer embeds the agent', 'Customer request'],
+  publishedPageTakedown: [
+    'Harmful or abusive content',
+    'Phishing or impersonation',
+    'Copyright or trademark claim',
+    'Spam or junk content',
+  ],
+  publishedPageRestore: ['Report reviewed, not a violation', 'Taken down in error', 'Appeal accepted'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
+  orgGroupTypes: ['Pilot or partner access', 'Plan change', 'Support request'],
+  rateLimitReset: ['Support request', 'Key locked out', 'Counter correction'],
   productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
   systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],
   permissionsChange: ['Joined the support rotation', 'Role change on the team', 'Access no longer needed'],
@@ -104,6 +113,7 @@ export const ADMIN_REASON_PRESETS = {
   ],
   identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
   knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
+  dlqDiscard: ['Account refused', 'Job obsolete', 'Fixed with no replay needed', 'Bad payload', 'Other'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;
@@ -111,6 +121,9 @@ export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;
 export type AdminReasonDraft = { preset: string | null; note: string };
 
 export const EMPTY_ADMIN_REASON: AdminReasonDraft = { preset: null, note: '' };
+
+/** The reason an Accept on an AiSuggestion prefills; the admin can still edit it before applying. */
+export const ACCEPTED_AI_REASON: AdminReasonDraft = { preset: null, note: 'Accepted AI suggestion' };
 
 export const ADMIN_REASON_HINT = `Pick a reason or write at least ${ADMIN_ACTION_REASON_MIN_LENGTH} characters.`;
 

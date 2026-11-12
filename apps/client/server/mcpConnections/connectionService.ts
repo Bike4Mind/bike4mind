@@ -31,7 +31,11 @@ import type {
   McpConnectionPatchBody,
 } from '@server/validators/mcpConnectionValidators';
 import { prepareConnectionUrl } from './connectionUrl';
-import { evaluateConnectionPolicy, resolveCustomMcpContext, type CustomMcpContext } from './customMcpAccess';
+import {
+  evaluateConnectionPolicy,
+  resolveCustomMcpContext,
+  type CustomMcpContext,
+} from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { discoverConnectionTools, type DiscoveryOutcome } from './discovery';
 import { revokeConnectionGrant } from './oauth/revoke';
 import {

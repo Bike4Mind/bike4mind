@@ -27,7 +27,8 @@ const handler = nextRouteForContract(generateAgentDescriptionContract, {
         description: await generateAgentDescription(
           agent,
           req.logger,
-          createRequestCompletionMeter(req, 'agent description', { systemModel: true })
+          createRequestCompletionMeter(req, 'agent description', { systemModel: true }),
+          req.user.id
         ),
       });
     } catch (error) {

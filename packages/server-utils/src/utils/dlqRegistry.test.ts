@@ -46,6 +46,29 @@ const mockDlqUrls = vi.hoisted(() => ({
   'github-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueueDLQ',
   'github-lake-revoke': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueueDLQ',
   'publish-thumbnail': 'https://sqs.us-east-2.amazonaws.com/123456789/publishThumbnailQueueDLQ',
+  ...Object.fromEntries(
+    [
+      'young-account-spend-alert',
+      'api-probe-detector',
+      'image-moderation-review-sweep',
+      'spend-monitor',
+      'signup-grant-held-release',
+      'revenue-snapshot',
+      'subscription-reconciliation',
+      'account-deletion-sweep',
+      'fab-file-moderation',
+      'telemetry-alert-rule',
+      'session-enrichment',
+      'billing-events',
+      'email-events',
+      'push-events',
+      'notebook-events',
+      'completion-events',
+      'business-metric-alerts',
+      'alarm-handler',
+    ].map(label => [label, `https://sqs.us-east-2.amazonaws.com/123456789/${label}`])
+  ),
+  'generated-media-purge': 'https://sqs.us-east-2.amazonaws.com/123456789/generatedMediaPurgeQueueDLQ',
 }));
 
 const mockSourceQueueUrls = vi.hoisted(() => ({
@@ -91,6 +114,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   githubLakeIngestQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueue',
   githubLakeRevokeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueue',
   publishThumbnailQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/publishThumbnailQueue',
+  generatedMediaPurgeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generatedMediaPurgeQueue',
 }));
 
 // Mock SST Resource bindings: both DLQ and source queue URLs via Linkables
@@ -101,13 +125,20 @@ vi.mock('sst', () => ({
   },
 }));
 
-import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './dlqRegistry';
+import {
+  coreDlqDescriptors,
+  getDlqRegistry,
+  getDlqByLabel,
+  getSourceQueueUrl,
+  getDlqUrl,
+  missingQueueHelp,
+} from './dlqRegistry';
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
     it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(42);
+      expect(registry).toHaveLength(61);
     });
 
     it('each entry has required fields', () => {
@@ -115,7 +146,8 @@ describe('dlqRegistry', () => {
         expect(entry.label).toBeTruthy();
         expect(entry.displayName).toBeTruthy();
         expect(entry.application).toBeTruthy();
-        expect(entry.sourceQueue).toBeTruthy();
+        if (entry.sourceQueue === null) expect(entry.replay).toBe('unsafe');
+        else expect(entry.sourceQueue).toBeTruthy();
       }
     });
 
@@ -135,10 +167,32 @@ describe('dlqRegistry', () => {
 
     it('getSourceQueueUrl returns source URL from Resource binding', () => {
       for (const entry of getDlqRegistry()) {
+        if (entry.sourceQueue === null) continue;
         const sourceUrl = getSourceQueueUrl(entry.sourceQueue as Parameters<typeof getSourceQueueUrl>[0]);
         expect(typeof sourceUrl).toBe('string');
         expect(sourceUrl).toContain('sqs.us-east-2.amazonaws.com');
       }
+    });
+
+    it('classifies replay safety from what the consumer does', () => {
+      expect(getDlqByLabel('fab-file-chunk')?.replay).toBe('safe');
+      expect(getDlqByLabel('liveops-triage')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('secops-triage')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('fab-file-vectorize')?.replay).toBe('side-effects');
+      expect(getDlqByLabel('webhook-delivery')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('account-data-export')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('agent-proactive-message')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('email-batch')?.replay).toBe('side-effects');
+      expect(getDlqByLabel('email-job')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('drive-disconnect-purge')?.replay).toBe('safe');
+      expect(getDlqByLabel('github-webhook')?.replay).toBe('unsafe');
+    });
+
+    it('every core entry has description, replay, replayNote, owner', () => {
+      const incomplete = coreDlqDescriptors()
+        .map(entry => ({ label: entry.label, missing: missingQueueHelp(entry) }))
+        .filter(({ missing }) => missing.length > 0);
+      expect(incomplete).toEqual([]);
     });
 
     it('includes tavern-heartbeat entry', () => {
@@ -187,13 +241,41 @@ describe('dlqRegistry', () => {
   });
 });
 
+describe('missingQueueHelp', () => {
+  const valid = { description: 'Does a thing', replay: 'safe', replayNote: 'Upserts by id', owner: 'Platform ops' };
+
+  it('returns nothing for a complete entry', () => {
+    expect(missingQueueHelp(valid)).toEqual([]);
+  });
+
+  it('flags empty and whitespace-only strings', () => {
+    expect(missingQueueHelp({ ...valid, description: '' })).toEqual(['description']);
+    expect(missingQueueHelp({ ...valid, owner: '   ' })).toEqual(['owner']);
+  });
+
+  it('flags a missing key', () => {
+    expect(missingQueueHelp({ description: valid.description, replay: valid.replay, owner: valid.owner })).toEqual([
+      'replayNote',
+    ]);
+  });
+
+  it('flags a replay value outside the enum', () => {
+    expect(missingQueueHelp({ ...valid, replay: 'maybe' })).toEqual(['replay']);
+    expect(missingQueueHelp({ ...valid, replay: undefined })).toEqual(['replay']);
+  });
+
+  it('flags every field of an entry with no help', () => {
+    expect(missingQueueHelp({})).toEqual(['description', 'replayNote', 'owner', 'replay']);
+  });
+});
+
 describe('dlqUrls Linkable', () => {
   // The mock above cannot catch a key renamed on one side only; read the real infra/web.ts instead.
   it('exposes a URL under every registry label, and nothing else', () => {
     const webTs = readFileSync(fileURLToPath(new URL('../../../../infra/web.ts', import.meta.url)), 'utf8');
     const block = webTs.slice(webTs.indexOf("new sst.Linkable('dlqUrls'"));
     const properties = block.slice(block.indexOf('{'), block.indexOf('\n});'));
-    const linkableKeys = [...properties.matchAll(/^\s+'([a-z0-9-]+)':/gm)].map(m => m[1]).sort();
+    const linkableKeys = [...properties.matchAll(/['"]([a-z0-9-]+)['"]:/g)].map(m => m[1]).sort();
 
     expect(linkableKeys).toEqual(
       getDlqRegistry()

@@ -74,8 +74,8 @@ import { resolveEmbedTools } from './embedToolResolver';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { z } from 'zod';
-import { getUserEntitlements } from '@server/entitlements';
-import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
+import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 
 /**
  * Public embed chat endpoint (`POST /api/embed/chat`), served by the always-on

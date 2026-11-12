@@ -28,11 +28,11 @@ import {
   projectRepository,
   userRepository,
 } from '@bike4mind/database';
-import type { EntitlementRequest } from '@server/entitlements';
+import type { EntitlementRequest } from '@bike4mind/server-utils/entitlements/index';
 import type { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { fileContentUrl } from '@server/files/browserFileSigner';
-import { toAccessContext } from './toAccessContext';
+import { toAccessContext, toMemberAccessContext, toCompleteMemberAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import {
   grantingLakes,
   isFileInAccessibleLake,
@@ -42,6 +42,18 @@ import { firstQueryValue } from '@bike4mind/server-utils/dataLakes/firstQueryVal
 import { narrowAccessibleLakes } from '@bike4mind/server-utils/dataLakes/narrowAccessibleLakes';
 
 export { grantingLakes, isFileInAccessibleLake, firstQueryValue };
+
+/**
+ * The subset of `lakeIds` a platform admin could read only through the admin bypass, i.e. lakes
+ * outside what the same user would reach as an ordinary member. Always `[]` for a non-admin.
+ */
+export async function adminBypassLakeIds(req: EntitlementRequest, lakeIds: string[]): Promise<string[]> {
+  if (!req.user?.isAdmin || lakeIds.length === 0) return [];
+  const memberIds = new Set(
+    (await resolveAccessibleLakes(req, { asMember: true, requireCompleteAccess: true })).map(l => l.id)
+  );
+  return lakeIds.filter(id => !memberIds.has(id));
+}
 
 /**
  * Resolve the data lakes a user can browse: their dynamic (DB) lakes - already
@@ -61,7 +73,10 @@ export { grantingLakes, isFileInAccessibleLake, firstQueryValue };
  * mixed result as the narrower shared shape keeps the manager-only labels off a path that has
  * no use for them.
  */
-export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<DataLakeConfig[]> {
+export async function resolveAccessibleLakes(
+  req: EntitlementRequest,
+  options?: { asMember?: false; requireCompleteAccess?: never } | { asMember: true; requireCompleteAccess?: boolean }
+): Promise<DataLakeConfig[]> {
   // toAccessContext, not a local literal: it is the one place this shape is built, and it is
   // what resolves entitlementKeys. Building it inline here silently dropped them, so
   // findAccessible saw no entitlement arm and browse lost a lake gated by requiredEntitlement
@@ -69,7 +84,11 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<D
   // Costs a developer-tagged non-admin one subscription read they previously skipped: the old
   // inline form resolved keys lazily and that branch short-circuits on the developer tag. Worth
   // it to stop the two halves of the merge disagreeing about what the caller holds.
-  const ctx = await toAccessContext(req);
+  const ctx = options?.requireCompleteAccess
+    ? await toCompleteMemberAccessContext(req)
+    : options?.asMember
+      ? await toMemberAccessContext(req)
+      : await toAccessContext(req);
 
   // No `users` adapter: this is the content-scope path (article/tag-count/answer gating), which
   // never renders an owner, so it must not pay for the owner-name lookup the manager list does.
@@ -88,6 +107,8 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<D
   const dynamic = ctx.isAdmin
     ? await dataLakeService.listAllDataLakes(ctx, { db: { dataLakes: dataLakeRepository } })
     : await dataLakeService.listDataLakes(ctx, {
+        ...(options?.requireCompleteAccess ? { requireCompleteAccess: true } : {}),
+        logger: req.logger,
         db: {
           dataLakes: dataLakeRepository,
           dataLakeAccessGrants: dataLakeAccessGrantRepository,

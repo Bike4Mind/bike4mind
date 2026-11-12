@@ -4,6 +4,7 @@ import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection'
 import {
   ACCOUNT_SUSPENDED_ERROR_CODE,
   AuthEvents,
+  MfaEnrollmentEvents,
   HTTPError,
   buildSuspensionNotice,
   InternalServerError,
@@ -51,10 +52,12 @@ import {
   reserveOtcRegistrationDomainBudget,
 } from '@server/utils/otcLimits';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
+import { recordMfaEnrollmentEvent } from '@server/auth/mfaEnrollmentFunnel';
+import { readEnforceMfa } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
-import { assertSignupNetworkWithinLimits } from '@server/auth/signupNetworkLimits';
+import { assertSignupNetworkWithinLimits } from '@bike4mind/server-utils/auth/signupNetworkLimits';
 import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
@@ -691,6 +694,17 @@ const handler = baseApi({ auth: false })
       visitId,
     });
     await emitFunnelEvent({ user: funnelUser, event: 'signup_completed', metadata: { method: 'otc' }, visitId });
+
+    // A new account has no factor, so under enforceMFA this session opens on the enforcement
+    // screen (MFAEnforcementWrapper) rather than the app. Best-effort, like the analytics above.
+    if (await readEnforceMfa({ skipCache: false }).catch(() => false)) {
+      await recordMfaEnrollmentEvent(
+        newUser.id,
+        MfaEnrollmentEvents.REQUIRED,
+        { surface: 'session', source: 'otc-registration', strategy: 'otc' },
+        req.logger
+      );
+    }
 
     const registrationSession = await issueSessionForRequest(req, newUser.id, {
       createdVia: 'otc-registration',

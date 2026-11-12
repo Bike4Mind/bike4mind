@@ -24,10 +24,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     // Only mark user offline if no other connections remain (e.g., CLI + web client both connected)
     const remainingConnections = await Connection.countDocuments({ userId });
     if (remainingConnections === 0) {
-      await User.updateOne({ _id: userId }, { lastActiveAt: new Date(), isOnline: false });
+      await User.updateOne({ _id: userId }, { isOnline: false });
       await userService.updateLogoutTime(userId.toString(), { db: { users: userRepository }, logger });
-    } else {
-      await User.updateOne({ _id: userId }, { lastActiveAt: new Date() });
     }
   }
 

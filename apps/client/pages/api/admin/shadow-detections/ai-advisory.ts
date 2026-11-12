@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { aiAdvisorySummarySchema } from '@client/app/utils/aiAdvisory';
-import { listAiAbuseAdvisories } from '@server/admin/aiAdvisory/aiAbuseAdvisories';
+import { aiAdvisorySummarySchema } from '@bike4mind/server-utils/app/utils/aiAdvisory';
+import { listAiAbuseAdvisories } from '@bike4mind/server-utils/admin/aiAdvisory/aiAbuseAdvisories';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { respond } from '@server/utils/respond';
@@ -22,7 +22,7 @@ const handler = adminApi({
   .get(
     asyncHandler(async (_req, res) => {
       res.setHeader('Cache-Control', 'private, no-store');
-      respond(res, aiAdvisorySummarySchema, await listAiAbuseAdvisories());
+      respond(res, aiAdvisorySummarySchema, await listAiAbuseAdvisories(undefined, { includeLinkedAccounts: true }));
     })
   );
 

@@ -4,7 +4,7 @@ import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featu
 import { dataLakeRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { loadFindingForLake } from '@server/dataLakes/loadFindingForLake';
 import { recordFindingResolutionBelief } from '@server/dataLakes/recordFindingResolutionBelief';
 

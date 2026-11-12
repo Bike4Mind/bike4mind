@@ -116,7 +116,8 @@ export const wafLogGroup =
         {
           // MUST be us-east-1 for CloudFront-scope WAF
           provider: wafProviderUsEast1,
-          // Retain logs for dev (safety net), auto-delete for PR stages (cleanup)
+          // Retain logs for dev (safety net), auto-delete for PR stages (cleanup). An orphaned group keeps
+          // its 30-day retention, so its events still expire; only the empty group remains.
           retainOnDelete: $app.stage === 'dev',
         }
       )

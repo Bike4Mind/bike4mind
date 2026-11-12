@@ -105,7 +105,7 @@ vi.mock('@bike4mind/services', async orig => ({
       tags: z.array(z.string()).nullable().optional(),
       currentCredits: z.number().optional(),
       creditReason: z.string().optional(),
-      creditDelta: z.number().optional(),
+      creditDelta: z.number().int().optional(),
       roleChangeReason: z.string().optional(),
       password: z.string().nullable().optional(),
       email: z.string().optional(),
@@ -177,14 +177,14 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
 // The setting gate and the mail are covered in server/users/suspensionNoticeEmail.test.ts; here only the call.
 vi.mock('@server/users/suspensionNoticeEmail', () => ({ emailSuspensionNoticeIfEnabled: mockEmailSuspensionNotice }));
-vi.mock('@server/billing/linkedAccounts', () => ({ propagateAccountRisk: mockPropagateAccountRisk }));
+vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({ propagateAccountRisk: mockPropagateAccountRisk }));
 // Grading rules are covered in server/admin/shadowDetectionStatusVerdicts.test.ts; here only the call.
 vi.mock('@server/admin/shadowDetectionStatusVerdicts', () => ({
   gradeDetectionsForStatusChange: mockGradeDetections,
 }));
 // The audit-entry builder stays real so the test pins what the admin log records.
-vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/cancelAccountSubscriptions')>()),
   cancelAccountSubscriptions: mockCancelAccountSubscriptions,
 }));
 
@@ -510,8 +510,8 @@ describe('PUT /api/users/:id/update - admin unknown-field discard', () => {
   });
 
   it('rejects a credit change whose reason was misnamed adminNote, instead of dropping it', async () => {
-    // `adminNote` is the real misnaming that shipped once (see useUpdateUserCredits): the intended
-    // field is `creditReason`. It parses away, so the reason check now turns it into a 400.
+    // `adminNote` is a misnaming of the intended field, `creditReason`.
+    // It parses away, so the reason check now turns it into a 400.
     const { promise } = run({ user: ADMIN, userId: 'other-user', body: { currentCredits: 500, adminNote: 'comped' } });
 
     await expect(promise).rejects.toMatchObject({ statusCode: 400 });
@@ -1046,6 +1046,7 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       await promise;
 
       expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().appliedCreditDelta).toBe(credits);
       expect(mockAdminUpdateUser.mock.calls[0][1]).toMatchObject({ creditReason: CREDIT_REASON });
       expect(mockRecord).toHaveBeenCalledTimes(1);
       expect(mockRecord).toHaveBeenCalledWith(
@@ -1059,6 +1060,39 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
           related: { creditTransactionId: 'ctx-1' },
         })
       );
+    });
+
+    it('returns the clamped committed delta, not the requested deduction', async () => {
+      mockUserFindById.mockReturnValue(target({ currentCredits: 40 }));
+      mockAdminUpdateUser.mockResolvedValue({
+        user: target({ currentCredits: 0 }),
+        creditAdjustment: adjustment(-40, 40),
+      });
+      const { res, promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { creditDelta: -100, creditReason: CREDIT_REASON },
+      });
+      await promise;
+
+      expect(res._getJSONData().appliedCreditDelta).toBe(-40);
+      expect(mockRecord.mock.calls[0][1].details.credits).toBe(-40);
+    });
+
+    it.each([0.5, '0.5', -0.5])('rejects fractional creditDelta %j at the route boundary', async creditDelta => {
+      mockUserFindById.mockReturnValue(target());
+      await expect(
+        run({ user: ADMIN, userId: 'other-user', body: { creditDelta, creditReason: CREDIT_REASON } }).promise
+      ).rejects.toThrow();
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('omits the applied delta for a non-credit response', async () => {
+      mockUserFindById.mockReturnValue(target());
+      const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { name: 'Renamed' } });
+      await promise;
+      expect(res._getJSONData()).not.toHaveProperty('appliedCreditDelta');
     });
 
     it('omits related when the adjustment carries no ledger transaction id', async () => {

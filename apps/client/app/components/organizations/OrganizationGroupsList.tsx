@@ -48,7 +48,7 @@ interface OrganizationGroupsListProps {
  */
 export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
   organization,
-  emptyStateMessage = 'No group types have been granted to this organization yet. Contact your Bike4Mind administrator to enable them.',
+  emptyStateMessage = 'No group types have been granted to this team yet. Contact your Bike4Mind administrator to enable them.',
 }) => {
   const queryClient = useQueryClient();
   const orgId = organization.id;

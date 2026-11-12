@@ -1,5 +1,5 @@
 import { hasDeveloperUserTag, type CoreTutorialVisibility } from '@bike4mind/common';
-import { userHasEntitlement, type EntitlementUser } from '@server/entitlements';
+import { userHasEntitlement, type EntitlementUser } from '@bike4mind/server-utils/entitlements/index';
 
 /**
  * Whether the user may see a core tutorial. Admins and developers see everything, as the client gate does;

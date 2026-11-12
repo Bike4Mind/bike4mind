@@ -4,6 +4,7 @@ import { belowReasoningFloor, buildThinkingParams } from './thinkingParams';
 
 export { resolveDispatchForRecord } from './dispatchResolver';
 export { buildThinkingParams, reasonsWithinOutputBudget } from './thinkingParams';
+export { chatReasoningEffortsFor } from './reasoningEfforts';
 
 /**
  * The max_tokens the adapter actually sends for a `maxTokens` request: the Anthropic adapters raise

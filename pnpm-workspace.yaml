@@ -75,6 +75,7 @@ overrides:
   "markdown-it@<14.3.3": "^14.3.3"
   "dompurify@>=3.0.0 <3.4.17": "^3.4.17"
   "decode-uri-component@>=0.5.0 <0.5.1": "^0.5.1"
+  "mongoose@>=8.0.0 <8.24.7": "^8.24.7"
 
 ignoredBuiltDependencies:
   - "aws-sdk"

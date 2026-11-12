@@ -251,6 +251,23 @@ describe('PermissionService', () => {
     expect(stored.projects[project]?.allow ?? []).toEqual([]);
   });
 
+  it("applies a main checkout's project-root path rules to a worktree's own files", async () => {
+    const worktree = join(project, '..', 'worktree');
+    const linked = new PermissionService({
+      store: new PermissionRuleStore(join(userData, 'permission-rules.json')),
+      claudeCode,
+      isTrusted: async () => false,
+      home,
+      protectedRoots: [],
+      mainCheckoutOf: async directory => (directory === worktree ? project : null),
+      logger: { warn },
+    });
+    await linked.setRules({ kind: 'project', directory: project }, { allow: ['Edit(/notes.md)'], ask: [], deny: [] });
+    const rules = await linked.rulesFor({ project: worktree, workingDirectory: worktree });
+    expect(rules.evaluate({ tool: 'file_write', paths: [join(worktree, 'notes.md')] }).decision).toBe('allow');
+    expect(rules.evaluate({ tool: 'file_write', paths: [join(project, 'notes.md')] }).decision).toBeNull();
+  });
+
   it('leaves a project with no stored rules unchanged when revoking from it', async () => {
     expect(await service.revokeAllow({ kind: 'project', directory: project }, 'Bash(pwd)')).toBe(false);
     const stored = await new PermissionRuleStore(join(userData, 'permission-rules.json')).read();

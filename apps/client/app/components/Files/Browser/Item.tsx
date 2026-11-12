@@ -38,6 +38,7 @@ import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 import { brand, brandAlpha, green, greenAlpha, orange, red } from '@client/app/utils/themes/colors';
 import { useFileBrowserInstance } from './instanceContext';
+import FileStarButton from './FileStarButton';
 import FileBrowserItemActions from './ItemActions';
 import UsernameText from '@client/app/components/common/UsernameText';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -290,6 +291,7 @@ const useCommon = (file: IFabFileDocument) => {
   const { selectedIds, setSelectedIds, config } = useFileBrowserInstance();
   const selected = selectedIds.has(file.id);
   const isAdded = config.addedFileIds?.has(file.id) ?? false;
+  const showStar = config.enableStar === true;
   const [editMode, setEditMode] = useState(false);
 
   function handleClick() {
@@ -305,6 +307,7 @@ const useCommon = (file: IFabFileDocument) => {
   return {
     selected,
     isAdded,
+    showStar,
     editMode,
     setEditMode,
     handleClick,
@@ -336,7 +339,7 @@ const isImageFile = (filename: string) => {
 
 const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = [] }) => {
   const { fileName, fileSize, createdAt, chunked, vectorized, isChunking, isVectorizing } = file;
-  const { selected, isAdded, editMode, setEditMode, handleClick } = useCommon(file);
+  const { selected, isAdded, showStar, editMode, setEditMode, handleClick } = useCommon(file);
   const icon = getFileIcon(file, 20);
   const playable = isPlayableMedia(file);
   const isVideo = isVideoMimeType(file.mimeType);
@@ -602,6 +605,7 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
           />
 
           {isAdded && <AddedBadge />}
+          {showStar && <FileStarButton fileId={file.id} />}
 
           {tags.length - 6 > 0 && (
             <Chip
@@ -691,7 +695,7 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
 };
 
 const GridItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = [] }) => {
-  const { selected, isAdded, editMode, setEditMode, handleClick } = useCommon(file);
+  const { selected, isAdded, showStar, editMode, setEditMode, handleClick } = useCommon(file);
   const icon = getFileIcon(file, 32);
   const { chunked, vectorized, isChunking, isVectorizing, fileName } = file;
   const { currentUser } = useUser();
@@ -971,6 +975,7 @@ const GridItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
               isChunking={isChunking}
             />
             {isAdded && <AddedBadge />}
+            {showStar && <FileStarButton fileId={file.id} />}
             {/* Shared recipients (Grid) */}
             {sharedUsersGrid.length > 0 && (
               <Box sx={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'center' }}>

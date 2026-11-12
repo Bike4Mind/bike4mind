@@ -6,7 +6,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { S3Storage } from '@bike4mind/fab-pipeline';
-import { appFileCdnPath, invalidateRouterPaths } from '@server/services/cdn/invalidateRouterCdn';
+import { appFileCdnPath, invalidateRouterPaths } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 import { Resource } from 'sst';
 import { z } from 'zod';
 

@@ -7,3 +7,6 @@ export * from './InternalTeamMemberModel';
 export * from './OrganizationModel';
 export * from './AdminApprovalModel';
 export * from './AdminGateReservationModel';
+export * from './AdminAiSuggestionModel';
+export * from './AdminMorningBriefModel';
+export * from './AdminAiOperationsModel';

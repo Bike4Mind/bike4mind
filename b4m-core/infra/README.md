@@ -83,3 +83,12 @@ because that record belongs to a package missing from the local tree. It also
 refuses when the shell does not link every core secret (as under `sst shell
 --target`), and when the glue was generated without `infra/`, since core and
 package names cannot then be told apart.
+
+## DLQ registries
+
+`createDlqRegistry` accepts `DlqDescriptor` entries with a non-null source queue.
+Use `createInspectableDlqRegistry` and `InspectableDlqDescriptor` for a registry
+that also includes inspection-only entries with `sourceQueue: null`. Those entries
+still resolve their DLQ URL; source queue URL resolution accepts only non-null
+source names. Replay-safety hints describe side effects separately from whether
+a source destination exists.

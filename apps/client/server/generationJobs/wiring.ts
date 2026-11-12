@@ -26,8 +26,8 @@ import {
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
-import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
-import { recordInsufficientCredits } from '@server/billing/userLimitEvents';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
+import { recordInsufficientCredits } from '@bike4mind/server-utils/billing/userLimitEvents';
 import { Logger } from '@bike4mind/observability';
 import { modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
@@ -50,9 +50,11 @@ import {
 } from '@bike4mind/utils';
 import { ImageModerationBlockedError, RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import {
+  BflImageProvider,
   createImageProviderRegistry,
   GeminiImageProvider,
   OpenAIImageProvider,
+  XaiImageProvider,
   type ImageProvider,
 } from '@bike4mind/utils/imageProviders';
 import {
@@ -154,10 +156,10 @@ export const selectImageProviderKey = (
       return keys.openai;
     case 'gemini':
       return keys.gemini;
-    // No image job adapter yet: no key, so createImageJobs refuses the model instead of holding credits.
     case 'bfl':
+      return keys.bfl;
     case 'xai':
-      return null;
+      return keys.xai;
     default: {
       const unhandled: never = providerId;
       throw new Error(`no API key mapping for image provider '${String(unhandled)}'`);
@@ -221,6 +223,8 @@ const imageProcessorLambdaName = (): string | undefined => {
 export const buildImageProviders = (): ImageProvider[] => [
   new OpenAIImageProvider({ imageProcessorLambdaName }),
   new GeminiImageProvider(),
+  new BflImageProvider(),
+  new XaiImageProvider(),
 ];
 
 // Direct links (worker, sweep cron) win; API Lambdas only carry the sourceQueueUrls Linkable. sst's Resource

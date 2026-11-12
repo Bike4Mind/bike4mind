@@ -1,0 +1,106 @@
+name: iOS
+
+# openapi.json is not a trigger: the job regenerates from the committed package snapshot, so it cannot
+# detect drift from the server spec. Spec sync is a tracked follow-up of the iOS epic.
+on:
+  pull_request:
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios.yml'
+      - 'scripts/check-no-overlay-literals.sh'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios.yml'
+      - 'scripts/check-no-overlay-literals.sh'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  ios:
+    name: Lint, test, generated-client check
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: apps/ios
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pin the toolchain: the newest Xcode 26.x installed on the image, never the image default.
+      - name: Select Xcode
+        working-directory: .
+        run: |
+          xcode_app=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$xcode_app" ]; then
+            echo "No Xcode 26.x found on this runner image" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$xcode_app"
+          xcodebuild -version
+
+      # Pin the simulator by UDID: an iPhone from the newest iOS runtime that has one. Picking by name with
+      # OS=latest breaks whenever the chosen model exists only on an older runtime.
+      - name: Pick simulator
+        run: |
+          pick=$(xcrun simctl list devices available --json | python3 -c '
+          import json, re, sys
+          runtimes = []
+          for key, devices in json.load(sys.stdin)["devices"].items():
+              match = re.search(r"SimRuntime\.iOS-(\d+(?:-\d+)*)$", key)
+              iphones = sorted((d for d in devices if d["name"].startswith("iPhone")), key=lambda d: d["name"])
+              if match and iphones:
+                  runtimes.append((tuple(int(part) for part in match.group(1).split("-")), iphones[0]))
+          if not runtimes:
+              sys.exit("No available iPhone simulator on any iOS runtime")
+          version, device = max(runtimes, key=lambda runtime: runtime[0])
+          print(device["udid"], "iOS " + ".".join(map(str, version)), device["name"])
+          ')
+          if [ -z "$pick" ]; then
+            echo "Could not pick an iPhone simulator" >&2
+            exit 1
+          fi
+          read -r udid label <<< "$pick"
+          echo "Using simulator: $label ($udid)"
+          echo "DESTINATION=platform=iOS Simulator,id=$udid" >> "$GITHUB_ENV"
+
+      # Swift packages resolve and compile the OpenAPI generator once; later runs reuse them.
+      - name: Cache SwiftPM
+        uses: actions/cache@v5
+        with:
+          path: |
+            apps/ios/build/DerivedData/SourcePackages
+            apps/ios/Packages/B4MKit/.build
+            apps/ios/Packages/B4MClient/.build
+            apps/ios/Tools/Generator/.build
+          key: ios-spm-${{ runner.os }}-${{ hashFiles('apps/ios/**/Package.swift', 'apps/ios/**/Package.resolved') }}
+          restore-keys: ios-spm-${{ runner.os }}-
+
+      - name: Entitlements parity
+        run: Tools/check-entitlements-parity.sh
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+      # The generated client is committed; regenerating from the committed snapshot must be a no-op.
+      - name: Generated client is reproducible
+        run: |
+          make generate-client
+          changes=$(git status --porcelain -- .)
+          if [ -n "$changes" ]; then
+            echo "Regenerating changed the tree (modified or untracked files):" >&2
+            echo "$changes" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: make build

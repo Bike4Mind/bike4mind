@@ -2,6 +2,7 @@ import mongoose, { Document, Model, model, Schema, Types } from 'mongoose';
 import {
   ABUSE_ASSESSMENT_FAILURE_CODES,
   ABUSE_ASSESSMENT_JUDGMENTS,
+  ABUSE_ASSESSMENT_REASON_KEYS,
   ABUSE_ASSESSMENT_RESULTS,
   ABUSE_ASSESSMENT_TRIGGERS,
   DECISION_MODEL_IDS,
@@ -9,6 +10,7 @@ import {
   type AbuseAssessmentFeatureSummary,
   type AbuseAssessmentItem,
   type AbuseAssessmentJudgment,
+  type AbuseAssessmentReason,
   type AbuseAssessmentResult,
   type AbuseAssessmentTrigger,
   type DecisionModelId,
@@ -26,6 +28,8 @@ export interface IAbuseAssessmentDocument extends Document {
   result: AbuseAssessmentResult;
   probabilities: { value: AbuseAssessmentJudgment; probability: number }[];
   confidence: number | null;
+  // Absent on rows written before policy v2.
+  reasons?: AbuseAssessmentReason[];
   // `model` would shadow Document#model.
   decisionModel: DecisionModelId;
   modelVersion: string | null;
@@ -54,6 +58,14 @@ const ProbabilitySchema = new Schema(
   { _id: false }
 );
 
+const ReasonSchema = new Schema(
+  {
+    key: { type: String, enum: ABUSE_ASSESSMENT_REASON_KEYS, required: true },
+    probability: { type: Number, required: true },
+  },
+  { _id: false }
+);
+
 export const AbuseAssessmentSchema: Schema<IAbuseAssessmentDocument> = new Schema<IAbuseAssessmentDocument>(
   {
     cacheKey: { type: String, required: true, unique: true },
@@ -61,6 +73,7 @@ export const AbuseAssessmentSchema: Schema<IAbuseAssessmentDocument> = new Schem
     result: { type: String, enum: ABUSE_ASSESSMENT_RESULTS, required: true },
     probabilities: { type: [ProbabilitySchema], default: [] },
     confidence: { type: Number, default: null },
+    reasons: { type: [ReasonSchema], default: undefined },
     decisionModel: { type: String, enum: DECISION_MODEL_IDS, required: true },
     modelVersion: { type: String, default: null },
     policyVersion: { type: Number, required: true },
@@ -90,12 +103,27 @@ type LeanAbuseAssessment = Omit<IAbuseAssessmentDocument, keyof Document> & { _i
 
 export type LatestJudgedAssessment = Pick<AbuseAssessmentItem, 'detectionId' | 'result' | 'confidence' | 'assessedAt'>;
 
+/**
+ * Drops undefined-valued keys at any depth. The driver stores an undefined key as null, which the
+ * summary contract (optional, never nullable) rejects when the saved row is read back.
+ */
+function withoutUndefinedKeys<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(withoutUndefinedKeys) as T;
+  if (value === null || typeof value !== 'object' || value instanceof Date) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, entry]) => entry !== undefined)
+      .map(([key, entry]) => [key, withoutUndefinedKeys(entry)])
+  ) as T;
+}
+
 const toItem = (doc: LeanAbuseAssessment): AbuseAssessmentItem => ({
   id: doc._id.toString(),
   detectionId: doc.detectionId,
   result: doc.result,
   probabilities: doc.probabilities.map(({ value, probability }) => ({ value, probability })),
   confidence: doc.confidence,
+  reasons: (doc.reasons ?? []).map(({ key, probability }) => ({ key, probability })),
   model: doc.decisionModel,
   modelVersion: doc.modelVersion,
   policyVersion: doc.policyVersion,
@@ -118,10 +146,13 @@ export class AbuseAssessmentRepository {
 
   /** Writes the latest result for a cache key and counts the attempt; a judgment replaces an unknown. */
   async save(input: SaveAbuseAssessmentInput): Promise<AbuseAssessmentItem> {
-    const { cacheKey, model: decisionModel, ...fields } = input;
+    const { cacheKey, model: decisionModel, reasons = [], featureSummary, ...fields } = input;
     const doc = await AbuseAssessmentModel.findOneAndUpdate(
       { cacheKey },
-      { $set: { ...fields, decisionModel }, $inc: { attempts: 1 } },
+      {
+        $set: { ...fields, featureSummary: withoutUndefinedKeys(featureSummary), reasons, decisionModel },
+        $inc: { attempts: 1 },
+      },
       { upsert: true, new: true, lean: true }
     );
     return toItem(doc as unknown as LeanAbuseAssessment);

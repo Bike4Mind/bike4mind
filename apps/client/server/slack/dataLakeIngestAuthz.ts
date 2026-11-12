@@ -88,7 +88,7 @@ export interface LakeAuthzDeps {
 
 /**
  * Build the management `AccessContext` server-side from the resolved user, mirroring
- * `server/dataLakes/toAccessContext.ts`. Identity and permissions come from the B4M user record,
+ * `packages/server-utils/src/dataLakes/toAccessContext.ts`. Identity and permissions come from the B4M user record,
  * never from the Slack payload, which is attacker-controlled for anyone who can post in a channel.
  */
 export function buildSlackAccessContext(

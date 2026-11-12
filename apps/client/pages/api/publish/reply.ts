@@ -4,7 +4,7 @@ import { Quest, Session } from '@bike4mind/database';
 import { PublishReplyRequestSchema, type PublishResult, type CitableSource, visibleReplyText } from '@bike4mind/common';
 import { resolveVisibility, checkScopePermission, type PublishUser } from '@server/services/publish';
 import { settlePublication } from '@server/services/publish/settlePublication';
-import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { parseArtifactsWithFallback } from '@bike4mind/server-utils/app/utils/artifactParser';
 import {
   REPLY_TITLE_MAX,

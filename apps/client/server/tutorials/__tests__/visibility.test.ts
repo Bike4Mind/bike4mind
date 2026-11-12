@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const userHasEntitlement = vi.hoisted(() => vi.fn());
-vi.mock('@server/entitlements', () => ({ userHasEntitlement }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ userHasEntitlement }));
 
 import { coreTutorialVisibleTo, filterCoreTutorialsVisibleTo } from '../visibility';
 

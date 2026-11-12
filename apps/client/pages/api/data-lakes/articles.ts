@@ -1,7 +1,12 @@
 import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { resolveAccessibleLakes, queryDataLakeArticles, type DataLakeArticlesQuery } from '@server/dataLakes';
+import {
+  adminBypassLakeIds,
+  resolveAccessibleLakes,
+  queryDataLakeArticles,
+  type DataLakeArticlesQuery,
+} from '@server/dataLakes';
 import { narrowAccessibleLakes } from '@bike4mind/server-utils/dataLakes/narrowAccessibleLakes';
 import { adminSettingsRepository, lakeAccessEventRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
@@ -29,7 +34,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES }).get(
     const result = await queryDataLakeArticles(req, lakes, req.query);
     const auditLakes = narrowAccessibleLakes(lakes, req.query.lakeId);
 
-    // Best-effort audit write, only when something was actually returned - an empty
+    // Audit write, only when something was actually returned - an empty
     // result (no accessible lakes, or a deep-link miss) reflects no lake content, so no event.
     const files = result.data as Array<{ id: string; tags?: { name: string }[] }>;
     if (files.length > 0) {
@@ -57,9 +62,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES }).get(
         // (?id=) branch returns straight from its `if (query.id)` arm without ever reading
         // query.search, so a ?id=&search= request must not record a queryText that named no search.
         const searchTerm = isDeepLink ? undefined : firstQueryValue(req.query.search);
-        // Awaited (never rethrows - see recordLakeAccessEvent's doc comment): this is a per-request
-        // serverless route, so the write must land before the response ends, not race a post-response
-        // freeze of the execution environment.
+        // Awaited so the write lands before the response ends; strict for an admin-bypass read.
+        const bypass = await adminBypassLakeIds(req, resolvedLakeIds);
         await dataLakeService.recordLakeAccessEvent(
           lakeAccessEventRepository,
           {
@@ -67,6 +71,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES }).get(
             organizationId: normalizeId(req.user.organizationId),
             resolvedLakeIds,
             fileIds: files.map(f => f.id),
+            ...(bypass.length ? { adminBypassLakeIds: bypass } : {}),
             surface: 'data-lake-articles',
             ...(searchTerm ? { queryText: searchTerm } : {}),
           },

@@ -1,21 +1,46 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import type { DlqRecommendation } from '@bike4mind/common';
+
+// Must stay in sync with DLQ_REPLAY_SAFETY in packages/server-utils/src/utils/dlqRegistry.ts.
+export type DlqReplaySafety = 'safe' | 'side-effects' | 'unsafe';
 
 export interface DlqQueueInfo {
   label: string;
   displayName: string;
   application: string;
+  /** Absent on older servers, whose registered queues all have replay destinations. */
+  hasReplayDestination?: boolean;
+  // Help fields are absent for overlay-contributed queues.
+  description?: string;
+  replay?: DlqReplaySafety;
+  replayNote?: string;
+  owner?: string;
+  /** -1 when unreadable, including on a stage that does not create the queue (deployed is false then). */
   approximateMessageCount: number;
   approximateNotVisibleCount: number;
+  /** False when this stage does not create the queue (stage-gated scheduled jobs); absent otherwise. */
+  deployed?: boolean;
+  /** Consumer Lambda log groups; null when the consumer could not be resolved. */
+  logGroups?: string[] | null;
+  /** CloudWatch Logs Insights link over the consumer's last 24h of logs. */
+  logsUrl?: string | null;
+  /** Absent when the queue attributes could not be read. */
+  messageRetentionSeconds?: number;
 }
 
 export interface DlqMessage {
+  recommendation?: DlqRecommendation;
+  failureLookupFailed?: boolean;
   messageId: string;
+  failure?: { errorMessage: string; category: 'refused' | 'timeout' | 'invalid output' | 'bug' | 'unknown' };
   body: string;
   receiptHandle?: string;
   sentTimestamp?: string;
   approximateReceiveCount?: string;
   approximateFirstReceiveTimestamp?: string;
+  /** CloudWatch Logs Insights link over the consumer's logs around this message's send time. */
+  logsUrl?: string | null;
 }
 
 export interface DlqReplayResult {
@@ -36,8 +61,10 @@ export interface DlqReplayLogEntry {
   queueLabel: string;
   messageId: string;
   sourceQueue: string;
-  status: 'success' | 'failed' | 'skipped';
+  status: 'success' | 'failed' | 'skipped' | 'discarded' | 'pending';
+  operation?: 'replay' | 'discard';
   errorMessage?: string;
+  reason?: string;
   replayedBy: string;
   /** Email or username of the admin; falls back to the id when the user no longer exists. */
   replayedByName: string;
@@ -88,6 +115,7 @@ export const useDlqReplay = () => {
   return useMutation({
     mutationFn: async (params: {
       queueLabel: string;
+      reason?: string;
       batchSize?: number;
       messageIds?: string[];
       messages?: Array<{ messageId: string; receiptHandle: string; body: string }>;
@@ -103,9 +131,37 @@ export const useDlqReplay = () => {
   });
 };
 
+export const useDlqDiscard = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      queueLabel: string;
+      reason: string;
+      messages: Array<{ messageId: string; receiptHandle: string; body: string }>;
+    }) => {
+      const response = await api.post<{
+        discarded: number;
+        failed: number;
+        results: Array<{
+          messageId: string;
+          status: 'discarded' | 'failed';
+          reason?: string;
+          historyPending?: boolean;
+        }>;
+      }>('/api/admin/dlq/discard', params);
+      return response.data;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'dlq', 'queues'] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'dlq', 'messages', variables.queueLabel] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'dlq', 'history'] });
+    },
+  });
+};
+
 export interface DlqHistoryFilters {
   queueLabel?: string;
-  status?: 'success' | 'failed' | 'skipped';
+  status?: 'success' | 'failed' | 'skipped' | 'discarded' | 'pending';
   startDate?: string;
   endDate?: string;
   search?: string;

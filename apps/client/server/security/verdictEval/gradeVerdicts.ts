@@ -7,15 +7,20 @@ import {
   type SignupRiskReviewState,
 } from '@bike4mind/common';
 import {
+  EVAL_COHORTS,
+  SPEND_LOOKBACK_DAYS,
   VERDICT_EVAL_LABEL_SOURCES,
+  type VerdictEvalCohortRow,
   type VerdictEvalDisagreement,
   type VerdictEvalGrader,
   type VerdictEvalLabel,
   type VerdictEvalLabelSource,
+  type VerdictEvalOperationsRow,
   type VerdictEvalReport,
   type VerdictEvalScore,
 } from '@client/app/utils/verdictEval';
-import type { SignupVerdict } from '@server/users/signupClassifier';
+import type { SignupVerdict } from '@bike4mind/server-utils/users/signupClassifier';
+import { cohortsOf, type CohortSignals } from './cohorts';
 
 /**
  * Grades the automated abuse verdicts against admin labels. Pure; the loader
@@ -28,6 +33,8 @@ import type { SignupVerdict } from '@server/users/signupClassifier';
 
 export type EvalDetection = {
   id: string;
+  detector: string;
+  policyVersion: number;
   userIds: readonly string[];
   detectedAt: Date;
   verdict: ShadowDetectionVerdict | null;
@@ -60,7 +67,12 @@ export type EvalAccountOutcome = {
   /** Banned or moderated-suspended now. */
   blockedNow: boolean;
   reviewState: SignupRiskReviewState | null;
+  /** The review was approved by the auto-approval policy, not by an admin. */
+  reviewAutoApproved: boolean;
 };
+
+/** Credits charged to one account in one hour bucket starting at `at`. */
+export type EvalSpendBucket = { at: Date; credits: number };
 
 export type SignupChartVerdict = SignupVerdict;
 
@@ -73,29 +85,35 @@ export type GradeVerdictsInput = {
   signupVerdicts: ReadonlyMap<string, SignupChartVerdict>;
   /** When each account signed up; the signup verdict's disagreements are dated by it. */
   signedUpAt: ReadonlyMap<string, Date>;
+  /** Credits per account for the members of detections labelled abuse, from SPEND_LOOKBACK_DAYS before their detection. */
+  spend: ReadonlyMap<string, readonly EvalSpendBucket[]>;
+  /** The earliest suspension or Contain by an admin, per account. */
+  suspendedAt: ReadonlyMap<string, Date>;
+  cohortSignals: ReadonlyMap<string, CohortSignals>;
+  now: Date;
   truncated: boolean;
 };
 
-type Label = { label: VerdictEvalLabel; source: VerdictEvalLabelSource };
-type Prediction = 'positive' | 'negative' | 'abstain';
+export type Label = { label: VerdictEvalLabel; source: VerdictEvalLabelSource };
+export type Prediction = 'positive' | 'negative' | 'abstain';
 
 export const MAX_DISAGREEMENTS = 100;
 
-const ADMIN_VERDICT_LABELS: Record<ShadowDetectionVerdict, VerdictEvalLabel | null> = {
+export const ADMIN_VERDICT_LABELS: Record<ShadowDetectionVerdict, VerdictEvalLabel | null> = {
   confirmed_abuse: 'abuse',
   legitimate_human: 'legit',
   legitimate_automation: 'legit',
   insufficient_evidence: null,
 };
 
-const ASSESSMENT_PREDICTIONS: Record<AbuseAssessmentResult, Prediction> = {
+export const ASSESSMENT_PREDICTIONS: Record<AbuseAssessmentResult, Prediction> = {
   abuse: 'positive',
   legitimate_automation: 'negative',
   insufficient_evidence: 'abstain',
   unknown: 'abstain',
 };
 
-const CONTAINMENT_PREDICTIONS: Record<AutoContainmentOutcome, Prediction> = {
+export const CONTAINMENT_PREDICTIONS: Record<AutoContainmentOutcome, Prediction> = {
   would_contain: 'positive',
   contained: 'positive',
   // Capped means it would have contained but the hourly cap held it back.
@@ -105,7 +123,7 @@ const CONTAINMENT_PREDICTIONS: Record<AutoContainmentOutcome, Prediction> = {
   failed: 'abstain',
 };
 
-const SIGNUP_PREDICTIONS: Record<SignupChartVerdict, Prediction> = {
+export const SIGNUP_PREDICTIONS: Record<SignupChartVerdict, Prediction> = {
   suspected: 'positive',
   legit: 'negative',
   unclassified: 'abstain',
@@ -118,7 +136,9 @@ export function accountLabel(outcome: EvalAccountOutcome): Label | null {
   }
   if (adminSuspendedAt && outcome.blockedNow) return { label: 'abuse', source: 'adminSuspended' };
   if (outcome.reviewState === 'banned') return { label: 'abuse', source: 'riskReview' };
-  if (outcome.reviewState === 'approved') return { label: 'legit', source: 'riskReview' };
+  // An approval by the auto-approval policy is the system's call, not an admin's.
+  if (outcome.reviewState === 'approved' && !outcome.reviewAutoApproved)
+    return { label: 'legit', source: 'riskReview' };
   return null;
 }
 
@@ -147,9 +167,9 @@ export function detectionLabel(detection: EvalDetection, accountLabels: Readonly
 
 type Tally = Omit<VerdictEvalScore, 'precision' | 'hitRate' | 'falsePositiveRate'>;
 
-const ratio = (part: number, whole: number) => (whole === 0 ? null : Math.round((part / whole) * 1000) / 1000);
+export const ratio = (part: number, whole: number) => (whole === 0 ? null : Math.round((part / whole) * 1000) / 1000);
 
-class Scoreboard {
+export class Scoreboard {
   private readonly tallies = new Map<string, Tally>();
   readonly disagreements: VerdictEvalDisagreement[] = [];
 
@@ -223,17 +243,165 @@ function latestBy<T>(rows: readonly T[], keyOf: (row: T) => string, timeOf: (row
   return [...latest.values()];
 }
 
-export function gradeVerdicts(input: GradeVerdictsInput): VerdictEvalReport {
+/**
+ * Account labels, detection labels, and account labels with the admin verdict on a detection
+ * inherited by its members (an account's own label first).
+ */
+export function labelAccountsAndDetections(
+  detections: readonly EvalDetection[],
+  accounts: readonly EvalAccountOutcome[]
+) {
   const accountLabels = new Map<string, Label>();
-  for (const outcome of input.accounts) {
+  for (const outcome of accounts) {
     const label = accountLabel(outcome);
     if (label) accountLabels.set(outcome.userId, label);
   }
   const detectionLabels = new Map<string, Label>();
-  for (const detection of input.detections) {
+  for (const detection of detections) {
     const label = detectionLabel(detection, accountLabels);
     if (label) detectionLabels.set(detection.id, label);
   }
+  const signupLabels = new Map(accountLabels);
+  for (const detection of detections) {
+    const label = detectionLabels.get(detection.id);
+    if (label?.source !== 'adminVerdict') continue;
+    for (const userId of detection.userIds) if (!signupLabels.has(userId)) signupLabels.set(userId, label);
+  }
+  return { accountLabels, detectionLabels, signupLabels };
+}
+
+const round1 = (value: number) => Math.round(value * 10) / 10;
+const HOUR_MS = 60 * 60 * 1000;
+const SPEND_LOOKBACK_MS = SPEND_LOOKBACK_DAYS * 24 * HOUR_MS;
+
+/** Nearest-rank percentile of an ascending list. */
+const percentile = (sorted: readonly number[], fraction: number) =>
+  sorted[Math.max(0, Math.ceil(fraction * sorted.length) - 1)];
+
+function median(sorted: readonly number[]): number {
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function operationsRows(
+  input: GradeVerdictsInput,
+  detectionLabels: ReadonlyMap<string, Label>
+): VerdictEvalOperationsRow[] {
+  const byDetector = new Map<string, EvalDetection[]>();
+  for (const detection of input.detections) {
+    byDetector.set(detection.detector, [...(byDetector.get(detection.detector) ?? []), detection]);
+  }
+  return [...byDetector]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([detector, detections]) => {
+      const reviewed = detections.filter(detection => detection.verdict !== null);
+      const conclusive = reviewed.filter(detection => detection.verdict !== 'insufficient_evidence');
+      const confirmed = conclusive.filter(detection => detection.verdict === 'confirmed_abuse');
+      const abuseDetections = detections.filter(detection => detectionLabels.get(detection.id)?.label === 'abuse');
+
+      const hours: number[] = [];
+      // Each account counts once per detector, at its earliest abuse-labelled detection.
+      const detectedAt = new Map<string, Date>();
+      for (const detection of abuseDetections) {
+        const signups = detection.userIds.flatMap(id => {
+          const signedUp = input.signedUpAt.get(id);
+          return signedUp ? [signedUp.getTime()] : [];
+        });
+        if (signups.length > 0) {
+          const elapsed = detection.detectedAt.getTime() - Math.min(...signups);
+          if (elapsed >= 0) hours.push(elapsed / HOUR_MS);
+        }
+        for (const userId of detection.userIds) {
+          const current = detectedAt.get(userId);
+          if (!current || detection.detectedAt < current) detectedAt.set(userId, detection.detectedAt);
+        }
+      }
+      let creditsBefore = 0;
+      let creditsAfter = 0;
+      for (const [userId, at] of detectedAt) {
+        const lookbackStart = at.getTime() - SPEND_LOOKBACK_MS;
+        const end = input.suspendedAt.get(userId) ?? input.now;
+        for (const bucket of input.spend.get(userId) ?? []) {
+          // Buckets are an hour wide: one straddling the detection counts by its start.
+          if (bucket.at < at) {
+            if (bucket.at.getTime() >= lookbackStart) creditsBefore += bucket.credits;
+          } else if (bucket.at < end) creditsAfter += bucket.credits;
+        }
+      }
+      const sortedHours = hours.sort((a, b) => a - b);
+      return {
+        detector,
+        detections: detections.length,
+        reviewed: reviewed.length,
+        conclusive: conclusive.length,
+        reviewYield: ratio(confirmed.length, conclusive.length),
+        timeToDetection:
+          sortedHours.length > 0
+            ? {
+                n: sortedHours.length,
+                medianHours: round1(median(sortedHours)),
+                p90Hours: round1(percentile(sortedHours, 0.9)),
+              }
+            : null,
+        spend:
+          abuseDetections.length > 0
+            ? {
+                accounts: detectedAt.size,
+                creditsBeforeDetection: Math.round(creditsBefore * 100) / 100,
+                creditsAfterDetection: Math.round(creditsAfter * 100) / 100,
+              }
+            : null,
+      };
+    });
+}
+
+/**
+ * One row per cohort over `userIds`, counting the accounts in each cohort and how admins labelled them.
+ * Accounts with no loaded signals belong to no cohort.
+ */
+export function cohortRows(
+  userIds: Iterable<string>,
+  labels: ReadonlyMap<string, Label>,
+  signals: ReadonlyMap<string, CohortSignals>
+): VerdictEvalCohortRow[] {
+  return cohortRowsFrom(userIds, labels, userId => {
+    const accountSignals = signals.get(userId);
+    return accountSignals ? cohortsOf(accountSignals) : [];
+  });
+}
+
+/** `cohortRows` for callers that already hold each account's cohorts. */
+export function cohortRowsFrom(
+  userIds: Iterable<string>,
+  labels: ReadonlyMap<string, Label>,
+  cohortsFor: (userId: string) => readonly string[]
+): VerdictEvalCohortRow[] {
+  const rows = EVAL_COHORTS.map(cohort => ({
+    cohort,
+    measurable: cohort !== 'assistive',
+    flaggedAccounts: 0,
+    labelledAccounts: 0,
+    abuse: 0,
+    legit: 0,
+    falsePositiveShare: null as number | null,
+  }));
+  for (const userId of new Set(userIds)) {
+    const label = labels.get(userId);
+    for (const cohort of cohortsFor(userId)) {
+      const row = rows.find(candidate => candidate.cohort === cohort);
+      if (!row) continue;
+      row.flaggedAccounts += 1;
+      if (!label) continue;
+      row.labelledAccounts += 1;
+      if (label.label === 'abuse') row.abuse += 1;
+      else row.legit += 1;
+    }
+  }
+  return rows.map(row => ({ ...row, falsePositiveShare: ratio(row.legit, row.labelledAccounts) }));
+}
+
+export function gradeVerdicts(input: GradeVerdictsInput): VerdictEvalReport {
+  const { accountLabels, detectionLabels, signupLabels } = labelAccountsAndDetections(input.detections, input.accounts);
 
   const board = new Scoreboard();
   for (const assessment of latestBy(
@@ -275,13 +443,6 @@ export function gradeVerdicts(input: GradeVerdictsInput): VerdictEvalReport {
     });
   }
 
-  // An account's own label first; a member of a detection an admin ruled on inherits that ruling.
-  const signupLabels = new Map(accountLabels);
-  for (const detection of input.detections) {
-    const label = detectionLabels.get(detection.id);
-    if (label?.source !== 'adminVerdict') continue;
-    for (const userId of detection.userIds) if (!signupLabels.has(userId)) signupLabels.set(userId, label);
-  }
   for (const [userId, label] of signupLabels) {
     const verdict = input.signupVerdicts.get(userId);
     if (!verdict) continue;
@@ -303,7 +464,16 @@ export function gradeVerdicts(input: GradeVerdictsInput): VerdictEvalReport {
     detections: input.detections.length,
     labelledDetections: detectionLabels.size,
     labelledAccounts: signupLabels.size,
+    excludedAutoApprovals: input.accounts.filter(
+      outcome => outcome.reviewState === 'approved' && outcome.reviewAutoApproved && !accountLabels.has(outcome.userId)
+    ).length,
     scores: board.scores(),
+    operations: operationsRows(input, detectionLabels),
+    cohorts: cohortRows(
+      input.detections.flatMap(detection => detection.userIds),
+      signupLabels,
+      input.cohortSignals
+    ),
     disagreements: board.disagreements.sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, MAX_DISAGREEMENTS),
     truncated: input.truncated,
   };

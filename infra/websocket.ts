@@ -1,8 +1,11 @@
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, STAGE_LOG_RETENTION } from './constants';
 import { allSecrets } from './secrets';
 import { lambdaVpc } from './vpc';
 
-const websocketApi = new sst.aws.ApiGatewayWebSocket('websocket', {});
+// Access logs carry client IPs; use the stage default instead of SST's flat 1 month.
+const websocketApi = new sst.aws.ApiGatewayWebSocket('websocket', {
+  accessLog: { retention: STAGE_LOG_RETENTION },
+});
 
 // Memory is set per route so a change shows in review. The cold-start Mongoose + AWS SDK
 // init sets the floor: lifecycle handlers at 256 MB hit OOM and init timeouts on previews.
@@ -50,12 +53,14 @@ const disconnectRoute = websocketApi.route('$disconnect', {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
 });
+// No VPC, unlike the other routes: the handler runs with skipDatabase and only posts `pong` back
+// through the API Gateway management endpoint. If it ever opens the database, restore `vpc`; see
+// docs/architecture/lambda-vpc-audit.md and infra/__tests__/lambdaVpcAudit.test.ts.
 const heartbeatRoute = websocketApi.route('heartbeat', {
   handler: 'apps/client/server/websocket/heartbeat.func',
   runtime: 'nodejs24.x',
   memory: DB_HANDLER_MEMORY,
   timeout: '30 seconds',
-  vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   permissions: [
     {

@@ -18,7 +18,7 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { Request } from 'express';
 import { z } from 'zod';
 import { dataLakeResponseSchema } from '@bike4mind/common';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { respond } from '@server/utils/respond';

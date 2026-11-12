@@ -18,6 +18,24 @@ export const vpc = vpcId
       },
     });
 
+// Gateway endpoints keep S3 and DynamoDB traffic from in-VPC Lambdas off the NAT, at no hourly or
+// per-GB charge. Private route tables only: cluster services run in the public subnets. Only for
+// the VPC provisioned above: a shared VPC (VPC_ID) is owned outside this stack and its route
+// tables take one gateway endpoint per service, so every stage adding its own would collide.
+// See docs/architecture/lambda-vpc-audit.md.
+export const GATEWAY_ENDPOINT_SERVICES = ['s3', 'dynamodb'] as const;
+export const gatewayEndpoints = vpc
+  ? GATEWAY_ENDPOINT_SERVICES.map(
+      service =>
+        new aws.ec2.VpcEndpoint(`VpcGatewayEndpoint-${service}`, {
+          vpcId: vpc.id,
+          serviceName: $interpolate`com.amazonaws.${aws.getRegionOutput().name}.${service}`,
+          vpcEndpointType: 'Gateway',
+          routeTableIds: vpc.nodes.privateRouteTables.apply(tables => tables.map(table => table.id)),
+        })
+    )
+  : [];
+
 // Effective VPC id for consumers that need a concrete id (SG/subnet lookups):
 // the env-provided id, or the freshly-provisioned VPC's id when VPC_ID is unset.
 // Exactly one of vpcId / vpc is set, so this is always defined.

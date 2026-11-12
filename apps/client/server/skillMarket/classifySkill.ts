@@ -175,7 +175,7 @@ export async function getOperationsClassifierLlm(
   endUserId: string,
   opts: { maxTokens?: number } = {}
 ): Promise<ClassifierLlm> {
-  const operationsModel = await OperationsModelService.getOperationsModel();
+  const operationsModel = await OperationsModelService.getOperationsModel({ endUserId });
   const modelInfo = operationsModel.modelInfo;
   const apiKey = await getEffectiveApiKeyByBackend('system', modelInfo.backend);
   const llm = getLlmByModel({ [modelInfo.backend]: apiKey }, { modelInfo, logger, endUserId });

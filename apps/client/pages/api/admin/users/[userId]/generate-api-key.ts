@@ -28,7 +28,7 @@ import {
   isApiKeyScopeOffered,
   isKnownApiKeyScope,
 } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
-import { toEntitlementUser } from '@server/entitlements';
+import { toEntitlementUser } from '@bike4mind/server-utils/entitlements/index';
 import { resolveApiKeyScopeAccessForUser } from '@server/entitlements/apiKeyScopeAccess';
 import {
   parseAdminActionReason,

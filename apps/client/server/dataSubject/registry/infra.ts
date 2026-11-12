@@ -2,12 +2,44 @@ import type { DataHolderRegistry } from '../types';
 import { AUDIT_LOG, EMAIL_SUPPRESSION, expiresAfterTtl } from './retention';
 
 export const infraHolders = {
+  // A frozen evaluation set of accounts for measuring abuse detection. Account deletion
+  // (abuseEvalSetRepository.removeUser) pulls the person's own example, with its verdicts, from every set.
+  // Campaign keys are opaque hashes, so no other example names the person. The admin references below
+  // are classified for export; deletion does not rewrite them.
+  AbuseEvalSet: {
+    kind: 'holder',
+    references: [
+      { path: 'examples.userId', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'createdBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'examples.verdicts.reviewerId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'runs.ranBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
   // Advisory model judgment of a shadow detection, kept for as long as the detection.
   AbuseAssessment: {
     kind: 'viaParent',
     parent: 'ShadowDetection',
     foreignKey: 'detectionId',
     attribution: [{ path: 'requestedBy', matchBy: 'userId', action: 'anonymize' }],
+  },
+  // Advisory model verdict on an admin queue item. `entityId` is that item (a detection, a ticket), not a
+  // person, and evidence is pseudonymised before it is stored; the deciding admin is the only reference.
+  // `overrideReason` is the admin's free text and is not scanned.
+  AdminAiSuggestion: {
+    kind: 'holder',
+    references: [{ path: 'decidedBy.userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['decidedBy.name'] }],
+  },
+  AdminAiAttempt: {
+    kind: 'noUserData',
+    note: 'Platform AI call accounting and outcome metadata; suggestionId links a suggestion, not a user account.',
+  },
+  AdminAiClass: {
+    kind: 'noUserData',
+    note: 'Operator-maintained action-class modes and aggregate replay evidence; replayArtifact is free text and is not scanned.',
+  },
+  AdminMorningBrief: {
+    kind: 'noUserData',
+    note: 'Environment/day operational counts, alarm names, aggregate AI activity and admin page links; no user references or source queue content are stored.',
   },
   // An admin's request for a second admin's sign-off on a privileged action, kept with the audit trail.
   // `summary` and `paramsJson` (which may name the target account) are free text and not scanned.
@@ -119,6 +151,10 @@ export const infraHolders = {
     ],
   },
   Counters: { kind: 'noUserData', note: 'Platform-wide named counters.' },
+  DlqFailure: {
+    kind: 'noUserData',
+    note: 'Queue failure metadata keyed by SQS message ID, not a user reference. Thrown error text may contain incidental identifiers and expires after 15 days.',
+  },
   // `messageBody` is the replayed queue message and may carry user content; it is not scanned.
   DlqReplayLog: {
     kind: 'holder',

@@ -35,7 +35,7 @@ import {
 } from './userTimelineAccount';
 import { fetchLimitEntries } from './userTimelineLimits';
 import { listSpendGroups, loadSpendLookups, spendGroupToEntry } from './userTimelineSpend';
-import { apiRequestToEntry, readApiRequests } from './userApiRequests';
+import { apiRequestToEntry, readApiRequests } from '@bike4mind/server-utils/utils/userApiRequests';
 
 const QUERY_MAX_TIME_MS = 15_000;
 

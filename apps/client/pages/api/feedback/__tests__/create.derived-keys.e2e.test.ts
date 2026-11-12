@@ -91,8 +91,12 @@ const runHandler = async (req: unknown, res: unknown) => {
   }
 };
 
-function mockRequest(body: Record<string, unknown>, user?: { id: string; username: string; email: string }) {
-  const { req, res } = createMocks({ method: 'POST', body });
+function mockRequest(
+  body: Record<string, unknown>,
+  user?: { id: string; username: string; email: string },
+  headers?: Record<string, string>
+) {
+  const { req, res } = createMocks({ method: 'POST', body, headers });
   const authenticated = !!user;
   (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => authenticated;
   if (user) {
@@ -314,5 +318,105 @@ describe('POST /api/feedback - server-derived foreign keys', () => {
     const text = await FeedbackTextModel.findById(saved!._id);
     expect(text?.content).toBe('this text should be split out');
     expect(text?.expiresAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('stores a sanitized clientContext and takes the user agent from the request, not the body', async () => {
+    const { user } = await makeUserWithOrg('client-context');
+    const opaqueToken = 'a1'.repeat(20);
+
+    const { req, res } = mockRequest(
+      {
+        userId: user.id,
+        content: 'the page broke',
+        tags: [],
+        username: user.username,
+        userEmail: user.email,
+        clientContext: {
+          path: `/reset/${opaqueToken}?token=secret&q=search#frag`,
+          appVersion: '1.2.3',
+          platform: 'web',
+          viewport: { width: 1280, height: 720 },
+          model: 'some-model',
+          userAgent: 'forged-agent',
+          extra: 'dropped',
+        },
+      },
+      { id: user.id, username: user.username, email: user.email },
+      { 'user-agent': 'real-agent/1.0' }
+    );
+
+    await runHandler(req, res);
+    expect(res._getStatusCode()).toBe(201);
+
+    const saved = await FeedbackModel.findOne({ userId: user.id }).lean();
+    expect(saved!.clientContext).toEqual({
+      path: '/reset/:redacted',
+      appVersion: '1.2.3',
+      platform: 'web',
+      viewport: { width: 1280, height: 720 },
+      model: 'some-model',
+      userAgent: 'real-agent/1.0',
+    });
+  });
+
+  it('keeps the valid fields of a clientContext that carries one unknown platform', async () => {
+    const { user } = await makeUserWithOrg('client-context-skew');
+
+    const { req, res } = mockRequest(
+      {
+        userId: user.id,
+        content: 'from a newer client',
+        tags: [],
+        username: user.username,
+        userEmail: user.email,
+        clientContext: { platform: 'tablet', appVersion: '2.0.0', path: '/notebooks' },
+      },
+      { id: user.id, username: user.username, email: user.email }
+    );
+
+    await runHandler(req, res);
+    expect(res._getStatusCode()).toBe(201);
+
+    const saved = await FeedbackModel.findOne({ userId: user.id }).lean();
+    expect(saved!.clientContext).toEqual({ appVersion: '2.0.0', path: '/notebooks' });
+  });
+
+  it('keeps the report when clientContext is malformed, storing only the request user agent', async () => {
+    const { user } = await makeUserWithOrg('client-context-bad');
+
+    const { req, res } = mockRequest(
+      {
+        userId: user.id,
+        content: 'still worth keeping',
+        tags: [],
+        username: user.username,
+        userEmail: user.email,
+        clientContext: { platform: 'toaster', viewport: { width: -4, height: 'tall' } },
+      },
+      { id: user.id, username: user.username, email: user.email },
+      { 'user-agent': 'real-agent/1.0' }
+    );
+
+    await runHandler(req, res);
+    expect(res._getStatusCode()).toBe(201);
+
+    const saved = await FeedbackModel.findOne({ userId: user.id }).lean();
+    expect(saved!.contentStored).toBe(true);
+    expect(saved!.clientContext).toEqual({ userAgent: 'real-agent/1.0' });
+  });
+
+  it('leaves clientContext absent when neither the body nor the request carries one', async () => {
+    const { user } = await makeUserWithOrg('client-context-none');
+
+    const { req, res } = mockRequest(
+      { userId: user.id, content: 'no context', tags: [], username: user.username, userEmail: user.email },
+      { id: user.id, username: user.username, email: user.email }
+    );
+
+    await runHandler(req, res);
+    expect(res._getStatusCode()).toBe(201);
+
+    const saved = await FeedbackModel.findOne({ userId: user.id }).lean();
+    expect(saved!.clientContext).toBeUndefined();
   });
 });

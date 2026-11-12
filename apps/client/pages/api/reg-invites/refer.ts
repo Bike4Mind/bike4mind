@@ -54,7 +54,7 @@ const handler = baseApi()
 
       // Minting credit-bearing invite codes requires proof the sender's own email
       // is real - otherwise a chain of unverified throwaway accounts could propagate
-      // invites (each redeemed invite grants at least ReferralCreditsAmount). OTC sign-in marks
+      // invites (each redeemed invite enrolls a signup grant and can pay inviter rewards). OTC sign-in marks
       // emailVerified; OAuth accounts carry a provider-verified email instead.
       const hasOAuthProvider = (user.authProviders?.length ?? 0) > 0;
       if (!user.emailVerified && !hasOAuthProvider) {

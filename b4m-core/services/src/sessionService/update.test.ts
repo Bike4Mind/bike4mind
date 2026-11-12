@@ -900,3 +900,37 @@ describe("updateSession - knowledgeIdsMode 'add'", () => {
     ).rejects.toBeInstanceOf(NotFoundError);
   });
 });
+
+describe('updateSession - tutorial marker', () => {
+  it('never writes a tutorial field a caller sends', async () => {
+    const updateWithUpdateAccess = vi.fn((_user: unknown, data: unknown) => Promise.resolve(data));
+    const adapters = {
+      db: {
+        sessions: {
+          shareable: {
+            findUpdateAccessById: vi.fn().mockResolvedValue({
+              id: 'session-1',
+              knowledgeIds: [],
+              artifactIds: [],
+              tags: [],
+              name: 'Session',
+              tutorial: { owner: 'core', moduleId: 'kept' },
+            }),
+          },
+          updateWithUpdateAccess,
+        },
+        projects: { findAllBySessionId: vi.fn().mockResolvedValue([]) },
+        fabFiles: { findAllByIds: vi.fn().mockResolvedValue([]) },
+        caches: {},
+      },
+      storage: {},
+    };
+    await updateSession(
+      { id: 'user-1' } as IUserDocument,
+      { id: 'session-1', name: 'Renamed', tutorial: null } as never,
+      adapters as never
+    );
+    expect(updateWithUpdateAccess).toHaveBeenCalled();
+    for (const [, data] of updateWithUpdateAccess.mock.calls) expect(data).not.toHaveProperty('tutorial');
+  });
+});

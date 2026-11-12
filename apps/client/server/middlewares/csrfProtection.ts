@@ -1,7 +1,7 @@
 import { RequestHandler } from 'express';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { extractApiKeyFromHeaders } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
-import { isLocalAppUrl } from '@server/utils/validators';
+import { isLocalAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { ADMIN_RETURN_COOKIE_NAME, REFRESH_COOKIE_NAME, readCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 
 const SESSION_COOKIE_NAMES = [REFRESH_COOKIE_NAME, ADMIN_RETURN_COOKIE_NAME].flatMap(name => [name, `__Host-${name}`]);

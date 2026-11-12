@@ -20,7 +20,7 @@ vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
   getRequestActiveSubscriptions: h.getRequestActiveSubscriptions,
 }));
 vi.mock('@server/entitlements/orgPaidStanding', () => ({ isPayingOrganization: h.isPayingOrganization }));
-vi.mock('@server/entitlements/paidStanding', () => ({ holdsPaidStanding: h.holdsPaidStanding }));
+vi.mock('@bike4mind/server-utils/entitlements/paidStanding', () => ({ holdsPaidStanding: h.holdsPaidStanding }));
 
 import { assertLakePlanAllowed, clearLakePlanGateCache, isLakePlanAllowed } from './lakePlanGate';
 

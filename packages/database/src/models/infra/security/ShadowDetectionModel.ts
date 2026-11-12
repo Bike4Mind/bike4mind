@@ -1,4 +1,5 @@
 import mongoose, { Document, Model, model, Schema, Types } from 'mongoose';
+import { createHash } from 'node:crypto';
 import {
   accountCampaignGroupSchema,
   accountCampaignSignals,
@@ -8,9 +9,19 @@ import {
   SHADOW_DETECTION_PAYMENT_KINDS,
   SHADOW_DETECTION_PAYMENT_OUTCOMES,
   type AccountCampaignGroup,
+  completionSequenceEvidenceSchema,
+  completionSynchronyEvidenceSchema,
+  type CompletionSynchronyEvidence,
+  REVIEW_ONLY_COMPLETION_DETECTORS,
+  isReviewOnlyCompletionDetector,
+  type CompletionSequenceEvidence,
   SHADOW_DETECTION_VERDICTS,
   SHADOW_DETECTORS,
+  SHADOW_DETECTION_BURST_PEER_LIMIT,
+  type ShadowDetectionAccount,
+  type ShadowDetectionReviewer,
   type ShadowDetectionAction,
+  type ShadowDetectionBurstPeers,
   type ShadowDetectionItem,
   type ShadowDetectionNetwork,
   type ShadowDetectionPayment,
@@ -40,6 +51,8 @@ export interface IShadowDetectionDocument extends Document {
   signals: ShadowDetectionSignal[];
   windowMinutes: number | null;
   group: AccountCampaignGroup | null;
+  completionSequence?: CompletionSequenceEvidence;
+  completionSynchrony?: CompletionSynchronyEvidence;
   payment: ShadowDetectionPayment | null;
   detectedAt: Date;
   verdict: ShadowDetectionVerdict | null;
@@ -111,6 +124,8 @@ export const ShadowDetectionSchema: Schema<IShadowDetectionDocument> = new Schem
     // Validated against accountCampaignGroupSchema on write (recordCampaignGroup); Mixed because the
     // nested evidence lists are read whole and never queried field by field.
     group: { type: Schema.Types.Mixed, default: null },
+    completionSequence: { type: Schema.Types.Mixed, default: undefined },
+    completionSynchrony: { type: Schema.Types.Mixed, default: undefined },
     payment: { type: PaymentSchema, default: null },
     detectedAt: { type: Date, required: true },
     verdict: { type: String, enum: [...SHADOW_DETECTION_VERDICTS, null], default: null },
@@ -233,6 +248,21 @@ export type AccountStatusVerdictInput = {
   reviewerId: string;
 };
 
+/** Signups read per burst IP when listing peers; enough for every row sharing it to fill its limit. */
+const BURST_PEER_SCAN = 200;
+
+type AccountContextDoc = {
+  _id: Types.ObjectId;
+  isBanned?: boolean;
+  deletedAt?: Date | null;
+  currentCredits?: number;
+  acquisition?: { signupMethod?: string };
+  authProviders?: { strategy?: string }[];
+};
+
+const accountStatus = (doc: AccountContextDoc): ShadowDetectionAccount['status'] =>
+  doc.deletedAt ? 'deleted' : doc.isBanned ? 'suspended' : 'active';
+
 const VERDICT_COUNT_FIELDS = {
   confirmed_abuse: 'confirmedAbuse',
   legitimate_human: 'legitimateHuman',
@@ -240,57 +270,136 @@ const VERDICT_COUNT_FIELDS = {
   insufficient_evidence: 'insufficientEvidence',
 } as const satisfies Record<ShadowDetectionVerdict, keyof ShadowDetectionSummaryRow>;
 
-const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => ({
-  id: doc._id.toString(),
-  detector: doc.detector,
-  policyVersion: doc.policyVersion,
-  wouldAction: doc.wouldAction,
-  summary: doc.summary,
-  userIds: doc.userIds ?? [],
-  network: doc.network
-    ? {
-        ip: doc.network.ip ?? null,
-        asn: doc.network.asn ?? null,
-        asnOrg: doc.network.asnOrg ?? null,
-        country: doc.network.country ?? null,
-        hosting: doc.network.hosting ?? null,
-      }
-    : null,
-  signals: (doc.signals ?? []).map(signal => ({
-    key: signal.key,
-    label: signal.label,
-    observed: signal.observed ?? null,
-    threshold: signal.threshold ?? null,
-  })),
-  windowMinutes: doc.windowMinutes ?? null,
-  group: doc.group ?? null,
-  // Records written before payment evidence existed carry no field at all.
-  payment: doc.payment
-    ? {
-        paymentIntentId: doc.payment.paymentIntentId,
-        chargeId: doc.payment.chargeId ?? null,
-        kind: doc.payment.kind,
-        outcome: doc.payment.outcome,
-        amount: doc.payment.amount ?? null,
-        currency: doc.payment.currency ?? null,
-        riskLevel: doc.payment.riskLevel ?? null,
-        livemode: doc.payment.livemode,
-      }
-    : null,
-  detectedAt: doc.detectedAt,
-  verdict: doc.verdict ?? null,
-  verdicts: (doc.verdicts ?? []).map(entry => ({
-    verdict: entry.verdict,
-    reason: entry.reason,
-    reviewerId: entry.reviewerId,
-    reviewedAt: entry.reviewedAt,
-    ...(entry.source ? { source: entry.source } : {}),
-    ...(entry.accountId ? { accountId: entry.accountId } : {}),
-  })),
-  revision: doc.revision ?? 0,
-});
+const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => {
+  const parsed = completionSequenceEvidenceSchema.safeParse(doc.completionSequence);
+  const synchrony = completionSynchronyEvidenceSchema.safeParse(doc.completionSynchrony);
+  return {
+    id: doc._id.toString(),
+    detector: doc.detector,
+    policyVersion: doc.policyVersion,
+    wouldAction: doc.wouldAction,
+    summary: doc.summary,
+    userIds: doc.userIds ?? [],
+    network: doc.network
+      ? {
+          ip: doc.network.ip ?? null,
+          asn: doc.network.asn ?? null,
+          asnOrg: doc.network.asnOrg ?? null,
+          country: doc.network.country ?? null,
+          hosting: doc.network.hosting ?? null,
+        }
+      : null,
+    signals: (doc.signals ?? []).map(signal => ({
+      key: signal.key,
+      label: signal.label,
+      observed: signal.observed ?? null,
+      threshold: signal.threshold ?? null,
+    })),
+    windowMinutes: doc.windowMinutes ?? null,
+    group: doc.group ?? null,
+    ...(synchrony.success ? { completionSynchrony: synchrony.data } : {}),
+    ...(parsed.success ? { completionSequence: parsed.data } : {}),
+    // Records written before payment evidence existed carry no field at all.
+    payment: doc.payment
+      ? {
+          paymentIntentId: doc.payment.paymentIntentId,
+          chargeId: doc.payment.chargeId ?? null,
+          kind: doc.payment.kind,
+          outcome: doc.payment.outcome,
+          amount: doc.payment.amount ?? null,
+          currency: doc.payment.currency ?? null,
+          riskLevel: doc.payment.riskLevel ?? null,
+          livemode: doc.payment.livemode,
+        }
+      : null,
+    detectedAt: doc.detectedAt,
+    verdict: doc.verdict ?? null,
+    verdicts: (doc.verdicts ?? []).map(entry => ({
+      verdict: entry.verdict,
+      reason: entry.reason,
+      reviewerId: entry.reviewerId,
+      reviewedAt: entry.reviewedAt,
+      ...(entry.source ? { source: entry.source } : {}),
+      ...(entry.accountId ? { accountId: entry.accountId } : {}),
+    })),
+    revision: doc.revision ?? 0,
+  };
+};
 
 class ShadowDetectionRepository {
+  async recordCompletionSequence(input: RecordShadowDetectionInput): Promise<'created' | 'updated' | 'unchanged'> {
+    if (input.detector !== 'completionSequence') throw new Error('Expected completionSequence');
+    return this.recordCompletionObservation(input);
+  }
+
+  async recordCompletionSynchrony(input: RecordShadowDetectionInput): Promise<'created' | 'updated' | 'unchanged'> {
+    if (input.detector !== 'completionSynchrony') throw new Error('Expected completionSynchrony');
+    return this.recordCompletionObservation(input);
+  }
+
+  /** One observation per cohort and UTC activity day; reviewed records stay immutable. */
+  private async recordCompletionObservation(
+    input: RecordShadowDetectionInput
+  ): Promise<'created' | 'updated' | 'unchanged'> {
+    if (!isReviewOnlyCompletionDetector(input.detector) || input.wouldAction !== 'none')
+      throw new Error('Sequence observations must be review-only');
+    const field = input.detector === 'completionSequence' ? 'completionSequence' : 'completionSynchrony';
+    const sequence =
+      field === 'completionSequence'
+        ? completionSequenceEvidenceSchema.parse(input.completionSequence)
+        : completionSynchronyEvidenceSchema.parse(input.completionSynchrony);
+    if (input.userIds.length < 3 || input.userIds.length > 10 || new Set(input.userIds).size !== input.userIds.length)
+      throw new Error('Invalid sequence membership');
+    const userIds = field === 'completionSynchrony' ? [...input.userIds].sort() : input.userIds;
+    const day = sequence.lastObservedAt.toISOString().slice(0, 10);
+    // The unique _id makes retries/concurrent sweeps idempotent without a lazily-built secondary index.
+    const id = new Types.ObjectId(
+      createHash('sha256')
+        .update(JSON.stringify([input.detector, input.policyVersion, day, userIds]))
+        .digest('hex')
+        .slice(0, 24)
+    );
+    const membersAvailable = async () =>
+      (await User.countDocuments({
+        _id: { $in: userIds },
+        deletedAt: null,
+        'deletion.purgeStartedAt': null,
+      }).maxTimeMS(5_000)) === userIds.length;
+    const reconcileMembers = async () => {
+      if (await membersAvailable()) return true;
+      await ShadowDetectionModel.deleteOne({ _id: id, detector: input.detector });
+      return false;
+    };
+    if (!(await reconcileMembers())) return 'unchanged';
+    const created = await ShadowDetectionModel.updateOne(
+      { _id: id },
+      {
+        $setOnInsert: { ...input, userIds, createdAt: input.detectedAt, updatedAt: input.detectedAt },
+      },
+      { upsert: true, timestamps: false }
+    );
+    if (created.upsertedCount > 0) return (await reconcileMembers()) ? 'created' : 'unchanged';
+    const freshness =
+      'scannedAt' in sequence
+        ? {
+            'completionSynchrony.scannedAt': { $lt: sequence.scannedAt },
+            'completionSynchrony.bursts': { $lte: sequence.bursts },
+          }
+        : {
+            'completionSequence.lastObservedAt': { $lt: sequence.lastObservedAt },
+            'completionSequence.rounds': { $lte: sequence.rounds },
+          };
+    const updated = await ShadowDetectionModel.updateOne(
+      { _id: id, verdict: null, ...freshness },
+      {
+        $set: { [field]: sequence, summary: input.summary, signals: input.signals },
+        $inc: { revision: 1 },
+      }
+    );
+    if (!(await reconcileMembers())) return 'unchanged';
+    return updated.modifiedCount > 0 ? 'updated' : 'unchanged';
+  }
+
   async record(input: RecordShadowDetectionInput): Promise<string> {
     const doc = await ShadowDetectionModel.create(input);
     return doc._id.toString();
@@ -379,9 +488,14 @@ class ShadowDetectionRepository {
    * direct members remain, or when its stored group no longer parses. Returns how many records were deleted.
    */
   async removeUser(userId: string): Promise<number> {
+    // This observation is about an exact ordering; removing a participant invalidates the whole observation.
+    const sequences = await ShadowDetectionModel.deleteMany({
+      detector: { $in: [...REVIEW_ONLY_COMPLETION_DETECTORS] },
+      userIds: userId,
+    });
     const touched = await ShadowDetectionModel.find({ userIds: userId }).lean<LeanShadowDetection[]>();
     const deleteIds: Types.ObjectId[] = [];
-    let deletedCampaigns = 0;
+    let deletedCampaigns = sequences.deletedCount;
     for (const doc of touched) {
       if (!doc.group) {
         if ((doc.userIds ?? []).every(id => id === userId)) deleteIds.push(doc._id);
@@ -433,7 +547,8 @@ class ShadowDetectionRepository {
   async countOpenForUser(userId: string, detector?: ShadowDetector): Promise<number> {
     return ShadowDetectionModel.countDocuments({
       userIds: userId,
-      ...(detector ? { detector } : {}),
+      // Coordination observations must not change automatic risk-review decisions.
+      detector: detector ?? { $nin: [...REVIEW_ONLY_COMPLETION_DETECTORS] },
       verdict: { $nin: ['legitimate_human', 'legitimate_automation'] },
     }).exec();
   }
@@ -448,6 +563,17 @@ class ShadowDetectionRepository {
       .limit(query.limit + 1)
       .lean<LeanShadowDetection[]>();
     return { data: docs.slice(0, query.limit).map(toItem), truncated: docs.length > query.limit };
+  }
+
+  /** Which of `userIds` are named by a detection an admin graded confirmed abuse. */
+  async findConfirmedAbuseUserIds(userIds: string[]): Promise<string[]> {
+    if (userIds.length === 0) return [];
+    const named: unknown[] = await ShadowDetectionModel.distinct('userIds', {
+      userIds: { $in: userIds },
+      verdict: 'confirmed_abuse',
+    });
+    const wanted = new Set(userIds);
+    return named.filter((id): id is string => typeof id === 'string' && wanted.has(id));
   }
 
   /**
@@ -760,6 +886,96 @@ class ShadowDetectionRepository {
       if (updated) graded.push(toItem(updated));
     }
     return graded;
+  }
+
+  /**
+   * The context the Detections page shows beside listed detections: for every signupNetworkBurst
+   * detection with an IP, the other accounts that signed up from that IP in its window (one user read
+   * per distinct IP, served by user_signupMeta_ip); and the current status, signup method and balance
+   * of every account the detections and those peers name.
+   */
+  async listContext(items: ShadowDetectionItem[]): Promise<{
+    accounts: ShadowDetectionAccount[];
+    burstPeers: ShadowDetectionBurstPeers[];
+    reviewers: ShadowDetectionReviewer[];
+  }> {
+    const burstPeers = await this.findBurstPeers(items);
+    const ids = [...new Set([...items.flatMap(item => item.userIds), ...burstPeers.flatMap(peers => peers.userIds)])];
+    const validIds = ids.filter(id => Types.ObjectId.isValid(id));
+    const docs =
+      validIds.length === 0
+        ? []
+        : await User.find({ _id: { $in: validIds } })
+            .select('isBanned deletedAt currentCredits acquisition.signupMethod authProviders.strategy')
+            .lean<AccountContextDoc[]>();
+    const byId = new Map(docs.map(doc => [doc._id.toString(), doc]));
+    const accounts = ids.map((userId): ShadowDetectionAccount => {
+      const doc = byId.get(userId);
+      if (!doc) return { userId, status: 'missing', signupMethod: null, currentCredits: null };
+      return {
+        userId,
+        status: accountStatus(doc),
+        // acquisition is consent-gated; the first auth provider is the durable fallback (findSignupLinkFacts).
+        signupMethod: doc.acquisition?.signupMethod ?? doc.authProviders?.[0]?.strategy ?? 'email',
+        currentCredits: doc.currentCredits ?? null,
+      };
+    });
+    return { accounts, burstPeers, reviewers: await this.findReviewers(items) };
+  }
+
+  private async findReviewers(items: ShadowDetectionItem[]): Promise<ShadowDetectionReviewer[]> {
+    const ids = [...new Set(items.flatMap(item => item.verdicts.map(entry => entry.reviewerId)))];
+    const validIds = ids.filter(id => Types.ObjectId.isValid(id));
+    const docs =
+      validIds.length === 0
+        ? []
+        : await User.find({ _id: { $in: validIds } })
+            .select('name username email')
+            .lean<{ _id: Types.ObjectId; name?: string | null; username?: string | null; email?: string | null }[]>();
+    const nameOf = new Map(
+      docs.map(doc => [doc._id.toString(), doc.name?.trim() || doc.username || doc.email || null] as const)
+    );
+    return ids.map(userId => ({ userId, name: nameOf.get(userId) ?? null }));
+  }
+
+  private async findBurstPeers(items: ShadowDetectionItem[]): Promise<ShadowDetectionBurstPeers[]> {
+    const windowOf = (item: ShadowDetectionItem) => ({
+      from: new Date(item.detectedAt.getTime() - (item.windowMinutes ?? 0) * 60_000),
+      to: item.detectedAt,
+    });
+    const bursts = items.filter(
+      item => item.detector === 'signupNetworkBurst' && item.network?.ip && item.windowMinutes !== null
+    );
+    const byIp = new Map<string, ShadowDetectionItem[]>();
+    for (const item of bursts) {
+      const ip = item.network!.ip!;
+      byIp.set(ip, [...(byIp.get(ip) ?? []), item]);
+    }
+
+    const peers: ShadowDetectionBurstPeers[] = [];
+    for (const [ip, rows] of byIp) {
+      const windows = rows.map(windowOf);
+      const from = new Date(Math.min(...windows.map(window => window.from.getTime())));
+      const to = new Date(Math.max(...windows.map(window => window.to.getTime())));
+      const signups = await User.find({ 'signupMeta.ip': ip, createdAt: { $gte: from, $lte: to } }, { createdAt: 1 })
+        .sort({ createdAt: -1 })
+        .limit(BURST_PEER_SCAN)
+        .lean<{ _id: Types.ObjectId; createdAt: Date }[]>();
+      rows.forEach((row, index) => {
+        const window = windows[index];
+        const inWindow = signups
+          .filter(signup => signup.createdAt >= window.from && signup.createdAt <= window.to)
+          .map(signup => signup._id.toString())
+          .filter(userId => !row.userIds.includes(userId));
+        peers.push({
+          detectionId: row.id,
+          userIds: inWindow.slice(0, SHADOW_DETECTION_BURST_PEER_LIMIT),
+          // A full scan may have cut older signups in this row's window.
+          truncated: inWindow.length > SHADOW_DETECTION_BURST_PEER_LIMIT || signups.length === BURST_PEER_SCAN,
+        });
+      });
+    }
+    return peers;
   }
 
   /**

@@ -8,7 +8,7 @@ import { FabFile } from '@bike4mind/database';
 // vitest.setup.ts passes this module through for every other suite.
 vi.unmock('@server/files/pendingUploads');
 // The tier read reaches subscriptions; this suite is about the pending query, so every caller is free tier.
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateTier: async () => 'free' }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateTier: async () => 'free' }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ isDevelopment: () => false }));
 
 import { admitPendingUploads, PENDING_UPLOAD_WINDOW_MS } from './pendingUploads';

@@ -30,6 +30,7 @@ export type ActionDialogProps = {
   reasonPresets: readonly string[];
   /** False while the endpoint has no reason field; see ReasonPicker's `audited`. */
   reasonAudited?: boolean;
+  reasonRequired?: boolean;
   /** Repeats the consequence where it helps: "Set balance to 0". */
   confirmLabel: string;
   /**
@@ -48,10 +49,19 @@ export type ActionDialogProps = {
   typedConfirm?: TypedConfirm;
   pending?: boolean;
   /**
+   * A second commit beside the primary one, gated the same way, e.g. "Save and next" in a review queue.
+   * Its button id is `<id>-secondary-btn`; the reason draft is kept for the caller's next item.
+   */
+  secondaryAction?: { label: string; onConfirm: (reason: string) => void | Promise<void> };
+  /**
    * Keeps Cancel enabled while the write is in flight, for a caller whose `onConfirm` stops at
    * `onClose` (a run of writes that checks between them and leaves the rest unsent).
    */
   cancelStopsWrite?: boolean;
+  /** Seeds the reason when the dialog opens, still editable: an accepted AI suggestion prefills one. */
+  initialReason?: AdminReasonDraft;
+  /** Changing it remounts the form, re-seeding `initialReason` and clearing typed input in an open dialog. */
+  formKey?: string | number;
   /** Derived ids: `<id>-reason-input`, `<id>-confirm-btn`, `<id>-cancel-btn`, `<id>-hint`, `<id>-typed-input`. */
   'data-testid': string;
   /** Overrides individual derived ids where an existing test or page object depends on them. */
@@ -70,7 +80,7 @@ export const ActionDialog: React.FC<ActionDialogProps> = props => (
     width={560}
     data-testid={props['data-testid']}
   >
-    <ActionDialogForm {...props} />
+    <ActionDialogForm key={props.formKey} {...props} />
   </AdminDialog>
 );
 
@@ -81,34 +91,37 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   children,
   reasonPresets,
   reasonAudited = true,
+  reasonRequired = true,
   confirmLabel,
   onConfirm,
   tone = 'neutral',
   blockedReason = null,
   typedConfirm,
   pending = false,
+  secondaryAction,
   cancelStopsWrite = false,
+  initialReason = EMPTY_ADMIN_REASON,
   'data-testid': testId,
   testIds = {},
 }) => {
   const hintId = useId();
   const typedInputId = useId();
-  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
+  const [reason, setReason] = useState<AdminReasonDraft>(initialReason);
   const [typedValue, setTypedValue] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const typedMatches = !typedConfirm || typedValue.trim() === typedConfirm.expected;
   const hint =
     blockedReason ??
-    (!isAdminReasonComplete(reason) ? ADMIN_REASON_HINT : null) ??
+    (reasonRequired && !isAdminReasonComplete(reason) ? ADMIN_REASON_HINT : null) ??
     (!typedMatches && typedConfirm ? `Type the ${typedConfirm.noun} exactly to confirm.` : null);
   const busy = pending || submitting;
 
-  const handleConfirm = async () => {
+  const handleConfirm = async (confirm: (reason: string) => void | Promise<void> = onConfirm) => {
     if (hint || busy) return;
     setSubmitting(true);
     try {
-      await onConfirm(composeAdminReason(reason));
+      await confirm(composeAdminReason(reason));
     } catch {
       // The caller reports its own failure (toast); a rejection only means the dialog stays open.
     } finally {
@@ -118,6 +131,8 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
+    // Portaled child dialogs must not also submit an enclosing admin command.
+    event.stopPropagation();
     void handleConfirm();
   };
 
@@ -130,13 +145,15 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
           </Typography>
         )}
         {children}
-        <ReasonPicker
-          presets={reasonPresets}
-          value={reason}
-          onChange={setReason}
-          audited={reasonAudited}
-          data-testid={testIds.reason ?? `${testId}-reason-input`}
-        />
+        {reasonRequired && (
+          <ReasonPicker
+            presets={reasonPresets}
+            value={reason}
+            onChange={setReason}
+            audited={reasonAudited}
+            data-testid={testIds.reason ?? `${testId}-reason-input`}
+          />
+        )}
         {typedConfirm && (
           <FormControl required>
             {/* One inline span: FormLabel is a flex row, which drops bare space text nodes around the code and
@@ -193,6 +210,18 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
         >
           Cancel
         </Button>
+        {secondaryAction && (
+          <Button
+            variant="outlined"
+            color="neutral"
+            disabled={!!hint || busy}
+            aria-describedby={hint ? hintId : undefined}
+            onClick={() => void handleConfirm(secondaryAction.onConfirm)}
+            data-testid={`${testId}-secondary-btn`}
+          >
+            {secondaryAction.label}
+          </Button>
+        )}
         <Button
           variant="solid"
           color={tone === 'danger' ? 'danger' : 'primary'}

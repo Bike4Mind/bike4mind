@@ -79,11 +79,6 @@
       "count": 4
     }
   },
-  "apps/client/__tests__/quest-plans.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 72
-    }
-  },
   "apps/client/__tests__/sessions.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 7
@@ -550,11 +545,6 @@
     }
   },
   "apps/client/app/components/admin/OrganizationProfile.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/admin/OrganizationProfileUpdated.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -2409,11 +2399,6 @@
       "count": 6
     }
   },
-  "apps/client/pages/api/quest-plans/index.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/quests/[id]/__tests__/check-timeout.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 6
@@ -3182,11 +3167,6 @@
       "count": 5
     }
   },
-  "apps/client/server/utils/logCompletionAnalytics.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 14
-    }
-  },
   "apps/client/server/websocket/__tests__/dataSubscribeRequest.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 48
@@ -3759,7 +3739,7 @@
   },
   "b4m-core/services/src/llm/ChatCompletion.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 620
+      "count": 619
     }
   },
   "b4m-core/services/src/llm/ChatCompletionInvoke.test.ts": {
@@ -4209,7 +4189,7 @@
   },
   "b4m-core/services/src/userService/register.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 10
+      "count": 9
     }
   },
   "b4m-core/services/src/userService/requestEmailChange.test.ts": {
