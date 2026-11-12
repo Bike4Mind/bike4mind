@@ -290,6 +290,15 @@ describe('findReadableArtifactId', () => {
     expect(await findReadableArtifactId('react', 'legacy', SESSION)).toBe('artifact_react_legacy_3_0');
   });
 
+  it('spends one list call, not two, on the id-segment fallback after a null route answer', async () => {
+    seed({ id: 'artifact_react_legacy_3_0', type: 'react' });
+    get.mockImplementationOnce(async () => ({ status: 200, data: { artifact: null } }));
+
+    await findReadableArtifactId('react', 'legacy', SESSION);
+
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
   it('falls back when the route errors', async () => {
     seed({ id: 'artifact_react_app_5_0', type: 'react', identifier: 'app' });
     get.mockImplementationOnce(async () => {
