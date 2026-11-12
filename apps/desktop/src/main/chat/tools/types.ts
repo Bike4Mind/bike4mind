@@ -112,7 +112,7 @@ export interface WebContext {
 export interface ToolReporter {
   /** Replaces the previous line. For work measured in tens of seconds. */
   progress(text: string): void;
-  /** Attach a generated image or audio clip to this call, for the UI only - not sent to the model. */
+  /** Attach an image or audio clip to this call, for the UI only - not sent to the model. */
   media(item: ChatMedia): void;
   /** Raise a cost or provider outcome to its own state; see ChatToolNotice. */
   notice(notice: ChatToolNotice): void;
