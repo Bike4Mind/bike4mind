@@ -2490,8 +2490,7 @@ async function runExecution(
     // `buildReActAgentRuntimeConfig` - a pure helper that conditionally spreads
     // temperature / maxTokens / thinking so they only override the agent's
     // built-in defaults when the client actually selected a value. Extracted
-    // for unit-testability (the `{ enabled: false }` guard for `thinking`
-    // prevents a `structuredClone()` failure in `ReActAgent.toCheckpoint()`).
+    // for unit-testability.
     const agent = new ReActAgent({
       userId: execution.userId,
       logger,

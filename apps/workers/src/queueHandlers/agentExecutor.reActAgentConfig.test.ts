@@ -18,13 +18,11 @@ describe('buildReActAgentRuntimeConfig', () => {
     expect(buildReActAgentRuntimeConfig({})).not.toHaveProperty('maxTokens');
   });
 
-  it('does NOT spread thinking when enabled is false (guards the structuredClone regression)', () => {
-    // The headline bug: the client LLM store ships `{ enabled: false, budget_tokens: 16000 }`
-    // as a baseline on every dispatch. If that survives into the ReActAgent ctor and
-    // gets stored on the checkpoint, `toCheckpoint()`'s `structuredClone()` can fail
-    // ("Cannot transfer object of unsupported type") for some model permutations.
-    const result = buildReActAgentRuntimeConfig({ thinking: { enabled: false, budget_tokens: 16000 } });
-    expect(result).not.toHaveProperty('thinking');
+  it('forwards thinking when enabled is false, as a fresh plain object (backend off switch)', () => {
+    const input = { enabled: false, budget_tokens: 16000 };
+    const result = buildReActAgentRuntimeConfig({ thinking: input });
+    expect(result.thinking).toEqual({ enabled: false, budget_tokens: 16000 });
+    expect(result.thinking).not.toBe(input);
   });
 
   it('does NOT spread thinking when the object is omitted entirely', () => {
