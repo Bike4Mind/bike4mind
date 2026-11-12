@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { AdminSettings, withTransaction } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
+import { requireFullAdmin } from '@server/admin/models/requireFullAdmin';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import {
   DEFAULT_OPERATIONS_SPEECH_MODEL,
@@ -43,6 +44,8 @@ const handler = adminApi({
     }
   })
   .put(async (req: Request, res: Response) => {
+    // Ahead of the try, whose catch answers every error with a 500.
+    requireFullAdmin(req);
     try {
       const config = UpdateOperationsModelSchema.parse(req.body);
 

@@ -1769,7 +1769,7 @@ export const AdminAiConfigSchema = z.object({
       abuseAssessment: decisionFeatureConfig('Abuse assessment'),
       domainHold: decisionFeatureConfig('Domain hold'),
       detectionTriage: decisionFeatureConfig('Detection triage'),
-      feedbackTriage: textFeatureConfig('Feedback triage'),
+      feedbackTriage: decisionFeatureConfig('Feedback triage'),
       dlqTriage: textFeatureConfig('DLQ triage'),
       morningBrief: textFeatureConfig('Morning brief'),
     })

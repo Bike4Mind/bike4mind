@@ -8,6 +8,7 @@ import { IOrganizationDocument, Permission } from '@bike4mind/common';
 import en from '@client/app/locales/en.json';
 import { OrganizationTabs } from '../orgTabAccess';
 import OrganizationPage from '../$id';
+import i18next from 'i18next';
 
 /**
  * Both halves of the ?tab= round trip.
@@ -58,15 +59,12 @@ vi.mock('@client/app/components/organizations/OrgSlackIntegration', () => ({ def
 vi.mock('@client/app/components/organizations/OrgWebhookConfig', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgGitHubConnectionTab', () => ({ default: () => null }));
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    i18n: { language: 'en' },
-    t: (key: string) => {
-      const value = key.split('.').reduce<unknown>((node, part) => (node as never)?.[part], en);
-      return typeof value === 'string' ? value : key;
-    },
-  }),
-}));
+// A real i18next over en.json, so assertions pin the wording, plurals and interpolation users get.
+const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: i18n.t, i18n: { language: 'en' } }) }));
+const i18nInstance = i18next.createInstance();
+void i18nInstance.init({ lng: 'en', resources: { en: { translation: en } }, initAsync: false });
+i18n.t = i18nInstance.t.bind(i18nInstance) as (key: string) => string;
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
