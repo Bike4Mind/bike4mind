@@ -729,7 +729,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/credits/balance` | GET | jwt | - | - | no | - | 1: `hooks/data/credits.ts` |
-| `/api/credits/transactions` | GET | jwt+key | `me:read` | - | no | - | 1: `hooks/data/credits.ts` |
+| `/api/credits/transactions` | GET | jwt+key | `admin:*`, `me:read` | - | no | - | 1: `hooks/data/credits.ts` |
 
 ### data-lakes
 
@@ -936,7 +936,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/gears/claim` | POST | jwt | - | - | no | - | 1: `hooks/useGearsStatus.ts` |
 | `/api/gears/stamp` | POST | jwt+key | - | - | no | - | 1: `hooks/useGearCta.ts` |
-| `/api/gears/status` | GET | jwt+key | `me:read` | - | no | - | 1: `hooks/useGearsStatus.ts` |
+| `/api/gears/status` | GET | jwt+key | `admin:*`, `me:read` | - | no | - | 1: `hooks/useGearsStatus.ts` |
 
 ### generated-content
 
@@ -993,7 +993,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/identify` | GET | jwt+key | `me:read` | - | no | - | 3: `contexts/UserContext.tsx`, `hooks/data/user.ts`, `utils/sessionBootstrap.ts` |
+| `/api/identify` | GET | jwt+key | `admin:*`, `me:read` | - | no | - | 3: `contexts/UserContext.tsx`, `hooks/data/user.ts`, `utils/sessionBootstrap.ts` |
 
 ### image-templates
 
@@ -1175,7 +1175,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/models` | GET | jwt+key | `ai:chat`, `ai:generate` | - | no | - | 2: `components/commands/ModelsCommand.tsx`, `utils/llm.ts` |
+| `/api/models` | GET | jwt+key | `admin:*`, `ai:chat`, `ai:generate` | - | no | - | 2: `components/commands/ModelsCommand.tsx`, `utils/llm.ts` |
 | `/api/models/stats` | GET | jwt+key | - | - | no | - | 1: `hooks/data/useModelStats.ts` |
 
 ### notebooks
@@ -1462,14 +1462,14 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/sessions` | GET, DELETE | jwt+key | `notebooks:read`, `notebooks:write` | - | no | - | 3: `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx`, `hooks/data/sessions.ts`, `utils/sessionsAPICalls.ts` |
+| `/api/sessions` | GET, DELETE | jwt+key | `admin:*`, `notebooks:read`, `notebooks:write` | - | no | - | 3: `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx`, `hooks/data/sessions.ts`, `utils/sessionsAPICalls.ts` |
 | `/api/sessions/[id]` | GET, PUT, DELETE | jwt+key | GET: `notebooks:read`, `notebooks:write`; PUT, DELETE: `notebooks:write` | - | yes | - | 4: `components/Knowledge/KnowledgeViewer.tsx`, `components/admin/useAdminAssistantSession.ts`, `hooks/data/artifacts.ts` +1 more |
 | `/api/sessions/[id]/agents` | GET, POST, DELETE | jwt+key | - | - | no | - | 5: `components/Session/AISettings/AgentsSection.tsx`, `components/Session/AgentBench.tsx`, `contexts/SessionsContext.tsx` +2 more |
 | `/api/sessions/[id]/agents/[agentId]/config` | GET, PUT, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/agentProactiveMessaging.ts` |
 | `/api/sessions/[id]/agents/configs` | GET | jwt+key | - | - | no | - | 1: `hooks/data/agentProactiveMessaging.ts` |
 | `/api/sessions/[id]/agents/trigger-proactive-messages` | POST | jwt+key | - | - | no | - | 1: `hooks/data/agentProactiveMessaging.ts` |
 | `/api/sessions/[id]/auto-rename` | POST | jwt+key | - | - | no | - | 2: `components/Session/VoiceSessionModal/useVoiceSessionEngine.ts`, `hooks/data/sessions.ts` |
-| `/api/sessions/[id]/chat` | GET, POST | jwt+key | `notebooks:read`, `notebooks:write` | - | no | - | 1: `utils/sessionsAPICalls.ts` |
+| `/api/sessions/[id]/chat` | GET, POST | jwt+key | `admin:*`, `notebooks:read`, `notebooks:write` | - | no | - | 1: `utils/sessionsAPICalls.ts` |
 | `/api/sessions/[id]/chat/[messageId]` | GET, PUT, DELETE | jwt+key | GET: `notebooks:read`, `notebooks:write`; PUT, DELETE: `notebooks:write` | - | yes | `/api/v1/sessions/[id]/messages/[messageId]` | 1: `utils/sessionsAPICalls.ts` |
 | `/api/sessions/[id]/chat/[messageId]/fork` | POST | jwt+key | - | - | no | - | 1: `hooks/data/sessions.ts` |
 | `/api/sessions/[id]/chat/[messageId]/snip` | POST | jwt+key | - | - | no | - | 1: `hooks/data/sessions.ts` |
@@ -1698,7 +1698,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/users` | GET | jwt+key | - | - | no | - | 2: `components/admin/CreditAnalysis/hooks/useUserCreditsManager.ts`, `utils/userAPICalls.tsx` |
-| `/api/users/[id]` | GET | jwt+key | `me:read` | - | no | - | 3: `components/admin/ModelMetrics/components/ControlPanel.tsx`, `hooks/data/user.ts`, `routes/auth/success.tsx` |
+| `/api/users/[id]` | GET | jwt+key | `admin:*`, `me:read` | - | no | - | 3: `components/admin/ModelMetrics/components/ControlPanel.tsx`, `hooks/data/user.ts`, `routes/auth/success.tsx` |
 | `/api/users/[id]/activities` | GET | jwt+key | - | - | no | - | 1: `hooks/data/user.ts` |
 | `/api/users/[id]/agents` | GET | jwt+key | - | - | no | - | 1: `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx` |
 | `/api/users/[id]/collections` | GET | jwt+key | - | - | no | - | 1: `hooks/data/user.ts` |
