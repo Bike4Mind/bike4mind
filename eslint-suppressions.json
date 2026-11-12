@@ -2892,11 +2892,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/work-items/__tests__/workItems.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 5
-    }
-  },
   "apps/client/scripts/test-slack-search.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 7

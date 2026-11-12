@@ -66,6 +66,7 @@ import {
   bobRunQueueDLQ,
   libreoncologyAudioRenderQueueDLQ,
   contributedQueues,
+  loopDispatchQueueDLQ,
 } from './queues';
 import {
   telemetryAlertDeadLetter,
@@ -87,6 +88,7 @@ import {
 import type { InspectableDlqDescriptor } from '@bike4mind/infra';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
 import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
+import { loopSchedulerDeadLetter } from './loopSchedulerDeadLetter';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
@@ -628,6 +630,24 @@ if (isMonitoredStage) {
       displayName: 'API Probe Detector',
       application: 'Security',
       queue: apiProbeDetectorDeadLetter.queue,
+    });
+  }
+
+  if (loopDispatchQueueDLQ) {
+    createDlqAlarms({
+      label: 'loop-dispatch',
+      displayName: 'Loop Dispatch',
+      application: 'Loops',
+      queue: loopDispatchQueueDLQ,
+    });
+  }
+
+  if (loopSchedulerDeadLetter) {
+    createDlqAlarms({
+      label: 'loop-scheduler',
+      displayName: 'Loop Scheduler',
+      application: 'Loops',
+      queue: loopSchedulerDeadLetter.queue,
     });
   }
 

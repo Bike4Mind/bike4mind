@@ -1,0 +1,659 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
+
+const { createLoop, updateLoop, budget } = vi.hoisted(() => ({
+  createLoop: { mutate: vi.fn(), isPending: false },
+  updateLoop: { mutate: vi.fn(), isPending: false },
+  budget: { data: { creditsToday: 0, laneLimits: { lanesPerUser: 2, maxActiveRuns: 4 } } },
+}));
+
+vi.mock('@client/app/hooks/data/loops', () => ({
+  useCreateLoop: () => createLoop,
+  useUpdateLoop: () => updateLoop,
+  useLoopsBudget: () => budget,
+  useLoops: () => ({
+    data: [
+      { id: 'l1', name: 'Digest', stages: ['todo', 'doing', 'done'] },
+      { id: 'l2', name: 'Closer', stages: ['open', 'review', 'shipped'] },
+    ],
+    isSuccess: true,
+  }),
+}));
+vi.mock('@client/app/hooks/data/mcpServers', () => ({
+  useMcpServers: () => ({
+    data: [
+      { name: 'GitHub', enabled: true, tools: ['create_issue'] },
+      { name: 'off', enabled: false, tools: ['hidden'] },
+    ],
+  }),
+}));
+vi.mock('@client/app/hooks/data/agents', () => ({ useGetAgents: () => ({ data: [{ id: 'a1', name: 'Alpha' }] }) }));
+vi.mock('@client/app/components/Agent/OrchestrationSection', () => ({
+  PICKABLE_TOOLS: ['web_search', 'weather_info'],
+}));
+vi.mock('@client/app/hooks/useAccessibleModels', () => ({
+  useAccessibleModels: () => ({ accessibleTextModels: [{ id: 'm2', name: 'Model Two' }] }),
+}));
+const config = vi.hoisted(() => ({ toolAvailability: undefined as Record<string, boolean> | undefined }));
+vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: config }) }));
+
+import { B4MLLMToolsList, LOOP_TEMPLATES } from '@bike4mind/common';
+import { TOOL_MAPPING } from '@client/app/utils/toolMapping';
+import LoopFormModal, { initialValues, validateLoopForm, type LoopFormValues } from './LoopFormModal';
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+
+const values = (overrides: Partial<LoopFormValues> = {}): LoopFormValues => ({
+  name: 'Digest',
+  goal: 'Summarize',
+  interval: '30',
+  intervalUnit: 'minutes',
+  tools: [],
+  stages: ['todo', 'doing', 'done'],
+  agentId: '',
+  oversees: [],
+  budget: '',
+  maxConcurrent: '1',
+  stageConfig: {},
+  slaP0: '',
+  slaP1: '',
+  p2Cap: '',
+  triageModel: '',
+  escalationModel: '',
+  handoffTargets: [],
+  triggers: [],
+  wakeMode: 'interval',
+  ...overrides,
+});
+
+describe('validateLoopForm', () => {
+  it('requires name and goal', () => {
+    const { errors, payload } = validateLoopForm(values({ name: ' ', goal: '' }), 'create');
+    expect(errors.name).toBeDefined();
+    expect(errors.goal).toBeDefined();
+    expect(payload).toBeUndefined();
+  });
+
+  it.each([['4'], ['7.5'], [''], ['10081']])('rejects an interval of %s minutes', interval => {
+    expect(validateLoopForm(values({ interval }), 'create').errors.interval).toBeDefined();
+  });
+
+  it('converts hours and days to minutes', () => {
+    expect(validateLoopForm(values({ interval: '2', intervalUnit: 'hours' }), 'create').payload?.intervalMinutes).toBe(
+      120
+    );
+    expect(validateLoopForm(values({ interval: '7', intervalUnit: 'days' }), 'create').payload?.intervalMinutes).toBe(
+      10_080
+    );
+    expect(validateLoopForm(values({ interval: '8', intervalUnit: 'days' }), 'create').errors.interval).toBeDefined();
+  });
+
+  it.each([
+    ['duplicate', ['todo', 'todo', 'done']],
+    ['empty', ['todo', ' ', 'done']],
+    ['too few', ['done']],
+    ['too long', ['todo', 'x'.repeat(61)]],
+  ])('rejects %s stages', (_, stages) => {
+    expect(validateLoopForm(values({ stages }), 'create').errors.stages).toBeDefined();
+  });
+
+  it.each([['0'], ['6'], ['1.5'], ['']])('rejects %s runs at once', maxConcurrent => {
+    expect(validateLoopForm(values({ maxConcurrent }), 'create').errors.maxConcurrent).toBeDefined();
+  });
+
+  it('omits the default runs at once on create and resets it with null on edit', () => {
+    expect(validateLoopForm(values(), 'create').payload).not.toHaveProperty('maxConcurrent');
+    expect(validateLoopForm(values(), 'edit').payload?.maxConcurrent).toBeNull();
+    expect(validateLoopForm(values({ maxConcurrent: '3' }), 'create').payload?.maxConcurrent).toBe(3);
+  });
+
+  it('omits no agent on create and clears it with null on edit', () => {
+    expect(validateLoopForm(values(), 'create').payload).not.toHaveProperty('agentId');
+    expect(validateLoopForm(values(), 'edit').payload?.agentId).toBeNull();
+    expect(validateLoopForm(values({ agentId: 'a1' }), 'create').payload?.agentId).toBe('a1');
+  });
+
+  it('omits an empty oversees on create, clears it with null on edit, and caps it at 5', () => {
+    expect(validateLoopForm(values(), 'create').payload).not.toHaveProperty('oversees');
+    expect(validateLoopForm(values(), 'edit').payload?.oversees).toBeNull();
+    expect(validateLoopForm(values({ oversees: ['l2'] }), 'create').payload?.oversees).toEqual(['l2']);
+    expect(
+      validateLoopForm(values({ oversees: ['1', '2', '3', '4', '5', '6'] }), 'edit').errors.oversees
+    ).toBeDefined();
+  });
+
+  it.each([['0'], ['-1'], ['abc']])('rejects a budget of %s', budget => {
+    expect(validateLoopForm(values({ budget }), 'create').errors.budget).toBeDefined();
+  });
+
+  it('omits no budget on create, clears it with null on edit, and sends a positive one', () => {
+    expect(validateLoopForm(values(), 'create').payload).not.toHaveProperty('budgetCreditsPerDay');
+    expect(validateLoopForm(values(), 'edit').payload?.budgetCreditsPerDay).toBeNull();
+    expect(validateLoopForm(values({ budget: '2.5' }), 'create').payload?.budgetCreditsPerDay).toBe(2.5);
+  });
+});
+
+describe('validateLoopForm hand-offs, triggers, wake mode and Slack', () => {
+  it('omits them when empty on create and clears them on edit', () => {
+    const created = validateLoopForm(values(), 'create').payload!;
+    for (const key of ['handoffTargets', 'triggers', 'wakeMode', 'slackChannelId']) {
+      expect(created).not.toHaveProperty(key);
+    }
+    expect(validateLoopForm(values(), 'edit').payload).toMatchObject({
+      handoffTargets: null,
+      triggers: null,
+      wakeMode: null,
+    });
+    // The Slack field is only sent when the form shows it.
+    expect(validateLoopForm(values(), 'edit').payload).not.toHaveProperty('slackChannelId');
+    expect(validateLoopForm(values({ slackChannelId: '' }), 'edit').payload?.slackChannelId).toBeNull();
+    expect(validateLoopForm(values({ slackChannelId: ' C0123ABCD ' }), 'edit').payload?.slackChannelId).toBe(
+      'C0123ABCD'
+    );
+  });
+
+  it('sends triggers, dropping a toStage that is not a non-last stage, and checks them', () => {
+    const triggers = [
+      { fromLoopId: 'l2', stage: 'shipped', toStage: 'doing' },
+      { fromLoopId: 'l2', stage: 'review', toStage: 'done' },
+    ];
+    expect(validateLoopForm(values({ triggers, wakeMode: 'tickets' }), 'create').payload).toMatchObject({
+      triggers: [
+        { fromLoopId: 'l2', stage: 'shipped', toStage: 'doing' },
+        { fromLoopId: 'l2', stage: 'review' },
+      ],
+      wakeMode: 'tickets',
+    });
+    expect(
+      validateLoopForm(values({ triggers: [{ fromLoopId: 'l2', stage: '', toStage: '' }] }), 'create').errors.triggers
+    ).toMatch(/Pick a loop and a stage/);
+    expect(validateLoopForm(values({ triggers: [triggers[0], triggers[0]] }), 'create').errors.triggers).toMatch(
+      /one trigger/
+    );
+  });
+});
+
+describe('validateLoopForm stageConfig', () => {
+  it('sends set fields of non-last stages only, and clears with null on edit', () => {
+    const { payload } = validateLoopForm(
+      values({
+        stages: ['todo', 'doing', 'done'],
+        stageConfig: {
+          todo: { model: 'm2', tools: [], instructions: '  ' },
+          doing: { runner: 'desktop', instructions: ' Review only ' },
+          done: { model: 'm3' },
+          removed: { model: 'm4' },
+        },
+      }),
+      'create'
+    );
+    expect(payload?.stageConfig).toEqual([
+      { stage: 'todo', model: 'm2' },
+      { stage: 'doing', runner: 'desktop', instructions: 'Review only' },
+    ]);
+    expect(validateLoopForm(values(), 'create').payload).not.toHaveProperty('stageConfig');
+    expect(validateLoopForm(values(), 'edit').payload?.stageConfig).toBeNull();
+  });
+
+  it('sends the desktop guards only for a desktop stage', () => {
+    const guards = {
+      repoHint: ' acme/app ',
+      mergePolicy: 'green-ci' as const,
+      deployWorkflow: 'deploy.yml',
+      smoke: 'https://app.example/health',
+      holdLabels: 'hold, , do-not-merge',
+    };
+    const { payload } = validateLoopForm(
+      values({
+        stages: ['todo', 'doing', 'review', 'done'],
+        stageConfig: {
+          todo: { model: 'm2', ...guards },
+          doing: { runner: 'desktop', ...guards },
+          review: { runner: 'desktop', smoke: 'pnpm smoke' },
+        },
+      }),
+      'create'
+    );
+    expect(payload?.stageConfig).toEqual([
+      { stage: 'todo', model: 'm2' },
+      {
+        stage: 'doing',
+        runner: 'desktop',
+        repoHint: 'acme/app',
+        mergePolicy: 'green-ci',
+        deployWorkflow: 'deploy.yml',
+        smoke: { url: 'https://app.example/health' },
+        holdLabels: ['hold', 'do-not-merge'],
+      },
+      { stage: 'review', runner: 'desktop', smoke: { command: 'pnpm smoke' } },
+    ]);
+  });
+
+  it('caps instructions at 4000 characters and tools at 50 per stage', () => {
+    expect(
+      validateLoopForm(values({ stageConfig: { todo: { instructions: 'x'.repeat(4001) } } }), 'create').errors
+        .stageConfig
+    ).toMatch(/4000/);
+    const tools = Array.from({ length: 51 }, (_, i) => `t${i}`);
+    expect(validateLoopForm(values({ stageConfig: { todo: { tools } } }), 'create').errors.stageConfig).toMatch(/50/);
+  });
+});
+
+describe('LoopFormModal', () => {
+  const renderForm = (loop?: Parameters<typeof LoopFormModal>[0]['loop']) =>
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <LoopFormModal open onClose={vi.fn()} loop={loop} />
+      </CssVarsProvider>
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    config.toolAvailability = undefined;
+  });
+
+  const openTools = () => fireEvent.click(screen.getByRole('combobox', { name: /tools/i }));
+
+  it('lists every tool while availability is loading, and hides an unavailable one once it is known', () => {
+    const { unmount } = renderForm();
+    openTools();
+    expect(screen.getByRole('option', { name: 'Web Search' })).toBeInTheDocument();
+    unmount();
+
+    config.toolAvailability = { web_search: false, weather_info: true };
+    renderForm();
+    openTools();
+    expect(screen.queryByRole('option', { name: /Web Search/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Weather/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('loop-form-tools-unavailable-warning')).not.toBeInTheDocument();
+  });
+
+  it('keeps a saved unavailable tool selected and labelled, warns about it, and clears the warning once removed', () => {
+    config.toolAvailability = { web_search: false };
+    renderForm({
+      id: 'l1',
+      name: 'Digest',
+      goal: 'Summarize',
+      intervalMinutes: 30,
+      tools: ['web_search'],
+      stages: ['todo', 'done'],
+    } as never);
+    expect(screen.getByTestId('loop-form-tools-unavailable-warning')).toHaveTextContent(
+      "Web Search isn't available on this server, so runs skip it."
+    );
+    openTools();
+    const option = screen.getByRole('option', { name: 'Web Search (unavailable)' });
+    expect(option).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(option);
+    expect(screen.queryByTestId('loop-form-tools-unavailable-warning')).not.toBeInTheDocument();
+  });
+
+  it('shows inline errors and submits nothing when invalid', () => {
+    renderForm();
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(screen.getByText('Name is required')).toBeInTheDocument();
+    expect(createLoop.mutate).not.toHaveBeenCalled();
+  });
+
+  it('creates with minutes, the default stages and an added stage', () => {
+    renderForm();
+    fireEvent.change(screen.getByTestId('loop-form-name-input'), { target: { value: 'Digest' } });
+    fireEvent.change(screen.getByTestId('loop-form-goal-input'), { target: { value: 'Summarize' } });
+    fireEvent.change(screen.getByTestId('loop-form-interval-input'), { target: { value: '45' } });
+    fireEvent.change(screen.getByTestId('loop-form-stage-input'), { target: { value: 'review' } });
+    fireEvent.click(screen.getByTestId('loop-form-stage-add-btn'));
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(createLoop.mutate).toHaveBeenCalledWith(
+      {
+        name: 'Digest',
+        goal: 'Summarize',
+        intervalMinutes: 45,
+        tools: [],
+        stages: ['todo', 'doing', 'done', 'review'],
+      },
+      expect.anything()
+    );
+  });
+
+  it('lists enabled MCP tools under the executor name <server>__<tool>', () => {
+    renderForm();
+    fireEvent.click(screen.getByRole('combobox', { name: /tools/i }));
+    expect(screen.getByRole('option', { name: 'GitHub: create_issue' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'off: hidden' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('option', { name: 'GitHub: create_issue' }));
+    fireEvent.change(screen.getByTestId('loop-form-name-input'), { target: { value: 'Digest' } });
+    fireEvent.change(screen.getByTestId('loop-form-goal-input'), { target: { value: 'Summarize' } });
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(createLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ tools: ['github__create_issue'] }),
+      expect.anything()
+    );
+  });
+
+  it('edits with the stored tools and warns when a stage is removed', () => {
+    renderForm({
+      id: 'l1',
+      name: 'Digest',
+      goal: 'Summarize',
+      intervalMinutes: 120,
+      tools: ['github__create_issue'],
+      stages: ['todo', 'doing', 'done'],
+      budgetCreditsPerDay: 50,
+    } as never);
+    expect(screen.getByTestId('loop-form-interval-input')).toHaveValue(2);
+    expect(screen.getByTestId('loop-form-budget-input')).toHaveValue(50);
+    expect(screen.getByTestId('loop-form-max-concurrent')).toHaveValue(1);
+    expect(screen.getByTestId('loop-form-max-concurrent-hint').textContent).toBe(
+      "Cloud runs at once; Desktop runs use your machine's own lanes."
+    );
+    fireEvent.change(screen.getByTestId('loop-form-max-concurrent'), { target: { value: '5' } });
+    expect(screen.getByTestId('loop-form-max-concurrent-hint').textContent).toBe(
+      "Cloud runs at once; Desktop runs use your machine's own lanes. Up to 2 run at once: your limit is 2 cloud runs across all loops. (server-wide limit: 4)"
+    );
+    fireEvent.change(screen.getByTestId('loop-form-budget-input'), { target: { value: '' } });
+    fireEvent.click(screen.getByTestId('loop-form-stage-remove-1'));
+    expect(screen.getByTestId('loop-form-stage-removed-warning')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'l1',
+        intervalMinutes: 120,
+        tools: ['github__create_issue'],
+        stages: ['todo', 'done'],
+        agentId: null,
+        budgetCreditsPerDay: null,
+        maxConcurrent: 5,
+      }),
+      expect.anything()
+    );
+  });
+
+  it("sends the loops picked under Oversees, offering the owner's other loops only", () => {
+    renderForm({
+      id: 'l1',
+      name: 'Digest',
+      goal: 'Summarize',
+      intervalMinutes: 30,
+      tools: [],
+      stages: ['todo', 'doing', 'done'],
+    } as never);
+    fireEvent.click(screen.getByRole('combobox', { name: /oversees/i }));
+    expect(screen.queryByRole('option', { name: 'Digest' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('option', { name: 'Closer' }));
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'l1', oversees: ['l2'] }),
+      expect.anything()
+    );
+  });
+
+  it('sends hand-off targets, a trigger and the wake mode picked in the form', () => {
+    renderForm({
+      id: 'l1',
+      name: 'Digest',
+      goal: 'Summarize',
+      intervalMinutes: 30,
+      tools: [],
+      stages: ['todo', 'doing', 'done'],
+    } as never);
+    fireEvent.click(screen.getByRole('combobox', { name: /hand off to/i }));
+    fireEvent.click(screen.getByRole('option', { name: 'Closer' }));
+    fireEvent.click(screen.getByTestId('loop-form-trigger-add-btn'));
+    fireEvent.click(within(screen.getByTestId('loop-form-trigger-from-0')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'Closer' }));
+    fireEvent.click(within(screen.getByTestId('loop-form-trigger-stage-0')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'shipped' }));
+    fireEvent.click(within(screen.getByTestId('loop-form-wake-tickets')).getByRole('radio'));
+    expect(screen.queryByTestId('loop-form-slack-channel')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'l1',
+        handoffTargets: ['l2'],
+        triggers: [{ fromLoopId: 'l2', stage: 'shipped' }],
+        wakeMode: 'tickets',
+      }),
+      expect.anything()
+    );
+  });
+
+  it('shows the Slack channel field for a loop that bills an organization', () => {
+    renderForm({
+      id: 'l1',
+      name: 'Digest',
+      goal: 'Summarize',
+      intervalMinutes: 30,
+      tools: [],
+      stages: ['todo', 'doing', 'done'],
+      organizationId: 'org-1',
+      slackChannelId: 'C0123ABCD',
+    } as never);
+    expect(screen.getByTestId('loop-form-slack-channel')).toHaveValue('C0123ABCD');
+  });
+
+  it('drops an oversees id whose loop was deleted, so the edit still saves', () => {
+    renderForm({
+      id: 'l1',
+      name: 'Digest',
+      goal: 'Summarize',
+      intervalMinutes: 30,
+      tools: [],
+      stages: ['todo', 'doing', 'done'],
+      oversees: ['gone', 'l2'],
+    } as never);
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'l1', oversees: ['l2'] }),
+      expect.anything()
+    );
+  });
+});
+
+describe('LoopFormModal stage settings', () => {
+  const renderForm = (loop?: Parameters<typeof LoopFormModal>[0]['loop']) =>
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <LoopFormModal open onClose={vi.fn()} loop={loop} />
+      </CssVarsProvider>
+    );
+  const pick = (testId: string, option: string) => {
+    fireEvent.click(within(screen.getByTestId(testId)).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: option }));
+  };
+  const saved = {
+    id: 'l1',
+    name: 'Digest',
+    goal: 'Summarize',
+    intervalMinutes: 30,
+    tools: [],
+    stages: ['todo', 'review', 'done'],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    config.toolAvailability = undefined;
+  });
+
+  it('is collapsed by default and has no panel for the last stage', () => {
+    renderForm();
+    const summary = within(screen.getByTestId('loop-form-stage-settings')).getByRole('button', {
+      name: 'Stage settings',
+    });
+    expect(summary).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(summary);
+    expect(summary).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('loop-form-stage-panel-0')).toBeInTheDocument();
+    expect(screen.getByTestId('loop-form-stage-panel-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('loop-form-stage-panel-2')).not.toBeInTheDocument();
+  });
+
+  it('hides an unavailable tool from the stage tools picker, keeping a saved one labelled', () => {
+    config.toolAvailability = { web_search: false, weather_info: true };
+    renderForm(saved as never);
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    fireEvent.click(within(screen.getByTestId('loop-form-stage-tools-0')).getByRole('combobox'));
+    expect(screen.queryByRole('option', { name: /Web Search/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Weather/ })).toBeInTheDocument();
+  });
+
+  it('keeps a stage tool saved before it became unavailable, labelled', () => {
+    config.toolAvailability = { web_search: false };
+    renderForm({ ...saved, stageConfig: [{ stage: 'todo', tools: ['web_search'] }] } as never);
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    fireEvent.click(within(screen.getByTestId('loop-form-stage-tools-0')).getByRole('combobox'));
+    expect(screen.getByRole('option', { name: 'Web Search (unavailable)' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it("sends a stage's runner, model, tools and instructions", () => {
+    renderForm(saved as never);
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    pick('loop-form-stage-runner-1', 'Desktop');
+    expect(screen.getByText('Tickets in this stage wait for your Desktop app to pick them up.')).toBeInTheDocument();
+    pick('loop-form-stage-model-1', 'Model Two');
+    pick('loop-form-stage-tools-1', 'GitHub: create_issue');
+    fireEvent.change(screen.getByTestId('loop-form-stage-instructions-1'), { target: { value: 'Review only' } });
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stageConfig: [
+          {
+            stage: 'review',
+            runner: 'desktop',
+            model: 'm2',
+            tools: ['github__create_issue'],
+            instructions: 'Review only',
+          },
+        ],
+      }),
+      expect.anything()
+    );
+  });
+
+  it('sends a stage escalation model and the loop priority settings, and round-trips them on edit', () => {
+    renderForm(saved as never);
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    pick('loop-form-stage-escalation-model-0', 'Model Two');
+    fireEvent.change(screen.getByTestId('loop-form-sla-p0'), { target: { value: '0.05' } });
+    fireEvent.change(screen.getByTestId('loop-form-sla-p1'), { target: { value: '12' } });
+    fireEvent.change(screen.getByTestId('loop-form-p2-cap'), { target: { value: '1' } });
+    pick('loop-form-triage-model', 'Model Two');
+    pick('loop-form-escalation-model', 'Model Two');
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    const sent = {
+      stageConfig: [{ stage: 'todo', escalationModel: 'm2' }],
+      serviceLevelHours: { p0: 0.05, p1: 12 },
+      p2RunsPerDay: 1,
+      triageModel: 'm2',
+      escalationModel: 'm2',
+    };
+    expect(updateLoop.mutate).toHaveBeenCalledWith(expect.objectContaining(sent), expect.anything());
+    cleanup();
+
+    vi.clearAllMocks();
+    renderForm({ ...saved, ...sent } as never);
+    expect(screen.getByTestId('loop-form-sla-p0')).toHaveValue(0.05);
+    expect(screen.getByTestId('loop-form-p2-cap')).toHaveValue(1);
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(expect.objectContaining(sent), expect.anything());
+  });
+
+  it('clears unset priority settings on edit and rejects out-of-range ones', () => {
+    expect(validateLoopForm(values(), 'edit').payload).toMatchObject({
+      serviceLevelHours: null,
+      p2RunsPerDay: null,
+      triageModel: null,
+      escalationModel: null,
+    });
+    expect(validateLoopForm(values(), 'create').payload).not.toHaveProperty('p2RunsPerDay');
+    expect(validateLoopForm(values({ slaP0: '0' }), 'create').errors.sla).toMatch(/above 0/);
+    expect(validateLoopForm(values({ slaP1: '721' }), 'create').errors.sla).toMatch(/720/);
+    expect(validateLoopForm(values({ p2Cap: '1.5' }), 'create').errors.p2Cap).toMatch(/whole number/);
+    expect(validateLoopForm(values({ p2Cap: '0' }), 'create').payload).toMatchObject({ p2RunsPerDay: 0 });
+  });
+
+  it('shows the saved config and drops it when its stage is removed', () => {
+    renderForm({
+      ...saved,
+      stageConfig: [{ stage: 'review', runner: 'desktop', instructions: 'Review only' }],
+    } as never);
+    fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
+    expect(screen.getByTestId('loop-form-stage-instructions-1')).toHaveValue('Review only');
+    expect(within(screen.getByTestId('loop-form-stage-panel-1')).getByText('desktop')).toBeInTheDocument();
+    expect(screen.getByTestId('loop-form-stage-repo-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('loop-form-stage-repo-0')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('loop-form-stage-remove-1'));
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ stages: ['todo', 'done'], stageConfig: null }),
+      expect.anything()
+    );
+  });
+});
+
+describe('LoopFormModal templates', () => {
+  // The real picker list; PICKABLE_TOOLS is mocked above (OrchestrationSection derives it the same way).
+  const pickable = B4MLLMToolsList.filter(tool => tool in TOOL_MAPPING) as string[];
+
+  it.each(LOOP_TEMPLATES)('$id prefills a form that saves as is', template => {
+    const { errors, payload } = validateLoopForm(initialValues(template), 'create');
+    expect(errors).toEqual({});
+    expect(payload).not.toHaveProperty('slackChannelId');
+    expect(payload).not.toHaveProperty('model');
+    expect(payload?.budgetCreditsPerDay).toBe(template.budgetCreditsPerDay);
+    for (const config of template.stageConfig) {
+      const sent = payload?.stageConfig?.find(c => c.stage === config.stage);
+      expect(sent?.instructions).toBe(config.instructions);
+      expect(sent?.runner).toBe(config.runner);
+      if (config.runner === 'desktop') expect(sent?.mergePolicy).toBe('review');
+    }
+    for (const tool of [...template.tools, ...template.stageConfig.flatMap(c => c.tools ?? [])]) {
+      expect(pickable).toContain(tool);
+    }
+  });
+
+  it('shows the setup notes and creates the prefilled loop', () => {
+    const template = LOOP_TEMPLATES.find(t => t.id === 'software-factory')!;
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <LoopFormModal open onClose={vi.fn()} template={template} />
+      </CssVarsProvider>
+    );
+    expect(screen.getByText('New loop from template')).toBeInTheDocument();
+    expect(screen.getByTestId('loop-form-setup-notes')).toHaveTextContent(template.setupNotes[0]);
+    expect(screen.getByTestId('loop-form-name-input')).toHaveValue('Software factory');
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(createLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Software factory', stages: template.stages, intervalMinutes: 60 }),
+      expect.anything()
+    );
+  });
+
+  it('ignores the template when editing a loop', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <LoopFormModal
+          open
+          onClose={vi.fn()}
+          loop={
+            {
+              id: 'l1',
+              name: 'Digest',
+              goal: 'Summarize',
+              intervalMinutes: 30,
+              tools: [],
+              stages: ['todo', 'done'],
+            } as never
+          }
+          template={LOOP_TEMPLATES[0]}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.getByText('Edit loop')).toBeInTheDocument();
+    expect(screen.queryByTestId('loop-form-setup-notes')).toBeNull();
+    expect(screen.getByTestId('loop-form-name-input')).toHaveValue('Digest');
+  });
+});

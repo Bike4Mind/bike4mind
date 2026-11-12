@@ -7,8 +7,10 @@ import type { ChatSessionSummary, ChatSpawnSuggestion, ChatStreamEvent, SpawnSug
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, MAX_CONCURRENT_SPAWNED } from './ChatService';
 import type { ModelMemory } from './ModelPreference';
+import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+import { ApprovalGate } from './tools/ApprovalGate';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -37,6 +39,7 @@ describe('ChatService spawn caps', () => {
   let post: ReturnType<typeof vi.fn>;
   let streams: PassThrough[];
   let project: string;
+  let deps: ConstructorParameters<typeof ChatService>[0];
   let modelMemory: ModelMemory & { record: ReturnType<typeof vi.fn<ModelMemory['record']>> };
 
   beforeEach(async () => {
@@ -56,8 +59,9 @@ describe('ChatService spawn caps', () => {
 
     modelMemory = { read: async () => null, record: vi.fn<ModelMemory['record']>(async () => {}) };
 
-    service = new ChatService({
+    deps = {
       store,
+      queue: new MessageQueue(() => undefined),
       access: { list: async () => [] } as unknown as AccessStore,
       modelMemory,
       logger: { debug: vi.fn(), warn: vi.fn() },
@@ -68,7 +72,8 @@ describe('ChatService spawn caps', () => {
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => emitted.push(event),
-    });
+    };
+    service = new ChatService(deps);
   });
 
   afterEach(() => {
@@ -284,6 +289,33 @@ describe('ChatService spawn caps', () => {
     const child = (await store.list()).find(session => session.origin);
     expect(child?.model).toBe('parent-model');
     expect(modelMemory.record).not.toHaveBeenCalled();
+  });
+
+  it("marks a loop runner session's child as working for the same run, with nobody to answer its cards", async () => {
+    // Only here: with a gate, tools in the other tests would wait on cards nobody answers.
+    const approvals = new ApprovalGate();
+    service.dispose();
+    service = new ChatService({ ...deps, approvals });
+    const parent = await codeSession();
+    await service.startAutomaticTurn(parent.id, 'go', {
+      kind: 'loop-runner',
+      loopId: 'loop-1',
+      ticketId: 'ticket-1',
+      runId: 'run-1',
+      summary: 'Fix the docs',
+    });
+    await awaitStream(0);
+    requestSpawns(streams[0], 1, 'loop');
+    await startSuggested(parent.id, ['loop-0']);
+
+    const child = (await store.list()).find(session => session.origin);
+    expect(child && service.loopRunOf(child.id)).toBe('run-1');
+    expect(service.loopRunSessions('run-1').sort()).toEqual([parent.id, child?.id].sort());
+
+    // Nobody watches the child either, so its cards are denied as they open (ApprovalGate.setUnattended). This, not
+    // the gate's parent links, is what covers spawned children: a side chat the user opens also has a parent.
+    const card = approvals.request(child!.id, 'bash_execute', new AbortController().signal, () => undefined);
+    await expect(card).resolves.toMatchObject({ decision: 'deny' });
   });
 
   it('gives a spawned session exactly its parent grants, with no way to name others', async () => {

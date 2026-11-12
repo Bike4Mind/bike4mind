@@ -62,7 +62,7 @@ interface OrchestrationSectionProps {
  * future "Restore" workflow would need a separate picker surface; for now the
  * filter intentionally limits surface area to user-safe tools.
  */
-const PICKABLE_TOOLS: string[] = B4MLLMToolsList.filter(t => t in TOOL_MAPPING).sort();
+export const PICKABLE_TOOLS: string[] = B4MLLMToolsList.filter(t => t in TOOL_MAPPING).sort();
 
 const ITERATION_BOUNDS = { min: 1, max: 100 } as const;
 

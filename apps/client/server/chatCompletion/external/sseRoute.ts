@@ -28,6 +28,7 @@ import {
   type IMessage,
   type SSEErrorEvent,
   type TurnUsage,
+  LOOP_RUN_HEADER,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
@@ -38,6 +39,7 @@ import {
   connectDB,
   mongoose,
   adminSettingsRepository,
+  agentExecutionRepository,
   apiKeyRepository,
   creditTransactionRepository,
   userRepository,
@@ -48,6 +50,7 @@ import {
 } from '@bike4mind/database';
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
+import { resolveLoopRunTag } from '@server/utils/loopRunner';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
@@ -333,6 +336,8 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
       }
 
+      // A desktop loop run tags its calls so their credits count toward its loop's budgets.
+      const loopRunId = await resolveLoopRunTag(headers[LOOP_RUN_HEADER.toLowerCase()], userId, !!apiKeyInfo, logger);
       timing?.phase('rateLimited');
       logger.updateMetadata({ userId, model: body.model, apiKeyId: apiKeyInfo?.keyId });
       logger.info(`[CLI_LLM] Starting completion for user ${userId}, model: ${body.model}`, {
@@ -418,6 +423,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       end();
       if (heartbeat) clearInterval(heartbeat);
       logger.info('[CLI_LLM] Completion stream finished successfully');
+
+      if (loopRunId && finalCreditsUsed) {
+        await agentExecutionRepository
+          .addRunnerCredits(loopRunId, userId, finalCreditsUsed)
+          .catch(error => logger.warn('[CLI_LLM] Could not tally loop run credits', { loopRunId, error }));
+      }
 
       await logCompletionAnalytics({
         type: 'success',

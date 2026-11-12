@@ -17,6 +17,7 @@ const AUTOMATIC_HEADS: Record<ChatAutomaticOrigin['kind'], string> = {
   'auto-fix': 'Started by auto-fix',
   'background-exit': 'Background command finished',
   'agents-settled': 'Agents finished',
+  'loop-runner': 'Started by the loop runner',
 };
 
 /** Short labels for the queue, keyed like AUTOMATIC_HEADS. */
@@ -24,6 +25,7 @@ export const AUTOMATIC_TAGS: Record<ChatAutomaticOrigin['kind'], string> = {
   'auto-fix': 'Auto-fix',
   'background-exit': 'Background',
   'agents-settled': 'Agents',
+  'loop-runner': 'Loop',
 };
 
 /** The collapsed row for a turn the app started: who started it, then what it is about. */

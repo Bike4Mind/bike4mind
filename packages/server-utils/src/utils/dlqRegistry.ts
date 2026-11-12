@@ -526,6 +526,27 @@ const DLQ_REGISTRY = [
     owner: 'Security ops',
   },
   {
+    label: 'loop-dispatch',
+    displayName: 'Loop Dispatch',
+    application: 'Loops',
+    sourceQueue: 'loopDispatchQueue',
+    description: "Starts a loop's next run within seconds of the event that made it due.",
+    replay: 'side-effects',
+    replayNote:
+      'Starts a run only if the loop is still due and within its budget and lane limits; that run spends credits. The scheduler tick starts it anyway within minutes.',
+    owner: 'Loops',
+  },
+  {
+    label: 'loop-scheduler',
+    displayName: 'Loop Scheduler',
+    application: 'Loops',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed loop scheduler invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'Loops',
+  },
+  {
     label: 'image-moderation-review-sweep',
     displayName: 'Image Moderation Review Sweep',
     application: 'Moderation',

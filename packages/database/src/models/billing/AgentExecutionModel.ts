@@ -13,6 +13,11 @@ import {
   type AudioGenerationToolCall,
   type AuthOrigin,
   AuthOriginSchema,
+  type LoopGateOutcome,
+  LOOP_RUN_OUTCOMES,
+  type LoopRunOutcome,
+  WORK_ITEM_PRIORITIES,
+  type WorkItemPriority,
   type PromptMeta,
   CONFIDENCE_GATE_MODES,
   type ConfidenceGateMode,
@@ -82,6 +87,12 @@ export interface IPendingGate {
   requestedAt: Date;
 }
 
+/** A resolved confidence gate, kept on the execution by `clearPendingGate`. */
+export type IGateRecord = IPendingGate & {
+  resolution: LoopGateOutcome;
+  resolvedAt: Date;
+  resolvedBy?: string;
+};
 /**
  * The finished result a completion-time `block` pause holds back (see `low_confidence_completion`
  * in agentExecutor). The executor's per-invocation state (images, side effects, retrieval) is gone
@@ -355,6 +366,42 @@ export interface IAgentExecution {
    */
   enableLattice?: boolean;
   /**
+   * The loop that dispatched this run. Its presence gives the run the `loop_ticket_*` tools
+   * (re-read on every invocation, like `enableLattice`).
+   */
+  loopId?: string;
+  /**
+   * Most credits this run may spend (`totalCreditsUsed`), set by the loop scheduler from the loop's and
+   * owner's remaining daily budgets. The executor stops before an iteration that would cross it.
+   */
+  creditCap?: number;
+  /** A loop run's ticket and its priority at dispatch; the p2 daily cap counts runs by `ticketPriority`. */
+  workItemId?: string;
+  ticketPriority?: WorkItemPriority;
+  /** A ticket's last run before its run limit, on the loop's escalation model (`loopRunModel`). */
+  escalated?: boolean;
+  /** A triage run sets the priority of untriaged tickets; it works no ticket and leaves the loop memory alone. */
+  loopRunKind?: 'triage';
+  /** A loop ticket run's stage and run number (`runCount` after its claim) at dispatch; `loopAttempt > 1` is a retry. */
+  loopStage?: string;
+  loopAttempt?: number;
+  /** How the loop run ended, stamped at fold. Read only by the loop stats. */
+  loopOutcome?: LoopRunOutcome;
+  /** Loop runs: names of tools the run called but did not have, and of tools that threw (each deduped, at most 20). */
+  toolsUnavailable?: string[];
+  toolsErrored?: string[];
+  /** The untriaged tickets a triage run was shown; its fold sets p2 on any it left without a priority. */
+  triageWorkItemIds?: string[];
+  /**
+   * Set on a loop run a desktop runner works (apps/client/server/utils/loopRunner.ts). No executor runs it:
+   * the runner posts its progress and outcome, and its lease (`runnerLeaseUntil`) keeps it alive.
+   */
+  runner?: 'desktop';
+  /** A desktop run's lease; the loop scheduler fails the run and reopens its ticket once it lapses. */
+  runnerLeaseUntil?: Date;
+  /** How long a finished desktop run took on its machine (ms). */
+  runnerDurationMs?: number;
+  /**
    * The caller's per-request artifact intent, mirroring the chat surface's `enableArtifacts` body
    * field. Combined with the admin `EnableArtifacts` setting by `resolveArtifactsEnabled`, so only
    * an explicit `false` opts out and `undefined` leaves the admin setting as the only gate.
@@ -448,10 +495,15 @@ export interface IAgentExecution {
    * Coarse classifier for failures that operators / dashboards filter on.
    * `'abandoned'` is set by the scheduled / admin-triggered sweep on stale
    * executions so they can be distinguished from real executor errors.
+   * `'insufficient_credits'` is set when the executor refuses to start a run for
+   * credits (balance or org member cap), or stops one mid-run because the payer's balance cannot cover
+   * the next iteration; the loop scheduler pauses on it. `'credit_cap'` is set when a run stops before
+   * an iteration that would cross its `creditCap`.
    * Schema is untyped at the Mongoose level so future variants can be added
    * without a migration; the TS union is the source of truth.
    */
-  failureReason?: 'abandoned';
+  /** 'blocked': a desktop loop run that completed but handed its ticket to the user. */
+  failureReason?: 'abandoned' | 'insufficient_credits' | 'credit_cap' | 'spend_cap' | 'blocked';
 
   /**
    * Set when the abandoned-sweep's post-abandonment quest settlement fails for
@@ -472,6 +524,8 @@ export interface IAgentExecution {
    */
   pendingGate?: IPendingGate;
 
+  /** Every gate this run resolved, oldest first; `pendingGate` moves here on `gate_response`. */
+  gateHistory?: IGateRecord[];
   /** Set alongside `pendingGate` only when the pause holds a finished answer. */
   pendingCompletion?: IPendingCompletion;
 
@@ -575,6 +629,12 @@ export interface IAgentExecution {
   // Connection tracking (for WebSocket streaming)
   connectionId?: string;
 
+  /**
+   * WS connections watching this run via the `subscribe` command. The executor fans frames out to them,
+   * but never uses them for decisions (unlike `connectionId`, which drives `hasApprover`).
+   */
+  viewerConnectionIds?: string[];
+
   // Timing
   startedAt?: Date;
   completedAt?: Date;
@@ -627,6 +687,19 @@ const PendingGateSchema = new mongoose.Schema(
     confidence: { type: Number, required: true },
     reason: { type: String, required: true },
     requestedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
+const GateRecordSchema = new mongoose.Schema(
+  {
+    iteration: { type: Number, required: true },
+    confidence: { type: Number, required: true },
+    reason: { type: String, required: true },
+    requestedAt: { type: Date, required: true },
+    resolution: { type: String, enum: ['resumed', 'rejected'], required: true },
+    resolvedAt: { type: Date, required: true },
+    resolvedBy: { type: String },
   },
   { _id: false }
 );
@@ -815,6 +888,21 @@ const AgentExecutionSchema = new mongoose.Schema(
     // Feature-parity flags
     enableMementos: { type: Boolean },
     enableLattice: { type: Boolean },
+    loopId: { type: String },
+    creditCap: { type: Number },
+    workItemId: { type: String },
+    ticketPriority: { type: String, enum: WORK_ITEM_PRIORITIES },
+    escalated: { type: Boolean },
+    loopRunKind: { type: String, enum: ['triage'] },
+    loopStage: { type: String },
+    loopAttempt: { type: Number },
+    loopOutcome: { type: String, enum: LOOP_RUN_OUTCOMES },
+    toolsUnavailable: { type: [String], default: undefined },
+    toolsErrored: { type: [String], default: undefined },
+    triageWorkItemIds: { type: [String], default: undefined },
+    runner: { type: String, enum: ['desktop'] },
+    runnerLeaseUntil: { type: Date },
+    runnerDurationMs: { type: Number },
     enableArtifacts: { type: Boolean },
     // `default: undefined` so an absent field stays absent (a bare [String] would
     // materialize [] on every doc, indistinguishable from "profile denies nothing").
@@ -880,6 +968,7 @@ const AgentExecutionSchema = new mongoose.Schema(
 
     // Confidence-gate state
     pendingGate: { type: PendingGateSchema, required: false },
+    gateHistory: { type: [GateRecordSchema], default: undefined },
     pendingCompletion: { type: mongoose.Schema.Types.Mixed, required: false },
 
     // Confidence-gate telemetry (#56 M1.1). `default: () => ({})` instantiates
@@ -920,6 +1009,7 @@ const AgentExecutionSchema = new mongoose.Schema(
 
     // Connection tracking
     connectionId: { type: String },
+    viewerConnectionIds: { type: [String], default: undefined },
 
     // Timing
     startedAt: { type: Date },
@@ -960,9 +1050,39 @@ AgentExecutionSchema.index({ parentExecutionId: 1, createdAt: 1 });
 AgentExecutionSchema.index({ userId: 1, status: 1, parentExecutionId: 1, isBackgroundExecution: 1 });
 AgentExecutionSchema.index({ spawnedByExecutionId: 1, status: 1 }); // Abort cascade to background children
 AgentExecutionSchema.index({ parentExecutionId: 1, dagNodeId: 1 }); // Sibling lookup during DAG completion handler
+AgentExecutionSchema.index({ runnerLeaseUntil: 1 }, { sparse: true }); // listExpiredRunnerRuns
+// countLoopRunsByPriority (the loop p2 daily cap)
+AgentExecutionSchema.index(
+  { loopId: 1, ticketPriority: 1, createdAt: 1 },
+  { partialFilterExpression: { ticketPriority: { $exists: true } } }
+);
+// The loop stats read of a loop's runs in a window (listLoopRunsSince), triage and goal runs included.
+AgentExecutionSchema.index({ loopId: 1, createdAt: 1 }, { partialFilterExpression: { loopId: { $exists: true } } });
 AgentExecutionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 }); // 90-day TTL - preserves billing/audit data
 
 // --- List filters & summary projection (history viewer) ---
+
+const LOOP_TOOL_FAILURES_MAX = 20;
+/** ponytail: runs the loop stats read per loop and window; a bigger loop's figures come from a prefix. */
+const LOOP_STATS_RUNS = 5000;
+
+/** The fields of a loop run the loop stats read. */
+export type LoopStatsRun = Pick<
+  IAgentExecution,
+  | 'id'
+  | 'createdAt'
+  | 'completedAt'
+  | 'status'
+  | 'model'
+  | 'totalCreditsUsed'
+  | 'loopStage'
+  | 'loopAttempt'
+  | 'loopOutcome'
+  | 'toolsUnavailable'
+  | 'toolsErrored'
+  | 'workItemId'
+  | 'loopRunKind'
+>;
 
 export interface ExecutionListFilters {
   statuses?: AgentExecutionStatus[];
@@ -1132,6 +1252,33 @@ export function parseExecutionListCursor(cursor: string): { createdAt: Date; id:
 
 // --- Repository ---
 
+const MAX_VIEWER_CONNECTIONS = 10;
+
+/**
+ * A loop run paused at the confidence gate is parked by the loop scheduler and waits on its owner,
+ * possibly for days, so the stale sweeps must not abort it (see `reconcileLoop` in `loopScheduler.ts`).
+ * A desktop loop run is ended by its lease instead (`releaseExpiredRunnerLeases`), which also reopens its ticket.
+ */
+const NOT_LOOP_PARKED = {
+  $nor: [{ status: 'paused', loopId: { $exists: true }, pendingGate: { $exists: true } }, { runner: 'desktop' }],
+};
+
+/** A run's credits, or its `creditCap` while it is still in flight and that is higher (a budget reservation). */
+const RESERVED_CREDITS = {
+  $cond: [
+    { $in: ['$status', [...ACTIVE_AGENT_EXECUTION_STATUSES]] },
+    { $max: ['$totalCreditsUsed', '$creditCap'] },
+    '$totalCreditsUsed',
+  ],
+};
+
+const activeRunnerRun = (id: string, userId: string) => ({
+  _id: id,
+  userId,
+  runner: 'desktop',
+  status: { $in: ACTIVE_AGENT_EXECUTION_STATUSES },
+});
+
 class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   constructor(private agentExecutionModel: mongoose.Model<IAgentExecution>) {
     super(agentExecutionModel);
@@ -1185,6 +1332,110 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   }
 
   /**
+   * Credits per loop over its top-level runs, keyed by loop id. Sync children roll up into their parent;
+   * background children carry no loopId, so they are not counted. `sessionIds` are the loops' notebooks:
+   * they narrow the scan to the {sessionId, status} index, while `loopId` leaves out any chat a user starts
+   * by hand in a loop's notebook. With `since`, only runs created since then count, so a run that crosses
+   * midnight counts toward the day it started. `reserveInFlight` as in `sumLoopCreditsForUser`: a loop's
+   * desktop runs run in parallel with each other and with its cloud run.
+   */
+  async sumCreditsByLoop(
+    loopIds: string[],
+    sessionIds: string[],
+    since?: Date,
+    reserveInFlight = false
+  ): Promise<Record<string, number>> {
+    if (loopIds.length === 0) return {};
+    const rows = await this.model.aggregate<{ _id: string; credits: number }>([
+      {
+        $match: {
+          sessionId: { $in: sessionIds },
+          loopId: { $in: loopIds },
+          parentExecutionId: null,
+          ...(since && { createdAt: { $gte: since } }),
+        },
+      },
+      { $group: { _id: '$loopId', credits: { $sum: reserveInFlight ? RESERVED_CREDITS : '$totalCreditsUsed' } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [row._id, row.credits]));
+  }
+
+  /**
+   * Credits over all of a user's top-level loop runs created since `since`. Served by the
+   * { userId, createdAt } index. `reserveInFlight` counts a run still in flight at its `creditCap` when
+   * that is higher, so parallel capped runs cannot each be admitted against the same remaining budget.
+   */
+  async sumLoopCreditsForUser(userId: string, since: Date, reserveInFlight = false): Promise<number> {
+    const credits = reserveInFlight ? RESERVED_CREDITS : '$totalCreditsUsed';
+    const [row] = await this.model.aggregate<{ credits: number }>([
+      { $match: { userId, createdAt: { $gte: since }, loopId: { $exists: true }, parentExecutionId: null } },
+      { $group: { _id: null, credits: { $sum: credits } } },
+    ]);
+    return row?.credits ?? 0;
+  }
+
+  /** A loop's top-level ticket runs of `priority` since `since`, cloud and desktop, finished or not. */
+  async countLoopRunsByPriority(loopId: string, priority: WorkItemPriority, since: Date): Promise<number> {
+    return this.model.countDocuments({
+      loopId,
+      ticketPriority: priority,
+      createdAt: { $gte: since },
+      parentExecutionId: null,
+    });
+  }
+
+  async setLoopOutcome(id: string, loopOutcome: LoopRunOutcome): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { loopOutcome } });
+  }
+
+  /** Merges tool names into the run's failure lists, each deduped and kept to its first 20. */
+  async addLoopToolFailures(id: string, failures: { unavailable: string[]; errored: string[] }): Promise<void> {
+    const merged = (field: string, names: string[]) => ({
+      $slice: [{ $setUnion: [{ $ifNull: ['$' + field, []] }, { $literal: names }] }, LOOP_TOOL_FAILURES_MAX],
+    });
+    const set = {
+      ...(failures.unavailable.length > 0 && { toolsUnavailable: merged('toolsUnavailable', failures.unavailable) }),
+      ...(failures.errored.length > 0 && { toolsErrored: merged('toolsErrored', failures.errored) }),
+    };
+    if (Object.keys(set).length > 0) await this.model.updateOne({ _id: id }, [{ $set: set }]);
+  }
+
+  /** A loop's top-level runs since `since`, newest first, capped (`truncated`): a cut drops the oldest. */
+  async listLoopRunsSince(loopId: string, since: Date): Promise<{ runs: LoopStatsRun[]; truncated: boolean }> {
+    const docs = await this.model
+      .find({ loopId, createdAt: { $gte: since }, parentExecutionId: null })
+      .sort({ createdAt: -1 })
+      .limit(LOOP_STATS_RUNS)
+      .select(
+        'createdAt completedAt status model totalCreditsUsed loopStage loopAttempt loopOutcome toolsUnavailable toolsErrored workItemId loopRunKind'
+      );
+    return { runs: docs.map(doc => doc.toJSON() as LoopStatsRun), truncated: docs.length === LOOP_STATS_RUNS };
+  }
+
+  /** A loop's newest top-level runs; `sessionId` (its notebook) narrows the scan like `sumCreditsByLoop`. */
+  async listRecentForLoop(
+    loopId: string,
+    sessionId: string,
+    limit: number
+  ): Promise<
+    Pick<IAgentExecution, 'id' | 'status' | 'failureReason' | 'createdAt' | 'completedAt' | 'totalCreditsUsed'>[]
+  > {
+    const results = await this.model
+      .find({ sessionId, loopId, parentExecutionId: null })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .select({ status: 1, failureReason: 1, createdAt: 1, completedAt: 1, totalCreditsUsed: 1 });
+    return results.map(doc => ({
+      id: doc.id,
+      status: doc.status,
+      failureReason: doc.failureReason,
+      createdAt: doc.createdAt,
+      completedAt: doc.completedAt,
+      totalCreditsUsed: doc.totalCreditsUsed,
+    }));
+  }
+
+  /**
    * Find background children spawned by a parent execution. Used by the abort cascade
    * to propagate aborts from the parent to its background children. Returns only
    * children that are still in an active status.
@@ -1206,14 +1457,106 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    *
    * Synchronous in-process subagents (have `parentExecutionId` and no
    * `isBackgroundExecution`) are excluded since they're a transient side effect of an
-   * already-counted parent.
+   * already-counted parent. Desktop loop runs use no executor and have their own cap
+   * (`countActiveDesktopByUserId`).
    */
   async countActiveByUserId(userId: string): Promise<number> {
     return this.model.countDocuments({
       userId,
       status: { $in: ACTIVE_AGENT_EXECUTION_STATUSES },
+      runner: { $exists: false },
       $or: [{ parentExecutionId: { $exists: false } }, { isBackgroundExecution: true }],
     });
+  }
+
+  async countActiveDesktopByUserId(userId: string): Promise<number> {
+    return this.model.countDocuments({ userId, runner: 'desktop', status: { $in: ACTIVE_AGENT_EXECUTION_STATUSES } });
+  }
+
+  /** Creates a desktop loop run under a pre-generated id, so its ticket can be claimed under that id first. */
+  async createRunnerRun(
+    id: string,
+    fields: Omit<IAgentExecution, 'id' | 'createdAt' | 'updatedAt' | 'runner'>
+  ): Promise<IAgentExecution> {
+    return (await this.model.create({ ...fields, _id: id, runner: 'desktop' })).toObject();
+  }
+
+  /** The owner's desktop run, in any status; null for another user's, a cloud run, or a malformed id. */
+  async findRunnerRun(id: string, userId: string): Promise<IAgentExecution | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    return (await this.model.findOne({ _id: id, userId, runner: 'desktop' }))?.toObject() ?? null;
+  }
+
+  /** Extends a live desktop run's lease to `until`; null when the run is not active or its lease already lapsed. */
+  async renewRunnerLease(id: string, userId: string, now: Date, until: Date): Promise<IAgentExecution | null> {
+    const doc = await this.model.findOneAndUpdate(
+      { ...activeRunnerRun(id, userId), runnerLeaseUntil: { $gte: now } },
+      { $set: { runnerLeaseUntil: until } },
+      { new: true }
+    );
+    return doc?.toObject() ?? null;
+  }
+
+  /**
+   * Appends a desktop run's progress steps (the last 500 kept) and renews its lease, conditional on
+   * `checkpoint.seq` (bumped by every append) still being `expected.seq`, so two concurrent posts never
+   * interleave. False when the run is gone, its lease lapsed, or another post won.
+   */
+  async appendRunnerSteps(
+    id: string,
+    userId: string,
+    now: Date,
+    expected: { seq: number },
+    next: { steps: unknown[]; iteration: number; pendingText: string; leaseUntil: Date }
+  ): Promise<boolean> {
+    const result = await this.model.updateOne(
+      {
+        ...activeRunnerRun(id, userId),
+        runnerLeaseUntil: { $gte: now },
+        'checkpoint.seq': expected.seq,
+      },
+      {
+        $inc: { 'checkpoint.seq': 1 },
+        $push: { 'checkpoint.steps': { $each: next.steps, $slice: -500 } },
+        $set: {
+          'checkpoint.iteration': next.iteration,
+          'checkpoint.pendingText': next.pendingText,
+          runnerLeaseUntil: next.leaseUntil,
+        },
+      }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * Tallies a desktop run's completion credits for its loop budgets; the user was already billed for them.
+   * Any status: a call still streaming when its run ended still spent them.
+   */
+  async addRunnerCredits(id: string, userId: string, credits: number): Promise<IAgentExecution | null> {
+    const doc = await this.model.findOneAndUpdate(
+      { _id: id, userId, runner: 'desktop' },
+      { $inc: { totalCreditsUsed: credits } },
+      { new: true }
+    );
+    return doc?.toObject() ?? null;
+  }
+
+  /** Ends an active desktop run with `set` (its status and outcome) and drops its lease; false when it was not active. */
+  async finishRunnerRun(id: string, userId: string, set: Partial<IAgentExecution>): Promise<boolean> {
+    const result = await this.model.updateOne(activeRunnerRun(id, userId), {
+      $set: { completedAt: new Date(), ...set },
+      $unset: { runnerLeaseUntil: '' },
+    });
+    return result.modifiedCount > 0;
+  }
+
+  /** Active desktop runs whose lease lapsed before `now`, oldest lease first. */
+  async listExpiredRunnerRuns(now: Date, limit: number): Promise<IAgentExecution[]> {
+    const docs = await this.model
+      .find({ runner: 'desktop', status: { $in: ACTIVE_AGENT_EXECUTION_STATUSES }, runnerLeaseUntil: { $lt: now } })
+      .sort({ runnerLeaseUntil: 1 })
+      .limit(limit);
+    return docs.map(doc => doc.toObject());
   }
 
   /**
@@ -1268,6 +1611,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       userId,
       status: { $in: this.sweepableStatuses },
       updatedAt: { $lt: cutoff },
+      ...NOT_LOOP_PARKED,
     };
     // Ids are read BEFORE the write because callers have to settle the quests
     // these executions leave behind, and `aborted` is terminal: once written,
@@ -1333,6 +1677,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     const query: Record<string, unknown> = {
       status: { $in: this.sweepableStatuses },
       updatedAt: { $lt: opts.olderThan },
+      ...NOT_LOOP_PARKED,
     };
     if (opts.userId) query.userId = opts.userId;
     const docs = await this.model.find(query, { _id: 1 }).lean<Array<{ _id: mongoose.Types.ObjectId }>>();
@@ -1544,6 +1889,57 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   async updateConnectionId(id: string, connectionId: string): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { connectionId } });
+  }
+
+  /** Adds a viewer connection (deduped), keeping only the newest MAX_VIEWER_CONNECTIONS. */
+  async addViewer(id: string, connectionId: string): Promise<void> {
+    await this.model.updateOne({ _id: id }, [
+      {
+        $set: {
+          viewerConnectionIds: {
+            $slice: [
+              {
+                $concatArrays: [
+                  {
+                    $filter: {
+                      input: { $ifNull: ['$viewerConnectionIds', []] },
+                      cond: { $ne: ['$$this', connectionId] },
+                    },
+                  },
+                  [connectionId],
+                ],
+              },
+              -MAX_VIEWER_CONNECTIONS,
+            ],
+          },
+        },
+      },
+    ]);
+  }
+
+  async removeViewer(id: string, connectionId: string): Promise<void> {
+    // The id comes straight from a client (`unsubscribe`); a malformed one would throw a CastError.
+    if (!mongoose.isObjectIdOrHexString(id)) return;
+    await this.model.updateOne({ _id: id }, { $pull: { viewerConnectionIds: connectionId } });
+  }
+
+  async findViewerConnectionIds(id: string): Promise<string[]> {
+    const doc = await this.model.findById(id, { viewerConnectionIds: 1 }).lean<{ viewerConnectionIds?: string[] }>();
+    return doc?.viewerConnectionIds ?? [];
+  }
+
+  /** Walks `parentExecutionId ?? spawnedByExecutionId` up to the top-level run (bounded). */
+  async findRootExecutionId(id: string): Promise<string> {
+    let current = id;
+    for (let hop = 0; hop < 10; hop++) {
+      const doc = await this.model
+        .findById(current, { parentExecutionId: 1, spawnedByExecutionId: 1 })
+        .lean<{ parentExecutionId?: mongoose.Types.ObjectId; spawnedByExecutionId?: mongoose.Types.ObjectId }>();
+      const parent = doc?.parentExecutionId ?? doc?.spawnedByExecutionId;
+      if (!parent) break;
+      current = parent.toString();
+    }
+    return current;
   }
 
   /** Written atomically with profile provenance when the orchestration profile resolves; continuations re-read it
@@ -1773,7 +2169,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   }
 
   /**
-   * Clear the gate marker. Caller is responsible for any subsequent status
+   * Clear the gate marker, appending it to `gateHistory` with its resolution in the same
+   * (pipeline) update. Caller is responsible for any subsequent status
    * transition (continuing -> re-invoke Lambda, completed -> markComplete).
    * Mirrors the `clearWaitingOnChild` `abortedAt`-not-exists guard so a
    * concurrent abort doesn't get resurrected. `checkpoint`, when given, is written in the
@@ -1783,13 +2180,27 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * without the `pendingGate` filter a repeated or racing response would still report a
    * modification and act on the same pause twice.
    */
-  async clearPendingGate(id: string, opts?: { checkpoint?: unknown; keepCompletion?: boolean }): Promise<boolean> {
+  async clearPendingGate(
+    id: string,
+    resolution: IGateRecord['resolution'],
+    resolvedBy?: string,
+    opts?: { checkpoint?: unknown; keepCompletion?: boolean }
+  ): Promise<boolean> {
+    const record = { resolution, resolvedAt: '$$NOW', ...(resolvedBy && { resolvedBy: { $literal: resolvedBy } }) };
     const result = await this.model.updateOne(
       { _id: id, status: 'paused', pendingGate: { $exists: true }, abortedAt: { $exists: false } },
-      {
-        $unset: opts?.keepCompletion ? { pendingGate: '' } : { pendingGate: '', pendingCompletion: '' },
-        ...(opts?.checkpoint !== undefined && { $set: { checkpoint: opts.checkpoint } }),
-      }
+      [
+        {
+          $set: {
+            gateHistory: {
+              $concatArrays: [{ $ifNull: ['$gateHistory', []] }, [{ $mergeObjects: ['$pendingGate', record] }]],
+            },
+            // $literal: a pipeline stage would read `$`-prefixed strings in the checkpoint as field paths.
+            ...(opts?.checkpoint !== undefined && { checkpoint: { $literal: opts.checkpoint } }),
+          },
+        },
+        { $unset: opts?.keepCompletion ? ['pendingGate'] : ['pendingGate', 'pendingCompletion'] },
+      ]
     );
     return result.modifiedCount > 0;
   }
@@ -1867,7 +2278,16 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   async markFailed(
     id: string,
-    error: { message: string; stack?: string; timedOut?: boolean; callerSafe?: boolean }
+    {
+      failureReason,
+      ...error
+    }: {
+      message: string;
+      stack?: string;
+      timedOut?: boolean;
+      callerSafe?: boolean;
+      failureReason?: IAgentExecution['failureReason'];
+    }
   ): Promise<void> {
     await this.model.updateOne(
       { _id: id },
@@ -1876,6 +2296,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
           status: 'failed',
           error,
           completedAt: new Date(),
+          ...(failureReason && { failureReason }),
         },
       }
     );

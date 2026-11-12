@@ -3,7 +3,7 @@ vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
   resolveThinkingVisibility: vi.fn(async () => 'raw'),
 }));
 import type { ServerSubagentTracker } from '@bike4mind/services/llm';
-import { OPTI_SURFACE, isShadowTier } from '@bike4mind/common';
+import { OPTI_SURFACE, OrchestrationDefaultsSchema, isShadowTier } from '@bike4mind/common';
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
@@ -179,6 +179,12 @@ vi.mock('@bike4mind/services/llm/shadowTier', async () => {
     ),
   };
 });
+
+// A finished loop run asks for a dispatch over SQS; no queue exists here.
+vi.mock('@server/utils/loopDispatch', async () => ({
+  ...(await vi.importActual<typeof import('@server/utils/loopDispatch')>('@server/utils/loopDispatch')),
+  requestLoopDispatch: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('@bike4mind/server-utils/utils/persistRunAsQuest', () => ({
   persistRunAsQuest: vi.fn().mockResolvedValue(undefined),
@@ -493,7 +499,10 @@ describe('processExecution tool deps', () => {
     it('refuses a run whose balance cannot cover one iteration, before any tool or model work', async () => {
       const { markFailed } = await admitWith({ credits: 1 });
 
-      expect(markFailed).toHaveBeenCalledWith('exec-1', { message: 'Insufficient credits to run agent execution' });
+      expect(markFailed).toHaveBeenCalledWith('exec-1', {
+        message: 'Insufficient credits to run agent execution',
+        failureReason: 'insufficient_credits',
+      });
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
     });
 
@@ -503,6 +512,7 @@ describe('processExecution tool deps', () => {
       // The harness stops the run at tool building, which markFailed reports on its own terms.
       expect(markFailed).not.toHaveBeenCalledWith('exec-1', {
         message: 'Insufficient credits to run agent execution',
+        failureReason: 'insufficient_credits',
       });
       expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
     });
@@ -516,7 +526,10 @@ describe('processExecution tool deps', () => {
       };
       const { markFailed } = await admitWith({ credits: 1_000, doc: resumed });
 
-      expect(markFailed).toHaveBeenCalledWith('exec-1', { message: 'Insufficient credits to run agent execution' });
+      expect(markFailed).toHaveBeenCalledWith('exec-1', {
+        message: 'Insufficient credits to run agent execution',
+        failureReason: 'insufficient_credits',
+      });
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
     });
 
@@ -532,6 +545,7 @@ describe('processExecution tool deps', () => {
 
       expect(markFailed).not.toHaveBeenCalledWith('exec-1', {
         message: 'Insufficient credits to run agent execution',
+        failureReason: 'insufficient_credits',
       });
     });
   });
@@ -1507,6 +1521,48 @@ describe('processExecution tool deps', () => {
 
       expect(markFailed).toHaveBeenCalledWith('exec-1', { message: 'Insufficient credits to run agent execution' });
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // An admin threshold of 0 turns the confidence gate off, except on loop runs: an unsure loop run
+  // parks its ticket for the owner (`gateThresholdFor`), and the persisted value is what later
+  // continuations read.
+  describe('persisted confidence gate threshold', () => {
+    async function persistedThresholdFor(doc: Record<string, unknown>) {
+      const { agentExecutionRepository, adminSettingsRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      vi.mocked(adminSettingsRepository.getSettingsValue).mockImplementation((async (key: string) =>
+        key === 'orchestrationDefaults'
+          ? OrchestrationDefaultsSchema.parse({ confidenceGateThreshold: 0 })
+          : false) as never);
+      const persistGates = vi
+        .spyOn(agentExecutionRepository, 'persistResolvedMementoGates')
+        .mockResolvedValue(undefined as never);
+      try {
+        const { handler } = await import('./agentExecutor');
+        const start = {
+          executionId: 'exec-1',
+          userId: 'user-1',
+          sessionId: 'session-1',
+          query: 'q',
+          model: 'claude-sonnet-5',
+          connectionId: 'conn-1',
+        };
+        await handler(start as never, lambdaContext).catch(() => undefined);
+      } finally {
+        vi.mocked(adminSettingsRepository.getSettingsValue).mockResolvedValue(false as never);
+        persistGates.mockRestore();
+      }
+      expect(agentExecutionRepository.persistConfidenceGate).toHaveBeenCalledTimes(1);
+      return vi.mocked(agentExecutionRepository.persistConfidenceGate).mock.calls[0][1].threshold;
+    }
+
+    it('keeps the default threshold on a loop run whose profile sets 0', async () => {
+      expect(await persistedThresholdFor({ ...execDoc, loopId: 'loop-1' })).toBe(0.6);
+    });
+
+    it('persists 0 for a run outside a loop', async () => {
+      expect(await persistedThresholdFor(execDoc)).toBe(0);
     });
   });
 });

@@ -5,6 +5,7 @@ const CLOSED_REASON: Record<Exclude<ChatApprovalSystemReason, 'error'>, string> 
   'conversation-deleted': 'Not run - conversation deleted before approval',
   'app-quit': 'Not run - app quit before approval',
   'moved-on': 'Not run - closed when a new message was sent',
+  unattended: 'Not run - loop runner, nobody to approve',
 };
 
 /**

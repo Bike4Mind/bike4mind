@@ -1,0 +1,1616 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMocks, type RequestMethod, type RequestOptions } from 'node-mocks-http';
+import { startOfUtcDay } from '@bike4mind/common';
+
+/**
+ * Route-level tests for /api/loops. The repository is mocked - its own behaviour
+ * is covered against a real Mongo in packages/database/src/models/ai/LoopModel.test.ts.
+ */
+
+type Handler = (req: unknown, res: unknown) => Promise<unknown>;
+type Method = 'get' | 'post' | 'put' | 'patch' | 'delete';
+
+const handlers = vi.hoisted(() => ({}) as Record<string, Partial<Record<Method, Handler>>>);
+const currentModule = vi.hoisted(() => ({ name: '' }));
+const baseApiOptions = vi.hoisted(() => ({}) as Record<string, unknown>);
+
+vi.mock('@server/middlewares/baseApi', () => {
+  const makeChain = () => {
+    const slot = (handlers[currentModule.name] ??= {});
+    const chain: Record<string, (fn: Handler) => unknown> = {
+      use: () => chain,
+      get: (fn: Handler) => ((slot.get = fn), chain),
+      post: (fn: Handler) => ((slot.post = fn), chain),
+      put: (fn: Handler) => ((slot.put = fn), chain),
+      patch: (fn: Handler) => ((slot.patch = fn), chain),
+      delete: (fn: Handler) => ((slot.delete = fn), chain),
+    };
+    return chain;
+  };
+  return {
+    baseApi: (options: unknown) => ((baseApiOptions[currentModule.name] = options), makeChain()),
+  };
+});
+
+const repo = vi.hoisted(() => ({
+  listForUser: vi.fn(),
+  findByIdAndUserId: vi.fn(),
+  updateForUser: vi.fn(),
+  deleteForUser: vi.fn(),
+  create: vi.fn(),
+  removeLoopReferences: vi.fn(),
+  pruneTriggersForStages: vi.fn(),
+  makeDueNow: vi.fn(),
+  countInFlight: vi.fn(),
+  countLanesForUser: vi.fn(),
+}));
+const tickets = vi.hoisted(() => ({
+  softDeleteByLoop: vi.fn(),
+  listForLoop: vi.fn(),
+  findManyByIdsForUser: vi.fn(),
+  countBlockedByLoop: vi.fn(),
+  updateForUser: vi.fn(),
+  findNextReadyForLoop: vi.fn(),
+  listUntriagedForLoop: vi.fn(),
+  listReadyForLoop: vi.fn(),
+  listForLoopStats: vi.fn(),
+  findByIdForUser: vi.fn(),
+  setOwnerRating: vi.fn(),
+}));
+const loopEvents = vi.hoisted(() => ({
+  listForLoop: vi.fn(),
+  deleteManyForLoop: vi.fn(),
+  findById: vi.fn(),
+  resolveAsked: vi.fn(),
+  reopenAsked: vi.fn(),
+  recordConfigChanged: vi.fn(),
+  listForLoopSince: vi.fn(),
+  listUnresolvedUnsure: vi.fn(),
+}));
+const directives = vi.hoisted(() => ({
+  listForLoop: vi.fn(),
+  deleteManyForLoop: vi.fn(),
+  findByIdForUser: vi.fn(),
+  transition: vi.fn(),
+  listToLoop: vi.fn(),
+}));
+const settings = vi.hoisted(() => ({ EnableLoops: true as unknown, LoopsDailyCreditsPerUser: 0 as unknown }));
+const executions = vi.hoisted(() => ({
+  sumCreditsByLoop: vi.fn(),
+  sumLoopCreditsForUser: vi.fn(),
+  listLoopRunsSince: vi.fn(),
+}));
+const users = vi.hoisted(() => ({ findById: vi.fn(), setLoopsDailyCredits: vi.fn() }));
+const presence = vi.hoisted(() => ({ findByUserId: vi.fn() }));
+vi.mock('@bike4mind/database', () => ({
+  loopRepository: repo,
+  agentExecutionRepository: executions,
+  workItemRepository: tickets,
+  loopEventRepository: loopEvents,
+  loopDirectiveRepository: directives,
+  userRepository: users,
+  loopRunnerPresenceRepository: presence,
+  adminSettingsRepository: {
+    getSettingsValue: async (key: string) => settings[key as keyof typeof settings],
+    findAll: async () => [],
+  },
+}));
+
+const verifyOrgAccess = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
+
+const getOrCreateSession = vi.hoisted(() => vi.fn());
+vi.mock('@server/managers/sessionCrud', () => ({ getOrCreateSession }));
+
+const dispatch = vi.hoisted(() => ({ requestLoopDispatch: vi.fn(), pushLoopChanged: vi.fn() }));
+vi.mock('@server/utils/loopDispatch', () => dispatch);
+
+const loopAdmission = vi.hoisted(() => vi.fn());
+const p2RunsLeft = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/loopBudget', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/loopBudget')>()),
+  loopAdmission,
+  p2RunsLeft,
+}));
+
+const authorizeOrgChannelPost = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/integrations/slack/orgChannelPost', () => ({ authorizeOrgChannelPost }));
+
+const resolveDefaultChatModel = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/chatCompletionDefaults', () => ({ resolveDefaultChatModel }));
+
+currentModule.name = 'collection';
+await import('@pages/api/loops/index');
+currentModule.name = 'item';
+await import('@pages/api/loops/[id]/index');
+currentModule.name = 'run';
+await import('@pages/api/loops/[id]/run');
+currentModule.name = 'tickets';
+await import('@pages/api/loops/[id]/tickets');
+currentModule.name = 'events';
+await import('@pages/api/loops/[id]/events');
+currentModule.name = 'budget';
+await import('@pages/api/loops/budget');
+currentModule.name = 'override';
+await import('@pages/api/loops/[id]/events/[eventId]/override');
+currentModule.name = 'resolve';
+await import('@pages/api/loops/[id]/events/[eventId]/resolve');
+currentModule.name = 'stats';
+await import('@pages/api/loops/[id]/stats');
+currentModule.name = 'rating';
+await import('@pages/api/loops/[id]/tickets/[ticketId]/rating');
+
+const OID = '507f1f77bcf86cd799439011';
+
+const call = (module: string, method: Method, options: RequestOptions = {}) => {
+  const { req, res } = createMocks({ method: method.toUpperCase() as RequestMethod, ...options });
+  Object.assign(req, { user: { id: 'u1', isAdmin: false }, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+  return { res, result: handlers[module][method]!(req, res) };
+};
+
+const loop = (overrides: Record<string, unknown> = {}) => ({
+  id: OID,
+  userId: 'u1',
+  name: 'Digest',
+  goal: 'Summarize',
+  model: 'm1',
+  sessionId: 's1',
+  intervalMinutes: 15,
+  tools: [],
+  stages: ['todo', 'done'],
+  status: 'draft',
+  runCount: 0,
+  consecutiveFailures: 0,
+  memory: { notes: '', nextAction: '' },
+  ...overrides,
+});
+
+const validBody = { name: 'Digest', goal: 'Summarize the inbox', intervalMinutes: 15 };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  settings.EnableLoops = true;
+  executions.sumCreditsByLoop.mockResolvedValue({});
+  directives.listForLoop.mockResolvedValue([]);
+  tickets.countBlockedByLoop.mockResolvedValue({});
+  getOrCreateSession.mockResolvedValue({ sessionId: 's-new' });
+  resolveDefaultChatModel.mockResolvedValue({ model: 'default-model' });
+  repo.create.mockImplementation(async (doc: Record<string, unknown>) => ({ id: OID, ...doc }));
+  repo.updateForUser.mockImplementation(async (_id: string, _u: string, patch: Record<string, unknown>) => loop(patch));
+  settings.LoopsDailyCreditsPerUser = 0;
+  users.findById.mockResolvedValue({});
+  executions.sumLoopCreditsForUser.mockResolvedValue(0);
+  repo.countInFlight.mockResolvedValue(0);
+  repo.countLanesForUser.mockResolvedValue(0);
+  repo.makeDueNow.mockResolvedValue(true);
+  loopEvents.recordConfigChanged.mockResolvedValue(undefined);
+  loopAdmission.mockResolvedValue({ ok: true });
+  p2RunsLeft.mockResolvedValue(Infinity);
+  tickets.listUntriagedForLoop.mockResolvedValue([]);
+  tickets.listReadyForLoop.mockResolvedValue([]);
+});
+
+it.each(['collection', 'item', 'run', 'budget'])('%s route refuses API keys (jwtOnly)', mod => {
+  expect(baseApiOptions[mod]).toEqual({ auth: 'jwtOnly' });
+});
+
+describe('EnableLoops gate', () => {
+  const routes: Array<[string, Method]> = [
+    ['collection', 'get'],
+    ['collection', 'post'],
+    ['item', 'get'],
+    ['item', 'patch'],
+    ['item', 'delete'],
+    ['run', 'post'],
+    ['override', 'post'],
+  ];
+
+  it.each(routes)('%s %s is a 404 while the setting is off, before touching the repository', async (mod, method) => {
+    settings.EnableLoops = false;
+    await expect(call(mod, method, { query: { id: OID }, body: validBody }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    for (const fn of Object.values(repo)) expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/loops', () => {
+  it('creates a draft loop with its own notebook and the default model', async () => {
+    const { res, result } = call('collection', 'post', { body: { ...validBody, tools: ['mcp__srv__do_thing'] } });
+    await result;
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(getOrCreateSession).toHaveBeenCalledWith(expect.objectContaining({ sessionName: 'Digest' }));
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        sessionId: 's-new',
+        model: 'default-model',
+        status: 'draft',
+        tools: ['mcp__srv__do_thing'],
+      })
+    );
+  });
+
+  it('refuses fewer than two stages', async () => {
+    await expect(call('collection', 'post', { body: { ...validBody, stages: ['todo'] } }).result).rejects.toMatchObject(
+      { statusCode: 400 }
+    );
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicit model', async () => {
+    await call('collection', 'post', { body: { ...validBody, model: 'claude-x' } }).result;
+    expect(resolveDefaultChatModel).not.toHaveBeenCalled();
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ model: 'claude-x' }));
+  });
+
+  it.each([
+    [{ ...validBody, intervalMinutes: 4 }, /intervalMinutes/],
+    [{ ...validBody, intervalMinutes: 7.5 }, /intervalMinutes/],
+    [{ ...validBody, name: '' }, /name/],
+    [{ ...validBody, goal: 'x'.repeat(8001) }, /goal/],
+    [{ ...validBody, tools: 'web_search' }, /tools/],
+    [{ ...validBody, tools: Array.from({ length: 51 }, (_, i) => `t${i}`) }, /tools/],
+    [{ ...validBody, budgetCreditsPerDay: 0 }, /budgetCreditsPerDay/],
+    [{ ...validBody, budgetCreditsPerDay: -5 }, /budgetCreditsPerDay/],
+    [{ ...validBody, serviceLevelHours: { p0: 0 } }, /serviceLevelHours.p0/],
+    [{ ...validBody, serviceLevelHours: { p1: 721 } }, /serviceLevelHours.p1/],
+    [{ ...validBody, serviceLevelHours: 4 }, /serviceLevelHours/],
+    [{ ...validBody, p2RunsPerDay: -1 }, /p2RunsPerDay/],
+    [{ ...validBody, p2RunsPerDay: 1.5 }, /p2RunsPerDay/],
+    [{ ...validBody, p2RunsPerDay: 1001 }, /p2RunsPerDay/],
+    [{ ...validBody, triageModel: '' }, /triageModel/],
+    [{ ...validBody, escalationModel: 'x'.repeat(201) }, /escalationModel/],
+    [{ ...validBody, stageConfig: [{ stage: 'todo', escalationModel: 5 }] }, /escalationModel/],
+  ])('rejects an invalid body (%#)', async (body, message) => {
+    await expect(call('collection', 'post', { body }).result).rejects.toThrow(message);
+    expect(repo.create).not.toHaveBeenCalled();
+    expect(getOrCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('stores the priority settings and a stage escalation model', async () => {
+    await call('collection', 'post', {
+      body: {
+        ...validBody,
+        serviceLevelHours: { p0: 0.05, p1: 12 },
+        p2RunsPerDay: 0,
+        triageModel: 'cheap',
+        escalationModel: 'strong',
+        stageConfig: [{ stage: 'todo', escalationModel: 'stage-strong' }],
+      },
+    }).result;
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serviceLevelHours: { p0: 0.05, p1: 12 },
+        p2RunsPerDay: 0,
+        triageModel: 'cheap',
+        escalationModel: 'strong',
+        stageConfig: [{ stage: 'todo', escalationModel: 'stage-strong' }],
+      })
+    );
+  });
+
+  it('stores an organizationId the caller may bill to', async () => {
+    verifyOrgAccess.mockResolvedValue(undefined);
+    await call('collection', 'post', { body: { ...validBody, organizationId: 'org1' } }).result;
+    expect(verifyOrgAccess).toHaveBeenCalledWith({ id: 'u1', isAdmin: false }, 'org1');
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'org1' }));
+  });
+
+  it('rejects a non-string organizationId before creating the notebook', async () => {
+    await expect(
+      call('collection', 'post', { body: { ...validBody, organizationId: { $ne: null } } }).result
+    ).rejects.toThrow(/organizationId/);
+    expect(getOrCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('checks org membership before creating anything', async () => {
+    verifyOrgAccess.mockRejectedValue(new Error('not a member'));
+    await expect(call('collection', 'post', { body: { ...validBody, organizationId: 'org1' } }).result).rejects.toThrow(
+      'not a member'
+    );
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET creditsUsed', () => {
+  const today = startOfUtcDay(new Date());
+  const creditsBy = (total: Record<string, number>, sinceToday: Record<string, number>) =>
+    executions.sumCreditsByLoop.mockImplementation(async (_ids: string[], _sessions: string[], since?: Date) =>
+      since ? sinceToday : total
+    );
+
+  it('adds each loop its credits in total and since the start of the UTC day, 0 when it has none', async () => {
+    repo.listForUser.mockResolvedValue([loop(), loop({ id: 'other', sessionId: 's2' })]);
+    creditsBy({ [OID]: 42 }, { [OID]: 4 });
+    const { res, result } = call('collection', 'get');
+    await result;
+    expect(executions.sumCreditsByLoop).toHaveBeenCalledTimes(2);
+    expect(executions.sumCreditsByLoop).toHaveBeenCalledWith([OID, 'other'], ['s1', 's2']);
+    expect(executions.sumCreditsByLoop).toHaveBeenCalledWith([OID, 'other'], ['s1', 's2'], today);
+    const body = res._getJSONData() as { creditsUsed: number; creditsToday: number }[];
+    expect(body.map(l => [l.creditsUsed, l.creditsToday])).toEqual([
+      [42, 4],
+      [0, 0],
+    ]);
+  });
+
+  it('adds the credits to a single loop', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    creditsBy({ [OID]: 9 }, { [OID]: 2 });
+    const { res, result } = call('item', 'get', { query: { id: OID } });
+    await result;
+    expect(executions.sumCreditsByLoop).toHaveBeenCalledWith([OID], ['s1']);
+    expect(executions.sumCreditsByLoop).toHaveBeenCalledWith([OID], ['s1'], today);
+    expect(res._getJSONData()).toMatchObject({ creditsUsed: 9, creditsToday: 2 });
+  });
+});
+
+describe('GET blockedTickets', () => {
+  it("counts each loop's blocked tickets for the caller, 0 when it has none", async () => {
+    repo.listForUser.mockResolvedValue([loop(), loop({ id: 'other', sessionId: 's2' })]);
+    tickets.countBlockedByLoop.mockResolvedValue({ [OID]: 2 });
+    const { res, result } = call('collection', 'get');
+    await result;
+    expect(tickets.countBlockedByLoop).toHaveBeenCalledWith('u1', [OID, 'other']);
+    expect(res._getJSONData().map((l: { blockedTickets: number }) => l.blockedTickets)).toEqual([2, 0]);
+  });
+
+  it('adds the count to a single loop', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    tickets.countBlockedByLoop.mockResolvedValue({ [OID]: 1 });
+    const { res, result } = call('item', 'get', { query: { id: OID } });
+    await result;
+    expect(res._getJSONData().blockedTickets).toBe(1);
+  });
+});
+
+describe('owner scoping', () => {
+  it.each<[string, Method]>([
+    ['item', 'get'],
+    ['item', 'patch'],
+    ['item', 'delete'],
+    ['run', 'post'],
+  ])("%s %s is a 404 for another user's loop", async (mod, method) => {
+    repo.findByIdAndUserId.mockResolvedValue(null);
+    repo.deleteForUser.mockResolvedValue(false);
+    await expect(call(mod, method, { query: { id: OID }, body: {} }).result).rejects.toMatchObject({ statusCode: 404 });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('scopes every lookup to the caller', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    await call('item', 'get', { query: { id: OID } }).result;
+    expect(repo.findByIdAndUserId).toHaveBeenCalledWith(OID, 'u1');
+  });
+});
+
+describe('PATCH /api/loops/:id status transitions', () => {
+  const patchStatus = async (from: Record<string, unknown>, status: string) => {
+    repo.findByIdAndUserId.mockResolvedValue(loop(from));
+    await call('item', 'patch', { query: { id: OID }, body: { status } }).result;
+    return repo.updateForUser.mock.calls[0][2];
+  };
+
+  it('draft -> live schedules the first run now', async () => {
+    const before = Date.now();
+    const patch = await patchStatus({ status: 'draft' }, 'live');
+    expect(patch).toMatchObject({ status: 'live', consecutiveFailures: 0, statusReason: null });
+    expect(patch.nextRunAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(patch.nextRunAt.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('paused -> live waits out the interval since the last run', async () => {
+    const lastRunAt = new Date();
+    const patch = await patchStatus({ status: 'paused', lastRunAt }, 'live');
+    expect(patch.nextRunAt).toEqual(new Date(lastRunAt.getTime() + 15 * 60_000));
+  });
+
+  it('paused -> live runs now when a ticket became ready while it was paused', async () => {
+    tickets.findNextReadyForLoop.mockResolvedValue({ id: 't1' });
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'paused', lastRunAt: new Date() }));
+    const { res, result } = call('item', 'patch', { query: { id: OID }, body: { status: 'live' } });
+    await result;
+    expect(repo.makeDueNow).toHaveBeenCalledWith(OID, expect.any(Date));
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
+    expect(new Date(res._getJSONData().nextRunAt).getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('paused -> live with nothing ready keeps the interval', async () => {
+    tickets.findNextReadyForLoop.mockResolvedValue(null);
+    await patchStatus({ status: 'paused', lastRunAt: new Date() }, 'live');
+    expect(repo.makeDueNow).not.toHaveBeenCalled();
+  });
+
+  it('error -> live resets the failure count', async () => {
+    const patch = await patchStatus({ status: 'error', consecutiveFailures: 3 }, 'live');
+    expect(patch).toMatchObject({ status: 'live', consecutiveFailures: 0 });
+  });
+
+  it.each(['error', 'needs_you'])('%s -> live runs now, not an interval after the last run', async from => {
+    const before = Date.now();
+    const patch = await patchStatus({ status: from, lastRunAt: new Date() }, 'live');
+    expect(patch.nextRunAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(patch.nextRunAt.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
+  });
+
+  it('asks for a dispatch only when the loop goes live', async () => {
+    await patchStatus({ status: 'paused' }, 'live');
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledTimes(1);
+
+    vi.clearAllMocks();
+    await patchStatus({ status: 'live' }, 'paused');
+    expect(dispatch.requestLoopDispatch).not.toHaveBeenCalled();
+  });
+
+  it('live -> paused', async () => {
+    expect(await patchStatus({ status: 'live' }, 'paused')).toMatchObject({ status: 'paused' });
+  });
+
+  it('pausing a loop the scheduler paused makes it an owner pause', async () => {
+    expect(
+      await patchStatus({ status: 'paused', autoResume: 'budget', statusReason: 'Daily budget' }, 'paused')
+    ).toEqual({ statusReason: null, autoResume: null });
+    expect(repo.updateForUser.mock.calls[0][3]).toBe('paused');
+  });
+
+  it('setting an auto-paused loop live clears autoResume', async () => {
+    expect(await patchStatus({ status: 'paused', autoResume: 'credits' }, 'live')).toMatchObject({
+      status: 'live',
+      statusReason: null,
+      autoResume: null,
+    });
+  });
+
+  it.each([
+    ['draft', 'paused'],
+    ['live', 'error'],
+    ['live', 'needs_you'],
+    ['paused', 'draft'],
+  ])('refuses %s -> %s', async (from, to) => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: from }));
+    await expect(call('item', 'patch', { query: { id: OID }, body: { status: to } }).result).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('needs_you -> live', async () => {
+    expect(await patchStatus({ status: 'needs_you' }, 'live')).toMatchObject({ status: 'live' });
+  });
+
+  it('writes only while the loop still has the status the patch was computed from', async () => {
+    await patchStatus({ status: 'live' }, 'paused');
+    expect(repo.updateForUser.mock.calls[0][3]).toBe('live');
+  });
+
+  it('is a 409 when the loop changed status mid-request', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', stages: ['todo', 'done'] }));
+    repo.updateForUser.mockResolvedValue(null);
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { status: 'paused' } }).result
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('moves the next run of a live loop when its interval changes', async () => {
+    const lastRunAt = new Date(Date.now() - 60_000);
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', lastRunAt }));
+    await call('item', 'patch', { query: { id: OID }, body: { intervalMinutes: 60 } }).result;
+    expect(repo.updateForUser.mock.calls[0][2].nextRunAt).toEqual(new Date(lastRunAt.getTime() + 60 * 60_000));
+  });
+
+  it('keeps the next run of a live loop when an edit resends the same interval', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', lastRunAt: new Date() }));
+    await call('item', 'patch', { query: { id: OID }, body: { name: 'Renamed', intervalMinutes: 15 } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).not.toHaveProperty('nextRunAt');
+  });
+
+  it('rejects a PATCH budget of 0', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { budgetCreditsPerDay: 0 } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('accepts a whole maxConcurrent from 1 to 5, rejects anything else, and resets it with null', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ maxConcurrent: 3 }));
+    for (const maxConcurrent of [0, 6, 1.5, '2']) {
+      await expect(call('item', 'patch', { query: { id: OID }, body: { maxConcurrent } }).result).rejects.toMatchObject(
+        { statusCode: 400 }
+      );
+      await expect(call('collection', 'post', { body: { ...validBody, maxConcurrent } }).result).rejects.toMatchObject({
+        statusCode: 400,
+      });
+    }
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+    expect(repo.create).not.toHaveBeenCalled();
+
+    for (const maxConcurrent of [1, 5, null]) {
+      await call('item', 'patch', { query: { id: OID }, body: { maxConcurrent } }).result;
+      expect(repo.updateForUser.mock.lastCall![2]).toEqual({ maxConcurrent });
+    }
+    await call('collection', 'post', { body: { ...validBody, maxConcurrent: 5 } }).result;
+    expect(repo.create.mock.lastCall![0]).toMatchObject({ maxConcurrent: 5 });
+  });
+
+  it('clears agentId and budgetCreditsPerDay with null', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ agentId: 'a1', budgetCreditsPerDay: 5 }));
+    await call('item', 'patch', { query: { id: OID }, body: { agentId: null, budgetCreditsPerDay: null } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).toEqual({ agentId: null, budgetCreditsPerDay: null });
+  });
+
+  it('sets and clears the priority settings', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    await call('item', 'patch', { query: { id: OID }, body: { p2RunsPerDay: 2, serviceLevelHours: { p1: 6 } } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).toEqual({ p2RunsPerDay: 2, serviceLevelHours: { p1: 6 } });
+
+    const nulls = { serviceLevelHours: null, p2RunsPerDay: null, triageModel: null, escalationModel: null };
+    await call('item', 'patch', { query: { id: OID }, body: nulls }).result;
+    expect(repo.updateForUser.mock.calls[1][2]).toEqual(nulls);
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { p2RunsPerDay: -1 } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('refuses fewer than two stages, which could not hold a ticket', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { stages: ['only'] } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    // Duplicates collapse, so two copies of one name are still one stage.
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { stages: ['a', 'a'] } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('validates the other fields', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    await expect(call('item', 'patch', { query: { id: OID }, body: { intervalMinutes: 1 } }).result).rejects.toThrow(
+      /intervalMinutes/
+    );
+  });
+});
+
+describe('POST /api/loops/:id/run', () => {
+  const run = async (fields: Record<string, unknown> = {}) => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', stages: ['todo', 'done'] }));
+    repo.updateForUser.mockImplementation(async (_id: string, _u: string, patch: Record<string, unknown>) =>
+      loop({ status: 'live', ...fields, ...patch })
+    );
+    const { res, result } = call('run', 'post', { query: { id: OID } });
+    await result;
+    return res._getJSONData();
+  };
+
+  it('makes a live loop due now and asks for a dispatch', async () => {
+    const body = await run();
+    expect(repo.updateForUser).toHaveBeenCalledWith(
+      OID,
+      'u1',
+      { nextRunAt: expect.any(Date), idleStreak: 0, idleResetAt: expect.any(Date) },
+      'live'
+    );
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
+    expect(body).not.toHaveProperty('waitingReason');
+  });
+
+  it.each([
+    ['a run is in flight', { activeExecutionIds: ['x1'] }, () => undefined, /Already running/],
+    ['every run slot is busy', {}, () => repo.countInFlight.mockResolvedValue(4), /run slots are busy/],
+    [
+      "the owner's cloud runs are busy",
+      {},
+      () => repo.countLanesForUser.mockResolvedValue(2),
+      /cloud loop runs are all busy/,
+    ],
+    [
+      'the loop budget is spent',
+      {},
+      () => loopAdmission.mockResolvedValue({ ok: false, kind: 'loop_budget' }),
+      /daily budget is spent/,
+    ],
+    [
+      'the loop budget is below one run',
+      {},
+      () => loopAdmission.mockResolvedValue({ ok: false, kind: 'loop_budget', belowOneRun: 327.68 }),
+      /below the cost of one run \(about 328 credits\)/,
+    ],
+    [
+      'pacing defers it',
+      {},
+      () => loopAdmission.mockResolvedValue({ ok: false, kind: 'paced', readyAt: new Date('2026-11-05T14:30:00Z') }),
+      /Paced.*14:30 UTC/,
+    ],
+    [
+      "today's p2 runs are used up and only p2/p3 tickets are ready",
+      {},
+      () => {
+        p2RunsLeft.mockResolvedValue(0);
+        tickets.listReadyForLoop.mockResolvedValue([{ id: 't1', priority: 'p2' }]);
+      },
+      /p2 runs are used up/,
+    ],
+  ])('says why it waits when %s, and still asks for a dispatch', async (_case, fields, arrange, reason) => {
+    arrange();
+    const body = await run(fields);
+    expect(body.waitingReason).toMatch(reason);
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
+  });
+
+  it.each([
+    ['a p0/p1 ticket is ready', () => tickets.listReadyForLoop.mockResolvedValue([{ id: 't1', priority: 'p1' }])],
+    ['an untriaged ticket waits', () => tickets.listUntriagedForLoop.mockResolvedValue([{ id: 't2' }])],
+  ])('does not report the p2 cap when %s', async (_case, arrange) => {
+    p2RunsLeft.mockResolvedValue(0);
+    tickets.listReadyForLoop.mockResolvedValue([{ id: 't1', priority: 'p3' }]);
+    arrange();
+    expect(await run()).not.toHaveProperty('waitingReason');
+  });
+
+  it('is a 409 when the loop stopped being live mid-request', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', stages: ['todo', 'done'] }));
+    repo.updateForUser.mockResolvedValue(null);
+    await expect(call('run', 'post', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('is a 409 for a loop that is not live', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'paused' }));
+    await expect(call('run', 'post', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
+describe('PATCH /api/loops/:id idle back-off', () => {
+  it('an edit ends the back-off and puts a live loop back on its interval', async () => {
+    const lastRunAt = new Date(Date.now() - 5 * 60_000);
+    repo.findByIdAndUserId.mockResolvedValue(
+      loop({ status: 'live', idleStreak: 3, lastRunAt, nextRunAt: new Date(Date.now() + 8 * 3_600_000) })
+    );
+    await call('item', 'patch', { query: { id: OID }, body: { name: 'Renamed' } }).result;
+    expect(repo.updateForUser).toHaveBeenCalledWith(
+      OID,
+      'u1',
+      expect.objectContaining({ idleStreak: 0, nextRunAt: new Date(lastRunAt.getTime() + 15 * 60_000) }),
+      'live',
+      undefined
+    );
+  });
+
+  it('leaves a loop that is not backing off alone', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live' }));
+    await call('item', 'patch', { query: { id: OID }, body: { name: 'Renamed' } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).not.toHaveProperty('idleStreak');
+    // Still stamped, so a run in flight across the edit is not folded as idle.
+    expect(repo.updateForUser.mock.calls[0][2]).toHaveProperty('idleResetAt', expect.any(Date));
+  });
+});
+
+describe('/api/loops/budget', () => {
+  it("returns today's all-loops spend against the lower of the admin and user caps", async () => {
+    settings.LoopsDailyCreditsPerUser = 50;
+    users.findById.mockResolvedValue({ loopsDailyCredits: 30 });
+    executions.sumLoopCreditsForUser.mockResolvedValue(12);
+    const { res, result } = call('budget', 'get');
+    await result;
+    expect(executions.sumLoopCreditsForUser).toHaveBeenCalledWith('u1', startOfUtcDay(new Date()));
+    expect(res._getJSONData()).toEqual({
+      creditsToday: 12,
+      userDailyCredits: 30,
+      adminDailyCredits: 50,
+      effectiveCap: 30,
+      laneLimits: { lanesPerUser: 2, maxActiveRuns: 4 },
+    });
+  });
+
+  it('reports no cap when neither is set', async () => {
+    const { res, result } = call('budget', 'get');
+    await result;
+    expect(res._getJSONData()).toEqual({ creditsToday: 0, laneLimits: { lanesPerUser: 2, maxActiveRuns: 4 } });
+  });
+
+  it('sets, clears and validates the user cap', async () => {
+    await call('budget', 'put', { body: { dailyCredits: 40 } }).result;
+    expect(users.setLoopsDailyCredits).toHaveBeenCalledWith('u1', 40);
+    await call('budget', 'put', { body: { dailyCredits: null } }).result;
+    expect(users.setLoopsDailyCredits).toHaveBeenLastCalledWith('u1', null);
+    for (const dailyCredits of [0, -1, 'ten', undefined]) {
+      await expect(call('budget', 'put', { body: { dailyCredits } }).result).rejects.toMatchObject({ statusCode: 400 });
+    }
+    expect(users.setLoopsDailyCredits).toHaveBeenCalledTimes(2);
+  });
+
+  it('is a 404 when EnableLoops is off', async () => {
+    settings.EnableLoops = false;
+    await expect(call('budget', 'get').result).rejects.toMatchObject({ statusCode: 404 });
+    await expect(call('budget', 'put', { body: { dailyCredits: 5 } }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect(users.setLoopsDailyCredits).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/loops/:id', () => {
+  it('deletes the caller loop', async () => {
+    repo.deleteForUser.mockResolvedValue(true);
+    const { res, result } = call('item', 'delete', { query: { id: OID } });
+    await result;
+    expect(repo.deleteForUser).toHaveBeenCalledWith(OID, 'u1');
+    expect(tickets.softDeleteByLoop).toHaveBeenCalledWith('u1', OID);
+    expect(loopEvents.deleteManyForLoop).toHaveBeenCalledWith('u1', OID);
+    expect(directives.deleteManyForLoop).toHaveBeenCalledWith('u1', OID);
+    expect(repo.removeLoopReferences).toHaveBeenCalledWith('u1', OID);
+    expect(res._getStatusCode()).toBe(204);
+  });
+});
+
+describe('oversees', () => {
+  const OTHER = '507f1f77bcf86cd799439022';
+  const ownLoops = (...ids: string[]) =>
+    repo.findByIdAndUserId.mockImplementation(async (id: string) => (ids.includes(id) ? loop({ id }) : null));
+
+  it('saves a valid list on create and on edit', async () => {
+    ownLoops(OID, OTHER);
+    await call('collection', 'post', { body: { ...validBody, oversees: [OTHER] } }).result;
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ oversees: [OTHER] }));
+
+    await call('item', 'patch', { query: { id: OID }, body: { oversees: [OTHER] } }).result;
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID, 'u1', { oversees: [OTHER] }, 'draft', undefined);
+  });
+
+  it.each([
+    ['itself', () => [OID], /itself/],
+    ['an unknown or foreign loop', () => ['507f1f77bcf86cd799439099'], /unknown loop/],
+    ['more than 5 loops', () => Array.from({ length: 6 }, (_, i) => `l${i}`), /5 entries or fewer/],
+    ['a non-array', () => 'abc', /array/],
+  ])('rejects %s with a 400', async (_label, value, message) => {
+    ownLoops(OID, OTHER);
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { oversees: value() } }).result
+    ).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(message) });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('clears on null or an empty list', async () => {
+    ownLoops(OID);
+    await call('item', 'patch', { query: { id: OID }, body: { oversees: [] } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID, 'u1', { oversees: null }, 'draft', undefined);
+    await call('item', 'patch', { query: { id: OID }, body: { oversees: null } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID, 'u1', { oversees: null }, 'draft', undefined);
+  });
+});
+
+describe('hand-offs, triggers, wake mode and Slack channel', () => {
+  const OTHER = '507f1f77bcf86cd799439022';
+  const ownLoops = (...ids: string[]) =>
+    repo.findByIdAndUserId.mockImplementation(async (id: string) =>
+      ids.includes(id) ? loop({ id, stages: ['todo', 'review', 'done'] }) : null
+    );
+
+  it('saves handoffTargets and rejects itself or a foreign loop', async () => {
+    ownLoops(OID, OTHER);
+    await call('collection', 'post', { body: { ...validBody, handoffTargets: [OTHER] } }).result;
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ handoffTargets: [OTHER] }));
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { handoffTargets: [OID] } }).result
+    ).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/itself/) });
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { handoffTargets: ['507f1f77bcf86cd799439099'] } }).result
+    ).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/unknown loop/) });
+  });
+
+  it("validates triggers against the source's stages and this loop's non-last stages", async () => {
+    ownLoops(OID, OTHER);
+    await call('item', 'patch', {
+      query: { id: OID },
+      body: { triggers: [{ fromLoopId: OTHER, stage: 'done', toStage: 'todo' }] },
+    }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(
+      OID,
+      'u1',
+      { triggers: [{ fromLoopId: OTHER, stage: 'done', toStage: 'todo' }] },
+      'draft',
+      undefined
+    );
+    const reject = (triggers: unknown, message: RegExp) =>
+      expect(call('item', 'patch', { query: { id: OID }, body: { triggers } }).result).rejects.toMatchObject({
+        statusCode: 400,
+        message: expect.stringMatching(message),
+      });
+    await reject([{ fromLoopId: OID, stage: 'done' }], /itself/);
+    await reject([{ fromLoopId: OTHER, stage: 'nope' }], /stage must be one of/);
+    await reject([{ fromLoopId: OTHER, stage: 'done', toStage: 'done' }], /toStage must be one of/);
+    await reject(
+      [
+        { fromLoopId: OTHER, stage: 'done' },
+        { fromLoopId: OTHER, stage: 'done' },
+      ],
+      /more than one entry/
+    );
+    await reject(
+      Array.from({ length: 11 }, () => ({ fromLoopId: OTHER, stage: 'done' })),
+      /10 entries or fewer/
+    );
+  });
+
+  it('a stages edit prunes the triggers listening to this loop', async () => {
+    ownLoops(OID);
+    await call('item', 'patch', { query: { id: OID }, body: { stages: ['a', 'b'] } }).result;
+    expect(repo.pruneTriggersForStages).toHaveBeenCalledWith('u1', OID, ['a', 'b']);
+  });
+
+  it('validates wakeMode', async () => {
+    ownLoops(OID);
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { wakeMode: 'never' } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    await call('collection', 'post', { body: { ...validBody, wakeMode: 'tickets' } }).result;
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ wakeMode: 'tickets' }));
+  });
+
+  it('switching a live loop to tickets mode drops its interval run, and makes it due when a ticket is ready', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', nextRunAt: new Date() }));
+    repo.updateForUser.mockImplementation(async (_id: string, _u: string, patch: Record<string, unknown>) =>
+      loop({ status: 'live', stages: ['todo', 'done'], ...patch })
+    );
+    tickets.findNextReadyForLoop.mockResolvedValue({ id: 't1' });
+    await call('item', 'patch', { query: { id: OID }, body: { wakeMode: 'tickets', intervalMinutes: 30 } }).result;
+    const patch = repo.updateForUser.mock.calls[0][2];
+    expect(patch).toMatchObject({ wakeMode: 'tickets', nextRunAt: null });
+    expect(repo.makeDueNow).toHaveBeenCalledWith(OID, expect.any(Date));
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
+  });
+
+  it('switching back to interval mode schedules a run', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', wakeMode: 'tickets' }));
+    await call('item', 'patch', { query: { id: OID }, body: { wakeMode: null } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).toMatchObject({ wakeMode: null, nextRunAt: expect.any(Date) });
+  });
+
+  it('an explicit interval wake mode on a loop without one is not a switch, so its next run stays', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', nextRunAt: new Date() }));
+    await call('item', 'patch', { query: { id: OID }, body: { wakeMode: 'interval' } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).not.toHaveProperty('nextRunAt');
+  });
+
+  it('starting a tickets-mode loop leaves nextRunAt unset', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'draft', wakeMode: 'tickets' }));
+    tickets.findNextReadyForLoop.mockResolvedValue(null);
+    await call('item', 'patch', { query: { id: OID }, body: { status: 'live' } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).toMatchObject({ status: 'live', nextRunAt: null });
+  });
+
+  it('accepts a Slack channel only when its org opted it in for posting without a key list', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ organizationId: 'org-1' }));
+    authorizeOrgChannelPost.mockResolvedValue({ ok: true, organizationId: 'org-1' });
+    await call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD' } }).result;
+    expect(authorizeOrgChannelPost).toHaveBeenCalledWith({ channelId: 'C0123ABCD', userId: 'u1' });
+    expect(repo.updateForUser.mock.calls[0][2]).toEqual({ slackChannelId: 'C0123ABCD' });
+
+    authorizeOrgChannelPost.mockResolvedValue({ ok: false, reason: 'key_not_allowlisted' });
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD' } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    authorizeOrgChannelPost.mockResolvedValue({ ok: true, organizationId: 'org-2' });
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD' } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'not a channel' } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD' } }).result
+    ).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/organization/) });
+  });
+
+  it('an unchanged Slack channel is saved without re-authorising it', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ organizationId: 'org-1', slackChannelId: 'C0123ABCD' }));
+    authorizeOrgChannelPost.mockResolvedValue({ ok: false, reason: 'not_enabled' });
+    await call('item', 'patch', { query: { id: OID }, body: { slackChannelId: 'C0123ABCD', name: 'Renamed' } }).result;
+    expect(authorizeOrgChannelPost).not.toHaveBeenCalled();
+    expect(repo.updateForUser.mock.calls[0][2]).toMatchObject({ name: 'Renamed' });
+  });
+});
+
+describe('GET /api/loops/:id/tickets', () => {
+  const ticket = (overrides: Record<string, unknown>) => ({
+    id: 't',
+    title: 'T',
+    status: 'open',
+    dependencies: [],
+    priority: 'p2',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  });
+
+  it('is session-only', () => {
+    expect(baseApiOptions.tickets).toEqual({ auth: 'jwtOnly' });
+  });
+
+  it("groups tickets by the loop's stage order and marks readiness", async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages: ['todo', 'doing', 'done'] }));
+    tickets.listForLoop.mockResolvedValue([
+      ticket({ id: 'a', stage: 'doing' }),
+      ticket({ id: 'b', stage: 'todo', dependencies: ['a'] }),
+      ticket({ id: 'c', stage: 'done', status: 'closed' }),
+      ticket({ id: 'd', stage: 'removed-stage' }),
+    ]);
+    tickets.findManyByIdsForUser.mockResolvedValue([ticket({ id: 'a', status: 'open' })]);
+
+    const { res, result } = call('tickets', 'get', { query: { id: OID } });
+    await result;
+
+    const { stages } = res._getJSONData();
+    expect(stages.map((group: { stage: string }) => group.stage)).toEqual(['todo', 'doing', 'done']);
+    expect(stages[0].tickets.map((t: { id: string; ready: boolean }) => [t.id, t.ready])).toEqual([
+      ['b', false],
+      ['d', true],
+    ]);
+    expect(stages[1].tickets[0]).toMatchObject({ id: 'a', ready: true });
+    expect(stages[2].tickets[0]).toMatchObject({ id: 'c', ready: false });
+    expect(tickets.listForLoop).toHaveBeenCalledWith('u1', OID, 50);
+  });
+
+  it('returns each ticket priority (absent: untriaged, never ready), blockedOn, demoted, epic and stale', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages: ['todo', 'done'] }));
+    const hoursAgo = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000);
+    tickets.listForLoop.mockResolvedValue([
+      ticket({ id: 'a', stage: 'todo', priority: 'p0', prioritySetAt: hoursAgo(1) }),
+      ticket({ id: 'b', stage: 'todo', status: 'blocked', blockedOn: 'dependencies', epic: true, priority: undefined }),
+      ticket({ id: 'c', stage: 'todo', priority: undefined }),
+      ticket({ id: 'd', stage: 'todo', priority: 'p3', prioritySetBy: 'demote' }),
+      ticket({ id: 'e', stage: 'todo', priority: 'p0', prioritySetAt: hoursAgo(5) }),
+    ]);
+    tickets.findManyByIdsForUser.mockResolvedValue([]);
+
+    const { res, result } = call('tickets', 'get', { query: { id: OID } });
+    await result;
+
+    const [todo] = res._getJSONData().stages;
+    expect(todo.tickets[0]).toMatchObject({ id: 'a', priority: 'p0', stale: false, demoted: false, epic: false });
+    expect(todo.tickets[0]).not.toHaveProperty('blockedOn');
+    expect(todo.tickets[1]).toMatchObject({ id: 'b', blockedOn: 'dependencies', epic: true });
+    expect(todo.tickets[1]).not.toHaveProperty('priority');
+    expect(todo.tickets[2]).toMatchObject({ id: 'c', ready: false });
+    expect(todo.tickets[2]).not.toHaveProperty('priority');
+    expect(todo.tickets[3]).toMatchObject({ id: 'd', demoted: true });
+    expect(todo.tickets[4]).toMatchObject({ id: 'e', stale: true, ready: true });
+  });
+
+  it('does not mark an open ticket in a desktop stage as ready', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(
+      loop({ stages: ['todo', 'review', 'done'], stageConfig: [{ stage: 'review', runner: 'desktop' }] })
+    );
+    tickets.listForLoop.mockResolvedValue([ticket({ id: 'a', stage: 'todo' }), ticket({ id: 'b', stage: 'review' })]);
+    tickets.findManyByIdsForUser.mockResolvedValue([]);
+
+    const { res, result } = call('tickets', 'get', { query: { id: OID } });
+    await result;
+
+    const { stages } = res._getJSONData();
+    expect(stages[0].tickets[0]).toMatchObject({ id: 'a', ready: true });
+    expect(stages[1].tickets[0]).toMatchObject({ id: 'b', ready: false });
+  });
+
+  it("reports the owner's desktop runner as online while its presence is fresh, null without a desktop stage", async () => {
+    const desktopLoop = loop({
+      stages: ['todo', 'review', 'done'],
+      stageConfig: [{ stage: 'review', runner: 'desktop' }],
+    });
+    tickets.listForLoop.mockResolvedValue([]);
+    tickets.findManyByIdsForUser.mockResolvedValue([]);
+    const runnerOf = async () => {
+      const { res, result } = call('tickets', 'get', { query: { id: OID } });
+      await result;
+      return res._getJSONData().runner;
+    };
+
+    repo.findByIdAndUserId.mockResolvedValue(desktopLoop);
+    presence.findByUserId.mockResolvedValue({ seenAt: new Date(), lanesFree: 2, waitingReason: 'Cloning' });
+    expect(await runnerOf()).toEqual({ online: true, lanesFree: 2, waitingReason: 'Cloning' });
+
+    presence.findByUserId.mockResolvedValue({ seenAt: new Date(Date.now() - 3 * 60_000), lanesFree: 2 });
+    expect(await runnerOf()).toEqual({ online: false, lanesFree: 2 });
+    // What a quitting runner's offline presence stores (runner/presence.ts): offline at once.
+    presence.findByUserId.mockResolvedValue({ seenAt: new Date(0), lanesFree: 0 });
+    expect(await runnerOf()).toEqual({ online: false, lanesFree: 0 });
+    presence.findByUserId.mockResolvedValue(null);
+    expect(await runnerOf()).toEqual({ online: false, lanesFree: 0 });
+
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages: ['todo', 'done'] }));
+    expect(await runnerOf()).toBeNull();
+  });
+
+  it("is a 404 for another user's loop", async () => {
+    repo.findByIdAndUserId.mockResolvedValue(null);
+    await expect(call('tickets', 'get', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('is a 404 when EnableLoops is off', async () => {
+    settings.EnableLoops = false;
+    try {
+      await expect(call('tickets', 'get', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 404 });
+    } finally {
+      settings.EnableLoops = true;
+    }
+  });
+});
+
+const directive = (overrides: Record<string, unknown> = {}) => ({
+  id: 'd1',
+  loopId: OID,
+  userId: 'u1',
+  fromLoopId: 'overseer',
+  fromLoopName: 'Overseer',
+  executionId: 'x1',
+  instruction: 'Stop writing tests',
+  reason: 'Slow',
+  state: 'open',
+  replies: [],
+  createdAt: new Date(1000),
+  ...overrides,
+});
+
+describe('GET /api/loops/:id/events', () => {
+  it('is session-only', () => {
+    expect(baseApiOptions.events).toEqual({ auth: 'jwtOnly' });
+  });
+
+  it("returns the owner's loop events as listed, newest first, capped", async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    loopEvents.listForLoop.mockResolvedValue([
+      { id: 'e2', kind: 'unsure', executionId: 'x2', confidence: 0.2, reason: 'r', userId: 'u1' },
+      { id: 'e1', kind: 'unsure', executionId: 'x1', confidence: 0.4, reason: 'r', userId: 'u1' },
+    ]);
+
+    const { res, result } = call('events', 'get', { query: { id: OID } });
+    await result;
+
+    expect(loopEvents.listForLoop).toHaveBeenCalledWith('u1', OID, 100);
+    const events = res._getJSONData();
+    expect(events.map((event: { id: string }) => event.id)).toEqual(['e2', 'e1']);
+    expect(events[0]).not.toHaveProperty('userId');
+  });
+
+  it("is a 404 for another user's loop", async () => {
+    repo.findByIdAndUserId.mockResolvedValue(null);
+    await expect(call('events', 'get', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 404 });
+    expect(loopEvents.listForLoop).not.toHaveBeenCalled();
+  });
+
+  it('merges directives sent and received with unsure events, newest first, without owner ids', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    loopEvents.listForLoop.mockResolvedValue([
+      { id: 'u1', kind: 'unsure', executionId: 'x', reason: 'r', createdAt: new Date(2000) },
+    ]);
+    directives.listForLoop.mockResolvedValue([
+      directive({ id: 'd2', createdAt: new Date(3000) }),
+      directive({
+        id: 'd1',
+        createdAt: new Date(1000),
+        replies: [{ by: 'owner', outcome: 'withdrawn', userId: 'u1', at: new Date(1500) }],
+      }),
+    ]);
+
+    const { res, result } = call('events', 'get', { query: { id: OID } });
+    await result;
+
+    expect(directives.listForLoop).toHaveBeenCalledWith('u1', OID, 100);
+    const rows = res._getJSONData();
+    expect(rows.map((row: { id: string; kind: string }) => [row.id, row.kind])).toEqual([
+      ['d2', 'directive'],
+      ['u1', 'unsure'],
+      ['d1', 'directive'],
+    ]);
+    expect(rows[0]).toMatchObject({ fromLoopId: 'overseer', fromLoopName: 'Overseer', state: 'open' });
+    expect(rows[0]).not.toHaveProperty('userId');
+    expect(rows[2].replies[0]).not.toHaveProperty('userId');
+  });
+});
+
+describe('POST /api/loops/:id/events/:eventId/override', () => {
+  const override = (body: Record<string, unknown>, query: Record<string, string> = { id: OID, eventId: 'd1' }) =>
+    call('override', 'post', { query, body });
+
+  beforeEach(() => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    directives.transition.mockImplementation(async (_id, _u, _from, state, reply) =>
+      directive({ state, replies: [reply] })
+    );
+  });
+
+  it('is session-only', () => {
+    expect(baseApiOptions.override).toEqual({ auth: 'jwtOnly' });
+  });
+
+  it.each([
+    [{ action: 'withdraw', note: 7 }, 'note must be a string'],
+    [{ action: 'withdraw', note: 'n'.repeat(1001) }, 'note must be 1000 characters or fewer'],
+  ])('rejects a bad note %#', async (body, message) => {
+    await expect(override(body).result).rejects.toMatchObject({ statusCode: 400, message });
+    expect(directives.transition).not.toHaveBeenCalled();
+  });
+
+  it.each(['open', 'accepted', 'pushed_back'])('withdraws a %s directive as an owner reply', async state => {
+    directives.findByIdForUser.mockResolvedValue(directive({ state }));
+    const { res, result } = override({ action: 'withdraw', note: ' not needed ' });
+    await result;
+    expect(directives.transition).toHaveBeenCalledWith(
+      'd1',
+      'u1',
+      ['open', 'accepted', 'pushed_back'],
+      'withdrawn',
+      expect.objectContaining({ by: 'owner', outcome: 'withdrawn', note: 'not needed', userId: 'u1' })
+    );
+    expect(res._getJSONData()).toMatchObject({ state: 'withdrawn', kind: 'directive' });
+    expect(res._getJSONData().replies[0]).not.toHaveProperty('userId');
+  });
+
+  it('overrules a pushed-back directive back to open, from the overseer side too', async () => {
+    directives.findByIdForUser.mockResolvedValue(directive({ state: 'pushed_back', loopId: 'w', fromLoopId: OID }));
+    const { res, result } = override({ action: 'overrule' });
+    await result;
+    expect(directives.transition).toHaveBeenCalledWith(
+      'd1',
+      'u1',
+      ['pushed_back'],
+      'open',
+      expect.objectContaining({ by: 'owner', outcome: 'overruled' })
+    );
+    expect(res._getJSONData().state).toBe('open');
+  });
+
+  it.each([
+    ['overrule', 'open'],
+    ['overrule', 'accepted'],
+    ['withdraw', 'done'],
+    ['withdraw', 'withdrawn'],
+  ])('is a 409 to %s a directive that is %s', async (action, state) => {
+    directives.findByIdForUser.mockResolvedValue(directive({ state }));
+    await expect(override({ action }).result).rejects.toMatchObject({ statusCode: 409 });
+    expect(directives.transition).not.toHaveBeenCalled();
+  });
+
+  it('is a 409 when the directive changed underneath', async () => {
+    directives.findByIdForUser.mockResolvedValue(directive());
+    directives.transition.mockResolvedValue(null);
+    await expect(override({ action: 'withdraw' }).result).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("is a 404 for another user's loop or event, or an event of an unrelated loop", async () => {
+    repo.findByIdAndUserId.mockResolvedValueOnce(null);
+    await expect(override({ action: 'withdraw' }).result).rejects.toMatchObject({ statusCode: 404 });
+
+    directives.findByIdForUser.mockResolvedValueOnce(null);
+    await expect(override({ action: 'withdraw' }).result).rejects.toMatchObject({ statusCode: 404 });
+
+    directives.findByIdForUser.mockResolvedValueOnce(directive({ loopId: 'a', fromLoopId: 'b' }));
+    await expect(override({ action: 'withdraw' }).result).rejects.toMatchObject({ statusCode: 404 });
+    expect(directives.transition).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown action or an oversized note', async () => {
+    directives.findByIdForUser.mockResolvedValue(directive());
+    await expect(override({ action: 'delete' }).result).rejects.toMatchObject({ statusCode: 400 });
+    await expect(override({ action: 'withdraw', note: 'x'.repeat(1001) }).result).rejects.toMatchObject({
+      statusCode: 400,
+    });
+  });
+});
+
+describe('stageConfig', () => {
+  const stages = ['todo', 'review', 'done'];
+  const patch = (body: Record<string, unknown>) => call('item', 'patch', { query: { id: OID }, body }).result;
+
+  it('stores it on create, dropping last-stage and empty entries and blank fields', async () => {
+    await call('collection', 'post', {
+      body: {
+        ...validBody,
+        stages,
+        stageConfig: [
+          { stage: 'review', model: 'm2', tools: ['web_search'], instructions: ' Review only ', runner: 'desktop' },
+          { stage: 'todo', model: '', tools: [], instructions: '  ' },
+          { stage: 'done', model: 'm3' },
+        ],
+      },
+    }).result;
+    expect(repo.create.mock.calls[0][0].stageConfig).toEqual([
+      { stage: 'review', model: 'm2', tools: ['web_search'], instructions: 'Review only', runner: 'desktop' },
+    ]);
+  });
+
+  it('validates against the default stages when none are sent', async () => {
+    await call('collection', 'post', { body: { ...validBody, stageConfig: [{ stage: 'doing', runner: 'cloud' }] } })
+      .result;
+    expect(repo.create.mock.calls[0][0].stageConfig).toEqual([{ stage: 'doing', runner: 'cloud' }]);
+  });
+
+  it.each([
+    [[{ stage: 'nope', model: 'm2' }], /stage must be one of: todo, review, done/],
+    [
+      [
+        { stage: 'review', model: 'm2' },
+        { stage: 'review', runner: 'cloud' },
+      ],
+      /more than one entry/,
+    ],
+    [[{ stage: 'review', runner: 'laptop' }], /runner/],
+    [[{ stage: 'review', instructions: 'x'.repeat(4001) }], /instructions/],
+    [[{ stage: 'review', tools: Array.from({ length: 51 }, (_, i) => `t${i}`) }], /tools/],
+    [{ stage: 'review' }, /stageConfig/],
+    [[{ stage: 'review', instructions: 5 }], /instructions must be a string/],
+    [['review'], /stageConfig/],
+    [Array.from({ length: 21 }, () => ({ stage: 'review' })), /20 entries or fewer/],
+    [[{ stage: 'review', model: 'm'.repeat(201) }], /model/],
+    [[{ stage: 'review', tools: 'web_search' }], /tools must be an array/],
+  ])('rejects an invalid stageConfig with a 400 (%#)', async (stageConfig, message) => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages }));
+    const result = patch({ stageConfig });
+    await expect(result).rejects.toMatchObject({ statusCode: 400 });
+    await expect(result).rejects.toThrow(message);
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  const desktop = (fields: Record<string, unknown>) => [{ stage: 'review', runner: 'desktop', ...fields }];
+
+  it.each([
+    [[{ stage: 'review', repoHint: 'acme/app' }], /only apply to desktop stages/],
+    [[{ stage: 'review', runner: 'cloud', mergePolicy: 'review' }], /only apply to desktop stages/],
+    [desktop({ repoHint: 'not a repo' }), /owner\/name/],
+    [desktop({ mergePolicy: 'yolo' }), /mergePolicy must be one of/],
+    [desktop({ smoke: { url: 'https://a.example', command: 'npm test' } }), /not both/],
+    [desktop({ smoke: { url: 'ftp://a.example' } }), /http\(s\) URL/],
+    [desktop({ holdLabels: Array.from({ length: 21 }, (_, i) => `l${i}`) }), /holdLabels/],
+    [desktop({ deployWorkflow: 'x'.repeat(201) }), /deployWorkflow/],
+  ])('rejects an invalid desktop guard with a 400 (%#)', async (stageConfig, message) => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages }));
+    const result = patch({ stageConfig });
+    await expect(result).rejects.toMatchObject({ statusCode: 400 });
+    await expect(result).rejects.toThrow(message);
+  });
+
+  it('stores and returns the desktop guards, blank ones dropped', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages }));
+    const guards = {
+      repoHint: 'acme/app',
+      mergePolicy: 'green-ci',
+      deployWorkflow: 'deploy.yml',
+      smoke: { url: 'https://app.example/health' },
+      holdLabels: ['hold', 'do-not-merge'],
+    };
+    const { res, result } = call('item', 'patch', {
+      query: { id: OID },
+      body: { stageConfig: desktop({ ...guards, smoke: { url: '', command: '' }, holdLabels: [] }) },
+    });
+    await result;
+    expect(res._getJSONData().stageConfig).toEqual(
+      desktop({ repoHint: 'acme/app', mergePolicy: 'green-ci', deployWorkflow: 'deploy.yml' })
+    );
+
+    await patch({ stageConfig: desktop(guards) });
+    expect(repo.updateForUser.mock.calls[1][2].stageConfig).toEqual(desktop(guards));
+    await patch({ stageConfig: desktop({ smoke: { command: 'pnpm smoke' } }) });
+    expect(repo.updateForUser.mock.calls[2][2].stageConfig).toEqual(desktop({ smoke: { command: 'pnpm smoke' } }));
+  });
+
+  it('stores and returns it on PATCH; null or nothing left clears it', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages }));
+    const { res, result } = call('item', 'patch', {
+      query: { id: OID },
+      body: { stageConfig: [{ stage: 'review', runner: 'desktop' }] },
+    });
+    await result;
+    expect(res._getJSONData().stageConfig).toEqual([{ stage: 'review', runner: 'desktop' }]);
+
+    await patch({ stageConfig: null });
+    await patch({ stageConfig: [{ stage: 'done', runner: 'desktop' }] });
+    await patch({ stageConfig: [{ stage: 'review', runner: null }] });
+    expect(repo.updateForUser.mock.calls.slice(1).map(c => c[2])).toEqual([
+      { stageConfig: null },
+      { stageConfig: null },
+      { stageConfig: null },
+    ]);
+  });
+
+  it('validates against the stages sent in the same PATCH', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages }));
+    await patch({ stages: ['todo', 'qa', 'done'], stageConfig: [{ stage: 'qa', model: 'm2' }] });
+    expect(repo.updateForUser.mock.calls[0][2].stageConfig).toEqual([{ stage: 'qa', model: 'm2' }]);
+    await expect(patch({ stages: ['todo', 'done'], stageConfig: [{ stage: 'review', model: 'm2' }] })).rejects.toThrow(
+      /stage must be one of/
+    );
+  });
+
+  it('drops the config of a removed stage, or one now last, when only stages change', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(
+      loop({
+        stages,
+        stageConfig: [
+          { stage: 'todo', model: 'm2' },
+          { stage: 'review', runner: 'desktop' },
+        ],
+      })
+    );
+    await patch({ stages: ['todo', 'doing', 'done'] });
+    expect(repo.updateForUser.mock.calls[0][2].stageConfig).toEqual([{ stage: 'todo', model: 'm2' }]);
+    await patch({ stages: ['review', 'todo'] });
+    expect(repo.updateForUser.mock.calls[1][2].stageConfig).toEqual([{ stage: 'review', runner: 'desktop' }]);
+    await patch({ stages: ['doing', 'done'] });
+    expect(repo.updateForUser.mock.calls[2][2].stageConfig).toBeNull();
+  });
+
+  it('writes stageConfig only while the stored stages are the ones it was checked against', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages, stageConfig: [{ stage: 'review', model: 'm2' }] }));
+    await patch({ stageConfig: [{ stage: 'review', runner: 'desktop' }] });
+    await patch({ stages: ['todo', 'done'] });
+    await patch({ name: 'Renamed' });
+    expect(repo.updateForUser.mock.calls.map(c => c[4])).toEqual([{ stages }, { stages }, undefined]);
+
+    repo.updateForUser.mockResolvedValue(null);
+    await expect(patch({ stageConfig: [{ stage: 'review', runner: 'desktop' }] })).rejects.toMatchObject({
+      statusCode: 409,
+    });
+  });
+});
+
+describe('POST /api/loops/:id/events/:eventId/resolve', () => {
+  const EVENT = '507f1f77bcf86cd799439022';
+  const asked = (overrides: Record<string, unknown> = {}) => ({
+    id: EVENT,
+    kind: 'unsure',
+    source: 'asked',
+    userId: 'u1',
+    loopId: OID,
+    executionId: 'x1',
+    workItemId: 't1',
+    reason: 'EU or US?',
+    ...overrides,
+  });
+  const resolve = (body: Record<string, unknown>) =>
+    call('resolve', 'post', { query: { id: OID, eventId: EVENT }, body });
+
+  beforeEach(() => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', stages: ['todo', 'done'] }));
+    loopEvents.findById.mockResolvedValue(asked());
+    loopEvents.resolveAsked.mockImplementation(async (_id, _u, _l, resolution) => asked({ resolution }));
+    tickets.updateForUser.mockResolvedValue({ id: 't1' });
+    tickets.findNextReadyForLoop.mockResolvedValue({ id: 't1' });
+  });
+
+  it('is session-only', () => {
+    expect(baseApiOptions.resolve).toEqual({ auth: 'jwtOnly' });
+  });
+
+  it('resumes with the answer: the event keeps the note and the ticket reopens', async () => {
+    const { res, result } = resolve({ outcome: 'resumed', note: ' EU ' });
+    await result;
+
+    expect(loopEvents.resolveAsked).toHaveBeenCalledWith(
+      EVENT,
+      'u1',
+      OID,
+      expect.objectContaining({ outcome: 'resumed', by: 'u1', note: 'EU' })
+    );
+    expect(tickets.updateForUser).toHaveBeenCalledWith('t1', 'u1', { status: 'open', statusReason: null }, 'blocked', {
+      statusReason: 'Unsure: EU or US?',
+      loopId: OID,
+    });
+    expect(repo.makeDueNow).toHaveBeenCalledWith(OID, expect.any(Date));
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ source: 'asked', resolution: { outcome: 'resumed', note: 'EU' } });
+    expect(res._getJSONData()).not.toHaveProperty('userId');
+    expect(res._getJSONData()).not.toHaveProperty('ticketSkipped');
+  });
+
+  it('rejects: the ticket stays blocked with the owner note in its reason', async () => {
+    await resolve({ outcome: 'rejected', note: 'not worth it' }).result;
+    expect(tickets.updateForUser).toHaveBeenCalledWith(
+      't1',
+      'u1',
+      { statusReason: 'Rejected by owner: not worth it' },
+      'blocked',
+      { statusReason: 'Unsure: EU or US?', loopId: OID }
+    );
+    await resolve({ outcome: 'rejected' }).result;
+    expect(tickets.updateForUser).toHaveBeenLastCalledWith(
+      't1',
+      'u1',
+      { statusReason: 'Rejected by owner' },
+      'blocked',
+      { statusReason: 'Unsure: EU or US?', loopId: OID }
+    );
+    expect(repo.makeDueNow).not.toHaveBeenCalled();
+  });
+
+  it('leaves a ticket no longer parked on this question alone and does not wake the loop', async () => {
+    tickets.updateForUser.mockResolvedValue(null);
+    const { res, result } = resolve({ outcome: 'resumed', note: 'EU' });
+    await result;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ ticketSkipped: true });
+    expect(repo.makeDueNow).not.toHaveBeenCalled();
+  });
+
+  it('reopens the question when the ticket write fails, so the owner can answer again', async () => {
+    tickets.updateForUser.mockRejectedValue(new Error('db down'));
+    loopEvents.reopenAsked.mockRejectedValue(new Error('still down'));
+    await expect(resolve({ outcome: 'resumed', note: 'EU' }).result).rejects.toThrow('db down');
+    expect(loopEvents.reopenAsked).toHaveBeenCalledWith(EVENT, expect.any(Date));
+    expect(repo.makeDueNow).not.toHaveBeenCalled();
+  });
+
+  it('skips the ticket for a question with no ticket', async () => {
+    loopEvents.resolveAsked.mockImplementation(async (_id, _u, _l, resolution) =>
+      asked({ resolution, workItemId: undefined })
+    );
+    await resolve({ outcome: 'resumed', note: 'EU' }).result;
+    expect(tickets.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ outcome: 'resumed' }],
+    [{ outcome: 'resumed', note: '   ' }],
+    [{ outcome: 'later', note: 'x' }],
+    [{ outcome: 'rejected', note: 3 }],
+    [{ outcome: 'rejected', note: 'n'.repeat(1001) }],
+  ])('is a 400 for a bad body %#', async body => {
+    await expect(resolve(body).result).rejects.toMatchObject({ statusCode: 400 });
+    expect(loopEvents.resolveAsked).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a gate-sourced event', asked({ source: undefined })],
+    ['an already-resolved event', asked({ resolution: { outcome: 'rejected', at: new Date() } })],
+  ])('is a 409 for %s', async (_name, event) => {
+    loopEvents.findById.mockResolvedValue(event);
+    await expect(resolve({ outcome: 'resumed', note: 'EU' }).result).rejects.toMatchObject({ statusCode: 409 });
+    expect(loopEvents.resolveAsked).not.toHaveBeenCalled();
+    expect(tickets.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('is a 409 when another answer landed first', async () => {
+    loopEvents.resolveAsked.mockResolvedValue(null);
+    await expect(resolve({ outcome: 'resumed', note: 'EU' }).result).rejects.toMatchObject({ statusCode: 409 });
+    expect(tickets.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it("is a 404 for another user's loop or event, or an event of another loop", async () => {
+    repo.findByIdAndUserId.mockResolvedValueOnce(null);
+    await expect(resolve({ outcome: 'rejected' }).result).rejects.toMatchObject({ statusCode: 404 });
+    loopEvents.findById.mockResolvedValueOnce(asked({ userId: 'u2' }));
+    await expect(resolve({ outcome: 'rejected' }).result).rejects.toMatchObject({ statusCode: 404 });
+    loopEvents.findById.mockResolvedValueOnce(asked({ loopId: 'other' }));
+    await expect(resolve({ outcome: 'rejected' }).result).rejects.toMatchObject({ statusCode: 404 });
+    expect(loopEvents.resolveAsked).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/loops/:id config_changed events', () => {
+  it('logs one readable event when stages, model or budget change', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ budgetCreditsPerDay: 200 }));
+    await call('item', 'patch', {
+      query: { id: OID },
+      body: { stages: ['todo', 'review', 'done'], model: 'm2', budgetCreditsPerDay: 300 },
+    }).result;
+    expect(loopEvents.recordConfigChanged).toHaveBeenCalledTimes(1);
+    expect(loopEvents.recordConfigChanged).toHaveBeenCalledWith({
+      loopId: OID,
+      userId: 'u1',
+      reason: 'stage "review" added; model m1 -> m2; budget 200 -> 300',
+      at: expect.any(Date),
+    });
+  });
+
+  it('logs nothing for an edit outside the tracked fields', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    await call('item', 'patch', { query: { id: OID }, body: { name: 'Renamed', goal: 'Another goal' } }).result;
+    expect(loopEvents.recordConfigChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/loops/:id/stats', () => {
+  beforeEach(() => {
+    executions.listLoopRunsSince.mockResolvedValue({ runs: [], truncated: false });
+    tickets.listForLoopStats.mockResolvedValue({ items: [], truncated: false });
+    loopEvents.listForLoopSince.mockResolvedValue([]);
+    loopEvents.listUnresolvedUnsure.mockResolvedValue([]);
+    directives.listToLoop.mockResolvedValue([]);
+  });
+
+  it('is session-only', () => {
+    expect(baseApiOptions.stats).toEqual({ auth: 'jwtOnly' });
+  });
+
+  it('defaults to 30 days and reads the window plus its baseline', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages: ['todo', 'doing', 'done'] }));
+    const before = Date.now();
+    const { res, result } = call('stats', 'get', { query: { id: OID } });
+    await result;
+    const body = res._getJSONData();
+    expect(body).toMatchObject({ days: 30, truncated: false, ratings: { up: 0, down: 0, unrated: 0 } });
+    expect(body.byStage.map((row: { stage: string }) => row.stage)).toEqual(['todo', 'doing', 'done']);
+    expect(body.daily).toHaveLength(30);
+    const since: Date = executions.listLoopRunsSince.mock.calls[0][1];
+    expect(before - since.getTime()).toBeGreaterThanOrEqual(60 * 24 * 60 * 60 * 1000 - 1000);
+    expect(loopEvents.listForLoopSince.mock.calls[0][3]).toEqual(['config_changed']);
+  });
+
+  it.each(['7', '90'])('serves %s days', async days => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    const { res, result } = call('stats', 'get', { query: { id: OID, days } });
+    await result;
+    expect(res._getJSONData().days).toBe(Number(days));
+  });
+
+  it.each(['14', 'abc', '0'])('rejects days=%s', async days => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    await expect(call('stats', 'get', { query: { id: OID, days } }).result).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("404s for another user's loop", async () => {
+    repo.findByIdAndUserId.mockResolvedValue(null);
+    await expect(call('stats', 'get', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('says truncated when a read hit its cap', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    executions.listLoopRunsSince.mockResolvedValue({ runs: [], truncated: true });
+    const { res, result } = call('stats', 'get', { query: { id: OID } });
+    await result;
+    expect(res._getJSONData().truncated).toBe(true);
+  });
+});
+
+describe('PUT /api/loops/:id/tickets/:ticketId/rating', () => {
+  const put = (body: Record<string, unknown>) => call('rating', 'put', { query: { id: OID, ticketId: 't1' }, body });
+
+  beforeEach(() => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    tickets.findByIdForUser.mockResolvedValue({ id: 't1', loopId: OID, status: 'closed' });
+    tickets.setOwnerRating.mockImplementation(async (id: string, _u: string, _l: string, rating: unknown) => ({
+      id,
+      ...(rating ? { ownerRating: rating } : {}),
+    }));
+  });
+
+  it('rates a closed ticket with a trimmed note', async () => {
+    const { res, result } = put({ value: 'up', note: '  solid work  ' });
+    await result;
+    expect(tickets.setOwnerRating).toHaveBeenCalledWith('t1', 'u1', OID, {
+      value: 'up',
+      note: 'solid work',
+      at: expect.any(Date),
+    });
+    expect(res._getJSONData().ownerRating).toMatchObject({ value: 'up', note: 'solid work' });
+  });
+
+  it('clears the rating with null', async () => {
+    const { res, result } = put({ value: null });
+    await result;
+    expect(tickets.setOwnerRating).toHaveBeenCalledWith('t1', 'u1', OID, null);
+    expect(res._getJSONData().ownerRating).toBeNull();
+  });
+
+  it('400s on an open ticket, a bad value or a note over 500 characters', async () => {
+    tickets.findByIdForUser.mockResolvedValueOnce({ id: 't1', loopId: OID, status: 'open' });
+    await expect(put({ value: 'up' }).result).rejects.toMatchObject({ statusCode: 400 });
+    await expect(put({ value: 'meh' }).result).rejects.toMatchObject({ statusCode: 400 });
+    await expect(put({ value: 'down', note: 'x'.repeat(501) }).result).rejects.toMatchObject({ statusCode: 400 });
+    expect(tickets.setOwnerRating).not.toHaveBeenCalled();
+  });
+
+  it("404s for another loop's ticket or another user's loop, and 409s when it reopened meanwhile", async () => {
+    tickets.findByIdForUser.mockResolvedValueOnce({ id: 't1', loopId: 'other', status: 'closed' });
+    await expect(put({ value: 'up' }).result).rejects.toMatchObject({ statusCode: 404 });
+    repo.findByIdAndUserId.mockResolvedValueOnce(null);
+    await expect(put({ value: 'up' }).result).rejects.toMatchObject({ statusCode: 404 });
+    tickets.setOwnerRating.mockResolvedValueOnce(null);
+    await expect(put({ value: 'up' }).result).rejects.toMatchObject({ statusCode: 409 });
+  });
+});

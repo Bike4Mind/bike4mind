@@ -33,6 +33,7 @@
  *   independently), and `baseFields` never copies the parent's `enableMementos` - so a child gated on
  *   `parentExecutionId` alone arrives with `enableMementos: undefined`, resolves V2 back on for any
  *   opted-in user, and writes beliefs distilled from a turn the user opted out of (#1337).
+ * - The execution belongs to a loop (`loopId`): the prompt is the loop's own ticket prompt, not a user turn.
  *
  * Best-effort: a publish failure does not roll back the completion - the user
  * already saw `completed` on the wire. Errors log and swallow.
@@ -50,7 +51,15 @@ import {
 
 export type MementoCompletionExecution = Pick<
   IAgentExecution,
-  'id' | 'userId' | 'sessionId' | 'questId' | 'query' | 'model' | 'parentExecutionId' | 'spawnedByExecutionId'
+  | 'id'
+  | 'userId'
+  | 'sessionId'
+  | 'questId'
+  | 'query'
+  | 'model'
+  | 'parentExecutionId'
+  | 'spawnedByExecutionId'
+  | 'loopId'
 >;
 
 export async function publishMementoCompletion(
@@ -62,6 +71,9 @@ export async function publishMementoCompletion(
   logger: Logger
 ): Promise<void> {
   if (execution.parentExecutionId || execution.spawnedByExecutionId) return;
+  // A loop's prompt is machine-written (loop memory lives in loopMemory), and the memento job bills
+  // outside the run's recorded cost.
+  if (execution.loopId) return;
 
   if (!gates.v1 && !gates.v2) return;
 

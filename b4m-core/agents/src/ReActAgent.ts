@@ -320,6 +320,9 @@ export class ReActAgent extends EventEmitter {
   private iterationToolFailed: boolean[] = [];
   /** Ids of calls `executeToolWithQueueFallback` saw fail; drained by `takeToolFailure`. */
   private failedToolCallIds = new Set<string>();
+  /** Names of tools called but not in this context, and of tools that threw; drained by `takeToolFailures`. */
+  private unavailableToolNames = new Set<string>();
+  private erroredToolNames = new Set<string>();
   /**
    * What a call's tool itself returned, before the agent appended any notice; drained by
    * `takeToolOutput`. Only these reach a tool's `validateResult` - text the agent wrote
@@ -1449,6 +1452,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       this.confidenceLog = [];
       this.resetIterationConfidences();
       this.failedToolCallIds.clear();
+      this.unavailableToolNames.clear();
+      this.erroredToolNames.clear();
       this.toolOutputs.clear();
       this.lastStopReason = undefined;
       this.iterations = 0;
@@ -2244,6 +2249,21 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     return output;
   }
 
+  /**
+   * The tool names that were unavailable or threw since the last call (each deduped, at most 20, names clipped to
+   * 200 chars since an unavailable name is whatever the model wrote), then clears
+   * them. A host that persists them per iteration (the loop run's executor) keeps one list across continuations.
+   */
+  takeToolFailures(): { unavailable: string[]; errored: string[] } {
+    const failures = {
+      unavailable: [...this.unavailableToolNames].slice(0, 20).map(name => name.slice(0, 200)),
+      errored: [...this.erroredToolNames].slice(0, 20).map(name => name.slice(0, 200)),
+    };
+    this.unavailableToolNames.clear();
+    this.erroredToolNames.clear();
+    return failures;
+  }
+
   /** True (once) when `executeToolWithQueueFallback` recorded this call as failed. */
   private takeToolFailure(toolUse: ToolUseInfo): boolean {
     return this.failedToolCallIds.delete(getToolId(toolUse));
@@ -2294,6 +2314,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       // instruction to stop retrying and PROCEED - without forcing the whole turn to end, in
       // case the missing tool was peripheral and the plan has other valid steps left.
       this.failedToolCallIds.add(getToolId(toolUse));
+      this.unavailableToolNames.add(toolUse.name);
       return (
         `Error: Tool "${toolUse.name}" is not available in this context and cannot be called. ` +
         `Do NOT attempt to call it again. Proceed without it — call other available tools if your ` +
@@ -2324,6 +2345,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       observation = `Error: ${message}`;
       succeeded = false;
       this.failedToolCallIds.add(getToolId(toolUse));
+      this.erroredToolNames.add(toolUse.name);
     }
 
     // Track this call's result. A changed result resets the counter (progress);
