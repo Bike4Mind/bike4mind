@@ -40,6 +40,7 @@ export * from './ActivityTypes';
 export * from './BaseTypes';
 export * from './SubscriberTypes';
 export * from './PartnerSignupRuleTypes';
+export * from './OrgDomainClaimTypes';
 export * from './ReportTypes';
 export * from './AnalyticsTypes';
 export * from './FavoriteTypes';

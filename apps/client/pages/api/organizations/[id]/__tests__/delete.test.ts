@@ -45,6 +45,7 @@ const groupRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository }));
 
 const updateMany = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const deleteDomainClaims = vi.hoisted(() => vi.fn().mockResolvedValue(0));
 const clearOrganization = vi.hoisted(() => vi.fn().mockResolvedValue(0));
 const findInvites = vi.hoisted(() => vi.fn().mockResolvedValue([{ id: 'inv1' }]));
 const closeInvite = vi.hoisted(() => vi.fn().mockResolvedValue(null));
@@ -64,6 +65,7 @@ const lakeConfigChangeEventRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   partnerSignupRuleRepository: { updateMany },
+  orgDomainClaimRepository: { deleteByOrganization: deleteDomainClaims },
   integrationRequestRepository: { clearOrganization },
   inviteRepository: { find: findInvites, closeInvite },
   withTransaction,
@@ -95,6 +97,7 @@ describe('DELETE /api/organizations/[id]', () => {
   beforeEach(() => {
     deleteOrganization.mockClear();
     updateMany.mockClear();
+    deleteDomainClaims.mockClear();
     clearOrganization.mockClear();
     findInvites.mockClear();
     closeInvite.mockClear();
@@ -192,6 +195,12 @@ describe('DELETE /api/organizations/[id]', () => {
     expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
   });
 
+  it("deletes the org's domain claims after deleting", async () => {
+    await call();
+
+    expect(deleteDomainClaims).toHaveBeenCalledWith('org1');
+  });
+
   it("drops the org from its members' integration requests after deleting", async () => {
     await call();
 
@@ -237,6 +246,7 @@ describe('DELETE /api/organizations/[id]', () => {
     await expect(call()).rejects.toThrow('blocked');
     expect(updateMany).not.toHaveBeenCalled();
     expect(invalidatePartnerRuleCache).not.toHaveBeenCalled();
+    expect(deleteDomainClaims).not.toHaveBeenCalled();
     expect(clearOrganization).not.toHaveBeenCalled();
   });
 
