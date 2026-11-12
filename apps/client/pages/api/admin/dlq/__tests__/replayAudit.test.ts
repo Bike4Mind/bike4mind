@@ -112,6 +112,7 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
         expect(res._getStatusCode()).toBe(200);
       }
       expect(h.sendToQueue).toHaveBeenCalledTimes(2);
+      expect(h.receiveFromQueue).toHaveBeenCalledWith(expect.anything(), 1, 60, 2);
       expect(h.getSourceQueueUrl).toHaveBeenCalledWith('questQueue');
     }
   );
@@ -196,6 +197,46 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
     });
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('payload');
     expect(h.sendToQueue.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('keeps receiving past a short batch and stops at the first empty receive', async () => {
+    h.receiveFromQueue
+      .mockResolvedValueOnce([
+        { MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' },
+        { MessageId: 'm2', ReceiptHandle: 'r2', Body: '{}' },
+      ])
+      .mockResolvedValueOnce([{ MessageId: 'm3', ReceiptHandle: 'r3', Body: '{}' }])
+      .mockResolvedValueOnce([]);
+    const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', batchSize: 10 } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as Route)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.receiveFromQueue).toHaveBeenCalledTimes(3);
+    expect(h.receiveFromQueue).toHaveBeenNthCalledWith(1, 'dlq-url', 10, 60, 2);
+    expect(h.receiveFromQueue).toHaveBeenNthCalledWith(2, 'dlq-url', 8, 60, 2);
+    expect(h.receiveFromQueue).toHaveBeenNthCalledWith(3, 'dlq-url', 7, 60, 2);
+    expect(h.sendToQueue).toHaveBeenCalledTimes(3);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      details: { messageCount: 3, replayedMessageIds: ['m1', 'm2', 'm3'] },
+    });
+  });
+
+  it('replays a message received twice in one run once, deleting it with its latest receipt handle', async () => {
+    h.receiveFromQueue
+      .mockResolvedValueOnce([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' }])
+      .mockResolvedValueOnce([{ MessageId: 'm1', ReceiptHandle: 'r1-latest', Body: '{}' }])
+      .mockResolvedValueOnce([]);
+    const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', batchSize: 10 } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as Route)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.deleteFromQueue).toHaveBeenCalledTimes(1);
+    expect(h.deleteFromQueue).toHaveBeenCalledWith('dlq-url', 'r1-latest');
   });
 });
 
