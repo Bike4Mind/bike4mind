@@ -18,7 +18,6 @@ import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import { normalizeDomainEntry } from '@bike4mind/common';
 import type { ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
@@ -319,8 +318,8 @@ export async function runLakeResearch(
     judgeProvider = models.find(m => m.id === model)?.backend;
 
     // Re-resolved on every admit: ownership can transfer mid-run, and the rule must act as whoever
-    // owns the lake now. A mid-run off switch or removed site stops further admits; turning it on
-    // applies from the next run. Never throws: any failure leaves the proposal pending for a human.
+    // owns the lake now. The live config's off switch and site lists can only narrow admits mid-run;
+    // enabling it or adding sites applies from the next run. Never throws: a failure leaves it pending.
     const autoAdmit: dataLakeResearchService.ResearchRunPorts['autoAdmit'] = async (proposal, rule) => {
       try {
         const grants = await dataLakeService.loadActiveLakeGrants(lake, {
@@ -340,7 +339,15 @@ export async function runLakeResearch(
           });
           return 'left_pending';
         }
-        const liveTrusted = new Set((config.trustedDomains ?? []).map(normalizeDomainEntry));
+        const liveRules = dataLakeResearchService.normalizeResearchLevers(config);
+        if (dataLakeResearchService.matchSource(proposal.sourceUrl, liveRules).verdict !== 'trusted') {
+          logger.info('[lakeResearch] auto-admit stopped by the live config', {
+            runId,
+            proposalId: proposal.id,
+            reason: 'source_not_trusted_live',
+          });
+          return 'left_pending';
+        }
         const result = await dataLakeService.autoApproveDataLakeProposal(
           proposal.id,
           {
@@ -349,7 +356,9 @@ export async function runLakeResearch(
             owner: { userId: ownerUser.id, isAdmin: false, administeredOrgIds },
             isTrusted: url => {
               const entry = rule.isTrusted(url);
-              return entry !== null && liveTrusted.has(normalizeDomainEntry(entry)) ? entry : null;
+              return entry !== null && dataLakeResearchService.trustedEntryForUrl(url, liveRules) !== null
+                ? entry
+                : null;
             },
           },
           {

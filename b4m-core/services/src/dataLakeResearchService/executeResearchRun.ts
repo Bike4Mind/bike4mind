@@ -117,6 +117,18 @@ const TIME_BUDGET_RESERVE_MS = 90_000;
 /** Judge failures, with nothing scored yet, after which the judge is treated as down for the run. */
 const JUDGE_BREAKER_FAILURES = 3;
 
+/**
+ * The trusted-list entry that admits `url`, or null. Shared by the run and by the worker's live
+ * re-check, so both apply the same host-coverage rule.
+ */
+export function trustedEntryForUrl(url: string, rules: Parameters<typeof matchSource>[1]): string | null {
+  const match = matchSource(url, rules);
+  const host = sourceHostname(url);
+  return match.verdict === 'trusted' && match.entry && host && trustedEntryCoversHost(match.entry, host)
+    ? match.entry
+    : null;
+}
+
 export async function executeResearchRun(
   storedLevers: LegacyResearchRunLevers,
   runId: string,
@@ -140,14 +152,7 @@ export async function executeResearchRun(
     judgeError,
   });
 
-  const trustedEntryFor = (url: string): string | null => {
-    const match = matchSource(url, levers);
-    const host = sourceHostname(url);
-    return match.verdict === 'trusted' && match.entry && host && trustedEntryCoversHost(match.entry, host)
-      ? match.entry
-      : null;
-  };
-  const autoAdmitRule: AutoAdmitRule = { isTrusted: trustedEntryFor };
+  const autoAdmitRule: AutoAdmitRule = { isTrusted: url => trustedEntryForUrl(url, levers) };
 
   const candidates = await ports.search(levers.query, levers.maxResults, levers.recencyDays);
   totals.searchHits = candidates.length;
@@ -233,8 +238,8 @@ export async function executeResearchRun(
           verdict === 'trusted' &&
           outcome.proposal.priorDisposition == null &&
           totals.autoAdmitted < levers.maxAutoAdmits &&
-          trustedEntryFor(candidate.url) !== null &&
-          trustedEntryFor(fetched.finalUrl) !== null &&
+          trustedEntryForUrl(candidate.url, levers) !== null &&
+          trustedEntryForUrl(fetched.finalUrl, levers) !== null &&
           !outOfTime();
         if (eligible) {
           const result = await ports.autoAdmit!(outcome.proposal, autoAdmitRule);

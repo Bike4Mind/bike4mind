@@ -354,6 +354,60 @@ describe('DataLakeResearchPanel', () => {
         expect(notice.textContent).toBe('Saved. This applies from the next run.');
       });
 
+      describe('notice only when the save changes what a run does', () => {
+        const saveWith = async (
+          stored: Parameters<typeof config>[0],
+          field: string,
+          value: string,
+          onUpdate = vi.fn().mockResolvedValue(undefined)
+        ) => {
+          renderPanel({ configs: [config(stored)], onUpdate });
+          fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+          fireEvent.click(screen.getByTestId('datalake-research-advanced-toggle'));
+          fireEvent.change(screen.getByTestId(field), { target: { value } });
+          fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+          await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+        };
+        const noNotice = () =>
+          expect(screen.queryByTestId('datalake-research-save-timing-notice')).not.toBeInTheDocument();
+
+        it('shows none when a site is retyped in another spelling', async () => {
+          await saveWith(
+            { trustedDomains: ['example.com'], autoAdmitTrusted: true },
+            'datalake-research-trusted-input',
+            'www.example.com'
+          );
+          noNotice();
+        });
+
+        it('shows none when a site is removed while auto-admit is off', async () => {
+          await saveWith(
+            { trustedDomains: ['example.com', 'other.org'], autoAdmitTrusted: false },
+            'datalake-research-trusted-input',
+            'example.com'
+          );
+          noNotice();
+        });
+
+        it('shows none when a site is added while auto-admit is off', async () => {
+          await saveWith(
+            { trustedDomains: ['example.com'], autoAdmitTrusted: false },
+            'datalake-research-trusted-input',
+            'example.com\nother.org'
+          );
+          noNotice();
+        });
+
+        it('says it stops now when a site is blocked while auto-admit stays on', async () => {
+          await saveWith(
+            { trustedDomains: ['example.com'], autoAdmitTrusted: true },
+            'datalake-research-blocked-input',
+            'example.com'
+          );
+          expect((await screen.findByTestId('datalake-research-save-timing-notice')).textContent).toMatch(/now\.$/);
+        });
+      });
+
       it('shows no timing notice when the save leaves auto-admit untouched', async () => {
         const onUpdate = vi.fn().mockResolvedValue(undefined);
         renderPanel({ configs: [config()], onUpdate });

@@ -49,6 +49,7 @@ import {
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
   RESEARCH_SCHEDULE_CADENCES,
+  normalizeDomainEntry,
   upgradeLegacyResearchLevers,
 } from '@bike4mind/common';
 import type { ResearchConfigInput } from '@client/app/hooks/data/dataLakes';
@@ -286,14 +287,22 @@ const NEXT_RUN_NOTICE = 'Saved. This applies from the next run.';
 
 /** What a save changes about auto-admit, split by when it takes effect on a run already in progress. */
 const autoAdmitTimingNotice = (before: ConfigDraft, after: ResearchConfigInput): string | null => {
+  const sites = (list: string[]) => new Set(list.map(normalizeDomainEntry));
+  const added = (previous: Set<string>, next: Set<string>) => [...next].some(site => !previous.has(site));
   const wasOn = before.autoAdmitTrusted && parseList(before.trustedDomains).length > 0;
-  const oldSites = new Set(parseList(before.trustedDomains));
-  const newSites = new Set(after.trustedDomains);
-  const stopsNow = (wasOn && !after.autoAdmitTrusted) || [...oldSites].some(site => !newSites.has(site));
+  const nowOn = after.autoAdmitTrusted;
+  const oldTrusted = sites(parseList(before.trustedDomains));
+  const newTrusted = sites(after.trustedDomains ?? []);
+  // Only narrowing changes reach a running run: off, a removed trusted site, or a site newly
+  // blocked or sent to review.
+  const stopsNow =
+    wasOn &&
+    (!nowOn ||
+      added(newTrusted, oldTrusted) ||
+      added(sites(parseList(before.blockedDomains)), sites(after.blockedDomains ?? [])) ||
+      added(sites(parseList(before.reviewDomains)), sites(after.reviewDomains ?? [])));
   const startsLater =
-    (!wasOn && after.autoAdmitTrusted) ||
-    [...newSites].some(site => !oldSites.has(site)) ||
-    (after.autoAdmitTrusted && parseNumber(before.maxAutoAdmits, 0) !== after.maxAutoAdmits);
+    nowOn && (!wasOn || added(oldTrusted, newTrusted) || parseNumber(before.maxAutoAdmits, 0) !== after.maxAutoAdmits);
   if (stopsNow && startsLater) return `${STOPS_NOW_NOTICE} ${NEXT_RUN_NOTICE.replace('Saved. ', '')}`;
   if (stopsNow) return STOPS_NOW_NOTICE;
   return startsLater ? NEXT_RUN_NOTICE : null;
@@ -732,9 +741,11 @@ export function DataLakeResearchPanel({
       // The mutation toasts its own refusal; staying open keeps the draft for a retry.
       return;
     }
-    setSaveNotice(submittedId ? autoAdmitTimingNotice(draftBaseline, input) : null);
-    // Only close the form this save came from: it may have been cancelled, or another opened, meanwhile.
-    if (formSession.current === session) closeForm();
+    // Only touch the form this save came from: it may have been cancelled, or another opened, meanwhile.
+    if (formSession.current === session) {
+      setSaveNotice(submittedId ? autoAdmitTimingNotice(draftBaseline, input) : null);
+      closeForm();
+    }
   };
 
   if (isLoading) {
