@@ -52,6 +52,16 @@ const wired = (
 
 // Reviewed snapshots, never automatically refreshed by CI. Portable means wiring only.
 export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
+  broker(
+    'queue:infra/adminMorningBrief.ts:adminMorningBriefDlq',
+    '02f77874c10969d8ede24d54d660f8722b34b4826b403446b8a06ca17bceae54'
+  ),
+  gapBecause(
+    'schedule:infra/adminMorningBrief.ts:adminMorningBrief',
+    '8f39213e20daf6df6bcc88a7548d0c275721d82c4a345805dafec8f3abb60fbd',
+    'Opt-in admin brief uses hosted CloudWatch alarms and the LiveOps destination; self-host scheduling and alternate alarm capability are not wired.',
+    ['cloudwatch:DescribeAlarms']
+  ),
   hostedOnly(
     'eventRule:infra/accountCreationAlarms.ts:AccountCreationMetricsSchedule',
     '9ecd499546afefc96b5204f91ccaa0292f7eaf73bce58d0bf91a30adda3497e7',

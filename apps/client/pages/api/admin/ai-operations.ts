@@ -22,6 +22,7 @@ const classUpdate = z.object({
 });
 
 export default adminApi({
+  auth: 'jwtOnly',
   adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', POST: 'settings:manage' },
 })
   .get(async (_req, res) => res.json(await getAdminAiOperations()))
