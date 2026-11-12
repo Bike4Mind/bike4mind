@@ -31,7 +31,6 @@ const componentsByFile = {
   'OrganizationProfile.tsx': ['Card'],
   'PartnerSignupRulesTab.tsx': ['Modal', 'Table'],
   'PrReport/PrReportDialog.tsx': ['Modal'],
-  'PublishedArtifactsTab.tsx': ['Table'],
   'RateLimits/components/OverviewTab.tsx': ['Table'],
   'RateLimits/index.tsx': ['Table'],
   'RegistrationInvites/components/CreateInviteModal.tsx': ['Modal'],

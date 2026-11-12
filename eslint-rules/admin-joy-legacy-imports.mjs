@@ -32,7 +32,6 @@ export default {
   'OrganizationProfile.tsx': [[2, '86700e7e9f5ffef4']],
   'PartnerSignupRulesTab.tsx': [[2, '4d25dd633956e08a']],
   'PrReport/PrReportDialog.tsx': [[2, '42e1900e98b7aac9']],
-  'PublishedArtifactsTab.tsx': [[2, 'e9f0cb3a32140028']],
   'RateLimits/components/OverviewTab.tsx': [[2, '39e3228c2b9fa22a']],
   'RateLimits/index.tsx': [[2, 'e1c3c0708902ccc5']],
   'RegistrationInvites/components/CreateInviteModal.tsx': [[2, '99a9e8a33f6a6973']],
