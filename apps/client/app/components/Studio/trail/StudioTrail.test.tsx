@@ -74,7 +74,7 @@ describe('StudioTrail', () => {
 
   it('shows an unreadable ancestor as a placeholder', () => {
     render(<StudioTrail fileId="take" />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('studio-trail-redacted-hidden')).toHaveTextContent('Not shared with you');
+    expect(screen.getByTestId('studio-trail-redacted-hidden')).toHaveTextContent('Not available');
   });
 
   it('restores a step with its stored request and medium', () => {

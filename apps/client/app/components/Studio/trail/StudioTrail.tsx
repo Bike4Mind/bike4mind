@@ -175,7 +175,7 @@ const RedactedStep = ({ node, roles }: StepProps) => (
     </ListItemDecorator>
     <ListItemContent>
       <Typography level="title-sm" textColor="text.tertiary">
-        Not shared with you
+        Not available
       </Typography>
       <RoleChips roles={roles} testId={`studio-trail-roles-${node.fileId}`} />
     </ListItemContent>
