@@ -1727,6 +1727,27 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
+    orgServiceAccount: {
+      type: new Schema(
+        {
+          organizationId: { type: String, required: true, immutable: true },
+          createdByUserId: { type: String, required: true, immutable: true },
+          grants: [
+            new Schema(
+              {
+                resourceType: { type: String, enum: ['project', 'organization'], required: true },
+                resourceId: { type: String, required: true },
+                permission: { type: String, enum: ['read', 'compute'], required: true },
+              },
+              { _id: false }
+            ),
+          ],
+        },
+        { _id: false }
+      ),
+      default: undefined,
+      immutable: true,
+    },
     subscribedUntil: { type: String, default: null },
     systemFiles: { type: [SystemFileEntrySchema], default: [] },
     oauthCredentials: { type: Object, default: {} },

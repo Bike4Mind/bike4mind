@@ -22,6 +22,7 @@ const rotateUserApiKeySchema = z.object({
 export type RotateUserApiKeyParameters = z.infer<typeof rotateUserApiKeySchema>;
 
 interface RotateUserApiKeyAdapters {
+  serviceAccountManagement?: boolean;
   db: {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
@@ -93,7 +94,7 @@ export const rotateUserApiKey = async (
   const { db } = adapters;
   const params = secureParameters(parameters, rotateUserApiKeySchema);
 
-  const apiKey = await resolveOwnedApiKey(userId, params.keyId, { db });
+  const apiKey = await resolveOwnedApiKey(userId, params.keyId, adapters);
   if (!apiKey) {
     throw new NotFoundError('API key not found');
   }
@@ -109,7 +110,7 @@ export const rotateUserApiKey = async (
   );
 
   const previousOwnerUserId = apiKey.userId?.toString();
-  const reOwned = !!previousOwnerUserId && previousOwnerUserId !== userId;
+  const reOwned = !apiKey.serviceAccount && !!previousOwnerUserId && previousOwnerUserId !== userId;
 
   // An embed key's userId is not just an owner label: the embed runtime resolves the
   // bound agent's ownership, the owner's BYOK LLM keys, tool availability and KB access

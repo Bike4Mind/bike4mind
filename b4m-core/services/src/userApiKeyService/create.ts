@@ -123,6 +123,7 @@ interface CreateUserApiKeyAdapters {
     agents: Pick<IAgentRepository, 'findById'>;
   };
   systemUserId?: string;
+  serviceAccount?: boolean;
   /**
    * Scopes of the API key making the request, when the caller authenticated with one.
    * Undefined for a browser/JWT caller. Same no-escalation contract as rotate
@@ -359,6 +360,7 @@ const mintUserApiKey = async (
 
   const docToCreate = {
     userId,
+    ...(adapters.serviceAccount ? { serviceAccount: true } : {}),
     name: params.name,
     keyDigest,
     keyPrefix,
