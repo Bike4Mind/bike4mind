@@ -59,7 +59,8 @@ const InviteLinksPanel: FC<InviteLinksPanelProps> = ({ organizationId, isOwnerTi
     const allowedDomains = parseDomains(domains);
     createLink.mutate(
       {
-        permissions: [...ORG_INVITE_ROLES[role]],
+        // Only owners may mint Editor/Admin links; the server refuses them for anyone else.
+        permissions: [...ORG_INVITE_ROLES[isOwnerTier ? role : 'viewer']],
         expiresAt: new Date(Date.now() + days * DAY_MS).toISOString(),
         ...(capValue !== undefined && { available: capValue }),
         ...(allowedDomains.length > 0 && { allowedDomains }),

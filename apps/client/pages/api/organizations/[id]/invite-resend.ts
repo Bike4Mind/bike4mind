@@ -55,8 +55,8 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       );
     if (!invite) throw new NotFoundError('Pending invitation not found');
 
-    // Only a typed address was charged to the typed-address budget when the invite was created. Org
-    // invites are sent in bulk, so a resend draws on the same org-bulk bucket as bulk-invite.ts.
+    // Only a typed address was charged to the typed-address budget when the invite was created. Every
+    // org invite resend, single or bulk-sent, draws on the org-bulk bucket shared with bulk-invite.ts.
     const budget = await reserveInviteSendBudget(user.id, [address], {
       chargeTypedAddresses: !parsed.data.userId,
       typedAddressBucket: 'orgBulk',

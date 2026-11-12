@@ -64,15 +64,22 @@ const RESHAREABLE_INVITE_TYPES: ReadonlySet<InviteType> = new Set([
 
 type Inviter = Pick<IUserDocument, 'id' | 'groups'> | null;
 
+// 'already-member': a named org invite reached someone already in the org; it was consumed, nothing granted.
+export type AcceptInviteOutcome = 'accepted' | 'already-member';
+
 /**
  * Accepts an invite from a user.
  *
  * @param userId - The ID of the user accepting the invite.
  * @param params - The parameters for the accept invite operation.
  * @param adapters - The adapters for the database operations.
- * @returns The invite after accepting.
+ * @returns The invite after accepting, and whether the accept granted access or found an existing org member.
  */
-export const acceptInvite = async (userId: string, params: AcceptInviteParameters, { db }: AcceptInviteAdapters) => {
+export const acceptInvite = async (
+  userId: string,
+  params: AcceptInviteParameters,
+  { db }: AcceptInviteAdapters
+): Promise<{ invite: IInvite; outcome: AcceptInviteOutcome }> => {
   const { id } = secureParameters(params, acceptInviteSchema);
 
   const user = await db.users.findById(userId);
@@ -144,6 +151,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   const inviter =
     invite.inviterId && RESHAREABLE_INVITE_TYPES.has(invite.type) ? await db.users.findById(invite.inviterId) : null;
 
+  let outcome: AcceptInviteOutcome = 'accepted';
   switch (invite.type) {
     case InviteType.Group: {
       const group = await db.groups.findById(invite.documentId);
@@ -232,7 +240,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
       break;
     }
     case InviteType.Organization:
-      await acceptOrganization(
+      outcome = await acceptOrganization(
         user,
         {
           organizationId: invite.documentId,
@@ -254,7 +262,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   const accepted = await db.invites.acceptRecipient(invite.id, user.email);
   if (!accepted) throw new UnprocessableEntityError('Invite has no remaining users');
 
-  return accepted;
+  return { invite: accepted, outcome };
 };
 
 interface AcceptOrganizationParameters {
@@ -270,7 +278,7 @@ const acceptOrganization = async (
   user: IUserDocument,
   params: AcceptOrganizationParameters,
   { db }: AcceptInviteAdapters
-) => {
+): Promise<AcceptInviteOutcome> => {
   const { organizationId, permissions, isLink } = params;
   const organization = await db.organization.findById(organizationId);
 
@@ -279,9 +287,10 @@ const acceptOrganization = async (
   }
   // A named invite to an existing member is still consumed (by the caller's acceptRecipient), so its
   // address leaves recipients.pending and stops reserving a seat; only a link join reports the 409.
+  // The member keeps their current role: an invite never changes it, only an org owner does.
   if (isMemberOf(organization, user.id)) {
     if (isLink) throw new ConflictError('You are already a member of this organization');
-    return;
+    return 'already-member';
   }
 
   // A named invite's seat was reserved when it was minted, so only a link join holds the others back.
@@ -302,7 +311,7 @@ const acceptOrganization = async (
     if (!current) throw new NotFoundError('Organization not found');
     if (isMemberOf(current, user.id)) {
       if (isLink) throw new ConflictError('You are already a member of this organization');
-      return;
+      return 'already-member';
     }
     throw new ForbiddenError('Organization is full');
   }
@@ -332,6 +341,7 @@ const acceptOrganization = async (
   // which set the selected organization as a required side effect of joining.
   user.organizationId = organizationId;
   await db.users.update({ id: user.id, organizationId: user.organizationId });
+  return 'accepted';
 };
 
 const acceptProject = async (

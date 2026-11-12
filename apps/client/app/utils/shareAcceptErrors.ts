@@ -1,6 +1,6 @@
 import { isAxiosError } from 'axios';
 
-export type ShareAcceptFailureKind = 'revoked' | 'expired' | 'domain' | 'full' | 'member' | 'used';
+export type ShareAcceptFailureKind = 'revoked' | 'expired' | 'domain' | 'full' | 'member' | 'used' | 'already-member';
 
 export interface ShareAcceptFailure {
   kind: ShareAcceptFailureKind;
@@ -43,4 +43,15 @@ export function describeAcceptFailure(error: unknown): ShareAcceptFailure | null
     };
   }
   return null;
+}
+
+// A named org invite accepted by someone already in the org succeeds without changing their role.
+export function describeAcceptOutcome(result: unknown): ShareAcceptFailure | null {
+  if (!result || typeof result !== 'object') return null;
+  if ((result as { acceptOutcome?: unknown }).acceptOutcome !== 'already-member') return null;
+  return {
+    kind: 'already-member',
+    title: "You're already a member",
+    body: 'You already belong to this organization, so your role stays the same. An organization owner can change your role.',
+  };
 }

@@ -215,17 +215,25 @@ describe('sharingService - acceptInvite (Organization)', () => {
   it.each([
     ['a member', makeOrganization({ users: [{ userId }] })],
     ['the owner', makeOrganization({ userId })],
-  ])('consumes a named invite sent to %s without adding them again', async (_label, organization) => {
-    mockAdapters.db.users.findById.mockResolvedValue(makeUser());
-    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
-    mockAdapters.db.organization.findById.mockResolvedValue(organization);
+  ])(
+    'consumes a named Editor invite sent to %s, keeps their role and reports already-member',
+    async (_label, organization) => {
+      mockAdapters.db.users.findById.mockResolvedValue(makeUser());
+      mockAdapters.db.invites.findById.mockResolvedValue(
+        makeInvite({ permissions: [Permission.read, Permission.update, Permission.share] })
+      );
+      mockAdapters.db.organization.findById.mockResolvedValue(organization);
 
-    await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).resolves.toEqual({ id: inviteId });
-    expect(mockAdapters.db.invites.acceptRecipient).toHaveBeenCalledWith(inviteId, 'member@example.com');
-    expect(mockAdapters.db.organization.addMemberIfUnderCeiling).not.toHaveBeenCalled();
-    expect(mockAdapters.db.organization.ensureUserDetails).not.toHaveBeenCalled();
-    expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
-  });
+      await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).resolves.toEqual({
+        invite: { id: inviteId },
+        outcome: 'already-member',
+      });
+      expect(mockAdapters.db.invites.acceptRecipient).toHaveBeenCalledWith(inviteId, 'member@example.com');
+      expect(mockAdapters.db.organization.addMemberIfUnderCeiling).not.toHaveBeenCalled();
+      expect(mockAdapters.db.organization.ensureUserDetails).not.toHaveBeenCalled();
+      expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+    }
+  );
 
   it('consumes a named invite when a concurrent join already added the user', async () => {
     mockAdapters.db.users.findById.mockResolvedValue(makeUser());
@@ -235,7 +243,10 @@ describe('sharingService - acceptInvite (Organization)', () => {
       .mockResolvedValueOnce(makeOrganization({ users: [{ userId }] }));
     mockAdapters.db.organization.addMemberIfUnderCeiling.mockResolvedValue(null);
 
-    await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).resolves.toEqual({ id: inviteId });
+    await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).resolves.toEqual({
+      invite: { id: inviteId },
+      outcome: 'already-member',
+    });
     expect(mockAdapters.db.invites.acceptRecipient).toHaveBeenCalledWith(inviteId, 'member@example.com');
   });
 

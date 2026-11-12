@@ -122,8 +122,11 @@ export const shareDocument = async (data: {
   }
 };
 
+// Mirrors AcceptInviteOutcome in b4m-core/services/src/sharingService/accept.ts.
+export type AcceptedInvite = IInviteDocument & { acceptOutcome?: 'accepted' | 'already-member' };
+
 export const acceptDocument = async (id: string, isPublic: boolean = false) => {
-  const response = await api.post<IInviteDocument>(`/api/invites/${id}/accept`, { public: isPublic });
+  const response = await api.post<AcceptedInvite>(`/api/invites/${id}/accept`, { public: isPublic });
   if (response.status === 200) {
     return response.data;
   }

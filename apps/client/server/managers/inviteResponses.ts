@@ -74,7 +74,7 @@ export async function acceptInviteForUser(req: InviteResponder, id: string) {
   // atomically. Without it, a failure between the two writes could leave a user in an
   // org with organizationId still null. Mirrors the add-member handler, which already
   // wraps organizationService.addMember.
-  const invite = await withTransaction(() =>
+  const { invite, outcome } = await withTransaction(() =>
     sharingService.acceptInvite(
       user.id,
       { id },
@@ -127,7 +127,7 @@ export async function acceptInviteForUser(req: InviteResponder, id: string) {
     await transferFileTagsToUser(invite.documentId, user.id);
   }
 
-  return invite;
+  return { invite, outcome };
 }
 
 export async function refuseInviteForUser(req: InviteResponder, id: string) {

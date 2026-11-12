@@ -1,6 +1,10 @@
 import { useAcceptDocument, useRefuseDocument, useRespondToInvites } from '@client/app/hooks/data/invites';
 import { fetchInvite } from '@client/app/utils/invitesAPICalls';
-import { describeAcceptFailure, type ShareAcceptFailure } from '@client/app/utils/shareAcceptErrors';
+import {
+  describeAcceptFailure,
+  describeAcceptOutcome,
+  type ShareAcceptFailure,
+} from '@client/app/utils/shareAcceptErrors';
 import CheckIcon from '@mui/icons-material/Check';
 import HandymanOutlinedIcon from '@mui/icons-material/HandymanOutlined';
 import DoDisturbIcon from '@mui/icons-material/DoDisturb';
@@ -130,12 +134,11 @@ const SharePage = () => {
   // An Organization share link names nobody, so there is no pending entry for Refuse to clear.
   const allOrgShareLinks = invites.every(isOrgShareLink);
 
+  // No navigate on success: handleBulkAction decides between going home and the already-member screen.
   const acceptInvite = useAcceptDocument({
-    onSuccess: () => {
-      navigate({ to: '/' });
-    },
     onSettled: () => setLoading(false),
     isPublic: true,
+    toastsError: error => !describeAcceptFailure(error),
   });
 
   const refuseInvite = useRefuseDocument({
@@ -156,7 +159,8 @@ const SharePage = () => {
     );
 
     try {
-      // Failures are toasted by the hooks; the page goes home either way, as it always has.
+      // A single accept's mapped failure or already-member outcome gets a screen (and no toast); anything
+      // else is toasted by the hooks and the page goes home.
       const respond = async () => {
         if (validInvites.length > 1) {
           return respondToInvites.mutateAsync({ action, ids: validInvites.map(item => item.id) });
@@ -167,10 +171,12 @@ const SharePage = () => {
         }
       };
       const [outcome] = await Promise.allSettled([respond()]);
-      const failure =
-        action === 'accept' && validInvites.length === 1 && outcome.status === 'rejected'
+      const single = action === 'accept' && validInvites.length === 1;
+      const failure = !single
+        ? null
+        : outcome.status === 'rejected'
           ? describeAcceptFailure(outcome.reason)
-          : null;
+          : describeAcceptOutcome(outcome.value);
       if (failure) {
         setAcceptFailure({ ...failure, documentId: validInvites[0].invite?.documentId });
         return;
@@ -184,7 +190,7 @@ const SharePage = () => {
   if (query.isLoading) return null;
   if (acceptFailure) {
     const { kind, title, body, documentId } = acceptFailure;
-    const openOrganization = kind === 'member' && documentId;
+    const openOrganization = (kind === 'member' || kind === 'already-member') && documentId;
     return (
       <StatusModal
         testId={`share-accept-${kind}-modal`}

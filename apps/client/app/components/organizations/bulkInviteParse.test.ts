@@ -25,6 +25,14 @@ describe('parseEmailList', () => {
     expect(parseEmailList('"Smith, Ann" <ann@x.com>, bare@x.com')).toEqual(['ann@x.com', 'bare@x.com']);
   });
 
+  it('drops a quoted display name with a comma after a separator and space', () => {
+    expect(parseEmailList('bare@x.com, "Smith, Ann" <ann@x.com>;\t"Lee, Bo" <bo@x.com>')).toEqual([
+      'bare@x.com',
+      'ann@x.com',
+      'bo@x.com',
+    ]);
+  });
+
   it('mixes bare and angle-bracket addresses and keeps an unclosed < as a plain token', () => {
     expect(parseEmailList('a@x.com Bob <b@y.com> c@x.com')).toEqual(['a@x.com', 'b@y.com', 'c@x.com']);
     expect(parseEmailList('a@x.com <oops')).toEqual(['a@x.com', '<oops']);

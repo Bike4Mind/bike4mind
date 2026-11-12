@@ -252,6 +252,43 @@ describe('SharePage', () => {
     expect(inviteMutations.accept).toHaveBeenCalledTimes(1);
   });
 
+  describe('named organization invite', () => {
+    const namedOrgInvite = { name: 'Acme', type: 'Organization', documentId: 'org-1', username: 'owner' } as never;
+    // Shape of the POST /api/invites/[id]/accept body: the invitee-filtered invite plus acceptOutcome.
+    const acceptBody = (acceptOutcome: 'accepted' | 'already-member') => ({
+      id: 'abc',
+      type: 'Organization',
+      documentId: 'org-1',
+      recipients: { pending: [], accepted: ['me@x.com'], refused: [] },
+      acceptOutcome,
+    });
+
+    it('tells an existing member their role is unchanged and offers the organization', async () => {
+      vi.mocked(fetchInvite).mockResolvedValue(namedOrgInvite);
+      inviteMutations.accept.mockResolvedValue(acceptBody('already-member'));
+      renderPage();
+
+      fireEvent.click(await screen.findByLabelText('Accept'));
+
+      const modal = await screen.findByTestId('share-accept-already-member-modal');
+      expect(modal.textContent).toContain('An organization owner can change your role');
+      expect(navigateMock).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByTestId('share-accept-already-member-btn'));
+      expect(navigateMock).toHaveBeenCalledWith({ to: '/organizations/$id', params: { id: 'org-1' } });
+    });
+
+    it('goes home after a new member joins', async () => {
+      vi.mocked(fetchInvite).mockResolvedValue(namedOrgInvite);
+      inviteMutations.accept.mockResolvedValue(acceptBody('accepted'));
+      renderPage();
+
+      fireEvent.click(await screen.findByLabelText('Accept'));
+
+      await vi.waitFor(() => expect(navigateMock).toHaveBeenCalledWith({ to: '/' }));
+      expect(screen.queryByTestId('share-accept-already-member-modal')).toBeNull();
+    });
+  });
+
   it('still goes home on an unmapped accept failure', async () => {
     vi.mocked(fetchInvite).mockResolvedValue(orgLink);
     acceptRejects('Something else', 500);

@@ -61,6 +61,8 @@ const ID_A = '65a1f77bcf86cd7994390001';
 const ID_B = '65a1f77bcf86cd7994390002';
 const TOKEN_C = 'q3Vx_9-TzW1sYbN2kLmPoR4uAeHcJdFgXiZt7nE8w0s';
 
+const accepted = (value: ReturnType<typeof invite>) => ({ invite: value, outcome: 'accepted' as const });
+
 const invite = (id: string, type = 'Session') => ({
   id,
   type,
@@ -80,7 +82,7 @@ const call = async (body: unknown) => {
 describe('POST /api/invites/bulk', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.acceptInvite.mockImplementation(async (_userId: string, { id }: { id: string }) => invite(id));
+    mocks.acceptInvite.mockImplementation(async (_userId: string, { id }: { id: string }) => accepted(invite(id)));
     mocks.refuseWholeInvite.mockImplementation(async (_user: unknown, { id }: { id: string }) => invite(id));
   });
 
@@ -113,7 +115,7 @@ describe('POST /api/invites/bulk', () => {
 
   it('pays the organization invite bonus for each accepted organization invite', async () => {
     mocks.acceptInvite.mockImplementation(async (_userId: string, { id }: { id: string }) =>
-      invite(id, id === ID_A ? 'Organization' : 'Session')
+      accepted(invite(id, id === ID_A ? 'Organization' : 'Session'))
     );
     await call({ action: 'accept', ids: [ID_A, ID_B] });
     expect(payOrgInviteBonus).toHaveBeenCalledTimes(1);
@@ -121,7 +123,7 @@ describe('POST /api/invites/bulk', () => {
   });
 
   it('keeps a committed project accept successful when analytics throws', async () => {
-    mocks.acceptInvite.mockResolvedValueOnce(invite(ID_A, 'Project'));
+    mocks.acceptInvite.mockResolvedValueOnce(accepted(invite(ID_A, 'Project')));
     mocks.findProject.mockResolvedValueOnce({ id: 'project', name: 'Project' });
     mocks.logEvent.mockRejectedValueOnce(new Error('analytics unavailable'));
     const response = (await call({ action: 'accept', ids: [ID_A] }))._getJSONData();
@@ -135,7 +137,7 @@ describe('POST /api/invites/bulk', () => {
     mocks.acceptInvite.mockImplementation(async (_userId: string, { id }: { id: string }) => {
       if (id === ID_B) throw forbidden;
       if (id === TOKEN_C) throw new Error('mongo exploded at host db-1');
-      return invite(id);
+      return accepted(invite(id));
     });
 
     const body = (await call({ action: 'accept', ids: [ID_A, ID_B, TOKEN_C] }))._getJSONData();
