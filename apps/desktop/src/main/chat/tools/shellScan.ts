@@ -6558,16 +6558,16 @@ export async function scanShell(
         return rule ? rule.base + url.slice(rule.prefix.length) : url;
       };
       const pushes = contacts.push ? [false, true] : [false];
-      // A name no remote has may name a group. A default or group member of `.` is the repository itself.
-      const members = (name: string): string[] =>
-        known.remotes.includes(name)
-          ? []
-          : known.groups.filter(group => group.name === name.toLowerCase()).flatMap(group => group.members);
+      // A default or group member of `.` is the repository itself.
       const elsewhere = (name: string): boolean => name !== '.';
+      const everything = [...known.remotes, ...known.helpers, ...known.defaults.filter(elsewhere)];
+      // A group may shadow a remote of its name and hold other groups, so a name any group has is checked against all.
+      const namesGroup = (name: string): boolean =>
+        known.groups.some(group => group.name.toLowerCase() === name.toLowerCase());
       const names =
         contacts.remotes === 'all'
-          ? [...known.remotes, ...known.helpers, ...known.defaults.filter(elsewhere)]
-          : contacts.remotes.flatMap(name => [name, ...members(name).filter(elsewhere)]);
+          ? everything
+          : contacts.remotes.flatMap(name => (namesGroup(name) ? [name, ...everything] : [name]));
       for (const name of names) {
         if (known.helpers.includes(name)) return false;
         // Outside a repository `git remote get-url` cannot run to resolve a remote the user config names.

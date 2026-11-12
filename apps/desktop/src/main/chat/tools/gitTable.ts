@@ -754,6 +754,7 @@ function readOption(
     }
     const rest = text.slice(index + 1);
     if (rest !== '' || !whole || kind === 'optional') {
+      if (word.glob) return miss(`${label} -${letter} with a value bash expands as a glob`);
       const value = { text: rest, whole, splits: false };
       take(`-${letter}`, value);
       return checkValue(form, `-${letter}`, value, label) ?? at;

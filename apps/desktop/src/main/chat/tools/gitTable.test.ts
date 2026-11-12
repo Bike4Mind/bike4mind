@@ -313,6 +313,13 @@ describe('gitListed', () => {
     ['add src/*', true],
     ['status -- *', true],
     ['commit -m x -- *', true],
+    ['commit -m* -- -e', false],
+    ['commit -m* -- -S', false],
+    ['log -n* -- -S', false],
+    ['grep -e* -- -S', false],
+    ['commit -mmsg -- -S', true],
+    ['commit -m msg', true],
+    ['log -n5', true],
   ])('reads a glob as the names bash may expand it to in %s', (line, expected) => {
     expect(listed(line)).toBe(expected);
   });

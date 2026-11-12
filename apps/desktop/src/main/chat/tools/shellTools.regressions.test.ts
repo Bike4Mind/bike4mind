@@ -2309,6 +2309,8 @@ describe('shell approval in a project with a large node_modules', () => {
     // A `..` after a link leads to the link target's parent, which may be /dev.
     'rg -l foo 2>src/../err | xargs sed -i s/a/b/',
     'rg -l foo | grep -v zz 2>src/../err | xargs sed -i s/a/b/',
+    'rg -l foo 02>/dev/null | xargs sed -i s/a/b/',
+    'rg -l foo 002>/dev/null | xargs sed -i s/a/b/',
   ])('asks for %s, whose stderr may reach xargs', async command => {
     expect(await judge(command)).toMatchObject(asks);
   });
