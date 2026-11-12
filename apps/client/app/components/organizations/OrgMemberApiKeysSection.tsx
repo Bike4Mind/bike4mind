@@ -40,7 +40,7 @@ const OrgMemberApiKeysSection: FC<OrgMemberApiKeysSectionProps> = ({ organizatio
 
       {isLoading && <CircularProgress size="sm" />}
       {isError && (
-        <Alert color="danger" variant="soft">
+        <Alert color="danger" variant="soft" data-testid="org-member-api-keys-error">
           Failed to load the members&apos; API keys.
         </Alert>
       )}

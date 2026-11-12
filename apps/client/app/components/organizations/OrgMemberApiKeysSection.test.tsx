@@ -42,6 +42,7 @@ describe('OrgMemberApiKeysSection', () => {
   beforeEach(() => {
     mutateAsync.mockReset().mockResolvedValue(undefined);
     queryState.data = undefined;
+    queryState.isError = false;
   });
 
   it('renders each key with its creator, scopes and lifetime credits', () => {
@@ -53,6 +54,14 @@ describe('OrgMemberApiKeysSection', () => {
     expect(row.getByText('write:chat')).toBeTruthy();
     expect(row.getByText((1234).toLocaleString())).toBeTruthy();
     expect(within(screen.getByTestId('org-member-api-key-row-key-2')).getByText('Deleted user')).toBeTruthy();
+  });
+
+  it('shows the load error instead of an empty list when the fetch fails', () => {
+    queryState.isError = true;
+    renderSection();
+    expect(screen.getByTestId('org-member-api-keys-error')).toBeTruthy();
+    expect(screen.queryByTestId('org-member-api-keys-empty')).toBeNull();
+    expect(screen.queryByTestId('org-member-api-keys-table')).toBeNull();
   });
 
   it('shows the empty state when no member keys are billed to the org', () => {
