@@ -38,6 +38,7 @@ import {
 } from '@client/app/hooks/data/dlqManagement';
 import {
   AdminPageHeader,
+  CopyValue,
   ActionDialog,
   EmptyState,
   ErrorState,
@@ -580,6 +581,11 @@ const DlqReplayTab: React.FC = () => {
       )}
 
       {selectedQueue && (
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+          Advisory only; review before acting.
+        </Typography>
+      )}
+      {selectedQueue && (
         <Sheet variant="outlined" sx={tableSurface}>
           {/* fixed table layout ignores th min-width; the floor keeps Body preview >= 160px */}
           <Table stickyHeader hoverRow sx={{ minWidth: 1200 }} data-testid="dlq-messages-table">
@@ -627,9 +633,13 @@ const DlqReplayTab: React.FC = () => {
                   data-testid={`dlq-message-row-${msg.messageId}`}
                 >
                   <td>
-                    <Typography level="body-xs" sx={{ fontFamily: 'monospace', color: 'admin.inkMuted' }}>
-                      {msg.messageId?.slice(0, 20)}...
-                    </Typography>
+                    <CopyValue
+                      value={msg.messageId}
+                      label="message ID"
+                      mono
+                      truncate
+                      data-testid={`dlq-copy-id-${msg.messageId}`}
+                    />
                   </td>
                   <td>
                     <Typography level="body-xs" noWrap sx={{ maxWidth: 300 }}>
@@ -840,9 +850,13 @@ const DlqReplayTab: React.FC = () => {
                       <Typography level="body-xs">{entry.sourceQueue}</Typography>
                     </td>
                     <td>
-                      <Typography level="body-xs" sx={{ fontFamily: 'monospace', color: 'admin.inkMuted' }}>
-                        {entry.messageId?.slice(0, 20)}...
-                      </Typography>
+                      <CopyValue
+                        value={entry.messageId}
+                        label="message ID"
+                        mono
+                        truncate
+                        data-testid={`dlq-history-copy-id-${entry.id}`}
+                      />
                     </td>
                     <td>
                       <StatusChip
@@ -914,7 +928,7 @@ const DlqReplayTab: React.FC = () => {
         data-testid="dlq-single-replay-dialog"
         testIds={{ confirm: 'dlq-single-replay-confirm' }}
       >
-        <DlqReplaySummary queue={selectedQueueInfo} count={1} />
+        <DlqReplaySummary queue={selectedQueueInfo} count={1} messageId={singleReplayConfirm?.messageId} />
       </ActionDialog>
       <ActionDialog
         open={!!discardConfirm}
