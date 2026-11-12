@@ -84,6 +84,16 @@ const report = async (content = 'Chat fails for jane@example.com account 64b7f0c
   return doc;
 };
 describe('feedback triage persistence', () => {
+  it('does not reuse an expired suggestion after a text revision', async () => {
+    setup();
+    const doc = await report();
+    await triageFeedback(doc.id);
+    const first = await FeedbackAiModel.findOne({ feedbackId: doc.id });
+    await FeedbackTextModel.updateOne({ _id: doc._id }, { $inc: { revision: 1 } });
+    await FeedbackAiModel.deleteOne({ feedbackId: doc.id });
+    await triageFeedback(doc.id);
+    expect((await FeedbackAiModel.findOne({ feedbackId: doc.id }))?.suggestionId).not.toBe(first?.suggestionId);
+  });
   it('observes a kill switch changed after embedding before decision work', async () => {
     setup();
     const initial = await mocks.config();
