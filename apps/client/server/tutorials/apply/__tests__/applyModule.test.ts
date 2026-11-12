@@ -3,12 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import {
-  MODULE_BUNDLE_FORMAT,
-  type TutorialDraftContent,
-  type TutorialModuleBundle,
-  type TutorialTurn,
-} from '@bike4mind/common';
+import { type TutorialDraftContent, type TutorialTurn } from '@bike4mind/common';
+import { moduleBundleOf } from '@client/app/components/tutorial/admin/tutorialOverrideExport';
 import { CORE_DRAFT_PROFILE, CORE_DRAFT_SELECTORS, coreDraftCore } from '../../coreDraftProfile';
 import { coreKnownSelectors } from '../../coreDraftProfile';
 import { validateTutorialModule } from '../../validate';
@@ -40,26 +36,19 @@ function made(patch: Partial<TutorialDraftContent> = {}): TutorialDraftContent {
   return { ...base, steps: coreDraftCore.normalizeDraftSteps(base) };
 }
 
-// The shape the drafts card exports (the card's own helper arrives with its PR).
-const moduleBundleOf = (content: TutorialDraftContent, owner: string): TutorialModuleBundle => ({
-  format: MODULE_BUNDLE_FORMAT,
-  owner,
-  moduleId: content.moduleId,
-  exportedAt: '2026-11-12T00:00:00.000Z',
-  content,
-});
+const NOW = new Date('2026-11-12T00:00:00.000Z');
 const exported = (content: TutorialDraftContent, owner = 'core') =>
-  parseModuleBundle(JSON.parse(JSON.stringify(moduleBundleOf(content, owner))));
+  parseModuleBundle(JSON.parse(JSON.stringify(moduleBundleOf(content, owner, NOW))));
 
 describe('parseModuleBundle', () => {
   it('reads back what the drafts card exports, owner included', () => {
     const content = made();
     expect(exported(content)).toEqual({ owner: 'core', moduleId: 'my-week', content });
-    expect(isModuleBundle(moduleBundleOf(content, 'core'))).toBe(true);
+    expect(isModuleBundle(moduleBundleOf(content, 'core', NOW))).toBe(true);
   });
 
   it('refuses another format, and a bundle whose content names another module', () => {
-    const bundle = moduleBundleOf(made(), 'core');
+    const bundle = moduleBundleOf(made(), 'core', NOW);
     expect(() => parseModuleBundle({ ...bundle, format: 'tutorial-overrides/1' })).toThrow(/module bundle/);
     expect(() => parseModuleBundle({ ...bundle, moduleId: 'other' })).toThrow(/different modules/);
   });
