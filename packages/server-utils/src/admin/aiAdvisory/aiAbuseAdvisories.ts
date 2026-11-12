@@ -140,8 +140,8 @@ export async function listAiAbuseAdvisories(
   for (const detection of flagged) {
     const judgment = judgments.get(detection.id);
     if (!judgment) continue;
-    // A campaign verdict covers every member, transitive ones included: the assessment prompt tells
-    // the model to answer abuse only when that is justified for the whole set.
+    // A campaign verdict covers every current member, transitive ones included. The judgment is keyed on
+    // the detection, not its revision, so members who joined after it was made inherit it too.
     for (const userId of detection.userIds) {
       if (!open.has(userId)) continue;
       const candidate: AiAbuseAdvisory = {
