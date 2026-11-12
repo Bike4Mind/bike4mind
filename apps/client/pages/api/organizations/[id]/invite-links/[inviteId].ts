@@ -1,5 +1,6 @@
 // DELETE /api/organizations/:id/invite-links/:inviteId
 // Revoke an Organization share link. accept.ts refuses a revoked invite before any other check.
+// Any manager may revoke any link, including an admin-role one whose URL they are not shown.
 
 import { InviteType, isLinkOnlyInvite } from '@bike4mind/common';
 import { inviteRepository } from '@bike4mind/database';
@@ -35,7 +36,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).delete(
       summary: 'revoked an organization share link',
       details: { inviteId: invite.id },
     });
-    res.json(toOrgInviteLinkView(revoked));
+    res.json(toOrgInviteLinkView(revoked, req.user!, organization));
   })
 );
 

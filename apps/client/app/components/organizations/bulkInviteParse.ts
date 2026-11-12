@@ -1,4 +1,6 @@
-export const MAX_BULK_INVITE_ROWS = 100;
+import { MAX_ORG_BULK_INVITE_ROWS } from '@bike4mind/common';
+
+export const MAX_BULK_INVITE_ROWS = MAX_ORG_BULK_INVITE_ROWS;
 
 const stripBom = (text: string) => (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
 

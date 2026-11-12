@@ -14,7 +14,14 @@ describe('sharingService - acceptInvite (Organization)', () => {
 
   let mockAdapters: {
     db: {
-      invites: { findById: Mock; findByToken: Mock; update: Mock; acceptRecipient: Mock; findAllByDocumentId: Mock };
+      invites: {
+        findById: Mock;
+        findByToken: Mock;
+        update: Mock;
+        acceptRecipient: Mock;
+        findAllByDocumentId: Mock;
+        cancelPendingRecipient: Mock;
+      };
       sessions: { shareable: { updateUserShares: Mock }; findById: Mock; update: Mock; findAllByIds: Mock };
       projects: { shareable: { updateUserShares: Mock }; findById: Mock; update: Mock };
       fabFiles: { shareable: { updateUserShares: Mock }; findById: Mock; update: Mock; findAllByIds: Mock };
@@ -64,6 +71,7 @@ describe('sharingService - acceptInvite (Organization)', () => {
           update: vi.fn(),
           acceptRecipient: acceptRecipientMock(),
           findAllByDocumentId: vi.fn(async () => []),
+          cancelPendingRecipient: vi.fn(async () => null),
         },
         sessions: { shareable: shares(), findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
         projects: { shareable: shares(), findById: vi.fn(), update: vi.fn() },
@@ -234,6 +242,38 @@ describe('sharingService - acceptInvite (Organization)', () => {
         2
       );
       expect(mockAdapters.db.invites.acceptRecipient).toHaveBeenCalledWith(inviteId, 'member@example.com');
+    });
+
+    it('clears the joiner from their own pending named invites so those stop holding a seat', async () => {
+      mockAdapters.db.invites.findAllByDocumentId.mockResolvedValue([
+        {
+          id: 'named-own',
+          type: InviteType.Organization,
+          remaining: 1,
+          recipients: { pending: [' Member@Example.com'] },
+        },
+        { id: 'named-other', type: InviteType.Organization, remaining: 1, recipients: { pending: ['a@x.com'] } },
+      ]);
+
+      await accept(linkInvite());
+
+      expect(mockAdapters.db.invites.cancelPendingRecipient).toHaveBeenCalledTimes(1);
+      expect(mockAdapters.db.invites.cancelPendingRecipient).toHaveBeenCalledWith('named-own', 'member@example.com');
+    });
+
+    it('leaves pending named invites alone when the seat check refuses the join', async () => {
+      mockAdapters.db.invites.findAllByDocumentId.mockResolvedValue([
+        {
+          id: 'named-own',
+          type: InviteType.Organization,
+          remaining: 1,
+          recipients: { pending: ['member@example.com'] },
+        },
+      ]);
+      mockAdapters.db.organization.addMemberIfUnderCeiling.mockResolvedValue(null);
+
+      await expect(accept(linkInvite())).rejects.toThrow('Organization is full');
+      expect(mockAdapters.db.invites.cancelPendingRecipient).not.toHaveBeenCalled();
     });
 
     it('refuses a revoked link before touching the organization', async () => {

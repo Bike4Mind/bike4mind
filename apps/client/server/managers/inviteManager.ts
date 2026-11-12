@@ -69,7 +69,10 @@ export const getInviteDetails = async (invite: IInviteDocument, includeUser?: bo
 
 export type InviteViewAccess = 'allowed' | 'expired' | 'revoked' | 'denied';
 
-/** 'allowed' | 'expired' (caller could view it but it lapsed) | 'denied'. Share-authorized callers still see expired invites. */
+/**
+ * 'allowed' | 'expired' (caller could view it but it lapsed) | 'revoked' (a share link its sharer
+ * revoked) | 'denied'. Share-authorized callers still see expired invites.
+ */
 export async function canViewInvite(user: IUserDocument, invite: IInviteDocument): Promise<InviteViewAccess> {
   const expired = !!invite.expiresAt && new Date(invite.expiresAt).getTime() < Date.now();
   const email = user.email?.toLowerCase();

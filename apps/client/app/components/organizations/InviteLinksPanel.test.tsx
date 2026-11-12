@@ -63,6 +63,14 @@ describe('InviteLinksPanel', () => {
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Invite link copied');
   });
 
+  it('offers revoke but no copy on an active row whose URL the server withheld', () => {
+    mocks.links = [link({ link: null, permissions: ['read', 'update', 'share'] })];
+    renderPanel();
+
+    expect(screen.queryByTestId('org-invite-link-copy-l1')).toBeNull();
+    expect(screen.getByTestId('org-invite-link-revoke-l1')).toBeTruthy();
+  });
+
   it('revokes only after confirmation', () => {
     mocks.links = [link()];
     const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);

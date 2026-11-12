@@ -569,7 +569,7 @@ export function useBulkInviteOrganization() {
 // Mirrors OrgInviteLinkView in apps/client/server/organizations/orgInviteLinks.ts.
 export interface OrgInviteLink {
   id: string;
-  link: string;
+  link: string | null;
   permissions: string[];
   expiresAt: string | null;
   remaining: number;

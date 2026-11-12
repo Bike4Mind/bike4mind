@@ -2,7 +2,7 @@
 // Invite many addresses to an organization in one call, reporting what happened to each row
 // instead of failing the whole batch on one existing member, bad address or missing seat.
 
-import { InviteType, isOrgMember, Permission, roleForPermissions } from '@bike4mind/common';
+import { InviteType, isOrgMember, MAX_ORG_BULK_INVITE_ROWS, Permission, roleForPermissions } from '@bike4mind/common';
 import { inviteRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { organizationService, sharingService } from '@bike4mind/services';
 import { BadRequestError, ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -11,8 +11,6 @@ import { createDocumentInvite } from '@server/managers/createDocumentInvite';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
-
-export const MAX_ORG_BULK_INVITE_ROWS = 100;
 
 const bodySchema = z.object({
   emails: z
@@ -53,17 +51,8 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       userRepository.findById(organization.userId),
       inviteRepository.findAllByDocumentId(organization.id),
     ]);
-    const now = new Date();
-    // Must match the pending filter in sharingService.createInvite (inviteToOrg), which re-checks seats.
-    const pending = invites
-      .filter(
-        invite =>
-          invite.type === InviteType.Organization &&
-          invite.remaining > 0 &&
-          (!invite.expiresAt || new Date(invite.expiresAt) > now)
-      )
-      .flatMap(invite => invite.recipients?.pending ?? [])
-      .map(email => email.trim().toLowerCase());
+    // Counted the same way sharingService.createInvite (inviteToOrg) re-checks seats.
+    const pending = sharingService.pendingOrgInviteRecipients(invites);
 
     const rows = sharingService.classifyOrgInviteRows(emails, {
       memberEmails: new Set(members.flatMap(member => (member.email ? [member.email.toLowerCase()] : []))),

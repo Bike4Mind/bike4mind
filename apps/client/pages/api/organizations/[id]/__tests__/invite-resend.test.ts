@@ -60,7 +60,7 @@ const INVITE = {
   expiresAt: null,
   revokedAt: null,
   description: 'Join us',
-  recipients: { pending: ['New@Example.test', 'user-2'], accepted: [], refused: [] },
+  recipients: { pending: ['new@example.test', 'two@example.test'], accepted: [], refused: [] },
 };
 
 const resend = async (body: Record<string, unknown>) => {
@@ -104,9 +104,10 @@ describe('POST /api/organizations/[id]/invite-resend', () => {
     );
   });
 
-  it('resends to a pending account by user id at that account address', async () => {
+  it('resends to a pending account by user id, matching the address stored in pending', async () => {
     mocks.findUserById.mockResolvedValue({ id: 'user-2', email: 'Two@Example.test' });
-    await resend({ userId: 'user-2' });
+    const res = await resend({ userId: 'user-2' });
+    expect(res._getJSONData()).toEqual({ resent: true });
     expect(mocks.reserve).toHaveBeenCalledWith('u-owner', ['two@example.test'], { chargeTypedAddresses: false });
     expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ recipients: ['two@example.test'] }));
   });
@@ -139,9 +140,13 @@ describe('POST /api/organizations/[id]/invite-resend', () => {
     ['a used-up invite', [{ ...INVITE, remaining: 0 }], { email: 'new@example.test' }],
     ['another document invite', [{ ...INVITE, documentId: 'other-org' }], { email: 'new@example.test' }],
     ['a non-organization invite', [{ ...INVITE, type: InviteType.FabFile }], { email: 'new@example.test' }],
-    ['a user id matched only as an address', [INVITE], { userId: 'new@example.test' }],
+    ['a user id whose account is not pending', [INVITE], { userId: 'user-3' }],
+    ['a user id with no account', [INVITE], { userId: 'missing' }],
   ])('404s %s without sending', async (_label, invites, body) => {
     mocks.findInvites.mockResolvedValue(invites);
+    mocks.findUserById.mockImplementation(async (id: string) =>
+      id === 'user-3' ? { id, email: 'three@example.test' } : null
+    );
     await expect(resend(body)).rejects.toBeInstanceOf(NotFoundError);
     expect(mocks.reserve).not.toHaveBeenCalled();
     expect(mocks.notify).not.toHaveBeenCalled();

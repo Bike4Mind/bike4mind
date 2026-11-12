@@ -38,8 +38,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@bike4mind/services', async () => {
   const { classifyOrgInviteRows } =
     await import('../../../../../../../b4m-core/services/src/sharingService/classifyOrgInviteRows');
+  const { pendingOrgInviteRecipients } =
+    await import('../../../../../../../b4m-core/services/src/sharingService/orgSeatReservations');
   return {
-    sharingService: { createInvite: mocks.createInvite, classifyOrgInviteRows },
+    sharingService: { createInvite: mocks.createInvite, classifyOrgInviteRows, pendingOrgInviteRecipients },
     organizationService: { assertCanManageOrgGroups: mocks.assertCanManageOrgGroups },
   };
 });

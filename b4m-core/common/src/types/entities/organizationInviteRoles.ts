@@ -25,3 +25,6 @@ export const roleForPermissions = (permissions: readonly Permission[]): OrgInvit
     }) ?? null
   );
 };
+
+/** Most addresses one organization bulk invite takes; the client modal and the route both enforce it. */
+export const MAX_ORG_BULK_INVITE_ROWS = 100;

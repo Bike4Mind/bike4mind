@@ -49,9 +49,9 @@ const ORG_ID = '65a1f77bcf86cd7994390001';
 const manager = { id: 'u-owner', email: 'owner@example.com' };
 const DAY = 86_400_000;
 
-const call = async (method: 'get' | 'post', body?: unknown) => {
+const call = async (method: 'get' | 'post', body?: unknown, user: unknown = manager) => {
   const { req, res } = createMocks({ method: method.toUpperCase() as 'GET' | 'POST', query: { id: ORG_ID }, body });
-  (req as unknown as { user: unknown }).user = manager;
+  (req as unknown as { user: unknown }).user = user;
   await refs.handlers[method](req, res);
   return res;
 };
@@ -167,5 +167,53 @@ describe('/api/organizations/[id]/invite-links', () => {
         revokedAt: revokedAt.toISOString(),
       },
     ]);
+  });
+
+  describe('admin-role link URLs', () => {
+    const linkRow = (id: string, permissions: string[]) => ({
+      id,
+      token: `tok-${id}`,
+      type: InviteType.Organization,
+      isLinkOnly: true,
+      permissions,
+      remaining: 3,
+      expiresAt: null,
+      recipients: { pending: [], accepted: [], refused: [] },
+    });
+    beforeEach(() => {
+      mocks.findInvites.mockResolvedValue([
+        linkRow('admin-link', ['read', 'update', 'share']),
+        linkRow('viewer-link', ['read']),
+      ]);
+    });
+    const linksById = (res: { _getJSONData: () => Array<{ id: string; link: string | null }> }) =>
+      Object.fromEntries(res._getJSONData().map(view => [view.id, view.link]));
+
+    it('shows the owner every link URL, including admin-role ones', async () => {
+      expect(linksById(await call('get'))).toEqual({
+        'admin-link': 'https://app.test/share/tok-admin-link',
+        'viewer-link': 'https://app.test/share/tok-viewer-link',
+      });
+    });
+
+    it('shows a platform admin every link URL', async () => {
+      const res = await call('get', undefined, { id: 'u-staff', isAdmin: true });
+      expect(linksById(res)['admin-link']).toBe('https://app.test/share/tok-admin-link');
+    });
+
+    it('withholds admin-role link URLs from a non-owner manager but still lists them', async () => {
+      mocks.findOrganization.mockResolvedValue({
+        id: ORG_ID,
+        name: 'Acme',
+        userId: 'u-owner',
+        users: [{ userId: 'u-manager', permissions: ['read'] }],
+      });
+      const res = await call('get', undefined, { id: 'u-manager', email: 'manager@example.com' });
+      expect(linksById(res)).toEqual({
+        'admin-link': null,
+        'viewer-link': 'https://app.test/share/tok-viewer-link',
+      });
+      expect(JSON.stringify(res._getJSONData())).not.toContain('tok-admin-link');
+    });
   });
 });

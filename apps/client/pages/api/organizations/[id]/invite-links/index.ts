@@ -36,7 +36,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       const invites = await inviteRepository.findAllByDocumentId(organization.id);
       const links = invites
         .filter(invite => invite.type === InviteType.Organization && isLinkOnlyInvite(invite))
-        .map(toOrgInviteLinkView);
+        .map(invite => toOrgInviteLinkView(invite, req.user!, organization));
       res.setHeader('Cache-Control', 'private, no-store');
       res.json(links);
     })

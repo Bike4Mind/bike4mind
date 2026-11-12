@@ -22,6 +22,7 @@ import {
   ORG_INVITE_ROLES,
   roleForPermissions,
 } from '@bike4mind/common';
+import { pendingOrgInviteRecipients } from './orgSeatReservations';
 import { BadRequestError, ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { assertCanManageOrgGroups } from '../organizationService/groupMembership';
@@ -42,7 +43,7 @@ const createInviteSchema = z.object({
   description: z.string().optional(),
   expiresAt: z.date().prefault(defaultExpiration()),
   // No prefault here: the default depends on recipients.length (below), which this schema
-  // cannot see. No caller currently sets this explicitly.
+  // cannot see. The organization invite-links route sets it to cap a share link's joins.
   available: z.number().int().min(1).optional(),
   // An Organization share link: names nobody, joins whoever holds its token (see accept.ts).
   link: z.boolean().optional(),
@@ -179,8 +180,9 @@ export const createInvite = async (
   // who did not resolve". `recipients` omitted entirely names nobody just as `[]` does, which is
   // why this is not simply isLinkOnlyInvite (that one sizes `available` and is left as it was).
   // Type-aware so it agrees with `isLinkOnlyInvite`'s legacy inference in @bike4mind/common: only
-  // FabFile and Session are shareable by link. A recipientless invite of any other type is a
-  // mistake, not a share link, and is refused below - this keeps the flag fail-closed regardless.
+  // FabFile and Session are shareable by link, plus an Organization invite minted with `link: true`.
+  // A recipientless invite of any other kind is a mistake, not a share link, and is refused below -
+  // this keeps the flag fail-closed regardless.
   const namesNobody =
     recipientsArray.length === 0 && (type === InviteType.FabFile || type === InviteType.Session || isOrgLink);
 
@@ -298,7 +300,7 @@ export const createInvite = async (
   const typedEmails = new Set(recipientsArray.filter(r => r.includes('@')).map(r => r.trim().toLowerCase()));
   const typedRecipients = pending.map(email => email.toLowerCase()).filter(email => typedEmails.has(email));
 
-  // No caller sets `available` explicitly today. Defaulting it to a flat 1 regardless of
+  // The organization invite-links route sets `available` for a share link. Defaulting it to a flat 1 regardless of
   // recipient count meant a multi-recipient By-Users share minted one invite whose single
   // accept slot only the first recipient could ever claim, while the sharer was told all of
   // them succeeded - so the default has to track how many people this invite is actually for.
@@ -357,16 +359,7 @@ const inviteToOrg = async (
   if (!isOrgMember(user, organization)) throw new BadRequestError('Organization not found');
   assertCanManageOrgGroups(user, organization);
 
-  const invites = await db.invites.findAllByDocumentId(organization.id);
-  const now = new Date();
-  const pendingRecipients = invites
-    .filter(
-      invite =>
-        invite.type === InviteType.Organization &&
-        invite.remaining > 0 &&
-        (!invite.expiresAt || new Date(invite.expiresAt) > now)
-    )
-    .flatMap(invite => invite.recipients?.pending ?? []);
+  const pendingRecipients = pendingOrgInviteRecipients(await db.invites.findAllByDocumentId(organization.id));
 
   return { organization, pendingRecipients };
 };

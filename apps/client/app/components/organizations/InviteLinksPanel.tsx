@@ -63,6 +63,7 @@ const InviteLinksPanel: FC<InviteLinksPanelProps> = ({ organizationId, canGrantA
   };
 
   const handleCopy = async (link: OrgInviteLink) => {
+    if (!link.link) return;
     try {
       await navigator.clipboard.writeText(link.link);
       toast.success('Invite link copied');
@@ -152,14 +153,16 @@ const InviteLinksPanel: FC<InviteLinksPanelProps> = ({ organizationId, canGrantA
                 </Typography>
                 {status === 'Active' && (
                   <>
-                    <Button
-                      data-testid={`org-invite-link-copy-${link.id}`}
-                      size="sm"
-                      variant="plain"
-                      onClick={() => handleCopy(link)}
-                    >
-                      Copy
-                    </Button>
+                    {link.link && (
+                      <Button
+                        data-testid={`org-invite-link-copy-${link.id}`}
+                        size="sm"
+                        variant="plain"
+                        onClick={() => handleCopy(link)}
+                      >
+                        Copy
+                      </Button>
+                    )}
                     <Button
                       data-testid={`org-invite-link-revoke-${link.id}`}
                       size="sm"

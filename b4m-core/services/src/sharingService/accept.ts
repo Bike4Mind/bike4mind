@@ -24,6 +24,7 @@ import {
   UnprocessableEntityError,
 } from '@bike4mind/utils';
 import { z } from 'zod';
+import { pendingOrgInviteRecipients } from './orgSeatReservations';
 import { resolveRedeemableInvite } from './resolveRedeemableInvite';
 
 const acceptInviteSchema = z.object({
@@ -261,26 +262,6 @@ interface AcceptOrganizationParameters {
   isLink: boolean;
 }
 
-/**
- * Distinct addresses still pending on live named invites to the organization, other than the
- * accepter's own. Same live-invite filter as create.ts inviteToOrg, which reserves these at mint.
- */
-const countReservedSeats = async (invites: IInviteRepository, organizationId: string, ownEmail: string) => {
-  const now = new Date();
-  const pending = (await invites.findAllByDocumentId(organizationId))
-    .filter(
-      invite =>
-        invite.type === InviteType.Organization &&
-        invite.remaining > 0 &&
-        !invite.revokedAt &&
-        (!invite.expiresAt || new Date(invite.expiresAt) > now)
-    )
-    .flatMap(invite => invite.recipients?.pending ?? [])
-    .map(address => address.trim().toLowerCase())
-    .filter(address => address !== ownEmail);
-  return new Set(pending).size;
-};
-
 const isMemberOf = (organization: IOrganizationDocument, userId: string) =>
   organization.userId === userId || organization.users.some(member => member.userId === userId);
 
@@ -298,9 +279,11 @@ const acceptOrganization = async (
   if (isMemberOf(organization, user.id)) throw new ConflictError('You are already a member of this organization');
 
   // A named invite's seat was reserved when it was minted, so only a link join holds the others back.
-  const reservedSeats = isLink
-    ? await countReservedSeats(db.invites, organizationId, (user.email ?? '').toLowerCase())
-    : 0;
+  // The reservation is read from Invite docs while the conditional update reads only the Organization,
+  // so a named invite minted concurrently with a link join can overfill the org by that one seat.
+  const ownEmail = (user.email ?? '').trim().toLowerCase();
+  const orgInvites = isLink ? await db.invites.findAllByDocumentId(organizationId) : [];
+  const reservedSeats = pendingOrgInviteRecipients(orgInvites).filter(address => address !== ownEmail).length;
   // One conditional update, so concurrent joins cannot both pass the seat check; it runs inside the
   // caller's transaction, so a later acceptRecipient failure rolls the join back.
   const added = await db.organization.addMemberIfUnderCeiling(
@@ -313,6 +296,15 @@ const acceptOrganization = async (
     if (!current) throw new NotFoundError('Organization not found');
     if (isMemberOf(current, user.id)) throw new ConflictError('You are already a member of this organization');
     throw new ForbiddenError('Organization is full');
+  }
+
+  // A named invite addressed to someone who joined by link would otherwise keep holding a seat for a
+  // member who already has one. Inside the caller's transaction, so a rolled-back join restores it.
+  if (ownEmail) {
+    const ownNamedInvites = orgInvites.filter(invite =>
+      (invite.recipients?.pending ?? []).some(address => address.trim().toLowerCase() === ownEmail)
+    );
+    for (const invite of ownNamedInvites) await db.invites.cancelPendingRecipient(invite.id, ownEmail);
   }
 
   // Seed the credit side-table via the idempotent guarded $push - keeps users[]/userDetails[] in sync

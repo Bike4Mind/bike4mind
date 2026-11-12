@@ -49,9 +49,9 @@ const LINK = {
   recipients: { pending: [], accepted: [], refused: [] },
 };
 
-const revoke = async () => {
+const revoke = async (user: unknown = { id: 'u-owner' }) => {
   const { req, res } = createMocks({ method: 'DELETE', query: { id: ORG_ID, inviteId: 'link-1' } });
-  (req as unknown as { user: unknown }).user = { id: 'u-owner' };
+  (req as unknown as { user: unknown }).user = user;
   await refs.handler!(req, res);
   return res;
 };
@@ -95,5 +95,33 @@ describe('DELETE /api/organizations/[id]/invite-links/[inviteId]', () => {
       expect.anything(),
       expect.objectContaining({ action: 'org.invite_link.revoked', details: { inviteId: 'link-1' } })
     );
+  });
+
+  it('lets a non-owner manager revoke an admin-role link without returning its URL', async () => {
+    const adminLink = { ...LINK, permissions: ['read', 'update', 'share'] };
+    mocks.findInvite.mockResolvedValue(adminLink);
+    mocks.markRevoked.mockResolvedValue({ ...adminLink, remaining: 0, revokedAt: new Date() });
+
+    mocks.findOrganization.mockResolvedValue({
+      id: ORG_ID,
+      name: 'Acme',
+      userId: 'u-owner',
+      users: [{ userId: 'u-manager', permissions: ['read'] }],
+    });
+
+    const res = await revoke({ id: 'u-manager' });
+
+    expect(mocks.markRevoked).toHaveBeenCalledWith('link-1');
+    expect(res._getJSONData()).toMatchObject({ id: 'link-1', link: null });
+  });
+
+  it('returns the URL of a revoked admin-role link to the owner', async () => {
+    const adminLink = { ...LINK, permissions: ['read', 'update', 'share'] };
+    mocks.findInvite.mockResolvedValue(adminLink);
+    mocks.markRevoked.mockResolvedValue({ ...adminLink, remaining: 0, revokedAt: new Date() });
+
+    const res = await revoke();
+
+    expect(res._getJSONData()).toMatchObject({ id: 'link-1', link: 'https://app.test/share/tok-1' });
   });
 });

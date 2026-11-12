@@ -17,8 +17,9 @@ import { z } from 'zod';
 
 export const INVITE_RESEND_COOLDOWN_MS = 10 * 60 * 1000;
 
-// A pending recipient is a user id (an existing account) or a typed address, so the caller names
-// whichever the members list shows, the same way the cancel route does.
+// The members list names a pending account by user id and a typed address by email. Pending
+// recipients are stored as lowercased addresses either way, so a user id resolves to its address
+// first, the same way sharingService/cancel.ts does.
 const bodySchema = z
   .object({ email: z.string().max(320).optional(), userId: z.string().max(64).optional() })
   .refine(body => !!body.email !== !!body.userId, 'Provide exactly one of email or userId');
@@ -38,24 +39,21 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     const parsed = bodySchema.safeParse(req.body);
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid request body');
 
-    const pendingKey = parsed.data.userId ?? parsed.data.email!.trim().toLowerCase();
+    let address = parsed.data.email?.trim().toLowerCase() ?? '';
+    if (parsed.data.userId) {
+      const invitee = await userRepository.findById(parsed.data.userId);
+      if (!invitee?.email) throw new NotFoundError('Pending invitation not found');
+      address = invitee.email.trim().toLowerCase();
+    }
+
     const now = new Date();
     const invites = await inviteRepository.findAllByDocumentId(organization.id);
     const invite = invites
       .filter(candidate => isOpenOrgInvite(candidate, organization.id, now))
       .find(candidate =>
-        (candidate.recipients?.pending ?? []).some(recipient =>
-          parsed.data.userId ? recipient === pendingKey : recipient.trim().toLowerCase() === pendingKey
-        )
+        (candidate.recipients?.pending ?? []).some(recipient => recipient.trim().toLowerCase() === address)
       );
     if (!invite) throw new NotFoundError('Pending invitation not found');
-
-    let address = pendingKey;
-    if (parsed.data.userId) {
-      const invitee = await userRepository.findById(parsed.data.userId);
-      if (!invitee?.email) throw new NotFoundError('Pending invitation not found');
-      address = invitee.email.toLowerCase();
-    }
 
     // Only a typed address was charged to the typed-address budget when the invite was created.
     const budget = await reserveInviteSendBudget(user.id, [address], { chargeTypedAddresses: !parsed.data.userId });
