@@ -2,14 +2,25 @@ import crypto from 'crypto';
 import { Resolver } from 'dns/promises';
 import {
   BadRequestError,
+  canAdministerOrganization,
   ConflictError,
+  ForbiddenError,
   DISALLOWED_SIGNUP_RULE_DOMAINS,
   MAX_ORG_DOMAIN_CLAIMS,
   NotFoundError,
   normalizeSignupRuleDomain,
   type IOrgDomainClaimDocument,
+  type IOrgDomainClaimView,
+  type IOrganizationDocument,
+  type OrgAuthorityActor,
+  type UpdateOrgDomainPolicyInput,
 } from '@bike4mind/common';
-import { disposableDomainRepository, orgDomainClaimRepository, partnerSignupRuleRepository } from '@bike4mind/database';
+import {
+  disposableDomainRepository,
+  organizationRepository,
+  orgDomainClaimRepository,
+  partnerSignupRuleRepository,
+} from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { isSelfHost } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 
@@ -133,4 +144,48 @@ export async function verifyDomainClaim(
   if (result === 'conflict') throw new ConflictError('Domain already claimed by another organization');
   if (!result) throw new NotFoundError('Domain claim not found');
   return { verified: true, claim: result };
+}
+
+export function toOrgDomainClaimView(claim: IOrgDomainClaimDocument): IOrgDomainClaimView {
+  const pending = claim.status !== 'verified';
+  return {
+    id: claim.id,
+    domain: claim.domain,
+    status: claim.status,
+    verifiedAt: claim.verifiedAt ?? null,
+    policy: claim.policy,
+    defaultRole: claim.defaultRole,
+    createdAt: claim.createdAt,
+    recordName: pending ? recordNameFor(claim.domain) : null,
+    recordValue: pending ? recordValueFor(claim.verificationToken) : null,
+  };
+}
+
+/** Loads the org and enforces the domain-admin gate before any claim is read. */
+export async function loadOrgForDomainAdmin(
+  actor: OrgAuthorityActor,
+  organizationId: string
+): Promise<IOrganizationDocument> {
+  const organization = await organizationRepository.findById(organizationId);
+  if (!organization) throw new NotFoundError('Organization not found');
+  if (!canAdministerOrganization(actor, organization)) {
+    throw new ForbiddenError('Only an organization owner or manager can manage domains');
+  }
+  return organization;
+}
+
+/** A join policy other than 'off' needs a verified claim; the default role may be set any time. */
+export async function updateDomainClaimPolicy(
+  organizationId: string,
+  claimId: string,
+  update: UpdateOrgDomainPolicyInput
+): Promise<{ before: IOrgDomainClaimDocument; after: IOrgDomainClaimDocument }> {
+  const before = await orgDomainClaimRepository.findByIdForOrg(claimId, organizationId);
+  if (!before) throw new NotFoundError('Domain claim not found');
+  if (update.policy !== undefined && update.policy !== 'off' && before.status !== 'verified') {
+    throw new BadRequestError('Verify the domain before turning on a join policy');
+  }
+  const after = await orgDomainClaimRepository.updatePolicy(claimId, organizationId, update);
+  if (!after) throw new NotFoundError('Domain claim not found');
+  return { before, after };
 }

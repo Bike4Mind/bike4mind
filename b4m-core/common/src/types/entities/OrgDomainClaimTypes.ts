@@ -29,6 +29,22 @@ export interface IOrgDomainClaim {
 
 export interface IOrgDomainClaimDocument extends IOrgDomainClaim, IMongoDocument {}
 
+/**
+ * A claim as the org-admin domain routes return it. The token never leaves the server; a pending
+ * claim carries the TXT record to publish instead.
+ */
+export interface IOrgDomainClaimView {
+  id: string;
+  domain: string;
+  status: OrgDomainClaimStatus;
+  verifiedAt: Date | string | null;
+  policy: OrgDomainJoinPolicy;
+  defaultRole: OrgDomainDefaultRole;
+  createdAt: Date | string;
+  recordName: string | null;
+  recordValue: string | null;
+}
+
 export type MarkOrgDomainClaimVerifiedResult = IOrgDomainClaimDocument | 'conflict' | null;
 
 export interface IOrgDomainClaimRepository extends IBaseRepository<IOrgDomainClaimDocument> {
