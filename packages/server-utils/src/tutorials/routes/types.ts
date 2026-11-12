@@ -6,7 +6,7 @@ import type { Ability } from '../../auth/ability';
 
 /**
  * A request after `baseApi()` ran: the fields it attaches, which apps/client/global.d.ts declares on
- * Express.Request for the app. The package cannot see that augmentation; keep these in sync with it.
+ * Express.Request for the app. The package cannot see that augmentation; apps/client/server/tutorials/requestTypeSync.ts asserts they match.
  */
 export type TutorialRequest = Request & { user: IUserDocument; logger: Logger; ability?: Ability };
 
