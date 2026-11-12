@@ -9,7 +9,12 @@ import type {
   ReportReason,
   UploadUrlResponse,
 } from '@bike4mind/common';
-import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX, deriveArtifactPublishSlug } from '@bike4mind/common';
+import {
+  ArtifactTypeSchema,
+  ELISION_PUBLISH_BODY,
+  SCOPE_URL_PREFIX,
+  deriveArtifactPublishSlug,
+} from '@bike4mind/common';
 import { detectElidedSafe } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { exportHref, type PublishExportFormat } from '@client/app/utils/publishExport';
 import { encodeReactPublishUpload } from '@client/app/utils/reactArtifactPublish';
@@ -503,9 +508,10 @@ export async function refreshPublishedFromSource(a: ManagedArtifact): Promise<Pu
   const { data } = await api.get<SourceArtifactResponse>(
     `/api/artifacts/${encodeURIComponent(artifactId)}?includeContent=true`
   );
-  const type = data.artifact?.type;
+  const parsedType = ArtifactTypeSchema.safeParse(data.artifact?.type);
   const content = data.content?.content;
-  if (!type) throw new Error('The source artifact could not be read');
+  if (!parsedType.success) throw new Error('The source artifact could not be read');
+  const type = parsedType.data;
   if (!content?.trim()) throw new Error('The source artifact has no content to publish');
   const siblings = type === 'react' ? (a.source.reactSiblings ?? []) : [];
   const reactFiles = siblings.length ? await loadReactSiblingSources(data.artifact?.sessionId, siblings) : undefined;

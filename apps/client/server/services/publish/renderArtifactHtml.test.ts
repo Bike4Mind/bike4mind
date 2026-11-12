@@ -71,6 +71,20 @@ describe('renderArtifactIndexHtml pinned published bytes', () => {
     expect(render(type, content, TITLE)).toBe(pinned(name));
   });
 
+  it('ignores server-only brand env, which the browser bundle that used to render never saw', async () => {
+    vi.resetModules();
+    const serverOnlyBrand = {
+      ...BRAND_ENV,
+      NEXT_PUBLIC_APP_NAME: '',
+      APP_NAME: 'bike4mind',
+      SEED_APP_NAME: 'bike4mind',
+    };
+    for (const [key, value] of Object.entries(serverOnlyBrand)) vi.stubEnv(key, value);
+    const render = (await import('./renderArtifactHtml')).renderArtifactIndexHtml;
+    const { type, content } = PINNED_CASES['html-fragment'];
+    expect(render(type, content, TITLE)).toBe(pinned('html-fragment-no-public-brand'));
+  });
+
   it('round-trips the UTF-8 bytes finalize decodes from the upload', async () => {
     const render = await loadRenderer();
     const { type, content } = PINNED_CASES['html-fragment-untrimmed-non-ascii'];

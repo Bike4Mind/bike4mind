@@ -1,6 +1,7 @@
 import type { ArtifactType } from '@bike4mind/common';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
 import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
+import { getPublicBrandName } from '@client/config/general';
 
 /**
  * Server-authoritative renderer: turn a B4M artifact's RAW content into the canonical
@@ -28,22 +29,25 @@ export function renderArtifactIndexHtml(type: ArtifactType, content: string, tit
   }
 
   const t = escapeHtml(title || 'Shared artifact');
+  // The browser-bundle brand, not getBrandName(): server-only APP_NAME/SEED_APP_NAME would
+  // otherwise change the bytes of every page the web client used to render itself.
+  const brandName = getPublicBrandName();
   // Full HTML doc -> serve as-is, but still inject the lead-gen footer before
   // </body> (fall back to appending) so every published page is branded.
   if (type === 'html' && /<html[\s>]/i.test(content)) {
-    const footer = buildShareFooterHtml({ source: 'artifact' });
+    const footer = buildShareFooterHtml({ source: 'artifact', brandName });
     return /<\/body>/i.test(content) ? content.replace(/<\/body>/i, `${footer}</body>`) : content + footer;
   }
 
   // Baked unconditionally: the serve handler strips it per request (stripSignupGateHtml) for
   // any viewer or visibility that should not see it, since visibility can change after publish.
-  const gate = buildSignupGateHtml();
+  const gate = buildSignupGateHtml({ brandName });
   const PAGE = (inner: string, extraStyle = '') => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta property="og:title" content="${t}"><title>${t}</title>
 <style>:root{color-scheme:light dark}body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;line-height:1.6;max-width:900px;margin:0 auto;padding:2rem 1.25rem 4rem}pre{background:rgba(127,127,127,.12);padding:1rem;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word}img,svg{max-width:100%;height:auto}${extraStyle}${gate.styles}</style>
-</head><body>${inner}${buildShareFooterHtml({ source: 'artifact' })}${gate.html}</body></html>`;
+</head><body>${inner}${buildShareFooterHtml({ source: 'artifact', brandName })}${gate.html}</body></html>`;
 
   if (type === 'html') return PAGE(content); // HTML fragment
   if (type === 'svg') return PAGE(content); // inline SVG markup
