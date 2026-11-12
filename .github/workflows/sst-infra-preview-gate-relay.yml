@@ -1,0 +1,64 @@
+name: SST / infra preview gate relay
+
+# Re-evaluates the preview gate when one of the two labels it reads moves. The gate
+# does not listen to label events itself: every label change on a PR started a gate
+# run, review-state swaps alone were two thirds of its runs, and a job-level filter
+# cannot drop them because a skipped required check counts as passing. This workflow
+# is not a required check, so skipping is free here, and a match re-runs the gate's
+# latest run for the head instead of starting a new one: the re-run attaches to the
+# same check run, and the gate reads labels live.
+
+# Reads metadata and re-runs a workflow only; never check out or execute the PR head here.
+on:
+  # Validate edits to this workflow before its trusted trigger is present on the base branch.
+  pull_request:
+    types: [labeled, unlabeled]
+    paths: ['.github/workflows/sst-infra-preview-gate-relay.yml']
+  pull_request_target:
+    types: [labeled, unlabeled]
+
+permissions:
+  actions: write
+
+jobs:
+  relay:
+    name: preview gate relay
+    if: >
+      (github.event_name == 'pull_request_target' || github.event_name == 'pull_request') &&
+      (github.event.label.name == 'preview-deployed' || github.event.label.name == 'skip-preview')
+    runs-on: ${{ vars.RUNNER_LABEL_LIGHT || vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    steps:
+      - name: Re-run the preview gate for this head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABEL: ${{ github.event.label.name }}
+          ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+
+          run_id=$(gh api "repos/$REPO/actions/workflows/sst-infra-preview-gate.yml/runs?event=pull_request_target&head_sha=$HEAD_SHA&per_page=1" \
+            --jq '.workflow_runs[0].id // empty')
+          if [ -z "$run_id" ]; then
+            echo "::warning title=No gate run::No preview gate run found for $HEAD_SHA; the next push starts one."
+            exit 0
+          fi
+          echo "Label '$LABEL' $ACTION: re-running preview gate run $run_id for $HEAD_SHA."
+
+          # A run that is still queued or executing refuses a re-run (409). It reads labels
+          # live when it executes, but it may already have read them, so wait and retry.
+          for attempt in 1 2 3 4 5 6; do
+            if gh api -X POST "repos/$REPO/actions/runs/$run_id/rerun" >/dev/null 2>/tmp/rerun.err; then
+              echo "Re-run requested."
+              exit 0
+            fi
+            if ! grep -q 'HTTP 409' /tmp/rerun.err; then
+              cat /tmp/rerun.err
+              exit 1
+            fi
+            echo "Gate run $run_id is still in progress; retrying in 15s ($attempt/6)."
+            sleep 15
+          done
+          echo "::error title=Gate busy::Preview gate run $run_id stayed in progress; re-run it from the Checks tab."
+          exit 1
