@@ -182,7 +182,7 @@ describe('GET /api/files/presigned-url - lake access audit', () => {
     h.record.mockRejectedValueOnce(new Error('mongo blip'));
     const { res, json } = makeRes();
 
-    await expect(handler(request(['lake-file.pdf']), res)).rejects.toThrow();
+    await expect(handler(request(['lake-file.pdf']), res)).rejects.toMatchObject({ statusCode: 400 });
     expect(h.getSignedUrl).not.toHaveBeenCalled();
     expect(json).not.toHaveBeenCalled();
   });
@@ -205,7 +205,7 @@ describe('GET /api/files/presigned-url - lake access audit', () => {
     h.adminBypassLakeIds.mockRejectedValue(new Error('lookup down'));
     const { res, json } = makeRes();
 
-    await expect(handler(request(['lake-file.pdf']), res)).rejects.toThrow();
+    await expect(handler(request(['lake-file.pdf']), res)).rejects.toMatchObject({ statusCode: 400 });
     expect(h.getSignedUrl).not.toHaveBeenCalled();
     expect(h.record).not.toHaveBeenCalled();
     expect(json).not.toHaveBeenCalled();
