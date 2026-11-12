@@ -50,6 +50,18 @@ private struct GenerationTile: View {
   let onCancel: () -> Void
   let onDismiss: () -> Void
 
+  /// Nil when it was made with changed values but its model's controls are not loaded to label them (another kind's
+  /// list, or a model since removed): "Model defaults" would be wrong there.
+  private var settingsHeader: String? {
+    if let summary { return summary }
+    return generation.handle.params?.isEmpty ?? true ? "Model defaults" : nil
+  }
+
+  private func useSettingsButton(_ action: @escaping () -> Void) -> some View {
+    Button("Use these settings", systemImage: "slider.horizontal.3", action: action)
+      .accessibilityIdentifier("studio-generation-use-settings")
+  }
+
   private let side: CGFloat = 76
   @State private var showsFailure = false
 
@@ -73,9 +85,10 @@ private struct GenerationTile: View {
     .onTapGesture { if case .failed = generation.phase { showsFailure = true } }
     .contextMenu {
       if let onUseSettings {
-        Section(summary ?? "Model defaults") {
-          Button("Use these settings", systemImage: "slider.horizontal.3", action: onUseSettings)
-            .accessibilityIdentifier("studio-generation-use-settings")
+        if let settingsHeader {
+          Section(settingsHeader) { useSettingsButton(onUseSettings) }
+        } else {
+          useSettingsButton(onUseSettings)
         }
       }
     }

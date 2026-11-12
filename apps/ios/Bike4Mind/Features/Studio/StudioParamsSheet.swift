@@ -175,6 +175,8 @@ private struct SeedRow: View {
       .accessibilityIdentifier("studio-param-seed-roll")
     }
     .onAppear { text = value?.number.map { String(Int($0)) } ?? "" }
+    // Reset clears the value from outside this row; the typed text must follow or it shows a seed that is not sent.
+    .onChange(of: value) { _, newValue in if newValue == nil { text = "" } }
   }
 }
 
