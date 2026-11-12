@@ -308,15 +308,60 @@ function keptSharesMessage(kept: number): string {
   return `Member removed. ${kept} share${isSingle ? '' : 's'} on personal data lakes ${isSingle ? 'was' : 'were'} kept; the lake owners are being notified.`;
 }
 
+export interface OffboardingInventoryEntry {
+  count: number;
+  sample: { id: string; name: string }[];
+}
+
+/** Mirrors MemberOffboardingInventory in b4m-core/services organizationService/getMemberOffboardingInventory. */
+export interface MemberOffboardingInventory {
+  files: OffboardingInventoryEntry;
+  artifacts: OffboardingInventoryEntry;
+  projects: OffboardingInventoryEntry;
+  notebooks: OffboardingInventoryEntry;
+  agents: OffboardingInventoryEntry;
+  orgBilledApiKeys: { count: number };
+}
+
+const memberOffboardingKey = (organizationId: string, userId: string) =>
+  ['organizations', organizationId, 'members', userId, 'offboarding'] as const;
+
+export function useMemberOffboardingInventory(organizationId: string, userId: string | null) {
+  return useQuery({
+    queryKey: memberOffboardingKey(organizationId, userId ?? ''),
+    queryFn: async () => {
+      const { data } = await api.get<MemberOffboardingInventory>(
+        `/api/organizations/${organizationId}/members/${userId}/offboarding`
+      );
+      return data;
+    },
+    enabled: !!userId,
+    staleTime: 0,
+  });
+}
+
 export function useRemoveMemberFromOrganization() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ organizationId, userId }: { organizationId: string; userId: string }) => {
-      const response = await api.delete<WithId<IOrganizationDocument> & { personalLakeSharesKept?: number | null }>(
-        `/api/organizations/${organizationId}/members/${userId}`
-      );
-      const { personalLakeSharesKept, ...organization } = response.data;
+    mutationFn: async ({
+      organizationId,
+      userId,
+      reassignTo,
+    }: {
+      organizationId: string;
+      userId: string;
+      /** Member who takes over the departing member's org content; omitted keeps it with them. */
+      reassignTo?: string;
+    }) => {
+      const response = await api.delete<
+        WithId<IOrganizationDocument> & {
+          personalLakeSharesKept?: number | null;
+          revokedOrgBilledKeys?: number;
+          reassigned?: unknown;
+        }
+      >(`/api/organizations/${organizationId}/members/${userId}`, reassignTo ? { data: { reassignTo } } : undefined);
+      const { personalLakeSharesKept, revokedOrgBilledKeys, reassigned, ...organization } = response.data;
 
       updateAllQueryData(queryClient, 'organizations', 'write', organization);
 
@@ -327,6 +372,7 @@ export function useRemoveMemberFromOrganization() {
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       // Removing a member may hand their lakes to a successor, changing ownership-derived flags.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.removeQueries({ queryKey: memberOffboardingKey(variables.organizationId, variables.userId) });
       // Notification is best-effort and already attempted server-side before this response arrives
       // (the route awaits it ahead of res.json), so the client still cannot claim delivery - only
       // that it was kept and owners are being told. `null` means the post-departure read itself

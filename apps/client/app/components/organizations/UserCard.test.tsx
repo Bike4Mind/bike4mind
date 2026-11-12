@@ -25,6 +25,10 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@client/app/utils/s3', () => ({ getAppFileUrl: () => '' }));
+vi.mock('./OffboardMemberDialog', () => ({
+  default: ({ member }: { member: { id: string } | null }) =>
+    member ? <div data-testid="offboard-dialog" data-member-id={member.id} /> : null,
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const org = { id: 'org1', userId: 'owner1', maxCreditsPerMember: 500 } as unknown as IOrganizationDocument;
@@ -148,6 +152,14 @@ describe('OrganizationUserCard roster actions', () => {
     renderCard(accepted(), false, { invite: false, revoke: true });
     openMenu();
     expect(await screen.findByTestId('organization-user-card-revoke-access')).toBeTruthy();
+  });
+
+  it('opens the offboarding dialog for that member instead of a plain confirm', async () => {
+    renderCard(accepted(), false, { invite: false, revoke: true });
+    expect(screen.queryByTestId('offboard-dialog')).toBeNull();
+    openMenu();
+    fireEvent.click(await screen.findByTestId('organization-user-card-revoke-access'));
+    expect(screen.getByTestId('offboard-dialog').getAttribute('data-member-id')).toBe('a');
   });
 
   it('withholds Revoke Access from a viewer who may only invite', () => {
