@@ -1,4 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, recommendDlqAction } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
@@ -17,8 +17,11 @@ import {
 } from '@bike4mind/server-utils/utils/dlqConsumerLogs';
 import { receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
-import { dlqFailureRepository } from '@bike4mind/database';
+import { dlqFailureRepository, dlqReplayLogRepository } from '@bike4mind/database';
 import { z } from 'zod';
+
+// Short polling samples a subset of SQS servers and can return empty for a sparse queue; a brief wait queries them all.
+const RECEIVE_WAIT_SECONDS = 2;
 
 const QuerySchema = z.object({
   queue: z.string().min(1, 'queue label is required'),
@@ -84,7 +87,7 @@ const handler = adminApi({
   Logger.info(`[DLQ Messages] Peeking at ${queueLabel}`, { adminUserId, maxMessages });
 
   const [received, consumerLogs] = await Promise.all([
-    receiveFromQueue(dlqUrl, maxMessages, 0),
+    receiveFromQueue(dlqUrl, maxMessages, 0, RECEIVE_WAIT_SECONDS),
     settleWithinBudget([resolveConsumerLogsForSourceQueue(dlqEntry.sourceQueue)], CONSUMER_LOGS_BUDGET_MS).then(
       ([logs]) => logs
     ),
@@ -99,16 +102,38 @@ const handler = adminApi({
     if (!existing || receiveCount(msg) > receiveCount(existing)) byId.set(msg.MessageId, msg);
   }
   const messages = [...byId.values()];
-  const { failures, lookupFailed } = await findFailures(
-    queueLabel,
-    dlqEntry.sourceQueue,
-    messages.map(msg => msg.MessageId!)
-  );
+  const [[failureLookup], attempts] = await Promise.all([
+    settleWithinBudget(
+      [
+        findFailures(
+          queueLabel,
+          dlqEntry.sourceQueue,
+          messages.map(message => message.MessageId!)
+        ),
+      ],
+      CONSUMER_LOGS_BUDGET_MS
+    ),
+    settleWithinBudget(
+      messages.map(async message => {
+        try {
+          return await dlqReplayLogRepository.countAttempts(message.MessageId!);
+        } catch (error) {
+          Logger.warn('[DLQ Messages] Replay attempts unavailable', {
+            queueLabel,
+            errorName: error instanceof Error ? error.name : 'Unknown',
+          });
+          return null;
+        }
+      }),
+      CONSUMER_LOGS_BUDGET_MS
+    ),
+  ]);
+  const { failures, lookupFailed } = failureLookup ?? { failures: [], lookupFailed: true };
   const failureById = new Map(failures.map(failure => [failure.messageId, failure]));
 
   // receiptHandle is omitted: with VisibilityTimeout 0 the handle expires immediately,
   // so the frontend uses the messageIds replay path which receives with its own timeout.
-  const formatted = messages.map(msg => {
+  const formatted = messages.map((msg, index) => {
     const failure = failureById.get(msg.MessageId!);
     return {
       messageId: msg.MessageId,
@@ -119,6 +144,14 @@ const handler = adminApi({
       logsUrl: messageLogsUrl(consumerLogs, msg.Attributes?.SentTimestamp),
       ...(lookupFailed ? { failureLookupFailed: true } : {}),
       failure: failure ? { errorMessage: failure.errorMessage, category: failure.category } : undefined,
+      recommendation: recommendDlqAction({
+        category: failure?.category,
+        errorType: failure?.errorType,
+        failedAt: failure?.failedAt?.toISOString(),
+        consumerDeployedAt: consumerLogs?.consumerDeployedAt,
+        replayAttempts: attempts[index] ?? undefined,
+        replaySafety: dlqEntry.replay,
+      }),
     };
   });
 

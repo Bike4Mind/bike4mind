@@ -1319,11 +1319,6 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/admin/rapid-reply/test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/admin/rate-limits.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -1528,11 +1523,6 @@
   "apps/client/pages/api/ai/optimize-input.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "apps/client/pages/api/ai/rapid-reply.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 3
     }
   },
   "apps/client/pages/api/ai/tavern-conversation.ts": {
