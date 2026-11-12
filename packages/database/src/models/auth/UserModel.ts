@@ -7,6 +7,7 @@ import {
   VERIFIED_SLACK_IDENTITY_FILTER,
   canonicalizeEmail,
 } from '@bike4mind/common';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
   ADMIN_PERMISSIONS,
   AuthStrategy,
@@ -1527,6 +1528,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // working password. Gates the SSO auto-link local-email-verified requirement in
     // verifyCallback.ts / okta/callback.ts.
     hasUsablePassword: { type: Boolean, default: false },
+    // toProviderEndUserId(_id): the identifier LLM providers receive for this account, stored so an
+    // admin can resolve a provider safety notice back to the account. Set on create; backfilled by
+    // migration 20260921241030. Hidden from reads like any other internal-only field.
+    providerEndUserId: { type: String, select: false },
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
     adminPermissions: { type: [String], enum: ADMIN_PERMISSIONS, default: [] },
@@ -1957,8 +1962,25 @@ UserSchema.pre('save', function (next) {
   next();
 });
 
+// Derived from _id, so it never changes after create; insert paths that skip document middleware
+// (insertMany, bulkWrite) are covered by the backfill migration rather than this hook.
+UserSchema.pre('save', function (next) {
+  if (this.isNew && !this.providerEndUserId) this.providerEndUserId = toProviderEndUserId(String(this._id));
+  next();
+});
+
 // Stripe-customer resolution for business metrics.
 UserSchema.index({ stripeCustomerId: 1 }, { name: 'user_stripeCustomerId' });
+// Admin lookup of the account behind a provider safety notice. Partial so accounts created before the
+// backfill are not indexed as null. Explicit name so migration 20260921241030 and autoIndex agree.
+UserSchema.index(
+  { providerEndUserId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { providerEndUserId: { $type: 'string' } },
+    name: 'user_providerEndUserId',
+  }
+);
 
 // This will support the $or queries in findByUsernameOrEmail efficiently
 UserSchema.index({
