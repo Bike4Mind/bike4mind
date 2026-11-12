@@ -156,6 +156,48 @@ describe('ModelListSection views', () => {
     expect(await screen.findByTestId('models-row-example-text-1')).toBeInTheDocument();
   });
 
+  /** Needs review holds `count` models; All holds both rows. */
+  const serveReviewCount = (count: { current: number }) =>
+    serveList(view =>
+      listResponse(view === 'needs-review' ? (count.current > 0 ? [reviewRow] : []) : [listedRow, reviewRow], {
+        viewCounts: { 'needs-review': count.current, all: 2 },
+      })
+    );
+
+  it('keeps All, and the selection, when a refetch finds models needing review after it opened', async () => {
+    const needsReview = { current: 0 };
+    serveReviewCount(needsReview);
+    const { router, queryClient } = await renderModelsRoute('/admin?tab=models', ModelListSection);
+    await screen.findByTestId('models-row-example-text-1');
+    expect(screen.getByTestId('models-view-all')).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(within(screen.getByTestId('admin-table-select-example-text-1')).getByRole('checkbox'));
+    expect(screen.getByTestId('admin-bulk-action-bar')).toHaveTextContent('1 selected');
+
+    needsReview.current = 3;
+    await act(() => queryClient.invalidateQueries());
+    await waitFor(() => expect(screen.getByTestId('models-views-needs-review-count')).toHaveTextContent('3'));
+
+    expect(screen.getByTestId('models-view-all')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('admin-bulk-action-bar')).toHaveTextContent('1 selected');
+    expect(listCalls().at(-1)?.view).toBe('all');
+    expect(router.state.location.search).not.toHaveProperty('modelsView');
+  });
+
+  it('keeps Needs review when a refetch finds it empty after it opened', async () => {
+    const needsReview = { current: 1 };
+    serveReviewCount(needsReview);
+    const { router, queryClient } = await renderModelsRoute('/admin?tab=models', ModelListSection);
+    await screen.findByTestId('models-row-example-text-2');
+
+    needsReview.current = 0;
+    await act(() => queryClient.invalidateQueries());
+    await waitFor(() => expect(screen.getByTestId('models-views-needs-review-count')).toHaveTextContent('0'));
+
+    expect(screen.getByTestId('models-view-needs-review')).toHaveAttribute('aria-pressed', 'true');
+    expect(listCalls().some(params => params.view === 'all')).toBe(false);
+    expect(router.state.location.search).not.toHaveProperty('modelsView');
+  });
+
   it('sorts from a column header and goes back to page 1', async () => {
     serveList(() => listResponse([listedRow, reviewRow], { total: 240 }));
     const { router } = await renderModelsRoute('/admin?tab=models&modelsView=all&modelsPage=3', ModelListSection);

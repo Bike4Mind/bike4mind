@@ -25,7 +25,7 @@ The Models section is the model list. The section, view, search, filters, sort, 
 | Hidden | Models with the Hidden status: no user can pick them, for a reason other than a pending review or retirement |
 | Retiring | Models deprecated, retired, or with a deprecation or retirement date that has passed or falls within 90 days |
 
-Each view shows its count. A model can be in more than one view, for example a hidden model that retires within 90 days is in both **Hidden** and **Retiring**, so the counts do not add up to **All**. The page opens on **Needs review** while it holds any model, and on **All** otherwise.
+Each view shows its count. A model can be in more than one view, for example a hidden model that retires within 90 days is in both **Hidden** and **Retiring**, so the counts do not add up to **All**. The page opens on **Needs review** when it holds any model, and on **All** otherwise. It stays on that view while you work, even if the Needs review count changes, until you pick another view.
 
 ### Search and filters
 

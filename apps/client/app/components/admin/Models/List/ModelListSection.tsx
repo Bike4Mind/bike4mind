@@ -282,9 +282,10 @@ export function ModelListSection() {
     : DEFAULT_PAGE_SIZE;
   const urlView = parseModelView(state.view);
 
-  // Needs review is the default view while it holds anything; its count does not depend on the view shown.
-  const [needsReviewCount, setNeedsReviewCount] = useState<number | undefined>(undefined);
-  const view: AdminModelView = urlView ?? (needsReviewCount === 0 ? 'all' : 'needs-review');
+  // Chosen once, from the first Needs review count (which does not depend on the view shown): a refetch that moves
+  // the count must not switch the view, and clear the selection, under the admin.
+  const [defaultView, setDefaultView] = useState<AdminModelView | undefined>(undefined);
+  const view: AdminModelView = urlView ?? defaultView ?? 'needs-review';
   const sort = parseModelSort(filters.sort) ?? (view === 'retiring' ? 'sunset' : undefined);
 
   const baseFilter: Omit<AdminModelFilter, 'view' | 'showFoundationIds'> & { showFoundationIds: boolean } = {
@@ -297,8 +298,8 @@ export function ModelListSection() {
   const list = useAdminModelList({ filter: { ...baseFilter, view }, sort, dir, page, pageSize });
   const data = list.data;
   const fetchedNeedsReview = data?.viewCounts['needs-review'];
-  if (fetchedNeedsReview !== undefined && fetchedNeedsReview !== needsReviewCount) {
-    setNeedsReviewCount(fetchedNeedsReview);
+  if (defaultView === undefined && fetchedNeedsReview !== undefined) {
+    setDefaultView(fetchedNeedsReview > 0 ? 'needs-review' : 'all');
   }
 
   const [selection, setSelection] = useState<AdminSelection>(NO_SELECTION);
