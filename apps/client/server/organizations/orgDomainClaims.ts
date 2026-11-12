@@ -10,6 +10,7 @@ import {
   NotFoundError,
   normalizeSignupRuleDomain,
   ORG_DOMAIN_ROLE_PERMISSIONS,
+  organizationSeatUsage,
   type IOrgDomainClaimDocument,
   type IOrgDomainClaimView,
   type IOrganizationDocument,
@@ -23,7 +24,7 @@ import {
   partnerSignupRuleRepository,
   userRepository,
 } from '@bike4mind/database';
-import { userService } from '@bike4mind/services';
+import { organizationService, userService } from '@bike4mind/services';
 import { isSelfHost } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 
 export const TXT_RECORD_PREFIX = '_b4m-verify';
@@ -200,21 +201,53 @@ export type OrgDomainMembershipOutcome =
     }
   | { joined: false; reason: 'at-capacity'; organizationId: string; seats: number };
 
-/**
- * Auto-join for a verified claim with policy 'auto-join' on the email's exact domain (a subdomain
- * never matches its parent). Never raises the seat ceiling. The membership shape (a `users[]` row,
- * `user.organizationId`, a seeded `userDetails` row) must stay in sync with applyPartnerRuleMembership
- * (b4m-core/services organizationService).
- */
-export async function applyOrgDomainMembership(userId: string, email: string): Promise<OrgDomainMembershipOutcome> {
+/** The exact domain after the last '@', or '' when there is none. */
+function emailDomain(email: string | null | undefined): string {
+  if (!email) return '';
   const at = email.lastIndexOf('@');
-  const domain =
-    at >= 0
-      ? email
-          .slice(at + 1)
-          .trim()
-          .toLowerCase()
-      : '';
+  return at >= 0
+    ? email
+        .slice(at + 1)
+        .trim()
+        .toLowerCase()
+    : '';
+}
+
+type DomainJoinUser = { id: string; email?: string | null; username: string; name: string };
+
+/**
+ * Adds the user to the claim's org with the claim's default role, never raising the seat ceiling.
+ * The membership shape (a `users[]` row, `user.organizationId`, a seeded `userDetails` row) must stay
+ * in sync with applyPartnerRuleMembership (b4m-core/services organizationService).
+ */
+async function addMemberViaClaim(
+  claim: IOrgDomainClaimDocument,
+  user: DomainJoinUser
+): Promise<
+  Exclude<OrgDomainMembershipOutcome, { reason: 'no-claim' | 'not-auto-join' | 'user-missing' | 'unverified' }>
+> {
+  const { organizationId } = claim;
+  const permissions = [...ORG_DOMAIN_ROLE_PERMISSIONS[claim.defaultRole]];
+  const pre = await organizationRepository.addMemberIfUnderCeiling(organizationId, { userId: user.id, permissions });
+  if (!pre) {
+    const fresh = await organizationRepository.findById(organizationId);
+    if (!fresh) return { joined: false, reason: 'org-missing' };
+    if (fresh.users.some(member => member.userId === user.id)) return { joined: false, reason: 'already-member' };
+    return { joined: false, reason: 'at-capacity', organizationId, seats: fresh.seats };
+  }
+
+  await userRepository.update({ id: user.id, organizationId });
+  await organizationRepository.ensureUserDetails(organizationId, {
+    id: user.id,
+    email: user.email ?? user.username,
+    name: user.name,
+  });
+  return { joined: true, organizationId };
+}
+
+/** Auto-join for a verified 'auto-join' claim on the email's exact domain (a subdomain never matches). */
+export async function applyOrgDomainMembership(userId: string, email: string): Promise<OrgDomainMembershipOutcome> {
+  const domain = emailDomain(email);
   if (!domain) return { joined: false, reason: 'no-claim' };
 
   const claim = await orgDomainClaimRepository.findVerifiedJoinableByDomain(domain);
@@ -226,21 +259,69 @@ export async function applyOrgDomainMembership(userId: string, email: string): P
   if (!user) return { joined: false, reason: 'user-missing' };
   if (user.emailVerified !== true) return { joined: false, reason: 'unverified' };
 
-  const { organizationId } = claim;
-  const permissions = [...ORG_DOMAIN_ROLE_PERMISSIONS[claim.defaultRole]];
-  const pre = await organizationRepository.addMemberIfUnderCeiling(organizationId, { userId, permissions });
-  if (!pre) {
-    const fresh = await organizationRepository.findById(organizationId);
-    if (!fresh) return { joined: false, reason: 'org-missing' };
-    if (fresh.users.some(member => member.userId === userId)) return { joined: false, reason: 'already-member' };
-    return { joined: false, reason: 'at-capacity', organizationId, seats: fresh.seats };
-  }
+  return addMemberViaClaim(claim, user);
+}
 
-  await userRepository.update({ id: userId, organizationId });
-  await organizationRepository.ensureUserDetails(organizationId, {
-    id: user.id,
-    email: user.email ?? user.username,
-    name: user.name,
-  });
-  return { joined: true, organizationId };
+/**
+ * The verified, joinable claim on the email's exact domain, unless a partner rule routes that domain
+ * into a different org (partner rules take precedence, as at signup).
+ */
+async function joinableClaimForEmail(email: string | null | undefined): Promise<IOrgDomainClaimDocument | null> {
+  const domain = emailDomain(email);
+  if (!domain) return null;
+  const claim = await orgDomainClaimRepository.findVerifiedJoinableByDomain(domain);
+  if (!claim) return null;
+  const partnerRule = await partnerSignupRuleRepository.findByDomain(domain);
+  if (partnerRule?.organizationId && partnerRule.organizationId !== claim.organizationId) return null;
+  return claim;
+}
+
+export interface OrgDomainJoinSuggestion {
+  organizationId: string;
+  organizationName: string;
+  claimId: string;
+}
+
+/**
+ * Orgs an existing user may join through their verified email's domain (policy 'suggest' or
+ * 'auto-join'). Omits orgs the user is already in and orgs with no free seat.
+ */
+export async function listOrgDomainJoinSuggestions(userId: string): Promise<OrgDomainJoinSuggestion[]> {
+  const user = await userRepository.findById(userId);
+  if (!user || user.emailVerified !== true) return [];
+  const claim = await joinableClaimForEmail(user.email);
+  if (!claim) return [];
+  const organization = await organizationRepository.findById(claim.organizationId);
+  if (!organization) return [];
+  if (organizationService.isCurrentOrgMember(organization, userId)) return [];
+  if (organizationSeatUsage(organization).full) return [];
+  return [{ organizationId: organization.id, organizationName: organization.name, claimId: claim.id }];
+}
+
+/**
+ * Joins an existing user to `organizationId` on request. Re-derives eligibility from the user's
+ * current verified email and the org's live claim; nothing from the client is trusted.
+ */
+export async function joinOrgViaDomain(
+  userId: string,
+  organizationId: string
+): Promise<{ joined: boolean; organization: IOrganizationDocument }> {
+  const user = await userRepository.findById(userId);
+  if (!user) throw new NotFoundError('User not found');
+  if (user.emailVerified !== true) throw new ForbiddenError('Verify your email address before joining');
+
+  const claim = await joinableClaimForEmail(user.email);
+  if (!claim || claim.organizationId !== organizationId) {
+    throw new ForbiddenError('Your email domain does not grant access to this organization');
+  }
+  const organization = await organizationRepository.findById(organizationId);
+  if (!organization) throw new NotFoundError('Organization not found');
+  // Checked first: the owner holds no users[] row, so the atomic add alone would not see them.
+  if (organizationService.isCurrentOrgMember(organization, userId)) return { joined: false, organization };
+
+  const outcome = await addMemberViaClaim(claim, user);
+  if (outcome.joined) return { joined: true, organization };
+  if (outcome.reason === 'already-member') return { joined: false, organization };
+  if (outcome.reason === 'org-missing') throw new NotFoundError('Organization not found');
+  throw new ConflictError('Organization is at full capacity');
 }

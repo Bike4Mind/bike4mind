@@ -40,3 +40,21 @@ export const updateOrgDomainClaimPolicy = async (
 export const deleteOrgDomainClaim = async (organizationId: string, claimId: string): Promise<void> => {
   await api.delete(`${base(organizationId)}/${encodeURIComponent(claimId)}`);
 };
+
+export interface OrgDomainJoinSuggestion {
+  organizationId: string;
+  organizationName: string;
+  claimId: string;
+}
+
+export const fetchOrgDomainJoinSuggestions = async (): Promise<OrgDomainJoinSuggestion[]> => {
+  const response = await api.get<{ suggestions: OrgDomainJoinSuggestion[] }>('/api/organizations/domain-suggestions');
+  return response.data.suggestions;
+};
+
+export const joinOrgViaDomain = async (organizationId: string): Promise<{ joined: boolean }> => {
+  const response = await api.post<{ joined: boolean }>(
+    `/api/organizations/${encodeURIComponent(organizationId)}/domain-join`
+  );
+  return response.data;
+};
