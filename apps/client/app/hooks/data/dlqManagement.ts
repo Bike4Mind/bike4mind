@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import type { DlqRecommendation } from '@bike4mind/common';
 
 // Must stay in sync with DLQ_REPLAY_SAFETY in packages/server-utils/src/utils/dlqRegistry.ts.
 export type DlqReplaySafety = 'safe' | 'side-effects' | 'unsafe';
@@ -29,6 +30,7 @@ export interface DlqQueueInfo {
 }
 
 export interface DlqMessage {
+  recommendation?: DlqRecommendation;
   failureLookupFailed?: boolean;
   messageId: string;
   failure?: { errorMessage: string; category: 'refused' | 'timeout' | 'invalid output' | 'bug' | 'unknown' };
@@ -113,6 +115,7 @@ export const useDlqReplay = () => {
   return useMutation({
     mutationFn: async (params: {
       queueLabel: string;
+      reason?: string;
       batchSize?: number;
       messageIds?: string[];
       messages?: Array<{ messageId: string; receiptHandle: string; body: string }>;
