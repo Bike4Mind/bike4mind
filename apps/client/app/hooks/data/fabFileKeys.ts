@@ -35,12 +35,18 @@ export const fabFileKeys = {
    *  `content(id)` stays its invalidation prefix. */
   contentRead: (id: string | undefined, strict: boolean) => ['fabFiles', id, 'content', strict] as const,
   name: (id: string) => ['fabFiles', 'name', id] as const,
+  /** A generated file's trail (GET /api/studio/files/:id/lineage); `doc(id)` is its invalidation prefix. */
+  lineage: (id: string) => ['fabFiles', id, 'lineage'] as const,
   /** Invalidation prefix covering ownList and ownBySession. */
   own: ['fabFiles', 'own'] as const,
   ownList: (params: { search: string; filters: FabFileListFilters; sort: string; sortField: string }) =>
     ['fabFiles', 'own', params] as const,
   ownBySession: (sessionId: string) => ['fabFiles', 'own', { sessionId }] as const,
   quest: (questId: string) => ['fabFiles', 'quest', questId] as const,
+  /** The ids of the caller's starred files (GET /api/files/favorites). */
+  starredIds: ['fabFiles', 'starred'] as const,
+  /** The generation models behind the caller's files (GET /api/files/generation-models). */
+  generationModels: ['fabFiles', 'generationModels'] as const,
   combined: (params: {
     searchTerm: string;
     filters: { type?: 'text' | 'pdf' | 'url' | 'image'; shared?: boolean };
@@ -48,6 +54,8 @@ export const fabFileKeys = {
     sortField: string;
     page: number;
   }) => ['fabFiles', 'combined', params] as const,
+  /** Invalidation prefix covering search, searchInfinite and searchPaginated. */
+  searchAll: ['fabFiles', 'search'] as const,
   search: (params?: ISearchFabFilesParams) => ['fabFiles', 'search', params] as const,
   searchInfinite: (params?: ISearchFabFilesParams) => ['fabFiles', 'search', 'infinite', params] as const,
   searchPaginated: (params: ISearchFabFilesParams & { page: number }) =>

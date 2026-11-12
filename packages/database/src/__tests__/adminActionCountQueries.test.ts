@@ -16,7 +16,7 @@ import { ModelDiscoveryState, modelDiscoveryStateRepository } from '../models/ai
 import { AdminApprovalModel, adminApprovalRepository } from '../models/infra/admin/AdminApprovalModel';
 import { SecretRotation, secretRotationRepository } from '../models/infra/security/SecretRotationModel';
 import { SreErrorTrackingModel, sreErrorTrackingRepository } from '../models/infra/ops/SreErrorTrackingModel';
-import { FeedbackModel, countNewFeedback } from '../models/social/FeedbackModel';
+import { FeedbackModel, countNewFeedback, oldestNewFeedbackAt } from '../models/social/FeedbackModel';
 
 // The admin sidebar's action counts (apps/client/server/admin/actionCounts.ts). Rows are inserted
 // raw: only the stored shape the filters read matters, not each model's full validation.
@@ -57,6 +57,26 @@ describe('admin action count queries', () => {
 
     expect(await subscriberRepository.countWaiting()).toBe(3);
     expect(await subscriberRepository.countWaiting({ limit: 2 })).toBe(2);
+  });
+
+  it('oldest readers exclude settled rows under the sidebar predicates', async () => {
+    await insertRaw(raw(FeedbackModel), [
+      { status: FeedbackStatus.New, createdAt: NOW },
+      { status: FeedbackStatus.New, createdAt: earlier },
+      { status: 'Resolved', createdAt: new Date(0) },
+    ]);
+    await insertRaw(raw(SignupDomainReviewModel), [
+      { domain: 'pending.test', status: 'held_pending_review', triggeredAt: earlier },
+      { domain: 'released.test', status: 'released', triggeredAt: new Date(0) },
+    ]);
+    await insertRaw(raw(ImageModerationIncident), [
+      { reviewStatus: 'pending_review', createdAt: NOW },
+      { reviewStatus: null, createdAt: earlier },
+      { reviewStatus: 'confirmed', createdAt: new Date(0) },
+    ]);
+    expect(await oldestNewFeedbackAt()).toEqual(earlier);
+    expect(await signupDomainHoldListRepository.oldestPendingAt()).toEqual(earlier);
+    expect(await imageModerationIncidentRepository.oldestPendingReviewAt()).toEqual(earlier);
   });
 
   it('countHeld counts budget-held pending grants, and stops at the limit', async () => {

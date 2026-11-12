@@ -15,6 +15,7 @@ import { getErrorMessage } from '@client/app/utils/error';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import type { ISharerInviteView } from '@client/app/utils/invitesAPICalls';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
 /**
  * Hook to search organizations with pagination and filtering
@@ -123,9 +124,9 @@ export function useSearchOrganizations(
           totalPages: Math.ceil(response.data.total / params.limit),
           totalOrganizations: response.data.total,
         };
-      } catch (e) {
+      } catch (error) {
         signal.throwIfAborted();
-        return { data: [], totalPages: 0, totalOrganizations: 0 };
+        throw error;
       }
     },
     enabled: options?.enabled ?? true,
@@ -139,9 +140,10 @@ export function useSearchOrganizations(
 export function useGetOrganization(orgId: string | null | undefined) {
   return useQuery({
     queryKey: ['organizations', orgId],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!orgId) return null;
-      const response = await api.get<WithId<IOrganizationDocument>>(`/api/organizations/${orgId}`);
+      const response = await api.get<WithId<IOrganizationDocument>>(`/api/organizations/${orgId}`, { signal });
+      signal.throwIfAborted();
       return response.data;
     },
     enabled: !!orgId,
@@ -308,25 +310,102 @@ function keptSharesMessage(kept: number): string {
   return `Member removed. ${kept} share${isSingle ? '' : 's'} on personal data lakes ${isSingle ? 'was' : 'were'} kept; the lake owners are being notified.`;
 }
 
+export interface OffboardingInventoryEntry {
+  count: number;
+  sample: { id: string; name: string }[];
+}
+
+/** Mirrors MemberOffboardingInventory in b4m-core/services organizationService/getMemberOffboardingInventory. */
+export interface MemberOffboardingInventory {
+  files: OffboardingInventoryEntry;
+  artifacts: OffboardingInventoryEntry;
+  projects: OffboardingInventoryEntry;
+  notebooks: OffboardingInventoryEntry;
+  agents: OffboardingInventoryEntry;
+  orgBilledApiKeys: { count: number };
+}
+
+const memberOffboardingKey = (organizationId: string, userId: string) =>
+  ['organizations', organizationId, 'members', userId, 'offboarding'] as const;
+
+const removeMemberKey = ['organizations', 'remove-member'] as const;
+
+interface RemoveMemberVariables {
+  organizationId: string;
+  userId: string;
+  /** Member who takes over the departing member's org content; omitted keeps it with them. */
+  reassignTo?: string;
+}
+
+export function useMemberOffboardingInventory(
+  organizationId: string,
+  userId: string | null,
+  { enabled }: { enabled: boolean }
+) {
+  // Current membership suppresses post-removal reads and allows a later re-added member to load.
+  return useQuery({
+    queryKey: memberOffboardingKey(organizationId, userId ?? ''),
+    queryFn: async () => {
+      const { data } = await api.get<MemberOffboardingInventory>(
+        `/api/organizations/${organizationId}/members/${userId}/offboarding`
+      );
+      return data;
+    },
+    enabled: !!userId && enabled,
+    staleTime: 0,
+  });
+}
+
 export function useRemoveMemberFromOrganization() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ organizationId, userId }: { organizationId: string; userId: string }) => {
-      const response = await api.delete<WithId<IOrganizationDocument> & { personalLakeSharesKept?: number | null }>(
-        `/api/organizations/${organizationId}/members/${userId}`
-      );
-      const { personalLakeSharesKept, ...organization } = response.data;
+    mutationKey: removeMemberKey,
+    mutationFn: async ({ organizationId, userId, reassignTo }: RemoveMemberVariables) => {
+      const response = await api.delete<
+        WithId<IOrganizationDocument> & {
+          personalLakeSharesKept?: number | null;
+          revokedOrgBilledKeys?: number;
+          reassigned?: unknown;
+        }
+      >(`/api/organizations/${organizationId}/members/${userId}`, reassignTo ? { data: { reassignTo } } : undefined);
+      const { personalLakeSharesKept, revokedOrgBilledKeys, reassigned, ...organization } = response.data;
 
-      updateAllQueryData(queryClient, 'organizations', 'write', organization);
+      // A pre-removal roster/search response must not restore the departed member in the cache.
+      await queryClient.cancelQueries({ queryKey: ['organizations'] });
+      updateAllQueryData(queryClient, 'organizations', 'write', organization, {
+        keysAllowedToCreate: [],
+        synchronous: true,
+      });
 
       return personalLakeSharesKept;
     },
     onSuccess: (kept, variables) => {
+      // Drop the removed member's inventory before the ['organizations'] prefix invalidation can refetch it.
+      const offboardingKey = memberOffboardingKey(variables.organizationId, variables.userId);
+      void queryClient.cancelQueries({ queryKey: offboardingKey });
+      queryClient.removeQueries({ queryKey: offboardingKey });
       queryClient.invalidateQueries({ queryKey: ['users', 'organization', variables.organizationId] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       // Removing a member may hand their lakes to a successor, changing ownership-derived flags.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      if (variables.reassignTo) {
+        const contentQueryKeys = [
+          fabFileKeys.all,
+          ['projects'],
+          ['joined-projects'],
+          ['sessions'],
+          ['own-session-count'],
+          ['agents'],
+          ['session-agents'],
+          ['artifact'],
+          ['session-artifacts'],
+        ] as const;
+        for (const queryKey of contentQueryKeys) {
+          void queryClient.invalidateQueries({ queryKey });
+        }
+      }
+
       // Notification is best-effort and already attempted server-side before this response arrives
       // (the route awaits it ahead of res.json), so the client still cannot claim delivery - only
       // that it was kept and owners are being told. `null` means the post-departure read itself

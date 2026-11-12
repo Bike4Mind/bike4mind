@@ -35,7 +35,6 @@ import {
   chargedBytes,
   type CitableFabFileFields,
   type CitableFabFileFieldsWithTags,
-  type FabFileTypeFilter,
   LegalHoldError,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
@@ -49,6 +48,7 @@ import {
   buildLakeArms,
   buildOwnershipConditions,
   escapeRegex,
+  type FabFileSearchParams,
 } from '../../queries/fabFileSearchQuery';
 import {
   buildDataLakeMembershipFilter,
@@ -956,15 +956,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async search(
     userId: string,
     search: string,
-    filters: {
-      tags?: string[];
-      type?: FabFileTypeFilter;
-      shared?: boolean;
-      curated?: boolean;
-      generated?: boolean;
-      fileIds?: string[];
-      restrictToFileIds?: string[];
-    },
+    filters: FabFileSearchParams['filters'],
     pagination: { page: number; limit: number },
     order: { by: 'createdAt' | 'fileName' | 'fileSize'; direction: 'asc' | 'desc' },
     options?: {
@@ -987,6 +979,44 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   ) {
     const query = buildFabFileSearchQuery({ userId, search, filters, pagination, order, options });
     return this.executeSearch(query, pagination.limit);
+  }
+
+  /**
+   * The distinct generation models behind the caller's own live files, sorted, for a model filter's
+   * options. Owner-only on purpose: a shared file's model is not worth a scope-widening query.
+   */
+  async listGenerationModelIds(userId: string): Promise<string[]> {
+    const modelIds: unknown[] = await this.fabFileModel.distinct('sourceMetadata.generation.modelId', {
+      userId,
+      // The same live-file conjuncts as buildFabFileSearchQuery, so every option can match a file.
+      deletedAt: null,
+      archivedAt: null,
+      'sourceMetadata.generation.modelId': { $type: 'string' },
+    });
+    return modelIds.filter((id): id is string => typeof id === 'string' && id.length > 0).sort();
+  }
+
+  /**
+   * One page of ids of the live generated files that list `fileId` in their `derivedFrom`, newest
+   * first. No access check: the caller filters the ids through a read door. The `sourceType` and
+   * `deletedAt` conjuncts match the partial `derivedFrom.fileId` index.
+   */
+  async findDerivedChildIds(fileId: string, { limit, skip = 0 }: { limit: number; skip?: number }): Promise<string[]> {
+    const children = await this.fabFileModel
+      .find(
+        {
+          'derivedFrom.fileId': fileId,
+          sourceType: FabFileSourceType.TOOL_GENERATED,
+          deletedAt: null,
+          archivedAt: null,
+        },
+        { _id: 1 }
+      )
+      .sort({ createdAt: -1, _id: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    return children.map(child => String(child._id));
   }
 
   async executeSearch(

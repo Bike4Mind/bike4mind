@@ -1,6 +1,8 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import {
+  COMPLETION_RUN_PURPOSES,
+  COMPLETION_RUN_ROLES,
   COMPLETION_SOURCES,
   CreditHolderType,
   IMongoDocument,
@@ -184,6 +186,22 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
       ),
       required: false,
     },
+    // Mirrors UsageEventRun. No index yet: run totals are read by a later reader.
+    run: {
+      type: new Schema(
+        {
+          runId: { type: String, required: true },
+          role: { type: String, required: true, enum: [...COMPLETION_RUN_ROLES] },
+          purpose: { type: String, required: false, enum: [...COMPLETION_RUN_PURPOSES] },
+          taskId: { type: String, required: false, maxlength: 128 },
+          attemptId: { type: String, required: false, maxlength: 128 },
+          parentSessionId: { type: String, required: false, maxlength: 128 },
+          sessionId: { type: String, required: false, maxlength: 128 },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
   },
   {
     timestamps: true,
@@ -203,6 +221,9 @@ UsageEventSchema.index({ ownerId: 1, ownerType: 1, createdAt: -1 });
 UsageEventSchema.index({ sessionId: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s optional source filter over a time window.
 UsageEventSchema.index({ source: 1, createdAt: -1 });
+// Supports the hourly completion sequence/synchrony sweeps' 24h scan of completion_api rows.
+// Built via migration 20260921240075_ensure-usage-event-feature-status-index, not autoIndex.
+UsageEventSchema.index({ feature: 1, status: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s byConsumer cut ($match apiKeyId present).
 UsageEventSchema.index({ apiKeyId: 1, createdAt: -1 });
 // Supports lakeUsageSummary()'s $match on dataLakeId (data-lake spend view).
@@ -216,6 +237,14 @@ UsageEventSchema.index(
 );
 
 export type IUsageEventModel = Model<IUsageEventDocument>;
+
+/** An account's spend from spendProfileByUsers. */
+export type IUserSpendProfile = {
+  firstSpendAt: Date;
+  totalCredits: number;
+  /** Largest first; `model` is null for spend recorded without one. */
+  byModel: { model: string | null; credits: number; events: number }[];
+};
 
 export class UsageEventRepository extends BaseRepository<IUsageEventDocument> implements IUsageEventRepository {
   /** `loadFundingSnapshot` is omitted only by tests that do not exercise the funding stamp. */
@@ -342,6 +371,53 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       },
     ]);
     return Object.fromEntries(rows.map(row => [String(row._id), row.credits]));
+  }
+
+  /**
+   * Per account since `since`: when it first spent credits and its spend by model (largest first,
+   * at most `maxModels`). Served by {userId, createdAt}; ids with no spend are absent.
+   */
+  async spendProfileByUsers(userIds: string[], since: Date, maxModels = 5): Promise<Record<string, IUserSpendProfile>> {
+    if (userIds.length === 0) return {};
+    const credits = { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] };
+    const rows = await this.model
+      .aggregate<{
+        _id: { userId: string; model: string | null };
+        credits: number;
+        events: number;
+        firstAt: Date;
+      }>([
+        { $match: { userId: { $in: userIds }, createdAt: { $gte: since } } },
+        { $match: { $expr: { $gt: [credits, 0] } } },
+        {
+          $group: {
+            _id: { userId: '$userId', model: '$model' },
+            credits: { $sum: credits },
+            events: { $sum: 1 },
+            firstAt: { $min: '$createdAt' },
+          },
+        },
+      ])
+      .option({ maxTimeMS: 2000 });
+    const profiles: Record<string, IUserSpendProfile> = {};
+    for (const row of rows) {
+      const id = String(row._id.userId);
+      const profile = (profiles[id] ??= { firstSpendAt: row.firstAt, totalCredits: 0, byModel: [] });
+      if (row.firstAt < profile.firstSpendAt) profile.firstSpendAt = row.firstAt;
+      profile.totalCredits += row.credits;
+      profile.byModel.push({ model: row._id.model ?? null, credits: row.credits, events: row.events });
+    }
+    for (const profile of Object.values(profiles)) {
+      profile.byModel = profile.byModel
+        .sort((a, b) => {
+          const leftModel = a.model ?? '';
+          const rightModel = b.model ?? '';
+          const modelOrder = leftModel < rightModel ? -1 : leftModel > rightModel ? 1 : 0;
+          return b.credits - a.credits || modelOrder;
+        })
+        .slice(0, maxModels);
+    }
+    return profiles;
   }
 
   async largestSettlementOverHold(userIds: string[], since: Date): Promise<Record<string, ISettlementOverHold>> {

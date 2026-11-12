@@ -282,6 +282,22 @@ describe('adminUpdateUser — audited credit adjustments', () => {
     });
   });
 
+  it('reports the committed delta after a deduction is clamped against a changed live balance', async () => {
+    const { adapters, target, incrementCredits, createTransaction } = makeAdapters(500);
+    target.currentCredits = 40;
+
+    const result = await adminUpdateUser(
+      ADMIN_ID,
+      { id: TARGET_ID, creditDelta: -100, creditReason: 'Correct balance' },
+      adapters
+    );
+
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -40);
+    expect(target.currentCredits).toBe(0);
+    expect(createTransaction.mock.calls[0][1].credits).toBe(-40);
+    expect(result.creditAdjustment?.credits).toBe(-40);
+  });
+
   it('links a grant to the ledger row it wrote', async () => {
     const { adapters, createTransaction } = makeAdapters(100);
     createTransaction.mockResolvedValueOnce({ id: 'tx-grant' });

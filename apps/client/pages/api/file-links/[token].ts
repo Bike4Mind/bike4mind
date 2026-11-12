@@ -43,7 +43,8 @@ async function resolveTarget(target: FileLinkTarget, user: LinkUser): Promise<Re
  * GET /api/file-links/:token - redeems a file link minted by buildFileLinkUrl (sent in emails and
  * Slack messages). The signed token is the credential, so this route takes no session; access is
  * re-checked for the issuing user on every click and the redirect target is a short-lived URL.
- * Every refusal is the same 404.
+ * Every refusal is the same 404. The token stays in the path because emailed and Slack links are
+ * plain hyperlinks; it is redacted from request logs (server/middlewares/requestLogUrl.ts).
  */
 const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
   // No user on a public route, so the limiter keys on the client IP.

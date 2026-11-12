@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -83,6 +83,82 @@ describe('resolveProfilePhotoUrl', () => {
 });
 
 describe('ProfilePhotoCache', () => {
+  it('can store a new account photo after clearing the same cache instance', async () => {
+    const store = await cache();
+    await store.store('account-a', PNG, 'image/png');
+    await store.clear();
+    const url = await store.store('account-b', PNG, 'image/png');
+    expect(await store.lookup('account-a')).toBeNull();
+    expect(await store.lookup('account-b')).toBe(url);
+  });
+
+  it.each(['media', 'sidecar'])('waits for an active %s write before completing sign-out cleanup', async stage => {
+    const base = await mkdtemp(join(tmpdir(), 'b4m-profile-photo-race-'));
+    const media = new MediaStore(base);
+    const record = memoryRecord();
+    const store = new ProfilePhotoCache(media, record);
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => {
+      enter = resolve;
+    });
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    if (stage === 'media') {
+      const save = media.save.bind(media);
+      vi.spyOn(media, 'save').mockImplementation(async (...args) => {
+        enter();
+        await gate;
+        return save(...args);
+      });
+    } else {
+      const write = record.write.bind(record);
+      vi.spyOn(record, 'write').mockImplementation(async contents => {
+        enter();
+        await gate;
+        await write(contents);
+      });
+    }
+    const outcome = store.store('account-a', PNG, 'image/png').catch((error: unknown) => error);
+    await entered;
+    let cleared = false;
+    const clearing = store.clear().then(() => {
+      cleared = true;
+    });
+    await Promise.resolve();
+    expect(cleared).toBe(false);
+    release();
+    expect(await outcome).toBeInstanceOf(Error);
+    await clearing;
+    expect(await record.read()).toBeNull();
+    expect(await readdir(base)).toEqual([]);
+  });
+
+  it('invalidates queued pre-sign-out stores and accepts a later account', async () => {
+    const store = await cache();
+    const first = store.store('old-a', PNG, 'image/png').catch((error: unknown) => error);
+    const second = store.store('old-b', PNG, 'image/png').catch((error: unknown) => error);
+    const clearing = store.clear();
+    const next = store.store('new-account', PNG, 'image/png');
+    expect(await first).toBeInstanceOf(Error);
+    expect(await second).toBeInstanceOf(Error);
+    await clearing;
+    expect(await store.lookup('new-account')).toBe(await next);
+    expect(await store.lookup('old-a')).toBeNull();
+  });
+
+  it('does not poison cleanup or the next store when a write fails', async () => {
+    const media = new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-profile-photo-failure-')));
+    const record = memoryRecord();
+    const store = new ProfilePhotoCache(media, record);
+    vi.spyOn(record, 'write').mockRejectedValueOnce(new Error('disk unavailable'));
+    await expect(store.store('old', PNG, 'image/png')).rejects.toThrow('disk unavailable');
+    await store.clear();
+    const url = await store.store('new', PNG, 'image/png');
+    expect(await store.lookup('new')).toBe(url);
+  });
+
   it('returns the stored url for the key it was stored under', async () => {
     const store = await cache();
     const url = await store.store(profilePhotoCacheKey('user-1', KEY), PNG, 'image/png');
@@ -150,6 +226,14 @@ describe('fetchProfilePhoto', () => {
     } as unknown as AuthenticatedApiClient;
 
     await expect(fetchProfilePhoto(await request(api))).resolves.toBeNull();
+  });
+
+  it('rechecks the auth generation inside the queued cache store', async () => {
+    const requestValue = await request(apiReturning(PNG, 'image/png'));
+    const isCurrent = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+    expect(await fetchProfilePhoto({ ...requestValue, isCurrent })).toBeNull();
+    expect(isCurrent).toHaveBeenCalledTimes(2);
+    expect(await requestValue.cache.lookup(profilePhotoCacheKey('user-1', KEY))).toBeNull();
   });
 
   it('writes nothing once the session it belongs to has ended', async () => {

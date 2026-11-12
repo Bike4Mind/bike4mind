@@ -38,6 +38,7 @@ import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliati
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import './businessMetricAlerts';
 import './imageModerationReviewSweep';
+import './adminMorningBrief';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -512,6 +513,20 @@ const accountCampaignSweepCron = runsScheduledJobs
       function: {
         vpc: lambdaVpc,
         handler: 'apps/workers/src/cron/accountCampaignSweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
+
+const completionSequenceSweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('completionSequenceSweep', {
+      schedule: 'cron(30 * * * ? *)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/completionSequenceSweep.handler',
         runtime: 'nodejs24.x',
         timeout: '5 minutes',
         link: [...allSecrets],
@@ -1608,6 +1623,7 @@ export {
   signupIpRetentionCron,
   signupRiskSweepCron,
   accountCampaignSweepCron,
+  completionSequenceSweepCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
   creditHoldSweepCron,

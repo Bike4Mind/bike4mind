@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { redactShareTokenPath, requestLogUrl } from './requestLogUrl';
+import { redactTokenPath, requestLogUrl } from './requestLogUrl';
 
 describe('search request log URLs', () => {
   it.each(['b4m_live_' + 'a'.repeat(32), '192.0.2.1', 'person@example.com'])('redacts %s', identifier => {
@@ -31,7 +31,7 @@ describe('share-link token paths', () => {
     [`/a/${token}/..%2fx`, '/a/[redacted]/..%2fx'],
   ])('redacts the token in %s', (url, expected) => {
     expect(requestLogUrl(url)).toBe(expected);
-    expect(redactShareTokenPath(url)).not.toContain(token);
+    expect(redactTokenPath(url)).not.toContain(token);
   });
 
   it.each([
@@ -48,6 +48,63 @@ describe('share-link token paths', () => {
     '/p/x/a/y',
     '/uc/ab/x',
   ])('leaves %s unchanged', url => {
+    expect(requestLogUrl(url)).toBe(url);
+  });
+});
+
+describe('by-design path-token routes', () => {
+  const token = 'synthetic-path-token-0123456789ab';
+
+  it.each([
+    [`/api/admin/qa/report/run-1/${token}/index.html`, '/api/admin/qa/report/run-1/[redacted]/index.html'],
+    [`/api/admin/qa/report/run-1/${token}/assets/app.css`, '/api/admin/qa/report/run-1/[redacted]/assets/app.css'],
+    [`/api/skills/market/by-token/${token}`, '/api/skills/market/by-token/[redacted]'],
+    [`/api/file-links/${token}`, '/api/file-links/[redacted]'],
+    [`/api/file-links/${token}?download=1`, '/api/file-links/[redacted]?download=1'],
+    [`/api/webhooks/github/${token}`, '/api/webhooks/github/[redacted]'],
+    [`/api/webhooks/jira/${token}`, '/api/webhooks/jira/[redacted]'],
+    [`/API/File-Links/${token}`, '/API/File-Links/[redacted]'],
+  ])('redacts the token in %s', (url, expected) => {
+    expect(requestLogUrl(url)).toBe(expected);
+    expect(redactTokenPath(url)).not.toContain(token);
+  });
+
+  it.each([
+    '/api/admin/qa/report/run-1',
+    '/api/admin/qa/runs',
+    '/api/skills/market/by-token',
+    '/api/skills/market/l1',
+    '/api/file-links',
+    '/api/webhooks/github',
+    '/api/webhooks/github/lake',
+    '/api/webhooks/github/sre',
+    '/api/webhooks/github/subscriptions',
+    '/api/webhooks/github/subscriptions/s1',
+    '/api/webhooks/jira/config',
+    '/api/webhooks/jira/subscriptions/s1',
+  ])('leaves %s unchanged', url => {
+    expect(requestLogUrl(url)).toBe(url);
+  });
+});
+
+describe('token query parameters', () => {
+  const token = 'synthetic-query-token-0123456789';
+
+  it.each([
+    [
+      `/api/publish/artifact/draft-upload?draftId=d1&token=${token}`,
+      '/api/publish/artifact/draft-upload?draftId=d1&token=[redacted]',
+    ],
+    [`/api/skills/market/l1?token=${token}`, '/api/skills/market/l1?token=[redacted]'],
+    [`/api/email/unsubscribe?TOKEN=${token}#x`, '/api/email/unsubscribe?TOKEN=[redacted]#x'],
+    [`/api/x?shareToken=${token}&access_token=${token}`, '/api/x?shareToken=[redacted]&access_token=[redacted]'],
+    [`/api/file-links/${token}?token=${token}`, '/api/file-links/[redacted]?token=[redacted]'],
+  ])('redacts the token value in %s', (url, expected) => {
+    expect(requestLogUrl(url)).toBe(expected);
+    expect(redactTokenPath(url)).not.toContain(token);
+  });
+
+  it.each(['/api/admin/users?limit=10', '/api/x?tokenizer', '/api/x?page=2&sort=top'])('leaves %s unchanged', url => {
     expect(requestLogUrl(url)).toBe(url);
   });
 });

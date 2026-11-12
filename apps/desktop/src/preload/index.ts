@@ -61,6 +61,7 @@ import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@sh
 // registers, which defeats the point of keeping the auth handlers out of its reach.
 const api: DesktopApi = {
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.getAppInfo),
+  setTheme: (mode, backgroundColor) => ipcRenderer.invoke(IPC_CHANNELS.setTheme, mode, backgroundColor),
   update: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.updateGetState),
     check: () => ipcRenderer.invoke(IPC_CHANNELS.updateCheck),
@@ -212,6 +213,7 @@ const api: DesktopApi = {
     exportLocalData: () => ipcRenderer.invoke(IPC_CHANNELS.chatExportLocalData),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
     createSession: (request?: CreateSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession, request),
+    defaultsForNewSession: () => ipcRenderer.invoke(IPC_CHANNELS.chatDraftDefaults),
     createCodeSession: (request: CreateCodeSessionRequest) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCreateCodeSession, request),
     updateProject: (request: UpdateProjectRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatUpdateProject, request),
@@ -276,6 +278,9 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatReadAttachment, sessionId, attachmentId, mediaType),
     discardAttachment: (sessionId: string, attachmentId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatDiscardAttachment, sessionId, attachmentId),
+    copyDraftAttachments: (draftId, sessionId, attachmentIds) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatCopyDraftAttachments, draftId, sessionId, attachmentIds),
+    discardDraftAttachments: draftId => ipcRenderer.invoke(IPC_CHANNELS.chatDiscardDraftAttachments, draftId),
     imageAction: (image: ChatImageRef, action: ChatImageAction) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatImageAction, image, action),
     attachImage: (sessionId: string, image: ChatImageRef) =>

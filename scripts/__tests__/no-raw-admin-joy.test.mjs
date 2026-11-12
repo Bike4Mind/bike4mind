@@ -98,14 +98,15 @@ describe('repository config', () => {
   const eslint = new ESLint({ cwd: root });
 
   it('does not transfer a removed Modal exception to a new declaration in the same file', async () => {
-    const filePath = path.join(admin, 'OrganizationProfileModal.tsx');
+    const filePath = path.join(admin, 'CreateSlackAppModal.tsx');
     const original = readFileSync(filePath, 'utf8');
-    const declaration = "import { Button, LinearProgress, Modal, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy';";
+    const declaration = original.match(/import \{[\s\S]*?\} from '@mui\/joy';/)?.[0];
+    expect(declaration).toBeTruthy();
     for (const code of [
       original.replace(declaration, ''),
-      original.replace(declaration, declaration.replace('Modal, ', '')),
-      original.replace(declaration, declaration.replace('Modal, ', '')) + "\nimport { Modal } from '@mui/joy';",
-      original.replace(declaration, declaration.replace('Modal, ', 'Modal as Dialog, ')),
+      original.replace(declaration, declaration.replace('  Modal,\n', '')),
+      original.replace(declaration, declaration.replace('  Modal,\n', '')) + "\nimport { Modal } from '@mui/joy';",
+      original.replace(declaration, declaration.replace('  Modal,\n', '  Modal as Dialog,\n')),
       '\n' + original,
     ]) {
       const [result] = await eslint.lintText(code, { filePath });
@@ -116,7 +117,7 @@ describe('repository config', () => {
   });
 
   it('rejects additional imports while the original legacy declaration remains', async () => {
-    const filePath = path.join(admin, 'OrganizationProfileModal.tsx');
+    const filePath = path.join(admin, 'CreateSlackAppModal.tsx');
     const code = readFileSync(filePath, 'utf8') + "\nimport { Modal as AnotherDialog } from '@mui/joy';";
     const [result] = await eslint.lintText(code, { filePath });
     expect(result.messages.filter(message => message.ruleId === 'b4m/no-raw-admin-joy').map(m => m.messageId)).toEqual([

@@ -28,7 +28,7 @@ const { deletedFeedbackDoc } = vi.hoisted(() => {
       { name: 'web_search', parameters: {}, id: 'call_1', returnValue: 'PRIVATE TOOL OUTPUT', success: true },
     ],
   };
-  const plain = { id: '507f1f77bcf86cd7994390fb', promptMeta };
+  const plain = { id: '507f1f77bcf86cd7994390fb', userId: 'reporter1', status: 'New', promptMeta };
   return { deletedFeedbackDoc: { ...plain, toJSON: () => plain } };
 });
 
@@ -36,11 +36,20 @@ const { deletedFeedbackDoc } = vi.hoisted(() => {
 // evaluated against the instance, then deletes it - hence findById + deleteOne, not
 // findOneAndDelete.
 vi.mock('@bike4mind/database', () => ({
+  FeedbackAiModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
+  FeedbackNoteModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
   FeedbackModel: {
     findById: vi.fn().mockResolvedValue(deletedFeedbackDoc),
     deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
   },
   FeedbackTextModel: { deleteOne: vi.fn().mockResolvedValue({}) },
+  withTransaction: (fn: () => Promise<unknown>) => fn(),
+}));
+
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+  userAuditTarget: vi.fn(async (id: string) => ({ kind: 'user', id, displayName: id })),
 }));
 
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
@@ -49,7 +58,11 @@ import '../delete';
 
 describe('DELETE /api/feedback/[id] - redacts tool output before returning it to an admin', () => {
   it('strips returnValue from functionCalls', async () => {
-    const { req, res } = createMocks({ method: 'DELETE', query: { id: '507f1f77bcf86cd7994390fb' } });
+    const { req, res } = createMocks({
+      method: 'DELETE',
+      query: { id: '507f1f77bcf86cd7994390fb' },
+      body: { reason: 'Spam or abuse' },
+    });
     (req as unknown as { ability: { can: () => boolean }; user: { id: string } }).ability = { can: () => true };
     (req as unknown as { user: { id: string } }).user = { id: 'admin1' };
 

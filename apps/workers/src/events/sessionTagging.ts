@@ -161,7 +161,7 @@ export const handler = withEventContext(async (event, logger) => {
   // Below the cheap exits above: the spider re-dispatches no-quest notebooks on every pass.
   if (!(await payerCanFundSessionOperation({ payerId: payer.id, operation: 'session tagging', logger }))) return;
 
-  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: user.id });
   logger.info(`Using operations model for tagging: ${modelInfo.name} (${modelInfo.backend})`);
 
   // Ask an LLM to tag the user's first Quest

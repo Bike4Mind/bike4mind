@@ -115,7 +115,11 @@ export type SignupTimeseries = {
 export type SignupVerdict = { suspected: boolean; signals: SignupSignal[] };
 
 /** Response of /api/admin/users/signup-verdicts: null for an account the chart did not classify. */
-export type SignupVerdicts = { verdicts: Record<string, SignupVerdict | null> };
+export type SignupVerdicts = {
+  verdicts: Record<string, SignupVerdict | null>;
+  truncated?: boolean;
+  keysTruncated?: boolean;
+};
 
 /** Most ids one verdict request may carry: the largest Users page. */
 export const SIGNUP_VERDICTS_MAX_IDS = 100;

@@ -89,8 +89,13 @@ const renderDashboard = () =>
 const lastFilters = () => mockUsePlatformUsage.mock.calls.at(-1)?.[0];
 
 const pickOption = async (selectTestId: string, optionName: string) => {
-  fireEvent.click(within(screen.getByTestId(selectTestId)).getByRole('combobox'));
-  fireEvent.click(await screen.findByRole('option', { name: optionName }));
+  if (selectTestId.startsWith('admin-filter-')) {
+    fireEvent.click(screen.getByTestId(selectTestId));
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: optionName }));
+  } else {
+    fireEvent.click(within(screen.getByTestId(selectTestId)).getByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: optionName }));
+  }
 };
 
 describe('PlatformUsageDashboard filters', () => {
@@ -106,14 +111,14 @@ describe('PlatformUsageDashboard filters', () => {
 
   it('sends no source when "All sources" is picked, and the chosen owner type', async () => {
     renderDashboard();
-    await pickOption('platform-usage-source-select', 'All sources');
-    await pickOption('platform-usage-owner-type-select', 'Organizations');
+    await pickOption('admin-filter-source', 'All sources');
+    await pickOption('admin-filter-ownerType', 'Organizations');
     expect(lastFilters()).toEqual({ days: 30, source: undefined, ownerType: CreditHolderType.Organization });
   });
 
-  it('drives the window from the range toggle', () => {
+  it('drives the window from the range filter', async () => {
     renderDashboard();
-    fireEvent.click(within(screen.getByTestId('platform-usage-range-toggle')).getByRole('button', { name: '90d' }));
+    await pickOption('admin-filter-days', '90 days');
     expect(lastFilters()).toMatchObject({ days: 90 });
   });
 });
@@ -220,8 +225,8 @@ describe('PlatformUsageDashboard endpoint section', () => {
   it('keeps the endpoint filter independent of the credit filters, in both directions', async () => {
     renderDashboard();
 
-    await pickOption('platform-usage-source-select', 'All sources');
-    fireEvent.click(within(screen.getByTestId('platform-usage-range-toggle')).getByRole('button', { name: '7d' }));
+    await pickOption('admin-filter-source', 'All sources');
+    await pickOption('admin-filter-days', '7 days');
     expect(mockUseEndpointUsage.mock.calls.at(-1)).toEqual([undefined]);
 
     await pickOption('platform-usage-endpoint-source-select', 'cli');
@@ -251,7 +256,9 @@ describe('PlatformUsageDashboard endpoint section', () => {
     });
     renderDashboard();
     expect(screen.getByTestId('platform-usage-loading')).toBeInTheDocument();
-    expect(screen.getByTestId('platform-usage-endpoint-table')).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('platform-usage-endpoint-section')).getByText('No API-key requests in this window')
+    ).toBeInTheDocument();
   });
 
   it('shows its own spinner while loading, with no table', () => {
@@ -266,9 +273,9 @@ describe('PlatformUsageDashboard endpoint section', () => {
     setEndpointData({}, { error: new Error('Admin access required') });
     renderDashboard();
 
-    expect(screen.getByTestId('platform-usage-endpoint-error')).toHaveTextContent('Admin access required');
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Admin access required');
     expect(screen.queryByTestId('platform-usage-endpoint-table')).not.toBeInTheDocument();
-    expect(screen.getByTestId('platform-usage-consumer-table')).toBeInTheDocument();
+    expect(screen.getByText('No API-key consumers in this window')).toBeInTheDocument();
   });
 });
 
@@ -349,7 +356,7 @@ describe('PlatformUsageDashboard error banner', () => {
     setError(new Error('Admin access required'));
     renderDashboard();
 
-    expect(screen.getByTestId('platform-usage-error')).toHaveTextContent('Admin access required');
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Admin access required');
     expect(screen.queryByTestId('platform-usage-consumer-table')).not.toBeInTheDocument();
   });
 
@@ -357,7 +364,7 @@ describe('PlatformUsageDashboard error banner', () => {
     setError({});
     renderDashboard();
 
-    expect(screen.getByTestId('platform-usage-error')).toHaveTextContent('Failed to load platform usage');
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Failed to load platform usage');
   });
 });
 

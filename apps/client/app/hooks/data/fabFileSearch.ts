@@ -114,6 +114,12 @@ export interface ISearchFabFilesParams {
     shared?: boolean;
     curated?: boolean;
     generated?: boolean;
+    /** Only files no generation tool saved; the complement of `generated`. */
+    uploaded?: boolean;
+    /** Only generated files made by this exact model id (`sourceMetadata.generation.modelId`). */
+    model?: string;
+    /** Only files the caller starred. */
+    starred?: boolean;
     /** Only the caller's own files, without the group, personal-share and data-lake widening of the default view. */
     owned?: boolean;
   };

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { Button, Stack, Typography } from '@mui/joy';
+import { Alert, Box, Button, Link, Stack, Typography } from '@mui/joy';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import type { ShadowDetector } from '@bike4mind/common';
 import { useAiAdvisory, type AiAbuseAdvisoryRow } from '@client/app/hooks/data/aiAdvisory';
@@ -68,6 +68,95 @@ export function AiAdvisoryStrip() {
           {`${count} ${advisories.length === 1 ? 'account' : 'accounts'} likely abuse (last ${AI_ADVISORY_WINDOW_HOURS}h, unreviewed)`}
           {detector && ` \u00b7 top signal: ${DETECTOR_LABELS[detector]}`}
         </Typography>
+        {data?.linkedAccountsStatus === 'failed' && (
+          <Alert color="warning">Linked accounts could not be checked. The AI advisory above is still available.</Alert>
+        )}
+        {data?.linkedAccountsStatus === 'truncated' && (
+          <Alert color="warning">The linked-account scan reached a cap. This list may be incomplete.</Alert>
+        )}
+        {(data?.linkedAccounts?.length ?? 0) > 0 && (
+          <Box component="details" data-testid="ai-advisory-linked-accounts">
+            <Box component="summary" sx={{ cursor: 'pointer' }}>
+              {data?.linkedAccounts.length} linked {data?.linkedAccounts.length === 1 ? 'account' : 'accounts'} to
+              review - not AI abuse verdicts
+            </Box>
+            <Stack gap={1.5} sx={{ pt: 1 }}>
+              <Typography level="body-sm">
+                These accounts share an exact signup or login IP with a flagged account within the last 7 days. Shared
+                networks can be legitimate. No name-only or JA4-only matches are included, and the scan does not follow
+                another hop.
+              </Typography>
+              {data?.linkedAccounts.map(account => (
+                <Stack gap={0.25} key={account.userId}>
+                  <Link
+                    href={`/admin/users/${account.userId}`}
+                    data-testid={`ai-advisory-linked-account-${account.userId}`}
+                    onClick={event => {
+                      if (
+                        event.defaultPrevented ||
+                        event.button !== 0 ||
+                        event.metaKey ||
+                        event.ctrlKey ||
+                        event.shiftKey ||
+                        event.altKey
+                      )
+                        return;
+                      event.preventDefault();
+                      void navigate({ to: '/admin/users/$userId', params: { userId: account.userId } });
+                    }}
+                  >
+                    {account.name ?? account.userId}
+                  </Link>
+                  {account.links.slice(0, 3).map(link => (
+                    <Typography
+                      level="body-xs"
+                      key={`${link.sourceUserId}-${link.ip}-${link.sourceKind}-${link.candidateKind}`}
+                    >
+                      {`This account's ${link.candidateKind} IP ${link.ip} matches a `}
+                      <Link
+                        href={`/admin/users/${link.sourceUserId}?tab=signins`}
+                        data-testid={`ai-advisory-linked-source-${account.userId}-${link.sourceUserId}-${link.ip}-${link.sourceKind}-${link.candidateKind}`}
+                        onClick={event => {
+                          if (
+                            event.defaultPrevented ||
+                            event.button !== 0 ||
+                            event.metaKey ||
+                            event.ctrlKey ||
+                            event.shiftKey ||
+                            event.altKey
+                          )
+                            return;
+                          event.preventDefault();
+                          void navigate({
+                            to: '/admin/users/$userId',
+                            params: { userId: link.sourceUserId },
+                            search: { tab: 'signins' },
+                          });
+                        }}
+                      >
+                        {`flagged account's ${link.sourceKind} IP`}
+                      </Link>
+                      .
+                    </Typography>
+                  ))}
+                  {account.links.length > 3 && (
+                    <Typography level="body-xs">
+                      {account.links.length - 3} additional matching observations.
+                    </Typography>
+                  )}
+                </Stack>
+              ))}
+              <WatchAccountsButton
+                label="Watch flagged and linked accounts"
+                userIds={[
+                  ...advisories.map(item => item.userId),
+                  ...(data?.linkedAccounts.map(item => item.userId) ?? []),
+                ]}
+                incomplete={data?.truncated || data?.linkedAccountsStatus !== 'complete'}
+              />
+            </Stack>
+          </Box>
+        )}
         {(networks.length > 0 || mailDomains.length > 0) && (
           <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
             <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>

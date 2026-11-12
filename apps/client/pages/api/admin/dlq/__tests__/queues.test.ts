@@ -5,6 +5,9 @@ import type * as DlqRegistryModule from '@bike4mind/server-utils/utils/dlqRegist
 
 const h = vi.hoisted(() => ({
   getQueueAttributes: vi.fn(),
+  getDlqUrl: vi.fn(),
+  resolveConsumerLogsForSourceQueue: vi.fn(),
+  adminPermissions: undefined as undefined | Record<string, string>,
   registry: undefined as readonly unknown[] | undefined,
   get: undefined as ((req: unknown, res: unknown) => Promise<void>) | undefined,
 }));
@@ -21,11 +24,16 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', async importOriginal => {
   return {
     ...actual,
     getDlqRegistry: () => h.registry ?? actual.coreDlqDescriptors(),
-    getDlqUrl: (label: string) => `https://sqs.example.com/${label}`,
+    getDlqUrl: h.getDlqUrl,
   };
 });
+vi.mock('@bike4mind/server-utils/utils/dlqConsumerLogs', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/dlqConsumerLogs')>()),
+  resolveConsumerLogsForSourceQueue: h.resolveConsumerLogsForSourceQueue,
+}));
 vi.mock('@server/middlewares/adminApi', () => ({
-  adminApi: () => {
+  adminApi: (options?: { adminPermissions?: Record<string, string> }) => {
+    h.adminPermissions = options?.adminPermissions;
     const chain = {
       use: () => chain,
       get: (fn: (req: unknown, res: unknown) => Promise<void>) => {
@@ -54,7 +62,106 @@ beforeEach(async () => {
   vi.clearAllMocks();
   h.registry = undefined;
   h.getQueueAttributes.mockResolvedValue({ approximateMessageCount: 3, approximateNotVisibleCount: 0 });
+  h.getDlqUrl.mockImplementation((label: string) => `https://sqs.example.com/${label}`);
+  h.resolveConsumerLogsForSourceQueue.mockResolvedValue(null);
   await import('../queues');
+});
+
+const CONSUMER_LOGS_REGISTRY = [
+  {
+    label: 'webhook-delivery',
+    displayName: 'Webhook Delivery',
+    application: 'Webhooks',
+    sourceQueue: 'webhookDeliveryQueue',
+  },
+  { label: 'image-edit', displayName: 'Image Edit', application: 'ImageGeneration', sourceQueue: 'imageEditQueue' },
+];
+
+type QueueRow = {
+  label: string;
+  deployed?: boolean;
+  approximateMessageCount: number;
+  logGroups: string[] | null;
+  logsUrl: string | null;
+};
+
+const list = async () => {
+  const res = { json: vi.fn() };
+  await h.get!({ user: { id: 'u1' } }, res);
+  return res.json.mock.calls[0][0] as { queues: QueueRow[] };
+};
+
+const webhookLogs = {
+  region: 'us-east-2',
+  logGroups: ['/aws/lambda/app-stage-WebhookConsumer'],
+  retryWindowMs: 3_600_000,
+};
+
+describe('GET /api/admin/dlq/queues consumer logs', () => {
+  beforeEach(() => {
+    h.registry = CONSUMER_LOGS_REGISTRY;
+    h.getQueueAttributes.mockReset().mockResolvedValue({ approximateMessageCount: 3, approximateNotVisibleCount: 0 });
+    h.getDlqUrl.mockReset().mockImplementation((label: string) => `https://sqs.example/${label}-dlq`);
+    h.resolveConsumerLogsForSourceQueue
+      .mockReset()
+      .mockImplementation(async (name: string) => (name === 'webhookDeliveryQueue' ? webhookLogs : null));
+  });
+
+  it('requires support:read', () => {
+    expect(h.adminPermissions).toEqual({ GET: 'support:read' });
+  });
+
+  it('returns the consumer log groups and a Logs Insights link per queue', async () => {
+    const { queues } = await list();
+
+    const webhook = queues.find(q => q.label === 'webhook-delivery')!;
+    expect(webhook.approximateMessageCount).toBe(3);
+    expect(webhook.logGroups).toEqual(['/aws/lambda/app-stage-WebhookConsumer']);
+    expect(
+      webhook.logsUrl!.startsWith('https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#')
+    ).toBe(true);
+    expect(webhook.logsUrl).toContain('ABSOLUTE');
+  });
+
+  it('returns null log fields when the consumer cannot be resolved', async () => {
+    const { queues } = await list();
+
+    expect(queues.find(q => q.label === 'image-edit')).toMatchObject({ logGroups: null, logsUrl: null });
+  });
+
+  it('marks a queue with no DLQ URL on this stage as not deployed, without failing the list', async () => {
+    h.getDlqUrl.mockImplementation((label: string) => {
+      if (label === 'image-edit') throw new Error('Missing DLQ URL for label: image-edit');
+      return `https://sqs.example/${label}-dlq`;
+    });
+
+    const { queues } = await list();
+
+    expect(queues.find(q => q.label === 'image-edit')).toMatchObject({ deployed: false, approximateMessageCount: -1 });
+    expect(h.getQueueAttributes).not.toHaveBeenCalledWith(expect.stringContaining('image-edit'));
+    const webhook = queues.find(q => q.label === 'webhook-delivery')!;
+    expect(webhook.approximateMessageCount).toBe(3);
+    expect(webhook.deployed).toBeUndefined();
+  });
+
+  it('keeps the log fields when the queue attributes fail', async () => {
+    h.getQueueAttributes.mockRejectedValue(new Error('throttled'));
+
+    const { queues } = await list();
+
+    const webhook = queues.find(q => q.label === 'webhook-delivery')!;
+    expect(webhook.approximateMessageCount).toBe(-1);
+    // A failed read on a queue that exists is not "not deployed": it must still block the all-clear.
+    expect(webhook.deployed).toBeUndefined();
+    expect(webhook.logGroups).toEqual(['/aws/lambda/app-stage-WebhookConsumer']);
+    expect(webhook.logsUrl).toEqual(expect.any(String));
+  });
+
+  it('carries no account id in the response', async () => {
+    const body = await list();
+
+    expect(JSON.stringify(body)).not.toMatch(/\d{12}/);
+  });
 });
 
 describe('GET /api/admin/dlq/queues', () => {

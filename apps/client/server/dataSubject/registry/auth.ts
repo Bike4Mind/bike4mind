@@ -291,6 +291,8 @@ export const authHolders = {
       'resetPasswordToken',
       'emailVerificationToken',
       'pendingEmailToken',
+      // A hash of the user id that only resolves provider safety notices; the export already has the id.
+      'providerEndUserId',
     ],
   },
   UserActivityCounter: {
@@ -303,6 +305,8 @@ export const authHolders = {
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
       { path: 'revokedBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'metadata.createdByUserId', matchBy: 'userId', action: 'anonymize' },
+      // An org-owned key outlives its creator, so only the creator link goes.
+      { path: 'orgOwned.createdByUserId', matchBy: 'userId', action: 'anonymize' },
     ],
     secretPaths: ['keyHash', 'keyDigest', 'callbackSigningSecret'],
   },

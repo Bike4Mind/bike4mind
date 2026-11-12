@@ -61,6 +61,7 @@ import {
 import type { McpMutationResult, McpServerInput, McpServersState } from '@shared/mcp';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
+import { createCompletionRunMinter } from './completionRuns';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
@@ -154,6 +155,7 @@ import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './rea
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { permissionProtectedLocations, toolProtectedLocations } from './protectedLocations';
 import { keepSessionWritesIn } from './tools/sessionScripts';
+import { mainCheckoutOf } from './tools/shellTools';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
 import { parsePaneInput, SimulatorLiveView } from './simulator/SimulatorLiveView';
@@ -478,6 +480,7 @@ export function registerChat(
     home,
     protectedRoots: () => permissionProtected.paths(),
     unresolvedProtected: () => permissionProtected.unresolved(),
+    mainCheckoutOf,
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
@@ -735,6 +738,9 @@ export function registerChat(
     models,
     modelSettings,
     logger,
+    mintCompletionRun: createCompletionRunMinter(message =>
+      logger.warn(`CHAT: could not mint a completion run: ${message}`)
+    ),
     turnTiming: TURN_TIMING,
     preferredModel: PREFERRED_MODEL,
     modelMemory: modelPreference,
@@ -804,6 +810,9 @@ export function registerChat(
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
     service.listModels(force === 'local' ? 'local' : force === true)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatDraftDefaults, async () =>
+    store.defaultsForNewSession(await service.modelForNewSession())
   );
   registerModelServersIpc(ipcMain, modelServers, async () => {
     const probed = await localHardware.probed();
@@ -1219,6 +1228,13 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatDiscardAttachment, (_event, sessionId: string, attachmentId: string) =>
     attachments.discard(sessionId, attachmentId)
   );
+  ipcMain.handle(IPC_CHANNELS.chatCopyDraftAttachments, (_event, draftId: string, sessionId: string, ids: string[]) =>
+    attachments.copyDraft(draftId, sessionId, ids)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatDiscardDraftAttachments, (_event, draftId: string) => {
+    if (!draftId.startsWith('draft-')) throw new Error('Invalid draft id.');
+    return attachments.disposeDraft(draftId);
+  });
 
   registerImageMenuIpc(ipcMain, {
     media,

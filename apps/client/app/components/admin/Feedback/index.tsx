@@ -20,7 +20,15 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import Papa from 'papaparse';
 import { toast } from 'sonner';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
-import { FEEDBACK_ID_PARAM, FEEDBACK_SUBJECTS } from '@bike4mind/common';
+import {
+  FEEDBACK_ID_PARAM,
+  FEEDBACK_SUBJECTS,
+  FEEDBACK_AI_AREAS,
+  FEEDBACK_AI_SEVERITIES,
+  FEEDBACK_RESOLUTIONS,
+  FEEDBACK_RESOLUTION_LABELS,
+} from '@bike4mind/common';
+import FeedbackCloseDialog from './FeedbackCloseDialog';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { CSV_FORMULA_PREFIX } from '@client/app/utils/csv';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
@@ -46,8 +54,10 @@ import { useFeedbackPagination } from './hooks/useFeedbackPagination';
 import { getFeedbackDisplayContent, type IExtendedFeedbackDocument } from './types';
 import FeedbackDetailDrawer from './FeedbackDetailDrawer';
 import { useFeedbackDetailNavigation } from './hooks/useFeedbackDetailNavigation';
-import { copyFeedbackRecordLink, feedbackConversationPath } from './feedbackLinks';
+import { copyFeedbackRecordLink, feedbackConversationPath, feedbackReporterMailto } from './feedbackLinks';
 import HelpContextChip from './HelpContextChip';
+import FeedbackTrendStrip from './FeedbackTrendStrip';
+import { FEEDBACK_RECEIVED_LABELS, FEEDBACK_RECEIVED_WINDOWS } from './feedbackTrends';
 import {
   FEEDBACK_STATUS_LABELS,
   FEEDBACK_STATUS_ORDER,
@@ -73,6 +83,10 @@ const SUBJECT_FILTER_OPTIONS = FEEDBACK_SUBJECTS.map(subject => ({
 const TYPE_FILTER_OPTIONS = FEEDBACK_TYPE_ORDER.map(type => ({
   value: type,
   label: FEEDBACK_TYPE_LABELS[type],
+}));
+const RECEIVED_FILTER_OPTIONS = FEEDBACK_RECEIVED_WINDOWS.map(range => ({
+  value: range,
+  label: FEEDBACK_RECEIVED_LABELS[range],
 }));
 
 // Tags the producers add that only restate the type chip; the rest (help, slash command,
@@ -199,6 +213,7 @@ const ContentCell = ({ row }: { row: FeedbackRow }) => (
 
 const FeedbackRowMenu = ({ row, onDelete }: { row: FeedbackRow; onDelete: (row: FeedbackRow) => void }) => {
   const conversationPath = feedbackConversationPath(row);
+  const reporterMailto = feedbackReporterMailto(row);
   return (
     <Dropdown>
       <MenuButton
@@ -233,6 +248,11 @@ const FeedbackRowMenu = ({ row, onDelete }: { row: FeedbackRow; onDelete: (row: 
             {row.questId ? 'Open the conversation at this turn' : 'Open the conversation'}
           </MenuItem>
         )}
+        {reporterMailto && (
+          <MenuItem component="a" href={reporterMailto} data-testid={`feedback-row-email-reporter-${row._id}`}>
+            Email reporter
+          </MenuItem>
+        )}
         <ListDivider />
         <MenuItem onClick={() => onDelete(row)} data-testid={`feedback-row-delete-${row._id}`}>
           Delete feedback
@@ -250,11 +270,16 @@ const FeedbackTab: React.FC = () => {
 
   const {
     filters,
+    setArea,
+    setSeverity,
     setSearchTerm,
     setStatusFilters,
     setSelectedOrganizations,
     setSubject,
+    setResolution,
     setTypes,
+    setReceived,
+    showOnly,
     toggleSortDirection,
     filterParams,
   } = useFeedbackFilters();
@@ -268,6 +293,9 @@ const FeedbackTab: React.FC = () => {
     isError,
     refreshFeedback,
     handleStatusChange,
+    feedbackToClose,
+    cancelClose,
+    confirmClose,
     handleDeleteFeedbackClick,
     confirmDeleteFeedback,
     feedbackToDelete,
@@ -353,6 +381,7 @@ const FeedbackTab: React.FC = () => {
       ID: feedbackItem._id,
       CreatedAt: feedbackItem.createdAt,
       Status: feedbackItem.status,
+      Resolution: feedbackItem.resolution ? FEEDBACK_RESOLUTION_LABELS[feedbackItem.resolution] : '',
       Type: FEEDBACK_TYPE_LABELS[feedbackTypeOf(feedbackItem.type)],
       Subject: feedbackItem.subject ? FEEDBACK_SUBJECT_LABELS[feedbackItem.subject] : '',
       UserId: feedbackItem.userId,
@@ -400,18 +429,16 @@ const FeedbackTab: React.FC = () => {
   }));
 
   const hasFilters =
+    filters.area !== undefined ||
+    filters.severity !== undefined ||
     filters.searchTerm.trim() !== '' ||
     statusNarrowed ||
     filters.subject !== undefined ||
+    filters.resolution !== undefined ||
     filters.types.length > 0 ||
+    filters.received !== undefined ||
     filters.selectedOrganizations.length > 0;
-  const clearFilters = () => {
-    setSearchTerm('');
-    setStatusFilters(toStatusFilters(FEEDBACK_STATUS_ORDER));
-    setSubject(undefined);
-    setTypes([]);
-    setSelectedOrganizations([]);
-  };
+  const clearFilters = () => showOnly({ statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
 
   // `loading` also covers a refetch with rows on screen (keepPreviousData): those rows stay, under a bar.
   const firstLoad = loading && currentFeedback.length === 0;
@@ -426,24 +453,31 @@ const FeedbackTab: React.FC = () => {
       label: 'Status',
       width: '8.5rem',
       render: row => (
-        <Select
-          size="sm"
-          value={row.status}
-          onChange={(_, value) => void handleStatusChange(row, value)}
-          slotProps={{
-            button: {
-              'aria-label': `Status of the report from ${reporterName(row)}`,
-              'data-testid': `feedback-row-status-select-${row._id}`,
-            },
-          }}
-          sx={{ width: '100%', minWidth: 0 }}
-        >
-          {FEEDBACK_STATUS_ORDER.map(status => (
-            <Option key={status} value={status}>
-              {FEEDBACK_STATUS_LABELS[status]}
-            </Option>
-          ))}
-        </Select>
+        <Stack gap={0.5}>
+          <Select
+            size="sm"
+            value={row.status}
+            onChange={(_, value) => void handleStatusChange(row, value)}
+            slotProps={{
+              button: {
+                'aria-label': `Status of the report from ${reporterName(row)}`,
+                'data-testid': `feedback-row-status-select-${row._id}`,
+              },
+            }}
+            sx={{ width: '100%', minWidth: 0 }}
+          >
+            {FEEDBACK_STATUS_ORDER.map(status => (
+              <Option key={status} value={status}>
+                {FEEDBACK_STATUS_LABELS[status]}
+              </Option>
+            ))}
+          </Select>
+          {row.resolution && (
+            <Typography level="body-xs" data-testid={`feedback-row-resolution-${row._id}`}>
+              {FEEDBACK_RESOLUTION_LABELS[row.resolution]}
+            </Typography>
+          )}
+        </Stack>
       ),
     },
   ];
@@ -483,6 +517,8 @@ const FeedbackTab: React.FC = () => {
         }
       />
 
+      <FeedbackTrendStrip showOnly={showOnly} />
+
       <Stack
         direction="row"
         flexWrap="wrap"
@@ -512,6 +548,34 @@ const FeedbackTab: React.FC = () => {
           value={filters.types}
           options={TYPE_FILTER_OPTIONS}
           onChange={picked => setTypes(FEEDBACK_TYPE_ORDER.filter(type => picked.includes(type)))}
+        />
+        <FilterChip
+          id="feedback-area"
+          label="Area"
+          value={filters.area}
+          options={FEEDBACK_AI_AREAS.map(value => ({ value, label: value }))}
+          onChange={value => setArea(FEEDBACK_AI_AREAS.find(area => area === value))}
+        />
+        <FilterChip
+          id="feedback-severity"
+          label="Severity"
+          value={filters.severity}
+          options={FEEDBACK_AI_SEVERITIES.map(value => ({ value, label: value }))}
+          onChange={value => setSeverity(FEEDBACK_AI_SEVERITIES.find(severity => severity === value))}
+        />
+        <FilterChip
+          id="feedback-resolution"
+          label="Resolution"
+          value={filters.resolution}
+          options={FEEDBACK_RESOLUTIONS.map(value => ({ value, label: FEEDBACK_RESOLUTION_LABELS[value] }))}
+          onChange={value => setResolution(FEEDBACK_RESOLUTIONS.find(resolution => resolution === value))}
+        />
+        <FilterChip
+          id="feedback-received"
+          label="Received"
+          value={filters.received}
+          options={RECEIVED_FILTER_OPTIONS}
+          onChange={value => setReceived(FEEDBACK_RECEIVED_WINDOWS.find(range => range === value))}
         />
         {/* Single-select, because GET /api/feedback takes one subject or none. */}
         <FilterChip
@@ -608,11 +672,9 @@ const FeedbackTab: React.FC = () => {
           )
         }
         reasonPresets={ADMIN_REASON_PRESETS.feedbackDeletion}
-        // DELETE /api/feedback/:id/delete takes no reason, so the one picked here is neither sent nor stored.
-        reasonAudited={false}
         confirmLabel="Delete feedback"
         tone="danger"
-        onConfirm={() => confirmDeleteFeedback()}
+        onConfirm={confirmDeleteFeedback}
         data-testid="feedback-delete-dialog"
       />
 
@@ -625,6 +687,9 @@ const FeedbackTab: React.FC = () => {
         onClose={closeFeedback}
         onStatusChange={handleStatusChange}
       />
+      {feedbackToClose && (
+        <FeedbackCloseDialog feedbackId={feedbackToClose.id} onClose={cancelClose} onConfirm={confirmClose} />
+      )}
     </Stack>
   );
 };
