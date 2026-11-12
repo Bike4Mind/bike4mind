@@ -6179,6 +6179,12 @@ export class ChatService {
       const brief = validated.contract ? renderTaskBrief(validated.contract) : seed;
       const named = title?.trim();
       const inherited = managed ? await this.currentPolicyFor(parent, managed) : undefined;
+      if (this.deps.store.scopeKey() !== scope)
+        return {
+          ok: false,
+          reason: 'model-policy',
+          message: 'Account changed before launch. Try again in the intended account.',
+        };
       const child = await this.deps.store.create(selection?.effectiveModel ?? parent.model, {
         ...(inherited ? { orchestrationPolicy: inherited } : {}),
         ...(selection ? { workerSelection: selection } : {}),

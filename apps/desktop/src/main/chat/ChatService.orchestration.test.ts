@@ -248,6 +248,54 @@ describe('role routing and task runtime compatibility', () => {
     ).toBe(true);
   });
 
+  it('refuses a child when the account changes while its inherited policy is loading', async () => {
+    const parent = await created();
+    await policy();
+    await service.setSessionOrchestrate(parent.id, true);
+    await service.send(parent.id, 'Delegate the bounded task');
+    await waitStream(0);
+
+    let scope = store.scopeKey();
+    vi.spyOn(store, 'scopeKey').mockImplementation(() => scope);
+    const createChild = vi.spyOn(store, 'create');
+    const get = store.get.bind(store);
+    let policyRead = false;
+    let releasePolicy!: () => void;
+    const policyReady = new Promise<void>(resolve => {
+      releasePolicy = resolve;
+    });
+    let reachedPolicy = false;
+    vi.spyOn(service, 'listModels').mockImplementationOnce(async () => {
+      policyRead = true;
+      return { models };
+    });
+    vi.spyOn(store, 'get').mockImplementation(async id => {
+      const snapshot = await get(id);
+      if (policyRead && id === parent.id) {
+        policyRead = false;
+        reachedPolicy = true;
+        await policyReady;
+      }
+      return snapshot;
+    });
+
+    tool(0, 'session_spawn', { prompt: 'Bounded child task', title: 'Child', contract });
+    try {
+      await vi.waitUntil(() => reachedPolicy, { timeout: 5000, interval: 5 });
+      scope = 'another-account';
+      releasePolicy();
+      await vi.waitUntil(() => events.some(event => event.type === 'tool-end' && event.call.name === 'session_spawn'));
+
+      const refused = events.find(event => event.type === 'tool-end' && event.call.name === 'session_spawn');
+      expect(createChild).not.toHaveBeenCalled();
+      expect(refused?.type === 'tool-end' && refused.call.error).toContain('Account changed before launch');
+      expect((await store.list()).filter(session => session.origin?.parentSessionId === parent.id)).toEqual([]);
+      expect(post.mock.calls.every((_call, index) => wire(index).model === 'planner')).toBe(true);
+    } finally {
+      releasePolicy();
+    }
+  });
+
   it('resolves a family alias to the newest allowed catalog model and offers the field only when overrides exist', async () => {
     models.push(
       { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', releaseDate: '2026-02-01', supportsTools: true },
