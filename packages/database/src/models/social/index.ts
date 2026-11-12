@@ -5,6 +5,7 @@ export * from './FeedbackModel';
 export * from './FeedbackReportQueries';
 export * from './FeedbackRollupQueries';
 export * from './FeedbackTextModel';
+export * from './FeedbackNoteModel';
 export * from './FriendshipModel';
 export * from './GroupModel';
 export * from './InboxModel';

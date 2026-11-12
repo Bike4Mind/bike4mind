@@ -5,6 +5,7 @@ import {
   ApiKeyScopeValue,
   IUserApiKeyRateLimit,
   IUserDocument,
+  IUserApiKey,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
@@ -15,7 +16,7 @@ declare global {
 
     interface ApiKeyInfo {
       keyId: string;
-      serviceAccount?: boolean;
+      orgOwned?: IUserApiKey['orgOwned'];
       scopes: ApiKeyScopeValue[];
       rateLimit: IUserApiKeyRateLimit;
       /** Owner trust before API key scopes can withhold the admin role. */

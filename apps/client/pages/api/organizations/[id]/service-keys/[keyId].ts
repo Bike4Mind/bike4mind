@@ -20,7 +20,7 @@ const handler = baseApi({ auth: 'jwtOnly', allowedMethods: ['POST', 'DELETE'] })
         req.user.id,
         { keyId },
         {
-          serviceAccountManagement: true,
+          includeOrgOwned: true,
           db: {
             userApiKeys: userApiKeyRepository,
             organizations: { findIdsAdministeredBy: async () => [id] },

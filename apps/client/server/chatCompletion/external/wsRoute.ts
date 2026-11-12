@@ -78,6 +78,8 @@ import { withOrganizationMfaContext } from '@bike4mind/db-core';
 const WS_COMPLETIONS_ENDPOINT = '/api/ai/v1/ws-completions';
 
 const WsCompletionRequestSchema = CompletionRequestSchema.extend({
+  // Run attribution is only verified and forwarded on the SSE route; refuse it here rather than drop it silently.
+  run: z.never().optional(),
   requestId: z.uuid(),
   connectionId: z.string().optional(),
 });

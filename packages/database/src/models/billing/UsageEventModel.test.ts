@@ -48,6 +48,19 @@ const record = (overrides: Partial<IUsageEventInput> = {}) =>
 
 describe('UsageEventRepository', () => {
   describe('record', () => {
+    it('persists run lineage as sent, leaving an absent purpose absent', async () => {
+      const run = { runId: 'run-1', role: 'worker' as const, taskId: 'task-1', parentSessionId: 'root-session' };
+      const doc = await record({ feature: 'completion_api', run });
+
+      const stored = await UsageEvent.findById(doc!.id).lean();
+      expect(stored?.run).toEqual(run);
+      expect(stored?.run).not.toHaveProperty('purpose');
+    });
+
+    it('rejects a run role outside the vocabulary', async () => {
+      await expect(record({ run: { runId: 'run-1', role: 'boss' as unknown as 'root' } })).rejects.toThrow(/role/);
+    });
+
     it('persists an event with all quantities and money fields', async () => {
       const doc = await record({
         providerInputTokens: 900,

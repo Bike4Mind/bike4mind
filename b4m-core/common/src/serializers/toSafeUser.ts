@@ -26,7 +26,7 @@ import type { SafeUser } from '../schemas/user';
  * `redactUserSecretsForSelf`.
  */
 export const USER_SECRET_FIELDS = [
-  'orgServiceAccount',
+  'serviceAccountOrganizationId',
   'password',
   'mfa',
   'totpLastStep',

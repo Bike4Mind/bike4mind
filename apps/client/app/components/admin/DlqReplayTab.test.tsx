@@ -7,6 +7,9 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import DlqReplayTab from './DlqReplayTab';
 
 const state = vi.hoisted(() => ({
+  compact: false,
+  messagesLoading: false,
+  messagesError: false,
   retentionSeconds: undefined as number | undefined,
   messages: [] as Array<{
     messageId: string;
@@ -16,6 +19,7 @@ const state = vi.hoisted(() => ({
     approximateReceiveCount: string;
     failureLookupFailed?: boolean;
     failure?: { errorMessage: string; category: 'timeout' };
+    recommendation?: { action: 'replay' | 'inspect'; label: string; basis: string };
   }>,
   history: [] as Array<{
     id: string;
@@ -82,6 +86,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: h.user }) }));
+vi.mock('@mui/system/useMediaQuery', () => ({ default: () => state.compact }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({
@@ -93,8 +98,8 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   }),
   useDlqMessages: () => ({
     data: h.messages.length ? h.messages : state.messages,
-    isLoading: false,
-    isError: false,
+    isLoading: state.messagesLoading,
+    isError: state.messagesError,
     refetch: vi.fn(),
   }),
   useDlqReplay: () => ({
@@ -105,7 +110,7 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   }),
   useDlqDiscard: () => ({ mutateAsync: h.discard, isPending: false }),
   useDlqHistory: () => ({
-    data: state.history,
+    data: { pages: [{ history: state.history, nextCursor: null }] },
     isLoading: false,
     isError: false,
   }),
@@ -124,7 +129,7 @@ function renderTab() {
 }
 
 const selectQueue = async (name: RegExp) => {
-  await userEvent.click(screen.getByRole('combobox'));
+  await userEvent.click(within(screen.getByTestId('dlq-queue-selector')).getByRole('combobox'));
   await userEvent.click(await screen.findByRole('option', { name }));
 };
 
@@ -140,6 +145,9 @@ const renderWithQueueSelected = async (name = /Queue One/) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.compact = false;
+  state.messagesLoading = false;
+  state.messagesError = false;
   state.messages = [
     {
       messageId: 'm1',
@@ -293,7 +301,112 @@ describe('DlqReplayTab queue deep link', () => {
   });
 });
 
+describe('DlqReplayTab toolkit presentation', () => {
+  it('keeps every column and horizontal scrolling when the viewport matches a compact breakpoint', async () => {
+    state.compact = true;
+    state.messages[0].failure = { errorMessage: 'worker timed out', category: 'timeout' };
+    state.messages[0].recommendation = {
+      action: 'replay',
+      label: 'Replay',
+      basis: 'Recorded transient failure: timeout.',
+    };
+    await renderWithQueueSelected();
+    const table = screen.getByTestId('dlq-messages-table');
+    expect(within(table).getAllByRole('columnheader')).toHaveLength(9);
+    expect(table).toHaveStyle({ minWidth: '94rem' });
+    expect(screen.getByRole('region', { name: 'Dead-letter messages' })).toHaveStyle({ overflowX: 'auto' });
+    const row = screen.getByTestId('dlq-message-row-m1');
+    expect(within(row).getAllByRole('cell')).toHaveLength(9);
+    expect(row).toHaveTextContent('m1');
+    expect(row).toHaveTextContent('worker timed out');
+    expect(within(row).getByTestId('dlq-recommendation-m1')).toHaveTextContent('Recorded transient failure: timeout.');
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+    expect(screen.getByTestId('dlq-failure-reason')).toHaveTextContent('worker timed out');
+  });
+
+  it('keeps history columns and copyable IDs at a narrow breakpoint', async () => {
+    state.compact = true;
+    state.history = [
+      {
+        id: 'history1',
+        queueLabel: 'q1',
+        messageId: 'full-message-id',
+        sourceQueue: 'source',
+        status: 'success',
+        replayedBy: 'admin',
+        replayedByName: 'Admin',
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    renderTab();
+    const table = screen.getByTestId('dlq-history-table');
+    expect(within(table).getAllByRole('columnheader')).toHaveLength(7);
+    expect(table).toHaveStyle({ minWidth: '70rem' });
+    expect(table.closest('[role="region"]')).toHaveStyle({ overflowX: 'auto' });
+    expect(screen.getByTestId('dlq-history-copy-id-history1')).toHaveAttribute('aria-label', 'Copy message ID');
+    expect(screen.getByText('full-message-id')).toHaveStyle({ whiteSpace: 'nowrap' });
+  });
+
+  it('shows an empty state rather than a blank table', async () => {
+    state.messages = [];
+    await renderWithQueueSelected();
+    expect(screen.getByText('No messages in this queue')).toBeInTheDocument();
+  });
+
+  it('replaces stale rows with the shared error state', async () => {
+    state.messagesError = true;
+    await renderWithQueueSelected();
+    expect(screen.getByText('Messages failed to load.')).toBeInTheDocument();
+    expect(screen.queryByTestId('dlq-message-row-m1')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['dlq-replay-all', 'dlq-replay-dialog', 'dlq-replay-confirm'],
+    ['dlq-replay-single-m1', 'dlq-single-replay-dialog', 'dlq-single-replay-confirm'],
+  ])('uses a reason picker in the %s confirmation', async (openId, dialogId, confirmId) => {
+    h.user = { isAdmin: true };
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId(openId));
+    expect(screen.getByTestId(confirmId)).toBeDisabled();
+    expect(screen.getByTestId(`${dialogId}-reason-input-helper`)).toHaveTextContent('Recorded in the audit log');
+    fireEvent.change(screen.getByTestId(`${dialogId}-reason-input`), { target: { value: 'Reviewed the failure' } });
+    expect(screen.getByTestId(confirmId)).toBeEnabled();
+    await userEvent.click(screen.getByTestId(`${dialogId}-cancel-btn`));
+    expect(h.replay).not.toHaveBeenCalled();
+  });
+});
+
 describe('DlqReplayTab failure metadata', () => {
+  it('shows an advisory recommendation and its basis on each row', async () => {
+    state.messages[0].failure = { errorMessage: 'worker timed out', category: 'timeout' };
+    state.messages[0].recommendation = {
+      action: 'replay',
+      label: 'Replay',
+      basis: 'Recorded transient failure: timeout.',
+    };
+    await renderWithQueueSelected();
+    expect(screen.getByTestId('dlq-recommendation-m1')).toHaveTextContent('Replay');
+    expect(screen.getByTestId('dlq-recommendation-m1')).toHaveTextContent('Recorded transient failure: timeout.');
+    expect(screen.getAllByText('Advisory only; review before acting.')).toHaveLength(1);
+  });
+
+  it('uses Inspect for old server data and displays one advisory across multiple rows', async () => {
+    state.messages[0].failure = { errorMessage: 'timeout', category: 'timeout' };
+    state.messages.push({ ...state.messages[0], messageId: 'm2' });
+    await renderWithQueueSelected();
+    expect(screen.getByTestId('dlq-recommendation-m1')).toHaveTextContent('Inspect first');
+    expect(screen.getByTestId('dlq-recommendation-m2')).toHaveTextContent('Inspect first');
+    expect(screen.getAllByText('Advisory only; review before acting.')).toHaveLength(1);
+  });
+  it('copies the full message ID without opening the row drawer', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    await renderWithQueueSelected();
+    fireEvent.click(screen.getByTestId('dlq-copy-id-m1'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('m1'));
+    expect(screen.queryByTestId('dlq-drawer-close')).not.toBeInTheDocument();
+  });
+
   it('shows recorded reason and category in the row and drawer', async () => {
     state.messages[0].failure = { errorMessage: 'worker timed out', category: 'timeout' };
     await renderWithQueueSelected();
@@ -419,9 +532,10 @@ describe('DlqReplayTab history table', () => {
     ).toBeTruthy();
     const failed = within(screen.getByTestId('dlq-history-row-failed-1'));
     expect(failed.getByText('Discard request failed')).toBeTruthy();
-    expect(failed.getByText(/expired receipt/)).toHaveTextContent('Job obsolete');
-    expect(within(screen.getByTestId('dlq-history-row-legacy-1')).getByText('Failed')).toBeTruthy();
-    expect(screen.getByRole('columnheader', { name: 'Recorded at' })).toBeTruthy();
+    expect(failed.getByText(/expired receipt/)).toBeTruthy();
+    expect(failed.getByText('Job obsolete')).toBeTruthy();
+    expect(within(screen.getByTestId('dlq-history-row-legacy-1')).getAllByText('Failed')).toHaveLength(2);
+    expect(screen.getByRole('columnheader', { name: 'Time' })).toBeTruthy();
   });
 
   it('shows discarded history with its reason', () => {
@@ -439,12 +553,54 @@ describe('DlqReplayTab history table', () => {
       },
     ];
     renderTab();
-    expect(within(screen.getByTestId('dlq-history-row-discard-1')).getByText('discarded')).toBeTruthy();
+    expect(within(screen.getByTestId('dlq-history-row-discard-1')).getAllByText('Discarded')).toHaveLength(2);
     expect(screen.getByText('Job obsolete')).toBeTruthy();
   });
 });
 
 describe('DlqReplayTab replay permission', () => {
+  it.each(['side-effects', 'unsafe', undefined])(
+    'shows consequences and requires a reason for %s in single and batch replay',
+    async replay => {
+      h.user = { isAdmin: true };
+      state.queues = [
+        { ...QUEUE_ONE, replay, description: 'Delivers notifications.', replayNote: 'A replay can deliver again.' },
+      ];
+      h.replay.mockResolvedValue({ replayed: 1, failed: 0, skipped: 0, notFound: 0, results: [] });
+      await renderWithQueueSelected();
+      for (const [opener, confirm, dialog] of [
+        ['dlq-replay-single-m1', 'dlq-single-replay-confirm', 'dlq-single-replay-dialog'],
+        ['dlq-replay-all', 'dlq-replay-confirm', 'dlq-replay-dialog'],
+      ]) {
+        await userEvent.click(screen.getByTestId(opener));
+        expect(screen.getByTestId('dlq-replay-summary')).toHaveTextContent('Queue One');
+        expect(screen.getByTestId('dlq-replay-summary')).toHaveTextContent('A replay can deliver again.');
+        expect(screen.getByTestId(confirm)).toBeDisabled();
+        fireEvent.change(screen.getByTestId(`${dialog}-reason-input`), { target: { value: 'Reviewed side effects' } });
+        await userEvent.click(screen.getByTestId(confirm));
+        expect(h.replay).toHaveBeenLastCalledWith(expect.objectContaining({ reason: 'Reviewed side effects' }));
+      }
+    }
+  );
+
+  it.each(['batch', 'direct single', 'ids single'])('submits a safe %s replay without an empty reason', async mode => {
+    h.user = { isAdmin: true };
+    state.queues = [{ ...QUEUE_ONE, replay: 'safe' }];
+    if (mode === 'ids single') delete state.messages[0].receiptHandle;
+    h.replay.mockResolvedValue({ replayed: 1, failed: 0, skipped: 0, notFound: 0, results: [] });
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId(mode === 'batch' ? 'dlq-replay-all' : 'dlq-replay-single-m1'));
+    if (mode !== 'batch') expect(screen.getByTestId('dlq-replay-summary')).toHaveTextContent('m1');
+    await userEvent.click(screen.getByTestId(mode === 'batch' ? 'dlq-replay-confirm' : 'dlq-single-replay-confirm'));
+    const expected =
+      mode === 'batch'
+        ? { batchSize: 100 }
+        : mode === 'direct single'
+          ? { messages: [{ messageId: 'm1', receiptHandle: 'receipt-1', body: '{}' }] }
+          : { messageIds: ['m1'] };
+    expect(h.replay).toHaveBeenCalledWith({ queueLabel: 'q1', reason: undefined, ...expected });
+  });
+
   it('disables both replay buttons for a support:read viewer', async () => {
     h.user = { isAdmin: false, adminPermissions: ['support:read'] };
     await renderWithQueueSelected();
@@ -546,11 +702,11 @@ describe('DlqReplayTab messages table', () => {
 
   it('explains that browser views contribute to the receive count', async () => {
     await renderWithQueueSelected();
-    const receivesHeader = within(screen.getByTestId('dlq-messages-table')).getByText('Receives');
-    const tooltipWrapper = receivesHeader.closest('[aria-label], [title]') ?? receivesHeader.parentElement;
-    const titleAttr = tooltipWrapper?.getAttribute('title') ?? tooltipWrapper?.getAttribute('aria-label') ?? '';
-    expect(titleAttr).toContain('including views in this browser');
-    expect(titleAttr).toContain('not a count of handler failures');
+    const receives = within(screen.getByTestId('dlq-message-row-m1')).getByText('1');
+    await userEvent.hover(receives);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip).toHaveTextContent('including views in this browser');
+    expect(tooltip).toHaveTextContent('not a count of handler failures');
   });
 });
 

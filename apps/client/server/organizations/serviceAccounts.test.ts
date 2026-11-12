@@ -62,7 +62,8 @@ describe('persisted non-seat service key lifecycle', () => {
     const principal = await User.findById(minted.principalId).orFail();
     expect(principal.isSystem).toBe(true);
     expect(principal.isAdmin).toBe(false);
-    expect(principal.organizationId).toBeNull();
+    expect(principal.serviceAccountOrganizationId).toBe(org.id);
+    expect(principal.email).toMatch(/\.invalid$/);
     const unchanged = await Organization.findById(org.id).orFail();
     expect(unchanged.seats).toBe(3);
     expect(unchanged.users.map(row => row.userId.toString())).toEqual([creator.id]);
@@ -131,7 +132,7 @@ describe('persisted non-seat service key lifecycle', () => {
       owner.id,
       { keyId: minted.id },
       {
-        serviceAccountManagement: true,
+        includeOrgOwned: true,
         db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository },
       }
     );
@@ -169,7 +170,7 @@ describe('persisted non-seat service key lifecycle', () => {
     await expect(createServiceKey(actor, org.id, input)).rejects.toThrow();
     const ownOrg = await Organization.create({ name: 'own', userId: actor.id });
     await expect(createServiceKey(actor, ownOrg.id, input)).rejects.toThrow('Grant must belong');
-    expect(await User.countDocuments({ 'orgServiceAccount.organizationId': ownOrg.id })).toBe(0);
+    expect(await User.countDocuments({ serviceAccountOrganizationId: ownOrg.id })).toBe(0);
   });
   it('requires a persisted matching org on project grants at mint and every use', async () => {
     const actor = await User.create({ name: 'project owner', username: 'project-owner', email: null });
@@ -189,6 +190,18 @@ describe('persisted non-seat service key lifecycle', () => {
     });
     const request = { method: 'GET', path: '/api/v1/projects/[id]', resourceId: project.id };
     await expect(assertOrgServiceAccountRequest(principal, validation, request)).resolves.toBeUndefined();
+    const sibling = await createServiceKey(actor, org.id, {
+      name: 'compute-only',
+      scopes: [ApiKeyScope.AI_CHAT],
+      grants: [{ resourceType: 'organization', resourceId: org.id, permission: 'compute' }],
+    });
+    expect(sibling.principalId).toBe(principal.id);
+    const siblingValidation = await userApiKeyService.validateUserApiKey(sibling.key, {
+      db: { userApiKeys: userApiKeyRepository },
+    });
+    await expect(assertOrgServiceAccountRequest(principal, siblingValidation, request)).rejects.toThrow(
+      'resource grant required'
+    );
     await Project.collection.updateOne(
       { _id: project._id },
       { $set: { organizationId: new mongoose.Types.ObjectId().toString() } }
@@ -212,7 +225,7 @@ describe('persisted non-seat service key lifecycle', () => {
     } finally {
       audit.mockRestore();
     }
-    expect(await User.countDocuments({ 'orgServiceAccount.organizationId': org.id })).toBe(0);
+    expect(await User.countDocuments({ serviceAccountOrganizationId: org.id })).toBe(0);
     expect(await UserApiKey.countDocuments({ organizationId: org.id })).toBe(0);
   });
 });

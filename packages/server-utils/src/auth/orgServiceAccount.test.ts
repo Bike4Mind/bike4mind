@@ -4,15 +4,16 @@ vi.mock('@bike4mind/database', () => ({ organizationRepository: {}, Project: {} 
 import { serviceAccountRequestGrant } from './orgServiceAccount';
 
 const account = {
-  organizationId: 'org',
-  createdByUserId: 'deleted-creator',
-  grants: [
-    { resourceType: 'organization' as const, resourceId: 'org', permission: 'compute' as const },
-    { resourceType: 'project' as const, resourceId: 'project', permission: 'read' as const },
-  ],
+  serviceAccountOrganizationId: 'org',
 };
 const key = {
-  serviceAccount: true,
+  orgOwned: {
+    createdByUserId: 'deleted-creator',
+    grants: [
+      { resourceType: 'organization' as const, resourceId: 'org', permission: 'compute' as const },
+      { resourceType: 'project' as const, resourceId: 'project', permission: 'read' as const },
+    ],
+  },
   organizationId: 'org',
   billingOwnerType: CreditHolderType.Organization,
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.READ_PROJECTS],
@@ -33,7 +34,11 @@ describe('service account scope and resource intersection', () => {
       serviceAccountRequestGrant(account, { ...key, scopes: [] }, { method: 'POST', path: '/api/lattice/chat' })
     ).toBeNull();
     expect(
-      serviceAccountRequestGrant({ ...account, grants: [] }, key, { method: 'POST', path: '/api/lattice/chat' })
+      serviceAccountRequestGrant(
+        account,
+        { ...key, orgOwned: { createdByUserId: 'creator', grants: [] } },
+        { method: 'POST', path: '/api/lattice/chat' }
+      )
     ).toBeNull();
   });
   it('denies cross-org billing and ungranted resources', () => {
@@ -61,6 +66,17 @@ describe('service account scope and resource intersection', () => {
         path: '/api/v1/projects/[id]',
         resourceId: 'project',
       })
+    ).toBeNull();
+  });
+  it('does not inherit sibling key grants or admit ungranted canonical keys', () => {
+    const sibling = { ...key, orgOwned: { createdByUserId: 'other' } };
+    expect(serviceAccountRequestGrant(account, sibling, { method: 'POST', path: '/api/lattice/chat' })).toBeNull();
+    expect(
+      serviceAccountRequestGrant(
+        account,
+        { ...key, orgOwned: undefined },
+        { method: 'POST', path: '/api/lattice/chat' }
+      )
     ).toBeNull();
   });
 });

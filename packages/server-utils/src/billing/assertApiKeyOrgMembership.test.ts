@@ -11,6 +11,12 @@ import { withholdAdminRole } from '../auth/apiKeyAdminScope';
 const org = (users: string[]) =>
   ({ id: 'org1', userId: 'owner', users: users.map(userId => ({ userId })) }) as unknown as IOrganizationDocument;
 const member = { id: 'u1', isAdmin: false };
+const serviceAccountOf = (organizationId: string) => ({
+  id: 'sa1',
+  isAdmin: false,
+  isSystem: true,
+  serviceAccountOrganizationId: organizationId,
+});
 
 describe('assertApiKeyOrgMembership', () => {
   it('admits a non-seat service principal only for its own organization', () => {
@@ -18,7 +24,7 @@ describe('assertApiKeyOrgMembership', () => {
       id: 'service',
       isAdmin: false,
       isSystem: true,
-      orgServiceAccount: { organizationId: 'org1', createdByUserId: 'deleted', grants: [] },
+      serviceAccountOrganizationId: 'org1',
     };
     expect(() => assertApiKeyOrgMembership({ billingOrg: org([]), billingUser, isApiKeyCaller: true })).not.toThrow();
     expect(() =>
@@ -26,7 +32,7 @@ describe('assertApiKeyOrgMembership', () => {
         billingOrg: org([]),
         billingUser: {
           ...billingUser,
-          orgServiceAccount: { ...billingUser.orgServiceAccount, organizationId: 'other' },
+          serviceAccountOrganizationId: 'other',
         },
         isApiKeyCaller: true,
       })
@@ -38,6 +44,7 @@ describe('assertApiKeyOrgMembership', () => {
     ['a platform admin whose key lacks the admin scope', org([]), withholdAdminRole({ id: 'u1', isAdmin: true }), true],
     ['a JWT caller off the roster', org([]), member, false],
     ['a user-billed key (no billing org)', null, member, true],
+    ["the org's own service account, never on the roster", org([]), serviceAccountOf('org1'), true],
   ])('admits %s', (_label, billingOrg, billingUser, isApiKeyCaller) => {
     expect(() => assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller })).not.toThrow();
   });
@@ -48,6 +55,15 @@ describe('assertApiKeyOrgMembership', () => {
     expect(refuse).toThrow(BadRequestError);
     expect(refuse).toThrow(
       expect.objectContaining({ statusCode: 400, message: expect.stringMatching(/no longer a member/) })
+    );
+  });
+
+  it.each([
+    ["another org's service account", serviceAccountOf('org2')],
+    ['a non-system user claiming the service-account org', { ...serviceAccountOf('org1'), isSystem: false }],
+  ])('refuses %s', (_label, billingUser) => {
+    expect(() => assertApiKeyOrgMembership({ billingOrg: org([]), billingUser, isApiKeyCaller: true })).toThrow(
+      BadRequestError
     );
   });
 });

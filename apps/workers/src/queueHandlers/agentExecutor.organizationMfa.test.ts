@@ -37,10 +37,7 @@ describe('background execution organization MFA', () => {
   });
   it('does not admit a service account without a background execution grant', async () => {
     await expect(
-      assertExecutionOrganizationMfa(
-        { id: 'service', orgServiceAccount: { organizationId: 'org', createdByUserId: 'owner', grants: [] } },
-        { organizationId: 'org' }
-      )
+      assertExecutionOrganizationMfa({ id: 'service', serviceAccountOrganizationId: 'org' }, { organizationId: 'org' })
     ).rejects.toThrow('resource-grant-aware REST');
     expect(mocks.org).not.toHaveBeenCalled();
   });

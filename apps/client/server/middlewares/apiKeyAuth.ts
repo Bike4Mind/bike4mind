@@ -191,7 +191,7 @@ export const apiKeyAuth = (
             path: endpointPath,
             resourceId: req.query?.id,
           }),
-        () => (validation.serviceAccount ? validation.organizationId : undefined)
+        () => (validation.orgOwned ? validation.organizationId : undefined)
       );
 
       // Must run before withholdAdminRole: admins bypass the paid-only switch.
@@ -230,7 +230,7 @@ export const apiKeyAuth = (
 
       req.apiKeyInfo = {
         keyId: validation.keyId!,
-        serviceAccount: validation.serviceAccount,
+        orgOwned: validation.orgOwned,
         scopes: validation.scopes!,
         rateLimit,
         ownerUntrusted,

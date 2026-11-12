@@ -9,3 +9,5 @@ export * from './OrganizationAuditEventModel';
 export * from './AdminApprovalModel';
 export * from './AdminGateReservationModel';
 export * from './AdminAiSuggestionModel';
+export * from './AdminMorningBriefModel';
+export * from './AdminAiOperationsModel';

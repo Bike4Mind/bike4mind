@@ -1,7 +1,12 @@
-import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { ApiKeyScope, CreditHolderType, type IUserDocument } from '@bike4mind/common';
-import { User, Project, userApiKeyRepository, agentRepository } from '@bike4mind/database';
+import {
+  Project,
+  userApiKeyRepository,
+  agentRepository,
+  userRepository,
+  organizationRepository,
+} from '@bike4mind/database';
 import { userApiKeyService } from '@bike4mind/services';
 import { withTransaction } from '@bike4mind/db-core';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
@@ -36,7 +41,7 @@ export const serviceKeyInput = z
 
 export async function createServiceKey(actor: IUserDocument, organizationId: string, body: unknown) {
   const input = serviceKeyInput.parse(body);
-  await verifyOrgAccess(actor, organizationId);
+  const org = await verifyOrgAccess(actor, organizationId);
   await assertApiKeyAccessAllowed(actor, { billingOwnerType: CreditHolderType.Organization, organizationId });
   if (input.expiresAt && new Date(input.expiresAt) <= new Date())
     throw new BadRequestError('Expiry must be in the future');
@@ -50,17 +55,8 @@ export async function createServiceKey(actor: IUserDocument, organizationId: str
         throw new BadRequestError('Grant must belong to this organization');
       }
     }
-    const principal = await User.create({
-      name: input.name,
-      username: `service-${randomUUID()}`,
-      email: null,
-      password: null,
-      isSystem: true,
-      isAdmin: false,
-      groups: [],
-      tags: [],
-      organizationId: null,
-      orgServiceAccount: { organizationId, createdByUserId: actor.id, grants: input.grants },
+    const principal = await userApiKeyService.getOrCreateOrgServiceAccount(org, {
+      db: { users: userRepository, organizations: organizationRepository },
     });
     const result = await userApiKeyService.createUserApiKey(
       principal.id,
@@ -71,8 +67,9 @@ export async function createServiceKey(actor: IUserDocument, organizationId: str
         organizationId,
         billingOwnerType: CreditHolderType.Organization,
         metadata: { createdFrom: 'dashboard' },
+        orgOwned: { createdByUserId: actor.id, grants: input.grants },
       },
-      { db: { userApiKeys: userApiKeyRepository, agents: agentRepository }, serviceAccount: true }
+      { db: { userApiKeys: userApiKeyRepository, agents: agentRepository } }
     );
     await recordOrganizationAuditEvent({
       organizationId,
@@ -80,7 +77,7 @@ export async function createServiceKey(actor: IUserDocument, organizationId: str
       action: 'api_key.created',
       targetId: result.id,
     });
-    return { ...result, serviceAccount: true, principalId: principal.id, grants: input.grants };
+    return { ...result, principalId: principal.id, grants: input.grants };
   });
 }
 
@@ -88,6 +85,6 @@ export async function resolveServiceKey(actor: IUserDocument, organizationId: st
   await verifyOrgAccess(actor, organizationId);
   if (!objectId.safeParse(keyId).success) throw new NotFoundError('API key not found');
   const key = await userApiKeyRepository.findByOrganizationIdsAndId([organizationId], keyId);
-  if (!key?.serviceAccount) throw new NotFoundError('API key not found');
+  if (!key?.orgOwned) throw new NotFoundError('API key not found');
   return key;
 }

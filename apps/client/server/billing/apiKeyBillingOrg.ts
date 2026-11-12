@@ -3,12 +3,12 @@ import {
   BadRequestError,
   CreditHolderType,
   ForbiddenError,
-  type IUserDocument,
 } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
 import {
   API_KEY_DEPARTED_HOLDER_MESSAGE,
   isApiKeyOrgMembershipStale,
+  type ApiKeyHolder,
 } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
 import { resolveBillingOrgId } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
@@ -54,7 +54,7 @@ export async function resolveApiKeyBillingOrg({
   requestedOrgId,
 }: {
   apiKeyInfo: ApiKeyBillingFields | undefined;
-  user: Pick<IUserDocument, 'id' | 'isAdmin'>;
+  user: ApiKeyHolder;
   requestedOrgId: string | null | undefined;
 }): Promise<ApiKeyBillingOrg> {
   const keyOrgId = apiKeyBillingOrgId(apiKeyInfo);

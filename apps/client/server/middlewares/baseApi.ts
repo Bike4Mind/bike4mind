@@ -156,7 +156,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     withOrganizationMfaContext(
       () => req.user?.id,
       next,
-      () => (req.apiKeyInfo?.serviceAccount ? req.apiKeyInfo.organizationId : undefined)
+      () => (req.apiKeyInfo?.orgOwned ? req.apiKeyInfo.organizationId : undefined)
     )
   );
 

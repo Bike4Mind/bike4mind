@@ -4,10 +4,13 @@ import Foundation
 public struct GenerationModel: Identifiable, Hashable, Sendable {
   public let id: String
   public let name: String
+  /// What the model accepts; nil when the list did not describe it (the params panel then shows nothing).
+  public let capabilities: ModelCapabilities?
 
-  public init(id: String, name: String) {
+  public init(id: String, name: String, capabilities: ModelCapabilities? = nil) {
     self.id = id
     self.name = name
+    self.capabilities = capabilities
   }
 
   /// The only image models the server accepts `edit_regions` for (`isFlux3ImageModel` in
@@ -28,14 +31,14 @@ public struct GenerationRequest: Equatable, Sendable {
   public let kind: GenerationKind
   public let prompt: String
   public let modelID: String
-  /// Music only: no vocals.
-  public let instrumental: Bool
+  /// Only the values changed from the model defaults; everything else is left to the server.
+  public let params: GenerationParams
 
-  public init(kind: GenerationKind, prompt: String, modelID: String, instrumental: Bool = false) {
+  public init(kind: GenerationKind, prompt: String, modelID: String, params: GenerationParams = GenerationParams()) {
     self.kind = kind
     self.prompt = prompt
     self.modelID = modelID
-    self.instrumental = instrumental
+    self.params = params
   }
 }
 

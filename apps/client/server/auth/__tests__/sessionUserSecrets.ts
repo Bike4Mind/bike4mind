@@ -13,7 +13,7 @@ const SECRET_VALUE = 'session-user-secret-sentinel';
  */
 export function secretUserFields() {
   return {
-    orgServiceAccount: { organizationId: SECRET_VALUE, createdByUserId: SECRET_VALUE, grants: [] },
+    serviceAccountOrganizationId: SECRET_VALUE,
     password: SECRET_VALUE,
     passwordHash: SECRET_VALUE,
     oauthCredentials: { github: SECRET_VALUE },

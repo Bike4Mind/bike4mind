@@ -20,6 +20,8 @@ public final class AppNavigator {
   /// A route that arrived before the user was signed in (cold-start notification tap). Applied by
   /// `releasePendingRoute()` once the shell is on screen.
   @ObservationIgnored private var pendingRoute: Route?
+  /// First turns of conversations this device just started, keyed by session id, until their screen takes them.
+  @ObservationIgnored private var openingTurns: [String: QuestTurn] = [:]
 
   public init() {}
 
@@ -46,6 +48,18 @@ public final class AppNavigator {
     isDrawerOpen = false
     composeRequest = nil
     externalURL = nil
+    openingTurns = [:]
+  }
+
+  /// Opens a conversation this device just started, handing its screen the first turn.
+  public func openNewConversation(sessionID: String, firstTurn: QuestTurn?) {
+    openingTurns[sessionID] = firstTurn
+    apply(.session(id: sessionID))
+  }
+
+  /// Hands the first turn of a just-started conversation to its screen exactly once.
+  public func takeOpeningTurn(forSession sessionID: String) -> QuestTurn? {
+    openingTurns.removeValue(forKey: sessionID)
   }
 
   public func apply(_ route: Route) {

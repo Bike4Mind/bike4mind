@@ -7,6 +7,7 @@ import { sessionDeleteContract } from './sessionDelete.contract';
 import { sessionCloneContract } from './sessionClone.contract';
 import { executeToolContract } from './tools.contract';
 import { createCompletionContract } from './completions.contract';
+import { createCompletionRunContract } from './completionRuns.contract';
 import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
@@ -149,6 +150,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   sessionCloneContract,
   executeToolContract,
   createCompletionContract,
+  createCompletionRunContract,
   synthesizeSpeechContract,
   generateMusicContract,
   generateSoundEffectContract,

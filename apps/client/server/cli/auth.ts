@@ -264,7 +264,7 @@ async function assertOwnerAccountUsable(info: ApiKeyInfo) {
   if (!user) {
     throw new UnauthorizedError('User not found or banned');
   }
-  if (user.orgServiceAccount) {
+  if (user.serviceAccountOrganizationId) {
     throw new ForbiddenError('Service accounts require a resource-grant-aware REST endpoint');
   }
   assertAccountStateUsable(user);

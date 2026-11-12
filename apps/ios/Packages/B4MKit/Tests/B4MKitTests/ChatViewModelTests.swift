@@ -22,6 +22,13 @@ final class ChatViewModelTests: XCTestCase {
       }, now: clock.provider)
   }
 
+  func testAFirstTurnShowsBeforeTheTranscriptLoads() {
+    let turn = QuestTurn(id: "quest-1", prompt: "Plan my week", reply: nil, status: .pending, createdAt: Date())
+    let model = ChatViewModel(sessionID: "s1", api: api, realtime: nil, firstTurn: turn)
+    XCTAssertEqual(model.messages.first?.role, .user)
+    XCTAssertEqual(model.messages.first?.text, "Plan my week")
+  }
+
   private func frame(
     _ questID: String = "quest-1", session: String = "s1", reply: String?, status: QuestTurn.Status? = .running,
     prompt: String? = nil, pendingAction: PendingAction? = nil
@@ -115,7 +122,7 @@ final class ChatViewModelTests: XCTestCase {
     XCTAssertEqual(model.hapticTrigger?.haptic, .started)
     model.apply(frame(reply: "Hello, wor"))
     model.apply(frame(reply: "Hello"))
-    XCTAssertEqual(model.messages.last?.text, "Hello", "cumulative text replaces, even when it shrinks")
+    XCTAssertEqual(model.messages.last?.text, "Hello, wor", "running text never shrinks mid-stream")
 
     model.apply(frame(reply: "Hello there", status: .done))
     XCTAssertEqual(model.messages.last?.text, "Hello there")

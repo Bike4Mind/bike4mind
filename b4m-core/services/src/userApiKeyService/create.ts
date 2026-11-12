@@ -15,6 +15,7 @@ import {
   isBuiltInApiKeyScope,
   isWellFormedApiKeyScope,
   IUserApiKeyRepository,
+  OrgServiceAccountGrant,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
@@ -93,6 +94,29 @@ const createUserApiKeySchema = z.object({
   // only thing the field is for. No new ApiKeyScope: the widening is bound to specific lake ids
   // rather than gated by a scope.
   preauthorizedLakeIds: z.array(z.string().min(1)).max(25).optional(),
+  // Org-owned key (IUserApiKey.orgOwned): held by the org's service account, never a member.
+  orgOwned: z
+    .object({
+      createdByUserId: z.string().min(1),
+      grants: z
+        .array(
+          z.discriminatedUnion('resourceType', [
+            z.object({
+              resourceType: z.literal('organization'),
+              resourceId: z.string().min(1),
+              permission: z.literal('compute'),
+            }),
+            z.object({
+              resourceType: z.literal('project'),
+              resourceId: z.string().min(1),
+              permission: z.literal('read'),
+            }),
+          ])
+        )
+        .max(25)
+        .optional(),
+    })
+    .optional(),
 });
 
 type MintUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
@@ -105,7 +129,10 @@ export type CreateUserApiKeyParameters = Omit<MintUserApiKeyParameters, 'metadat
 };
 
 /** Parameters for the federated AI-token exchange mint; createdFrom is fixed by the entry point. */
-export type CreateExchangeUserApiKeyParameters = Omit<MintUserApiKeyParameters, 'metadata' | 'expiresAt'> & {
+export type CreateExchangeUserApiKeyParameters = Omit<
+  MintUserApiKeyParameters,
+  'metadata' | 'expiresAt' | 'orgOwned'
+> & {
   expiresAt: Date;
   metadata: { clientIP?: string; userAgent?: string; oauthClientId: string };
 };
@@ -123,7 +150,6 @@ interface CreateUserApiKeyAdapters {
     agents: Pick<IAgentRepository, 'findById'>;
   };
   systemUserId?: string;
-  serviceAccount?: boolean;
   /**
    * Scopes of the API key making the request, when the caller authenticated with one.
    * Undefined for a browser/JWT caller. Same no-escalation contract as rotate
@@ -176,6 +202,7 @@ export interface CreateUserApiKeyResult {
   branding?: IEmbedBranding;
   spendCap?: number;
   preauthorizedLakeIds?: string[];
+  orgOwned?: { createdByUserId: string; grants?: OrgServiceAccountGrant[] };
   createdAt: Date;
 }
 
@@ -313,6 +340,9 @@ const mintUserApiKey = async (
   if (billsOrg !== !!params.organizationId) {
     throw new BadRequestError('organizationId must be set exactly when billingOwnerType is Organization');
   }
+  if (params.orgOwned && !billsOrg) {
+    throw new BadRequestError('An org-owned key must bill its organization');
+  }
 
   // Per-product cap: max 20 active keys (counts ACTIVE + RATE_LIMITED)
   if (params.productId) {
@@ -360,7 +390,6 @@ const mintUserApiKey = async (
 
   const docToCreate = {
     userId,
-    ...(adapters.serviceAccount ? { serviceAccount: true } : {}),
     name: params.name,
     keyDigest,
     keyPrefix,
@@ -387,6 +416,7 @@ const mintUserApiKey = async (
     branding: params.branding,
     spendCap: params.spendCap,
     preauthorizedLakeIds: params.preauthorizedLakeIds,
+    orgOwned: params.orgOwned,
   };
 
   let apiKeyDocument: IUserApiKeyDocument;
@@ -432,6 +462,7 @@ const mintUserApiKey = async (
     branding: apiKeyDocument.branding,
     spendCap: apiKeyDocument.spendCap,
     preauthorizedLakeIds: apiKeyDocument.preauthorizedLakeIds,
+    orgOwned: apiKeyDocument.orgOwned,
     createdAt: apiKeyDocument.createdAt,
   };
 };

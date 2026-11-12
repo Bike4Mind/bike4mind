@@ -131,6 +131,16 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
     return this.model.countDocuments({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } }, { limit: options.limit });
   }
 
+  async oldestPendingReviewAt(): Promise<Date | null> {
+    const row = await this.model
+      .findOne({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } })
+      .sort({ createdAt: 1 })
+      .select({ createdAt: 1 })
+      .maxTimeMS(2000)
+      .lean();
+    return row?.createdAt ?? null;
+  }
+
   /**
    * Unreviewed incidents created at or before `createdBefore` that no alert has been delivered
    * for, oldest first. A missing alertedAt is the only signal: none configured, or the send failed.

@@ -42,7 +42,7 @@ describe('organization MFA access', () => {
       id: 'service',
       isSystem: true,
       isAdmin: false,
-      orgServiceAccount: { organizationId: 'org' },
+      serviceAccountOrganizationId: 'org',
     });
     await expect(assertOrganizationMfa('service', 'org')).rejects.toThrow(ORGANIZATION_MFA_REQUIRED);
     await withOrganizationMfaContext(

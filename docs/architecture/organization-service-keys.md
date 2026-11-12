@@ -1,15 +1,16 @@
 # Organization service keys
 
-Organization administrators manage service keys in Team Settings. Each key has a
-dedicated `isSystem` user with immutable `orgServiceAccount` organization binding,
-creator provenance and explicit grants. It has no password, email, login providers,
+Organization administrators manage service keys in Team Settings. Keys share the
+organization's `isSystem` principal with immutable `serviceAccountOrganizationId`.
+Each key stores creator provenance and explicit grants in `orgOwned`. The principal
+has no password, deliverable email, login providers,
 admin authority, groups, home organization or human roster entry. Seats and human
 membership are unchanged. Creator provenance is not an authorization input.
 
 ## Authorization
 
 Service credentials are default-denied by REST auth. The supported intersection of
-key scopes and principal grants is deliberately narrow:
+key scopes and that key's grants is deliberately narrow:
 
 | Resource grant | Required key scope | Endpoint |
 | --- | --- | --- |
@@ -40,6 +41,11 @@ the mutation transaction. Key usage records identify the service principal and
 key; org credit ledger entries carry `apiKeyId`. The existing org billing path
 accepts a system principal only for its bound organization, independently of the
 human roster. Existing personal and org-billed personal key behavior is unchanged.
+
+Missing grants deny access; grants from another key never widen a credential.
+The canonical migration transfers validated alternate-key grants and provenance,
+retains key identifiers and secrets, and disables orphaned or mismatched records.
+Run it before enabling the reconciled routes; there is no runtime alternate model.
 
 Revocation disables the credential; the principal remains for usage attribution.
 Deleting an organization causes the service-auth organization lookup to refuse

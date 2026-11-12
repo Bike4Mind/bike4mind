@@ -13,6 +13,7 @@ import {
   ADMIN_MODEL_LOGS_TAB_SLUG,
   ADMIN_MODEL_METRICS_TAB_SLUG,
   ADMIN_ORGANIZATIONS_TAB_SLUG,
+  ADMIN_REVENUE_TAB_SLUG,
   ADMIN_SECURITY_DASHBOARD_TAB_SLUG,
   ADMIN_SETTINGS_TAB_SLUG,
   ADMIN_SHADOW_DETECTIONS_TAB_SLUG,
@@ -46,7 +47,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.WorldTime]: 'world-time',
   [AdminTab.Waitlist]: ADMIN_WAITLIST_TAB_SLUG,
   [AdminTab.Subscriptions]: ADMIN_SUBSCRIPTIONS_TAB_SLUG,
-  [AdminTab.Revenue]: 'revenue',
+  [AdminTab.Revenue]: ADMIN_REVENUE_TAB_SLUG,
   [AdminTab.Organizations]: ADMIN_ORGANIZATIONS_TAB_SLUG,
   [AdminTab.CreditAnalytics]: 'credit-analytics',
   [AdminTab.SecretsRotation]: 'secrets-rotation',
@@ -106,6 +107,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.AuditLog]: ADMIN_AUDIT_LOG_TAB_SLUG,
   [AdminTab.Approvals]: 'approvals',
   [AdminTab.Tutorials]: 'tutorials',
+  [AdminTab.AiOperations]: 'ai-operations',
 };
 
 /**

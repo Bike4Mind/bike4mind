@@ -8,7 +8,7 @@ describe('service key lifecycle', () => {
     const key = {
       id: 'key',
       userId: 'service-principal',
-      serviceAccount: true,
+      orgOwned: { createdByUserId: 'creator', grants: [] },
       scopes: [],
     } as unknown as IUserApiKeyDocument;
     const update = vi.fn();
@@ -21,7 +21,7 @@ describe('service key lifecycle', () => {
       'admin',
       { keyId: 'key' },
       {
-        serviceAccountManagement: true,
+        includeOrgOwned: true,
         db: {
           userApiKeys,
           organizations: { findIdsAdministeredBy: vi.fn().mockResolvedValue(['org']) },
@@ -34,7 +34,7 @@ describe('service key lifecycle', () => {
   });
   it('does not let the service principal manage its own key', async () => {
     const userApiKeys = {
-      findByUserIdAndId: vi.fn().mockResolvedValue({ serviceAccount: true }),
+      findByUserIdAndId: vi.fn().mockResolvedValue({ orgOwned: { createdByUserId: 'creator' } }),
       findByOrganizationIdsAndId: vi.fn().mockResolvedValue(null),
     } as unknown as IUserApiKeyRepository;
     expect(

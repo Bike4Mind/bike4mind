@@ -3,11 +3,12 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { assertOrganizationMfa } from '@bike4mind/server-utils/auth/organizationMfa';
 
 export async function assertExecutionOrganizationMfa(
-  user: Pick<IUserDocument, 'id' | 'orgServiceAccount'>,
+  user: Pick<IUserDocument, 'id' | 'serviceAccountOrganizationId'>,
   session: { organizationId?: string | null },
   billingOrganizationId?: string | null
 ): Promise<void> {
-  if (user.orgServiceAccount) throw new ForbiddenError('Service accounts require a resource-grant-aware REST endpoint');
+  if (user.serviceAccountOrganizationId)
+    throw new ForbiddenError('Service accounts require a resource-grant-aware REST endpoint');
   const organizationIds = new Set([session.organizationId, billingOrganizationId]);
   for (const organizationId of organizationIds) {
     if (organizationId) await assertOrganizationMfa(user.id, organizationId);

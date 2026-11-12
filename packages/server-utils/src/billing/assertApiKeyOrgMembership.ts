@@ -1,4 +1,4 @@
-import type { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
+import { isOrgServiceAccountOf, type IOrganizationDocument, type IUserDocument } from '@bike4mind/common';
 import { organizationService } from '@bike4mind/services';
 import { BadRequestError } from '../utils/errors';
 import { persistedIsAdmin } from '../auth/apiKeyAdminScope';
@@ -6,9 +6,13 @@ import { persistedIsAdmin } from '../auth/apiKeyAdminScope';
 export const API_KEY_DEPARTED_HOLDER_MESSAGE =
   'This API key bills an organization you are no longer a member of. Re-mint the key to continue.';
 
+/** The key holder fields the rule reads. Pass all of them: a missing service-account field fails closed. */
+export type ApiKeyHolder = Pick<IUserDocument, 'id' | 'isAdmin'> &
+  Partial<Pick<IUserDocument, 'isSystem' | 'serviceAccountOrganizationId'>>;
+
 type ApiKeyOrgMembershipInput = {
   billingOrg: IOrganizationDocument | null;
-  billingUser: Pick<IUserDocument, 'id' | 'isAdmin' | 'isSystem' | 'orgServiceAccount'>;
+  billingUser: ApiKeyHolder;
   isApiKeyCaller: boolean;
 };
 
@@ -21,8 +25,8 @@ export function isApiKeyOrgMembershipStale({
   return (
     !!billingOrg &&
     isApiKeyCaller &&
-    !(billingUser.isSystem && billingUser.orgServiceAccount?.organizationId === billingOrg.id.toString()) &&
     !persistedIsAdmin(billingUser) &&
+    !isOrgServiceAccountOf(billingUser, billingOrg.id) &&
     !organizationService.isCurrentOrgMember(billingOrg, billingUser.id)
   );
 }
@@ -39,7 +43,8 @@ export function isApiKeyOrgMembershipStale({
  *
  * A platform admin mints org-billed keys on a customer org's behalf (user-api-keys/index.ts admits
  * them explicitly) and is never on that org's roster, so the authority arm is checked here rather
- * than inside isCurrentOrgMember, which reports roster attachment only.
+ * than inside isCurrentOrgMember, which reports roster attachment only. The org's own service account
+ * (an org-owned key's holder) is never on the roster either, and is admitted the same way.
  */
 export function assertApiKeyOrgMembership(input: ApiKeyOrgMembershipInput): void {
   if (isApiKeyOrgMembershipStale(input)) {

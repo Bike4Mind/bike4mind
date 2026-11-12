@@ -114,7 +114,10 @@ describe('apiKeyAuth scope gate', () => {
       isValid: true,
       keyId: 'service-key',
       userId: 'service',
-      serviceAccount: true,
+      orgOwned: {
+        createdByUserId: 'deleted',
+        grants: [{ resourceType: 'organization', resourceId: 'org', permission: 'compute' }],
+      },
       organizationId: 'org',
       billingOwnerType: CreditHolderType.Organization,
       scopes: [ApiKeyScope.AI_CHAT],
@@ -124,11 +127,7 @@ describe('apiKeyAuth scope gate', () => {
       id: 'service',
       isSystem: true,
       isAdmin: false,
-      orgServiceAccount: {
-        organizationId: 'org',
-        createdByUserId: 'deleted',
-        grants: [{ resourceType: 'organization', resourceId: 'org', permission: 'compute' }],
-      },
+      serviceAccountOrganizationId: 'org',
     });
     const result = await run([ApiKeyScope.AI_CHAT], makeReq());
     expect(result.passed).toBe(false);

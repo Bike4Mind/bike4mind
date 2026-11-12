@@ -28,3 +28,5 @@ export * from './utils/organizationSharingPolicy';
 export { default } from '@bike4mind/db-core';
 
 export { mongoose };
+
+export * from './utils/feedbackNotes';

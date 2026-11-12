@@ -491,11 +491,12 @@ export interface IUser extends ICreditHolder {
    * Queries for human users must use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
    */
   isSystem?: boolean;
-  orgServiceAccount?: {
-    organizationId: string;
-    createdByUserId: string;
-    grants: { resourceType: 'project' | 'organization'; resourceId: string; permission: 'read' | 'compute' }[];
-  };
+  /**
+   * Set only on an organization's service account (an `isSystem` user that owns the org's API keys,
+   * see constants/orgServiceAccount.ts). Binds the account to that one org; it never sits on the
+   * org's `users[]` roster, so it takes no seat and is not listed as a member.
+   */
+  serviceAccountOrganizationId?: string;
   subscribedUntil: string | null;
   photoUrl: string | null;
 
@@ -1120,6 +1121,12 @@ export interface IUserRepository
    * it, so a recalculated absolute value never overwrites an adjustment it did not see.
    */
   setCurrentStorageIfUnchanged: (userId: string, expected: number, next: number) => Promise<boolean>;
+  /**
+   * Sets `planStorageLimit` and re-derives the enforced `storageLimit` in one write, so a manual
+   * `storageLimitOverride` keeps winning (same precedence as resolveUserStorageLimit). A row without the
+   * override field first gets its legacy-derived override written. False when the user does not exist.
+   */
+  setPlanStorageLimit: (userId: string, planStorageLimitMb: number) => Promise<boolean>;
   /** The user's `currentStorageSize` (missing counts as 0), or null when the user does not exist. */
   findCurrentStorageSize: (userId: string) => Promise<number | null>;
   /** One keyset page of user ids in `_id` order, starting after `afterId` (null = first page). */

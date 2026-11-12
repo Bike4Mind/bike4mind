@@ -27,7 +27,7 @@ export async function assertOrganizationMfa(
     isOrganizationMfaServiceContext(userId, organizationId) &&
     user?.isSystem &&
     !user.isAdmin &&
-    user.orgServiceAccount?.organizationId === organizationId
+    user.serviceAccountOrganizationId === organizationId
   )
     return;
   if (!user || !mfaService.userHasMFAConfigured(user)) {

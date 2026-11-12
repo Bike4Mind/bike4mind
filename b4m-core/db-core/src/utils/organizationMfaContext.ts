@@ -40,7 +40,7 @@ async function blockedOrganizations(scope: Scope): Promise<string[]> {
             .collection('users')
             .findOne(
               { _id: new mongoose.Types.ObjectId(userId) },
-              { projection: { 'mfa.totpEnabled': 1, isSystem: 1, isAdmin: 1, orgServiceAccount: 1 } }
+              { projection: { 'mfa.totpEnabled': 1, isSystem: 1, isAdmin: 1, serviceAccountOrganizationId: 1 } }
             )
         : null;
     if (user?.mfa?.totpEnabled === true) return [];
@@ -53,8 +53,8 @@ async function blockedOrganizations(scope: Scope): Promise<string[]> {
           $or: [
             { userId },
             { users: { $elemMatch: { userId, permissions: { $in: [...ORG_MEMBERSHIP_ACL_PERMISSIONS] } } } },
-            ...(user?.isSystem === true && mongoose.isObjectIdOrHexString(user.orgServiceAccount?.organizationId)
-              ? [{ _id: new mongoose.Types.ObjectId(user.orgServiceAccount.organizationId) }]
+            ...(user?.isSystem === true && mongoose.isObjectIdOrHexString(user.serviceAccountOrganizationId)
+              ? [{ _id: new mongoose.Types.ObjectId(user.serviceAccountOrganizationId) }]
               : []),
           ],
         },
@@ -67,7 +67,7 @@ async function blockedOrganizations(scope: Scope): Promise<string[]> {
           serviceOrganization === String(org._id) &&
           user?.isSystem === true &&
           user.isAdmin !== true &&
-          user.orgServiceAccount?.organizationId === serviceOrganization
+          user.serviceAccountOrganizationId === serviceOrganization
         )
           return false;
         const deadline = org.mfaPolicy?.enforceAfter;

@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { User, userApiKeyRepository } from '@bike4mind/database';
+import { userApiKeyRepository } from '@bike4mind/database';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { createServiceKey } from '@server/organizations/serviceAccounts';
 import { z } from 'zod';
@@ -9,9 +9,7 @@ const handler = baseApi({ auth: 'jwtOnly', allowedMethods: ['GET', 'POST'] })
   .get(async (req, res) => {
     const organizationId = orgId.parse(req.query.id);
     await verifyOrgAccess(req.user, organizationId);
-    const keys = (await userApiKeyRepository.findByOrganizationId(organizationId)).filter(key => key.serviceAccount);
-    const principals = await User.find({ _id: { $in: keys.map(key => key.userId) }, isSystem: true });
-    const byId = new Map(principals.map(user => [user.id, user.orgServiceAccount]));
+    const keys = (await userApiKeyRepository.findByOrganizationId(organizationId)).filter(key => key.orgOwned);
     res.setHeader('Cache-Control', 'private, no-store');
     return res.json(
       keys.map(key => ({
@@ -25,8 +23,8 @@ const handler = baseApi({ auth: 'jwtOnly', allowedMethods: ['GET', 'POST'] })
         lastUsedAt: key.lastUsedAt,
         expiresAt: key.expiresAt,
         revokedAt: key.revokedAt,
-        createdByUserId: byId.get(key.userId)?.createdByUserId,
-        grants: byId.get(key.userId)?.grants ?? [],
+        createdByUserId: key.orgOwned?.createdByUserId,
+        grants: key.orgOwned?.grants ?? [],
       }))
     );
   })

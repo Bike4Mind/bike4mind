@@ -6,6 +6,7 @@ import {
   USER_RISK_SIGNAL_TYPES,
   VERIFIED_SLACK_IDENTITY_FILTER,
   canonicalizeEmail,
+  DEFAULT_STORAGE_LIMIT_MB,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
@@ -1118,6 +1119,39 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return res.matchedCount === 1;
   }
 
+  async setPlanStorageLimit(userId: string, planStorageLimitMb: number): Promise<boolean> {
+    if (!mongoose.isValidObjectId(userId)) return false;
+    const fieldMissing = (field: string) => ({ $eq: [{ $type: field }, 'missing'] });
+    const res = await this.model.updateOne({ _id: userId }, [
+      // A row without the override field (pre-backfill, or an OAuth signup) gets the override
+      // resolveUserStorageLimit would derive for it, since a defined plan limit retires that fallback.
+      {
+        $set: {
+          storageLimitOverride: {
+            $cond: [
+              fieldMissing('$storageLimitOverride'),
+              {
+                $cond: [
+                  { $in: ['$storageLimit', [null, DEFAULT_STORAGE_LIMIT_MB]] },
+                  null,
+                  { $cond: [fieldMissing('$storageLimit'), null, '$storageLimit'] },
+                ],
+              },
+              '$storageLimitOverride',
+            ],
+          },
+        },
+      },
+      {
+        $set: {
+          planStorageLimit: planStorageLimitMb,
+          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb] },
+        },
+      },
+    ]);
+    return res.matchedCount === 1;
+  }
+
   async findCurrentStorageSize(userId: string): Promise<number | null> {
     if (!mongoose.isValidObjectId(userId)) return null;
     const row = await this.model
@@ -1727,27 +1761,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
-    orgServiceAccount: {
-      type: new Schema(
-        {
-          organizationId: { type: String, required: true, immutable: true },
-          createdByUserId: { type: String, required: true, immutable: true },
-          grants: [
-            new Schema(
-              {
-                resourceType: { type: String, enum: ['project', 'organization'], required: true },
-                resourceId: { type: String, required: true },
-                permission: { type: String, enum: ['read', 'compute'], required: true },
-              },
-              { _id: false }
-            ),
-          ],
-        },
-        { _id: false }
-      ),
-      default: undefined,
-      immutable: true,
-    },
+    // An organization's service account (see IUser.serviceAccountOrganizationId). Set on insert only.
+    serviceAccountOrganizationId: { type: String, immutable: true },
     subscribedUntil: { type: String, default: null },
     systemFiles: { type: [SystemFileEntrySchema], default: [] },
     oauthCredentials: { type: Object, default: {} },

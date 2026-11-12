@@ -2,6 +2,7 @@ import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { organizationRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -12,6 +13,7 @@ import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyA
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
     const userId = req.user?.id;
+    assertNotOrgServiceAccount(req.user);
     const keyId = req.query.id;
 
     if (!keyId) throw new BadRequestError('Invalid key ID');

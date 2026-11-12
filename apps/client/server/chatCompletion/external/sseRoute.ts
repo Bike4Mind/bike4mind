@@ -6,13 +6,17 @@ import express, { type Request, type Response, type Express, type NextFunction }
 import {
   CompletionRequestSchema,
   BadRequestError,
+  CreditHolderType,
   HTTPError,
+  NotFoundError,
+  RUN_NOT_FOUND_ERROR_CODE,
   LEGACY_REQUEST_ID_HEADER,
   REQUEST_ID_HEADER,
   TooManyRequestsError,
   UnauthorizedError,
   UnprocessableEntityError,
   buildMetaEvent,
+  buildSettledEvent,
   buildCompletionStreamEvent,
   createCompletionContract,
   formatSSEError,
@@ -23,6 +27,7 @@ import {
   serializeSSEEvent,
   SSE_DONE_SIGNAL,
   SSE_KEEPALIVE,
+  type CompletionRunAttribution,
   type CompletionSource,
   type CompletionSseErrorCode,
   type IMessage,
@@ -45,7 +50,9 @@ import {
   usageEventRepository,
   organizationRepository,
   cacheRepository,
+  completionRunRepository,
 } from '@bike4mind/database';
+import type { CompletionSettlement } from '@bike4mind/services/cliCompletions';
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
@@ -114,6 +121,28 @@ function isUpstreamCallerError(error: unknown): error is Error {
   if (!(error instanceof Error) || error instanceof HTTPError) return false;
   if (!UPSTREAM_CALLER_ERROR_STATUSES.has(getHttpStatus(error) ?? 0)) return false;
   return !OPERATOR_SIDE_4XX_PATTERNS.some(pattern => pattern.test(error.message));
+}
+
+/**
+ * Returns the attribution only when the run was minted by this user for this billing owner, resolved
+ * as completion-runs.ts resolves it. A missing run and someone else's run get the same 404, so a run
+ * id reveals nothing about other accounts.
+ */
+async function verifyRunOwnership(
+  run: CompletionRunAttribution,
+  caller: { userId: string; billingOrganizationId?: string }
+): Promise<CompletionRunAttribution> {
+  // _id is stored lowercase (randomUUID) but z.uuid accepts uppercase.
+  const runId = run.runId.toLowerCase();
+  const stored = await completionRunRepository.findById(runId);
+  const ownerType = caller.billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
+  const ownerId = caller.billingOrganizationId ?? caller.userId;
+  if (!stored || stored.userId !== caller.userId || stored.ownerType !== ownerType || stored.ownerId !== ownerId) {
+    throw new NotFoundError('Completion run not found. Create one with POST /api/v1/completion-runs.', {
+      errorCode: RUN_NOT_FOUND_ERROR_CODE,
+    });
+  }
+  return { ...run, runId };
 }
 
 function requestIdFrom(headers: Record<string, string | undefined>): string {
@@ -351,6 +380,9 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
             }
           }
 
+          const run = body.run
+            ? await verifyRunOwnership(body.run, { userId, billingOrganizationId: apiKeyInfo?.organizationId })
+            : undefined;
           // Stream the completion, tracking usage for analytics.
           let finalInputTokens = 0;
           let finalOutputTokens = 0;
@@ -359,6 +391,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           let finalTurnUsage: TurnUsage[] | undefined;
           let finalCreditsUsed: number | undefined;
           let hasToolCalls = false;
+          const settled: { outcome?: CompletionSettlement } = {};
 
           // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
           await checkFreeTierDailySpendCap({
@@ -401,8 +434,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
             requestId,
             source,
             sessionId: body.sessionId,
+            run,
             logger,
             onReady,
+            onSettled: outcome => {
+              settled.outcome = outcome;
+            },
             onChunk: async (text, info) => {
               if (info?.inputTokens) finalInputTokens = info.inputTokens;
               if (info?.outputTokens) finalOutputTokens = info.outputTokens;
@@ -417,6 +454,9 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           });
 
           completionOutcome = 'completed';
+          if (settled.outcome?.committed) {
+            write(serializeSSEEvent(buildSettledEvent({ ...settled.outcome, runId: run?.runId })));
+          }
           // Close the stream and log success analytics.
           write(SSE_DONE_SIGNAL);
           end();

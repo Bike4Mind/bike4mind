@@ -274,7 +274,7 @@ describe('persisted organization MFA content boundary', () => {
         _id: userId,
         username: String(userId),
         isSystem: true,
-        orgServiceAccount: { organizationId: org.id },
+        serviceAccountOrganizationId: org.id,
       });
       const project = await Project.create({ name: 'service', userId: String(userId), organizationId: org.id });
       await withOrganizationMfaContext(

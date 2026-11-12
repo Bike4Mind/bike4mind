@@ -32,7 +32,7 @@ const getAccessibleProject = (userId: string, id: string) =>
 const getRoute = nextRouteForContract(getProjectContract, {
   rateLimit: perUserRateLimit('/api/v1/projects/[id]'),
 }).get(async (req, res) => {
-  if (req.user.orgServiceAccount) {
+  if (req.user.serviceAccountOrganizationId) {
     await assertOrgServiceAccountRequest(req.user, req.apiKeyInfo ?? {}, {
       method: 'GET',
       path: '/api/v1/projects/[id]',
@@ -40,7 +40,7 @@ const getRoute = nextRouteForContract(getProjectContract, {
     });
     const project = await Project.findOne({
       _id: req.validatedParams.id,
-      organizationId: req.user.orgServiceAccount.organizationId,
+      organizationId: req.user.serviceAccountOrganizationId,
     }).setOptions({ strictQuery: false });
     if (!project) throw new NotFoundError('Project not found');
     return res.json({ ...toPublicProject(project), session_ids: [], file_ids: [] });
