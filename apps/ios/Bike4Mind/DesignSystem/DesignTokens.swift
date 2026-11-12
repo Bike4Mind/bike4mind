@@ -61,6 +61,15 @@ enum Tokens {
     static let caption = BrandFont.font(size: Size.sm, relativeTo: .footnote)
     static let meta = BrandFont.font(size: Size.xs, relativeTo: .caption2)
     static let code = Font.system(size: Size.sm, design: .monospaced).leading(.standard)
+    /// Reply headings, h1 to h6 (web `.b4m-md` headings, weight 600); h4 and below stay body size.
+    static func heading(level: Int) -> Font {
+      switch level {
+      case 1: BrandFont.font(size: Size.xl2, weight: Weight.lg, relativeTo: .title2)
+      case 2: BrandFont.font(size: Size.xl, weight: Weight.lg, relativeTo: .title3)
+      case 3: BrandFont.font(size: Size.lg, weight: Weight.lg, relativeTo: .headline)
+      default: BrandFont.font(size: Size.md, weight: Weight.lg, relativeTo: .headline)
+      }
+    }
     static let codeLabel = Font.system(size: Size.xs, design: .monospaced)
   }
 

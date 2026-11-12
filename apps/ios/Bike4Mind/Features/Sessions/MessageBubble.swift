@@ -60,17 +60,7 @@ struct MessageBubble: View {
         Text(" ")
       } else {
         ForEach(Array(MarkdownBlock.split(message.text).enumerated()), id: \.offset) { _, block in
-          switch block {
-          case .prose(let text):
-            Text(MarkdownText.attributed(text))
-              .font(Tokens.Typography.body)
-              .lineSpacing(Tokens.LineSpacing.reply)
-              .foregroundStyle(Tokens.Palette.readingInk)
-              .textSelection(.enabled)
-              .frame(maxWidth: .infinity, alignment: .leading)
-          case .code(let language, let code):
-            CodeBlockView(language: language, code: code)
-          }
+          MarkdownBlockView(block: block)
         }
       }
       if let action = message.pendingAction {
@@ -115,6 +105,62 @@ struct MessageBubble: View {
     case .failed: Tokens.Palette.destructive
     case .outOfCredits: Tokens.Palette.warning
     default: nil
+    }
+  }
+}
+
+/// One block of a reply. Every case's text is inline Markdown, rendered by `MarkdownText`.
+private struct MarkdownBlockView: View {
+  let block: MarkdownBlock
+
+  var body: some View {
+    switch block {
+    case .prose(let text):
+      prose(text)
+    case .heading(let level, let text):
+      Text(MarkdownText.attributed(text))
+        .font(Tokens.Typography.heading(level: level))
+        .foregroundStyle(Tokens.Palette.primaryText)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityAddTraits(.isHeader)
+    case .listItem(let marker, let depth, let text):
+      HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.s) {
+        Text(Self.label(marker, depth: depth))
+          .font(Tokens.Typography.body)
+          .foregroundStyle(Tokens.Palette.secondaryText)
+          .monospacedDigit()
+        prose(text)
+      }
+      .padding(.leading, Tokens.Spacing.s + CGFloat(depth) * Tokens.Spacing.l)
+    case .quote(let text):
+      prose(text)
+        .foregroundStyle(Tokens.Palette.secondaryText)
+        .padding(.leading, Tokens.Spacing.m)
+        .overlay(alignment: .leading) {
+          Rectangle().fill(Tokens.Palette.borderSolid).frame(width: 3)
+        }
+    case .rule:
+      Rectangle().fill(Tokens.Palette.divider).frame(height: 1).padding(.vertical, Tokens.Spacing.xs)
+    case .code(let language, let code):
+      CodeBlockView(language: language, code: code)
+    }
+  }
+
+  private func prose(_ text: String) -> some View {
+    Text(MarkdownText.attributed(text))
+      .font(Tokens.Typography.body)
+      .lineSpacing(Tokens.LineSpacing.reply)
+      .foregroundStyle(Tokens.Palette.readingInk)
+      .textSelection(.enabled)
+      .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  /// Nested bullets alternate disc and circle, as the browser's default list style does.
+  private static func label(_ marker: MarkdownBlock.ListMarker, depth: Int) -> String {
+    switch marker {
+    case .bullet: depth.isMultiple(of: 2) ? "\u{2022}" : "\u{25E6}"
+    case .number(let number): number
     }
   }
 }
