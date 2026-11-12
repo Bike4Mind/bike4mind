@@ -46,24 +46,4 @@ export function recommendDlqAction(input: {
   };
 }
 
-export function mayActOnDlq(
-  action: TriageAction,
-  input: {
-    enabled: boolean;
-    mode: string;
-    queueMode: string;
-    replay?: string;
-    sourceQueue: string | null;
-  }
-): boolean {
-  return (
-    input.enabled &&
-    input.mode === 'act' &&
-    input.queueMode === 'act' &&
-    ((action.action === 'discard' && action.risk === 'terminal-refusal') ||
-      (action.action === 'replay' &&
-        action.risk === 'safe-transient' &&
-        input.replay === 'safe' &&
-        !!input.sourceQueue))
-  );
-}
+export const DLQ_TRIAGE_POLICY_VERSION = 'recommend-v1';

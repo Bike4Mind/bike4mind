@@ -38,6 +38,42 @@ import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliati
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import './businessMetricAlerts';
 import './imageModerationReviewSweep';
+import { secrets } from './secrets';
+import { createEventBusDeadLetter } from './eventBusDeadLetter';
+
+if (runsScheduledJobs) {
+  const dlq = new sst.aws.Queue('dlqTriageSweepDlq', {
+    transform: { queue: { messageRetentionSeconds: 1209600 } },
+  });
+  const deadLetter = createEventBusDeadLetter('DlqTriageSweep', dlq);
+  new sst.aws.Cron('dlqTriageSweep', {
+    schedule: 'cron(0 8 * * ? *)',
+    function: {
+      handler: 'apps/workers/src/cron/dlqTriage.handler',
+      runtime: 'nodejs24.x',
+      timeout: '5 minutes',
+      retries: 0,
+      link: [secrets.MONGODB_URI, secrets.SLACK_ALARMS_WEBHOOK_URL, secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
+      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      permissions: [
+        deadLetter.sendPermission,
+        { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
+        {
+          actions: [
+            'sqs:GetQueueUrl',
+            'sqs:GetQueueAttributes',
+            'sqs:ListDeadLetterSourceQueues',
+            'sqs:ReceiveMessage',
+          ],
+          resources: [
+            $interpolate`arn:${aws.getPartitionOutput().partition}:sqs:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:${$app.name}-${$app.stage}-*`,
+          ],
+        },
+      ],
+      transform: deadLetter.functionTarget,
+    },
+  });
+}
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',

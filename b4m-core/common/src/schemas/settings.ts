@@ -1781,7 +1781,7 @@ export const AdminAiConfigSchema = z.object({
     .meta({
       title: 'DLQ queue modes',
       description:
-        'Queue label to autoTriage mode. Unlisted queues default to recommend; act also requires the DLQ feature act mode. The master Enabled switch stops triage and autonomous actions.',
+        'Queue label to autoTriage mode. Unlisted queues default to recommend. DLQ triage is recommend-only even when act is selected; replay has no real Undo. The master Enabled switch stops triage.',
     }),
 });
 export type AdminAiConfig = z.infer<typeof AdminAiConfigSchema>;

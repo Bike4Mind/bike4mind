@@ -154,6 +154,7 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
         secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL,
         secrets.SLACK_ALARMS_WEBHOOK_URL,
         secrets.SLACK_COST_ALARMS_WEBHOOK_URL,
+        secrets.MONGODB_URI,
       ],
       // Room for the Logs Insights query (25 s budget) ahead of the Slack post.
       timeout: '60 seconds',
@@ -164,6 +165,18 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
       },
       permissions: [
         ...mentionArgs.permissions,
+        { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
+        {
+          actions: [
+            'sqs:GetQueueUrl',
+            'sqs:GetQueueAttributes',
+            'sqs:ListDeadLetterSourceQueues',
+            'sqs:ReceiveMessage',
+          ],
+          resources: [
+            $interpolate`arn:${aws.getPartitionOutput().partition}:sqs:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:${$app.name}-${$app.stage}-*`,
+          ],
+        },
         { actions: ['logs:StartQuery'], resources: spendLogGroupArns },
         { actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*'] },
       ],

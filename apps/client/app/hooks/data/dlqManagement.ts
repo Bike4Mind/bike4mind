@@ -109,6 +109,7 @@ export const useDlqReplay = () => {
     mutationFn: async (params: {
       queueLabel: string;
       batchSize?: number;
+      aiSuggestionId?: string;
       messageIds?: string[];
       messages?: Array<{ messageId: string; receiptHandle: string; body: string }>;
     }) => {
@@ -119,6 +120,7 @@ export const useDlqReplay = () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'dlq', 'queues'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'dlq', 'messages', variables.queueLabel] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'dlq', 'history'] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'dlq', 'triage'] });
     },
   });
 };
