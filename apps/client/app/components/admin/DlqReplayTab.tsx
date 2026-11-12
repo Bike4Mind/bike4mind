@@ -272,6 +272,8 @@ const MessageDrawer: React.FC<{
   );
 };
 
+const isOnStage = (queue: DlqQueueInfo) => queue.deployed !== false;
+
 const DlqReplayTab: React.FC = () => {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
@@ -285,8 +287,9 @@ const DlqReplayTab: React.FC = () => {
   } = useDlqQueues();
 
   // The selection lives in the URL so an alarm can deep-link to one queue. A label the registry
-  // does not list (an alarm-only DLQ) selects nothing rather than querying an unknown queue.
-  const selectedQueue = queueParam && queues?.some(q => q.label === queueParam) ? queueParam : null;
+  // does not list, or a queue this stage does not create, selects nothing rather than querying it.
+  const linkedQueue = queueParam ? queues?.find(q => q.label === queueParam) : undefined;
+  const selectedQueue = linkedQueue && isOnStage(linkedQueue) ? linkedQueue.label : null;
   const unknownQueue = queueParam && queues && !selectedQueue ? queueParam : null;
   const setSelectedQueue = (label: string | null) =>
     void navigate({
@@ -339,24 +342,27 @@ const DlqReplayTab: React.FC = () => {
     refetch: refetchHistory,
   } = useDlqHistory(historyFilters, showHistory);
 
-  const totalMessages = useMemo(() => {
-    if (!queues) return 0;
-    return queues.reduce((sum, q) => sum + Math.max(q.approximateMessageCount, 0), 0);
-  }, [queues]);
+  // Totals and the all-clear cover only queues this stage creates; a queue that exists but could
+  // not be read (-1) still counts, so it keeps the all-clear from showing.
+  const stageQueues = useMemo(() => queues?.filter(isOnStage) ?? [], [queues]);
 
-  const queuesWithMessages = useMemo(() => {
-    if (!queues) return 0;
-    return queues.filter(q => q.approximateMessageCount > 0).length;
-  }, [queues]);
+  const totalMessages = useMemo(
+    () => stageQueues.reduce((sum, q) => sum + Math.max(q.approximateMessageCount, 0), 0),
+    [stageQueues]
+  );
+
+  const queuesWithMessages = useMemo(
+    () => stageQueues.filter(q => q.approximateMessageCount > 0).length,
+    [stageQueues]
+  );
 
   // A failed background refetch keeps the last good data, so an error must not read as all clear.
   const allClear = useMemo(
     () =>
       !queuesError &&
-      !!queues &&
-      queues.length > 0 &&
-      queues.every(q => q.approximateMessageCount === 0 && q.approximateNotVisibleCount <= 0),
-    [queues, queuesError]
+      stageQueues.length > 0 &&
+      stageQueues.every(q => q.approximateMessageCount === 0 && q.approximateNotVisibleCount <= 0),
+    [stageQueues, queuesError]
   );
 
   const selectedQueueInfo = useMemo(() => {
@@ -467,7 +473,7 @@ const DlqReplayTab: React.FC = () => {
         <StatStrip aria-label="Dead-letter queue totals">
           <StatTile
             label="Dead-letter queues"
-            value={<span data-testid="dlq-stats-total">{(queues?.length ?? 0).toLocaleString()}</span>}
+            value={<span data-testid="dlq-stats-total">{stageQueues.length.toLocaleString()}</span>}
           />
           <StatTile
             label="Queues with messages"
@@ -482,8 +488,9 @@ const DlqReplayTab: React.FC = () => {
 
       {unknownQueue && (
         <Alert color="neutral" variant="soft" data-testid="dlq-unknown-queue">
-          The {unknownQueue} queue is not listed on this page yet, so it cannot be viewed or replayed here. Check it in
-          the AWS console.
+          {linkedQueue
+            ? `The ${linkedQueue.displayName} queue is not created on this stage, so there is nothing to view here.`
+            : `The ${unknownQueue} queue is not listed on this page yet, so it cannot be viewed or replayed here. Check it in the AWS console.`}
         </Alert>
       )}
 
@@ -502,10 +509,14 @@ const DlqReplayTab: React.FC = () => {
           data-testid="dlq-queue-selector"
         >
           {queues?.map(q => (
-            <Option key={q.label} value={q.label} data-testid={`dlq-queue-option-${q.label}`}>
+            <Option key={q.label} value={q.label} disabled={!isOnStage(q)} data-testid={`dlq-queue-option-${q.label}`}>
               <Stack direction="row" alignItems="center" gap={1}>
                 <Typography level="body-sm">{q.displayName}</Typography>
-                {q.approximateMessageCount < 0 && <StatusChip tone="warn" label="Count unavailable" />}
+                {!isOnStage(q) ? (
+                  <StatusChip tone="neutral" label="Not on this stage" />
+                ) : (
+                  q.approximateMessageCount < 0 && <StatusChip tone="warn" label="Count unavailable" />
+                )}
                 {q.approximateMessageCount > 0 && (
                   <StatusChip tone="bad" label={q.approximateMessageCount.toLocaleString()} />
                 )}

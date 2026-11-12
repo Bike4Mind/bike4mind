@@ -37,7 +37,7 @@ const QUEUE_ONE = {
   approximateNotVisibleCount: 0,
 };
 
-const q = vi.hoisted(() => ({ isError: false }));
+const q = vi.hoisted(() => ({ isError: false, refetch: vi.fn() }));
 
 // A minimal URL store: navigate writes the search, useSearch re-renders on change.
 const router = vi.hoisted(() => {
@@ -84,7 +84,7 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
     dataUpdatedAt: Date.UTC(2026, 10, 11, 9, 30),
     isLoading: false,
     isError: q.isError,
-    refetch: vi.fn(),
+    refetch: q.refetch,
   }),
   useDlqMessages: () => ({
     data: h.messages.length ? h.messages : state.messages,
@@ -142,6 +142,7 @@ beforeEach(() => {
   h.queueLogsUrl = null;
   h.messages = [];
   q.isError = false;
+  q.refetch.mockClear();
   router.set({});
   router.navigate.mockClear();
 });
@@ -172,12 +173,70 @@ describe('DlqReplayTab all-clear state', () => {
     ['a queue has messages', { approximateMessageCount: 2 }],
     ['a message is in flight', { approximateMessageCount: 0, approximateNotVisibleCount: 1 }],
     ['a queue count failed to load', { approximateMessageCount: -1, approximateNotVisibleCount: -1 }],
-  ])('keeps the counts when %s', (_label, counts) => {
-    state.queues = [{ ...QUEUE_ONE, ...counts }];
+  ])('keeps the counts when %s, even beside an empty queue', (_label, counts) => {
+    state.queues = [
+      { ...QUEUE_ONE, label: 'q0', approximateMessageCount: 0 },
+      { ...QUEUE_ONE, ...counts },
+    ];
     renderPlain();
 
     expect(screen.queryByTestId('dlq-all-clear')).toBeNull();
     expect(screen.getByTestId('dlq-stats-total')).toBeInTheDocument();
+  });
+});
+
+describe('DlqReplayTab queues this stage does not create', () => {
+  const NOT_DEPLOYED = {
+    ...QUEUE_ONE,
+    label: 'nightly-job',
+    displayName: 'Nightly Job',
+    deployed: false,
+    approximateMessageCount: -1,
+    approximateNotVisibleCount: -1,
+  };
+
+  it('shows the all-clear when every queue the stage creates is empty', () => {
+    state.queues = [{ ...QUEUE_ONE, approximateMessageCount: 0 }, NOT_DEPLOYED];
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-all-clear')).toBeInTheDocument();
+  });
+
+  it('leaves them out of the queue total', () => {
+    state.queues = [QUEUE_ONE, NOT_DEPLOYED];
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-stats-total')).toHaveTextContent('1');
+  });
+
+  it('lists them in the picker as disabled, marked not on this stage', async () => {
+    state.queues = [QUEUE_ONE, NOT_DEPLOYED];
+    renderPlain();
+    await userEvent.click(screen.getByRole('combobox'));
+
+    const option = await screen.findByTestId('dlq-queue-option-nightly-job');
+    expect(option).toHaveAttribute('aria-disabled', 'true');
+    expect(option).toHaveTextContent('Not on this stage');
+    expect(option).not.toHaveTextContent('Count unavailable');
+  });
+
+  it('explains a deep link to one instead of selecting it', () => {
+    state.queues = [QUEUE_ONE, NOT_DEPLOYED];
+    router.set({ dlqQueue: 'nightly-job' });
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-unknown-queue')).toHaveTextContent('Nightly Job queue is not created on this stage');
+    expect(screen.queryByTestId('dlq-messages-table')).toBeNull();
+  });
+});
+
+describe('DlqReplayTab all-clear refresh', () => {
+  it('refetches the queues from Check again', async () => {
+    state.queues = [{ ...QUEUE_ONE, approximateMessageCount: 0 }];
+    renderPlain();
+
+    await userEvent.click(screen.getByTestId('dlq-all-clear-refresh'));
+    expect(q.refetch).toHaveBeenCalledTimes(1);
   });
 });
 
