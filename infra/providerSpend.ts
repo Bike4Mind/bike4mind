@@ -1,7 +1,8 @@
 /**
  * Provider-reported LLM spend: hourly alarms per provider on ProviderReportedUsd, which the
- * providerUsagePoll cron (infra/cron.ts) reads from each provider's own usage report, plus an alarm
- * on the poller failing and a small dashboard. The ledger-derived twin is infra/llmSpend.ts.
+ * providerUsagePoll cron (infra/cron.ts) reads from each provider's own usage report, plus alarms
+ * on the poller failing or skipping a provider, and a small dashboard. The ledger-derived twin is
+ * infra/llmSpend.ts.
  */
 
 import { providerUsagePollCron } from './cron';
@@ -59,6 +60,26 @@ if (isMonitoredStage) {
       alarmActions: actions,
       okActions: actions,
       tags: { Application: 'LLMSpend', Severity: 'Critical' },
+    });
+  }
+
+  // Fires on the ProviderUsagePollSkipped datum the poller publishes, in place of spend, for a
+  // provider with no admin key.
+  for (const provider of PROVIDER_SPEND_PROVIDERS) {
+    new aws.cloudwatch.MetricAlarm(`providerUsagePollSkipped-${provider}`, {
+      name: `${prefix}-provider-usage-poll-skipped-${provider}`,
+      alarmDescription: `Usage poller skipped ${provider}: admin key not configured`,
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'ProviderUsagePollSkipped',
+      namespace: LLM_SPEND_NAMESPACE,
+      dimensions: { Provider: provider },
+      period: 3600,
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
     });
   }
 

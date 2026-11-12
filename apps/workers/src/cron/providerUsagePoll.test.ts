@@ -148,6 +148,14 @@ describe('providerUsagePoll handler', () => {
     );
   });
 
+  const skippedDatum = (provider: string) => ({
+    MetricName: 'ProviderUsagePollSkipped',
+    Value: 1,
+    Unit: 'Count',
+    Dimensions: [{ Name: 'Provider', Value: provider }],
+    Timestamp: NOW,
+  });
+
   it.each([undefined, '', 'not-configured'])('skips a provider whose admin key is %j', async key => {
     mocks.config.OPENAI_ADMIN_API_KEY = key;
     const result = await handler({}, context);
@@ -155,15 +163,29 @@ describe('providerUsagePoll handler', () => {
     expect(result).toEqual({ published: 1, skipped: 1 });
     expect(mocks.fetchOpenAIHourlyUsage).not.toHaveBeenCalled();
     expect(mocks.warn).toHaveBeenCalledWith('[ProviderUsagePoll] openai: admin key not configured, skipping');
-    const providers = published().MetricData.map(d => (d.Dimensions as Array<{ Value: string }>)[0].Value);
-    expect(new Set(providers)).toEqual(new Set(['anthropic']));
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    const metrics = published().MetricData;
+    expect(metrics.filter(d => d.MetricName === 'ProviderUsagePollSkipped')).toEqual([skippedDatum('openai')]);
+    const spendProviders = metrics
+      .filter(d => d.MetricName !== 'ProviderUsagePollSkipped')
+      .map(d => (d.Dimensions as Array<{ Value: string }>)[0].Value);
+    expect(new Set(spendProviders)).toEqual(new Set(['anthropic']));
   });
 
-  it('publishes nothing when no provider is configured', async () => {
+  it('publishes only a skipped datum per provider, in one call, when no provider is configured', async () => {
     mocks.config.ANTHROPIC_ADMIN_API_KEY = undefined;
     mocks.config.OPENAI_ADMIN_API_KEY = 'not-configured';
     expect(await handler({}, context)).toEqual({ published: 0, skipped: 2 });
-    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(published()).toEqual({
+      Namespace: 'test-app/production/LLMSpend',
+      MetricData: [skippedDatum('anthropic'), skippedDatum('openai')],
+    });
+  });
+
+  it('publishes no skipped datum when every provider is configured', async () => {
+    await handler({}, context);
+    expect(published().MetricData.some(d => d.MetricName === 'ProviderUsagePollSkipped')).toBe(false);
   });
 
   it('publishes the providers that worked, then fails the run for the one that did not', async () => {
