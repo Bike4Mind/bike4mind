@@ -42,11 +42,8 @@ jobs:
   preview-gate:
     name: preview gate
     if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request'
-    # A seconds-long API-only required check. On the shared PR pool it queues behind CI
-    # fan-out (observed: ~45 min, sometimes hours) and holds every PR yellow, and each
-    # label event adds another run. The separately capped *_QUEUE pool keeps it moving;
-    # unset, it falls through to the PR pool.
-    runs-on: ${{ vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    # API-only required check; keep it off the pool that CI fan-out saturates.
+    runs-on: ${{ vars.RUNNER_LABEL_LIGHT || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - name: Expire preview waiver on push
         uses: actions/github-script@v8
