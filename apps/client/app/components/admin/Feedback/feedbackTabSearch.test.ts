@@ -211,11 +211,13 @@ describe('feedbackViewToSearch', () => {
   it('sets every default param to undefined so a write removes it from the URL', () => {
     expect(Object.keys(feedbackViewToSearch(DEFAULT_FEEDBACK_VIEW)).sort()).toEqual(
       [
+        'feedbackArea',
         'feedbackLimit',
         'feedbackOrder',
         'feedbackOrg',
         'feedbackPage',
         'feedbackReceived',
+        'feedbackSeverity',
         'feedbackStatus',
         'feedbackSubject',
         'feedbackType',

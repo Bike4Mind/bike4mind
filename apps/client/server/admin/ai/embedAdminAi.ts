@@ -6,6 +6,8 @@ import {
   hasPublishedEmbeddingRate,
   type AdminAiConfig,
   type AdminAiFeature,
+  type AdminAiAttempt,
+  FEEDBACK_AI_POLICY,
 } from '@bike4mind/common';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -15,6 +17,7 @@ import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind
 import { reserveAdminAiSpend } from './budget';
 import { AdminAiSkip, type AdminAiSkipReason } from './adminAiSkip';
 import { pseudonymiseEvidence } from './pseudonymiseEvidence';
+import { recordAdminAiAttempt } from './telemetry';
 
 export const FEEDBACK_EMBEDDING_MODEL = OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
 export const loadFeedbackAiConfig = async (): Promise<AdminAiConfig> => {
@@ -30,6 +33,7 @@ export type AdminAiEmbeddingDeps = {
   loadConfig?: typeof loadFeedbackAiConfig;
   embed?: (text: string) => Promise<EmbeddingResult>;
   reserve?: typeof reserveAdminAiSpend;
+  recordAttempt?: typeof recordAdminAiAttempt;
 };
 
 export async function embedAdminAi(
@@ -41,17 +45,31 @@ export async function embedAdminAi(
   | { ok: false; skip: AdminAiSkipReason }
 > {
   let reservation: Awaited<ReturnType<typeof reserveAdminAiSpend>> | undefined;
+  const attempt: AdminAiAttempt = {
+    feature,
+    policyVersion: FEEDBACK_AI_POLICY,
+    outcome: 'skip',
+    skipReason: 'error',
+    calls: 0,
+    knownCostUsd: 0,
+    costUnknown: false,
+    startedAt: new Date(),
+  };
+  const skip = (reason: AdminAiSkipReason) => {
+    attempt.skipReason = reason;
+    return { ok: false as const, skip: reason };
+  };
   try {
     const config = await (deps.loadConfig ?? loadFeedbackAiConfig)();
     const limits = config.features[feature];
-    if (!config.enabled || limits.mode === 'off') return { ok: false, skip: 'disabled' };
+    if (!config.enabled || limits.mode === 'off') return skip('disabled');
     const redacted = String(pseudonymiseEvidence(text.slice(0, 3000), ''));
     const model = FEEDBACK_EMBEDDING_MODEL;
-    if (!hasPublishedEmbeddingRate(model)) return { ok: false, skip: 'no_model' };
+    if (!hasPublishedEmbeddingRate(model)) return skip('no_model');
     // UTF-8 bytes bound token count without relying on an approximate tokenizer.
     const ceilingTokens = Buffer.byteLength(redacted, 'utf8');
     const caps = getEmbeddingModelCapabilities(model);
-    if (!redacted.trim() || ceilingTokens > caps.maxInputTokens) return { ok: false, skip: 'invalid_output' };
+    if (!redacted.trim() || ceilingTokens > caps.maxInputTokens) return skip('invalid_output');
     let embed = deps.embed;
     if (!embed) {
       const keys = await apiKeyService.getEffectiveLLMApiKeys('system', {
@@ -59,7 +77,7 @@ export async function embedAdminAi(
         getSettingsByNames,
       });
       const { provider, missing } = resolveEmbeddingProvider(model, keys);
-      if (missing || !provider) return { ok: false, skip: 'no_model' };
+      if (missing || !provider) return skip('no_model');
       embed = input =>
         provider.embed({ model, inputs: [input], inputType: 'document' }, { signal: AbortSignal.timeout(8000) });
     }
@@ -68,7 +86,14 @@ export async function embedAdminAi(
       maxCostUsd: getEmbeddingModelCost(model, ceilingTokens),
       limits: { ...limits, monthlyCapUsd: config.monthlyCapUsd },
     });
+    attempt.calls = 1;
+    attempt.costUnknown = true;
     const result = await embed(redacted);
+    const reportedTokens = result.inputTokens;
+    if (reportedTokens !== undefined && Number.isFinite(reportedTokens) && reportedTokens >= 0) {
+      attempt.knownCostUsd = getEmbeddingModelCost(model, reportedTokens);
+      attempt.costUnknown = false;
+    }
     const vector = result.vectors[0];
     if (result.vectors.length !== 1 || vector?.length !== caps.dimensions.native || !vector.every(Number.isFinite)) {
       throw new AdminAiSkip('invalid_output');
@@ -81,12 +106,16 @@ export async function embedAdminAi(
     if (costUsd > getEmbeddingModelCost(model, ceilingTokens)) throw new AdminAiSkip('invalid_output');
     await reservation.settle(costUsd);
     reservation = undefined;
+    attempt.outcome = 'suggestion';
+    attempt.skipReason = undefined;
     return { ok: true, vector, model, costUsd };
   } catch (error) {
     if (reservation) await reservation.fail().catch(() => undefined);
     new Logger({ metadata: { service: 'adminAiEmbedding' } }).warn('Admin AI embedding skipped', {
       errorName: error instanceof Error ? error.name : 'unknown',
     });
-    return { ok: false, skip: error instanceof AdminAiSkip ? error.reason : 'provider_down' };
+    return skip(error instanceof AdminAiSkip ? error.reason : 'provider_down');
+  } finally {
+    await (deps.recordAttempt ?? recordAdminAiAttempt)({ ...attempt, finishedAt: new Date() }).catch(() => undefined);
   }
 }

@@ -10,6 +10,7 @@ vi.mock('./embedAdminAi', () => ({ loadFeedbackAiConfig: mocks.config, embedAdmi
 vi.mock('@server/decisions/platformDecision', () => ({
   callablePlatformModel: async () => 'jev/decision',
   resolveJsonInput: vi.fn(),
+  decisionFailureCode: () => undefined,
   toMicroUsd: (n: number) => Math.ceil(n * 1_000_000),
 }));
 vi.mock('@server/decisions/executeDecision', () => ({ executeDecision: mocks.decide }));
@@ -83,6 +84,16 @@ const report = async (content = 'Chat fails for jane@example.com account 64b7f0c
   return doc;
 };
 describe('feedback triage persistence', () => {
+  it('observes a kill switch changed after embedding before decision work', async () => {
+    setup();
+    const initial = await mocks.config();
+    mocks.config.mockResolvedValue(AdminAiConfigSchema.parse({})).mockResolvedValueOnce(initial);
+    const doc = await report();
+    await triageFeedback(doc.id);
+    expect(mocks.embed).toHaveBeenCalledOnce();
+    expect(mocks.decide).not.toHaveBeenCalled();
+    expect(await FeedbackAiModel.countDocuments()).toBe(0);
+  });
   it('stores labels, redacts decision evidence, deduplicates unchanged runs and leaves status alone', async () => {
     setup();
     const doc = await report();

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { FEEDBACK_AI_POLICY, confidenceBand, type DecisionAnswer } from '@bike4mind/common';
+import { FEEDBACK_AI_POLICY, confidenceBand, type DecisionAnswer, type AdminAiAttempt } from '@bike4mind/common';
 import {
   FeedbackAiModel,
   FeedbackModel,
@@ -14,18 +14,37 @@ import { adminAiDecisionAccounting } from './budget';
 import { embedAdminAi, loadFeedbackAiConfig } from './embedAdminAi';
 import { feedbackQuestions, nearestFeedback, readFeedbackAnswers } from './feedbackDecision';
 import { pseudonymiseEvidence } from './pseudonymiseEvidence';
+import { recordAdminAiAttempt } from './telemetry';
+import { AdminAiSkip } from './adminAiSkip';
+import { decisionFailureCode } from '@server/decisions/platformDecision';
 
 export async function triageFeedback(feedbackId: string): Promise<void> {
   const logger = new Logger({ metadata: { service: 'feedbackAi' } });
   const claimKey = `feedbackAi:inflight:${feedbackId}`;
   const owner = randomUUID();
   let claimed = false;
+  const attempt: AdminAiAttempt = {
+    feature: 'feedbackTriage',
+    policyVersion: FEEDBACK_AI_POLICY,
+    outcome: 'skip',
+    skipReason: 'error',
+    calls: 0,
+    knownCostUsd: 0,
+    costUnknown: false,
+    startedAt: new Date(),
+  };
   try {
     const config = await loadFeedbackAiConfig();
     const feature = config.features.feedbackTriage;
-    if (!config.enabled || feature.mode === 'off') return;
+    if (!config.enabled || feature.mode === 'off') {
+      attempt.skipReason = 'disabled';
+      return;
+    }
     claimed = (await cacheRepository.claimDedup(claimKey, { owner }, 60_000)).claimed;
-    if (!claimed) return;
+    if (!claimed) {
+      attempt.skipReason = 'in_flight';
+      return;
+    }
     const report = await FeedbackModel.findById(feedbackId).select('createdAt status subject type').lean();
     const text = await FeedbackTextModel.findById(feedbackId).lean();
     if (!report || !text || text.expiresAt <= new Date() || !text.content.trim()) return;
@@ -35,9 +54,18 @@ export async function triageFeedback(feedbackId: string): Promise<void> {
     );
     const inputHash = createHash('sha256').update(JSON.stringify(evidence)).digest('hex');
     const previous = await FeedbackAiModel.findOne({ feedbackId }).lean();
-    if (previous?.inputHash === inputHash && previous.suggestionId) return;
+    if (previous?.inputHash === inputHash && previous.suggestionId) {
+      attempt.outcome = 'cached';
+      attempt.suggestionId = previous.suggestionId;
+      attempt.skipReason = undefined;
+      return;
+    }
+    const model = await callablePlatformModel({ enabled: true, model: feature.model }, logger);
     const embedded = await embedAdminAi('feedbackTriage', JSON.stringify(evidence));
-    if (!embedded.ok) return;
+    if (!embedded.ok) {
+      attempt.skipReason = embedded.skip;
+      return;
+    }
     // Retained, recent reports only: no full-corpus scan or re-embedding on each submission.
     const earlier = await FeedbackAiModel.find({
       model: embedded.model,
@@ -77,22 +105,30 @@ export async function triageFeedback(feedbackId: string): Promise<void> {
     };
     let suggestion = await adminAiSuggestionRepository.findByKey(key);
     if (!suggestion) {
-      const model = await callablePlatformModel({ enabled: true, model: feature.model }, logger);
       let costUsd = 0;
-      const accounting = adminAiDecisionAccounting(
-        {
-          feature: 'feedbackTriage',
-          limits: { ...feature, monthlyCapUsd: config.monthlyCapUsd },
-          onCost: cost => {
-            costUsd += cost;
-          },
-        },
-        logger
-      );
       const started = Date.now();
       // Single-question calls work with every decision provider's question limit.
-      const results = await Promise.all(
+      const results = await Promise.allSettled(
         feedbackQuestions(candidates.length).map(async question => {
+          const fresh = await loadFeedbackAiConfig();
+          if (!fresh.enabled || fresh.features.feedbackTriage.mode === 'off') throw new AdminAiSkip('disabled');
+          const accounting = adminAiDecisionAccounting(
+            {
+              feature: 'feedbackTriage',
+              limits: { ...fresh.features.feedbackTriage, monthlyCapUsd: fresh.monthlyCapUsd },
+              onCost: cost => {
+                costUsd += cost;
+                attempt.knownCostUsd += cost;
+              },
+              onCall: delta => {
+                attempt.calls += delta;
+              },
+              onUnknownCost: () => {
+                attempt.costUnknown = true;
+              },
+            },
+            logger
+          );
           const { response } = await executeDecision({
             model,
             body: { input: [{ type: 'json', json: payload as Record<string, unknown> }], questions: [question] },
@@ -103,7 +139,9 @@ export async function triageFeedback(feedbackId: string): Promise<void> {
           return response.answers;
         })
       );
-      const answers: DecisionAnswer[] = results.flat();
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed?.status === 'rejected') throw failed.reason;
+      const answers: DecisionAnswer[] = results.flatMap(result => (result.status === 'fulfilled' ? result.value : []));
       const output = readFeedbackAnswers(
         answers,
         candidates.map(c => c.id)
@@ -111,6 +149,8 @@ export async function triageFeedback(feedbackId: string): Promise<void> {
       suggestion = await adminAiSuggestionRepository.createPending({
         ...key,
         entityType: 'feedback',
+        actionClass: 'labels',
+        costUnknown: attempt.costUnknown,
         model,
         verdict: `${output.labels.area}: ${output.labels.severity}`,
         confidence: { probability: output.confidence, band: confidenceBand(output.confidence) },
@@ -140,11 +180,16 @@ export async function triageFeedback(feedbackId: string): Promise<void> {
       },
       { upsert: true }
     );
+    attempt.outcome = 'suggestion';
+    attempt.suggestionId = suggestion.id;
+    attempt.skipReason = undefined;
   } catch (error) {
+    attempt.skipReason = error instanceof AdminAiSkip ? error.reason : (decisionFailureCode(error) ?? 'provider_down');
     logger.warn('Feedback AI skipped; manual report preserved', {
       errorName: error instanceof Error ? error.name : 'unknown',
     });
   } finally {
     if (claimed) await cacheRepository.casDeleteDedup(claimKey, 'owner', owner).catch(() => undefined);
+    await recordAdminAiAttempt({ ...attempt, finishedAt: new Date() }).catch(() => undefined);
   }
 }
