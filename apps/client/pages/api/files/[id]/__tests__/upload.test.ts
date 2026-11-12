@@ -2,16 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { settingsMap } from '@bike4mind/common';
 import type { Request, Response } from 'express';
 
-const { findByIdMock, uploadMock, getSettingsValueMock, recomputeUploadedMock, scopeGate, admitMock } = vi.hoisted(
-  () => ({
+const { findByIdMock, updateOneMock, uploadMock, getSettingsValueMock, recomputeUploadedMock, scopeGate, admitMock } =
+  vi.hoisted(() => ({
     admitMock: vi.fn(),
     findByIdMock: vi.fn(),
+    updateOneMock: vi.fn(),
     uploadMock: vi.fn(),
     getSettingsValueMock: vi.fn(),
     recomputeUploadedMock: vi.fn(),
     scopeGate: { baseApiOptions: undefined as unknown },
-  })
-);
+  }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
@@ -19,7 +19,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return { put: (h: unknown) => h };
   },
 }));
-vi.mock('@bike4mind/database', () => ({ FabFile: { findById: findByIdMock }, adminSettingsRepository: {} }));
+vi.mock('@bike4mind/database', () => ({
+  FabFile: { findById: findByIdMock, updateOne: updateOneMock },
+  adminSettingsRepository: {},
+}));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: getSettingsValueMock,
@@ -61,6 +64,7 @@ const makeReq = (opts: { id?: string; userId?: string; body?: Buffer[]; apiKeyIn
 };
 
 const makePendingFile = (fileSize = 5) => ({
+  _id: 'ff1',
   id: 'ff1',
   userId: 'u1',
   status: 'pending' as string,
@@ -79,6 +83,7 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
     process.env.B4M_SELF_HOST = 'true';
     getSettingsValueMock.mockReturnValue(20); // 20 MB
     uploadMock.mockResolvedValue(undefined);
+    updateOneMock.mockResolvedValue({ modifiedCount: 1 });
     admitMock.mockResolvedValue(true);
     findByIdMock.mockResolvedValue(makePendingFile());
   });
@@ -180,7 +185,7 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
     expect(Buffer.isBuffer(body)).toBe(true);
     expect((body as Buffer).toString()).toBe('hello world');
     expect(key).toBe('uploads/abc.txt');
-    expect(options).toMatchObject({ ContentType: 'text/plain', ContentLength: 11 });
+    expect(options).toMatchObject({ ContentType: 'text/plain', ContentLength: 11, IfNoneMatch: '*' });
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
@@ -205,8 +210,20 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
     await handler(makeReq({}), res);
 
     expect(fabFile.status).toBe('complete');
-    expect(fabFile.save).toHaveBeenCalledTimes(1);
+    expect(updateOneMock).toHaveBeenCalledWith(
+      { _id: 'ff1', userId: 'u1', filePath: 'uploads/abc.txt', status: 'pending' },
+      { $set: { status: 'complete' } }
+    );
+    expect(fabFile.save).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('does not recompute or report success when the key/status claim loses after upload', async () => {
+    updateOneMock.mockResolvedValue({ modifiedCount: 0 });
+    const res = makeRes();
+    await handler(makeReq({}), res);
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(recomputeUploadedMock).not.toHaveBeenCalled();
   });
 
   it('recomputes the lakes the file joined once the PUT succeeds (#1342)', async () => {
@@ -259,6 +276,7 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
 
     expect(fabFile.status).toBe('pending');
     expect(fabFile.save).not.toHaveBeenCalled();
+    expect(updateOneMock).not.toHaveBeenCalled();
   });
 
   it('requires files:write at the baseApi route gate', () => {

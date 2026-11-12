@@ -30,6 +30,14 @@ export async function uploadFileToUrl(
   if (url.startsWith('/') && !url.startsWith('//')) {
     await api.put(url, file, putConfig);
   } else {
+    if (
+      new URL(url, 'https://upload.invalid').searchParams
+        .get('X-Amz-SignedHeaders')
+        ?.split(';')
+        .includes('if-none-match')
+    ) {
+      putConfig.headers = { ...putConfig.headers, 'If-None-Match': '*' };
+    }
     await axios.put(url, file, putConfig);
   }
 }

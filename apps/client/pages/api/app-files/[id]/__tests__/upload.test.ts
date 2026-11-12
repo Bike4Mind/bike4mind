@@ -2,15 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { settingsMap } from '@bike4mind/common';
 import type { Request, Response } from 'express';
 
-const { findByIdMock, uploadMock, getSettingsValueMock } = vi.hoisted(() => ({
+const { findByIdMock, updateOneMock, uploadMock, getSettingsValueMock } = vi.hoisted(() => ({
   findByIdMock: vi.fn(),
+  updateOneMock: vi.fn(),
   uploadMock: vi.fn(),
   getSettingsValueMock: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ put: (h: unknown) => h }) }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
-vi.mock('@bike4mind/database/content', () => ({ AppFile: { findById: findByIdMock } }));
+vi.mock('@bike4mind/database/content', () => ({ AppFile: { findById: findByIdMock, updateOne: updateOneMock } }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: getSettingsValueMock,
@@ -46,6 +47,7 @@ const makeReq = (opts: { id?: string; userId?: string; body?: Buffer[] }) => {
 };
 
 const makePendingFile = (size = 5) => ({
+  _id: '507f1f77bcf86cd7994390a1',
   id: '507f1f77bcf86cd7994390a1',
   userId: 'u1',
   status: 'pending' as string,
@@ -63,6 +65,7 @@ describe('PUT /api/app-files/[id]/upload (self-host proxy)', () => {
     process.env.B4M_SELF_HOST = 'true';
     getSettingsValueMock.mockReturnValue(20); // 20 MB
     uploadMock.mockResolvedValue(undefined);
+    updateOneMock.mockResolvedValue({ modifiedCount: 1 });
     findByIdMock.mockResolvedValue(makePendingFile());
   });
   afterEach(() => {
@@ -154,7 +157,7 @@ describe('PUT /api/app-files/[id]/upload (self-host proxy)', () => {
     expect(Buffer.isBuffer(body)).toBe(true);
     expect((body as Buffer).toString()).toBe('hello world');
     expect(key).toBe('organizations/org1/logo.png');
-    expect(options).toMatchObject({ ContentType: 'image/png', ContentLength: 11 });
+    expect(options).toMatchObject({ ContentType: 'image/png', ContentLength: 11, IfNoneMatch: '*' });
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
@@ -164,9 +167,19 @@ describe('PUT /api/app-files/[id]/upload (self-host proxy)', () => {
     const res = makeRes();
     await handler(makeReq({}), res);
 
-    expect(appFile.status).toBe('complete');
-    expect(appFile.save).toHaveBeenCalledTimes(1);
+    expect(updateOneMock).toHaveBeenCalledWith(
+      { _id: appFile._id, userId: 'u1', path: 'organizations/org1/logo.png', status: 'pending' },
+      { $set: { status: 'complete' } }
+    );
+    expect(appFile.save).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('returns conflict if the row changed after its bytes landed', async () => {
+    updateOneMock.mockResolvedValue({ modifiedCount: 0 });
+    const res = makeRes();
+    await handler(makeReq({}), res);
+    expect(res.status).toHaveBeenCalledWith(409);
   });
 
   it('does not mark complete when the write fails', async () => {
@@ -178,5 +191,6 @@ describe('PUT /api/app-files/[id]/upload (self-host proxy)', () => {
 
     expect(appFile.status).toBe('pending');
     expect(appFile.save).not.toHaveBeenCalled();
+    expect(updateOneMock).not.toHaveBeenCalled();
   });
 });

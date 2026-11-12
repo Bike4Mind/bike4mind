@@ -25,6 +25,11 @@ describe('uploadFileToUrl', () => {
     expect(axiosPut.mock.calls[0][0]).toBe(s3);
   });
 
+  it('sends the signed create-only header for a file upload capability', async () => {
+    await uploadFileToUrl('https://bucket.s3.amazonaws.com/key?X-Amz-SignedHeaders=host%3Bif-none-match', file);
+    expect(axiosPut.mock.calls[0][2].headers['If-None-Match']).toBe('*');
+  });
+
   it('sends protocol-relative URLs through raw axios, never the authed api client', async () => {
     // '//host/...' passes startsWith('/'); guard it so the Bearer never reaches a foreign origin.
     await uploadFileToUrl('//evil.example.com/key.md', file, 'text/markdown');
