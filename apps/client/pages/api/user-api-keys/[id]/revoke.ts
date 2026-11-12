@@ -21,7 +21,8 @@ const handler = baseApi().post(
     assertNotOrgServiceAccount(req.user);
     const keyId = req.query.id;
     if (!keyId) throw new BadRequestError('Invalid key ID');
-    const reason = parseOrBadRequest(RevokeUserApiKeyBodySchema, req.body)?.reason || undefined;
+    // A bodyless POST without a JSON content type (an API-key client) reaches here as ''.
+    const reason = parseOrBadRequest(RevokeUserApiKeyBodySchema, req.body || undefined)?.reason || undefined;
 
     // An org admin revoking a member's key they did not mint gets the same strict audit row, committed with
     // the revoke, as pages/api/organizations/[id]/api-keys/members/[keyId]/revoke.ts. Realtime teardown

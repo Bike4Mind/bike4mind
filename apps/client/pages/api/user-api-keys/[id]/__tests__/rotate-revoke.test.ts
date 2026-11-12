@@ -274,6 +274,19 @@ describe('POST /api/user-api-keys/[id]/revoke', () => {
     );
   });
 
+  it('revokes on a bodyless POST that arrives as an empty string', async () => {
+    revokeUserApiKey.mockResolvedValueOnce(selfRevoke);
+    const { req, res } = post('key-1');
+    req.body = '';
+    await mockRefs.revokeHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(revokeUserApiKey).toHaveBeenCalledWith(
+      'admin-user',
+      { keyId: 'key-1', reason: undefined },
+      expect.anything()
+    );
+  });
+
   it('rejects a reason over 500 characters before revoking', async () => {
     const { req, res } = post('key-1', { reason: 'x'.repeat(501) });
     await expect(mockRefs.revokeHandler!(req, res)).rejects.toThrow();
