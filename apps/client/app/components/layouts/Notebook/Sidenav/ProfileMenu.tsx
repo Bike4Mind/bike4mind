@@ -502,7 +502,7 @@ const ProfileMenu = () => {
           <MenuRow
             testId="profile-menu-teams"
             icon={<BusinessIcon sx={{ fontSize: '18px' }} />}
-            label={t('organization.teams', 'Teams')}
+            label={t('organization.organizations')}
             onClick={() => {
               navigateFromMenu('/organizations', () => navigate({ to: '/organizations' }));
             }}
