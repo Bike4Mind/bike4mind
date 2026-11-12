@@ -3,7 +3,7 @@ import { findPersonalOrganizationIds, personalFilter } from '../users/purgeAccou
 import { findOrganizationFileIds } from '@bike4mind/server-utils/users/purgeAccountFiles';
 import { holderExportScope, viaParentExportScope, type ExportScope, type ReferenceMatch } from './exportScope';
 import { DATA_HOLDER_REGISTRY, findUnclassifiedModels } from './registry';
-import { matchingArrayElements, omitPath, setPath, valuesAt } from './documentPaths';
+import { cloneContainers, matchingArrayElements, omitPath, setPath, valuesAt } from './documentPaths';
 import type { DataHolder, DataHolderRegistry, UserReference } from './types';
 
 /**
@@ -53,6 +53,29 @@ const personPathsOf = (reference: UserReference): readonly string[] => [
   ...(reference.identifies ?? []),
 ];
 
+/**
+ * The references that read inside `arrayPath`, with every path taken relative to one of its
+ * elements, so an element can be withheld from like a document of its own.
+ */
+function referencesWithin(references: readonly UserReference[], arrayPath: string): UserReference[] {
+  const prefix = `${arrayPath}.`;
+  const within = (paths: readonly string[] | undefined): string[] | undefined =>
+    paths?.filter(path => path.startsWith(prefix)).map(path => path.slice(prefix.length));
+  return references
+    .filter(reference => reference.path.startsWith(prefix))
+    .map(reference => {
+      const rebased = {
+        ...reference,
+        path: reference.path.slice(prefix.length),
+        identifies: within(reference.identifies),
+      };
+      return 'alsoRedact' in rebased ? { ...rebased, alsoRedact: within(rebased.alsoRedact) } : rebased;
+    });
+}
+
+const isRecord = (value: unknown): value is LeanDocument =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
 const isExported = (holder: DataHolder): boolean =>
   holder.kind === 'subject' || holder.kind === 'holder' || holder.kind === 'viaParent';
 
@@ -98,6 +121,8 @@ export class SubjectRecordExport {
             await mongoose.model(model).collection.estimatedDocumentCount({ maxTimeMS: SIZE_MAX_TIME_MS })
           );
         } catch {
+          // Not logged: a failed size only moves the model to the end of its tier, and a model whose
+          // reads fail is reported through `failedReferences`.
           sizes.set(model, Number.MAX_SAFE_INTEGER);
         }
       }
@@ -427,13 +452,31 @@ export class SubjectRecordExport {
     }
     for (const [arrayPath, elements] of throughArray) {
       const mine = kept.get(arrayPath) ?? new Set<unknown>();
-      setPath(
-        document,
-        arrayPath,
-        elements.filter(element => mine.has(element))
-      );
+      // Whole elements in stored order, then the cut-down parts of a nested array match.
+      const ordered = [
+        ...elements.filter(element => mine.has(element)),
+        ...[...mine].filter(e => !elements.includes(e)),
+      ];
+      setPath(document, arrayPath, this.subjectElements(ordered, arrayPath, references));
     }
     return document;
+  }
+
+  /**
+   * Copies of the array elements kept for this person, each less the other people the references
+   * inside the array name (the reviewers' verdicts on the person's own eval-set example).
+   */
+  private subjectElements(
+    elements: readonly unknown[],
+    arrayPath: string,
+    references: readonly UserReference[]
+  ): unknown[] {
+    const within = referencesWithin(references, arrayPath);
+    if (within.length === 0) return [...elements];
+    return elements.map(element => {
+      const copy = cloneContainers(element);
+      return isRecord(copy) ? this.withholdOthers(copy, within) : copy;
+    });
   }
 
   /**
@@ -456,6 +499,7 @@ export class SubjectRecordExport {
         .flatMap(personPathsOf)
         .filter(path => !matchedPaths.has(path))
     );
+    const arrayElements = new Map<string, unknown[]>();
     for (const path of paths) {
       if (othersPaths.has(path)) continue;
       const arrayMatches = matches.filter(({ reference, throughArray }) => throughArray && reference.path === path);
@@ -467,9 +511,13 @@ export class SubjectRecordExport {
       for (const { reference } of arrayMatches) {
         const match = matchingArrayElements(document, path, this.isSubject(reference));
         if (!match || match.elements.length === 0) continue;
-        const already = valuesAt(record, match.arrayPath);
-        setPath(record, match.arrayPath, [...already, ...match.elements.filter(element => !already.includes(element))]);
+        const kept = arrayElements.get(match.arrayPath) ?? [];
+        kept.push(...match.elements.filter(element => !kept.includes(element)));
+        arrayElements.set(match.arrayPath, kept);
       }
+    }
+    for (const [arrayPath, elements] of arrayElements) {
+      setPath(record, arrayPath, this.subjectElements(elements, arrayPath, references));
     }
     return record;
   }

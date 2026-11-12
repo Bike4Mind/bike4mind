@@ -820,8 +820,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     await skipExport('deletion_due', nameOf(user));
     return;
   }
-  const appUrl = process.env.APP_URL?.trim();
-  if (!appUrl) throw new Error('APP_URL is required to link an account data export');
+  // Only the self-serve ready email links to the app, so an admin export runs without APP_URL.
+  const appUrl = process.env.APP_URL?.trim() ?? '';
+  if (!forAdmin && !appUrl) throw new Error('APP_URL is required to link an account data export');
 
   // The purge's atomic claim checks this same User document. Holding the lease prevents
   // prefix cleanup and final user deletion from racing a slow export upload.

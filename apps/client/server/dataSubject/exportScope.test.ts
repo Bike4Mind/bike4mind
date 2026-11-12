@@ -63,7 +63,7 @@ describe('holderExportScope', () => {
   it("exports only the actor's reference and identifying fields from a record about someone else", () => {
     expect(holderExportScope([match('AdminAuditLog', 'actor.userId')])).toEqual({
       scope: 'matchedPaths',
-      paths: ['actor.userId', 'actor.email', 'actor.name', 'context.ip', 'context.userAgent'],
+      paths: ['actor.userId', 'actor.email', 'actor.name', 'actor.apiKeyId', 'context.ip', 'context.userAgent'],
     });
   });
 

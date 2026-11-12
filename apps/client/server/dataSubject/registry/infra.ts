@@ -93,7 +93,7 @@ export const infraHolders = {
         matchBy: 'userId',
         action: 'retain',
         ...AUDIT_LOG,
-        identifies: ['actor.email', 'actor.name', 'context.ip', 'context.userAgent'],
+        identifies: ['actor.email', 'actor.name', 'actor.apiKeyId', 'context.ip', 'context.userAgent'],
         exportScope: 'reference',
       },
       {

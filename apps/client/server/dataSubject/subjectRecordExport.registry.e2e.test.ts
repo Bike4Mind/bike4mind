@@ -163,4 +163,62 @@ describe('SubjectRecordExport over the real registry', () => {
     expect(records[0].actor).toEqual({ kind: 'user', scope: 'platform', wasAdmin: true });
     expect(records[0]).not.toHaveProperty('context.ip');
   });
+
+  it('exports only their own part of an eval-set example to the flagged user and to each reviewer', async () => {
+    const [flagged, other, reviewerA, reviewerB, creator] = Array.from({ length: 5 }, () =>
+      new mongoose.Types.ObjectId().toString()
+    );
+    const detectionId = new mongoose.Types.ObjectId().toString();
+    const verdict = (reviewerId: string, reason: string) => ({
+      verdict: 'confirmed_abuse',
+      reason,
+      reviewerId: new mongoose.Types.ObjectId(reviewerId),
+      reviewedAt: new Date('2026-11-01T00:00:00Z'),
+    });
+    const example = (userId: string, verdicts: ReturnType<typeof verdict>[]) => ({
+      userId: new mongoose.Types.ObjectId(userId),
+      kind: 'flagged',
+      detectionIds: [new mongoose.Types.ObjectId(detectionId)],
+      campaignKey: 'campaign-hash',
+      split: 'test',
+      cohorts: [],
+      signedUpAt: null,
+      frozenLabel: null,
+      verdicts,
+      revision: 0,
+    });
+    const { insertedId } = await mongoose.model('AbuseEvalSet').collection.insertOne({
+      name: 'eval set',
+      note: null,
+      createdBy: new mongoose.Types.ObjectId(creator),
+      examples: [
+        example(flagged, [verdict(reviewerA, 'reason A'), verdict(reviewerB, 'reason B')]),
+        example(other, [verdict(reviewerA, 'reason A on other')]),
+      ],
+      runs: [],
+    });
+    const exportFor = async (userId: string) => {
+      const records = [];
+      for await (const record of new SubjectRecordExport({ userId, email: null }).records('AbuseEvalSet')) {
+        records.push(JSON.parse(JSON.stringify(record)));
+      }
+      return records;
+    };
+
+    const [flaggedRecord] = await exportFor(flagged);
+    expect(flaggedRecord._id).toBe(insertedId.toString());
+    expect(flaggedRecord.examples).toEqual([
+      expect.objectContaining({ userId: flagged, detectionIds: [detectionId], verdicts: [] }),
+    ]);
+
+    const [reviewerRecord] = await exportFor(reviewerA);
+    expect(reviewerRecord).toEqual({
+      _id: insertedId.toString(),
+      examples: [
+        { verdicts: [expect.objectContaining({ reviewerId: reviewerA, reason: 'reason A' })] },
+        { verdicts: [expect.objectContaining({ reviewerId: reviewerA, reason: 'reason A on other' })] },
+      ],
+    });
+    expect(JSON.stringify(reviewerRecord)).not.toContain(reviewerB);
+  });
 });
