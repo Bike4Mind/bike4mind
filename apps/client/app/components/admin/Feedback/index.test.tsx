@@ -365,6 +365,9 @@ describe('FeedbackTab', () => {
       expect(screen.getByTestId('admin-filter-feedback-received')).toHaveTextContent(
         'Received: Mar 1, 2020 \u2013 Mar 9, 2020'
       );
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-received'));
+      expect(screen.getByTestId('admin-filter-feedback-received-custom')).toHaveTextContent('Custom range\u2026');
+      await userEvent.keyboard('{Escape}');
       await userEvent.click(screen.getByTestId('admin-filter-clear-feedback-received-btn'));
 
       expect(defaultFiltersReturn.setReceived).toHaveBeenCalledWith(undefined);

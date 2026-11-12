@@ -447,7 +447,12 @@ const FeedbackTab: React.FC = () => {
   const customRangeSet = hasCreatedRange(createdRange);
   const receivedOptions = [
     ...RECEIVED_FILTER_OPTIONS,
-    { value: CUSTOM_RANGE, label: customRangeSet ? formatCreatedRange(createdRange) : 'Custom range' },
+    // The menu entry keeps saying what it does (reopen the picker); the chip shows the range itself.
+    {
+      value: CUSTOM_RANGE,
+      label: 'Custom range\u2026',
+      chipLabel: customRangeSet ? formatCreatedRange(createdRange) : undefined,
+    },
   ];
   const [rangeDialogOpen, setRangeDialogOpen] = useState(false);
   const setReceivedFilter = (value: string | undefined) => {
