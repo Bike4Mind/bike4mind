@@ -8,6 +8,7 @@ export * from './FabFileModel';
 export * from './FavoriteModel';
 export * from './ImageGenerationTemplateModel';
 export * from './ImageModerationIncidentModel';
+export * from './OwnerMutationLogModel';
 export * from './ReleaseNoteModel';
 export * from './ImportHistoryJobModel';
 export * from './AnnotationModel';
