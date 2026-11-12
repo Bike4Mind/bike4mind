@@ -4,7 +4,7 @@ All art here was generated for Bike4Mind with Bike4Mind's own image models. Do n
 
 Used by the Tavern view (`src/renderer/src/chat/orchestrator/tavern`). Characters: 1 dwarf smith, 2 elf scholar, 3 human ranger, 4 gnome tinkerer, 5 halfling bard, 6 orc alchemist, 7 human knight, 8 cat-folk cartographer (each listed with its craft in `tavern/tavernArt.ts`; add a sheet there too when adding one here), plus the Innkeeper (`innkeeper-*.png`, poses `idle`, `writing`, `reading`, `walking`, `cheering`). Sprites are 256x256 transparent canvases at one shared scale with the feet at bottom center; the `work` poses include their prop, and the `ko` poses include their stars. Render them with `image-rendering: pixelated`.
 
-The slot coordinates in `tavern/scene.ts` (`TAVERN_SLOTS`, `DOOR_POINT`) are picked for this `backdrop.png`; re-pick them whenever the backdrop is regenerated.
+Everything placed on `backdrop.png` lives in `layout.json` beside it: the seats per zone, where a full zone stacks its extra agents, the door, the Innkeeper's spot, the bar counter, the lamps, the window and the hearth glow. All are percents of the scene box (0-100). Regenerating the backdrop means re-picking `layout.json` in the same change; `tavern/tavernLayout.ts` parses it at load and `tavern/scene.test.ts` checks that every zone has slots inside the scene.
 
 ## Provenance
 

@@ -18,6 +18,14 @@ export const billingHolders = {
     // DAG node ids of other executions, not users.
     unrelatedPaths: ['blockedBy'],
   },
+  // Attribution only (who minted a run id); the run's charges live on the ledger and usage events.
+  CompletionRun: {
+    kind: 'holder',
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'ownerId', matchBy: 'userId', where: { ownerType: 'User' }, action: 'deleteDocument' },
+    ],
+  },
   CreditGrantIdentityClaim: {
     kind: 'holder',
     // `ownerId` is immutable and uniquely indexed, so it cannot be cleared in place. The claim is what blocks a

@@ -256,6 +256,7 @@ export function compileRule(
 export interface ShellSubjectCommand {
   text: string;
   words?: string;
+  expanded?: string;
   coverable: boolean;
   opaque?: string;
 }
@@ -489,7 +490,9 @@ export class PermissionRuleSet {
       case 'shell':
         return (subject.shell?.commands ?? []).some(
           command =>
-            matcher.pattern.test(command.text) || (command.words !== undefined && matcher.pattern.test(command.words))
+            matcher.pattern.test(command.text) ||
+            (command.words !== undefined && matcher.pattern.test(command.words)) ||
+            (command.expanded !== undefined && matcher.pattern.test(command.expanded))
         );
       case 'path':
         // The probe makes `Read(~/.ssh/**)` refuse a search rooted at ~/.ssh itself.

@@ -489,6 +489,52 @@ export class SessionStore implements SessionWritesStore {
     );
   }
 
+  /**
+   * Record the server's run id on a session's orchestration policy. A no-op unless the policy
+   * still belongs to `rootRunId`, so an id minted for a run the user has since turned off and on
+   * again never lands on its successor.
+   */
+  setServerRunId(
+    id: string,
+    rootRunId: string,
+    serverRunId: string,
+    expectedScope?: string | null
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const policy = session.orchestrationPolicy;
+        if (policy?.rootRunId !== rootRunId || policy.serverRunId === serverRunId) return null;
+        session.orchestrationPolicy = rootPolicySchema.parse({ ...policy, serverRunId });
+        return true;
+      },
+      expectedScope
+    );
+  }
+
+  /**
+   * Forget a server run id the server refused. A no-op unless the policy still holds exactly
+   * `refusedRunId`: a refusal that lands after a newer id was minted must not wipe the newer one.
+   */
+  clearServerRunId(
+    id: string,
+    rootRunId: string,
+    refusedRunId: string,
+    expectedScope?: string | null
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const policy = session.orchestrationPolicy;
+        if (policy?.rootRunId !== rootRunId || policy.serverRunId !== refusedRunId) return null;
+        const { serverRunId: _refused, ...rest } = policy;
+        session.orchestrationPolicy = rootPolicySchema.parse(rest);
+        return true;
+      },
+      expectedScope
+    );
+  }
+
   setWorkerModel(id: string, model: string, expectedScope: string | null): Promise<ChatSessionSummary | null> {
     return this.mutate(
       id,

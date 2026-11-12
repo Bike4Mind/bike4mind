@@ -552,6 +552,43 @@ describe('FeedbackTab', () => {
         expect(open.textContent).toBe(label);
       });
 
+      it('offers an email draft to the reporter, with the report quoted', async () => {
+        mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([item]));
+
+        renderFeedbackTab();
+        openRowMenu();
+        const email = await screen.findByTestId('feedback-row-email-reporter-fb-1');
+
+        expect(email.textContent).toBe('Email reporter');
+        expect(email).not.toHaveAttribute('target');
+        const href = email.getAttribute('href') ?? '';
+        expect(href).toMatch(/^mailto:reporter%40example\.com\?subject=/);
+        expect(decodeURIComponent(href.split('&body=')[1])).toBe('> Some feedback content');
+      });
+
+      it('lists the email action with the links, above the delete divider', async () => {
+        mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem({ sessionId: 'sess-1' })]));
+
+        renderFeedbackTab();
+        openRowMenu();
+        const conversation = await screen.findByTestId('feedback-row-open-conversation-fb-1');
+        const email = screen.getByTestId('feedback-row-email-reporter-fb-1');
+        const divider = screen.getByRole('separator');
+
+        expect(conversation.compareDocumentPosition(email) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(email.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      });
+
+      it('hides the email action for a report with no email', async () => {
+        mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem({ userEmail: '' })]));
+
+        renderFeedbackTab();
+        openRowMenu();
+
+        expect(await screen.findByTestId('feedback-row-copy-link-fb-1')).toBeInTheDocument();
+        expect(screen.queryByTestId('feedback-row-email-reporter-fb-1')).toBeNull();
+      });
+
       it('offers no conversation for a report with no session', async () => {
         mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([item]));
 

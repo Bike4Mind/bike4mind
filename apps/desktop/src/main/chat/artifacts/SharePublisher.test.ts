@@ -114,17 +114,26 @@ describe('SharePublisher', () => {
     expect(Object.keys(init)).not.toContain('auth');
   });
 
-  it('resolves a same-origin upload path against the server, as a browser would', async () => {
+  it('resolves a same-origin upload path against the server and sends the headers it was issued with', async () => {
     post.mockImplementationOnce(async () => ({
       data: {
         draftId: DRAFT_ID,
-        uploadUrls: [{ path: 'index.html', url: '/api/publish/artifact/draft-upload?token=t', expiresAt: 'later' }],
+        uploadUrls: [
+          {
+            path: 'index.html',
+            url: '/api/publish/artifact/draft-upload?draftId=d1&path=index.html',
+            expiresAt: 'later',
+            headers: { 'x-upload-token': 't' },
+          },
+        ],
       },
     }));
 
     await publisher.publish(request());
 
-    expect(String(fetchMock.mock.calls[0][0])).toBe(`${BASE_URL}/api/publish/artifact/draft-upload?token=t`);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe(`${BASE_URL}/api/publish/artifact/draft-upload?draftId=d1&path=index.html`);
+    expect(init.headers).toEqual({ 'x-upload-token': 't', 'Content-Type': 'text/html' });
   });
 
   it('refuses an oversized artifact before uploading anything', async () => {
