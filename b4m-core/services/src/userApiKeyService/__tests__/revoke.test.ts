@@ -30,8 +30,9 @@ function makeSyncedRepo() {
     revokeIfNotDisabled: vi.fn().mockImplementation((_id: string, revokedBy: string, revokedReason?: string) => {
       if (stored && stored.status !== ApiKeyStatus.DISABLED) {
         Object.assign(stored, { status: ApiKeyStatus.DISABLED, revokedAt: new Date(), revokedBy, revokedReason });
+        return Promise.resolve(true);
       }
-      return Promise.resolve();
+      return Promise.resolve(false);
     }),
   };
   return { repo, getStored: () => stored };
