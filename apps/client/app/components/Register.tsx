@@ -680,6 +680,7 @@ const Register: React.FC = () => {
                               <Typography sx={{ fontSize: '13px', color: 'text.secondary' }}>
                                 I agree to the{' '}
                                 <Link
+                                  data-testid="register-terms-link"
                                   href={ExternalLinks.terms}
                                   target="_blank"
                                   rel="noopener noreferrer"
@@ -689,6 +690,7 @@ const Register: React.FC = () => {
                                 </Link>
                                 ,{' '}
                                 <Link
+                                  data-testid="register-aup-link"
                                   href={ExternalLinks.acceptableUse}
                                   target="_blank"
                                   rel="noopener noreferrer"
@@ -698,6 +700,7 @@ const Register: React.FC = () => {
                                 </Link>
                                 , and{' '}
                                 <Link
+                                  data-testid="register-privacy-link"
                                   href={ExternalLinks.privacy}
                                   target="_blank"
                                   rel="noopener noreferrer"

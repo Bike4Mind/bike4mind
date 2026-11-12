@@ -197,8 +197,12 @@ const contrast = (a: Rgb, b: Rgb): number => {
 describe('the desktop dark palette', () => {
   const { palette } = desktopTheme.colorSchemes.dark;
 
-  it('leaves the light scheme on Joy defaults', () => {
-    expect(desktopTheme.colorSchemes.light.palette).toEqual(extendTheme().colorSchemes.light.palette);
+  it('keeps Joy light defaults with a concrete native-window surface color', () => {
+    const defaults = extendTheme().colorSchemes.light.palette;
+    expect(desktopTheme.colorSchemes.light.palette).toEqual({
+      ...defaults,
+      background: { ...defaults.background, surface: defaults.neutral[50] },
+    });
   });
 
   it.each(['primary', 'secondary', 'tertiary'] as const)('sets text.%s at 4.5:1 or better on every ground', step => {

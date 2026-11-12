@@ -61,6 +61,7 @@ import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@sh
 // registers, which defeats the point of keeping the auth handlers out of its reach.
 const api: DesktopApi = {
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.getAppInfo),
+  setTheme: (mode, backgroundColor) => ipcRenderer.invoke(IPC_CHANNELS.setTheme, mode, backgroundColor),
   update: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.updateGetState),
     check: () => ipcRenderer.invoke(IPC_CHANNELS.updateCheck),

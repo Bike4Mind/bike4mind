@@ -8,7 +8,7 @@ import {
   type ICompletionBackend,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { ModelBackend, type ModelInfo } from '@bike4mind/common';
+import { ChatModels, ModelBackend, type ModelInfo } from '@bike4mind/common';
 import { apiKeyRepository, adminSettingsRepository, AdminSettings } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import {
@@ -25,6 +25,19 @@ import {
  * summaries and research could never reach a newly added backend.
  */
 type OperationsApiKeyTable = ApiKeyTable;
+
+/**
+ * The operations text model used when the `operationsModel` admin setting is missing or names a
+ * model this deployment cannot run. Cheapest current-generation OpenAI text model.
+ */
+export const DEFAULT_OPERATIONS_TEXT_MODEL = ChatModels.GPT5_6_LUNA;
+
+/** Tried in order after the preferred model, before falling back to any available text model. */
+const OPERATIONS_TEXT_MODEL_FALLBACKS: readonly string[] = [
+  DEFAULT_OPERATIONS_TEXT_MODEL,
+  ChatModels.GPT5_4_MINI,
+  ChatModels.GPT4o_MINI,
+];
 
 /** Text-only operations result: no image/speech resolution. */
 export type OperationsTextModelResult = Pick<OperationsModelResult, 'modelId' | 'llm' | 'modelInfo'>;
@@ -107,7 +120,7 @@ export class OperationsModelService {
   /**
    * Shared operations text-model selection chain (no LLM init, no image/speech).
    * Order: self-host local Ollama (only when self-host and no cloud key) ->
-   * the preferred model id (admin config or hardcoded default) -> gpt-3.5-turbo ->
+   * the preferred model id (admin config or hardcoded default) -> OPERATIONS_TEXT_MODEL_FALLBACKS ->
    * any available text model. Throws only when no text model exists at all.
    */
   private static pickOperationsTextModelInfo(
@@ -122,9 +135,9 @@ export class OperationsModelService {
     if (!modelInfo && preferredModelId) {
       modelInfo = models.find(m => m.id === preferredModelId);
     }
-    if (!modelInfo) {
-      // gpt-3.5-turbo is a legacy fallback id no longer in the ModelName union; compare as string.
-      modelInfo = models.find(m => (m.id as string) === 'gpt-3.5-turbo');
+    for (const fallbackId of OPERATIONS_TEXT_MODEL_FALLBACKS) {
+      if (modelInfo) break;
+      modelInfo = models.find(m => m.id === fallbackId);
     }
     if (!modelInfo) {
       modelInfo = OperationsModelService.pickAnyTextModel(models);
@@ -221,7 +234,7 @@ export class OperationsModelService {
     const modelInfo = OperationsModelService.pickOperationsTextModelInfo(
       apiKeyTable,
       models,
-      config?.modelId ?? 'gpt-4o-mini'
+      config?.modelId ?? DEFAULT_OPERATIONS_TEXT_MODEL
     );
 
     const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: this.logger, endUserId: options.endUserId });
@@ -356,7 +369,7 @@ export class OperationsModelService {
     options: OperationsModelOptions
   ): Promise<OperationsModelResult> {
     const defaultConfig: OperationsModelConfig = {
-      modelId: 'gpt-4o-mini',
+      modelId: DEFAULT_OPERATIONS_TEXT_MODEL,
       imageModelId: 'flux-pro-1.1',
       speechModelId: 'whisper-1',
     };
@@ -454,7 +467,7 @@ export class OperationsModelService {
    */
   private static async getDefaultOperationsModel(options: OperationsModelOptions): Promise<OperationsModelResult> {
     const defaultConfig: OperationsModelConfig = {
-      modelId: 'gpt-4o-mini',
+      modelId: DEFAULT_OPERATIONS_TEXT_MODEL,
       imageModelId: 'flux-pro-1.1',
       speechModelId: 'whisper-1',
     };
