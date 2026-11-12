@@ -409,6 +409,22 @@ describe('DlqReplayTab age and expiry', () => {
     expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('13d 13h');
   });
 
+  it('keeps age, expiry and receive values under their matching headers', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.messages[0].sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    const table = screen.getByTestId('dlq-messages-table');
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map(header => header.textContent);
+    const cells = within(screen.getByTestId('dlq-message-row-m1')).getAllByRole('cell');
+    expect(cells[headers.indexOf('Age')]).toHaveTextContent('10h 30m');
+    expect(cells[headers.indexOf('Expires in')]).toHaveTextContent('3d 13h');
+    expect(cells[headers.indexOf('Receives')]).toHaveTextContent(/^1$/);
+  });
+
   it('shows a different expiry for a shorter retention', async () => {
     state.retentionSeconds = 4 * 24 * 3600;
     state.messages[0].sentTimestamp = String(Date.now() - 10.5 * HOUR);
