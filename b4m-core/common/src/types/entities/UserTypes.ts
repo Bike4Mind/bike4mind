@@ -491,6 +491,12 @@ export interface IUser extends ICreditHolder {
    * Queries for human users must use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
    */
   isSystem?: boolean;
+  /**
+   * Set only on an organization's service account (an `isSystem` user that owns the org's API keys,
+   * see constants/orgServiceAccount.ts). Binds the account to that one org; it never sits on the
+   * org's `users[]` roster, so it takes no seat and is not listed as a member.
+   */
+  serviceAccountOrganizationId?: string;
   subscribedUntil: string | null;
   photoUrl: string | null;
 

@@ -2,6 +2,7 @@ import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { agentRepository, organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
 import { gateEmbedBrandingWrite } from '@server/entitlements/embedKeyEntitlement';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
@@ -25,6 +26,7 @@ const handler = baseApi()
   .patch(
     asyncHandler<{}, unknown, UpdateEmbedKeyRequest, { id: string }>(async (req, res) => {
       const userId = req.user?.id;
+      assertNotOrgServiceAccount(req.user);
       const keyId = req.query.id;
       const { agentId, allowedOrigins, branding, identifiedClientIds } = req.body;
 
@@ -118,6 +120,7 @@ const handler = baseApi()
   .delete(
     asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
       const userId = req.user?.id;
+      assertNotOrgServiceAccount(req.user);
       const keyId = req.query.id;
 
       if (!keyId) throw new BadRequestError('Invalid key ID');
