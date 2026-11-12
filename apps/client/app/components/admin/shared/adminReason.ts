@@ -36,6 +36,13 @@ export const ADMIN_REASON_PRESETS = {
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
   apiKeyAdminScope: ['Partner integration', 'Internal service', 'Requested by the account owner'],
   embedKeyRevoke: ['Compromised or leaked key', 'Site no longer embeds the agent', 'Customer request'],
+  publishedPageTakedown: [
+    'Harmful or abusive content',
+    'Phishing or impersonation',
+    'Copyright or trademark claim',
+    'Spam or junk content',
+  ],
+  publishedPageRestore: ['Report reviewed, not a violation', 'Taken down in error', 'Appeal accepted'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
   orgGroupTypes: ['Pilot or partner access', 'Plan change', 'Support request'],
   rateLimitReset: ['Support request', 'Key locked out', 'Counter correction'],

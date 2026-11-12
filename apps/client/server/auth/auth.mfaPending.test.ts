@@ -56,6 +56,7 @@ describe('auth middleware: mfaPending allowlist', () => {
     '/api/logout',
     '/api/auth/mfa/verify-setup',
     '/api/auth/mfa/cancel-setup',
+    '/api/auth/mfa/enrollment-abandoned',
     '/api/auth/mfa/status',
     '/api/auth/mfa/passkey/authenticate-options',
     '/api/settings/fetch',
