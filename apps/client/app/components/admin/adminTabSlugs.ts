@@ -1,5 +1,6 @@
 import {
   ADMIN_AUDIT_LOG_TAB_SLUG,
+  ADMIN_DLQ_REPLAY_TAB_SLUG,
   ADMIN_FEEDBACK_TAB_SLUG,
   ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
   ADMIN_USERS_TAB_SLUG,
@@ -73,7 +74,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.HelpAnalytics]: 'help-analytics',
   [AdminTab.ContextInspector]: 'context-inspector',
   [AdminTab.RateLimits]: 'rate-limits',
-  [AdminTab.DlqReplay]: 'dlq-replay',
+  [AdminTab.DlqReplay]: ADMIN_DLQ_REPLAY_TAB_SLUG,
   [AdminTab.IntegrationHealth]: 'integration-health',
   [AdminTab.SreAgent]: 'sre-agent',
   [AdminTab.ManageGears]: 'manage-gears',
@@ -105,6 +106,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.AuditLog]: ADMIN_AUDIT_LOG_TAB_SLUG,
   [AdminTab.Approvals]: 'approvals',
   [AdminTab.Tutorials]: 'tutorials',
+  [AdminTab.AiOperations]: 'ai-operations',
 };
 
 /**
