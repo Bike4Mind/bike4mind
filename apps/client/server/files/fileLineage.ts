@@ -38,7 +38,7 @@ export type VisibleLineageNode = LineageNodeBase & {
   prompt: string | null;
   /** The signed, browser-facing URL; null when moderation withholds it. */
   url: string | null;
-  createdAt: string;
+  createdAt: string | null;
   /** The stored generation request (`sourceMetadata.generation.request`), for "restore these settings". */
   request: Record<string, unknown> | null;
 };
@@ -66,9 +66,9 @@ export type FileLineageDeps = {
   findChildIds: (fileId: string, page: { limit: number; skip: number }) => Promise<string[]>;
 };
 
-const toIsoString = (value: unknown): string => {
+const toIsoString = (value: unknown): string | null => {
   if (value instanceof Date) return value.toISOString();
-  return typeof value === 'string' ? value : new Date(0).toISOString();
+  return typeof value === 'string' ? value : null;
 };
 
 function toVisibleNode(file: IFabFileDocument, depth: number): VisibleLineageNode {

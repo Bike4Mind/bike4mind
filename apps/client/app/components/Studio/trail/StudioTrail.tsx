@@ -123,9 +123,11 @@ const VisibleStep = ({ node, roles, isCurrent, onRestore }: StepProps & { node: 
             {node.prompt}
           </Typography>
         )}
-        <Typography level="body-xs" textColor="text.tertiary">
-          {dateFormat.format(new Date(node.createdAt))}
-        </Typography>
+        {node.createdAt && (
+          <Typography level="body-xs" textColor="text.tertiary">
+            {dateFormat.format(new Date(node.createdAt))}
+          </Typography>
+        )}
         <RoleChips roles={roles} testId={`studio-trail-roles-${node.fileId}`} />
       </ListItemContent>
     </>
