@@ -15,8 +15,11 @@ export interface DlqQueueInfo {
   replay?: DlqReplaySafety;
   replayNote?: string;
   owner?: string;
+  /** -1 when unreadable, including on a stage that does not create the queue (deployed is false then). */
   approximateMessageCount: number;
   approximateNotVisibleCount: number;
+  /** False when this stage does not create the queue (stage-gated scheduled jobs); absent otherwise. */
+  deployed?: boolean;
   /** Consumer Lambda log groups; null when the consumer could not be resolved. */
   logGroups?: string[] | null;
   /** CloudWatch Logs Insights link over the consumer's last 24h of logs. */

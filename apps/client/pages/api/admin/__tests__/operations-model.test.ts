@@ -127,4 +127,14 @@ describe('/api/admin/operations-model permission gate', () => {
     expect(h.update).not.toHaveBeenCalled();
     expect(h.audit).not.toHaveBeenCalled();
   });
+
+  it('refuses PUT with 403 to a delegate holding settings:manage', async () => {
+    const { req, res } = createMocks({ method: 'PUT', body });
+    (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false, adminPermissions: ['settings:manage'] };
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)).rejects.toMatchObject(
+      { statusCode: 403 }
+    );
+    expect(h.update).not.toHaveBeenCalled();
+  });
 });
