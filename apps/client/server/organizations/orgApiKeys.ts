@@ -57,8 +57,8 @@ export function toOrgApiKeyView(key: IUserApiKeyDocument, creatorNames: Map<stri
     status: key.status,
     createdAt: key.createdAt,
     expiresAt: key.expiresAt,
-    lastUsedAt: key.usage?.lastRequest,
-    totalRequests: key.usage?.totalRequests ?? 0,
+    // Key validation stamps the top-level field; `usage.lastRequest` has no writer.
+    lastUsedAt: key.lastUsedAt,
     createdBy: creatorId ? { id: creatorId, name: creatorNames.get(creatorId) ?? null } : null,
   };
 }
