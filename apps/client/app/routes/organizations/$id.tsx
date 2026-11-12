@@ -161,13 +161,33 @@ const OrganizationPage: FC = () => {
   // One list feeds both the desktop rail and the phone select, so the two can never offer
   // different tabs. Order and gates must match the TabPanels below.
   const visibleTabs: { value: OrganizationTabs; label: string; icon: ReactNode }[] = [
-    { value: OrganizationTabs.Overview, label: t('organization.tabs.overview'), icon: <BusinessOutlinedIcon sx={{ fontSize: 16 }} /> },
-    { value: OrganizationTabs.Members, label: t('organization.tabs.members'), icon: <GroupOutlinedIcon sx={{ fontSize: 16 }} /> },
+    {
+      value: OrganizationTabs.Overview,
+      label: t('organization.tabs.overview'),
+      icon: <BusinessOutlinedIcon sx={{ fontSize: 16 }} />,
+    },
+    {
+      value: OrganizationTabs.Members,
+      label: t('organization.tabs.members'),
+      icon: <GroupOutlinedIcon sx={{ fontSize: 16 }} />,
+    },
     ...(canManageGroups
-      ? [{ value: OrganizationTabs.Groups, label: t('organization.tabs.groups'), icon: <GroupWorkOutlinedIcon sx={{ fontSize: 16 }} /> }]
+      ? [
+          {
+            value: OrganizationTabs.Groups,
+            label: t('organization.tabs.groups'),
+            icon: <GroupWorkOutlinedIcon sx={{ fontSize: 16 }} />,
+          },
+        ]
       : []),
     ...(canViewUsage
-      ? [{ value: OrganizationTabs.Usage, label: t('organization.tabs.usage'), icon: <InsightsOutlinedIcon sx={{ fontSize: 16 }} /> }]
+      ? [
+          {
+            value: OrganizationTabs.Usage,
+            label: t('organization.tabs.usage'),
+            icon: <InsightsOutlinedIcon sx={{ fontSize: 16 }} />,
+          },
+        ]
       : []),
     ...(canViewAnalysis
       ? [
@@ -179,7 +199,13 @@ const OrganizationPage: FC = () => {
         ]
       : []),
     ...(canViewBilling
-      ? [{ value: OrganizationTabs.Billing, label: t('organization.tabs.billing'), icon: <CreditCardOutlinedIcon sx={{ fontSize: 16 }} /> }]
+      ? [
+          {
+            value: OrganizationTabs.Billing,
+            label: t('organization.tabs.billing'),
+            icon: <CreditCardOutlinedIcon sx={{ fontSize: 16 }} />,
+          },
+        ]
       : []),
     ...(canManageIntegrations
       ? [
@@ -188,18 +214,38 @@ const OrganizationPage: FC = () => {
             label: t('organization.tabs.integrations'),
             icon: <ExtensionOutlinedIcon sx={{ fontSize: 16 }} />,
           },
-          { value: OrganizationTabs.GitHub, label: t('organization.tabs.github_api'), icon: <VpnKeyOutlinedIcon sx={{ fontSize: 16 }} /> },
-          { value: OrganizationTabs.Webhooks, label: t('organization.tabs.webhooks'), icon: <GitHubIcon sx={{ fontSize: 16 }} /> },
+          {
+            value: OrganizationTabs.GitHub,
+            label: t('organization.tabs.github_api'),
+            icon: <VpnKeyOutlinedIcon sx={{ fontSize: 16 }} />,
+          },
+          {
+            value: OrganizationTabs.Webhooks,
+            label: t('organization.tabs.webhooks'),
+            icon: <GitHubIcon sx={{ fontSize: 16 }} />,
+          },
         ]
       : []),
     ...(canManageConnectors
-      ? [{ value: OrganizationTabs.Connectors, label: t('organization.tabs.connectors'), icon: <HubOutlinedIcon sx={{ fontSize: 16 }} /> }]
+      ? [
+          {
+            value: OrganizationTabs.Connectors,
+            label: t('organization.tabs.connectors'),
+            icon: <HubOutlinedIcon sx={{ fontSize: 16 }} />,
+          },
+        ]
       : []),
     ...(canManageConnectors
       ? [{ value: OrganizationTabs.ApiKeys, label: 'API Keys', icon: <KeyOutlinedIcon sx={{ fontSize: 16 }} /> }]
       : []),
     ...(canManageOrg
-      ? [{ value: OrganizationTabs.Settings, label: t('organization.tabs.settings'), icon: <SettingsOutlinedIcon sx={{ fontSize: 16 }} /> }]
+      ? [
+          {
+            value: OrganizationTabs.Settings,
+            label: t('organization.tabs.settings'),
+            icon: <SettingsOutlinedIcon sx={{ fontSize: 16 }} />,
+          },
+        ]
       : []),
   ];
 
