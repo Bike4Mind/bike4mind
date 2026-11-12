@@ -3,7 +3,7 @@ import { settingsMap, type SettingKey } from '@bike4mind/common';
 import { test, expect, openPageAs } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { apiCreateThrowawayUser, apiGetAdminSettings, apiUpdateAdminSetting } from './helpers/api';
-import { isSharedRealEnv, isStagingEnv } from './helpers/env';
+import { expectsApiRateLimitEnforcement, isSharedRealEnv, isStagingEnv } from './helpers/env';
 import { getTestUsers } from './helpers/test-users';
 import { BasePage } from './pages/BasePage';
 import { ChatPage } from './pages/ChatPage';
@@ -14,13 +14,14 @@ import { NavigationPage } from './pages/NavigationPage';
  * free-tier rate limit at 0, and the daily spend cap.
  *
  * The limits are global admin settings, so there are two modes:
- * - Previews and localhost: the zero-limit and spend-cap tests set small values and put every touched
+ * - Previews and production-mode localhost: the zero-limit and spend-cap tests set small values and put every touched
  *   setting back afterwards (a missing row goes back to its registry default).
  * - Staging (the scheduled runs, shared with real users): no global setting is written. Those tests
  *   skip, and a read-only check asserts a fresh free account gets past both gates at staging's own
  *   values. Per-user writes on accounts this file creates still run. Production is skipped.
  *
  * Every account here is minted without the predefined Developer tag, which bypasses both limits.
+ * Development targets skip the zero-limit case because that server mode deliberately bypasses rate limits.
  *
  * Serial mode: the global-setting tests change limits every free account on the env shares.
  */
@@ -165,6 +166,10 @@ test.describe('Free-tier limits', () => {
 
   test('a zero free-tier rate limit blocks a free account and not a developer', async ({ request }) => {
     test.skip(LIVE, 'Needs a global rate-limit change, which staging must never get.');
+    test.skip(
+      !expectsApiRateLimitEnforcement(),
+      'Development servers intentionally bypass rate limits. Set E2E_API_RUNTIME=production only for a production-mode target.'
+    );
     test.setTimeout(TIMEOUTS.TEST + 2 * (RATE_TIER_CACHE_TTL_MS + CACHE_MARGIN_MS));
     const free = await createFreeUser(request, 'ftlzero');
     const developer = await apiCreateThrowawayUser(request, 'ftlzerodev');
