@@ -141,7 +141,7 @@ extension QuestTurn {
     QuestTurn(
       id: frame.questID,
       prompt: prompt.flatMap { $0.isEmpty ? nil : $0 } ?? frame.prompt,
-      reply: frame.reply ?? reply,
+      reply: Self.reply(current: reply, incoming: frame.reply, settled: frame.status?.isTerminal ?? false),
       status: frame.status ?? status,
       kind: frame.kind ?? kind,
       errorCode: frame.errorCode ?? errorCode,
@@ -157,7 +157,7 @@ extension QuestTurn {
     return QuestTurn(
       id: id,
       prompt: prompt ?? polled.prompt,
-      reply: polled.reply ?? reply,
+      reply: Self.reply(current: reply, incoming: polled.reply, settled: terminal),
       status: polled.status ?? status,
       kind: polled.kind ?? kind,
       errorCode: polled.errorCode ?? errorCode,
@@ -167,6 +167,15 @@ extension QuestTurn {
   }
 
   public var isFailed: Bool { kind == .error || status == .stopped }
+
+  /// Mid-stream text only grows, as on the web (useStreamingQueryUpdates): a poll reads the quest as last
+  /// persisted, up to a heartbeat behind the socket, and a retry resets the server's reply slots. A settled
+  /// update is the final display text and wins even when shorter.
+  static func reply(current: String?, incoming: String?, settled: Bool) -> String? {
+    guard let incoming else { return current }
+    if settled { return incoming }
+    return incoming.count < (current?.count ?? 0) ? current : incoming
+  }
 }
 
 /// Where a turn's tool approval stands.

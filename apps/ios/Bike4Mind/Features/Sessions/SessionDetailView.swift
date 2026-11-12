@@ -10,7 +10,7 @@ struct SessionDetailView: View {
   var body: some View {
     ChatScreen(
       session: session, api: services.api, realtime: services.realtime, activities: services.questActivities,
-      agentRuns: services.agentRuns)
+      agentRuns: services.agentRuns, firstTurn: services.navigator.takeOpeningTurn(forSession: session.id))
   }
 }
 
@@ -27,14 +27,14 @@ private struct ChatScreen: View {
 
   init(
     session: SessionSummary, api: any B4MAPI, realtime: any RealtimeClient, activities: any QuestActivityTracking,
-    agentRuns: any AgentRunStarting
+    agentRuns: any AgentRunStarting, firstTurn: QuestTurn?
   ) {
     self.session = session
     _title = State(initialValue: session.name)
     _model = State(
       initialValue: ChatViewModel(
         sessionID: session.id, api: api, realtime: realtime, title: session.name, activities: activities,
-        agentRuns: agentRuns))
+        agentRuns: agentRuns, firstTurn: firstTurn))
   }
 
   var body: some View {

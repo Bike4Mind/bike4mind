@@ -60,7 +60,8 @@ public final class ChatViewModel {
     now: @escaping @Sendable () -> Date = Date.init,
     title: String = "",
     activities: (any QuestActivityTracking)? = nil,
-    agentRuns: (any AgentRunStarting)? = nil
+    agentRuns: (any AgentRunStarting)? = nil,
+    firstTurn: QuestTurn? = nil
   ) {
     self.sessionID = sessionID
     self.title = title
@@ -72,6 +73,8 @@ public final class ChatViewModel {
     self.sleep = sleep
     self.now = now
     transcript = TranscriptViewModel(sessionID: sessionID, api: api)
+    // A conversation this device just started: its prompt shows at once, not after the transcript round trip.
+    if let firstTurn { liveTurns = [firstTurn] }
   }
 
   // MARK: - Reading

@@ -19,7 +19,13 @@ struct NewConversationView: View {
   var body: some View {
     VStack(spacing: Tokens.Spacing.m) {
       Spacer(minLength: 0)
-      if model.draft.isEmpty {
+      if model.isSending {
+        // The server creates the session before it answers, which takes a few seconds on a cold start.
+        ProgressView("Starting your chat...")
+          .font(Tokens.Typography.caption)
+          .foregroundStyle(Tokens.Palette.secondaryText)
+          .accessibilityIdentifier("new-conversation-sending")
+      } else if model.draft.isEmpty {
         greeting
         chips
       }
@@ -166,11 +172,11 @@ struct NewConversationView: View {
 
   private func send() {
     guard model.canSend else { return }
+    focused = false
     Task {
       // The model clears the draft on success, so back from the new session lands on the greeting again.
       guard let sessionID = await model.send() else { return }
-      focused = false
-      services.navigator.apply(.session(id: sessionID))
+      services.navigator.openNewConversation(sessionID: sessionID, firstTurn: model.startedTurn)
     }
   }
 }

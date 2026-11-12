@@ -96,10 +96,10 @@ final class ChatFrameTests: XCTestCase {
   func testCumulativeReplyReplacesNeverAppends() {
     var turn = QuestTurn(id: "q1", prompt: "Hi", reply: nil, status: .pending, createdAt: Samples.date)
     for (reply, expected) in [
-      ("Hel", "Hel"), ("Hello wor", "Hello wor"), ("Hello", "Hello"), ("Hello world!", "Hello world!"),
+      ("Hel", "Hel"), ("Hello wor", "Hello wor"), ("Hello", "Hello wor"), ("Hello world!", "Hello world!"),
     ] {
       turn = turn.applying(ChatQuestFrame(questID: "q1", sessionID: "s1", reply: reply, status: .running))
-      XCTAssertEqual(turn.reply, expected, "a shrinking or growing reply is shown exactly as sent")
+      XCTAssertEqual(turn.reply, expected, "a growing reply replaces; a shorter running one is ignored")
     }
     XCTAssertEqual(turn.prompt, "Hi")
   }
@@ -300,5 +300,36 @@ final class RealtimeHandshakeTests: XCTestCase {
     } catch {
       XCTAssertEqual(error as? APIError, .malformedResponse)
     }
+  }
+}
+
+/// Live text must not jump backwards mid-stream: a poll reads the quest as last persisted (up to a heartbeat
+/// behind the socket), and a retry resets the server's reply slots. Only a settled turn may shorten it.
+final class QuestTurnMonotonicReplyTests: XCTestCase {
+  private let streaming = QuestTurn(
+    id: "q1", prompt: "Hi", reply: "Hello there, how are", status: .running, createdAt: Date(timeIntervalSince1970: 0))
+
+  func testARunningPollDoesNotShortenStreamedText() {
+    let polled = QuestTurn(
+      id: "q1", prompt: nil, reply: "Hello", status: .running, createdAt: Date(timeIntervalSince1970: 0))
+    XCTAssertEqual(streaming.applying(polled: polled).reply, "Hello there, how are")
+  }
+
+  func testARunningFrameDoesNotShortenStreamedText() {
+    let frame = ChatQuestFrame(questID: "q1", sessionID: "s1", reply: "Hel", status: .running)
+    XCTAssertEqual(streaming.applying(frame).reply, "Hello there, how are")
+  }
+
+  func testLongerRunningUpdatesStillApply() {
+    let frame = ChatQuestFrame(questID: "q1", sessionID: "s1", reply: "Hello there, how are you?", status: .running)
+    XCTAssertEqual(streaming.applying(frame).reply, "Hello there, how are you?")
+  }
+
+  func testASettledUpdateIsAuthoritativeEvenWhenShorter() {
+    let frame = ChatQuestFrame(questID: "q1", sessionID: "s1", reply: "Hello.", status: .done)
+    XCTAssertEqual(streaming.applying(frame).reply, "Hello.")
+    let polled = QuestTurn(
+      id: "q1", prompt: nil, reply: "Hello.", status: .stopped, createdAt: Date(timeIntervalSince1970: 0))
+    XCTAssertEqual(streaming.applying(polled: polled).reply, "Hello.")
   }
 }
