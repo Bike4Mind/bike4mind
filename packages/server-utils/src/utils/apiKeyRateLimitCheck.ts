@@ -1,4 +1,6 @@
 import { cacheRepository } from '@bike4mind/database';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
+import { createHash } from 'node:crypto';
 import {
   UserApiKeyEvents,
   IUserApiKeyRateLimit,
@@ -93,6 +95,18 @@ export function buildRateLimitKeys(
   };
 }
 
+async function resolveRateLimitKeys(keyId: string, counter: RateLimitCounter = 'request') {
+  if (counter === 'management') return buildRateLimitKeys(keyId, counter);
+  const key = await userApiKeyRepository.findById(keyId);
+  if (key?.metadata?.createdFrom !== 'oauth-exchange') return buildRateLimitKeys(keyId, counter);
+  if (!key.userId || !key.metadata.oauthClientId) throw new Error('Invalid federated quota identity');
+  // Hash a tuple so client ids cannot collide with delimiters or ordinary key ids.
+  const identity = createHash('sha256')
+    .update(JSON.stringify([key.userId.toString(), key.metadata.oauthClientId]))
+    .digest('hex');
+  return buildRateLimitKeys(`federated:${identity}`, counter);
+}
+
 // Defined by the admin response schema (apiKeyRateLimitUsageSchema), so the producer, the response
 // contract and the admin UI share one shape.
 export type RateLimitUsage = ApiKeyRateLimitUsage;
@@ -170,7 +184,7 @@ export async function resetApiKeyRateLimit(
   options: { alsoResetManagement?: boolean; logger?: CounterLogger } = {}
 ): Promise<ResetApiKeyRateLimitResult> {
   const logger = options.logger ?? Logger.globalInstance;
-  const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
+  const { minuteKey, dayKey } = await resolveRateLimitKeys(keyId);
   const request = deleteCounterGroup(keyId, 'request', minuteKey, dayKey, logger);
 
   let management: Promise<CounterClearResult> | undefined;
@@ -276,7 +290,7 @@ function docsToUsage(
  * a separate read (see its docstring), and no other caller needs one.
  */
 export async function getApiKeyRateLimitUsage(keyId: string): Promise<RateLimitUsage> {
-  const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
+  const { minuteKey, dayKey } = await resolveRateLimitKeys(keyId);
   const [minuteDoc, dayDoc] = await Promise.all([
     cacheRepository.findByKey(minuteKey),
     cacheRepository.findByKey(dayKey),
@@ -383,7 +397,7 @@ export async function checkApiKeyRateLimit(
   const { requestsPerMinute: reportedRequestsPerMinute, requestsPerDay: reportedRequestsPerDay } = rateLimit;
 
   try {
-    const { minuteKey, dayKey } = buildRateLimitKeys(keyId, counter);
+    const { minuteKey, dayKey } = await resolveRateLimitKeys(keyId, counter);
 
     // Step 1: Atomically try to increment the minute counter (only if under
     // limit). The returned expiresAt is the real window end -> exact Retry-After.
@@ -394,6 +408,7 @@ export async function checkApiKeyRateLimit(
     if (!minuteResult.success) {
       // Minute limit exceeded - reject immediately
       await logRateLimitEvent(context, keyId, 'minute', requestsPerMinute, minuteResult.count);
+      const day = readCounter(await cacheRepository.findByKey(dayKey));
 
       return {
         allowed: false,
@@ -406,8 +421,8 @@ export async function checkApiKeyRateLimit(
           minuteCount: minuteResult.count,
           minuteResetAt,
           dayLimit: requestsPerDay,
-          dayCount: 0, // Day counter untouched on a minute-limit rejection
-          dayResetAt: Date.now() + DAY_IN_MS, // Nominal; the day header is informational here
+          dayCount: day.count,
+          dayResetAt: day.resetAt ? day.resetAt * 1000 : Date.now() + DAY_IN_MS,
           reportedMinuteLimit: reportedRequestsPerMinute,
           reportedDayLimit: reportedRequestsPerDay,
         }),
