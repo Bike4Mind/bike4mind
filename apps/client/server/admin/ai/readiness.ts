@@ -26,8 +26,12 @@ export const ADMIN_AI_CLASS_REGISTRY: readonly RegisteredAdminAiClass[] = [];
 const DAY = 86_400_000;
 export type AdminAiClassKey = { feature: AdminAiFeature; actionClass: string; policyVersion: string };
 
-export async function getAdminAiClassReadiness(key: AdminAiClassKey, now = new Date()) {
+export async function getAdminAiClassReadiness(key: AdminAiClassKey, now = new Date(), config?: AdminAiConfig) {
   let state = await AdminAiClassModel.findOne(key).lean();
+  // Demotion only weighs decisions made after the last demotion (ms resolution, so +1 is strictly after).
+  const since7 = new Date(
+    Math.max(now.getTime() - 7 * DAY, state?.lastDemotedDecision ? state.lastDemotedDecision.getTime() + 1 : 0)
+  );
   const [counts] = await AdminAiSuggestionModel.aggregate<{
     accepted: number;
     overridden: number;
@@ -51,18 +55,14 @@ export async function getAdminAiClassReadiness(key: AdminAiClassKey, now = new D
         overridden: { $sum: { $cond: [{ $eq: ['$status', 'overridden'] }, 1, 0] } },
         accepted7: {
           $sum: {
-            $cond: [
-              { $and: [{ $eq: ['$status', 'accepted'] }, { $gte: ['$decidedAt', new Date(now.getTime() - 7 * DAY)] }] },
-              1,
-              0,
-            ],
+            $cond: [{ $and: [{ $eq: ['$status', 'accepted'] }, { $gte: ['$decidedAt', since7] }] }, 1, 0],
           },
         },
         overridden7: {
           $sum: {
             $cond: [
               {
-                $and: [{ $eq: ['$status', 'overridden'] }, { $gte: ['$decidedAt', new Date(now.getTime() - 7 * DAY)] }],
+                $and: [{ $eq: ['$status', 'overridden'] }, { $gte: ['$decidedAt', since7] }],
               },
               1,
               0,
@@ -156,8 +156,9 @@ export async function getAdminAiClassReadiness(key: AdminAiClassKey, now = new D
       typeof r.undo === 'function'
   );
   const readiness = adminAiReadiness(evidence, registration);
-  const settings = await AdminSettings.findOne({ settingName: 'adminAiConfig' }).lean();
-  const config = AdminAiConfigSchema.parse(settings?.settingValue ?? {});
+  config ??= AdminAiConfigSchema.parse(
+    (await AdminSettings.findOne({ settingName: 'adminAiConfig' }).lean())?.settingValue ?? {}
+  );
   const featureMode = config.features[key.feature].mode;
   return {
     ...readiness,

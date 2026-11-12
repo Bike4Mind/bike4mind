@@ -72,6 +72,7 @@ export function adminAiDemotedMode(
 ): AdminAiMode {
   if (
     !latestDecision ||
+    accepted + overridden === 0 ||
     (lastDemotedDecision && latestDecision <= lastDemotedDecision) ||
     overridden / (accepted + overridden) <= 0.1
   )

@@ -151,7 +151,8 @@ export async function getAdminAiOperations(now = new Date()) {
           actionClass: cls.actionClass,
           policyVersion: cls.policyVersion,
         },
-        now
+        now,
+        config
       )
     )
   );

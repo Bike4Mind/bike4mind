@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, FormControl, FormLabel, Input, Option, Select, Stack, Switch, Typography } from '@mui/joy';
 import { ADMIN_AI_FEATURES, ADMIN_AI_LADDER_COPY, type AdminAiConfig, type AdminAiFeature } from '@bike4mind/common';
 import type { AdminAiOperations } from '@client/server/admin/ai/operations';
+import { api } from '@client/app/contexts/ApiContext';
+import { getErrorMessage } from '@client/app/utils/error';
 import { AdminPageHeader } from './shared/AdminPageHeader';
 import { StatStrip, StatTile } from './shared/StatStrip';
 import { DataTable } from './shared/DataTable';
@@ -23,15 +25,11 @@ const EMPTY_CLASS = {
   replayArtifact: '',
 };
 async function request<T>(method = 'GET', body?: unknown, path = '/api/admin/ai-operations'): Promise<T> {
-  const response = await fetch(path, {
-    method,
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
-  if (!response.ok)
-    throw new Error(`Could not ${method === 'GET' ? 'load' : 'save'} AI operations (${response.status})`);
-  return response.json();
+  try {
+    return (await api.request<T>({ method, url: path, data: body })).data;
+  } catch (error) {
+    throw new Error(`Could not ${method === 'GET' ? 'load' : 'save'} AI operations: ${getErrorMessage(error)}`);
+  }
 }
 const usd = (value: number) => `$${value.toFixed(4)}`;
 const agreement = (accepted: number, overridden: number) =>

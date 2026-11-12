@@ -105,6 +105,15 @@ describe('durable AI operations', () => {
     expect(logs).toHaveLength(2);
     expect(logs[0].actor.name).toBe('admin-ai:feedbackTriage');
   });
+  it('ignores decisions older than 7 days and overrides from before the last demotion', async () => {
+    await AdminAiClassModel.create({ ...key, mode: 'act' });
+    await suggestion('overridden', new Date(now.getTime() - 10 * 86_400_000), 'a');
+    expect((await getAdminAiClassReadiness(key, now)).mode).toBe('act');
+    await suggestion('overridden', new Date(now.getTime() - 1000), 'b');
+    expect((await getAdminAiClassReadiness(key, now)).mode).toBe('recommend');
+    await suggestion('accepted', now, 'c');
+    expect((await getAdminAiClassReadiness(key, now)).mode).toBe('recommend');
+  });
   it('fails closed without class evidence or a registered reversible action', async () => {
     expect(await getAdminAiClassReadiness(key, now)).toMatchObject({ canAct: false, canRecommend: false });
     const config = AdminAiConfigSchema.parse({ enabled: true, features: { feedbackTriage: { mode: 'act' } } });
