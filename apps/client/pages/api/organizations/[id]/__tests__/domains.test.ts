@@ -23,6 +23,14 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
 });
 
+const rateLimitOptions = vi.hoisted(() => [] as unknown[]);
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: (options: unknown) => {
+    rateLimitOptions.push(options);
+    return (_req: unknown, _res: unknown, next: () => void) => next();
+  },
+}));
+
 const claims = vi.hoisted(() => ({
   listByOrganization: vi.fn(),
   countByOrganization: vi.fn(),
@@ -279,6 +287,10 @@ describe('DELETE /api/organizations/[id]/domains/[claimId]', () => {
 });
 
 describe('POST /api/organizations/[id]/domains/[claimId]/verify', () => {
+  it('is the only domain route with a rate limit, on one bucket shared by every org and claim', () => {
+    expect(rateLimitOptions).toEqual([{ limit: 10, windowMs: 60_000, bucket: 'organizations/domains/verify' }]);
+  });
+
   it('verifies when the TXT record matches', async () => {
     claims.findByIdForOrg.mockResolvedValue(claim());
     resolveTxt.mockResolvedValue([['b4m-domain-verification=', TOKEN]]);

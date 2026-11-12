@@ -124,6 +124,17 @@ describe('POST /api/organizations/:id/domain-join', () => {
     const { res, run } = call();
     await run();
     expect(res._getJSONData().joined).toBe(false);
+    expect(users.update).toHaveBeenCalledWith({ id: 'u1', organizationId: 'org1' });
+    expect(orgs.ensureUserDetails).toHaveBeenCalledWith('org1', { id: 'u1', email: 'dee@acme.com', name: 'Dee' });
+  });
+
+  it('leaves the org pointer alone for a member whose join already completed', async () => {
+    users.findById.mockResolvedValue({ ...USER, organizationId: 'org1' });
+    orgs.findById.mockResolvedValue({ ...ORG, users: [...ORG.users, { userId: 'u1', permissions: ['read'] }] });
+    const { res, run } = call();
+    await run();
+    expect(res._getJSONData().joined).toBe(false);
+    expect(orgs.addMemberIfUnderCeiling).not.toHaveBeenCalled();
     expect(users.update).not.toHaveBeenCalled();
   });
 

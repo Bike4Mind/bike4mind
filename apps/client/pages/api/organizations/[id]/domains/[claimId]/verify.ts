@@ -4,29 +4,35 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { loadOrgForDomainAdmin, toOrgDomainClaimView, verifyDomainClaim } from '@server/organizations/orgDomainClaims';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
-const handler = baseApi({ auth: 'jwtOnly' }).post(
-  asyncHandler<{}, unknown, unknown, { id?: string; claimId?: string }>(async (req, res) => {
-    const { id: organizationId, claimId } = req.query;
-    if (typeof organizationId !== 'string' || !organizationId) throw new BadRequestError('Invalid organization id');
-    if (typeof claimId !== 'string' || !claimId) throw new BadRequestError('Invalid domain claim id');
+// Each call can make up to two outbound DNS lookups, so it is capped per user across all claims.
+export const VERIFY_RATE_LIMIT = { limit: 10, windowMs: 60 * 1000, bucket: 'organizations/domains/verify' } as const;
 
-    const organization = await loadOrgForDomainAdmin(req.user!, organizationId);
-    const result = await verifyDomainClaim(organizationId, claimId);
-    if (!result.verified) return res.status(200).json({ verified: false, reason: result.reason });
+const handler = baseApi({ auth: 'jwtOnly' })
+  .use(rateLimit(VERIFY_RATE_LIMIT))
+  .post(
+    asyncHandler<{}, unknown, unknown, { id?: string; claimId?: string }>(async (req, res) => {
+      const { id: organizationId, claimId } = req.query;
+      if (typeof organizationId !== 'string' || !organizationId) throw new BadRequestError('Invalid organization id');
+      if (typeof claimId !== 'string' || !claimId) throw new BadRequestError('Invalid domain claim id');
 
-    await recordAdminActionFromRequest(req, {
-      action: 'org.domain.verified',
-      actorScope: 'organization',
-      target: { kind: 'organization', id: organizationId, displayName: organization.name },
-      summary: `verified domain ${result.claim.domain}`,
-    });
+      const organization = await loadOrgForDomainAdmin(req.user!, organizationId);
+      const result = await verifyDomainClaim(organizationId, claimId);
+      if (!result.verified) return res.status(200).json({ verified: false, reason: result.reason });
 
-    return res.status(200).json({ verified: true, claim: toOrgDomainClaimView(result.claim) });
-  })
-);
+      await recordAdminActionFromRequest(req, {
+        action: 'org.domain.verified',
+        actorScope: 'organization',
+        target: { kind: 'organization', id: organizationId, displayName: organization.name },
+        summary: `verified domain ${result.claim.domain}`,
+      });
+
+      return res.status(200).json({ verified: true, claim: toOrgDomainClaimView(result.claim) });
+    })
+  );
 
 export const config = {
   api: {

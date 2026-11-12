@@ -219,7 +219,13 @@ function emailDomain(email: string | null | undefined): string {
     : '';
 }
 
-type DomainJoinUser = { id: string; email?: string | null; username: string; name: string };
+type DomainJoinUser = {
+  id: string;
+  email?: string | null;
+  username: string;
+  name: string;
+  organizationId?: string | null;
+};
 
 /**
  * Adds the user to the claim's org as a read-only member, never raising the seat ceiling.
@@ -238,18 +244,38 @@ async function addMemberViaClaim(
   if (!pre) {
     const fresh = await organizationRepository.findById(organizationId);
     if (!fresh) return { joined: false, reason: 'org-missing' };
-    if (fresh.users.some(member => member.userId === user.id)) return { joined: false, reason: 'already-member' };
+    if (fresh.users.some(member => member.userId === user.id)) {
+      await repairDomainMembership(user, organizationId);
+      return { joined: false, reason: 'already-member' };
+    }
     return { joined: false, reason: 'at-capacity', organizationId, seats: fresh.seats };
   }
 
   await userRepository.update({ id: user.id, organizationId });
-  await organizationRepository.ensureUserDetails(organizationId, {
+  await seedDomainMemberDetails(user, organizationId);
+  return { joined: true, organizationId };
+}
+
+function seedDomainMemberDetails(user: DomainJoinUser, organizationId: string) {
+  return organizationRepository.ensureUserDetails(organizationId, {
     id: user.id,
     email: user.email ?? user.username,
     name: user.name,
   });
-  return { joined: true, organizationId };
 }
+
+/**
+ * Completes a join that wrote the `users[]` row but failed before the org pointer or the
+ * `userDetails` row, so a retry repairs it instead of stopping at already-member. Both writes are
+ * idempotent; mirrors the already-member repair in applyPartnerRuleMembership.
+ */
+async function repairDomainMembership(user: DomainJoinUser, organizationId: string): Promise<void> {
+  if (user.organizationId !== organizationId) await userRepository.update({ id: user.id, organizationId });
+  await seedDomainMemberDetails(user, organizationId);
+}
+
+const holdsMemberRow = (organization: IOrganizationDocument, userId: string) =>
+  (organization.users ?? []).some(member => member.userId?.toString() === userId);
 
 /** Auto-join for a verified 'auto-join' claim on the email's exact domain (a subdomain never matches). */
 export async function applyOrgDomainMembership(userId: string, email: string): Promise<OrgDomainMembershipOutcome> {
@@ -268,7 +294,10 @@ export async function applyOrgDomainMembership(userId: string, email: string): P
   const organization = await organizationRepository.findById(claim.organizationId);
   if (!organization) return { joined: false, reason: 'org-missing' };
   // Checked first: the owner holds no users[] row, so the atomic add alone would not see them.
-  if (organizationService.isCurrentOrgMember(organization, userId)) return { joined: false, reason: 'already-member' };
+  if (organizationService.isCurrentOrgMember(organization, userId)) {
+    if (holdsMemberRow(organization, userId)) await repairDomainMembership(user, organization.id);
+    return { joined: false, reason: 'already-member' };
+  }
 
   return addMemberViaClaim(claim, user);
 }
@@ -322,7 +351,10 @@ export async function joinOrgViaDomain(
   const organization = await organizationRepository.findById(organizationId);
   if (!organization) throw new NotFoundError('Organization not found');
   // Checked first: the owner holds no users[] row, so the atomic add alone would not see them.
-  if (organizationService.isCurrentOrgMember(organization, userId)) return { joined: false, organization };
+  if (organizationService.isCurrentOrgMember(organization, userId)) {
+    if (holdsMemberRow(organization, userId)) await repairDomainMembership(user, organizationId);
+    return { joined: false, organization };
+  }
 
   const outcome = await addMemberViaClaim(claim, user);
   if (outcome.joined) return { joined: true, organization };

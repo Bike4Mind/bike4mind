@@ -52,6 +52,22 @@ const makeClaim = async (
 
 const reload = async (orgId: string) => (await Organization.findById(orgId).lean())!;
 
+// A join that wrote the users[] row, then failed before the org pointer and the userDetails row.
+const makeHalfJoined = async (policy: string) => {
+  const org = await makeOrg(5);
+  await makeClaim(org.id, { policy });
+  const user = await makeUser('dee@example.com');
+  await Organization.updateOne({ _id: org._id }, { $push: { users: { userId: user.id, permissions: ['read'] } } });
+  return { org, user };
+};
+
+const expectRepaired = async (orgId: string, userId: string) => {
+  const after = await reload(orgId);
+  expect(after.users).toHaveLength(1);
+  expect(after.userDetails?.map(d => d.id)).toEqual([userId]);
+  expect(String((await User.findById(userId).lean())!.organizationId)).toBe(orgId);
+};
+
 describe('applyOrgDomainMembership (real Mongo)', () => {
   it('adds a verified user as a read-only member, seeds userDetails, sets the org pointer, leaves seats alone', async () => {
     const org = await makeOrg(5);
@@ -78,6 +94,16 @@ describe('applyOrgDomainMembership (real Mongo)', () => {
 
     expect(second).toEqual({ joined: false, reason: 'already-member' });
     expect((await reload(org.id)).users).toHaveLength(1);
+  });
+
+  it('completes a half-finished join on retry: sets the org pointer and seeds userDetails', async () => {
+    const { org, user } = await makeHalfJoined('auto-join');
+
+    expect(await applyOrgDomainMembership(user.id, 'dee@example.com')).toEqual({
+      joined: false,
+      reason: 'already-member',
+    });
+    await expectRepaired(org.id, user.id);
   });
 
   it('never adds a users[] row for the owner', async () => {
@@ -144,6 +170,13 @@ describe('suggest-join for an existing user (real Mongo)', () => {
     expect((await joinOrgViaDomain(user.id, org.id)).joined).toBe(false);
     expect((await reload(org.id)).users).toHaveLength(1);
     expect(await listOrgDomainJoinSuggestions(user.id)).toEqual([]);
+  });
+
+  it('completes a half-finished join when the user asks to join again', async () => {
+    const { org, user } = await makeHalfJoined('suggest');
+
+    expect((await joinOrgViaDomain(user.id, org.id)).joined).toBe(false);
+    await expectRepaired(org.id, user.id);
   });
 
   it('never adds a users[] row for the owner', async () => {
