@@ -44,6 +44,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ] }).get<Request<{
   async (req, res) => {
     const userId = req.query.id;
 
+    // me:read covers only the key owner's own account, so a key reads other users' profiles only
+    // with admin authority. 404, not 403, for the enumeration reason below.
+    if (req.apiKeyInfo && req.user.id !== userId && !req.user.isAdmin) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
     const user = await User.findById(userId).populate('organizationId').select('-password -counters');
     // Return 404 for missing users regardless of requester privilege.
     // Do NOT change to 403 - that would confirm the user exists and enable

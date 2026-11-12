@@ -384,9 +384,11 @@ describe('UserApiKeysTab - premium scopes', () => {
   it('lists the notebook list under the notebook scope, not as open to every key', () => {
     openScopeDocs();
     expect(screen.queryByTestId('api-keys-scopes-open-endpoints')).not.toBeInTheDocument();
-    expect(screen.getByTestId(`api-keys-scope-endpoints-${ApiKeyScope.READ_NOTEBOOKS}`)).toHaveTextContent(
-      '/api/sessions/*'
-    );
+    fireEvent.click(screen.getByTestId(`api-keys-scope-endpoints-${ApiKeyScope.READ_NOTEBOOKS}-toggle-btn`));
+    const routes = within(screen.getByTestId(`api-keys-scope-endpoints-${ApiKeyScope.READ_NOTEBOOKS}-list`))
+      .getAllByRole('listitem')
+      .map(item => item.textContent);
+    expect(routes).toContain('GET /api/sessions');
   });
 
   it('keeps the premium scopes out of the New-Key modal and its Full access preset without Opti access', () => {

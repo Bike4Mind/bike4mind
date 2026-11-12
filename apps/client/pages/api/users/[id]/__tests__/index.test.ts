@@ -33,12 +33,15 @@ const SUBJECT_ID = 'subject-1';
 const throttle = { tier: 'shadow', reason: 'x', source: 'admin' };
 const riskSignals = [{ type: 'signup_honeypot', at: new Date('2025-01-01T00:00:00Z') }];
 
-const run = async (viewer: { id: string; isAdmin: boolean }) => {
+const fire = async (viewer: { id: string; isAdmin: boolean }, viaApiKey = false) => {
   const { req, res } = createMocks({ method: 'GET', query: { id: SUBJECT_ID } });
-  (req as unknown as { user: typeof viewer }).user = viewer;
+  Object.assign(req, { user: viewer, ...(viaApiKey && { apiKeyInfo: { keyId: 'k1', scopes: ['me:read'] } }) });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
-  return res._getJSONData() as Record<string, unknown>;
+  return res;
 };
+
+const run = async (viewer: { id: string; isAdmin: boolean }) =>
+  (await fire(viewer))._getJSONData() as Record<string, unknown>;
 
 describe('GET /api/users/[id] restricted-tier fields', () => {
   beforeEach(() => {
@@ -73,5 +76,28 @@ describe('GET /api/users/[id] restricted-tier fields', () => {
     expect(body.username).toBe('subject');
     expect(body).not.toHaveProperty('throttle');
     expect(body).not.toHaveProperty('riskSignals');
+  });
+
+  describe('API-key caller', () => {
+    it("404s another user's profile without looking it up", async () => {
+      const res = await fire({ id: 'someone-else', isAdmin: false }, true);
+
+      expect(res._getStatusCode()).toBe(404);
+      expect(mockFindById).not.toHaveBeenCalled();
+    });
+
+    it('serves the key owner their own profile', async () => {
+      const res = await fire({ id: SUBJECT_ID, isAdmin: false }, true);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().username).toBe('subject');
+    });
+
+    it('serves another user to a key with admin authority', async () => {
+      const res = await fire({ id: 'admin-1', isAdmin: true }, true);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().throttle).toMatchObject({ tier: 'shadow' });
+    });
   });
 });
