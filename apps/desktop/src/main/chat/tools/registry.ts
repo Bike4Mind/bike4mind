@@ -29,6 +29,7 @@ import {
   saveGeneratedImageTool,
 } from './mediaTools';
 import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
+import { loopTool } from './loopTool';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
 import { setSessionPullRequest } from './pullRequestTool';
 import { requestDirectory } from './requestDirectoryTool';
@@ -161,6 +162,7 @@ const BY_NAME = new Map(
     ...SKILL_TOOLS,
     askUser,
     requestDirectory,
+    loopTool,
     setSessionPullRequest,
     ...MCP_TOOLS,
     ...WEB_TOOLS,
@@ -295,7 +297,7 @@ export function toolsForRequest(options: {
     ...(options.skills ? SKILL_TOOLS : []),
     ...(options.web ? WEB_TOOLS : []),
     // Offered with no folder granted too: asking for one is exactly what that conversation needs.
-    ...(options.ask ? [askUser, requestDirectory] : []),
+    ...(options.ask ? [askUser, requestDirectory, loopTool] : []),
     ...(options.pullRequest && options.ask ? [setSessionPullRequest] : []),
     ...(options.mcpServers ? (options.ask ? MCP_TOOLS : MCP_READ_TOOLS) : []),
   ];

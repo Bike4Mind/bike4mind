@@ -12,7 +12,7 @@ import {
   type TaskAction,
 } from '@shared/orchestration';
 import { randomUUID } from 'node:crypto';
-import { LOOP_HELP, parseLoop, type LoopResult, type LoopState } from '@shared/loop';
+import { LOOP_HELP, parseLoop, type LoopResult, type LoopStart, type LoopState } from '@shared/loop';
 import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -243,6 +243,7 @@ import {
   type ApprovalSettlement,
 } from './tools/ApprovalGate';
 import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirectoryTool';
+import { LOOP_TOOL_NAME } from './tools/loopTool';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { QUEST_COMPLETE_TOOL_NAME, SESSION_SPAWN_TOOL_NAME } from './tools/hostTools';
 import { isWithin } from './tools/paths';
@@ -763,6 +764,11 @@ export class ChatService {
     if (action.kind === 'help' || action.kind === 'list') {
       return { ok: true, state: this.getLoop(sessionId), notice: action.kind === 'help' ? LOOP_HELP : undefined };
     }
+    return this.startLoop(sessionId, action);
+  }
+
+  /** Both /loop and the agent's `loop` tool start here, so every check below applies to both. */
+  private async startLoop(sessionId: string, action: LoopStart): Promise<LoopResult> {
     this.loopRequests.get(sessionId)?.abort();
     const request = new AbortController();
     this.loopRequests.set(sessionId, request);
@@ -798,7 +804,14 @@ export class ChatService {
       if (request.signal.aborted || this.deps.store.scopeKey() !== scope)
         return { ok: false, error: 'Loop stopped or account changed. Start the loop again.' };
       this.loops.start(
-        { sessionId, prompt: action.prompt, intervalMs: action.intervalMs, phase: 'scheduled', nextRunAt: Date.now() },
+        {
+          sessionId,
+          prompt: action.prompt,
+          intervalMs: action.intervalMs,
+          phase: 'scheduled',
+          nextRunAt: Date.now(),
+          ...(action.until === undefined ? {} : { until: action.until }),
+        },
         async signal => {
           const current = await this.deps.store.get(sessionId);
           const valid = async (value: ChatSession) => {
@@ -4868,6 +4881,17 @@ export class ChatService {
                 },
               }
             : {}),
+          ...(ask
+            ? {
+                loop: {
+                  // Only a loop run is in flight while its entry is 'running': the scheduler waits for an idle session.
+                  inRun: () => this.loops.get(sessionId)?.phase === 'running',
+                  start: request => this.startLoop(sessionId, request),
+                  current: () => this.getLoop(sessionId),
+                  stop: () => this.stopLoop(sessionId),
+                },
+              }
+            : {}),
           report,
           isStanding: key => !!this.deps.approvals?.isStanding(sessionId, key),
         };
@@ -8185,6 +8209,8 @@ const ASK_GUIDANCE: readonly string[] = [
   'to its label. Never add an "Other" option, never use it to ask "should I proceed?", and never',
   'end a turn with an offer of next steps. Keep labels short, a few words, and put the detail in',
   'the description.',
+  `For anything recurring ("every hour", "until 6pm") call ${LOOP_TOOL_NAME} with action start; never`,
+  'emulate a schedule with sleep, a shell loop or a background timer.',
 ];
 
 /** For GPT models, which stop at plans and offers more readily than the rest. */

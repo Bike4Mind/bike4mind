@@ -51,6 +51,7 @@ const HOST_QUESTION: Record<string, string> = {
   session_send: 'Send this to that conversation? It runs there on its own and costs credits.',
   session_archive: 'Archive this conversation?',
   session_delete: 'Delete this conversation for good?',
+  loop: 'Start this loop? Each run is a turn that costs credits.',
 };
 
 /** Read-only tools that still stop at the gate; "Run this command?" would misname them. */

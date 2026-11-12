@@ -4,6 +4,7 @@ import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
 import type { BrowserSnapshot } from '@shared/browserPage';
 import type { McpServerState, McpServersState } from '@shared/mcp';
+import type { LoopResult, LoopStart, LoopState } from '@shared/loop';
 import type { PrActionResult, PrBindOutcome } from '@shared/pullRequest';
 import type {
   ChatApprovalOption,
@@ -435,6 +436,8 @@ export interface ToolContext {
   mcp?: McpToolContext;
   /** The calling session's PR binding. Absent in tests; set_session_pull_request then refuses. */
   pullRequests?: PullRequestContext;
+  /** The calling session's /loop. Absent when no user is present; the `loop` tool then refuses. */
+  loop?: LoopContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
   /**
@@ -459,6 +462,15 @@ export interface McpToolContext {
   reconnect(id: string): Promise<McpServerState | null>;
   setEnabled(id: string, enabled: boolean): Promise<McpServersState>;
   removeServer(id: string): Promise<McpServersState>;
+}
+
+/** One session's loop, through the same start path as the user's /loop. See ChatService.startLoop. */
+export interface LoopContext {
+  /** Whether this turn is one of the session's own loop runs, which may not start another. */
+  inRun(): boolean;
+  start(request: LoopStart): Promise<LoopResult>;
+  current(): LoopState | null;
+  stop(): void;
 }
 
 /** One session's PR binding, as set_session_pull_request may change it. See PrMonitor. */
