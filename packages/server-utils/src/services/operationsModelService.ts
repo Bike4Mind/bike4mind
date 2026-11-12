@@ -26,7 +26,6 @@ import {
  */
 type OperationsApiKeyTable = ApiKeyTable;
 
-/** Text-only operations result: no image/speech resolution. */
 /**
  * The operations text model used when the `operationsModel` admin setting is missing or names a
  * model this deployment cannot run. Cheapest current-generation OpenAI text model.
@@ -40,6 +39,7 @@ const OPERATIONS_TEXT_MODEL_FALLBACKS: readonly string[] = [
   ChatModels.GPT4o_MINI,
 ];
 
+/** Text-only operations result: no image/speech resolution. */
 export type OperationsTextModelResult = Pick<OperationsModelResult, 'modelId' | 'llm' | 'modelInfo'>;
 
 export type OperationsModelOptions = { endUserId?: string | null };
