@@ -349,6 +349,7 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
   it('rejects JWT login for a non-human system account', async () => {
     vi.mocked(User.findById).mockResolvedValue(mockUser({ isSystem: true, aupAcceptedVersion: undefined }));
     await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('User not found');
+    expect(assertCliSessionAllowedMock).not.toHaveBeenCalled();
   });
 
   it('rejects a first-factor-only (mfaPending) token before hitting the DB', async () => {

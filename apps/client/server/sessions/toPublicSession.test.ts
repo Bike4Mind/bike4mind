@@ -31,5 +31,6 @@ describe('toPublicSession', () => {
     expect(Object.keys(output).sort()).toEqual(Object.keys(SessionResponseSchema.shape).sort());
     expect(output.organizationId).toBe(session.organizationId);
     expect(SessionResponseSchema.safeParse(output).success).toBe(true);
+    expect(output.organizationId).toBe(session.organizationId);
   });
 });

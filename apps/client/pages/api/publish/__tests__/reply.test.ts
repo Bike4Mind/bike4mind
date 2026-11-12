@@ -39,6 +39,7 @@ vi.mock('@bike4mind/database', () => ({
     },
   },
   Session: { findById: () => ({ select: () => ({ lean: dbMocks.sessionLean }) }) },
+  sessionRepository: { findById: () => dbMocks.sessionLean() },
   PublishedArtifact: {
     findOne: (filter: unknown) => {
       dbMocks.publishedFindOne(filter);

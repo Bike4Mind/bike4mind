@@ -36,6 +36,8 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 
+vi.mock('./OrganizationServiceKeys', () => ({ default: () => null }));
+
 const OWNER_ID = 'owner1';
 const appTheme = extendTheme({ ...getThemeConfig() });
 
