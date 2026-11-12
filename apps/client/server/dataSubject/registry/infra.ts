@@ -29,6 +29,14 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'decidedBy.userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['decidedBy.name'] }],
   },
+  AdminAiAttempt: {
+    kind: 'noUserData',
+    note: 'Feature-level call counts, costs and outcomes. suggestionId identifies an advisory record, not a person; no provider input or user identity is stored.',
+  },
+  AdminAiClass: {
+    kind: 'noUserData',
+    note: 'Policy-versioned action-class configuration and aggregate replay evidence, with no user identities or individual replay cases.',
+  },
   // An admin's request for a second admin's sign-off on a privileged action, kept with the audit trail.
   // `summary` and `paramsJson` (which may name the target account) are free text and not scanned.
   AdminApproval: {

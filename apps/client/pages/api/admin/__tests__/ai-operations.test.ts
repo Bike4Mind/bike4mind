@@ -2,9 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { AdminAiConfigSchema } from '@bike4mind/common';
 
-const h = vi.hoisted(() => ({ read: vi.fn(), config: vi.fn(), write: vi.fn(), audit: vi.fn(), validate: vi.fn() }));
+const h = vi.hoisted(() => ({
+  read: vi.fn(),
+  config: vi.fn(),
+  write: vi.fn(),
+  audit: vi.fn(),
+  validate: vi.fn(),
+  options: vi.fn(),
+}));
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    h.options(options);
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
     const chain = Object.assign(
@@ -47,6 +55,11 @@ beforeEach(() => {
   h.read.mockResolvedValue({ ok: true });
 });
 describe('AI operations authorization and audited controls', () => {
+  it('uses JWT-only authentication for the unversioned operations route', async () => {
+    vi.resetModules();
+    await import('../ai-operations');
+    expect(h.options).toHaveBeenCalledWith(expect.objectContaining({ auth: 'jwtOnly' }));
+  });
   it.each(['GET', 'PUT', 'POST'] as const)('denies %s before any work without settings permission', async method => {
     await expect(call(method, { isAdmin: false })).rejects.toThrow(/missing permission/i);
     expect(h.read).not.toHaveBeenCalled();
