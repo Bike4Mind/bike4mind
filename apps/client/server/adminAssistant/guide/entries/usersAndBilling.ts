@@ -378,7 +378,6 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
     views: ['admin.growth_pricing'],
     settings: [
       'allowOpenRegistration',
-      'ReferralCreditsAmount',
       'ReferralFirstAnswerCredits',
       'ReferralFirstPaymentCredits',
       'ReferralSecondPaymentCredits',

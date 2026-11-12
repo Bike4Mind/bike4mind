@@ -5,17 +5,35 @@ import XCTest
 
 final class BrandThemeTests: XCTestCase {
   func testRGBAUnpacksHexComponents() {
-    let value = BrandTheme.RGBA(0x0B6BCB)
+    let value = BrandRGBA(0x0B6BCB)
     XCTAssertEqual(value.red, 11.0 / 255.0, accuracy: 0.0001)
     XCTAssertEqual(value.green, 107.0 / 255.0, accuracy: 0.0001)
     XCTAssertEqual(value.blue, 203.0 / 255.0, accuracy: 0.0001)
     XCTAssertEqual(value.alpha, 1.0)
   }
 
-  func testWithAlphaKeepsComponents() {
-    let value = BrandTheme.RGBA(0x61AFEF).withAlpha(0.42)
+  func testRGBAKeepsAlpha() {
+    let value = BrandRGBA(0x61AFEF, alpha: 0.42)
     XCTAssertEqual(value.red, 97.0 / 255.0, accuracy: 0.0001)
     XCTAssertEqual(value.alpha, 0.42)
+  }
+
+  func testRadiiFollowTheWebScale() {
+    XCTAssertEqual(BrandTokens.Radius.sm, 6)
+    XCTAssertEqual(BrandTokens.Radius.md, 8)
+    XCTAssertEqual(BrandTokens.Radius.lg, 12)
+    XCTAssertEqual(BrandTokens.Radius.xl, 16)
+  }
+
+  func testLineSpacingTurnsNaturalLeadingIntoWebLineHeight() {
+    XCTAssertEqual(BrandFont.lineSpacing(size: 16, lineHeight: 1.5), 16 * (1.5 - 1.212), accuracy: 0.0001)
+    XCTAssertEqual(BrandFont.lineSpacing(size: 16, lineHeight: 1.0), 0)
+  }
+
+  func testFontWeightMapsCSSWeights() {
+    XCTAssertEqual(BrandFont.fontWeight(400), .regular)
+    XCTAssertEqual(BrandFont.fontWeight(BrandTokens.Typography.Weight.md), .medium)
+    XCTAssertEqual(BrandFont.fontWeight(BrandTokens.Typography.Weight.lg), .semibold)
   }
 
   #if canImport(UIKit)
@@ -44,9 +62,9 @@ final class BrandThemeTests: XCTestCase {
       XCTAssertEqual(dark.blue, 239.0 / 255.0, accuracy: 0.0001)
     }
 
-    func testUserBubbleKeepsContrastTints() {
-      XCTAssertEqual(components(of: BrandTheme.userBubble, dark: false).alpha, 0.16, accuracy: 0.0001)
-      XCTAssertEqual(components(of: BrandTheme.userBubble, dark: true).alpha, 0.42, accuracy: 0.0001)
+    func testPromptBubbleBorderIsTheSoftWebHairline() {
+      XCTAssertEqual(components(of: BrandTheme.borderSoft, dark: false).alpha, 0.5, accuracy: 0.0001)
+      XCTAssertEqual(components(of: BrandTheme.borderSoft, dark: true).alpha, 0.08, accuracy: 0.0001)
     }
 
     func testTextTokensResolvePerAppearance() {

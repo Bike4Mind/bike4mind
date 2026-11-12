@@ -14,12 +14,14 @@ import {
 } from './securityDashboardSearch';
 import {
   ADMIN_AUDIT_LOG_TAB_SLUG,
+  ADMIN_DLQ_REPLAY_TAB_SLUG,
   ADMIN_FEEDBACK_TAB_SLUG,
   ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
   ADMIN_TAB_PARAM,
   ADMIN_USERS_TAB_SLUG,
   AUDIT_ENTRY_ID_PARAM,
   AuditLogFiltersSchema,
+  DLQ_QUEUE_PARAM,
   MODERATION_INCIDENT_ID_PARAM,
   type AuditLogFilters,
 } from '@bike4mind/common';
@@ -39,6 +41,12 @@ import {
   ORGS_TAB_PARAMS,
   type OrganizationsSearch,
 } from './organizationsTabSearch';
+import {
+  ADMIN_REVENUE_TAB_SLUG,
+  REVENUE_SEARCH_PARSERS,
+  REVENUE_TAB_PARAMS,
+  type RevenueSearch,
+} from './Revenue/revenueTabSearch';
 import {
   ADMIN_SUBSCRIPTIONS_TAB_SLUG,
   SUBSCRIPTIONS_SEARCH_PARSERS,
@@ -68,7 +76,7 @@ export const ADMIN_SHADOW_DETECTIONS_TAB_SLUG = 'shadow-detections';
 export const ADMIN_SIGNUP_DOMAIN_HOLDS_TAB_SLUG = 'signup-domain-holds';
 export const ADMIN_WAITLIST_TAB_SLUG = 'waitlist';
 export const ADMIN_STRIPE_DISPUTES_TAB_SLUG = 'disputes';
-export { ADMIN_ORGANIZATIONS_TAB_SLUG, ADMIN_SUBSCRIPTIONS_TAB_SLUG };
+export { ADMIN_ORGANIZATIONS_TAB_SLUG, ADMIN_REVENUE_TAB_SLUG, ADMIN_SUBSCRIPTIONS_TAB_SLUG };
 
 const EMERGENCY_ACCESS_PARAM = 'emergency_access';
 
@@ -81,7 +89,7 @@ export const ADMIN_GLOBAL_PARAMS = [EMERGENCY_ACCESS_PARAM, ADMIN_TAB_PARAM] as 
  * Tab slug -> the params that tab owns; each key has exactly one owner (tested). These URLs get
  * shared and copied into login redirects, so never register tokens, form fields, setting values, or
  * a search over user records. Admin Settings' `q` is fine: it searches config, not people; the Users,
- * Feedback, Model Logs, Organizations, Subscriptions and Risk review tabs' free-text searches are left out for
+ * Feedback, Model Logs, Organizations, Subscriptions, Revenue (payments) and Risk review tabs' free-text searches are left out for
  * exactly that reason.
  */
 export const ADMIN_TAB_PARAMS = {
@@ -95,6 +103,7 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_INTEGRATION_DEMAND_TAB_SLUG]: INTEGRATION_DEMAND_TAB_PARAMS,
   [ADMIN_ORGANIZATIONS_TAB_SLUG]: ORGS_TAB_PARAMS,
   [ADMIN_SUBSCRIPTIONS_TAB_SLUG]: SUBSCRIPTIONS_TAB_PARAMS,
+  [ADMIN_REVENUE_TAB_SLUG]: REVENUE_TAB_PARAMS,
   [ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG]: SIGNUP_RISK_REVIEW_TAB_PARAMS,
   [ADMIN_ANALYTICS_TAB_SLUG]: ANALYTICS_TAB_PARAMS,
   [ADMIN_EVENTS_TAB_SLUG]: EVENTS_TAB_PARAMS,
@@ -105,6 +114,7 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_WAITLIST_TAB_SLUG]: INVITE_CENTER_TAB_PARAMS,
   [ADMIN_STRIPE_DISPUTES_TAB_SLUG]: STRIPE_DISPUTE_TAB_PARAMS,
   [ADMIN_MODEL_METRICS_TAB_SLUG]: MODEL_METRICS_TAB_PARAMS,
+  [ADMIN_DLQ_REPLAY_TAB_SLUG]: [DLQ_QUEUE_PARAM],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 type AdminTabParam = (typeof ADMIN_TAB_PARAMS)[keyof typeof ADMIN_TAB_PARAMS][number];
@@ -123,6 +133,7 @@ type TypedAdminSearch = UsersSearch &
   ModelLogsSearch &
   OrganizationsSearch &
   SubscriptionsSearch &
+  RevenueSearch &
   SecurityDashboardSearch &
   InviteCenterSearch;
 
@@ -138,6 +149,7 @@ const TYPED_PARAM_PARSERS: ReadonlyMap<string, (value: unknown, search: Record<s
     ...MODEL_LOGS_SEARCH_PARSERS,
     ...ORGS_SEARCH_PARSERS,
     ...SUBSCRIPTIONS_SEARCH_PARSERS,
+    ...REVENUE_SEARCH_PARSERS,
     ...SECURITY_DASHBOARD_SEARCH_PARSERS,
     ...INVITE_CENTER_SEARCH_PARSERS,
     ...RECORD_ID_SEARCH_PARSERS,

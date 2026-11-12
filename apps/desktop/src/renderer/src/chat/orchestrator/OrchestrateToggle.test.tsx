@@ -2,9 +2,9 @@
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isMac } from '../platform';
-import { OrchestrateToggle, describeAgentStates, isSurfaceToggleKey } from './OrchestrateToggle';
+import { OrchestrateToggle, isSurfaceToggleKey } from './OrchestrateToggle';
 import type { SessionSurface } from './orchestratorPrefs';
-import type { AgentState } from './roster';
+import { describeAgentStates, type AgentState } from './roster';
 import { createThemedMount, el, query } from './testUtils';
 
 const onSurfaceChange = vi.fn();

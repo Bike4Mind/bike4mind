@@ -327,6 +327,50 @@ export interface IUserApiKeyMetadata {
   baseline?: IUserApiKeyBaseline;
 }
 
+/**
+ * An org-owned key as the org management surface shows it (pages/api/organizations/[id]/api-keys).
+ * A projection, never the stored document: no secret material and no minter location metadata.
+ */
+export interface IOrgApiKeyView {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  scopes: ApiKeyScopeValue[];
+  status: ApiKeyStatus;
+  createdAt?: Date;
+  expiresAt?: Date;
+  lastUsedAt?: Date;
+  /** Lifetime settled spend (`usage.totalSpendCredits`); the key keeps no per-period counter. */
+  creditsUsed: number;
+  /** The member who created the key; `name` is null when that account no longer exists. */
+  createdBy: { id: string; name: string | null } | null;
+}
+
+/**
+ * A member's own key billed to the org, as the org's owner and managers see it
+ * (pages/api/organizations/[id]/api-keys/members). Same projection rules as IOrgApiKeyView.
+ */
+export interface IOrgMemberApiKeyView {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  scopes: ApiKeyScopeValue[];
+  status: ApiKeyStatus;
+  createdAt?: Date;
+  expiresAt?: Date;
+  lastUsedAt?: Date;
+  revokedAt?: Date;
+  creditsUsed: number;
+  /** The member holding the key; `name` is null when that account no longer exists. */
+  createdBy: { id: string; name: string | null };
+}
+
+/** POST /api/organizations/[id]/api-keys and its rotate: the view plus the secret, shown once. */
+export interface IOrgApiKeySecretResponse {
+  apiKey: IOrgApiKeyView;
+  key: string;
+}
+
 export interface IUserApiKeyRateLimit {
   requestsPerMinute: number;
   requestsPerDay: number;
@@ -445,6 +489,13 @@ export interface IUserApiKey {
    * request, this only narrows which lakes that authority may be exercised for.
    */
   preauthorizedLakeIds?: string[];
+  /**
+   * Present only on an org-owned key: one held by the organization's service account rather than a
+   * member, so it outlives whoever created it. Records that creator for audit. Deliberately not
+   * `metadata.createdByUserId`, which marks a platform-admin-provisioned key and bypasses the paid
+   * access gate. Rotation never re-owns an org-owned key to the rotating admin.
+   */
+  orgOwned?: { createdByUserId: string };
   /** Optional white-label config for an embed key (see {@link IEmbedBranding}). */
   branding?: IEmbedBranding;
   /**

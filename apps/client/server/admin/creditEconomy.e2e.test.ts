@@ -1,9 +1,6 @@
-import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mongoose, CreditTransaction, UsageEvent, CreditLot, User } from '@bike4mind/database';
-import {
-  createMongoServer,
-  MONGO_TEST_TIMEOUT_MS,
-} from '../../../../../packages/database/src/__test__/createMongoServer';
+import { beforeAll, afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mongoose, CreditTransaction, UsageEvent, CreditLot, User, Organization } from '@bike4mind/database';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { EconomyQuery, EconomyReport } from '../../shared/creditEconomy';
 import { readEconomyPage, readEconomyReport } from './creditEconomy';
 
@@ -24,7 +21,7 @@ const tx = (type: string, credits: number, extra = {}) => ({
   ...extra,
 });
 
-describe('credit economy read accounting', () => {
+describe.each(['false', 'true'])('credit economy read accounting (DocumentDB compatibility: %s)', compatibility => {
   beforeAll(async () => {
     mongo = await createMongoServer();
     await mongoose.connect(mongo.getUri(), { autoIndex: false });
@@ -34,12 +31,15 @@ describe('credit economy read accounting', () => {
     await mongoose.disconnect();
     await mongo.stop();
   });
+  afterEach(() => vi.unstubAllEnvs());
   beforeEach(async () => {
+    vi.stubEnv('USE_DOCUMENTDB_COMPATIBILITY', compatibility);
     await Promise.all([
       CreditTransaction.deleteMany({}),
       UsageEvent.deleteMany({}),
       CreditLot.deleteMany({}),
       User.deleteMany({}),
+      Organization.deleteMany({}),
     ]);
   });
 
@@ -170,4 +170,37 @@ describe('credit economy read accounting', () => {
     expect(report.balances.currentAvailable).toBeNull();
     expect(report.balances.missingBalances).toBe(1);
   });
+  it.skipIf(compatibility !== 'true')(
+    'executes bounded compatible pipelines without unsupported DocumentDB operators',
+    async () => {
+      const transactionAggregate = vi.spyOn(CreditTransaction, 'aggregate');
+      const usageAggregate = vi.spyOn(UsageEvent, 'aggregate');
+      const lotAggregate = vi.spyOn(CreditLot, 'aggregate');
+      const userAggregate = vi.spyOn(User, 'aggregate');
+      const organizationAggregate = vi.spyOn(Organization, 'aggregate');
+      const spies = [transactionAggregate, usageAggregate, lotAggregate, userAggregate, organizationAggregate];
+      const checkOperators = (value: unknown): void => {
+        if (!value || typeof value !== 'object') return;
+        for (const [key, child] of Object.entries(value)) {
+          expect(['$set', '$isNumber', '$facet']).not.toContain(key);
+          checkOperators(child);
+        }
+      };
+      try {
+        await readEconomyReport(query, now);
+        await expect(readEconomyPage(query)).resolves.toEqual({ rows: [], total: 0 });
+        for (const spy of spies) {
+          expect(spy).toHaveBeenCalled();
+          for (const [pipeline] of spy.mock.calls) checkOperators(pipeline);
+          for (const result of spy.mock.results) {
+            expect(result.type).toBe('return');
+            expect(result.value.options.maxTimeMS).toBe(15000);
+          }
+        }
+        expect(transactionAggregate).toHaveBeenCalledTimes(4);
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+    }
+  );
 });

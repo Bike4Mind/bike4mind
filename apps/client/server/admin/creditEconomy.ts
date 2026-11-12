@@ -1,17 +1,26 @@
-import { CreditTransaction, CreditLot, UsageEvent, User, Organization } from '@bike4mind/database';
+import {
+  CreditTransaction,
+  CreditLot,
+  UsageEvent,
+  User,
+  Organization,
+  executeFacetCompatible,
+} from '@bike4mind/database';
 import type { PipelineStage } from 'mongoose';
+import { z } from 'zod';
 import {
   ECONOMY_FLOWS,
   ECONOMY_LIMITATIONS,
   type EconomyQueryInput,
   type EconomyFlow,
   type EconomyReportData,
-  type EconomyRowData,
+  EconomyRow,
 } from '../../shared/creditEconomy';
 
 const MAX_TIME_MS = 15000;
 const fundingKeys = ['purchased', 'subscription', 'granted', 'unknown'] as const;
 const emptyFunding = () => ({ purchased: 0, subscription: 0, granted: 0, unknown: 0 });
+const isNumeric = (field: string) => ({ $in: [{ $type: field }, ['int', 'long', 'double', 'decimal']] });
 const reasons = (values: string[]) => ({ $in: ['$reason', values] });
 const typeIs = (type: string) => ({ $eq: ['$type', type] });
 const genericReason = (types: string[], values: string[]) => ({
@@ -65,44 +74,48 @@ export function economyStages(query: EconomyQueryInput): PipelineStage[] {
         ownerType: query.ownerType === 'all' ? { $in: ['User', 'Organization', 'Agent'] } : query.ownerType,
       },
     },
-    { $set: { flow: economyFlowExpression } },
-    { $set: { delta: { $cond: [{ $eq: ['$flow', 'non_balance'] }, 0, '$credits'] } } },
+    { $addFields: { flow: economyFlowExpression } },
+    { $addFields: { delta: { $cond: [{ $eq: ['$flow', 'non_balance'] }, 0, '$credits'] } } },
   ];
 }
 
 type FlowBucket = { _id: EconomyFlow; credits: number; rows: number };
 export async function readEconomyPage(query: EconomyQueryInput) {
-  const [result] = await CreditTransaction.aggregate<{
-    rows: EconomyRowData[];
-    count: { total: number }[];
-  }>([
-    ...economyStages(query),
-    ...(query.flow ? [{ $match: { flow: query.flow } }] : []),
+  const rawResult: unknown = await executeFacetCompatible(
+    CreditTransaction,
+    [...economyStages(query), ...(query.flow ? [{ $match: { flow: query.flow } }] : [])],
     {
-      $facet: {
-        rows: [
-          { $sort: { createdAt: -1, _id: -1 } },
-          { $skip: (query.page - 1) * query.limit },
-          { $limit: query.limit },
-          {
-            $project: {
-              _id: 0,
-              id: { $toString: '$_id' },
-              at: { $dateToString: { date: '$createdAt', format: '%Y-%m-%dT%H:%M:%S.%LZ' } },
-              ownerId: 1,
-              ownerType: 1,
-              type: 1,
-              reason: { $ifNull: ['$reason', null] },
-              credits: 1,
-              delta: 1,
-              flow: 1,
-            },
+      rows: [
+        { $sort: { createdAt: -1, _id: -1 } },
+        { $skip: (query.page - 1) * query.limit },
+        { $limit: query.limit },
+        {
+          $project: {
+            _id: 0,
+            id: { $toString: '$_id' },
+            at: { $dateToString: { date: '$createdAt', format: '%Y-%m-%dT%H:%M:%S.%LZ' } },
+            ownerId: 1,
+            ownerType: 1,
+            type: 1,
+            reason: { $ifNull: ['$reason', null] },
+            credits: 1,
+            delta: 1,
+            flow: 1,
           },
-        ],
-        count: [{ $count: 'total' }],
-      },
+        },
+      ],
+      count: [{ $count: 'total' }],
     },
-  ]).option({ maxTimeMS: MAX_TIME_MS });
+    { maxTimeMS: MAX_TIME_MS }
+  );
+  const [result] = z
+    .array(
+      z.object({
+        rows: z.array(EconomyRow),
+        count: z.array(z.object({ total: z.number().int().nonnegative() })),
+      })
+    )
+    .parse(rawResult);
   return { rows: result?.rows ?? [], total: result?.count[0]?.total ?? 0 };
 }
 
@@ -119,7 +132,7 @@ export async function readEconomyReport(query: EconomyQueryInput, now = new Date
           _id: null,
           available: { $sum: '$currentCredits' },
           holders: { $sum: 1 },
-          missing: { $sum: { $cond: [{ $isNumber: '$currentCredits' }, 0, 1] } },
+          missing: { $sum: { $cond: [isNumeric('$currentCredits'), 0, 1] } },
         },
       },
     ];
@@ -139,13 +152,13 @@ export async function readEconomyReport(query: EconomyQueryInput, now = new Date
     UsageEvent.aggregate<{ total: number; rows: number; stamped: number; funding: ReturnType<typeof emptyFunding> }>([
       { $match: { ...ownerMatch, createdAt: { $gte: new Date(query.from), $lt: new Date(query.to) } } },
       {
-        $set: {
+        $addFields: {
           debited: { $max: [0, { $subtract: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] }] },
           validStamp: {
             $and: [
               { $gt: ['$creditsCharged', 0] },
               ...fundingKeys.map(key => ({
-                $and: [{ $isNumber: `$fundingBreakdown.${key}` }, { $gte: [`$fundingBreakdown.${key}`, 0] }],
+                $and: [isNumeric(`$fundingBreakdown.${key}`), { $gte: [`$fundingBreakdown.${key}`, 0] }],
               })),
               {
                 $lte: [
@@ -154,7 +167,7 @@ export async function readEconomyReport(query: EconomyQueryInput, now = new Date
                       $subtract: [
                         {
                           $add: fundingKeys.map(key => ({
-                            $cond: [{ $isNumber: `$fundingBreakdown.${key}` }, `$fundingBreakdown.${key}`, 0],
+                            $cond: [isNumeric(`$fundingBreakdown.${key}`), `$fundingBreakdown.${key}`, 0],
                           })),
                         },
                         '$creditsCharged',

@@ -1,0 +1,58 @@
+{
+  "$comment": "Picked for backdrop.png (1280x720). Every point is a percent of the scene box (0-100), at a sprite's feet. Re-pick these whenever the backdrop is regenerated; see README.md.",
+  "slots": {
+    "workbench": [
+      { "x": 13, "y": 46 },
+      { "x": 25, "y": 46 },
+      { "x": 37, "y": 46 },
+      { "x": 10, "y": 55 },
+      { "x": 22, "y": 55 },
+      { "x": 34, "y": 55 }
+    ],
+    "bar": [
+      { "x": 53, "y": 45 },
+      { "x": 59, "y": 45 },
+      { "x": 65, "y": 45 },
+      { "x": 71, "y": 45 }
+    ],
+    "hearth": [
+      { "x": 70, "y": 52 },
+      { "x": 78, "y": 60 },
+      { "x": 87, "y": 62 },
+      { "x": 94, "y": 68 }
+    ],
+    "benches": [
+      { "x": 20, "y": 64 },
+      { "x": 29, "y": 64 },
+      { "x": 38, "y": 64 },
+      { "x": 52, "y": 68 },
+      { "x": 61, "y": 68 },
+      { "x": 70, "y": 68 }
+    ]
+  },
+  "overflow": {
+    "workbench": { "x": 44, "y": 51 },
+    "bar": { "x": 79, "y": 45 },
+    "hearth": { "x": 85, "y": 46 },
+    "benches": { "x": 45, "y": 76 }
+  },
+  "door": { "x": 4, "y": 46 },
+  "innkeeper": { "x": 62, "y": 30.5 },
+  "barCounter": { "left": 45, "right": 77, "top": 26.3, "front": 38 },
+  "lights": [
+    { "x": 92, "y": 36, "size": 22, "kind": "fire" },
+    { "x": 11.5, "y": 18.5, "size": 7, "kind": "candle" },
+    { "x": 30.6, "y": 23.5, "size": 6, "kind": "candle" },
+    { "x": 44, "y": 11.5, "size": 6, "kind": "candle" },
+    { "x": 55, "y": 9.5, "size": 6, "kind": "candle" },
+    { "x": 69.1, "y": 9.5, "size": 6, "kind": "candle" },
+    { "x": 71.7, "y": 26, "size": 5, "kind": "candle" },
+    { "x": 85.6, "y": 17.2, "size": 6, "kind": "candle" },
+    { "x": 95.3, "y": 19.5, "size": 6, "kind": "candle" },
+    { "x": 88.1, "y": 45.4, "size": 5, "kind": "candle" },
+    { "x": 24.8, "y": 63.5, "size": 9, "kind": "candle" },
+    { "x": 62, "y": 69.8, "size": 9, "kind": "candle" }
+  ],
+  "window": { "x": 23.8, "y": 7.5 },
+  "hearthGlow": { "x": 92, "y": 40 }
+}

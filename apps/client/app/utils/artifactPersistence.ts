@@ -214,6 +214,32 @@ export async function persistArtifacts(
 }
 
 /**
+ * The session's artifact for `type` + `identifier` the caller may READ, including one shared with
+ * them. For resolving a card to its saved row only: the owner-only lookup behind
+ * findExistingArtifactId is what saves and new versions must keep using, so a read grant never
+ * turns into a write onto someone else's row.
+ */
+export async function findReadableArtifactId(
+  type: string,
+  identifier: string,
+  sessionId?: string
+): Promise<string | null> {
+  if (!sessionId || !identifier) {
+    return null;
+  }
+  try {
+    const response = await api.get(`/api/artifacts/by-identifier`, { params: { sessionId, type, identifier } });
+    const id = response.data?.artifact?.id;
+    if (typeof id === 'string') return id;
+  } catch (error) {
+    console.warn('Error finding readable artifact:', error);
+    return findExistingArtifactId(type, identifier, sessionId);
+  }
+  // The route answered with no match, so only rows that carry the identifier as an id segment remain.
+  return findArtifactIdByIdSegment(type, identifier, sessionId);
+}
+
+/**
  * Find the session's artifact for a reply's `type` + `identifier`, newest first.
  */
 export async function findExistingArtifactId(
@@ -231,8 +257,19 @@ export async function findExistingArtifactId(
       return byIdentifier;
     }
 
-    // A legacy row with neither the field nor metadata.originalIdentifier carries the identifier
-    // only as an id segment.
+    return await findArtifactIdByIdSegment(type, identifier, sessionId);
+  } catch (error) {
+    console.warn('Error finding existing artifact:', error);
+    return null;
+  }
+}
+
+/**
+ * A legacy row with neither the field nor metadata.originalIdentifier carries the identifier only
+ * as an id segment; this scans the caller's recent rows for it.
+ */
+async function findArtifactIdByIdSegment(type: string, identifier: string, sessionId: string): Promise<string | null> {
+  try {
     const response = await api.get(`/api/artifacts`, {
       params: {
         sessionId,

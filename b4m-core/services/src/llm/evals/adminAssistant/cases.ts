@@ -55,6 +55,12 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     question: 'Where can I see platform credit issuance, consumption and accounting coverage?',
     expectViewIds: ['admin.credit_analytics'],
   },
+  {
+    id: 'where-ai-operations',
+    category: 'where-is',
+    question: 'Where can I check admin AI spend and agreement or turn all admin AI off?',
+    expectViewIds: ['admin.ai_operations'],
+  },
   // where-is: the answer is a navigate_view hand-off to the right admin tab.
   {
     id: 'where-advisories',

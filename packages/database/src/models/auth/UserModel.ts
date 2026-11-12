@@ -6,6 +6,7 @@ import {
   USER_RISK_SIGNAL_TYPES,
   VERIFIED_SLACK_IDENTITY_FILTER,
   canonicalizeEmail,
+  DEFAULT_STORAGE_LIMIT_MB,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
@@ -359,6 +360,8 @@ export type UserAccountRiskProfile = {
   signupIp: string | null;
   signupJa4: string | null;
   signupAsnKnown: boolean;
+  /** The signup ASN when known (a positive number); null otherwise. */
+  signupAsn: number | null;
   signupDatacenter: boolean | null;
   signupWafAnonIp: boolean | null;
   totpEnabled: boolean;
@@ -929,6 +932,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       signupIp: doc.signupMeta?.ip ?? null,
       signupJa4: doc.signupMeta?.ja4 ?? null,
       signupAsnKnown: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0,
+      signupAsn: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0 ? doc.signupMeta.asn : null,
       signupDatacenter: doc.signupMeta?.isDatacenter ?? null,
       signupWafAnonIp: doc.signupMeta?.wafAnonIp ?? null,
       totpEnabled: doc.mfa?.totpEnabled === true,
@@ -1112,6 +1116,39 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       { _id: userId, currentStorageSize: counterFilter },
       { $set: { currentStorageSize: next } }
     );
+    return res.matchedCount === 1;
+  }
+
+  async setPlanStorageLimit(userId: string, planStorageLimitMb: number): Promise<boolean> {
+    if (!mongoose.isValidObjectId(userId)) return false;
+    const fieldMissing = (field: string) => ({ $eq: [{ $type: field }, 'missing'] });
+    const res = await this.model.updateOne({ _id: userId }, [
+      // A row without the override field (pre-backfill, or an OAuth signup) gets the override
+      // resolveUserStorageLimit would derive for it, since a defined plan limit retires that fallback.
+      {
+        $set: {
+          storageLimitOverride: {
+            $cond: [
+              fieldMissing('$storageLimitOverride'),
+              {
+                $cond: [
+                  { $in: ['$storageLimit', [null, DEFAULT_STORAGE_LIMIT_MB]] },
+                  null,
+                  { $cond: [fieldMissing('$storageLimit'), null, '$storageLimit'] },
+                ],
+              },
+              '$storageLimitOverride',
+            ],
+          },
+        },
+      },
+      {
+        $set: {
+          planStorageLimit: planStorageLimitMb,
+          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb] },
+        },
+      },
+    ]);
     return res.matchedCount === 1;
   }
 
@@ -1724,6 +1761,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
+    // An organization's service account (see IUser.serviceAccountOrganizationId). Set on insert only.
+    serviceAccountOrganizationId: { type: String },
     subscribedUntil: { type: String, default: null },
     systemFiles: { type: [SystemFileEntrySchema], default: [] },
     oauthCredentials: { type: Object, default: {} },
