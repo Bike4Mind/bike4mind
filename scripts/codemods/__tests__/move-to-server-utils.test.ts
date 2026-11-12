@@ -436,6 +436,21 @@ describe('move-to-server-utils', () => {
       expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/stays in apps\/client/);
     });
 
+    it('throws when a left-behind asset only has a same-named copy in the package', () => {
+      write('packages/server-utils/src/memory/factCipher.ts', "import fields from './fields.json';\n");
+      write('packages/server-utils/src/memory/fields.json', '{}\n');
+      write('apps/client/server/memory/fields.json', '{}\n');
+
+      expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/stays in apps\/client/);
+    });
+
+    it('throws when the package path an asset specifier names is a directory, not a file', () => {
+      write('packages/server-utils/src/memory/factCipher.ts', "import cfg from './cfg.config';\n");
+      write('packages/server-utils/src/memory/cfg.config/a.ts', 'export {};\n');
+
+      expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/stays in apps\/client/);
+    });
+
     it('writes nothing when a moved file still imports a file left in apps/', () => {
       write('packages/server-utils/src/memory/factCipher.ts', "import { h } from './helper';\n");
       write('apps/client/server/memory/helper.ts', 'export const h = 1;\n');

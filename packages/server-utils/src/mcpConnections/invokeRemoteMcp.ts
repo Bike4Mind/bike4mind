@@ -67,10 +67,6 @@ import {
 
 /**
  * The one way the app talks to a custom remote MCP server (design #4845 sections 5, 8, 11, 12).
- *
- * Lives in apps/client/server rather than packages/server-utils because everything it composes
- * (the per-tenant breakers, the audit logger, token decryption bound to the app Config, CloudWatch)
- * still lives here; apps/workers reaches it through the `@server/*` alias like invokeMcpHandler.
  */
 
 export {
