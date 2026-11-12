@@ -213,7 +213,7 @@ export function useDeleteOrganization() {
       return orgId;
     },
     onSuccess: async orgId => {
-      // Org-scoped queries (detail, invites, members) 401 or 404 once the org is gone, and a 401 is read as an
+      // Org-scoped queries (detail, invites) 401 or 404 once the org is gone, and a 401 is read as an
       // expired session. Two things can still fire them: the settings page, which stays mounted until the caller
       // navigates, and the Teams list, whose cards mount per cached org. So the org leaves every cached list
       // synchronously, before the caller navigates, and its own queries are neither refetched nor removed
