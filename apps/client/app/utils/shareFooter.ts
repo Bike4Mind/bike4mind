@@ -3,8 +3,7 @@
  * bundles). Pure string builder - NO imports beyond the inlined logo, NO JS -
  * so it's safe under the strict serve CSP (`script-src 'none'`) and passes
  * `validateBundle` (no external asset fetch). Used by `renderViewerPage` (serve
- * handler), `renderArtifactIndexHtml` (server artifact renderer - the permanent
- * home), and `buildArtifactIndexHtml` (client bundler, removed in #1492).
+ * handler) and `renderArtifactIndexHtml` (server artifact renderer).
  *
  * Dark-navy card, a brand wordmark (the inlined built-in SVG when the operator
  * opts in via NEXT_PUBLIC_SHARE_BUILTIN_LOGO, otherwise a text wordmark of the

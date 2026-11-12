@@ -6,9 +6,9 @@ import { renderArtifactIndexHtml } from './renderArtifactHtml';
 
 /**
  * Published bytes pinned per artifact type. Customer /p/ pages were built from these exact bytes,
- * so any drift changes a live page. The fixtures were captured from the web client's pre-render
- * (`buildArtifactIndexHtml`, since removed) before the client switched to raw upload; regenerate
- * only for an intended change to published output.
+ * so any drift changes a live page. The fixtures were captured from the web client's own renderer
+ * before it switched to raw upload and the render moved here; regenerate only for an intended
+ * change to published output.
  *
  * `react` is absent: finalize transpiles it via `buildReactArtifactBundle`, pinned in
  * `reactBundlePinned.test.ts`.
@@ -69,14 +69,6 @@ describe('renderArtifactIndexHtml pinned published bytes', () => {
     const render = await loadRenderer();
     const { type, content } = PINNED_CASES[name];
     expect(render(type, content, TITLE)).toBe(pinned(name));
-  });
-
-  it.each(Object.keys(PINNED_CASES))('%s: the client pre-render emits the same pinned page', async name => {
-    vi.resetModules();
-    for (const [key, value] of Object.entries(BRAND_ENV)) vi.stubEnv(key, value);
-    const { buildArtifactIndexHtml } = await import('@client/app/utils/publishApi');
-    const { type, content } = PINNED_CASES[name];
-    expect(buildArtifactIndexHtml(type, content, TITLE)).toBe(pinned(name));
   });
 
   it('round-trips the UTF-8 bytes finalize decodes from the upload', async () => {

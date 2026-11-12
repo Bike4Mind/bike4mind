@@ -14,9 +14,8 @@ import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/sha
  * fragments and inline SVG are wrapped in a minimal page shell; all source-bearing types
  * (code/python/mermaid/recharts/json/...) render their source in a code view.
  *
- * MUST stay byte-identical to the web client's `buildArtifactIndexHtml`
- * (`apps/client/app/utils/publishApi.ts`) until #1492 removes the client copy - the
- * byte-parity tests in `renderArtifactHtml.test.ts` guard that invariant.
+ * Already-published /p/ pages were built from these exact bytes, so the output is pinned per
+ * type in `renderArtifactHtml.test.ts`; any change here re-renders live pages on re-publish.
  */
 
 /** Render an artifact to a single static index.html based on its type. */
