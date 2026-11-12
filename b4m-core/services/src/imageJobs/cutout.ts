@@ -18,7 +18,7 @@ import type { CreateImageJobsDeps, CreateImageJobsInput, CreateImageJobsResult }
  * The matte model. gpt-image renders a transparent background (gpt-image-2 refuses it), on a key Studio already
  * holds; only its alpha is kept (see @bike4mind/utils/imageCutout), so its rendering of the product never ships.
  */
-export const CUTOUT_MODEL = ImageModels.GPT_IMAGE_1_5;
+export const CUTOUT_MODEL: ImageModels.GPT_IMAGE_1_5 = ImageModels.GPT_IMAGE_1_5;
 // Medium: the matte edge is what is paid for, and low quality frays fine edges (a can's rim) for little saving.
 export const CUTOUT_QUALITY = 'medium';
 export const CUTOUT_PROMPT =
