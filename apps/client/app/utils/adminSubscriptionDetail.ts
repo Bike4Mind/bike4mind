@@ -179,3 +179,34 @@ export type AdminSubscriptionDetail = {
 };
 
 export type AdminSubscriptionByStripeIdResponse = { id: string };
+
+/**
+ * One plan-credit cycle: from a subscription grant to the next grant, or to now (or the subscription's end) for the
+ * last one. The ledger names no subscription, so both sides are the owner's.
+ */
+export type AdminSubscriptionCreditCycle = {
+  start: string;
+  end: string;
+  /** Credits the `subscription` ledger rows starting this cycle granted. */
+  granted: number;
+  /** Everything the owner spent in [start, end), from any credit source (plan, packs, adjustments). */
+  used: number;
+  /** The cycle still running, so its usage is partial. */
+  current: boolean;
+};
+
+/** A paid-seat count Stripe reported for this subscription, from its stored subscription events. */
+export type AdminSubscriptionSeatChange = { at: string; quantity: number };
+
+/** Response of GET /api/admin/subscriptions/[id]/history: the detail page's chart history, all from Mongo. */
+export type AdminSubscriptionHistory = {
+  /** Oldest first; at most MAX_CREDIT_CYCLES. */
+  creditCycles: AdminSubscriptionCreditCycle[];
+  /** Grants older than the cycles shown exist. */
+  creditCyclesTruncated: boolean;
+  /** Oldest first, consecutive repeats dropped. `null` for a user-owned row; empty for a comp, which Stripe never bills. */
+  seatChanges: AdminSubscriptionSeatChange[] | null;
+};
+
+/** Credit cycles the history endpoint returns (a year of monthly cycles). */
+export const MAX_CREDIT_CYCLES = 12;

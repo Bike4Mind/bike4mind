@@ -25,6 +25,7 @@ import type {
   AdminStripeWriteResponse,
   AdminSubscriptionByStripeIdResponse,
   AdminSubscriptionDetail,
+  AdminSubscriptionHistory,
   AdminSubscriptionSyncPreview,
   AdminSubscriptionSyncResponse,
 } from '@client/app/utils/adminSubscriptionDetail';
@@ -50,6 +51,7 @@ export const adminSubscriptionDetailKey = (id: string) => ['admin', 'subscriptio
 export const adminSubscriptionAdminLogKey = (id: string) => [...adminSubscriptionDetailKey(id), 'admin-log'] as const;
 export const adminSubscriptionTimelineKey = (id: string, kind: SubscriptionTimelineKind | undefined) =>
   [...adminSubscriptionDetailKey(id), 'timeline', kind ?? 'all'] as const;
+const adminSubscriptionHistoryKey = (id: string) => [...adminSubscriptionDetailKey(id), 'history'] as const;
 const adminSubscriptionStripeKey = (id: string) => [...adminSubscriptionDetailKey(id), 'stripe'] as const;
 const adminSubscriptionByStripeIdKey = (stripeSubscriptionId: string) =>
   ['admin', 'subscriptions', 'by-stripe', stripeSubscriptionId] as const;
@@ -63,6 +65,16 @@ export const useAdminSubscriptionDetail = (id: string) =>
     queryKey: adminSubscriptionDetailKey(id),
     queryFn: async (): Promise<AdminSubscriptionDetail> =>
       (await api.get<AdminSubscriptionDetail>(subscriptionPath(id))).data,
+    enabled: isSubscriptionObjectId(id),
+    retry: retryUnlessNotFound,
+  });
+
+/** The detail page's chart history; its own query so the charts load and fail apart from the facts above them. */
+export const useAdminSubscriptionHistory = (id: string) =>
+  useQuery({
+    queryKey: adminSubscriptionHistoryKey(id),
+    queryFn: async (): Promise<AdminSubscriptionHistory> =>
+      (await api.get<AdminSubscriptionHistory>(`${subscriptionPath(id)}/history`)).data,
     enabled: isSubscriptionObjectId(id),
     retry: retryUnlessNotFound,
   });

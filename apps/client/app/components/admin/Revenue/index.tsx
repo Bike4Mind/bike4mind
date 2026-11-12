@@ -16,6 +16,8 @@ import {
 import { AnalyticsTermHelp } from '../EventMetrics/components/AnalyticsTermHelp';
 import {
   AdminPageHeader,
+  ChartDataTable,
+  ChartSection,
   DataTable,
   EmptyState,
   ErrorState,
@@ -25,6 +27,7 @@ import {
   StatTile,
   StatusChip,
   formatMoney,
+  type ChartSectionBody,
   type DataColumn,
 } from '../shared';
 import { ADMIN_REGION_GAP, adminFocus } from '../shared/adminStyles';
@@ -158,79 +161,42 @@ type ChartSectionProps = {
   table: (trend: RevenueTrendPoint[], data: AdminRevenueData) => ReactNode;
 };
 
-/** A chart in a SectionCard with its takeaway, a "View as table" fallback, and loading and empty states (spec 5.7). */
-function ChartSection({ title, testId, data, loading, lead = false, caption, chart, table }: ChartSectionProps) {
-  const [asTable, setAsTable] = useState(false);
+/** Revenue's adapter over the shared ChartSection: every chart reads the same snapshot trend. */
+function TrendChartSection({ title, testId, data, loading, lead = false, caption, chart, table }: ChartSectionProps) {
   const trend = data?.trend ?? [];
-  const hasTrend = trend.length > 0;
-  let body: ReactNode;
+  let body: ChartSectionBody;
   if (!data || loading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <Skeleton
-          variant="rectangular"
-          height={lead ? 240 : 200}
-          sx={{ borderRadius: '8px' }}
-          data-testid={`${testId}-skeleton`}
-        />
-      </Box>
-    );
-  } else if (!hasTrend) {
+    body = { kind: 'loading' };
+  } else if (trend.length === 0) {
     // trendStartsOn is today until the first snapshot; one before the range means the snapshots stopped.
     const notStarted = data.trendStartsOn >= data.from;
     const emptyTitle = notStarted
       ? `Trend starts collecting on ${formatLongDay(data.trendStartsOn)}`
       : 'No snapshots in this range';
-    body = lead ? (
-      <Box data-testid={`${testId}-empty`}>
-        <EmptyState
-          title={emptyTitle}
-          description={
-            notStarted
-              ? 'A snapshot is taken once a day. The numbers above are current.'
-              : `Snapshots began on ${formatLongDay(data.trendStartsOn)}, but none fall in this range. The numbers above are current.`
-          }
-          action={null}
-        />
-      </Box>
-    ) : (
-      <Typography level="body-sm" sx={{ color: 'admin.inkMuted', p: 2 }} data-testid={`${testId}-empty`}>
-        {`${emptyTitle}.`}
-      </Typography>
-    );
-  } else {
-    body = (
-      <Stack gap={1.5} sx={{ p: 2 }}>
-        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid={`${testId}-caption`}>
-          {caption(trend, data)}
+    body = {
+      kind: 'notice',
+      content: lead ? (
+        <Box data-testid={`${testId}-empty`}>
+          <EmptyState
+            title={emptyTitle}
+            description={
+              notStarted
+                ? 'A snapshot is taken once a day. The numbers above are current.'
+                : `Snapshots began on ${formatLongDay(data.trendStartsOn)}, but none fall in this range. The numbers above are current.`
+            }
+            action={null}
+          />
+        </Box>
+      ) : (
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted', p: 2 }} data-testid={`${testId}-empty`}>
+          {`${emptyTitle}.`}
         </Typography>
-        {asTable ? table(trend, data) : chart(trend, data)}
-      </Stack>
-    );
+      ),
+    };
+  } else {
+    body = { kind: 'ready', caption: caption(trend, data), chart: chart(trend, data), table: table(trend, data) };
   }
-  return (
-    <SectionCard
-      title={title}
-      body="custom"
-      data-testid={testId}
-      action={
-        hasTrend && (
-          <Button
-            size="sm"
-            variant="plain"
-            onClick={() => setAsTable(previous => !previous)}
-            aria-pressed={asTable}
-            data-testid={`${testId}-table-toggle-btn`}
-            sx={adminFocus}
-          >
-            {asTable ? 'View as chart' : 'View as table'}
-          </Button>
-        )
-      }
-    >
-      {body}
-    </SectionCard>
-  );
+  return <ChartSection title={title} testId={testId} body={body} skeletonHeight={lead ? 240 : 200} />;
 }
 
 const moneyColumn = <Row,>(id: string, label: string, amount: (row: Row) => number): DataColumn<Row> => ({
@@ -297,17 +263,7 @@ const chartTable = <Row,>(
   rows: readonly Row[],
   columns: DataColumn<Row>[],
   getRowId: (row: Row) => string
-) => (
-  <DataTable
-    label={label}
-    testId={testId}
-    rows={[...rows]}
-    columns={columns}
-    getRowId={getRowId}
-    onRetry={() => undefined}
-    minWidth="24rem"
-  />
-);
+) => <ChartDataTable label={label} testId={testId} rows={rows} columns={columns} getRowId={getRowId} />;
 
 function TrendSections({ data, loading }: { data?: AdminRevenueData; loading: boolean }) {
   const unit = PERIOD_UNIT[data?.range ?? '30d'];
@@ -317,7 +273,7 @@ function TrendSections({ data, loading }: { data?: AdminRevenueData; loading: bo
   const shared = { data, loading };
   return (
     <>
-      <ChartSection
+      <TrendChartSection
         {...shared}
         lead
         title="MRR over time"
@@ -327,7 +283,7 @@ function TrendSections({ data, loading }: { data?: AdminRevenueData; loading: bo
         table={trend => chartTable('MRR over time', 'admin-revenue-trend-table', trend, TREND_COLUMNS, row => row.date)}
       />
       <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' }, minWidth: 0 }}>
-        <ChartSection
+        <TrendChartSection
           {...shared}
           title="MRR movement"
           testId="admin-revenue-movement"
@@ -337,7 +293,7 @@ function TrendSections({ data, loading }: { data?: AdminRevenueData; loading: bo
             chartTable('MRR movement', 'admin-revenue-movement-table', periods, MOVEMENT_COLUMNS, row => row.start)
           }
         />
-        <ChartSection
+        <TrendChartSection
           {...shared}
           title="MRR by plan over time"
           testId="admin-revenue-plan-trend"
@@ -353,7 +309,7 @@ function TrendSections({ data, loading }: { data?: AdminRevenueData; loading: bo
             )
           }
         />
-        <ChartSection
+        <TrendChartSection
           {...shared}
           title="Paying customers by owner type"
           testId="admin-revenue-by-owner"
@@ -369,7 +325,7 @@ function TrendSections({ data, loading }: { data?: AdminRevenueData; loading: bo
             )
           }
         />
-        <ChartSection
+        <TrendChartSection
           {...shared}
           title="At-risk MRR"
           testId="admin-revenue-at-risk-trend"

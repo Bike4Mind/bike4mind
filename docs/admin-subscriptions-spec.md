@@ -330,6 +330,11 @@ As built (`components/admin/Revenue/`):
 - New and churned use the `good` and `bad` tones, net is an `ink` line. `contrast.test.ts` checks each solid series color reaches 3:1 on the card in light and dark.
 - The list's sparklines show only in the Paying and All views with no search, where the tile counts the same rows the snapshot does. Past due's sparkline is its MRR at risk, since the snapshot stores no past-due count.
 
+As built (`components/admin/Subscriptions/Detail/SubscriptionCharts.tsx`, below the Overview cards; the chart card, frame and tooltip are shared in `components/admin/shared/ChartSection.tsx` and `chartParts.tsx`):
+- Payment history charts the latest 24 non-draft invoices in the latest invoice's currency, from the same Stripe read as the Invoices tab, and degrades with it. Outcomes: paid (`good`), refunded (`warn`; a paid invoice whose payment intent has a stored `charge.refunded` BillingEvent), failed (`bad`; uncollectible, or open after a failed attempt), open (`info`), void (`neutral`). Comps have no payment chart.
+- Credits per cycle comes from `GET /api/admin/subscriptions/[id]/history`. The ledger names no subscription, so a cycle runs from one of the owner's `subscription` grants (from an hour before the row was created) to the next, and "used" is everything the owner spent in it from any credit source. Latest 12 cycles.
+- Seats used vs paid: paid seats are the quantities stored on this subscription's `customer.subscription.*` BillingEvents, plus today from the row. Member history is not recorded, so used seats are today's count only, and the chart says so.
+
 To make this possible, `RevenueSnapshot` (6.4) also stores per day:
 - MRR by plan and by owner type;
 - the paying count;
