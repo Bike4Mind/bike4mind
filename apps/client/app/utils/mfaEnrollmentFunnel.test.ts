@@ -37,4 +37,11 @@ describe('reportMfaEnrollmentAbandoned', () => {
     expect(() => reportMfaEnrollmentAbandoned('tok')).not.toThrow();
     await Promise.resolve();
   });
+
+  it('swallows a synchronous throw so the caller still signs out', () => {
+    fetchMock.mockImplementation(() => {
+      throw new TypeError('keepalive not supported');
+    });
+    expect(() => reportMfaEnrollmentAbandoned('tok')).not.toThrow();
+  });
 });

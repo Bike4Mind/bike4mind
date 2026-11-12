@@ -11,13 +11,17 @@ const ENROLLMENT_ABANDONED_PATH = '/api/auth/mfa/enrollment-abandoned';
  */
 export function reportMfaEnrollmentAbandoned(accessToken: string | null): void {
   if (!accessToken || typeof fetch !== 'function') return;
-  void fetch(ENROLLMENT_ABANDONED_PATH, {
-    method: 'POST',
-    credentials: 'same-origin',
-    keepalive: true,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-    body: '{}',
-  }).catch(() => {
-    // Best-effort, as the page beacons; a browser that rejects keepalive lands here too.
-  });
+  try {
+    void fetch(ENROLLMENT_ABANDONED_PATH, {
+      method: 'POST',
+      credentials: 'same-origin',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: '{}',
+    }).catch(() => {
+      // Best-effort, as the page beacons.
+    });
+  } catch {
+    // A browser that rejects keepalive may throw synchronously; that must not stop the caller's sign-out.
+  }
 }
