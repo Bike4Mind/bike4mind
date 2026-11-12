@@ -26,8 +26,9 @@ import type { AsyncImageProvider, ImageInputs, ResolvedImageInput } from '../typ
 
 type BflHandle = GenerationProviderJobHandle<'bfl'>;
 
-// The polling URL is persisted on the job and later sent our API key, so only BFL's own hosts are followed.
-const isBflPollingUrl = (value: string): boolean => {
+// The polling URL is persisted on the job and later sent our API key, so only BFL's own hosts are followed;
+// the same check keeps the delivery download on BFL's hosts.
+const isBflHostUrl = (value: string): boolean => {
   try {
     const url = new URL(value);
     return url.protocol === 'https:' && (url.hostname === 'bfl.ai' || url.hostname.endsWith('.bfl.ai'));
@@ -56,7 +57,7 @@ const dimensionsOf = (model: BFLImageModel, size: string | undefined): { width?:
 
 const taskOf = (handle: BflHandle): BflTask | null => {
   const { id, pollingUrl } = handle.data;
-  if (typeof id !== 'string' || typeof pollingUrl !== 'string' || !isBflPollingUrl(pollingUrl)) return null;
+  if (typeof id !== 'string' || typeof pollingUrl !== 'string' || !isBflHostUrl(pollingUrl)) return null;
   return { id, pollingUrl };
 };
 
@@ -96,7 +97,7 @@ export class BflImageProvider implements AsyncImageProvider {
       throw error;
     }
     // The task exists (and may bill), so a polling URL we will not follow is an unknown outcome, not a rejection.
-    if (!isBflPollingUrl(task.pollingUrl)) throw new Error('BFL returned a polling URL outside its own hosts');
+    if (!isBflHostUrl(task.pollingUrl)) throw new Error('BFL returned a polling URL outside its own hosts');
     return { provider: 'bfl', data: { id: task.id, pollingUrl: task.pollingUrl } };
   }
 
@@ -116,6 +117,15 @@ export class BflImageProvider implements AsyncImageProvider {
     }
     switch (reading.state) {
       case 'ready':
+        if (!isBflHostUrl(reading.sampleUrl)) {
+          ctx.logger.error('BFL returned a delivery URL outside its own hosts', { requestId: task.id });
+          return {
+            status: 'failed',
+            retryable: false,
+            message: 'BFL returned a delivery URL outside its own hosts',
+            raw: { requestId: task.id },
+          };
+        }
         return { status: 'succeeded', output: { kind: 'url', url: reading.sampleUrl, requiresAuth: false } };
       case 'moderated':
         // Not marked billed: BFL does not document whether a moderated task is charged.

@@ -212,6 +212,11 @@ describe('BflImageProvider.poll', () => {
     expect(get).toHaveBeenCalledWith(POLLING_URL, expect.objectContaining({ headers: expect.anything() }));
   });
 
+  it.each(BAD_POLLING_URLS)('fails Ready with the delivery URL %s, without retry', async url => {
+    get.mockResolvedValue({ data: { status: 'Ready', result: { sample: url } } });
+    await expect(provider.poll(handle(), context())).resolves.toMatchObject({ status: 'failed', retryable: false });
+  });
+
   it('fails a task BFL no longer knows, without retry', async () => {
     get.mockResolvedValue({ data: { status: 'Task not found' } });
     await expect(provider.poll(handle(), context())).resolves.toMatchObject({
