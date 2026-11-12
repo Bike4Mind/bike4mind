@@ -54,6 +54,11 @@ describe('XaiImageProvider.generate', () => {
     expect(result).toEqual({ status: 'succeeded', output: { kind: 'url', url: IMAGE_URL, requiresAuth: false } });
   });
 
+  it('passes the requested model to the API', async () => {
+    await provider.generate(request({ model: 'grok-test-model' as StoredImageRequest['model'] }), {}, context());
+    expect(imagesGenerate).toHaveBeenCalledWith(expect.objectContaining({ model: 'grok-test-model' }));
+  });
+
   it('reports the moderation 400 as blocked', async () => {
     imagesGenerate.mockRejectedValue(apiError(400, 'Generated image rejected by content moderation.'));
     await expect(provider.generate(request(), {}, context())).resolves.toMatchObject({ status: 'blocked' });

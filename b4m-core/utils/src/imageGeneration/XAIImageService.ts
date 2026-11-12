@@ -49,7 +49,7 @@ export class XAIImageService extends AIImageService {
       // XAI does not support size, quality, or other OpenAI-specific parameters
       const response = await xai.images.generate({
         prompt,
-        model: ImageModels.GROK_IMAGINE_IMAGE_QUALITY,
+        model: options.model ?? ImageModels.GROK_IMAGINE_IMAGE_QUALITY,
         n: options.n || 1,
         user: options.user,
       });
