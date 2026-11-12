@@ -262,6 +262,7 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
    * Returns the selected live ids. Call within withTransaction when these ids are used as an
    * exact audit receipt, so a concurrent revocation retries the read and write together.
    */
+  // Keep the selection in sync with orgBilledKeyFilter in b4m-core/services/src/organizationService/offboardingScope.ts.
   async revokeLiveOrgBilledByUserId(
     userId: string,
     organizationId: string,
