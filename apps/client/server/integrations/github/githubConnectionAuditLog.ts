@@ -9,18 +9,13 @@
  */
 
 import { Logger } from '@bike4mind/observability';
+import { recordOrganizationAuditEventSafe } from '@bike4mind/server-utils/utils/organizationAudit';
 
 /**
  * Audit event types for GitHub connection operations
  */
 export type GitHubConnectionAuditEvent =
-  | 'created'
-  | 'updated'
-  | 'deleted'
-  | 'key_rotated'
-  | 'pat_rotated'
-  | 'enabled_changed'
-  | 'test_executed';
+  'created' | 'updated' | 'deleted' | 'key_rotated' | 'pat_rotated' | 'enabled_changed' | 'test_executed';
 
 /**
  * Context for a GitHub connection audit log entry
@@ -85,6 +80,15 @@ export function logGitHubConnectionAudit(
     changes,
     timestamp: new Date().toISOString(),
   };
+  if (event !== 'test_executed') {
+    void recordOrganizationAuditEventSafe({
+      organizationId: context.organizationId,
+      actorUserId: context.actorUserId,
+      targetId: context.connectionId,
+      action:
+        event === 'created' ? 'connector.connected' : event === 'deleted' ? 'connector.disconnected' : 'policy.updated',
+    });
+  }
 
   // Log with structured data for easy querying in CloudWatch/log aggregation
   auditLogger.info('[GITHUB-CONNECTION-AUDIT]', {
