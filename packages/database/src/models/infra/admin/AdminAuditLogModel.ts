@@ -300,6 +300,13 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
     return this.listPage([ownerClause, { 'details.subscriptionId': { $in: subscriptionIds } }], page);
   }
 
+  async listForFeedback(feedbackId: string, page: { limit: number; cursor?: AuditLogCursor }) {
+    return this.listPage(
+      [{ 'details.feedbackId': feedbackId }, { action: { $in: ['feedback.status_changed', 'feedback.note_added'] } }],
+      page
+    );
+  }
+
   async listForSubscriptionOrOwner(
     scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
     page: { limit: number; cursor?: AuditLogCursor }
@@ -569,6 +576,5 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
   }
 }
 
-export const adminAuditLogRepository: SubscriptionTimelineAuditLogRepository = new AdminAuditLogRepository(
-  AdminAuditLogModel
-);
+export const adminAuditLogRepository: SubscriptionTimelineAuditLogRepository &
+  Pick<AdminAuditLogRepository, 'listForFeedback'> = new AdminAuditLogRepository(AdminAuditLogModel);

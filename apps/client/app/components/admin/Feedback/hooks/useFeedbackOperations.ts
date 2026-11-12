@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useNavigate } from '@tanstack/react-router';
-import { FeedbackStatus, adminAuditLogPath } from '@bike4mind/common';
+import { FeedbackStatus, adminAuditLogPath, type UpdateFeedbackStatusRequest } from '@bike4mind/common';
 import {
   deleteFeedbackFromServer,
   getFeedbackFromServer,
@@ -63,6 +63,7 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const showUndo = useUndoToast();
+  const [feedbackToClose, setFeedbackToClose] = useState<IExtendedFeedbackDocument | null>(null);
   const [feedbackToDelete, setFeedbackToDelete] = useState<string | null>(null);
   const [openDeleteFeedbackModal, toggleDeleteFeedbackModal] = useToggle();
 
@@ -118,6 +119,7 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
         queryClient.invalidateQueries({ queryKey: FEEDBACK_RECORD_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
         queryClient.invalidateQueries({ queryKey: FEEDBACK_TRENDS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: ['feedback-history'] }),
       ]),
     [queryClient]
   );
@@ -130,8 +132,12 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
     [navigate]
   );
 
-  const handleStatusChange = useCallback(
-    async (feedbackItem: IExtendedFeedbackDocument, newValue: FeedbackStatus | null) => {
+  const applyStatusChange = useCallback(
+    async (
+      feedbackItem: IExtendedFeedbackDocument,
+      newValue: FeedbackStatus | null,
+      closeBody?: Pick<UpdateFeedbackStatusRequest, 'resolution' | 'resolutionDuplicateId' | 'reason'>
+    ) => {
       const previousStatus = feedbackItem.status;
       const updatedStatus = newValue ?? getNextStatus(previousStatus);
       if (updatedStatus === previousStatus) return;
@@ -140,6 +146,7 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
         const result = await updateFeedbackStatusOnServer(feedbackItem._id, {
           status: updatedStatus,
           expectedStatus: previousStatus,
+          ...closeBody,
         });
         await invalidateAfterStatusChange();
 
@@ -169,10 +176,30 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
         showFeedbackToast.error(`Failed to update feedback status: ${getErrorMessage(error)}`);
         // A 409 means someone else moved the report; show where it is now.
         await invalidateAfterStatusChange();
+        throw error;
       }
     },
     [invalidateAfterStatusChange, openAuditEntry, showUndo]
   );
+
+  const handleStatusChange = useCallback(
+    async (item: IExtendedFeedbackDocument, next: FeedbackStatus | null) => {
+      const status = next ?? getNextStatus(item.status);
+      if (status === item.status) return;
+      if (status === FeedbackStatus.Closed) {
+        setFeedbackToClose(item);
+        return;
+      }
+      await applyStatusChange(item, status).catch(() => {});
+    },
+    [applyStatusChange]
+  );
+
+  const confirmClose: UseFeedbackOperationsReturn['confirmClose'] = async body => {
+    if (!feedbackToClose) return;
+    await applyStatusChange(feedbackToClose, FeedbackStatus.Closed, body);
+    setFeedbackToClose(null);
+  };
 
   const handleDeleteFeedbackClick = useCallback(
     (item: IExtendedFeedbackDocument) => {
@@ -213,6 +240,9 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
     isError: hasStatusSelection && listQuery.isError,
     refreshFeedback,
     handleStatusChange,
+    feedbackToClose,
+    cancelClose: () => setFeedbackToClose(null),
+    confirmClose,
     handleDeleteFeedbackClick,
     confirmDeleteFeedback,
     feedbackToDelete,
