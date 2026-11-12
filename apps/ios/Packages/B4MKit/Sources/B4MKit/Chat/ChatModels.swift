@@ -49,7 +49,9 @@ public struct ChatSendReceipt: Hashable, Sendable {
 /// (built by b4m-core/services/src/llm/StatusManager.ts).
 ///
 /// `reply` is the CUMULATIVE text so far: it replaces what is shown, never appends. A frame lost to a
-/// dropped connection or chunk is therefore healed by the next one.
+/// dropped connection or chunk is therefore healed by the next one. The server keeps the text in
+/// `replies` and often sends `reply: null`, so the frame falls back to joining `replies`; the REST quest
+/// body derives its `reply` the same way (`questReplyText` in b4m-core/common/src/utils/replyChoices.ts).
 public struct ChatQuestFrame: Hashable, Sendable {
   public static let action = "streamed_chat_completion"
 
@@ -94,13 +96,24 @@ public struct ChatQuestFrame: Hashable, Sendable {
       questID: questID,
       sessionID: sessionID,
       prompt: quest["prompt"]?.stringValue,
-      reply: quest["reply"]?.stringValue,
+      reply: Self.replyText(reply: quest["reply"], replies: quest["replies"]),
       status: quest["status"]?.stringValue.flatMap(QuestTurn.Status.init(rawValue:)),
       kind: quest["type"]?.stringValue.flatMap(QuestTurn.Kind.init(rawValue:)),
       errorCode: quest["errorCode"]?.stringValue.flatMap(QuestTurn.ErrorCode.init(rawValue:)),
       creditsUsed: quest["creditsUsed"]?.numberValue,
       pendingAction: quest["pendingAction"]?.objectValue.flatMap(PendingAction.init(wire:)),
       statusMessage: frame.payload["statusMessage"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 })
+  }
+}
+
+extension ChatQuestFrame {
+  /// The joined non-empty `replies` slots, else a non-empty `reply`. `nil` when neither has text, so an
+  /// optimized frame never blanks text an earlier frame showed.
+  static func replyText(reply: JSONValue?, replies: JSONValue?) -> String? {
+    let joined = (replies?.arrayValue ?? []).compactMap(\.stringValue).filter { !$0.isEmpty }.joined()
+    if !joined.isEmpty { return joined }
+    guard let reply = reply?.stringValue, !reply.isEmpty else { return nil }
+    return reply
   }
 }
 

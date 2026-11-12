@@ -37,6 +37,9 @@ public final class ChatViewModel {
   @ObservationIgnored private var awaitingReceipt: [String] = []
   @ObservationIgnored private var lastHeardAt: [String: Date] = [:]
   @ObservationIgnored private var pollTasks: [String: Task<Void, Never>] = [:]
+  /// Quests whose final text was (or is being) fetched once they settled; see `settle(_:)`.
+  @ObservationIgnored private var settledQuestIDs: Set<String> = []
+  @ObservationIgnored private var settleTasks: [String: Task<Void, Never>] = [:]
 
   public struct PollingPolicy: Sendable {
     public var interval: Duration = .seconds(2)
@@ -136,6 +139,8 @@ public final class ChatViewModel {
   public func stop() {
     for task in pollTasks.values { task.cancel() }
     pollTasks.removeAll()
+    for task in settleTasks.values { task.cancel() }
+    settleTasks.removeAll()
   }
 
   // MARK: - Sending
@@ -255,6 +260,11 @@ public final class ChatViewModel {
 
   /// Applies one frame for this session. Internal so tests can drive it without a socket.
   func apply(_ frame: ChatQuestFrame) {
+    applyFrame(frame)
+    if frame.status?.isTerminal ?? false { settle(frame.questID) }
+  }
+
+  private func applyFrame(_ frame: ChatQuestFrame) {
     lastHeardAt[frame.questID] = now()
     activities?.questChanged(questID: frame.questID, to: QuestActivityMapping.state(from: frame))
     let frameIsTerminal = frame.status?.isTerminal ?? false
@@ -300,6 +310,33 @@ public final class ChatViewModel {
       return false
     }
     return local?.trimmingCharacters(in: .whitespacesAndNewlines) == streamed
+  }
+
+  /// Fetches a settled quest once and takes the server's reply text. Frames carry the raw `replies`
+  /// slots, while the REST body is the display text the transcript shows after a reload (choice blocks
+  /// and hidden slots stripped), so the live bubble ends on exactly what a reopen would show.
+  private func settle(_ questID: String) {
+    guard !settledQuestIDs.contains(questID) else { return }
+    settledQuestIDs.insert(questID)
+    let api = self.api
+    settleTasks[questID] = Task { [weak self] in
+      let settled = try? await api.quest(id: questID)
+      guard let self, !Task.isCancelled else { return }
+      self.settleTasks[questID] = nil
+      guard let settled else {
+        // Let a later terminal frame try again; the frame's own text stays on screen meanwhile.
+        self.settledQuestIDs.remove(questID)
+        return
+      }
+      self.applySettled(settled)
+    }
+  }
+
+  private func applySettled(_ settled: QuestTurn) {
+    guard let reply = settled.reply, !reply.isEmpty,
+      let index = liveTurns.firstIndex(where: { $0.id == settled.id })
+    else { return }
+    liveTurns[index] = liveTurns[index].updating(reply: reply)
   }
 
   // MARK: - Fallback polling

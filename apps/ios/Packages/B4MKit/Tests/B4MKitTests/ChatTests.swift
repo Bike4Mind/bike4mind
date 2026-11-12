@@ -45,6 +45,26 @@ final class ChatFrameTests: XCTestCase {
     XCTAssertEqual(frame.pendingAction?.requestedAt, Date(timeIntervalSince1970: 1_800_000_000))
   }
 
+  /// The final frame as staging sends it: `reply` is null and the text lives only in `replies`.
+  func testReplyFallsBackToTheRepliesSlots() throws {
+    let final = try XCTUnwrap(
+      ChatQuestFrame(
+        streamed([
+          "id": "q1", "sessionId": "s1", "reply": .null, "replies": ["", "Red\nBlue"], "creditsUsed": 2,
+          "type": "message", "status": "done",
+        ])))
+    XCTAssertEqual(final.reply, "Red\nBlue")
+    XCTAssertEqual(final.status, .done)
+
+    let running = try XCTUnwrap(
+      ChatQuestFrame(streamed(["id": "q1", "sessionId": "s1", "reply": .null, "replies": [], "status": "running"])))
+    XCTAssertNil(running.reply, "a frame with no text keeps whatever an earlier frame showed")
+
+    let legacy = try XCTUnwrap(
+      ChatQuestFrame(streamed(["id": "q1", "sessionId": "s1", "reply": "Hello", "replies": [], "status": "running"])))
+    XCTAssertEqual(legacy.reply, "Hello")
+  }
+
   func testOtherActionsAndIncompleteFramesAreNotChat() {
     XCTAssertNil(ChatQuestFrame(ActionFrame(action: "streamed_rapid_reply", payload: ["questId": "q1"])))
     XCTAssertNil(ChatQuestFrame(streamed(["id": "q1", "reply": "no session"])))

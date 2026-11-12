@@ -143,6 +143,49 @@ final class ChatViewModelTests: XCTestCase {
     listener.cancel()
   }
 
+  /// The staging delivery path: status frames with no text, then one final frame whose text is only in
+  /// `replies`. The reply must show while the screen stays open, and end on the server's own reply text.
+  func testAFinalFrameWithTextOnlyInRepliesShowsTheReplyLive() async throws {
+    let realtime = FakeRealtime()
+    let model = makeModel(realtime: realtime)
+    model.draft = "Name two colors"
+    await model.send()
+    let listener = Task { await model.listen() }
+    await eventually { await realtime.listenerCount == 1 }
+
+    func quest(_ fields: JSONObject) -> RealtimeEvent {
+      var quest: JSONObject = ["id": "quest-1", "sessionId": "s1", "type": "message", "prompt": "Name two colors"]
+      quest.merge(fields) { _, new in new }
+      return .frame(
+        ActionFrame(
+          action: "streamed_chat_completion", payload: ["action": "streamed_chat_completion", "quest": .object(quest)]))
+    }
+    await api.setPolledQuests([
+      QuestTurn(
+        id: "quest-1", prompt: nil, reply: "Red and blue.", status: .done, createdAt: Samples.date, creditsUsed: 2)
+    ])
+    await realtime.emit(quest(["reply": .null, "replies": [], "status": "running", "creditsUsed": 0]))
+    await realtime.emit(
+      quest(["reply": .null, "replies": ["", "Red\nBlue"], "status": "done", "creditsUsed": 2]))
+
+    await eventually { await MainActor.run { model.messages.last?.text == "Red and blue." } }
+    XCTAssertEqual(model.messages.map(\.role), [.user, .assistant])
+    XCTAssertEqual(model.liveTurns.first?.creditsUsed, 2)
+    let lookups = await api.questLookups
+    XCTAssertEqual(lookups.filter { $0 == "quest-1" }.count, 1, "the settled quest is fetched once")
+    listener.cancel()
+    model.stop()
+  }
+
+  func testASettledTurnKeepsTheFrameTextWhenTheFetchFails() async throws {
+    let model = makeModel(realtime: FakeRealtime())
+    model.apply(frame(reply: "Hello there", status: .done, prompt: "Hi"))
+    let api = self.api!
+    await eventually { await api.questLookups.contains("quest-1") }
+    XCTAssertEqual(model.messages.last?.text, "Hello there")
+    model.stop()
+  }
+
   func testAFrameThatBeatsTheReceiptIsAdoptedNotDuplicated() async {
     await api.holdSends()
     let model = makeModel(realtime: FakeRealtime())
