@@ -178,9 +178,13 @@ describe('serving a core draft through /api/tutorials/run', () => {
       expect((await post({ action: 'start', moduleId: 'my-draft' }, LACKING)).status).toBe(404);
     });
 
-    it('gets 404 on resume', async () => {
+    it('gets the unknown-module 404 on resume, not NOT_STARTED', async () => {
       await post({ action: 'start', moduleId: 'my-draft' });
-      expect((await post({ action: 'resume', moduleId: 'my-draft' }, LACKING)).status).toBe(404);
+      state.progress.set('u2', { 'my-draft': { ...state.progress.get('u1')!['my-draft'] } });
+      const { status, json } = await post({ action: 'resume', moduleId: 'my-draft' }, LACKING);
+      expect(status).toBe(404);
+      expect(json.code).not.toBe('NOT_STARTED');
+      expect(json.error).toBe('Unknown tutorial module');
     });
 
     it('gets 404 on advance', async () => {
@@ -190,10 +194,13 @@ describe('serving a core draft through /api/tutorials/run', () => {
       expect(state.quests).toHaveLength(0);
     });
 
-    it('gets 404 on position', async () => {
+    it('gets the unknown-module 404 on position even with progress of its own', async () => {
       await post({ action: 'start', moduleId: 'my-draft' });
+      state.progress.set('u2', { 'my-draft': { ...state.progress.get('u1')!['my-draft'] } });
       const body = { action: 'position', moduleId: 'my-draft', stepId: 'turn-0', status: 'left' };
-      expect((await post(body, LACKING)).status).toBe(404);
+      const { status, json } = await post(body, LACKING);
+      expect(status).toBe(404);
+      expect(json.error).toBe('Unknown tutorial step');
     });
   });
 });
