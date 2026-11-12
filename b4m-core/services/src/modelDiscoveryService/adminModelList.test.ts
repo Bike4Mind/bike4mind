@@ -571,6 +571,18 @@ describe('buildAdminModelRows', () => {
       expect(stale.firstSeenAt).toBe(EARLIER.toISOString());
     });
 
+    it.each([{ allowedEntitlements: ['base'] }, { allowedEntitlements: [] }])(
+      'keeps a legacy entry without enabled off for $allowedEntitlements',
+      async ({ allowedEntitlements }) => {
+        const legacy = entry('gpt-x', { allowedEntitlements });
+        Reflect.deleteProperty(legacy, 'enabled');
+        const row = await rowFor('gpt-x', { adapterModels: [model], accessEntries: [legacy] });
+        expect(row.status).toBe('hidden');
+        expect(codes(row)).toEqual(['admin-off']);
+        expect(row.access).toMatchObject({ entry: { enabled: false }, adminsOnly: false });
+      }
+    );
+
     it('marks a model Limited when not everyone can pick it', async () => {
       const tagged = await rowFor('gpt-x', {
         adapterModels: [model],

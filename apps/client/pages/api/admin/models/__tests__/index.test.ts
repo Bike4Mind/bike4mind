@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { AdminModelListResponse } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -86,18 +87,7 @@ const foundationRow = discoveredRow('anthropic.claude-admin-list-v1:0', {
   disabledReason: 'not invocable on demand; use its region-prefixed inference profile id',
 });
 
-interface ListBody {
-  models: Array<{
-    id: string;
-    status: string;
-    reasons: Array<{ code: string; fixAction?: string }>;
-    sunsetDate: string | null;
-    sunsetDays: number | null;
-  }>;
-  total: number;
-  counts: Record<string, number>;
-  foundationIds: number;
-}
+type ListBody = Pick<AdminModelListResponse, 'models' | 'total' | 'counts' | 'foundationIds'>;
 
 async function list(
   query: Record<string, string | string[]> = {},
@@ -217,6 +207,18 @@ describe('GET /api/admin/models', () => {
     expect(image?.status).toBe('hidden');
     expect(image?.reasons).toEqual([expect.objectContaining({ code: 'admin-off', fixAction: 'turn-on' })]);
   });
+
+  it.each([{ allowedEntitlements: ['base'] }, { allowedEntitlements: [] }])(
+    'reads an omitted enabled field as off from the raw setting: $allowedEntitlements',
+    async ({ allowedEntitlements }) => {
+      h.accessSetting.mockResolvedValue({
+        settingValue: [{ id: 'gpt-image-2', allowedUserTags: [], allowedEntitlements }],
+      });
+      const image = (await list({ search: 'gpt-image-2' })).models.find(model => model.id === 'gpt-image-2');
+      expect(image).toMatchObject({ status: 'hidden', access: { entry: { enabled: false }, adminsOnly: false } });
+      expect(image?.reasons).toContainEqual(expect.objectContaining({ code: 'admin-off' }));
+    }
+  );
 
   it('reports a backend with no key in this environment', async () => {
     h.keys.mockResolvedValue({ ...ALL_KEYS, xai: null });
