@@ -169,11 +169,23 @@ describe('persisted organization MFA content boundary', () => {
         contentId: new mongoose.Types.ObjectId(),
         createdBy: userId,
       });
+      const collection = mongoose.connection.db!.collection(Project.collection.collectionName);
+      const parentReads = vi.spyOn(Object.getPrototypeOf(collection) as typeof collection, 'find');
       await withOrganizationMfaContext(
         () => userId,
         async () => {
           expect(await Artifact.findOne({ id: artifactId })).toBeNull();
           expect(await ArtifactVersion.findById(version._id)).toBeNull();
+          expect(await ArtifactVersion.aggregate([{ $match: { _id: version._id } }])).toEqual([]);
+          await expect(
+            ArtifactVersion.bulkWrite([
+              {
+                insertOne: {
+                  document: { artifactId, version: 4, contentId: new mongoose.Types.ObjectId(), createdBy: userId },
+                },
+              },
+            ])
+          ).rejects.toThrow('MFA');
           await expect(
             ArtifactVersion.create({
               artifactId,
@@ -196,6 +208,11 @@ describe('persisted organization MFA content boundary', () => {
           ).rejects.toThrow('MFA');
         }
       );
+      expect(parentReads.mock.calls).toContainEqual([
+        { $or: [{ _id: project._id }] },
+        expect.objectContaining({ limit: 2, batchSize: 1 }),
+      ]);
+      parentReads.mockRestore();
     },
     MONGO_TEST_TIMEOUT_MS
   );
