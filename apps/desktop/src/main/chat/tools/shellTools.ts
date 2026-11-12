@@ -616,7 +616,15 @@ export async function shellApproval(
       namespace: tool,
       commands: scan.commands.map(({ text, always, coverable, words, opaque, expanded }, index) => {
         const ask = byPart ? parts[index] : undefined;
-        return { text, pattern: always, coverable, words, ...(expanded ? { expanded } : {}), ...(opaque ? { opaque } : {}), ...(ask ? { ask } : {}) };
+        return {
+          text,
+          pattern: always,
+          coverable,
+          words,
+          ...(expanded ? { expanded } : {}),
+          ...(opaque ? { opaque } : {}),
+          ...(ask ? { ask } : {}),
+        };
       }),
       directories: [...new Set([...directories, ...outside])],
       paths: scan.paths ?? [],

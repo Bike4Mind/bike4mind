@@ -1082,7 +1082,6 @@ describe('shell approval in a project with a large node_modules', () => {
     "env --split-string='GIT_EDITOR=./x.sh git' commit --allow-empty",
     'EDITOR=./x.sh git commit --allow-empty',
     'export VISUAL=./x.sh; git commit --allow-empty',
-    'PAGER=./x.sh git log',
     'GIT_EDITOR[0]=./x.sh git commit --allow-empty',
     "export 'GIT_EDITOR'=./x.sh; git commit --allow-empty",
     'export "GIT_EDITOR"=./x.sh; git commit --allow-empty',
@@ -1137,6 +1136,7 @@ describe('shell approval in a project with a large node_modules', () => {
   it.each([
     'GIT_PAGER=cat git log -1',
     'PAGER=cat git log -1',
+    'PAGER=./x.sh git log',
     'GIT_PAGER= git log -1',
     'export GIT_PAGER=cat; git diff',
     'GIT_EDITOR=true git commit --amend',

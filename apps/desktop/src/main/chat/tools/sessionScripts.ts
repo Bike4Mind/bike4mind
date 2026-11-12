@@ -12,6 +12,7 @@ import {
   pastWrapper,
   programName,
   scriptVariables,
+  packageCommand,
   shellHome,
   splitString,
   unquote,
@@ -223,11 +224,6 @@ export function expectShellRun(key: string, sessionId: string, hooks: [string, n
 
 /** Leading words that start another program: `npx tsx x.ts` runs `tsx x.ts`. */
 const LAUNCHERS: readonly (readonly string[])[] = [
-  ['npx'],
-  ['bunx'],
-  ['pnpm', 'exec'],
-  ['pnpm', 'dlx'],
-  ['yarn', 'dlx'],
   ['uv', 'run'],
   ['poetry', 'run'],
 ];
@@ -307,6 +303,8 @@ function pathsIn(word: string): string[] {
 }
 
 function launcherLength(tokens: readonly string[], start: number): number {
+  const launch = packageCommand(tokens.slice(start));
+  if (launch && !launch.unread) return launch.at;
   const match = LAUNCHERS.find(words =>
     words.every((word, index) =>
       index === 0 ? programName(unquote(tokens[start] ?? '')) === word : tokens[start + index] === word

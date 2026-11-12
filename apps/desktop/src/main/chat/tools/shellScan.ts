@@ -932,6 +932,8 @@ export interface VariableSet {
   value: string | null | undefined;
   /** Declared a nameref, so assigning it sets whichever variable it is bound to. */
   nameref: boolean;
+  startIndex: number;
+  uncertainOrder: boolean;
 }
 
 /**
@@ -946,8 +948,10 @@ export interface ScriptVariables {
 export function scriptVariables(root: Node): ScriptVariables {
   const set: VariableSet[] = [];
   let splits = false;
+  let startIndex = 0;
+  let uncertainOrder = false;
   const add = (name: string, value: string | null | undefined, nameref = false): void => {
-    set.push({ name: name.trim(), value, nameref });
+    set.push({ name: name.trim(), value, nameref, startIndex, uncertainOrder });
   };
   const named = (word: string, value: null | undefined, nameref = false): void => {
     const equals = word.indexOf('=');
@@ -958,6 +962,11 @@ export function scriptVariables(root: Node): ScriptVariables {
   const types = ['variable_assignment', 'expansion', 'for_statement', 'declaration_command', 'command'];
   for (const node of root.descendantsOfType(types)) {
     if (node === null) continue;
+    startIndex = node.startIndex;
+    uncertainOrder = false;
+    for (let parent = node.parent; parent !== null; parent = parent.parent) {
+      if (BRANCHES.has(parent.type) || REPEATS.has(parent.type)) uncertainOrder = true;
+    }
     if (node.type === 'variable_assignment') {
       const name = node.childForFieldName('name');
       const base = name?.type === 'subscript' ? name.childForFieldName('name') : name;
@@ -1056,6 +1065,54 @@ function setsGitVariable(set: readonly VariableSet[]): boolean {
     const writes = value === null || (value !== undefined && TRACE_TARGET.test(value));
     return writes && variableNames(/^GIT_TRACE\w*$/).test(base);
   });
+}
+
+const GIT_FALLBACK_READS = new Set([
+  'status',
+  'log',
+  'show',
+  'diff',
+  'blame',
+  'rev-parse',
+  'rev-list',
+  'ls-files',
+  'ls-tree',
+  'ls-remote',
+  'show-ref',
+  'describe',
+  'name-rev',
+  'cat-file',
+  'for-each-ref',
+  'diff-files',
+  'diff-index',
+  'diff-tree',
+]);
+
+/** Unknown commands stay conservative; ordinary piped output does not start Git's terminal pager. */
+function usesGitFallback(name: string, tokens: readonly string[], cwd: string): boolean {
+  const raw = withoutWrappers(tokens).slice(1).map(wordValue);
+  const git = gitSubcommand(raw, cwd);
+  if (git === null) return false;
+  if (git.unread || git.rest.some(isDynamic)) return true;
+  if (GIT_FALLBACK_READS.has(git.sub)) return false;
+  if (name === 'PAGER') {
+    if (git.sub === 'grep') return gitRunsGivenCommand(raw);
+    return !['commit', 'tag', 'branch', 'config', 'add', 'merge', 'rebase', 'revert', 'cherry-pick', 'notes'].includes(
+      git.sub
+    );
+  }
+  const args = git.rest;
+  const edits = args.some(arg => arg === '-e' || arg.startsWith('--edit'));
+  if (git.sub === 'commit' || git.sub === 'tag') {
+    if (edits) return true;
+    if (args.includes('--no-edit') || args.some(arg => /^(-[mF]|--message(?:=|$)|--file(?:=|$))/.test(arg)))
+      return false;
+    if (git.sub === 'tag') return args.some(arg => /^(-[asu]|--annotate|--sign|--local-user)/.test(arg));
+    return true;
+  }
+  if (['branch', 'config', 'add'].includes(git.sub)) return edits || (git.sub === 'config' && args[0] === 'edit');
+  if (git.sub === 'grep') return false;
+  return true;
 }
 
 function loginName(): string {
@@ -2734,20 +2791,11 @@ function launchedGitCommands(tokens: readonly string[]): { runs: string[][]; unr
     );
     return { runs: found.flatMap(each => each.runs), unread: found.some(each => each.unread) };
   }
-  const launcher = TOOL_LAUNCHERS.get(name);
-  if (launcher === undefined) return none;
-  const { at: operand, unread } = launcherOperand(name, rest);
-  // An option the scan does not know hides the subcommand; a git word after it may be what the launcher runs.
-  if (unread) return { runs: [], unread: rest.some(word => programName(unquote(word)) === 'git') };
-  const first = unquote(rest[operand] ?? '');
-  const builtins = BUILTIN_COMMANDS.get(name);
-  const bare = builtins !== undefined && first !== '' && !first.startsWith('-') && !builtins.has(first);
-  if (!(launcher.length === 0 || launcher.includes(first) || bare)) return none;
-  const from = operand + (launcher.length === 0 || (bare && !launcher.includes(first)) ? 0 : 1);
-  for (let at = from; at < rest.length; at++) {
-    if (runsGit(rest.slice(at))) return { runs: [rest.slice(at)], unread: false };
-  }
-  return none;
+  const launch = packageCommand(withoutWrappers(tokens));
+  if (launch === null) return none;
+  if (launch.unread) return { runs: [], unread: rest.some(word => programName(unquote(word)) === 'git') };
+  const command = withoutWrappers(tokens).slice(launch.at);
+  return runsGit(command) ? { runs: [command], unread: false } : launchedGitCommands(command);
 }
 
 /**
@@ -5401,6 +5449,54 @@ function launcherOperand(name: string, args: readonly string[]): { at: number; u
   return { at, unread: false };
 }
 
+/** The executable a package launcher names; unknown options never become an arbitrary later operand. */
+export function packageCommand(tokens: readonly string[]): { at: number; unread: boolean } | null {
+  const name = programName(unquote(tokens[0] ?? '')).replace(/[\d.]+$/, '');
+  const launcher = TOOL_LAUNCHERS.get(name);
+  if (launcher === undefined) return null;
+  const args = tokens.slice(1);
+  const leading = launcherOperand(name, args);
+  if (leading.unread) return { at: leading.at + 1, unread: true };
+  let at = leading.at;
+  if (launcher.length > 0) {
+    const first = unquote(args[at] ?? '');
+    if (launcher.includes(first)) at++;
+    else if (!(BUILTIN_COMMANDS.get(name)?.has(first) === false && first !== '' && !first.startsWith('-'))) return null;
+  }
+  const valued = new Set([...PACKAGE_VALUE_OPTIONS, '--package', '-p', '--workspace', '--cwd', '--reporter']);
+  const flags = new Set([
+    '-w',
+    '-r',
+    '-g',
+    '-y',
+    '-q',
+    '--yes',
+    '--no',
+    '--quiet',
+    '--silent',
+    '--offline',
+    '--prefer-offline',
+    '--prefer-online',
+    '--no-install',
+    '--ignore-existing',
+    '--ignore-scripts',
+  ]);
+  while (at < args.length) {
+    const word = unquote(args[at] as string);
+    if (word === '--') {
+      at++;
+      break;
+    }
+    if (!word.startsWith('-') || word === '-') break;
+    const [option = ''] = word.split('=');
+    if (valued.has(option)) at += word.includes('=') ? 1 : 2;
+    else if (flags.has(option)) at++;
+    else if (/^-[pFC].+/.test(word)) at++;
+    else return { at: at + 1, unread: true };
+  }
+  return { at: at + 1, unread: at >= args.length || isDynamic(args[at] ?? '') };
+}
+
 /** `git clone`, `init` and `worktree add` options that take no value, and those that take one (as the next word or after `=`). */
 const FRESH_FLAGS = new Map<string, { flags: ReadonlySet<string>; valued: ReadonlySet<string> }>([
   [
@@ -5522,21 +5618,12 @@ const BUILTIN_COMMANDS = new Map<string, ReadonlySet<string>>([
  */
 function runsInlineCode(program: string, args: readonly string[], node: Node): boolean {
   const name = program.replace(/[\d.]+$/, '');
-  const launcher = TOOL_LAUNCHERS.get(name);
-  const { at: operand, unread } = launcherOperand(name, args);
-  const first = args[operand] ?? '';
-  const builtins = BUILTIN_COMMANDS.get(name);
-  if (launcher !== undefined && unread && args.some(arg => isInlineProgram(programName(arg).replace(/[\d.]+$/, '')))) {
-    return true;
-  }
-  // `pnpm tsx -e` and `yarn node -e` run the tool named, unless the word is one of the manager's own commands.
-  const bare = builtins !== undefined && first !== '' && !first.startsWith('-') && !builtins.has(first);
-  if (launcher !== undefined && (launcher.length === 0 || launcher.includes(first) || bare)) {
-    const from = operand + (launcher.length === 0 || (bare && !launcher.includes(first)) ? 0 : 1);
-    const at = args.findIndex(
-      (arg, index) => index >= from && isInlineProgram(programName(arg).replace(/[\d.]+$/, ''))
-    );
-    return at !== -1 && runsInlineCode(programName(args[at] as string), args.slice(at + 1), node);
+  const first = args[0] ?? '';
+  const launch = packageCommand([program, ...args]);
+  if (launch?.unread) return true;
+  if (launch !== null) {
+    const tokens = [program, ...args];
+    return runsInlineCode(programName(tokens[launch.at] ?? ''), tokens.slice(launch.at + 1), node);
   }
   if (name === 'deno' && first === 'run') {
     const operand = args.slice(1).find(arg => arg === '-' || !arg.startsWith('-'));
@@ -5554,8 +5641,6 @@ function runsInlineCode(program: string, args: readonly string[], node: Node): b
   const { operands } = interpreterOptions(name, args);
   return (operands.length === 0 || operands[0] === '-') && readsStdin(node);
 }
-
-const isInlineProgram = (name: string): boolean => INLINE_CODE_OPTIONS.has(name) || STDIN_SHELLS.has(name);
 
 /** How many aliases in a row the scan follows; git stops at a loop. */
 const GIT_ALIAS_DEPTH = 8;
@@ -6144,9 +6229,15 @@ export async function scanShell(
       anyName ||
       variableNames(/GIT_/).test(gateText) ||
       ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(name => process.env[name] !== undefined);
-    // A script that sets a variable git reads a program from (its exec path, config passed by environment, an editor,
-    // pager or ssh command) runs that program in any git call after it.
-    const programEnvironment = setsGitVariable(variables.set);
+    const programEnvironment = (node: Node, tokens: readonly string[], runsString = false): boolean =>
+      setsGitVariable(
+        variables.set.filter(setting => {
+          const name = setting.name.replace(/\[[^]*$/, '');
+          if (!/^(EDITOR|VISUAL|PAGER)$/.test(name)) return true;
+          if (branching === 0 && !setting.uncertainOrder && setting.startIndex > node.endIndex) return false;
+          return runsString || usesGitFallback(name, tokens, state.cwd);
+        })
+      );
     // Pathspec settings the scan's own git never reads: icase and glob widen what a pathspec matches, literal reads
     // magic as a name, and noglob only narrows.
     const widenedPathspecs =
@@ -7242,15 +7333,25 @@ export async function scanShell(
       effects: WrapperEffects,
       unreadBefore: number
     ): Promise<ShellCommand | null> => {
-      const expanded = await gitAliasExpansion(node, written);
+      let expanded = await gitAliasExpansion(node, written);
       if (expanded === null) unreadOperands++;
       const launches = launchedGitCommands(written);
       if (launches.unread) unreadOperands++;
       for (const launched of launches.runs) {
-        const words = withoutWrappers(launched).slice(1);
-        if ((await gitAliasExpansion(node, launched)) === null || untrackableCommand(launched)) unreadOperands++;
-        const git = gitSubcommand(words.map(unquote), state.cwd);
+        const launchedExpansion = await gitAliasExpansion(node, launched);
+        const checked = launchedExpansion ?? launched;
+        if (launchedExpansion === null || untrackableCommand(checked) || programEnvironment(node, checked))
+          unreadOperands++;
+        const git = gitSubcommand(withoutWrappers(checked).slice(1).map(unquote), state.cwd);
         if (git !== null && !git.unread) await checkGitPrograms(node, git);
+        if (expanded !== null && launchedExpansion !== null && launchedExpansion.join(' ') !== launched.join(' ')) {
+          const enclosing = expanded;
+          const at = enclosing.findIndex((_, index) =>
+            launched.every((word, offset) => enclosing[index + offset] === word)
+          );
+          if (at === -1) unreadOperands++;
+          else expanded = [...enclosing.slice(0, at), ...launchedExpansion, ...enclosing.slice(at + launched.length)];
+        }
       }
       const tokens = expanded ?? written;
       const [program, ...rest] = tokens;
@@ -7267,7 +7368,7 @@ export async function scanShell(
         effects.unread ||
         untrackableCommand(tokens) ||
         RESERVED_WORDS.has(wrapped ?? '') ||
-        (programEnvironment && (inner === 'git' || runsString))
+        ((inner === 'git' || runsString) && programEnvironment(node, tokens, runsString))
       ) {
         unreadOperands++;
       }
