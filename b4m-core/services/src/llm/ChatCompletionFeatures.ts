@@ -93,6 +93,7 @@ import {
   ModelBackend,
   type WorkspaceDeniedToolsTable,
   type WorkspaceSessionSettingsTable,
+  type CoreTutorialTurnHook,
   type SupportedEmbeddingModel,
   PersistedSessionSummaryTrigger,
   SessionSummaryTrigger,
@@ -446,6 +447,11 @@ export interface IChatCompletionServiceOptions {
    * the same reason as `workspaceDeniedTools`; the open-core value is the generated empty table.
    */
   workspaceSessionSettings: WorkspaceSessionSettingsTable;
+  /**
+   * Answers a turn on a session carrying a core tutorial marker, and only then. Optional: a host without
+   * core tutorials leaves it out and every marked session falls through to the model.
+   */
+  coreTutorialTurns?: CoreTutorialTurnHook;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
   invokeCreateMemento: (
     questId: string,

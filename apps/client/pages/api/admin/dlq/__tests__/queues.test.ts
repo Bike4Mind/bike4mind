@@ -177,6 +177,7 @@ describe('GET /api/admin/dlq/queues', () => {
         replay: entry.replay,
         replayNote: entry.replayNote,
         owner: entry.owner,
+        hasReplayDestination: entry.sourceQueue !== null,
       });
       for (const key of ['description', 'replayNote', 'owner'] as const) {
         expect(String(queue?.[key]).trim(), `${entry.label}.${key}`).not.toBe('');
@@ -198,7 +199,11 @@ describe('GET /api/admin/dlq/queues', () => {
     const { queues } = await callRoute();
 
     const contributed = queues.find(q => q.label === 'contributed-dlq');
-    expect(contributed).toMatchObject({ displayName: 'Contributed', approximateMessageCount: 3 });
+    expect(contributed).toMatchObject({
+      displayName: 'Contributed',
+      approximateMessageCount: 3,
+      hasReplayDestination: true,
+    });
     expect(contributed).not.toHaveProperty('description');
     expect(contributed).not.toHaveProperty('replay');
   });
@@ -233,5 +238,30 @@ describe('GET /api/admin/dlq/queues', () => {
       expect(broken?.approximateMessageCount).toBe(-1);
       expect(broken?.messageRetentionSeconds).toBeUndefined();
     });
+  });
+
+  it.each([false, true])('lists unsafe queues and their safety even when attributes fail: %s', async fail => {
+    h.registry = [
+      { label: 'events', displayName: 'Events', application: 'Example', sourceQueue: null, replay: 'unsafe' },
+    ];
+    h.getQueueAttributes.mockReset().mockResolvedValue({
+      approximateMessageCount: 2,
+      approximateNotVisibleCount: 0,
+      messageRetentionSeconds: 1209600,
+    });
+    if (fail) h.getQueueAttributes.mockRejectedValue(new Error('Unavailable'));
+    const events = (await callRoute()).queues.find(q => q.label === 'events');
+
+    expect(events).toMatchObject({
+      label: 'events',
+      displayName: 'Events',
+      application: 'Example',
+      replay: 'unsafe',
+      hasReplayDestination: false,
+      approximateMessageCount: fail ? -1 : 2,
+      approximateNotVisibleCount: fail ? -1 : 0,
+    });
+    expect(events?.messageRetentionSeconds).toBe(fail ? undefined : 1209600);
+    expect(h.getQueueAttributes).toHaveBeenCalledWith('https://sqs.example.com/events');
   });
 });

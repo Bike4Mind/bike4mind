@@ -8,6 +8,8 @@ export interface DlqQueueInfo {
   label: string;
   displayName: string;
   application: string;
+  /** Absent on older servers, whose registered queues all have replay destinations. */
+  hasReplayDestination?: boolean;
   // Help fields are absent for overlay-contributed queues.
   description?: string;
   replay?: DlqReplaySafety;

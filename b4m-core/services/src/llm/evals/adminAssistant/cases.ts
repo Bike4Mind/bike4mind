@@ -82,6 +82,13 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     question: 'Where are the subscription plans managed?',
     expectViewIds: ['admin.subscriptions'],
   },
+  {
+    // The Billing tab on a user profile: payments, subscription standing and credit funding in one place.
+    id: 'where-user-billing',
+    category: 'where-is',
+    question: "Where do I see one customer's payments, subscription and credit balance together?",
+    expectViewIds: ['admin.users'],
+  },
 
   // how-to: the assistant is read-only, so it points at the tab rather than acting.
   {

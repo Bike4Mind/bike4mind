@@ -184,6 +184,13 @@ describe('resolveConsumerLogs', () => {
     expect(await resolveConsumerLogsForSourceQueue('webhookDeliveryQueue')).toBeNull();
   });
 
+  it('resolves null without an AWS lookup for a dead-letter queue with no source queue', async () => {
+    registry.getSourceQueueUrl.mockClear();
+    expect(await resolveConsumerLogsForSourceQueue(null)).toBeNull();
+    expect(registry.getSourceQueueUrl).not.toHaveBeenCalled();
+    expect(lambdaMock.calls()).toHaveLength(0);
+  });
+
   it('returns null for a non-aws partition', async () => {
     queueAttrs({ QueueArn: arn('aws-cn', 'sqs', 'cn-north-1', ACCOUNT, 'q') });
     expect(await resolveConsumerLogs(QUEUE_URL)).toBeNull();

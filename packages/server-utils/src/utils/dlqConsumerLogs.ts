@@ -83,7 +83,8 @@ async function withLookupSlot<T>(run: () => Promise<T>): Promise<T> {
 }
 
 /** resolveConsumerLogs for a registry source queue; a queue this stage does not link resolves to null. */
-export function resolveConsumerLogsForSourceQueue(sourceQueue: SourceQueueName): Promise<ConsumerLogs | null> {
+export function resolveConsumerLogsForSourceQueue(sourceQueue: SourceQueueName | null): Promise<ConsumerLogs | null> {
+  if (sourceQueue === null) return Promise.resolve(null);
   let url: string;
   try {
     url = getSourceQueueUrl(sourceQueue);
