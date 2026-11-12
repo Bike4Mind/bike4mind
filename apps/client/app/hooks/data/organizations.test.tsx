@@ -5,7 +5,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import {
+  useDeleteOrganization,
   useGetUserOrganizations,
+  useOrganizationInvites,
   useSearchOrganizations,
   useSearchUserOrganizations,
   useSetMemberCreditDefault,
@@ -201,5 +203,53 @@ describe('manager and ownership mutations', () => {
     expect(post).toHaveBeenCalledWith('/api/organizations/org1/transfer-ownership', { newOwnerId: 'u1' });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['organizations'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['users', 'organization'] });
+  });
+});
+
+describe('useDeleteOrganization', () => {
+  const get = api.get as unknown as Mock;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    del.mockResolvedValue({ data: {} });
+    get.mockResolvedValue({ data: [] });
+  });
+
+  it('does not refetch org-scoped queries of the deleted org while its page is still mounted', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const view = renderHook(() => ({ invites: useOrganizationInvites('org1'), remove: useDeleteOrganization() }), {
+      wrapper,
+    });
+    await waitFor(() => expect(view.result.current.invites.isSuccess).toBe(true));
+    expect(get).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await view.result.current.remove.mutateAsync('org1');
+    });
+
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryData(['organizations', 'org1', 'invites'])).toBeUndefined();
+    expect(toast.success).toHaveBeenCalledWith('Organization deleted successfully');
+  });
+
+  it('still refetches other organization queries', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(useDeleteOrganization, { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync('org1');
+    });
+
+    const { predicate } = invalidateSpy.mock.calls[0][0] as { predicate: (q: { queryKey: unknown[] }) => boolean };
+    expect(predicate({ queryKey: ['organizations'] })).toBe(true);
+    expect(predicate({ queryKey: ['organizations', 'org2', 'invites'] })).toBe(true);
+    expect(predicate({ queryKey: ['organizations', 'org1', 'invites'] })).toBe(false);
   });
 });
