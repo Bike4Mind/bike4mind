@@ -25,6 +25,19 @@ const QaFiltersQuerySchema = z.object({
   range: z.enum(['7d', '30d']).default('7d'),
 });
 
+/** The summary spans every product, so it takes no product or tenant. */
+export type QaSummaryFilters = Omit<QaFilters, 'product' | 'tenant'>;
+
+const QaSummaryQuerySchema = QaFiltersQuerySchema.omit({ product: true, tenant: true });
+
+/** Admin query string to summary filters. Ignores product/tenant; throws ZodError (422) on bad input. */
+export function parseQaSummaryFilters(query: Record<string, unknown>): QaSummaryFilters {
+  const q = QaSummaryQuerySchema.parse(query);
+  const filters: QaSummaryFilters = { branch: q.branch, rangeDays: q.range === '30d' ? 30 : 7 };
+  if (q.env) filters.env = q.env;
+  return filters;
+}
+
 /** Admin query string to filters. Throws ZodError (422) on bad input. */
 export function parseQaFilters(query: Record<string, unknown>): QaFilters {
   const q = QaFiltersQuerySchema.parse(query);

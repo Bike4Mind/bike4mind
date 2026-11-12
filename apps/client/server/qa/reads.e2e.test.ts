@@ -10,6 +10,7 @@ import {
   getQaFacets,
   getQaOverview,
   getQaRunDetail,
+  getQaSummary,
   getQaTestHistory,
   listQaRuns,
   QA_SERIES_MAX_RUNS,
@@ -146,6 +147,34 @@ describe('getQaOverview', () => {
     // Oldest first, and the one dropped is the oldest run.
     expect(series[series.length - 1].startedAt).toBe(new Date(newest).toISOString());
     expect(series[0].startedAt).toBe(new Date(newest - (QA_SERIES_MAX_RUNS - 1) * 60_000).toISOString());
+  });
+});
+
+describe('getQaSummary', () => {
+  const SUMMARY_FILTERS = { branch: 'main', rangeDays: 7 as const };
+
+  it('covers every product, suite and trigger in range, on the branch and env', async () => {
+    await seed({ hours: 2, suite: 'Full', trigger: 'Run via Schedule', failing: [TEST_B] });
+    await seed({ hours: 3, suite: 'Full', trigger: 'Run via Dispatch' });
+    await seed({ hours: 4 });
+    await seed({ hours: 5, product: 'product-b' });
+    await seed({ hours: 6, branch: 'pr-1' });
+    await seed({ hours: 7, env: 'production' });
+    await seed({ hours: 24 * 8 });
+    const summary = await getQaSummary(SUMMARY_FILTERS, NOW);
+    expect(summary.truncated).toBe(false);
+    expect(summary.from).toBe(hoursAgo(24 * 7));
+    expect(summary.products.map(p => [p.product, p.e2e?.runs, p.e2e?.cleanRuns])).toEqual([
+      ['product-a', 4, 3],
+      ['product-b', 1, 1],
+    ]);
+    expect(summary.products[0].rows.map(r => [r.suite, r.triggerLabel, r.stats.runs])).toEqual([
+      ['Core', 'After deploy', 2],
+      ['Full', 'Scheduled', 1],
+      ['Full', 'Manual dispatch', 1],
+    ]);
+    const staging = await getQaSummary({ ...SUMMARY_FILTERS, env: 'staging' }, NOW);
+    expect(staging.products[0].e2e?.runs).toBe(3);
   });
 });
 

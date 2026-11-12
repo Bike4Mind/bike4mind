@@ -1,11 +1,18 @@
-/** Admin QA status (`/status`): tiles, trend charts, flaky tests and run history. Reads: pages/api/admin/qa. */
+/** Admin QA status (`/status`): ops summary, tiles, trend charts, flaky tests and run history. Reads: pages/api/admin/qa. */
 import { FC } from 'react';
 import { Alert, Box, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { qaStatusRoute } from '@client/app/router';
-import { useQaFacets, useQaOverview, useQaRuns, type QaStatusSearch } from '@client/app/hooks/data/qaStatus';
+import {
+  useQaFacets,
+  useQaOverview,
+  useQaRuns,
+  useQaSummary,
+  type QaStatusSearch,
+} from '@client/app/hooks/data/qaStatus';
 import StatusFilters from '@client/app/components/QaStatus/StatusFilters';
+import StatusSummary from '@client/app/components/QaStatus/StatusSummary';
 import StatusTiles from '@client/app/components/QaStatus/StatusTiles';
 import StatusCharts from '@client/app/components/QaStatus/StatusCharts';
 import FlakyTable from '@client/app/components/QaStatus/FlakyTable';
@@ -24,6 +31,7 @@ const QaStatusPage: FC = () => {
   const effective: QaStatusSearch = { ...search, product };
   const overview = useQaOverview(effective);
   const runs = useQaRuns(effective);
+  const summary = useQaSummary(effective);
 
   const onChange = (patch: Partial<QaStatusSearch>) =>
     navigate({ from: '/status', to: '/status', search: prev => ({ ...prev, ...patch }) });
@@ -38,7 +46,17 @@ const QaStatusPage: FC = () => {
         </StatusHeader>
         <StatusFilters search={effective} facets={facets.data} onChange={onChange} />
         {allFacets.data && allFacets.data.products.length === 0 && <Alert>No QA runs ingested yet.</Alert>}
-        {(overview.isError || runs.isError) && <Alert color="danger">Could not load QA status.</Alert>}
+        {(overview.isError || runs.isError || summary.isError) && (
+          <Alert color="danger">Could not load QA status.</Alert>
+        )}
+        {summary.data && (
+          <StatusSummary
+            summary={summary.data}
+            rangeDays={effective.range === '30d' ? 30 : 7}
+            branch={effective.branch || 'main'}
+            env={effective.env}
+          />
+        )}
         {overview.data && (
           <>
             <StatusTiles tiles={overview.data.tiles} onOpenRun={openRun} />

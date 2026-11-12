@@ -5,15 +5,20 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import type {
   QaDiffTest,
+  QaE2eStats,
   QaFacets,
   QaFlakyRow,
+  QaLatencyStats,
   QaMediaView,
   QaOverview,
+  QaProductSummary,
   QaRunDetail,
   QaRunDiff,
   QaRunPage,
   QaRunSummary,
   QaSeriesPoint,
+  QaSummary,
+  QaSummaryRow,
   QaTestHistory,
   QaTestView,
   QaTile,
@@ -22,15 +27,20 @@ import { api } from '@client/app/contexts/ApiContext';
 
 export type {
   QaDiffTest,
+  QaE2eStats,
   QaFacets,
   QaFlakyRow,
+  QaLatencyStats,
   QaMediaView,
   QaOverview,
+  QaProductSummary,
   QaRunDetail,
   QaRunDiff,
   QaRunPage,
   QaRunSummary,
   QaSeriesPoint,
+  QaSummary,
+  QaSummaryRow,
   QaTestHistory,
   QaTestView,
   QaTile,
@@ -80,6 +90,17 @@ export function useQaOverview(search: QaStatusSearch) {
     enabled: Boolean(search.product),
     refetchInterval: 60_000,
     queryFn: async () => (await api.get<QaOverview>('/api/admin/qa/overview', { params })).data,
+  });
+}
+
+/** Every product, so product and tenant are left out of the key and the request. */
+export function useQaSummary(search: QaStatusSearch) {
+  const { branch, range, env } = filterParams(search);
+  const params = { branch, range, ...(env ? { env } : {}) };
+  return useQuery({
+    queryKey: ['qa-summary', params],
+    refetchInterval: 60_000,
+    queryFn: async () => (await api.get<QaSummary>('/api/admin/qa/summary', { params })).data,
   });
 }
 

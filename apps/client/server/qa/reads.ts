@@ -14,13 +14,34 @@ import {
   type QaSuiteSummary,
   type QaTestStatus,
 } from '@bike4mind/common';
-import type { QaFilters } from './filters';
+import type { QaFilters, QaSummaryFilters } from './filters';
 import { diffTests, median, type QaDiffTest, type QaRunDiff } from './runInsights';
 import type { QaMediaStorage } from './storage';
 import { leadingNonPassing, stateKeyFilter } from './streak';
+import {
+  summarizeQaRuns,
+  type QaE2eStats,
+  type QaLatencyStats,
+  type QaProductSummary,
+  type QaSummary,
+  type QaSummaryRow,
+  type QaSummaryRunInput,
+  type QaTriggerKind,
+} from './summary';
 
 /** Read models for the admin /status page (app/hooks/data/qaStatus.ts imports these types). */
-export type { QaFilters, QaDiffTest, QaRunDiff };
+export type {
+  QaFilters,
+  QaSummaryFilters,
+  QaDiffTest,
+  QaRunDiff,
+  QaE2eStats,
+  QaLatencyStats,
+  QaProductSummary,
+  QaSummary,
+  QaSummaryRow,
+  QaTriggerKind,
+};
 
 const DAY_MS = 86_400_000;
 const STREAK_LOOKBACK = 50;
@@ -28,6 +49,8 @@ export const QA_SERIES_MAX_RUNS = 2000;
 const FLAKY_ROWS = 10;
 const HISTORY_LIMIT = 50;
 export const QA_RUNS_PAGE_SIZE = 50;
+/** Per product; a 30-day range holds well under this today. */
+export const QA_SUMMARY_MAX_RUNS = 5000;
 const BASELINE_DAYS = 7;
 const BASELINE_MAX_RUNS = 200;
 /** Earlier runs findPreviousRun inspects for test rows before giving up. */
@@ -295,6 +318,38 @@ export async function getQaOverview(f: QaFilters, now: Date = new Date()): Promi
     .slice(0, FLAKY_ROWS);
 
   return { tiles, series, flaky };
+}
+
+/**
+ * Every product's runs in the range, whatever their suite or trigger, for the weekly ops summary.
+ * One query per product so each uses the { product, startedAt } index.
+ */
+export async function getQaSummary(f: QaSummaryFilters, now: Date = new Date()): Promise<QaSummary> {
+  const since = new Date(now.getTime() - f.rangeDays * DAY_MS);
+  const products = strings(await QaRun.distinct('product'));
+  let truncated = false;
+  const perProduct = await Promise.all(
+    products.map(async product => {
+      const runs = await QaRun.find({
+        product,
+        branch: f.branch,
+        ...(f.env ? { env: f.env } : {}),
+        startedAt: { $gte: since, $lte: now },
+      })
+        .sort({ startedAt: -1 })
+        .limit(QA_SUMMARY_MAX_RUNS)
+        .select('product suite trigger status counts metrics')
+        .lean<QaSummaryRunInput[]>();
+      if (runs.length === QA_SUMMARY_MAX_RUNS) truncated = true;
+      return runs;
+    })
+  );
+  return {
+    from: since.toISOString(),
+    to: now.toISOString(),
+    products: summarizeQaRuns(perProduct.flat()),
+    truncated,
+  };
 }
 
 /** Cursor is `startedAt`; runs sharing the boundary timestamp can be skipped, which is acceptable here. */
