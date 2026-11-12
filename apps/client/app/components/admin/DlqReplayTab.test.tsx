@@ -4,6 +4,8 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DlqReplayTab from './DlqReplayTab';
+vi.mock('@tanstack/react-router', () => ({ useSearch: () => ({}) }));
+vi.mock('./DlqTriageRecommendation', () => ({ DlqTriageRecommendation: () => null }));
 
 const state = vi.hoisted(() => ({
   retentionSeconds: undefined as number | undefined,

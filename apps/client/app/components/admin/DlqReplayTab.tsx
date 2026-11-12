@@ -50,6 +50,8 @@ import { ADMIN_REGION_GAP, adminSurface } from '@client/app/components/admin/sha
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { AdminPermissionAction } from './shared/MissingPermission';
 import { formatDuration, formatExpiresIn, getDlqExpiry } from './dlqExpiry';
+import { DlqTriageRecommendation } from './DlqTriageRecommendation';
+import { useSearch } from '@tanstack/react-router';
 
 const REPLAY_CHIP: Record<DlqReplaySafety, { tone: AdminStatusTone; label: string }> = {
   safe: { tone: 'good', label: 'Safe to replay' },
@@ -261,6 +263,16 @@ const DlqReplayTab: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [singleReplayConfirm, setSingleReplayConfirm] = useState<DlqMessage | null>(null);
+  const [triageApproval, setTriageApproval] = useState<{
+    queueLabel: string;
+    messageId: string;
+    suggestionId: string;
+  } | null>(null);
+  const search = useSearch({ strict: false }) as Record<string, unknown>;
+  const linkedMessageOpened = useRef(false);
+  useEffect(() => {
+    if (typeof search.dlqQueue === 'string') setSelectedQueue(search.dlqQueue);
+  }, [search.dlqQueue]);
   const [showHistory, setShowHistory] = useState(false);
   const [historyStatus, setHistoryStatus] = useState<'success' | 'failed' | 'skipped' | ''>('');
   const [historyDateRange, setHistoryDateRange] = useState<'24h' | '7d' | '30d' | 'all'>('7d');
@@ -295,6 +307,15 @@ const DlqReplayTab: React.FC = () => {
     isError: messagesError,
     refetch: refetchMessages,
   } = useDlqMessages(selectedQueue);
+  useEffect(() => {
+    if (linkedMessageOpened.current || typeof search.dlqMessage !== 'string') return;
+    const message = messages?.find(message => message.messageId === search.dlqMessage);
+    if (message) {
+      setSelectedMessage(message);
+      setDrawerOpen(true);
+      linkedMessageOpened.current = true;
+    }
+  }, [messages, search.dlqMessage]);
   const replayMutation = useDlqReplay();
   const {
     data: history,
@@ -357,11 +378,14 @@ const DlqReplayTab: React.FC = () => {
     setSingleReplayConfirm(null);
     try {
       const result = await replayMutation.mutateAsync(
-        receiptHandle
-          ? { queueLabel: selectedQueue, messages: [{ messageId, receiptHandle, body }] }
-          : { queueLabel: selectedQueue, messageIds: [messageId] }
+        triageApproval?.queueLabel === selectedQueue && triageApproval.messageId === messageId
+          ? { queueLabel: selectedQueue, messageIds: [messageId], aiSuggestionId: triageApproval.suggestionId }
+          : receiptHandle
+            ? { queueLabel: selectedQueue, messages: [{ messageId, receiptHandle, body }] }
+            : { queueLabel: selectedQueue, messageIds: [messageId] }
       );
       const messageResult = result.results?.find(r => r.messageId === messageId);
+      setTriageApproval(null);
       if (result.notFound > 0) {
         toast.warning('Message not found in DLQ. It may have been processed or is temporarily unavailable.');
       } else if (result.failed > 0) {
@@ -596,6 +620,18 @@ const DlqReplayTab: React.FC = () => {
                   </td>
                   <td data-testid={`dlq-category-${msg.messageId}`}>
                     <StatusChip tone="neutral" label={msg.failure?.category ?? 'Unknown'} />
+                    <DlqTriageRecommendation
+                      queueLabel={selectedQueue}
+                      messageId={msg.messageId}
+                      onApprove={suggestion => {
+                        setTriageApproval({
+                          queueLabel: selectedQueue,
+                          messageId: msg.messageId,
+                          suggestionId: suggestion.id,
+                        });
+                        setSingleReplayConfirm(msg);
+                      }}
+                    />
                   </td>
                   <td>
                     <Typography level="body-xs">

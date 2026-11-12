@@ -161,6 +161,12 @@ const isDuplicateKeyError = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === DUPLICATE_KEY;
 
 export class AdminAiSuggestionRepository {
+  async findById(id: string): Promise<AdminAiSuggestionItem | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const doc = await AdminAiSuggestionModel.findById(id).lean<LeanAdminAiSuggestion>();
+    return doc ? toItem(doc) : null;
+  }
+
   async findByKey(key: AdminAiSuggestionKey): Promise<AdminAiSuggestionItem | null> {
     const { feature, entityId, inputHash, policyVersion } = key;
     const doc = await AdminAiSuggestionModel.findOne({

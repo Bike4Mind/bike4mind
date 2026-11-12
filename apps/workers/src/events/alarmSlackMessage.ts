@@ -1066,16 +1066,33 @@ export function appUrlFromEnv(env: NodeJS.ProcessEnv = process.env): string | un
   return domain ? `https://app.${domain}` : undefined;
 }
 
-export async function postAlarmToSlack(webhookUrl: string, message: SlackAlarmMessage): Promise<void> {
+export function postAlarmToSlack(webhookUrl: string, message: SlackAlarmMessage): Promise<void>;
+export function postAlarmToSlack(
+  webhookUrl: string,
+  message: SlackAlarmMessage,
+  options: { atMostOnce: boolean }
+): Promise<{ state: 'delivered' | 'unconfirmed' }>;
+export async function postAlarmToSlack(
+  webhookUrl: string,
+  message: SlackAlarmMessage,
+  options?: { atMostOnce: boolean }
+): Promise<void | { state: 'delivered' | 'unconfirmed' }> {
   const body: Record<string, unknown> = { text: message.text };
   if (message.blocks.length > 0) body.blocks = message.blocks;
   if (message.attachments && message.attachments.length > 0) body.attachments = message.attachments;
-  const resp = await fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) {
-    throw new Error(`Slack webhook failed: ${resp.status} ${resp.statusText}`);
+  try {
+    const resp = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!resp.ok) {
+      throw new Error(`Slack webhook failed: ${resp.status} ${resp.statusText}`);
+    }
+    if (options) return { state: 'delivered' };
+  } catch (error) {
+    if (!options?.atMostOnce) throw error;
+    return { state: 'unconfirmed' };
   }
 }

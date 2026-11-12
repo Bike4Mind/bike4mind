@@ -14,6 +14,7 @@ const detail = vi.hoisted(() => ({
   youngAccountSpendSection: vi.fn(async () => '*Top accounts in the window*\n1. `u1` 1.52 USD in 36 calls'),
 }));
 vi.mock('./youngAccountSpendDetail', () => detail);
+vi.mock('./dlqTriage', () => ({ collectDlqTriage: vi.fn(async () => null), finishDlqTriageDelivery: vi.fn() }));
 
 import { handler } from './dlqAlarmToSlack';
 

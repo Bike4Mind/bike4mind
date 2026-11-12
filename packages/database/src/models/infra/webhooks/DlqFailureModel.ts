@@ -8,6 +8,8 @@ export interface IDlqFailure {
   errorType: string;
   errorMessage: string;
   category: DlqFailureCategory;
+  terminalRefusal?: boolean;
+  transientFailure?: boolean;
   failedAt: Date;
   consumerVersion: string;
 }
@@ -18,6 +20,8 @@ const DlqFailureSchema = new mongoose.Schema<IDlqFailure>({
   errorType: { type: String, required: true },
   errorMessage: { type: String, required: true },
   category: { type: String, enum: ['refused', 'timeout', 'invalid output', 'bug', 'unknown'], required: true },
+  terminalRefusal: { type: Boolean },
+  transientFailure: { type: Boolean },
   failedAt: { type: Date, required: true },
   consumerVersion: { type: String, required: true },
 });

@@ -30,6 +30,8 @@ import {
 import { readAlarmMention } from './alarmSlackMention';
 import { youngAccountSpendSection } from './youngAccountSpendDetail';
 import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
+import { collectDlqTriage, finishDlqTriageDelivery } from './dlqTriage';
+import { Logger } from '@bike4mind/observability';
 
 async function loadDetails(
   alarm: CloudWatchAlarmPayload,
@@ -60,9 +62,20 @@ export const handler = async (event: SNSEvent): Promise<void> => {
     const bare = formatAlarmSlackMessage(payload, stage, options);
     if (!bare) continue;
     const details = await loadDetails(payload, stage, options.appUrl);
+    const triage =
+      payload.NewStateValue === 'ALARM'
+        ? await collectDlqTriage(payload.AlarmName, options.appUrl).catch(() => {
+            Logger.warn('[DLQ Triage] Recommendation unavailable; forwarding base alarm');
+            return null;
+          })
+        : null;
+    if (triage) details.push(triage.section);
     const message =
       details.length > 0 ? (formatAlarmSlackMessage(payload, stage, { ...options, details }) ?? bare) : bare;
 
-    await postAlarmToSlack(resolveAlarmWebhookUrl(Resource, alarmCategory(payload, stage)), message);
+    const delivery = await postAlarmToSlack(resolveAlarmWebhookUrl(Resource, alarmCategory(payload, stage)), message, {
+      atMostOnce: !!triage,
+    });
+    if (triage) await finishDlqTriageDelivery(triage, delivery.state === 'delivered');
   }
 };

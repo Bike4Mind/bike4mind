@@ -1,5 +1,7 @@
 import { GetQueueAttributesCommand, SQSClient } from '@aws-sdk/client-sqs';
 import { dlqFailureRepository, type DlqFailureCategory } from '@bike4mind/database';
+import { getQuestErrorCode, isTerminalCreditRefusal } from '@bike4mind/common';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import type { SQSEvent } from 'aws-lambda';
 import { getDeliveryAttempt } from '../utils/sqsDelivery';
 import { queueUrlFromArn } from '../utils/sqsRedelivery';
@@ -60,6 +62,17 @@ export async function recordFinalDlqFailures(event: SQSEvent, error: unknown): P
         errorType,
         errorMessage,
         category: failureCategory(errorType, errorMessage),
+        terminalRefusal:
+          isAiAccessRefusal(error) ||
+          isTerminalCreditRefusal(error) ||
+          getQuestErrorCode(error) === 'spend_cap_exceeded' ||
+          (error instanceof Error &&
+            error.name === 'EmbeddingSpendDeniedError' &&
+            'retryable' in error &&
+            error.retryable === false),
+        transientFailure:
+          error instanceof Error &&
+          ['TimeoutError', 'RequestTimeout', 'ThrottlingException', 'ServiceUnavailableException'].includes(error.name),
         failedAt,
         consumerVersion,
       })

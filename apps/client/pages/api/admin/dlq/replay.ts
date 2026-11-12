@@ -5,7 +5,9 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl, getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { receiveFromQueue, sendToQueue, deleteFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import type { Message } from '@aws-sdk/client-sqs';
-import { dlqReplayLogRepository } from '@bike4mind/database';
+import { dlqReplayLogRepository, adminAiSuggestionRepository, withTransaction } from '@bike4mind/database';
+import { visibleDlqSuggestion } from '@server/admin/dlq/triage';
+import { triageActionSchema } from '@server/admin/dlq/triagePolicy';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 
@@ -21,6 +23,10 @@ const DirectMessageSchema = z.object({
 const BodySchema = z
   .object({
     queueLabel: z.string().min(1, 'queueLabel is required'),
+    aiSuggestionId: z
+      .string()
+      .regex(/^[0-9a-f]{24}$/)
+      .optional(),
     batchSize: z.number().int().min(1).max(MAX_BATCH_SIZE).optional().default(10),
     messageIds: z.array(z.string().min(1)).min(1).max(MAX_BATCH_SIZE).optional(),
     messages: z.array(DirectMessageSchema).min(1).max(MAX_BATCH_SIZE).optional(),
@@ -69,6 +75,36 @@ const handler = adminApi({
     throw new BadRequestError(`Replay is not available for DLQ: ${queueLabel}`);
   }
 
+  const aiSuggestionId = result.data.aiSuggestionId;
+  if (aiSuggestionId) {
+    if (directMessages || messageIds?.length !== 1)
+      throw new BadRequestError('Suggestion approval requires one message ID');
+    const suggestion = await visibleDlqSuggestion(queueLabel, messageIds[0]);
+    const action = triageActionSchema.safeParse(suggestion?.proposedAction);
+    if (
+      !suggestion ||
+      suggestion.id !== aiSuggestionId ||
+      !action.success ||
+      action.data.action !== 'replay' ||
+      action.data.queueLabel !== queueLabel ||
+      action.data.messageId !== messageIds[0]
+    ) {
+      throw new BadRequestError('Suggestion does not match this replay');
+    }
+    await withTransaction(async () => {
+      const decided = await adminAiSuggestionRepository.transition(aiSuggestionId, ['pending'], 'accepted', {
+        decidedBy: { userId: adminUserId, name: req.user!.name || req.user!.username },
+      });
+      if (!decided) throw new BadRequestError('Suggestion has already been decided');
+      await recordAdminActionFromRequest(req, {
+        action: 'ops.dlq.triage.accepted',
+        target: { kind: 'system', id: queueLabel, displayName: 'DLQ triage' },
+        summary: 'approved a dead-letter replay recommendation',
+        details: { aiSuggestionId, queueLabel, messageId: messageIds[0] },
+      });
+    });
+  }
+
   const dlqUrl = getDlqUrl(dlqEntry.label);
   const sourceQueueUrl = getSourceQueueUrl(dlqEntry.sourceQueue);
   const results: ReplayResult[] = [];
@@ -86,6 +122,7 @@ const handler = adminApi({
       summary: `replayed ${summary.replayed} messages from ${queueLabel}`,
       details: {
         queueLabel,
+        ...(aiSuggestionId ? { aiSuggestionId } : {}),
         messageCount: summary.replayed,
         failed: summary.failed,
         skipped: summary.skipped,
