@@ -13,8 +13,9 @@ vi.mock('@client/app/contexts/ApiContext', () => ({ api }));
 
 describe('organization service keys', () => {
   it('requires explicit grants and displays the minted secret only until dismissed', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <QueryClientProvider client={client}>
         <CssVarsProvider theme={extendTheme({ ...getThemeConfig() })}>
           <OrganizationServiceKeys organizationId="org" />
         </CssVarsProvider>
@@ -36,5 +37,13 @@ describe('organization service keys', () => {
     });
     fireEvent.click(screen.getByTestId('org-service-keys-dismiss-btn'));
     expect(screen.queryByTestId('org-service-keys-secret-alert')).not.toBeInTheDocument();
+    expect(
+      JSON.stringify(
+        client
+          .getMutationCache()
+          .getAll()
+          .map(mutation => mutation.state.data)
+      )
+    ).not.toContain('one-time-secret');
   });
 });

@@ -70,7 +70,8 @@ function generateNewApiKey(): { key: string; keyPrefix: string; keyDigest: strin
  * Rotate a key's secret, scoped by resolveOwnedApiKey (the key's minter, or an
  * admin of the org it is billed to).
  *
- * Rotation RE-OWNS the key to whoever rotated it. Previously only the secret and
+ * Personal-key rotation RE-OWNS the key to whoever rotated it. Service keys keep their principal.
+ * Previously only the secret and
  * `keyPrefix` were rewritten, never `userId` - so an org admin rotating a
  * teammate's org-billed key walked away with a plaintext credential that
  * authenticated as that teammate. Re-owning keeps the org-admin capability (the

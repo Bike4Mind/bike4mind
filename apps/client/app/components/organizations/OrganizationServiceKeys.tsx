@@ -25,7 +25,9 @@ export default function OrganizationServiceKeys({ organizationId }: { organizati
   const [secret, setSecret] = useState<string>();
   const keys = useQuery({ queryKey, queryFn: async () => (await api.get<ServiceKey[]>(endpoint)).data });
   const mutation = useMutation({
+    gcTime: 0,
     mutationFn: async ({ action, id }: { action: 'create' | 'rotate' | 'revoke'; id?: string }) => {
+      setSecret(undefined);
       if (action === 'revoke') {
         await api.delete(`${endpoint}/${id}`);
         return;
@@ -47,10 +49,9 @@ export default function OrganizationServiceKeys({ organizationId }: { organizati
                 ...projectIds.map(resourceId => ({ resourceType: 'project', resourceId, permission: 'read' })),
               ],
             });
-      return result.data.key;
+      setSecret(result.data.key);
     },
-    onSuccess: async key => {
-      setSecret(key);
+    onSuccess: async () => {
       await client.invalidateQueries({ queryKey });
     },
   });
@@ -60,8 +61,8 @@ export default function OrganizationServiceKeys({ organizationId }: { organizati
       <Typography level="body-sm">
         Non-login service accounts use no seats and keep working when their creator leaves. No human permissions are
         inherited. Compute grants allow only POST /api/lattice/chat (no server-side tool execution). Project grants read
-        only that org-bound project details, not its notebooks or files. All other endpoints are denied. Revoke and
-        recreate to change grants.
+        only explicitly granted org-bound project details, not notebooks or files. All other endpoints are denied.
+        Revoke and recreate to change grants.
       </Typography>
       <FormControl>
         <FormLabel>Name</FormLabel>
