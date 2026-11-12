@@ -11,7 +11,12 @@ import useToggle from '@client/app/hooks/useToggle';
 import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCounts';
 import { FeedbackListParams, IExtendedFeedbackDocument } from '../types';
 import { UseFeedbackOperationsReturn } from '../types';
-import { FEEDBACK_LIST_QUERY_KEY, FEEDBACK_ORGANIZATIONS_QUERY_KEY, FEEDBACK_RECORD_QUERY_KEY } from '../queryKeys';
+import {
+  FEEDBACK_LIST_QUERY_KEY,
+  FEEDBACK_ORGANIZATIONS_QUERY_KEY,
+  FEEDBACK_RECORD_QUERY_KEY,
+  FEEDBACK_TRENDS_QUERY_KEY,
+} from '../queryKeys';
 import { FEEDBACK_STATUS_LABELS, FEEDBACK_TYPE_LABELS, feedbackTypeOf } from '../constants';
 
 const formatReporter = (feedbackItem: IExtendedFeedbackDocument | undefined) => {
@@ -92,6 +97,7 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
       // The detail drawer reads its record from its own query, so a delete that refreshed only
       // the list would leave the drawer showing a report that no longer exists.
       queryClient.invalidateQueries({ queryKey: FEEDBACK_RECORD_QUERY_KEY }),
+      queryClient.invalidateQueries({ queryKey: FEEDBACK_TRENDS_QUERY_KEY }),
     ]);
   }, [queryClient]);
 
@@ -113,6 +119,7 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
           queryClient.invalidateQueries({ queryKey: FEEDBACK_LIST_QUERY_KEY }),
           queryClient.invalidateQueries({ queryKey: FEEDBACK_RECORD_QUERY_KEY }),
           queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
+          queryClient.invalidateQueries({ queryKey: FEEDBACK_TRENDS_QUERY_KEY }),
         ]);
 
         showFeedbackToast.success(

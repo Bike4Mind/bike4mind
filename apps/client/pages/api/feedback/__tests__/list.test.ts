@@ -359,6 +359,27 @@ describe('GET /api/feedback', () => {
     expect(findFilter.$and).toContainEqual({ type: { $in: ['Feedback', null] } });
   });
 
+  it('ANDs a received window in as an exclusive lower bound on createdAt', async () => {
+    vi.useFakeTimers({ now: new Date('2026-11-11T12:00:00.000Z'), toFake: ['Date'] });
+    try {
+      const { req, res } = buildRequest({ received: '7d' }, adminAbility());
+      await runHandler(req, res);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ createdAt: { $gt: new Date('2026-11-04T12:00:00.000Z') } });
+  });
+
+  it('rejects an unknown received window with a 422 before any query runs', async () => {
+    const { req, res } = buildRequest({ received: '90d' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFind).not.toHaveBeenCalled();
+  });
+
   it('rejects a type outside FeedbackType with a 422 before any query runs', async () => {
     const { req, res } = buildRequest({ type: 'Spam' }, adminAbility());
     await runHandler(req, res);

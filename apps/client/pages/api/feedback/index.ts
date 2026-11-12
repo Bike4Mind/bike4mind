@@ -31,6 +31,7 @@ import { postFeedbackToSlack } from '@bike4mind/server-utils/integrations/slack/
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { FEEDBACK_RECEIVED_WINDOWS, feedbackReceivedSince } from '@client/app/components/admin/Feedback/feedbackTrends';
 import { recordFeedbackRead } from '@server/utils/feedbackReadAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
@@ -109,6 +110,7 @@ const ListFeedbackQuerySchema = z.object({
   status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
   subject: z.enum(FEEDBACK_SUBJECTS).optional(),
   type: z.union([z.enum(FeedbackType), z.array(z.enum(FeedbackType))]).optional(),
+  received: z.enum(FEEDBACK_RECEIVED_WINDOWS).optional(),
   // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
   search: z.string().min(1).max(200).optional(),
   sort: z.enum(['asc', 'desc']).prefault('desc'),
@@ -284,6 +286,8 @@ const handler = baseApi()
     if (types.length > 0) {
       clauses.push({ type: { $in: types.includes(FeedbackType.FEEDBACK) ? [...types, null] : types } });
     }
+
+    if (query.received) clauses.push({ createdAt: { $gt: feedbackReceivedSince(query.received, new Date()) } });
 
     if (query.search) {
       const pattern = new RegExp(escapeRegex(query.search), 'i');
