@@ -1,9 +1,13 @@
 import {
+  ABUSE_ASSESSMENT_EVIDENCE_VERSION,
   ABUSE_ASSESSMENT_MAX_ACCOUNTS,
   ABUSE_ASSESSMENT_MAX_SIGNALS,
   RISK_EVIDENCE_VERSION,
   abuseAssessmentFeatureSummarySchema,
   type AccountCampaignGroup,
+  type AbuseAssessmentAccountProfile,
+  type AbuseAssessmentAccount,
+  type AbuseAssessmentFeatureSummary,
   type RiskEvidenceSummary,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
@@ -87,9 +91,31 @@ const evidence = (overrides: { logins?: number; creditsSpent?: number } = {}): R
   },
 });
 
+const profile: AbuseAssessmentAccountProfile = {
+  signupMethod: 'otc',
+  signupNetwork: { asnKnown: true, hosting: true, datacenter: false, anonymousIp: true, ja4Present: false },
+  email: { plusAddressed: true, randomLookingPlusTag: true, generatedLocalPart: false, consumerMailDomain: true },
+  minutesToTwoFactor: 4,
+  minutesToFirstSpend: 12,
+  spend: {
+    totalCredits: 1000,
+    byModel: [{ model: 'claude-opus-4-5', creditShare: 1, events: 11, creditsPerEvent: 90.9 }],
+  },
+  linkedAccounts: {
+    windowHours: 72,
+    total: 2,
+    blocked: 1,
+    sharedSignupIp: 1,
+    sharedJa4: 0,
+    sharedMailbox: 1,
+    sharedMailDomain: 0,
+    truncated: false,
+  },
+};
+
 const accounts = (summary: RiskEvidenceSummary | null = evidence()) => [
-  { id: '65f0000000000000000000a1', createdAt: new Date('2026-11-01T10:00:00Z'), summary },
-  { id: '65f0000000000000000000a2', createdAt: null, summary: null },
+  { id: '65f0000000000000000000a1', createdAt: new Date('2026-11-01T10:00:00Z'), summary, profile },
+  { id: '65f0000000000000000000a2', createdAt: null, summary: null, profile: null },
 ];
 
 const campaign = (): AccountCampaignGroup => {
@@ -130,6 +156,31 @@ const campaign = (): AccountCampaignGroup => {
     totals: { direct: 1, transitive: 1, links: 1 },
   };
 };
+
+describe('published assessment compatibility', () => {
+  it('accepts an older typed account and v1 summary without the additive profile field', () => {
+    const account: AbuseAssessmentAccount = {
+      ref: 'acct_1',
+      accountAgeHours: 1,
+      evidenceAgeHours: null,
+      evidence: null,
+    };
+    const summary: AbuseAssessmentFeatureSummary = {
+      evidenceVersion: RISK_EVIDENCE_VERSION,
+      detection: {
+        detector: 'signupNetworkBurst',
+        detectorPolicyVersion: 1,
+        windowMinutes: 60,
+        hostingNetwork: null,
+        signals: [],
+      },
+      accounts: [account],
+      accountsOmitted: 0,
+      group: null,
+    };
+    expect(abuseAssessmentFeatureSummarySchema.safeParse(summary).success).toBe(true);
+  });
+});
 
 describe('buildFeatureSummary', () => {
   it('projects campaign relationships and rarity without raw identifiers or labels', () => {
@@ -217,7 +268,67 @@ describe('buildFeatureSummary', () => {
       accountAgeHours: null,
       evidenceAgeHours: null,
       evidence: null,
+      profile: null,
     });
+  });
+
+  it('is evidence v2 and carries each account profile beside its stored evidence', () => {
+    const summary = buildFeatureSummary({ detection: detection(), accounts: accounts(), group: null });
+    expect(summary.evidenceVersion).toBe(ABUSE_ASSESSMENT_EVIDENCE_VERSION);
+    expect(ABUSE_ASSESSMENT_EVIDENCE_VERSION).toBe(2);
+    expect(summary.accounts[0].profile).toEqual(profile);
+  });
+
+  it('rejects free text smuggled in as a profile model id', () => {
+    expect(() =>
+      buildFeatureSummary({
+        detection: detection(),
+        accounts: [
+          {
+            ...accounts()[0],
+            profile: {
+              ...profile,
+              spend: {
+                totalCredits: 1,
+                byModel: [{ model: INJECTION, creditShare: 1, events: 1, creditsPerEvent: 1 }],
+              },
+            },
+          },
+        ],
+        group: null,
+      })
+    ).toThrow();
+  });
+
+  it('fits a full set of accounts, each with evidence and a full profile, without omitting any', () => {
+    const full = {
+      ...profile,
+      spend: {
+        ...profile.spend!,
+        byModel: Array.from({ length: 5 }, (_, i) => ({
+          model: `model-${i}`,
+          creditShare: 0.2,
+          events: 10,
+          creditsPerEvent: 12.5,
+        })),
+      },
+    };
+    const userIds = Array.from({ length: ABUSE_ASSESSMENT_MAX_ACCOUNTS }, (_, index) =>
+      (0x65f0000000000000000000a0n + BigInt(index)).toString(16)
+    );
+    const summary = buildFeatureSummary({
+      detection: detection({ userIds }),
+      accounts: userIds.map(id => ({
+        id,
+        createdAt: new Date('2026-11-01T10:00:00Z'),
+        summary: evidence(),
+        profile: full,
+      })),
+      group: null,
+    });
+    expect(summary.accountsOmitted).toBe(0);
+    expect(summary.accounts).toHaveLength(ABUSE_ASSESSMENT_MAX_ACCOUNTS);
+    expect(JSON.stringify(summary).length).toBeLessThan(24_000);
   });
 
   it('caps the accounts and counts the rest as omitted', () => {
@@ -292,6 +403,25 @@ describe('evidenceHash', () => {
     expect(hashFor({ creditsSpent: 40 })).toBe(hashFor({ creditsSpent: 41 }));
     expect(hashFor({ creditsSpent: 40 })).not.toBe(hashFor({ creditsSpent: 90 }));
     expect(hashFor({ logins: 2 })).not.toBe(hashFor({ logins: 3 }));
+  });
+
+  it('invalidates cached evidence when account profiles change without dropping request evidence', () => {
+    const withProfile = (minutesToTwoFactor: number) =>
+      buildFeatureSummary({
+        detection: detection(),
+        accounts: accounts().map(account => ({
+          ...account,
+          profile: account.profile ? { ...account.profile, minutesToTwoFactor } : null,
+          requests: { status: 'failed' as const },
+        })),
+        group: null,
+      });
+    const before = withProfile(4);
+    const after = withProfile(30);
+    expect(after.accounts[0].requests).toEqual({ status: 'failed' });
+    expect(after.accounts[0].profile?.minutesToTwoFactor).toBe(30);
+    expect(evidenceHash(before)).not.toBe(evidenceHash(after));
+    expect(abuseAssessmentFeatureSummarySchema.safeParse(after).success).toBe(true);
   });
 
   it('keys the cache on detection, evidence and model', () => {
