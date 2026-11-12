@@ -7,18 +7,18 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({ userService: {} }));
-vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({ findLinkedAccounts: vi.fn() }));
-vi.mock('@server/security/autoContainment/deviceLinkEvaluation', () => ({
+vi.mock('../../billing/linkedAccounts', () => ({ findLinkedAccounts: vi.fn() }));
+vi.mock('../autoContainment/deviceLinkEvaluation', () => ({
   DEFAULT_DEVICE_LINK_CONFIG: { windowHours: 168, commonNetworks: 5 },
   evaluateDeviceLinks: vi.fn(),
   liveDeviceLinkReaders: {},
 }));
-vi.mock('@server/security/autoContainment/config', () => ({ loadAutoContainmentConfig: vi.fn() }));
+vi.mock('../autoContainment/config', () => ({ loadAutoContainmentConfig: vi.fn() }));
 
-import type { LinkedAccount } from '@bike4mind/server-utils/billing/linkedAccounts';
+import type { LinkedAccount } from '../../billing/linkedAccounts';
 import { loadDeviceLinkAccounts } from '@bike4mind/database';
-import { loadAutoContainmentConfig } from '@server/security/autoContainment/config';
-import { evaluateDeviceLinks } from '@server/security/autoContainment/deviceLinkEvaluation';
+import { loadAutoContainmentConfig } from '../autoContainment/config';
+import { evaluateDeviceLinks } from '../autoContainment/deviceLinkEvaluation';
 import {
   buildLinkedAccountEvidence,
   liveLinkedAccountEvidenceDeps,
@@ -38,19 +38,20 @@ const fact = (overrides: Partial<UserSignupLinkFacts>): UserSignupLinkFacts => (
   ...overrides,
 });
 
-const link = (overrides: Partial<LinkedAccount>): LinkedAccount => ({
-  id: 'x',
-  name: null,
-  email: null,
-  createdAt: new Date(NOW.getTime() - 3 * HOUR_MS),
-  isBanned: false,
-  disputePending: false,
-  moderation: null,
-  strength: 'weak',
-  via: ['signupNetwork'],
-  blocked: false,
-  ...overrides,
-});
+const link = (overrides: Partial<LinkedAccount>): LinkedAccount =>
+  ({
+    id: 'x',
+    name: null,
+    email: null,
+    createdAt: new Date(NOW.getTime() - 3 * HOUR_MS),
+    isBanned: false,
+    disputePending: false,
+    moderation: null,
+    strength: 'weak',
+    via: ['signupNetwork'],
+    blocked: false,
+    ...overrides,
+  }) as LinkedAccount;
 
 const signalsOf = (evidence: Awaited<ReturnType<typeof buildLinkedAccountEvidence>>) =>
   Object.fromEntries((evidence?.signals ?? []).map(({ key, value }) => [key, value]));

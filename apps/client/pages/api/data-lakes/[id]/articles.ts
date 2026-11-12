@@ -13,10 +13,10 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { fileContentUrl } from '@server/files/browserFileSigner';
+import { fileContentUrl } from '@bike4mind/server-utils/files/browserFileSigner';
 import { fabFilesService } from '@bike4mind/services';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
-import { adminBypassLakeIds } from '@server/dataLakes';
+import { adminBypassLakeIds } from '@bike4mind/server-utils/dataLakes/index';
 import {
   dataLakeArticleListResponseSchema,
   getFileMembershipArm,

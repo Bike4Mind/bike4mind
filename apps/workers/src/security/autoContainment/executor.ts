@@ -6,7 +6,7 @@ import {
 } from '@bike4mind/common';
 import { autoContainmentDecisionRepository, cacheRepository, shadowDetectionRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { loadAutoContainmentConfig } from '@server/security/autoContainment/config';
+import { loadAutoContainmentConfig } from '@bike4mind/server-utils/security/autoContainment/config';
 import type { AdminUsersBulkResult } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { usersBulkExecuteDepsFor, usersBulkResolveDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
 import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/execute';

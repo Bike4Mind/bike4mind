@@ -16,18 +16,13 @@ import type {
   AdminUsersListParams,
   AdminUsersListResponse,
   AdminUsersSummary,
-} from '@bike4mind/server-utils/app/utils/adminUsersFilter';
-import { withSafeOrganization } from '@bike4mind/server-utils/utils/toSafeOrganizationSubdocument';
-import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@bike4mind/server-utils/users/signupAnomaly';
-import { COHORT_MAX_TIME_MS, funnelStepUserIds } from '@server/analytics/activationFunnel';
-import { signupVerdictUserIds } from '@server/analytics/realSignup';
-import { listAiAbuseAdvisories } from '@bike4mind/server-utils/admin/aiAdvisory/aiAbuseAdvisories';
-import {
-  LIVE_API_KEY_STATUS,
-  adminUsersSort,
-  buildAdminUsersMatch,
-  organizationNamesOf,
-} from '@bike4mind/server-utils/admin/usersList/adminUsersQuery';
+} from '../../app/utils/adminUsersFilter';
+import { withSafeOrganization } from '../../utils/toSafeOrganizationSubdocument';
+import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '../../users/signupAnomaly';
+import { COHORT_MAX_TIME_MS, funnelStepUserIds } from '../../analytics/activationFunnel';
+import { signupVerdictUserIds } from '../../analytics/realSignup';
+import { listAiAbuseAdvisories } from '../aiAdvisory/aiAbuseAdvisories';
+import { LIVE_API_KEY_STATUS, adminUsersSort, buildAdminUsersMatch, organizationNamesOf } from './adminUsersQuery';
 
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.
 // Shared with the Analytics funnel so its counts and this drill-down fail on the same terms.

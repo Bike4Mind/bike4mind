@@ -12,6 +12,8 @@ import {
 } from '@bike4mind/common';
 import { DecisionProviderError } from '@bike4mind/utils/decisionProviders';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+// No global sst mock in this package; a module on the import path reads a Resource at load.
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
 
 const mocks = vi.hoisted(() => ({
   settings: { enabled: true, config: {} as Record<string, unknown> },
@@ -63,8 +65,8 @@ vi.mock('@bike4mind/database', async importActual => ({
 }));
 // Account profiles have their own suite (accountProfile.test.ts).
 vi.mock('./accountProfile', () => ({ loadAccountProfiles: async () => new Map() }));
-vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits: mocks.reserveRequestCredits }));
-vi.mock('@bike4mind/server-utils/decisions/providers', () => ({
+vi.mock('../../billing/reserveRequestCredits', () => ({ reserveRequestCredits: mocks.reserveRequestCredits }));
+vi.mock('../../decisions/providers', () => ({
   getDecisionProviderRegistry: () => ({
     forModel: (model: string) =>
       model === 'gpt-6-luna' ? { id: 'openai', models: ['gpt-6-luna'], decide: mocks.providerDecide } : undefined,
@@ -83,7 +85,7 @@ import {
   summarizeDetection,
   sweepAbuseAssessments,
 } from './abuseAssessment';
-import { collectRequestActivity } from '@bike4mind/server-utils/security/abuseAssessment/requestActivity';
+import { collectRequestActivity } from './requestActivity';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
 const DETECTION_ID = '65f000000000000000000001';

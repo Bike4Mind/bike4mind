@@ -42,11 +42,11 @@ vi.mock('../utils/storage/index', () => ({
   }),
   getAppFilesStorage: () => ({ delete: effects.deleteFile, deletePermanently: effects.deleteFile }),
 }));
-vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async importActual => ({
-  ...(await importActual<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
+vi.mock('../services/cdn/invalidateRouterCdn', async importActual => ({
+  ...(await importActual<typeof import('../services/cdn/invalidateRouterCdn')>()),
   createCdnInvalidationBatch: () => ({ add: effects.cdnAdd, flush: effects.cdnFlush }),
 }));
-vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('../services/publish/purgeUserPublishedArtifacts', () => ({
   purgeUserPublishedArtifacts: vi.fn(),
 }));
 vi.mock('../skillMarket/market', () => ({ withdrawAuthorListings: vi.fn() }));

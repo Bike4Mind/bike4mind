@@ -135,7 +135,7 @@ const referencesGate = (source: string): boolean => /isImageServeable\s*\(/.test
  * be provably safe, not merely inconvenient to fix.
  */
 const ALLOWLIST: Record<string, string> = {
-  'apps/client/server/tutorials/sheet.ts':
+  'packages/server-utils/src/tutorials/sheet.ts':
     'writes a server-authored text/csv tutorial sheet, never an image or user upload',
   // --- The moderation scanner itself: downloads bytes to RUN Rekognition and PRODUCE
   // moderationStatus in the first place. It cannot gate on isImageServeable (that
@@ -209,7 +209,7 @@ const ALLOWLIST: Record<string, string> = {
 
   'apps/client/pages/api/files/createFabFile.ts':
     'DI passthrough to the already-gated fabFileService.createFabFile; browser response signing delegates to signBrowserFileResponse',
-  'apps/client/server/files/browserFileSigner.ts':
+  'packages/server-utils/src/files/browserFileSigner.ts':
     'DI passthrough - storage adapter consumed by fabFilesService.generateSignedUrl and the services that call it, which apply the moderation gate before using either the S3 signer or the content URL builder; the content URL itself redirects only after pages/api/files/[id]/content.ts calls isImageServeable',
 
   // --- Upload-only / delete-only: no read path. ---

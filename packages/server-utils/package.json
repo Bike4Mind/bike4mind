@@ -76,6 +76,8 @@
     "aws-sdk-client-mock": "^4.1.0",
     "jsdom": "^29.1.1",
     "mongodb-memory-server": "^11.3.0",
+    "next-connect": "^0.13.0",
+    "node-mocks-http": "^1.18.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.12"
   }

@@ -1,7 +1,7 @@
 import { ApiKeyScope, MODERATION_PAGE_READ } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { ADMIN_USERS_LIST_MAX, AdminUsersFilterSchema } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { exportAdminUsers } from '@bike4mind/server-utils/admin/usersList/listAdminUsers';
 import qs from 'qs';

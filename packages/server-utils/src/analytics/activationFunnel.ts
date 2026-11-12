@@ -11,20 +11,16 @@ import {
   Organization,
   User,
 } from '@bike4mind/database';
-import {
-  resolveSubscriptionSource,
-  SubscriptionOwnerType,
-  SubscriptionSource,
-} from '@bike4mind/server-utils/lib/subscriptions/types';
-import type { UserFunnelStep } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
-import { Subscription } from '@bike4mind/server-utils/models/Subscription';
+import { resolveSubscriptionSource, SubscriptionOwnerType, SubscriptionSource } from '../lib/subscriptions/types';
+import type { UserFunnelStep } from '../app/utils/adminUsersFilter';
+import { Subscription } from '../models/Subscription';
 import {
   isActiveEligible,
   loadCountingContext,
   USER_FLAG_FIELDS,
   type CountingContext,
   type UserFlags,
-} from '@bike4mind/server-utils/analytics/signupCohort';
+} from './signupCohort';
 
 /**
  * The activation funnel of docs/admin-analytics-spec.md 4.5. The users list's funnelStep filter resolves

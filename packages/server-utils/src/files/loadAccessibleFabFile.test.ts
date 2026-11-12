@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+// No global sst mock in this package; a module on the import path reads a Resource at load.
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
 import { ApiKeyScope } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { S3Storage } from '../../../../b4m-core/fab-pipeline/src/storage/S3Storage';
@@ -31,13 +33,13 @@ vi.mock('@bike4mind/services', () => ({
   fabFilesService: { getFabFile, generateSignedUrl },
   dataLakeService: { recordLakeAccessEvent },
 }));
-vi.mock('@server/dataLakes', () => ({
+vi.mock('../dataLakes/index', () => ({
   adminBypassLakeIds,
   resolveAccessibleLakes,
   grantingLakes,
 }));
-vi.mock('@bike4mind/server-utils/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: () => ({}) }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+vi.mock('../dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: () => ({}) }));
+vi.mock('../utils/storage/index', () => ({
   getFilesStorage: () => new S3Storage('files-bucket', 'us-east-2'),
 }));
 

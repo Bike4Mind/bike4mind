@@ -17,7 +17,7 @@ vi.mock('../generations/signOutputUrl', () => ({
 vi.mock('../security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
 vi.mock('../integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: h.initializeSlackPackage }));
 vi.mock('@bike4mind/slack', () => ({ SlackClient: h.SlackClient }));
-vi.mock('@bike4mind/server-utils/files/fileLinkToken', () => ({
+vi.mock('../files/fileLinkToken', () => ({
   buildFileLinkUrl: (target: unknown, userId: string, ttl: number) => JSON.stringify({ target, userId, ttl }),
 }));
 

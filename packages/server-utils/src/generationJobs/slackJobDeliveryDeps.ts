@@ -1,8 +1,8 @@
 import { slackDevWorkspaceRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { downloadServeableOutput, signOutputUrl } from '@bike4mind/server-utils/generations/signOutputUrl';
-import type { SlackJobDeliveryDeps } from '@bike4mind/server-utils/generationJobs/slackJobDelivery';
-import { buildFileLinkUrl } from '@bike4mind/server-utils/files/fileLinkToken';
+import { downloadServeableOutput, signOutputUrl } from '../generations/signOutputUrl';
+import type { SlackJobDeliveryDeps } from './slackJobDelivery';
+import { buildFileLinkUrl } from '../files/fileLinkToken';
 
 export const createSlackJobDeliveryDeps = (logger: Logger): SlackJobDeliveryDeps => ({
   getSlackClient: async workspaceId => {

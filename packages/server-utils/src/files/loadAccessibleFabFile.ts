@@ -7,12 +7,12 @@ import {
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { adminBypassLakeIds, grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
-import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
-import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
-import type { EntitlementRequest } from '@bike4mind/server-utils/entitlements/index';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { fileContentUrl } from '@server/files/browserFileSigner';
+import { adminBypassLakeIds, grantingLakes, resolveAccessibleLakes } from '../dataLakes/index';
+import { holdsDataLakeReadScope } from '../dataLakes/dataLakeScopes';
+import { resolveAuditPrincipal } from '../dataLakes/resolveAuditPrincipal';
+import type { EntitlementRequest } from '../entitlements/index';
+import { getFilesStorage } from '../utils/storage/index';
+import { fileContentUrl } from './browserFileSigner';
 import type { Logger } from '@bike4mind/observability';
 import type { ApiKeyInfo } from '../cli/auth';
 

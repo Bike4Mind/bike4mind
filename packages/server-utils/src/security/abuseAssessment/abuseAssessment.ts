@@ -72,8 +72,8 @@ import {
   evidenceHash,
   rolloutBucket,
   type AssessedAccountSource,
-} from '@bike4mind/server-utils/security/abuseAssessment/featureSummary';
-import { collectRequestActivity } from '@bike4mind/server-utils/security/abuseAssessment/requestActivity';
+} from './featureSummary';
+import { collectRequestActivity } from './requestActivity';
 import { loadAccountProfiles } from './accountProfile';
 
 const DAY_MS = 24 * 60 * 60 * 1000;

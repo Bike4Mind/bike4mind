@@ -1,14 +1,15 @@
 import { ABUSE_ASSESSMENT_MAX_ACCOUNTS, type AbuseAssessmentGroupEvidence } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { loadDeviceLinkAccounts, usageEventRepository, userRepository } from '@bike4mind/database';
 import type { UserSignupLinkFacts } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { findLinkedAccounts, type LinkedAccount } from '@bike4mind/server-utils/billing/linkedAccounts';
-import { loadAutoContainmentConfig } from '@server/security/autoContainment/config';
+import { findLinkedAccounts, type LinkedAccount } from '../../billing/linkedAccounts';
+import { loadAutoContainmentConfig } from '../autoContainment/config';
 import {
   DEFAULT_DEVICE_LINK_CONFIG,
   evaluateDeviceLinks,
   liveDeviceLinkReaders,
-} from '@server/security/autoContainment/deviceLinkEvaluation';
+} from '../autoContainment/deviceLinkEvaluation';
 import type { AbuseAssessmentGroupEvidenceSource } from './abuseAssessment';
 
 /**
@@ -120,7 +121,7 @@ export async function buildLinkedAccountEvidence(
     .bannedDeviceLinks(ids)
     .then(links => [...links.values()].flat().filter(match => !members.has(match.blockedUserId)))
     .catch(error => {
-      console.warn('Device-link evidence unavailable for the assessment', error);
+      Logger.warn('Device-link evidence unavailable for the assessment', error);
       return null;
     });
 

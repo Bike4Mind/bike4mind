@@ -4,8 +4,8 @@ import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import { AdminAuditLogModel, Invite, Organization, PartnerSignupRule, User } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { InviteType } from '@bike4mind/common';
-import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { Subscription } from '@bike4mind/server-utils/models/Subscription';
+import { SubscriptionOwnerType, SubscriptionSource } from '../lib/subscriptions/types';
+import { Subscription } from '../models/Subscription';
 import { organizationService } from '@bike4mind/services';
 import {
   createMongoReplSet,
@@ -24,7 +24,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
     authSessionService: { endRealtimeConnections: vi.fn() },
   };
 });
-vi.mock('@server/services/hardDeleteUser', async () => {
+vi.mock('../services/hardDeleteUser', async () => {
   const { User: UserModel } = await import('@bike4mind/database');
   return {
     hardDeleteUser: async (
@@ -156,9 +156,15 @@ describe('account deletion purge claims with Mongo', () => {
       source: SubscriptionSource.Stripe,
     });
     await expect(complete(userId)).resolves.toEqual({ deleted: true });
-    expect((await Subscription.findOne({ subscriptionId: 'admin_grant_purge-test' }).lean())!.status).toBe('canceled');
-    expect((await Subscription.findOne({ subscriptionId: 'admin_grant_other-org' }).lean())!.status).toBe('active');
-    expect((await Subscription.findOne({ subscriptionId: 'sub_stripe_purge-test' }).lean())!.status).toBe('active');
+    expect(
+      (await Subscription.findOne({ subscriptionId: 'admin_grant_purge-test' }).lean<{ status: string }>())!.status
+    ).toBe('canceled');
+    expect(
+      (await Subscription.findOne({ subscriptionId: 'admin_grant_other-org' }).lean<{ status: string }>())!.status
+    ).toBe('active');
+    expect(
+      (await Subscription.findOne({ subscriptionId: 'sub_stripe_purge-test' }).lean<{ status: string }>())!.status
+    ).toBe('active');
   });
   it('deletes an organization whose only manager entry is the owner and clears partner rules pointing at it', async () => {
     const userId = await seedUser();

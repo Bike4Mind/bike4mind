@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ listAiAbuseAdvisories: vi.fn() }));
-vi.mock('@bike4mind/server-utils/admin/aiAdvisory/aiAbuseAdvisories', () => ({
+vi.mock('../aiAdvisory/aiAbuseAdvisories', () => ({
   listAiAbuseAdvisories: h.listAiAbuseAdvisories,
 }));
 

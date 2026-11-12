@@ -30,12 +30,12 @@ vi.mock('@bike4mind/services', () => ({
   authSessionService: { endRealtimeConnections: h.endRealtimeConnections },
   adminAuditService: { recordAdminAction: h.recordAdminAction },
 }));
-vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: h.hardDeleteUser }));
+vi.mock('../services/hardDeleteUser', () => ({ hardDeleteUser: h.hardDeleteUser }));
 vi.mock('./ownedOrganizations', () => ({
   classifyOwnedOrganizations: h.classifyOwned,
   deleteSoleOwnedOrganizations: h.deleteSoleOwned,
 }));
-vi.mock('@bike4mind/server-utils/users/purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
+vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.sendComplete }));
 vi.mock('../utils/adminAudit', () => ({

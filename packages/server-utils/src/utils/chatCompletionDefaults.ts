@@ -66,7 +66,7 @@ import { Config } from './config';
 import { getFilesStorage, getGeneratedImageStorage } from './storage/index';
 import { Resource } from 'sst';
 import { premiumWorkspaceDeniedTools } from '../premium-generated/premiumWorkspaceDeniedTools.generated';
-import { coreTutorialTurns } from '@server/tutorials/chatTurns';
+import { coreTutorialTurns } from '../tutorials/chatTurns';
 import { premiumWorkspaceSessionSettings } from '../premium-generated/premiumWorkspaceSessionSettings.generated';
 import { buildMcpEnvVariables } from './mcpEnv';
 import { LLMEvents, TelemetryEvents } from './eventBus';

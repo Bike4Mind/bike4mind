@@ -22,17 +22,17 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
-import { getGeneratedImageStorage, getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { publishThumbnailPrefix } from '@bike4mind/server-utils/utils/publishThumbnails';
-import { buildPublishS3KeyPrefix } from '@bike4mind/server-utils/services/publish/paths';
-import { withdrawAuthorListings } from '@bike4mind/server-utils/skillMarket/market';
-import { retainDeletedSignupTraces } from '@bike4mind/server-utils/auth/signupNetworkLimits';
-import { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
+import { getGeneratedImageStorage, getPublishedArtifactsStorage } from '../utils/storage/index';
+import { publishThumbnailPrefix } from '../utils/publishThumbnails';
+import { buildPublishS3KeyPrefix } from '../services/publish/paths';
+import { withdrawAuthorListings } from '../skillMarket/market';
+import { retainDeletedSignupTraces } from '../auth/signupNetworkLimits';
+import { purgeUserPublishedArtifacts } from '../services/publish/purgeUserPublishedArtifacts';
 import {
   type CdnInvalidationBatch,
   createCdnInvalidationBatch,
   generatedCdnPath,
-} from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
+} from '../services/cdn/invalidateRouterCdn';
 
 type PurgeOptions = { logger: Pick<Logger, 'info' | 'warn' | 'error'>; assertLease: () => Promise<void> };
 const BATCH_SIZE = 100;

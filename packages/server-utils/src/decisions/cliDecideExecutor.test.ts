@@ -4,6 +4,8 @@
  * failure class may escape.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// No global sst mock in this package; a module on the import path reads a Resource at load.
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
 import { DecisionProviderError } from '@bike4mind/utils/decisionProviders';
 import { DecisionRequestError } from './decisionErrors';
 import { buildDecideExecutor } from './cliDecideExecutor';
