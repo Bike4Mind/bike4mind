@@ -183,6 +183,36 @@ describe('renderer-only session drafts', () => {
     expect(deleteSession).not.toHaveBeenCalled();
   });
 
+  it('does not carry a refused-send cleanup failure into the draft opened after navigation', async () => {
+    let refuse!: (value: { ok: false; error: string }) => void;
+    sendMessage.mockReturnValueOnce(
+      new Promise(resolve => {
+        refuse = resolve;
+      })
+    );
+    deleteSession.mockRejectedValueOnce(new Error('locked'));
+    await act(async () => {
+      draft.start('chat');
+    });
+    const previous = draft.session!.id;
+    let pending!: Promise<boolean>;
+    await act(async () => {
+      pending = controller().send('Hello');
+    });
+    await act(async () => {
+      draft.discard();
+      draft.start('chat');
+    });
+    await act(async () => {
+      refuse({ ok: false, error: 'Unavailable' });
+      await pending;
+    });
+    expect(draft.session?.id).not.toBe(previous);
+    expect(controller().sendError).toBeNull();
+    expect(discardDraftAttachments).toHaveBeenCalledWith(previous);
+    expect(opened).not.toHaveBeenCalled();
+  });
+
   it('materializes Chat folders and staged attachments only on send', async () => {
     await act(async () => {
       draft.start('chat');

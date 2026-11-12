@@ -207,7 +207,8 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
           try {
             await window.b4m.chat.deleteSession(id);
           } catch {
-            setError('Could not remove the unsent conversation. Delete it from the sidebar before retrying.');
+            if (current.current?.id === draft.id)
+              setError('Could not remove the unsent conversation. Delete it from the sidebar before retrying.');
             return false;
           }
         }
