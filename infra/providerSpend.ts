@@ -63,28 +63,28 @@ if (isMonitoredStage) {
     });
   }
 
-  // Fires on the ProviderUsagePollSkipped datum the poller publishes, in place of spend, for a
-  // provider with no admin key.
-  for (const provider of PROVIDER_SPEND_PROVIDERS) {
-    new aws.cloudwatch.MetricAlarm(`providerUsagePollSkipped-${provider}`, {
-      name: `${prefix}-provider-usage-poll-skipped-${provider}`,
-      alarmDescription: `Usage poller skipped ${provider}: admin key not configured`,
-      comparisonOperator: 'GreaterThanOrEqualToThreshold',
-      evaluationPeriods: 1,
-      metricName: 'ProviderUsagePollSkipped',
-      namespace: LLM_SPEND_NAMESPACE,
-      dimensions: { Provider: provider },
-      period: 3600,
-      statistic: 'Sum',
-      threshold: 1,
-      treatMissingData: 'notBreaching',
-      alarmActions: [dlqAlarmTopic.arn],
-      tags: { Application: 'LLMSpend', Severity: 'Medium' },
-    });
-  }
-
   // The cron only exists where scheduled jobs run, so a preview that opts in to monitoring has none.
   if (providerUsagePollCron) {
+    // Fires on the ProviderUsagePollSkipped datum the poller publishes, in place of spend, for a
+    // provider with no admin key.
+    for (const provider of PROVIDER_SPEND_PROVIDERS) {
+      new aws.cloudwatch.MetricAlarm(`providerUsagePollSkipped-${provider}`, {
+        name: `${prefix}-provider-usage-poll-skipped-${provider}`,
+        alarmDescription: `Usage poller skipped ${provider}: admin key not configured`,
+        comparisonOperator: 'GreaterThanOrEqualToThreshold',
+        evaluationPeriods: 1,
+        metricName: 'ProviderUsagePollSkipped',
+        namespace: LLM_SPEND_NAMESPACE,
+        dimensions: { Provider: provider },
+        period: 3600,
+        statistic: 'Sum',
+        threshold: 1,
+        treatMissingData: 'notBreaching',
+        alarmActions: [dlqAlarmTopic.arn],
+        tags: { Application: 'LLMSpend', Severity: 'Medium' },
+      });
+    }
+
     new aws.cloudwatch.MetricAlarm('providerUsagePollErrors', {
       name: `${prefix}-provider-usage-poll-errors`,
       alarmDescription: 'The hourly provider usage poller failed, so the provider-reported spend alarms are blind',

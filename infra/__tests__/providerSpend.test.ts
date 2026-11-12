@@ -193,14 +193,17 @@ describe('provider spend stage gating', () => {
     expect(resources.dashboard).not.toHaveBeenCalled();
   });
 
-  it('skips the poller alarm on a monitored preview, where the cron does not exist', async () => {
+  it('skips poller alarms on a monitored preview, where the cron does not exist', async () => {
     vi.stubEnv('ENABLE_MONITORING', 'true');
     resources.cron = undefined;
     await load('preview');
     expect(callFor(resources.alarm, 'providerUsagePollErrors')).toBeUndefined();
-    expect(callFor(resources.alarm, 'providerUsagePollSkipped-anthropic')).toBeDefined();
-    expect(callFor(resources.alarm, 'providerUsagePollSkipped-openai')).toBeDefined();
-    expect(resources.alarm).toHaveBeenCalledTimes(4);
+    expect(callFor(resources.alarm, 'providerUsagePollSkipped-anthropic')).toBeUndefined();
+    expect(callFor(resources.alarm, 'providerUsagePollSkipped-openai')).toBeUndefined();
+    expect(resources.alarm).toHaveBeenCalledTimes(2);
+    expect(callFor(resources.alarm, 'providerReportedSpendHourly-anthropic')).toBeDefined();
+    expect(callFor(resources.alarm, 'providerReportedSpendHourly-openai')).toBeDefined();
+    expect(resources.dashboard).toHaveBeenCalledTimes(1);
   });
 
   it('declares the env vars in the deploy contract and exports the module', () => {
