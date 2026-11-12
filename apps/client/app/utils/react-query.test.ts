@@ -13,6 +13,23 @@ const queryKey = ['items'];
 const options = { keysAllowedToCreate: [] };
 
 describe('updateSingleQueryDataFast', () => {
+  it('keeps sibling fields of a { data } cache entry when deleting an item', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKey, {
+      data: [{ id: 'item-1' }, { id: 'item-2' }],
+      totalPages: 3,
+      totalItems: 42,
+    });
+
+    updateSingleQueryDataFast(queryClient, queryKey, 'delete', { id: 'item-1' }, options);
+
+    expect(queryClient.getQueryData(queryKey)).toEqual({
+      data: [{ id: 'item-2' }],
+      totalPages: 3,
+      totalItems: 42,
+    });
+  });
+
   it('replaces an optimistic infinite-query item with an older authoritative document', () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(queryKey, {
