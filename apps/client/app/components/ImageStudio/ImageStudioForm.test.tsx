@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { describe, expect, it, vi } from 'vitest';
-import { ImageModels } from '@bike4mind/common';
+import { ImageModels, SCENE_PRESETS } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 // The picker modal and its file search are the Agent's; the form only opens it and takes the applied file.
@@ -185,5 +185,61 @@ describe('ImageStudioForm', () => {
     renderForm({ models: [{ id: ImageModels.FLUX_KONTEXT_PRO, name: 'FLUX Kontext Pro' }] });
     expect(screen.getByTestId('image-studio-no-generate-model')).toBeInTheDocument();
     expect(screen.queryByTestId('image-form')).not.toBeInTheDocument();
+  });
+  describe('Look chips', () => {
+    const [slate, kitchen] = SCENE_PRESETS;
+    const chip = (id: string) => screen.getByTestId(`image-form-look-${id}-chip`);
+    const promptInput = () => screen.getByTestId('image-form-prompt-input');
+
+    it('shows a chip per scene preset, none selected', () => {
+      renderForm();
+      for (const preset of SCENE_PRESETS) {
+        expect(chip(preset.id)).toHaveAccessibleName(preset.name);
+        expect(chip(preset.id)).toHaveAttribute('aria-pressed', 'false');
+      }
+    });
+
+    it('fills an empty prompt and enables Generate', () => {
+      renderForm();
+      fireEvent.click(chip(slate.id));
+      expect(promptInput()).toHaveValue(slate.promptFragment);
+      expect(chip(slate.id)).toHaveAttribute('aria-pressed', 'true');
+      expect(submitButton()).toBeEnabled();
+    });
+
+    it("adds to the user's prompt, swaps scenes and clears on a second click", () => {
+      renderForm();
+      typePrompt('A lemon tart');
+      fireEvent.click(chip(slate.id));
+      expect(promptInput()).toHaveValue(`A lemon tart, ${slate.promptFragment}`);
+
+      fireEvent.click(chip(kitchen.id));
+      expect(promptInput()).toHaveValue(`A lemon tart, ${kitchen.promptFragment}`);
+      expect(chip(slate.id)).toHaveAttribute('aria-pressed', 'false');
+      expect(chip(kitchen.id)).toHaveAttribute('aria-pressed', 'true');
+
+      fireEvent.click(chip(kitchen.id));
+      expect(promptInput()).toHaveValue('A lemon tart');
+      expect(chip(kitchen.id)).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('deselects when the user edits the scene words away', () => {
+      renderForm();
+      fireEvent.click(chip(slate.id));
+      typePrompt('A tart on dark stone');
+      expect(chip(slate.id)).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('submits the prompt with the scene in it', () => {
+      const { onSubmit } = renderForm();
+      typePrompt('A lemon tart');
+      fireEvent.click(chip(slate.id));
+      fireEvent.click(submitButton());
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({ prompt: `A lemon tart, ${slate.promptFragment}` }),
+        })
+      );
+    });
   });
 });

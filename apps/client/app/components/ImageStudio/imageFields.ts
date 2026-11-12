@@ -1,9 +1,19 @@
-import { IMAGE_JOB_PROMPT_MAX_CHARS, type ImageModels, type OpenAIImageQuality } from '@bike4mind/common';
+import {
+  IMAGE_JOB_PROMPT_MAX_CHARS,
+  SCENE_PRESETS,
+  SCENE_SWATCHES,
+  appliedScenePreset,
+  applyScenePreset,
+  type ImageModels,
+  type OpenAIImageQuality,
+} from '@bike4mind/common';
 import {
   withCurrentValue,
   type CapabilityControl,
   type CapabilityField,
   type CapabilityOption,
+  type ChipOption,
+  type ChipsField,
 } from '@client/app/components/Studio/capabilityFields';
 import { STUDIO_IMAGE_COUNT_MAX } from '@client/app/hooks/data/studioImageJobs';
 import {
@@ -135,6 +145,31 @@ const settingFields = (model: ImageModels, intent: ImageIntent, actions: ImageFi
   return fields;
 };
 
+const SCENE_OPTIONS: readonly ChipOption[] = SCENE_PRESETS.map(preset => ({
+  value: preset.id,
+  label: preset.name,
+  swatch: SCENE_SWATCHES[preset.swatch],
+}));
+
+/**
+ * The scene presets as chips. The selected chip is read from the prompt itself, so editing a preset's words away
+ * clears it; picking one adds its words to the user's own, and a pick that would overflow the prompt is ignored.
+ */
+const lookField = (prompt: string, actions: ImageFieldActions): ChipsField => ({
+  kind: 'chips',
+  id: 'look',
+  label: 'Look',
+  value: appliedScenePreset(prompt)?.id ?? null,
+  options: SCENE_OPTIONS,
+  onChange: presetId => {
+    const next = applyScenePreset(
+      prompt,
+      SCENE_PRESETS.find(preset => preset.id === presetId)
+    );
+    if (next.length <= IMAGE_JOB_PROMPT_MAX_CHARS) actions.update({ prompt: next });
+  },
+});
+
 /** The image Create controls for the selected model, in display order. */
 export function imageCapabilityFields(
   model: ImageModels,
@@ -151,6 +186,7 @@ export function imageCapabilityFields(
       maxLength: IMAGE_JOB_PROMPT_MAX_CHARS,
       onChange: prompt => actions.update({ prompt }),
     },
+    lookField(form.prompt, actions),
     ...settingFields(model, form.intent, actions),
     {
       kind: 'segmented',

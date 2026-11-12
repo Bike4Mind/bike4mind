@@ -97,6 +97,22 @@ export type ReferencesField = FieldBase & {
   onRemove: (fileId: string) => void;
 };
 
+/** A gradient a chip shows beside its label, e.g. a scene preset's swatch. Colors are CSS hex values. */
+export type ChipSwatch = { from: string; to: string };
+
+export type ChipOption = { value: string; label: string; swatch?: ChipSwatch };
+
+/**
+ * Optional quick picks shown as toggle chips (e.g. image scene presets). At most one is selected; picking the selected
+ * chip again clears it, so onChange receives null.
+ */
+export type ChipsField = FieldBase & {
+  kind: 'chips';
+  value: string | null;
+  options: readonly ChipOption[];
+  onChange: (value: string | null) => void;
+};
+
 /** Fields laid out side by side on wide screens. */
 export type FieldGroup = {
   kind: 'group';
@@ -113,7 +129,8 @@ export type CapabilityControl =
   | SwitchField
   | NoteField
   | ImageField
-  | ReferencesField;
+  | ReferencesField
+  | ChipsField;
 
 export type CapabilityField = CapabilityControl | FieldGroup;
 
