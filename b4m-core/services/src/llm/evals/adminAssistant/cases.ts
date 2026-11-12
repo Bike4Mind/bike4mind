@@ -45,6 +45,12 @@ const NOT_FOUND =
   "\\b(?:not found|no (?:such )?org|no match|(?:couldn|didn)['\\u2019]?t find|could not find|did not find|do(?:es)? not exist|doesn['\\u2019]?t exist)";
 
 export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
+  {
+    id: 'where-ai-operations',
+    category: 'where-is',
+    question: 'Where can I check admin AI spend and agreement or turn all admin AI off?',
+    expectViewIds: ['admin.ai_operations'],
+  },
   // where-is: the answer is a navigate_view hand-off to the right admin tab.
   {
     id: 'where-advisories',

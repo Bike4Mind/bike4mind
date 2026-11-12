@@ -8,3 +8,4 @@ export * from './OrganizationModel';
 export * from './AdminApprovalModel';
 export * from './AdminGateReservationModel';
 export * from './AdminAiSuggestionModel';
+export * from './AdminAiOperationsModel';
