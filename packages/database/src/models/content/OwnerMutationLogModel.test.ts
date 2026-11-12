@@ -152,5 +152,7 @@ describe('owner mutation outbox', () => {
     const first = await readOwnerMutationsInternal('alice', 1);
     await OwnerMutationLog.collection.deleteOne({ ownerId: 'alice', seq: 2 });
     await expect(readOwnerMutationsInternal('alice', 2, first.nextCursor)).rejects.toThrow('gap');
+    await expect(pruneOwnerMutations('alice', 3)).rejects.toThrow('gap');
+    expect((await OwnerMutationHead.findById('alice'))?.floorSeq).toBe(0);
   });
 });

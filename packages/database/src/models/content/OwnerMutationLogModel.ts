@@ -204,13 +204,25 @@ export async function pruneOwnerMutations(ownerId: string, throughSeq: number): 
     const head = await OwnerMutationHead.findById(ownerId).session(session).lean<OwnerHead>();
     if (!head || throughSeq <= head.floorSeq || throughSeq > head.seq)
       throw new OwnerMutationCursorError('Invalid retention floor');
-    const event = await OwnerMutationLog.findOne({ ownerId, seq: throughSeq }).session(session).lean<OwnerMutation>();
-    if (!event) throw new OwnerMutationCursorError('Retention anchor is missing');
-    await OwnerMutationHead.updateOne(
+    let expectedSeq = head.floorSeq;
+    let expectedHash = head.floorHash;
+    for await (const event of OwnerMutationLog.find({ ownerId, seq: { $gt: head.floorSeq, $lte: throughSeq } })
+      .sort({ seq: 1 })
+      .session(session)
+      .lean<OwnerMutation>()
+      .cursor()) {
+      if (event.seq !== ++expectedSeq || event.prevHash !== expectedHash || event.hash !== digest(event)) {
+        throw new OwnerMutationCursorError('Retention range has a gap');
+      }
+      expectedHash = event.hash;
+    }
+    if (expectedSeq !== throughSeq) throw new OwnerMutationCursorError('Retention range has a gap');
+    const updated = await OwnerMutationHead.updateOne(
       { _id: ownerId, floorSeq: head.floorSeq },
-      { $set: { floorSeq: throughSeq, floorHash: event.hash } },
+      { $set: { floorSeq: throughSeq, floorHash: expectedHash } },
       { session }
     );
+    if (updated.matchedCount !== 1) throw new OwnerMutationCursorError('Retention floor moved');
     await OwnerMutationLog.deleteMany({ ownerId, seq: { $lte: throughSeq } }).session(session);
   });
 }
