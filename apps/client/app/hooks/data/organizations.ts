@@ -15,6 +15,7 @@ import { getErrorMessage } from '@client/app/utils/error';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import type { ISharerInviteView } from '@client/app/utils/invitesAPICalls';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
 /**
  * Hook to search organizations with pagination and filtering
@@ -373,6 +374,23 @@ export function useRemoveMemberFromOrganization() {
       // Removing a member may hand their lakes to a successor, changing ownership-derived flags.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       queryClient.removeQueries({ queryKey: memberOffboardingKey(variables.organizationId, variables.userId) });
+      if (variables.reassignTo) {
+        const contentQueryKeys = [
+          fabFileKeys.all,
+          ['projects'],
+          ['joined-projects'],
+          ['sessions'],
+          ['own-session-count'],
+          ['agents'],
+          ['session-agents'],
+          ['artifact'],
+          ['session-artifacts'],
+        ] as const;
+        for (const queryKey of contentQueryKeys) {
+          void queryClient.invalidateQueries({ queryKey });
+        }
+      }
+
       // Notification is best-effort and already attempted server-side before this response arrives
       // (the route awaits it ahead of res.json), so the client still cannot claim delivery - only
       // that it was kept and owners are being told. `null` means the post-departure read itself

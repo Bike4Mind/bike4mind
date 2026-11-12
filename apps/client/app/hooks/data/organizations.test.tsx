@@ -4,8 +4,11 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
+import { fabFileKeys } from './fabFileKeys';
+import { dataLakeKeys } from './dataLakeKeys';
 import {
   useGetUserOrganizations,
+  useRemoveMemberFromOrganization,
   useSearchOrganizations,
   useSearchUserOrganizations,
   useSetMemberCreditDefault,
@@ -201,5 +204,62 @@ describe('manager and ownership mutations', () => {
     expect(post).toHaveBeenCalledWith('/api/organizations/org1/transfer-ownership', { newOwnerId: 'u1' });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['organizations'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['users', 'organization'] });
+  });
+});
+
+describe('member offboarding ownership caches', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    del.mockResolvedValue({ data: { id: 'org1', personalLakeSharesKept: 0 } });
+  });
+
+  it.each([false, true])('refreshes transferred content caches only when transfer is %s', async transferring => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { staleTime: Infinity }, mutations: { retry: false } },
+    });
+    const contentKeys = [
+      fabFileKeys.doc('file1'),
+      ['projects', 'project1'],
+      ['projects', 'search', { search: 'Roadmap' }],
+      ['joined-projects', 'owner'],
+      ['sessions', 'own', 'owner'],
+      ['sessions', 'notebook1'],
+      ['own-session-count'],
+      ['agents'],
+      ['session-agents', 'notebook1'],
+      ['artifact', 'artifact1'],
+      ['session-artifacts', 'notebook1'],
+    ] as const;
+    const membershipKeys = [['users', 'organization', 'org1'], ['organizations', 'org1'], dataLakeKeys.list] as const;
+    for (const queryKey of [...contentKeys, ...membershipKeys, ['unrelated']]) {
+      queryClient.setQueryData(queryKey, { id: 'cached' });
+    }
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const view = renderHook(useRemoveMemberFromOrganization, { wrapper });
+    try {
+      await act(async () => {
+        await view.result.current.mutateAsync({
+          organizationId: 'org1',
+          userId: 'member',
+          ...(transferring ? { reassignTo: 'owner' } : {}),
+        });
+      });
+      for (const queryKey of contentKeys) {
+        expect(queryClient.getQueryState(queryKey)?.isInvalidated, JSON.stringify(queryKey)).toBe(transferring);
+      }
+      for (const queryKey of membershipKeys) {
+        expect(queryClient.getQueryState(queryKey)?.isInvalidated, JSON.stringify(queryKey)).toBe(true);
+      }
+      expect(queryClient.getQueryState(['unrelated'])?.isInvalidated).toBe(false);
+      expect(del).toHaveBeenCalledWith(
+        '/api/organizations/org1/members/member',
+        transferring ? { data: { reassignTo: 'owner' } } : undefined
+      );
+    } finally {
+      view.unmount();
+      queryClient.clear();
+    }
   });
 });
