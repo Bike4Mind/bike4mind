@@ -549,6 +549,66 @@ describe('ModelPricingCatalog', () => {
     expect(screen.getByTestId('history-drawer')).not.toHaveTextContent('stale gpt-x row');
   });
 
+  it('reports a failed history load inside the drawer and leaves the table and its error slot alone', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+
+    mockGet.mockRejectedValueOnce(new Error('history down'));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+
+    const drawer = await screen.findByTestId('history-drawer');
+    expect(await within(drawer).findByTestId('model-pricing-history-error')).toHaveTextContent('history down');
+    expect(screen.getByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-pricing-error')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('admin-error-state')).toHaveLength(1);
+  });
+
+  it('retries the history fetch for the same model from the drawer', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+
+    mockGet.mockRejectedValueOnce(new Error('history down'));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+    await screen.findByTestId('model-pricing-history-error');
+
+    mockGet.mockResolvedValueOnce({
+      data: {
+        history: [
+          {
+            modelId: 'gpt-x',
+            pricing: { '0': { input: 1e-6, output: 2e-6 } },
+            effectiveFrom: '2026-06-01T00:00:00.000Z',
+            note: 'adapter-seed',
+          },
+        ],
+      },
+    });
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+
+    expect(await screen.findAllByTestId('history-row')).toHaveLength(1);
+    expect(screen.queryByTestId('model-pricing-history-error')).not.toBeInTheDocument();
+    expect(mockGet).toHaveBeenLastCalledWith('/api/admin/model-prices?history=gpt-x');
+  });
+
+  it('does not turn the table into its load-error state when history fails with no rows on screen', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+
+    let rejectHistory: (e: unknown) => void = () => {};
+    mockGet.mockReturnValueOnce(new Promise((_, reject) => (rejectHistory = reject)));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+
+    mockGet.mockResolvedValueOnce({ data: { seeded: [], rows: [] } });
+    fireEvent.click(screen.getByTestId('model-pricing-refresh-btn'));
+    await waitFor(() => expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument());
+
+    await act(async () => rejectHistory(new Error('history down')));
+
+    const drawer = screen.getByTestId('history-drawer');
+    expect(await within(drawer).findByTestId('model-pricing-history-error')).toBeInTheDocument();
+    expect(screen.getAllByTestId('admin-error-state')).toHaveLength(1);
+  });
+
   it('filters the catalog by model id', async () => {
     renderCatalog();
     await screen.findByTestId('model-pricing-row-gpt-x-per_token');

@@ -30,7 +30,7 @@ import {
 import { api } from '@client/app/contexts/ApiContext';
 import { useModelIndex } from '../../Models/Discovery/useModelIndex';
 import { ModelWriteAction } from '../../Models/ModelWriteAction';
-import { AdminDialog, AdminPageHeader, DataTable, EmptyState, FilterBar, UpdatingBar } from '../../shared';
+import { AdminDialog, AdminPageHeader, DataTable, EmptyState, ErrorState, FilterBar, UpdatingBar } from '../../shared';
 
 /** Wire shape of a catalog row (dates arrive as ISO strings). */
 interface PriceRow {
@@ -242,6 +242,8 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
   const [revertTarget, setRevertTarget] = useState<PriceRow | null>(null);
   const [historyModel, setHistoryModel] = useState<string | null>(null);
   const [history, setHistory] = useState<PriceRow[] | null>(null);
+  // Held apart from `error` so a failed history load shows in its drawer and never replaces the table.
+  const [historyError, setHistoryError] = useState<string | null>(null);
   // Latest requested history model; a slower earlier response must not
   // overwrite the drawer for the model currently displayed.
   const historyRequestRef = useRef<string | null>(null);
@@ -379,6 +381,7 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
     historyRequestRef.current = modelId;
     setHistoryModel(modelId);
     setHistory(null);
+    setHistoryError(null);
     try {
       const res = await api.get<{ history: PriceRow[] }>(
         `/api/admin/model-prices?history=${encodeURIComponent(modelId)}`
@@ -387,9 +390,14 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
       setHistory(res.data.history);
     } catch (err) {
       if (historyRequestRef.current !== modelId) return;
-      setError(apiErrorMessage(err, 'Failed to load history'));
-      setHistoryModel(null);
+      setHistoryError(apiErrorMessage(err, 'Failed to load history'));
     }
+  };
+
+  const closeHistory = () => {
+    historyRequestRef.current = null;
+    setHistoryModel(null);
+    setHistoryError(null);
   };
 
   const visibleRows = useMemo(() => {
@@ -722,12 +730,16 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
         </Stack>
       </AdminDialog>
 
-      <Drawer anchor="right" open={historyModel !== null} onClose={() => setHistoryModel(null)} size="md">
+      <Drawer anchor="right" open={historyModel !== null} onClose={closeHistory} size="md">
         <Box sx={{ p: 2 }} data-testid="history-drawer">
           <Typography level="title-md" sx={{ mb: 1 }}>
             Price history: {historyModel}
           </Typography>
-          {history === null ? (
+          {historyError ? (
+            <Box data-testid="model-pricing-history-error">
+              <ErrorState message={historyError} onRetry={() => historyModel && void openHistory(historyModel)} />
+            </Box>
+          ) : history === null ? (
             <CircularProgress size="sm" />
           ) : (
             <Stack spacing={1}>
