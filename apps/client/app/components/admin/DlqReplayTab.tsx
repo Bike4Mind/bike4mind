@@ -19,6 +19,7 @@ import {
   Typography,
 } from '@mui/joy';
 import ReplayIcon from '@mui/icons-material/Replay';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import VisibilityIcon from '@mui/icons-material/Visibility';
@@ -29,6 +30,7 @@ import {
   useDlqQueues,
   useDlqMessages,
   useDlqReplay,
+  useDlqDiscard,
   useDlqHistory,
   DlqMessage,
   DlqReplayLogEntry,
@@ -49,6 +51,8 @@ import {
 import { ADMIN_REGION_GAP, adminSurface } from '@client/app/components/admin/shared/adminStyles';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { AdminPermissionAction } from './shared/MissingPermission';
+import { ActionDialog } from './shared/ActionDialog';
+import { ADMIN_REASON_PRESETS } from './shared/adminReason';
 import { formatDuration, formatExpiresIn, getDlqExpiry } from './dlqExpiry';
 
 const REPLAY_CHIP: Record<DlqReplaySafety, { tone: AdminStatusTone; label: string }> = {
@@ -80,6 +84,8 @@ const REPLAY_STATUS: Record<DlqReplayLogEntry['status'], { tone: AdminStatusTone
   success: { tone: 'good', label: 'Success' },
   failed: { tone: 'bad', label: 'Failed' },
   skipped: { tone: 'warn', label: 'Skipped' },
+  discarded: { tone: 'neutral', label: 'discarded' },
+  pending: { tone: 'warn', label: 'Discard outcome unconfirmed' },
 };
 
 const tableSurface = { ...adminSurface, borderRadius: 'lg', overflow: 'auto' } as const;
@@ -261,8 +267,9 @@ const DlqReplayTab: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [singleReplayConfirm, setSingleReplayConfirm] = useState<DlqMessage | null>(null);
+  const [discardConfirm, setDiscardConfirm] = useState<DlqMessage | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [historyStatus, setHistoryStatus] = useState<'success' | 'failed' | 'skipped' | ''>('');
+  const [historyStatus, setHistoryStatus] = useState<DlqReplayLogEntry['status'] | ''>('');
   const [historyDateRange, setHistoryDateRange] = useState<'24h' | '7d' | '30d' | 'all'>('7d');
   const [historySearch, setHistorySearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -296,6 +303,7 @@ const DlqReplayTab: React.FC = () => {
     refetch: refetchMessages,
   } = useDlqMessages(selectedQueue);
   const replayMutation = useDlqReplay();
+  const discardMutation = useDlqDiscard();
   const {
     data: history,
     isLoading: historyLoading,
@@ -375,6 +383,39 @@ const DlqReplayTab: React.FC = () => {
       }
     } catch (error) {
       toast.error(`Replay failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  const confirmDiscard = async (reason: string) => {
+    if (!selectedQueue || !discardConfirm?.receiptHandle || !discardConfirm.body) return;
+    try {
+      const result = await discardMutation.mutateAsync({
+        queueLabel: selectedQueue,
+        reason,
+        messages: [
+          {
+            messageId: discardConfirm.messageId,
+            receiptHandle: discardConfirm.receiptHandle,
+            body: discardConfirm.body,
+          },
+        ],
+      });
+      if (result.failed) {
+        toast.error(
+          `Discard failed: ${result.results[0]?.reason ?? 'Unknown error'}${result.results[0]?.historyPending ? '. History outcome is unconfirmed.' : ''}`
+        );
+        return;
+      }
+      setDiscardConfirm(null);
+      if (result.results.some(message => message.historyPending)) {
+        toast.warning(
+          'Deletion acknowledged. History outcome is unconfirmed; the body is kept for 30 days for manual recovery.'
+        );
+      } else {
+        toast.success('Message discarded. Its body is kept for 30 days for manual recovery.');
+      }
+    } catch (error) {
+      toast.error(`Discard failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
@@ -665,6 +706,26 @@ const DlqReplayTab: React.FC = () => {
                           </Tooltip>
                         )}
                       </AdminPermissionAction>
+                      <AdminPermissionAction requirement="settings:manage">
+                        {permissionDisabled => (
+                          <Tooltip title="Discard this message">
+                            <IconButton
+                              size="sm"
+                              color="danger"
+                              onClick={e => {
+                                e.stopPropagation();
+                                setDiscardConfirm(msg);
+                              }}
+                              disabled={
+                                permissionDisabled || !msg.receiptHandle || !msg.body || discardMutation.isPending
+                              }
+                              data-testid={`dlq-discard-single-${msg.messageId}`}
+                            >
+                              <DeleteOutlineIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                      </AdminPermissionAction>
                     </Stack>
                   </td>
                 </tr>
@@ -694,6 +755,8 @@ const DlqReplayTab: React.FC = () => {
                 <Option value="success">Success</Option>
                 <Option value="failed">Failed</Option>
                 <Option value="skipped">Skipped</Option>
+                <Option value="discarded">Discarded</Option>
+                <Option value="pending">Discard outcome unconfirmed</Option>
               </Select>
             </FormControl>
             <FormControl size="sm">
@@ -713,7 +776,7 @@ const DlqReplayTab: React.FC = () => {
             <FormControl size="sm">
               <FormLabel>Search</FormLabel>
               <Input
-                placeholder="Search message ID or error"
+                placeholder="Search message ID, error or reason"
                 value={historySearch}
                 onChange={e => setHistorySearch(e.target.value)}
                 startDecorator={<SearchIcon fontSize="small" />}
@@ -747,9 +810,9 @@ const DlqReplayTab: React.FC = () => {
                   <th style={{ width: 160 }}>Feature</th>
                   <th style={{ width: 200 }}>Message ID</th>
                   <th style={{ width: 100 }}>Status</th>
-                  <th>Error</th>
+                  <th>Details</th>
                   <th style={{ width: 120 }}>By</th>
-                  <th style={{ width: 160 }}>Replayed at</th>
+                  <th style={{ width: 160 }}>Recorded at</th>
                 </tr>
               </thead>
               <tbody>
@@ -779,11 +842,24 @@ const DlqReplayTab: React.FC = () => {
                       </Typography>
                     </td>
                     <td>
-                      <StatusChip tone={REPLAY_STATUS[entry.status].tone} label={REPLAY_STATUS[entry.status].label} />
+                      <StatusChip
+                        tone={REPLAY_STATUS[entry.status].tone}
+                        label={
+                          entry.operation === 'discard' && entry.status === 'failed'
+                            ? 'Discard request failed'
+                            : REPLAY_STATUS[entry.status].label
+                        }
+                      />
                     </td>
                     <td>
                       <Typography level="body-xs" noWrap sx={{ maxWidth: 200 }}>
-                        {entry.errorMessage || '-'}
+                        {entry.errorMessage || entry.reason || '-'}
+                        {entry.errorMessage && entry.reason && (
+                          <>
+                            <br />
+                            Reason: {entry.reason}
+                          </>
+                        )}
                       </Typography>
                     </td>
                     <td>
@@ -863,6 +939,18 @@ const DlqReplayTab: React.FC = () => {
           </Stack>
         </ModalDialog>
       </Modal>
+      <ActionDialog
+        open={!!discardConfirm}
+        onClose={() => setDiscardConfirm(null)}
+        title="Discard dead letter?"
+        description="This removes the message from the DLQ. It cannot be undone from this page. The message body is kept for 30 days for manual recovery."
+        reasonPresets={ADMIN_REASON_PRESETS.dlqDiscard}
+        confirmLabel="Discard message"
+        tone="danger"
+        pending={discardMutation.isPending}
+        onConfirm={confirmDiscard}
+        data-testid="dlq-discard-dialog"
+      />
     </Stack>
   );
 };
