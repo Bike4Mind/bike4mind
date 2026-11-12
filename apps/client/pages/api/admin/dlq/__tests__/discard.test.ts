@@ -22,10 +22,16 @@ vi.mock('@server/middlewares/adminApi', () => ({
     };
   },
 }));
-vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
-  getDlqByLabel: (label: string) => (label === 'quest' ? { label, displayName: 'Quest queue' } : undefined),
-  getDlqUrl: () => 'dlq-url',
-}));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => {
+  const queues: Record<string, { displayName: string; url: string }> = {
+    quest: { displayName: 'Quest queue', url: 'dlq-url' },
+    exports: { displayName: 'Export queue', url: 'exports-dlq-url' },
+  };
+  return {
+    getDlqByLabel: (label: string) => (queues[label] ? { label, displayName: queues[label].displayName } : undefined),
+    getDlqUrl: (label: string) => queues[label].url,
+  };
+});
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ deleteFromQueue: h.deleteFromQueue }));
 vi.mock('@bike4mind/database', () => ({
   dlqReplayLogRepository: { logReplay: h.logReplay, finalizeDiscard: h.finalizeDiscard },
@@ -110,6 +116,51 @@ describe('POST /api/admin/dlq/discard', () => {
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('payload');
     expect(h.deleteFromQueue).toHaveBeenCalledWith('dlq-url', 'receipt-1');
   });
+
+  it.each([
+    ['quest', 'dlq-url', 'Quest queue'],
+    ['exports', 'exports-dlq-url', 'Export queue'],
+  ])(
+    'retains and deletes each distinct message in the selected %s queue',
+    async (queueLabel, queueUrl, displayName) => {
+      const messages = [
+        { messageId: 'first-message', receiptHandle: 'first-receipt', body: '{"work":"first"}' },
+        { messageId: 'second-message', receiptHandle: 'second-receipt', body: '{"work":"second"}' },
+      ];
+      h.logReplay.mockResolvedValueOnce({ id: 'first-log' }).mockResolvedValueOnce({ id: 'second-log' });
+      const { req, res } = request({ queueLabel, messages, reason: 'Job obsolete' });
+
+      await h.post!(req, res);
+
+      expect(JSON.parse(res._getData())).toMatchObject({ discarded: 2, failed: 0 });
+      for (const [index, currentMessage] of messages.entries()) {
+        expect(h.logReplay).toHaveBeenNthCalledWith(index + 1, {
+          queueLabel,
+          messageId: currentMessage.messageId,
+          messageBody: currentMessage.body,
+          sourceQueue: displayName,
+          operation: 'discard',
+          status: 'pending',
+          reason: 'Job obsolete',
+          replayedBy: 'admin-1',
+        });
+        expect(h.deleteFromQueue).toHaveBeenNthCalledWith(index + 1, queueUrl, currentMessage.receiptHandle);
+        expect(h.finalizeDiscard).toHaveBeenNthCalledWith(
+          index + 1,
+          index === 0 ? 'first-log' : 'second-log',
+          'discarded',
+          undefined
+        );
+        expect(h.logReplay.mock.invocationCallOrder[index]).toBeLessThan(
+          h.deleteFromQueue.mock.invocationCallOrder[index]
+        );
+        expect(h.deleteFromQueue.mock.invocationCallOrder[index]).toBeLessThan(
+          h.finalizeDiscard.mock.invocationCallOrder[index]
+        );
+      }
+      expect(h.audit.mock.calls[0][1].details.discardedMessageIds).toEqual(messages.map(current => current.messageId));
+    }
+  );
 
   it('never deletes when the body cannot be retained', async () => {
     h.logReplay.mockRejectedValue(new Error('database unavailable'));
