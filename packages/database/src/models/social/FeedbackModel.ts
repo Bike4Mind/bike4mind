@@ -132,4 +132,13 @@ export const FeedbackModel: Model<IFeedbackDocument> =
 export const countNewFeedback = (options: { limit?: number } = {}): Promise<number> =>
   FeedbackModel.countDocuments({ status: FeedbackStatus.New }, { limit: options.limit }).exec();
 
+export async function oldestNewFeedbackAt(): Promise<Date | null> {
+  const row = await FeedbackModel.findOne({ status: FeedbackStatus.New })
+    .sort({ createdAt: 1 })
+    .select({ createdAt: 1 })
+    .maxTimeMS(2000)
+    .lean();
+  return row?.createdAt ?? null;
+}
+
 export default FeedbackModel;
