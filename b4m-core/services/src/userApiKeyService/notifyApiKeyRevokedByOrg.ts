@@ -13,15 +13,15 @@ export function renderApiKeyRevokedByOrgEmail(
     subject: `Your API key "${subjectName}" was revoked by your organization`,
     html: wrapEmail(
       `<p>Your API key <strong>${escapeHtml(keyName)}</strong>, billed to <strong>${escapeHtml(organizationName)}</strong>, ` +
-        `was revoked by an owner or manager of that organization. Requests made with it are now refused. ` +
-        `If you still need access, ask them, or create a new key from your account settings.</p>`,
+        `was revoked by an administrator of that organization. Requests made with it are now refused. ` +
+        `If you still need access, ask an administrator, or create a new key from your account settings.</p>`,
       'You are receiving this because you created this API key.'
     ),
   };
 }
 
 /**
- * Email a member whose org-billed key an org owner or manager revoked. Best-effort and never throws:
+ * Email a member whose org-billed key an org administrator revoked. Best-effort and never throws:
  * call it after the revoke commits, and a mail failure must not fail the revoke.
  */
 export async function notifyApiKeyRevokedByOrg(

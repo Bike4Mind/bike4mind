@@ -23,7 +23,8 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, unknown, unknown, { id?: string; keyId?: string }>(async (req, res) => {
     const user = req.user!;
     const org = await verifyOrgAccess(user, stringParam(req.query.id));
-    const reason = parseOrBadRequest(RevokeOrgApiKeyBodySchema, req.body)?.reason;
+    // A bodyless POST without a JSON content type reaches here as ''.
+    const reason = parseOrBadRequest(RevokeOrgApiKeyBodySchema, req.body || undefined)?.reason || undefined;
     const { apiKey } = await loadOrgOwnedKey(org.id, stringParam(req.query.keyId));
     if (apiKey.status === ApiKeyStatus.DISABLED) return res.status(200).json({ success: true });
 

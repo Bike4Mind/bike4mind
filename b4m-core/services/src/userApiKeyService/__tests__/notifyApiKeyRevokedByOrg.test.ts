@@ -15,6 +15,12 @@ describe('renderApiKeyRevokedByOrgEmail', () => {
     expect(html).not.toContain('<b>K');
   });
 
+  it('attributes the revoke to an organization administrator', () => {
+    const { html } = renderApiKeyRevokedByOrgEmail('Key', 'Acme');
+    expect(html).toContain('revoked by an administrator of that organization');
+    expect(html).not.toContain('owner or manager');
+  });
+
   it('strips CR and LF from the subject', () => {
     expect(renderApiKeyRevokedByOrgEmail('Key\r\nBcc: x@example.test', 'Acme').subject).not.toMatch(/[\r\n]/);
     expect(renderApiKeyRevokedByOrgEmail('Key\rBcc', 'Acme').subject).not.toMatch(/[\r\n]/);

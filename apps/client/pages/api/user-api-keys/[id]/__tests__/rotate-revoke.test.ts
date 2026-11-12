@@ -246,6 +246,16 @@ describe('POST /api/user-api-keys/[id]/revoke', () => {
     expect(notifyApiKeyOrgRevoke).toHaveBeenCalledWith('member-1', 'k', 'Acme', req.logger);
   });
 
+  it('fails the request, without notifying the holder or tearing down sockets, when the audit write throws', async () => {
+    revokeUserApiKey.mockResolvedValueOnce({ ...selfRevoke, holderUserId: 'member-1', organizationId: 'org-1' });
+    recordAdminActionFromRequest.mockRejectedValueOnce(new Error('audit store down'));
+    const { req, res } = post('key-1');
+    await expect(mockRefs.revokeHandler!(req, res)).rejects.toThrow('audit store down');
+    expect(notifyApiKeyOrgRevoke).not.toHaveBeenCalled();
+    expect(endKeyRealtimeConnections).not.toHaveBeenCalled();
+    expect(logEventSafe).not.toHaveBeenCalled();
+  });
+
   it('still audits and notifies the holder when the billing org document is gone', async () => {
     revokeUserApiKey.mockResolvedValueOnce({ ...selfRevoke, holderUserId: 'member-1', organizationId: 'org-1' });
     organizationRepository.findById.mockResolvedValueOnce(null);

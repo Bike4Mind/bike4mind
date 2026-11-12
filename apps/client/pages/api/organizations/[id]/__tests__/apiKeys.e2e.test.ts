@@ -96,7 +96,8 @@ async function call<T>(
   body?: unknown
 ): Promise<{ statusCode: number; data: T }> {
   const { req, res } = createMocks({ method, query, body });
-  Object.assign(req, { user: await User.findById(userId), logger });
+  // createMocks drops a falsy body; a bodyless POST reaches the handler as ''.
+  Object.assign(req, { user: await User.findById(userId), logger, ...(body === '' ? { body } : {}) });
   try {
     await (route as Route).routes[method]!(req, res);
   } catch (err) {
@@ -273,6 +274,22 @@ describe('org-owned API keys', () => {
     expect((await call(rotateHandler, 'POST', owner.id, { id: orgId, keyId })).statusCode).toBe(400);
     expect((await call(revokeHandler, 'POST', owner.id, { id: orgId, keyId }, {})).statusCode).toBe(200);
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('revokes on a bodyless POST that arrives as an empty string', async () => {
+    const { owner, creator, orgId } = await seedOrg();
+    const created = await call<IOrgApiKeySecretResponse>(
+      listHandler,
+      'POST',
+      creator.id,
+      { id: orgId },
+      { name: 'Svc', scopes: [ApiKeyScope.AI_CHAT] }
+    );
+    const keyId = created.data.apiKey.id;
+
+    expect((await call(revokeHandler, 'POST', owner.id, { id: orgId, keyId }, '')).statusCode).toBe(200);
+    expect((await authenticate(created.data.key, orgId)).ok).toBe(false);
+    expect((await userApiKeyRepository.findById(keyId))?.revokedBy).toBe(owner.id);
   });
 
   it('refuses to rotate an expired key, without an audit row', async () => {
