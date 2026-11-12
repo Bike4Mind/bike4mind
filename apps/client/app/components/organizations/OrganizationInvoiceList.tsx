@@ -14,6 +14,10 @@ const STATUS_VIEW: Record<string, { label: string; color: ChipProps['color'] }> 
 
 const statusView = (status: string) => STATUS_VIEW[status] ?? { label: status, color: 'neutral' as const };
 
+// Keyed off the list's own width, not the viewport: the org page's tab rail leaves the Billing
+// column far narrower than the screen. Below this the row stacks and its details wrap.
+const WIDE_ROW = '@container (min-width: 32rem)';
+
 // What the invoice charged: a paid one shows what was collected, anything else what is owed.
 const invoiceAmount = (invoice: OrgInvoice) => (invoice.status === 'paid' ? invoice.amountPaid : invoice.amountDue);
 
@@ -42,15 +46,18 @@ const OrganizationInvoiceList: FC<{ organizationId: string }> = ({ organizationI
   }
 
   return (
-    <Stack divider={<Divider />} spacing={1.5} data-testid="org-invoices">
+    <Stack divider={<Divider />} spacing={1.5} sx={{ containerType: 'inline-size' }} data-testid="org-invoices">
       {data.invoices.map(invoice => {
         const status = statusView(invoice.status);
         return (
-          <Stack
+          <Box
             key={invoice.id}
-            direction={{ xs: 'column', sm: 'row' }}
-            spacing={{ xs: 0.5, sm: 2 }}
-            alignItems={{ sm: 'center' }}
+            sx={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 0.5,
+              [WIDE_ROW]: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+            }}
             data-testid="org-invoices-row"
           >
             <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -59,21 +66,30 @@ const OrganizationInvoiceList: FC<{ organizationId: string }> = ({ organizationI
                 {invoice.number ?? invoice.id}
               </Typography>
             </Box>
-            {/* Fixed widths keep the amount, status and links in columns across rows. */}
-            <Stack direction="row" spacing={2} alignItems="center" sx={{ flexShrink: 0 }}>
+            {/* Wide rows fix the widths so amount, status and links line up in columns across rows. */}
+            <Box
+              sx={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                columnGap: 2,
+                rowGap: 0.5,
+                [WIDE_ROW]: { flexWrap: 'nowrap', flexShrink: 0 },
+              }}
+            >
               <Typography
                 level="body-md"
-                sx={{ minWidth: '6rem', textAlign: { sm: 'right' } }}
+                sx={{ [WIDE_ROW]: { minWidth: '6rem', textAlign: 'right' } }}
                 data-testid="org-invoices-amount"
               >
                 {formatMoney(invoiceAmount(invoice), invoice.currency)}
               </Typography>
-              <Box sx={{ width: '7rem' }}>
+              <Box sx={{ [WIDE_ROW]: { width: '7rem' } }}>
                 <Chip size="sm" variant="soft" color={status.color} data-testid="org-invoices-status">
                   {status.label}
                 </Chip>
               </Box>
-              <Stack direction="row" spacing={1.5} sx={{ width: '5rem' }}>
+              <Stack direction="row" spacing={1.5} sx={{ [WIDE_ROW]: { width: '5rem' } }}>
                 {invoice.hostedInvoiceUrl && (
                   <Link
                     href={invoice.hostedInvoiceUrl}
@@ -97,8 +113,8 @@ const OrganizationInvoiceList: FC<{ organizationId: string }> = ({ organizationI
                   </Link>
                 )}
               </Stack>
-            </Stack>
-          </Stack>
+            </Box>
+          </Box>
         );
       })}
       {data.hasMore && (

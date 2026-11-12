@@ -91,6 +91,19 @@ describe('OrganizationInvoiceList', () => {
     );
   });
 
+  it('stacks rows by default and lays them out in columns only when the list itself is wide', () => {
+    loaded([invoice()]);
+
+    renderList();
+
+    expect(getComputedStyle(screen.getByTestId('org-invoices')).getPropertyValue('container-type')).toBe('inline-size');
+    expect(getComputedStyle(screen.getByTestId('org-invoices-row')).flexDirection).toBe('column');
+    const css = Array.from(document.querySelectorAll('style'))
+      .map(style => style.textContent ?? '')
+      .join('\n');
+    expect(css).toMatch(/@container \(min-width: ?32rem\)\{[^}]*flex-direction:row;/);
+  });
+
   it('says so when there are no invoices', () => {
     loaded([]);
 
