@@ -4,6 +4,8 @@ vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
 }));
 import type { ServerSubagentTracker } from '@bike4mind/services/llm';
 import { OPTI_SURFACE, isShadowTier } from '@bike4mind/common';
+const organizationMfaGate = vi.hoisted(() => vi.fn());
+vi.mock('./agentExecutor.organizationMfa', () => ({ assertExecutionOrganizationMfa: organizationMfaGate }));
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
@@ -320,6 +322,7 @@ describe('processExecution tool deps', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    organizationMfaGate.mockResolvedValue(undefined);
     ws.frames.length = 0;
     ws.holdTextDelta = null;
     buildSharedToolsMock.mockImplementation(() => {
@@ -330,6 +333,20 @@ describe('processExecution tool deps', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('stops a continuation before tool building when the organization MFA gate refuses', async () => {
+    organizationMfaGate.mockRejectedValueOnce(new Error('Organization requires MFA'));
+    const { handler } = await import('./agentExecutor');
+    const { agentExecutionRepository, sessionRepository } = await import('@bike4mind/database');
+    vi.mocked(sessionRepository.findById).mockResolvedValue(baseSession as never);
+    await handler(continuationEvent(), lambdaContext);
+    expect(organizationMfaGate).toHaveBeenCalledOnce();
+    expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    expect(agentExecutionRepository.markFailed).toHaveBeenCalledWith(
+      'exec-1',
+      expect.objectContaining({ message: 'Organization requires MFA' })
+    );
   });
 
   it('passes every attached file and the resolved library opt-out to the tools', async () => {
