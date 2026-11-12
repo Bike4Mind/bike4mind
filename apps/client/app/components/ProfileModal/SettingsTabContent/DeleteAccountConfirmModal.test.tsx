@@ -112,6 +112,39 @@ describe('DeleteAccountConfirm', () => {
     expect(text).not.toContain('Org 5');
   });
 
+  const soleOrgsText = (count: number) => {
+    h.status = {
+      data: {
+        deletion: null,
+        ownedOrganizations: [],
+        soleOwnedOrganizations: Array.from({ length: count }, (_, i) => ({ id: `org-${i}`, name: `Org ${i}` })),
+      },
+      isLoading: false,
+    };
+    wrap(<DeleteAccountConfirm onCancel={vi.fn()} />);
+    return screen.getByTestId('delete-account-sole-owned-orgs').textContent;
+  };
+
+  it('uses singular copy for exactly one sole-owned organization', () => {
+    const text = soleOrgsText(1);
+    expect(text).toContain('only member of this team');
+    expect(text).toContain('so it will be deleted');
+    expect(text).toContain('Org 0');
+    expect(text).not.toContain('more');
+  });
+
+  it('lists exactly five sole-owned organizations without a remainder', () => {
+    const text = soleOrgsText(5);
+    expect(text).toContain('Org 0, Org 1, Org 2, Org 3, Org 4');
+    expect(text).not.toContain('more');
+  });
+
+  it('adds a remainder for the sixth sole-owned organization', () => {
+    const text = soleOrgsText(6);
+    expect(text).toContain('Org 0, Org 1, Org 2, Org 3, Org 4 and 1 more');
+    expect(text).not.toContain('Org 5');
+  });
+
   it('shows no organization notice when the user has no sole-owned organization', () => {
     wrap(<DeleteAccountConfirm onCancel={vi.fn()} />);
     expect(screen.queryByTestId('delete-account-sole-owned-orgs')).toBeNull();
