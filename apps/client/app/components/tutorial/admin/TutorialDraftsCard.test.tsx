@@ -1,0 +1,181 @@
+import React from 'react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
+
+const current = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+const mockMutate = vi.fn();
+const download = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/hooks/tutorials/useTutorialDrafts', () => ({
+  useTutorialDrafts: () => current.value,
+  useTutorialDraftAction: () => ({ mutate: mockMutate, isPending: false }),
+  TutorialDraftRefused: class extends Error {},
+}));
+vi.mock('./tutorialOverrideExport', () => ({ downloadModuleBundle: download }));
+
+import TutorialDraftsCard from './TutorialDraftsCard';
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+const renderCard = () =>
+  render(
+    <CssVarsProvider theme={appTheme}>
+      <TutorialDraftsCard apiBase="/api/test-tutorials" owner="core" />
+    </CssVarsProvider>
+  );
+
+function draft(patch: Record<string, unknown> = {}) {
+  return {
+    moduleId: 'my-sites',
+    title: 'Pick the sites',
+    pitch: 'p',
+    sourceSessionId: 's1',
+    revision: 1,
+    contentSeq: 3,
+    approved: false,
+    enabled: false,
+    content: {
+      moduleId: 'my-sites',
+      title: 'Pick the sites',
+      pitch: 'p',
+      transcript: [{ prompt: 'Pick sites', reply: 'Sure.' }],
+      steps: [],
+      finale: { title: 'F', body: 'B' },
+    },
+    preview: [{ id: 'bridge', type: 'questFinale', title: 'The finale', body: 'Done' }],
+    issues: [],
+    lastChange: null,
+    ...patch,
+  };
+}
+
+const CHOICES = {
+  anchors: [],
+  anchorScopes: [],
+  avoids: [],
+  canvasTabs: [] as string[],
+  stepTypes: ['prompt'],
+  visibility: false,
+};
+const setDrafts = (drafts: unknown[], choices: Record<string, unknown> = {}) => {
+  current.value = { data: { drafts, choices: { ...CHOICES, ...choices } }, isLoading: false, isError: false };
+};
+const fillCapture = () => {
+  fireEvent.change(screen.getByTestId('tutorial-capture-session'), { target: { value: 'sess-1' } });
+  fireEvent.change(screen.getByTestId('tutorial-capture-module-id'), { target: { value: 'my-sites' } });
+  fireEvent.change(screen.getByTestId('tutorial-capture-title'), { target: { value: 'Pick the sites' } });
+};
+const chooseOption = (testid: string, label: string) => {
+  fireEvent.click(screen.getByTestId(testid));
+  fireEvent.click(screen.getByRole('option', { name: label }));
+};
+const typeReason = () =>
+  fireEvent.change(screen.getByTestId('tutorial-drafts-reason'), { target: { value: 'checked it' } });
+
+describe('TutorialDraftsCard', () => {
+  beforeEach(() => {
+    mockMutate.mockReset();
+    download.mockReset();
+  });
+
+  it('captures a session with the id and title given', () => {
+    setDrafts([]);
+    renderCard();
+    fireEvent.change(screen.getByTestId('tutorial-capture-session'), { target: { value: 'sess-1' } });
+    fireEvent.change(screen.getByTestId('tutorial-capture-module-id'), { target: { value: 'my-sites' } });
+    fireEvent.change(screen.getByTestId('tutorial-capture-title'), { target: { value: 'Pick the sites' } });
+    fireEvent.click(screen.getByTestId('tutorial-capture-submit'));
+    expect(mockMutate.mock.calls[0][0]).toMatchObject({
+      action: 'capture',
+      sessionId: 'sess-1',
+      moduleId: 'my-sites',
+      title: 'Pick the sites',
+    });
+  });
+
+  it('shows the preview and approves it only with a reason', () => {
+    setDrafts([draft()]);
+    renderCard();
+    fireEvent.click(screen.getByTestId('tutorial-draft-open-my-sites'));
+    expect(screen.getByTestId('tutorial-draft-preview')).toHaveTextContent('The finale');
+    expect(screen.getByTestId('tutorial-draft-approve')).toBeDisabled();
+    typeReason();
+    fireEvent.click(screen.getByTestId('tutorial-draft-approve'));
+    expect(mockMutate.mock.calls[0][0]).toMatchObject({ action: 'approve', moduleId: 'my-sites', contentSeq: 3 });
+  });
+
+  it('keeps the switch off until the draft is approved, and approval off while rules fail', () => {
+    setDrafts([draft({ issues: [{ rule: 'draft-params', message: 'set the proven best' }] })]);
+    renderCard();
+    fireEvent.click(screen.getByTestId('tutorial-draft-open-my-sites'));
+    typeReason();
+    expect(screen.getByTestId('tutorial-draft-issues')).toHaveTextContent('set the proven best');
+    expect(screen.getByTestId('tutorial-draft-approve')).toBeDisabled();
+    expect(screen.getByTestId('tutorial-draft-enable').querySelector('input')).toBeDisabled();
+  });
+
+  it('keeps capture disabled until a visibility is chosen, and sends the choice', () => {
+    setDrafts([], { visibility: true });
+    renderCard();
+    fillCapture();
+    expect(screen.getByTestId('tutorial-capture-submit')).toBeDisabled();
+    chooseOption('tutorial-capture-visibility-kind', 'Entitlement key');
+    expect(screen.getByTestId('tutorial-capture-submit')).toBeDisabled();
+    fireEvent.change(screen.getByTestId('tutorial-capture-visibility-key'), { target: { value: 'pro:tools' } });
+    expect(screen.getByTestId('tutorial-capture-submit')).not.toBeDisabled();
+    fireEvent.click(screen.getByTestId('tutorial-capture-submit'));
+    expect(mockMutate.mock.calls[0][0]).toMatchObject({ action: 'capture', visibility: { entitlement: 'pro:tools' } });
+  });
+
+  it('sends an explicit Everyone choice as public', () => {
+    setDrafts([], { visibility: true });
+    renderCard();
+    fillCapture();
+    chooseOption('tutorial-capture-visibility-kind', 'Everyone');
+    fireEvent.click(screen.getByTestId('tutorial-capture-submit'));
+    expect(mockMutate.mock.calls[0][0]).toMatchObject({ visibility: { public: true } });
+  });
+
+  it('does not ask for a visibility when the host does not require one', () => {
+    setDrafts([]);
+    renderCard();
+    expect(screen.queryByTestId('tutorial-capture-visibility-kind')).not.toBeInTheDocument();
+    fillCapture();
+    fireEvent.click(screen.getByTestId('tutorial-capture-submit'));
+    expect(mockMutate.mock.calls[0][0]).not.toHaveProperty('visibility');
+  });
+
+  it('saves a changed visibility on a draft', () => {
+    setDrafts([draft({ content: { ...draft().content, visibility: { entitlement: 'pro:tools' } } })], {
+      visibility: true,
+    });
+    renderCard();
+    fireEvent.click(screen.getByTestId('tutorial-draft-open-my-sites'));
+    typeReason();
+    fireEvent.click(screen.getByTestId('tutorial-draft-save'));
+    expect(mockMutate.mock.calls[0][0]).not.toHaveProperty('visibility');
+    fireEvent.change(screen.getByTestId('tutorial-draft-visibility-key'), { target: { value: 'pro:other' } });
+    fireEvent.click(screen.getByTestId('tutorial-draft-save'));
+    expect(mockMutate.mock.calls[1][0]).toMatchObject({ action: 'save', visibility: { entitlement: 'pro:other' } });
+  });
+
+  it('shows the canvas node field only when the host has canvas tabs', () => {
+    setDrafts([draft()]);
+    const { unmount } = renderCard();
+    fireEvent.click(screen.getByTestId('tutorial-draft-open-my-sites'));
+    expect(screen.queryByTestId('tutorial-draft-canvas-node')).not.toBeInTheDocument();
+    unmount();
+    setDrafts([draft()], { canvasTabs: ['opti'] });
+    renderCard();
+    fireEvent.click(screen.getByTestId('tutorial-draft-open-my-sites'));
+    expect(screen.getByTestId('tutorial-draft-canvas-node')).toBeInTheDocument();
+  });
+
+  it('exports a bundle owned by the owner prop', () => {
+    setDrafts([draft()]);
+    renderCard();
+    fireEvent.click(screen.getByTestId('tutorial-draft-open-my-sites'));
+    fireEvent.click(screen.getByTestId('tutorial-draft-export'));
+    expect(download).toHaveBeenCalledWith(expect.objectContaining({ moduleId: 'my-sites' }), 'core');
+  });
+});
