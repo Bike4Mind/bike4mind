@@ -128,6 +128,29 @@ describe('/api/organizations/[id]/invite-links', () => {
     );
   });
 
+  describe('link role gate', () => {
+    const nonOwnerManager = { id: 'u-manager', email: 'manager@example.com' };
+
+    it.each([
+      ['an Editor', ['read', 'update']],
+      ['an Admin', ['read', 'update', 'share']],
+    ])('403s a non-owner manager minting %s link and creates nothing', async (_label, permissions) => {
+      await expect(call('post', validBody({ permissions }), nonOwnerManager)).rejects.toBeInstanceOf(ForbiddenError);
+      expect(mocks.createDocumentInvite).not.toHaveBeenCalled();
+      expect(mocks.audit).not.toHaveBeenCalled();
+    });
+
+    it('lets a non-owner manager mint a Viewer link', async () => {
+      const res = await call('post', validBody({ permissions: ['read'] }), nonOwnerManager);
+      expect(res._getStatusCode()).toBe(201);
+    });
+
+    it('lets a platform admin mint an Editor link', async () => {
+      const res = await call('post', validBody({ permissions: ['read', 'update'] }), { id: 'u-staff', isAdmin: true });
+      expect(res._getStatusCode()).toBe(201);
+    });
+  });
+
   it('lists only organization share links, with domains and revocation', async () => {
     const revokedAt = new Date();
     mocks.findInvites.mockResolvedValue([
@@ -169,7 +192,7 @@ describe('/api/organizations/[id]/invite-links', () => {
     ]);
   });
 
-  describe('admin-role link URLs', () => {
+  describe('above-Viewer link URLs', () => {
     const linkRow = (id: string, permissions: string[]) => ({
       id,
       token: `tok-${id}`,
@@ -183,6 +206,7 @@ describe('/api/organizations/[id]/invite-links', () => {
     beforeEach(() => {
       mocks.findInvites.mockResolvedValue([
         linkRow('admin-link', ['read', 'update', 'share']),
+        linkRow('editor-link', ['read', 'update']),
         linkRow('viewer-link', ['read']),
       ]);
     });
@@ -192,6 +216,7 @@ describe('/api/organizations/[id]/invite-links', () => {
     it('shows the owner every link URL, including admin-role ones', async () => {
       expect(linksById(await call('get'))).toEqual({
         'admin-link': 'https://app.test/share/tok-admin-link',
+        'editor-link': 'https://app.test/share/tok-editor-link',
         'viewer-link': 'https://app.test/share/tok-viewer-link',
       });
     });
@@ -201,7 +226,7 @@ describe('/api/organizations/[id]/invite-links', () => {
       expect(linksById(res)['admin-link']).toBe('https://app.test/share/tok-admin-link');
     });
 
-    it('withholds admin-role link URLs from a non-owner manager but still lists them', async () => {
+    it('withholds above-Viewer link URLs from a non-owner manager but still lists them', async () => {
       mocks.findOrganization.mockResolvedValue({
         id: ORG_ID,
         name: 'Acme',
@@ -211,9 +236,11 @@ describe('/api/organizations/[id]/invite-links', () => {
       const res = await call('get', undefined, { id: 'u-manager', email: 'manager@example.com' });
       expect(linksById(res)).toEqual({
         'admin-link': null,
+        'editor-link': null,
         'viewer-link': 'https://app.test/share/tok-viewer-link',
       });
       expect(JSON.stringify(res._getJSONData())).not.toContain('tok-admin-link');
+      expect(JSON.stringify(res._getJSONData())).not.toContain('tok-editor-link');
     });
   });
 });

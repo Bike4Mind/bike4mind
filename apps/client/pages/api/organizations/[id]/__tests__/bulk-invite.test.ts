@@ -153,6 +153,19 @@ describe('POST /api/organizations/:id/bulk-invite', () => {
     expect(mocks.createInvite).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['some invitable rows', ['new1@example.com']],
+    ['no invitable rows', ['member@example.com', 'bad']],
+  ])('403s a non-owner manager inviting admins with %s', async (_label, emails) => {
+    const error = await statusOf(
+      { emails, permissions: ['read', 'update', 'share'] },
+      { id: 'member-1', email: 'member@example.com' }
+    );
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect(mocks.findUsersByIds).not.toHaveBeenCalled();
+    expect(mocks.createInvite).not.toHaveBeenCalled();
+  });
+
   it('classifies each row and invites only the new ones, charging the org-bulk bucket', async () => {
     const res = await call({
       emails: [

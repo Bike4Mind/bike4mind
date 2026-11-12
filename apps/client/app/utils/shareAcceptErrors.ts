@@ -1,6 +1,6 @@
 import { isAxiosError } from 'axios';
 
-export type ShareAcceptFailureKind = 'revoked' | 'expired' | 'domain' | 'full' | 'member';
+export type ShareAcceptFailureKind = 'revoked' | 'expired' | 'domain' | 'full' | 'member' | 'used';
 
 export interface ShareAcceptFailure {
   kind: ShareAcceptFailureKind;
@@ -13,10 +13,9 @@ export interface ShareAcceptFailure {
 export function describeAcceptFailure(error: unknown): ShareAcceptFailure | null {
   if (!isAxiosError(error)) return null;
   const data: unknown = error.response?.data;
+  const envelope = data && typeof data === 'object' ? (data as { error?: unknown; message?: unknown }) : {};
   const message =
-    data && typeof data === 'object' && typeof (data as { message?: unknown }).message === 'string'
-      ? (data as { message: string }).message
-      : '';
+    typeof envelope.error === 'string' ? envelope.error : typeof envelope.message === 'string' ? envelope.message : '';
   if (message === 'Invite has been revoked') {
     return { kind: 'revoked', title: 'This invite was revoked', body: 'Ask the person who shared it for a new link.' };
   }
@@ -35,6 +34,13 @@ export function describeAcceptFailure(error: unknown): ShareAcceptFailure | null
   }
   if (message === 'You are already a member of this organization') {
     return { kind: 'member', title: "You're already a member", body: 'You already belong to this organization.' };
+  }
+  if (message === 'Invite has no remaining users') {
+    return {
+      kind: 'used',
+      title: 'This invite has been used up',
+      body: 'Ask the person who shared it for a new link.',
+    };
   }
   return null;
 }

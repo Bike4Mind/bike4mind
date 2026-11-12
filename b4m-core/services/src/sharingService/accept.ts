@@ -277,7 +277,12 @@ const acceptOrganization = async (
   if (!organization) {
     throw new NotFoundError('Organization not found');
   }
-  if (isMemberOf(organization, user.id)) throw new ConflictError('You are already a member of this organization');
+  // A named invite to an existing member is still consumed (by the caller's acceptRecipient), so its
+  // address leaves recipients.pending and stops reserving a seat; only a link join reports the 409.
+  if (isMemberOf(organization, user.id)) {
+    if (isLink) throw new ConflictError('You are already a member of this organization');
+    return;
+  }
 
   // A named invite's seat was reserved when it was minted, so only a link join holds the others back.
   // The reservation is read from Invite docs while the conditional update reads only the Organization,
@@ -295,7 +300,10 @@ const acceptOrganization = async (
   if (!added) {
     const current = await db.organization.findById(organizationId);
     if (!current) throw new NotFoundError('Organization not found');
-    if (isMemberOf(current, user.id)) throw new ConflictError('You are already a member of this organization');
+    if (isMemberOf(current, user.id)) {
+      if (isLink) throw new ConflictError('You are already a member of this organization');
+      return;
+    }
     throw new ForbiddenError('Organization is full');
   }
 

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { OrgInviteLink } from '@client/app/hooks/data/organizations';
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   revoke: vi.fn(),
   toastSuccess: vi.fn(),
+  confirm: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
@@ -18,6 +20,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
   useCreateOrganizationInviteLink: () => ({ mutate: mocks.create, isPending: false }),
   useRevokeOrganizationInviteLink: () => ({ mutate: mocks.revoke, isPending: false }),
 }));
+vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => mocks.confirm }));
 vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess, error: vi.fn() } }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (_key: string, fallback?: string) => fallback ?? _key }),
@@ -40,8 +43,8 @@ const link = (overrides: Partial<OrgInviteLink> = {}): OrgInviteLink => ({
   ...overrides,
 });
 
-const renderPanel = () =>
-  render(<InviteLinksPanel organizationId="org1" canGrantAdmin={false} />, { wrapper: TestWrapper });
+const renderPanel = (isOwnerTier = false) =>
+  render(<InviteLinksPanel organizationId="org1" isOwnerTier={isOwnerTier} />, { wrapper: TestWrapper });
 
 describe('InviteLinksPanel', () => {
   beforeEach(() => {
@@ -49,6 +52,7 @@ describe('InviteLinksPanel', () => {
     mocks.create.mockReset();
     mocks.revoke.mockReset();
     mocks.toastSuccess.mockReset();
+    mocks.confirm.mockReset();
   });
 
   it('copies the token link of an active row', async () => {
@@ -71,16 +75,32 @@ describe('InviteLinksPanel', () => {
     expect(screen.getByTestId('org-invite-link-revoke-l1')).toBeTruthy();
   });
 
-  it('revokes only after confirmation', () => {
+  it('revokes only once the confirmation dialog is accepted', async () => {
     mocks.links = [link()];
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
     renderPanel();
 
     fireEvent.click(screen.getByTestId('org-invite-link-revoke-l1'));
     expect(mocks.revoke).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId('org-invite-link-revoke-l1'));
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ type: 'danger' }));
+    await mocks.confirm.mock.calls[0][0].onOk();
     expect(mocks.revoke).toHaveBeenCalledWith('l1');
-    confirm.mockRestore();
+  });
+
+  it('offers a non-owner manager only the Viewer role for a link', async () => {
+    renderPanel(false);
+    await userEvent.click(screen.getByTestId('org-invite-link-role-select'));
+
+    expect(screen.getByRole('option', { name: 'Viewer' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Editor' })).toBeNull();
+    expect(screen.queryByRole('option', { name: 'Admin' })).toBeNull();
+  });
+
+  it('offers the owner tier every link role', async () => {
+    renderPanel(true);
+    await userEvent.click(screen.getByTestId('org-invite-link-role-select'));
+
+    expect(screen.getByRole('option', { name: 'Editor' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Admin' })).toBeTruthy();
   });
 
   it('offers no copy or revoke on a revoked row', () => {
@@ -110,10 +130,16 @@ describe('InviteLinksPanel', () => {
     );
   });
 
-  it('blocks create on a non-positive cap', () => {
+  it.each(['0', '1001'])('blocks create on an out-of-range cap of %s', value => {
     renderPanel();
-    fireEvent.change(screen.getByTestId('org-invite-link-cap-input'), { target: { value: '0' } });
+    fireEvent.change(screen.getByTestId('org-invite-link-cap-input'), { target: { value } });
     expect(screen.getByTestId('org-invite-link-create-btn')).toHaveProperty('disabled', true);
+  });
+
+  it('allows the largest cap the server accepts', () => {
+    renderPanel();
+    fireEvent.change(screen.getByTestId('org-invite-link-cap-input'), { target: { value: '1000' } });
+    expect(screen.getByTestId('org-invite-link-create-btn')).toHaveProperty('disabled', false);
   });
 
   it('parseDomains drops blanks and duplicates', () => {

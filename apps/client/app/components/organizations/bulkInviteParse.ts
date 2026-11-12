@@ -4,11 +4,45 @@ export const MAX_BULK_INVITE_ROWS = MAX_ORG_BULK_INVITE_ROWS;
 
 const stripBom = (text: string) => (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
 
-/** Addresses typed or pasted into the textarea, separated by whitespace, commas or semicolons. */
+const isListSeparator = (ch: string) => ch === ',' || ch === ';' || ch === '\n' || ch === '\r';
+
+/**
+ * Addresses typed or pasted into the textarea, separated by whitespace, commas or semicolons.
+ * A `Name <addr>` entry (mail-client copy format) yields just `addr`; the display name is dropped.
+ * Single linear scan.
+ */
 export function parseEmailList(text: string): string[] {
-  return stripBom(text)
-    .split(/[\s,;]+/)
-    .filter(Boolean);
+  const s = stripBom(text);
+  const out: string[] = [];
+  let i = 0;
+  while (i < s.length) {
+    if (isListSeparator(s[i])) {
+      i++;
+      continue;
+    }
+    let scan = i;
+    if (s[i] === '"') {
+      const close = s.indexOf('"', i + 1);
+      if (close !== -1) scan = close + 1;
+    }
+    while (scan < s.length && !isListSeparator(s[scan])) scan++;
+    const segment = s.slice(i, scan);
+    i = scan;
+
+    let pos = 0;
+    while (pos < segment.length) {
+      const lt = segment.indexOf('<', pos);
+      const gt = lt === -1 ? -1 : segment.indexOf('>', lt + 1);
+      if (gt === -1) {
+        for (const token of segment.slice(pos).split(/\s+/)) if (token) out.push(token);
+        break;
+      }
+      const addr = segment.slice(lt + 1, gt).trim();
+      if (addr) out.push(addr);
+      pos = gt + 1;
+    }
+  }
+  return out;
 }
 
 function firstCell(line: string): string {

@@ -521,7 +521,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         </Box>
       </Stack>
 
-      {canInviteMembers && <InviteLinksPanel organizationId={organization.id} canGrantAdmin={canGrantAdmin} />}
+      {canInviteMembers && <InviteLinksPanel organizationId={organization.id} isOwnerTier={canGrantAdmin} />}
 
       {pendingInvitesError && (
         <Typography color="danger" data-testid="organization-pending-invites-error">

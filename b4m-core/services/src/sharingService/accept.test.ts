@@ -186,9 +186,11 @@ describe('sharingService - acceptInvite (Organization)', () => {
     expect(mockAdapters.db.invites.acceptRecipient).not.toHaveBeenCalled();
   });
 
-  it('reports a concurrent join of the same user as already a member, not as full', async () => {
+  const linkOnly = { isLinkOnly: true, recipients: { pending: [], refused: [], accepted: [] } };
+
+  it('reports a concurrent link join of the same user as already a member, not as full', async () => {
     mockAdapters.db.users.findById.mockResolvedValue(makeUser());
-    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite(linkOnly));
     mockAdapters.db.organization.findById
       .mockResolvedValueOnce(makeOrganization())
       .mockResolvedValueOnce(makeOrganization({ users: [{ userId }] }));
@@ -200,14 +202,41 @@ describe('sharingService - acceptInvite (Organization)', () => {
   it.each([
     ['a member', makeOrganization({ users: [{ userId }] })],
     ['the owner', makeOrganization({ userId })],
-  ])('refuses %s with 409 before any write', async (_label, organization) => {
+  ])('refuses %s joining by link with 409 before any write', async (_label, organization) => {
     mockAdapters.db.users.findById.mockResolvedValue(makeUser());
-    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite(linkOnly));
     mockAdapters.db.organization.findById.mockResolvedValue(organization);
 
     await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).rejects.toThrow(ConflictError);
     expect(mockAdapters.db.organization.addMemberIfUnderCeiling).not.toHaveBeenCalled();
     expect(mockAdapters.db.invites.acceptRecipient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a member', makeOrganization({ users: [{ userId }] })],
+    ['the owner', makeOrganization({ userId })],
+  ])('consumes a named invite sent to %s without adding them again', async (_label, organization) => {
+    mockAdapters.db.users.findById.mockResolvedValue(makeUser());
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.organization.findById.mockResolvedValue(organization);
+
+    await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).resolves.toEqual({ id: inviteId });
+    expect(mockAdapters.db.invites.acceptRecipient).toHaveBeenCalledWith(inviteId, 'member@example.com');
+    expect(mockAdapters.db.organization.addMemberIfUnderCeiling).not.toHaveBeenCalled();
+    expect(mockAdapters.db.organization.ensureUserDetails).not.toHaveBeenCalled();
+    expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+  });
+
+  it('consumes a named invite when a concurrent join already added the user', async () => {
+    mockAdapters.db.users.findById.mockResolvedValue(makeUser());
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.organization.findById
+      .mockResolvedValueOnce(makeOrganization())
+      .mockResolvedValueOnce(makeOrganization({ users: [{ userId }] }));
+    mockAdapters.db.organization.addMemberIfUnderCeiling.mockResolvedValue(null);
+
+    await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).resolves.toEqual({ id: inviteId });
+    expect(mockAdapters.db.invites.acceptRecipient).toHaveBeenCalledWith(inviteId, 'member@example.com');
   });
 
   describe('share link', () => {

@@ -191,7 +191,10 @@ describe('SharePage', () => {
   } as never;
   const acceptRejects = (message: string, status: number) =>
     inviteMutations.accept.mockRejectedValue(
-      new AxiosError('fail', 'ERR', undefined, undefined, { status, data: { message } } as never)
+      new AxiosError('fail', 'ERR', undefined, undefined, {
+        status,
+        data: { name: 'UnprocessableEntityError', error: message, request_id: 'req-1' },
+      } as never)
     );
 
   it('shows a revoked modal, never Accept, when the link was revoked before opening', async () => {
@@ -215,6 +218,7 @@ describe('SharePage', () => {
     ['Invite has been revoked', 422, 'revoked'],
     ['This invite is limited to verified email addresses at example.com', 403, 'domain'],
     ['Organization is full', 403, 'full'],
+    ['Invite has no remaining users', 422, 'used'],
   ])('explains a refused join (%s) instead of going home', async (message, status, kind) => {
     vi.mocked(fetchInvite).mockResolvedValue(orgLink);
     acceptRejects(message, status);

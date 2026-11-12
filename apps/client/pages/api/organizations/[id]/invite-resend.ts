@@ -55,8 +55,12 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       );
     if (!invite) throw new NotFoundError('Pending invitation not found');
 
-    // Only a typed address was charged to the typed-address budget when the invite was created.
-    const budget = await reserveInviteSendBudget(user.id, [address], { chargeTypedAddresses: !parsed.data.userId });
+    // Only a typed address was charged to the typed-address budget when the invite was created. Org
+    // invites are sent in bulk, so a resend draws on the same org-bulk bucket as bulk-invite.ts.
+    const budget = await reserveInviteSendBudget(user.id, [address], {
+      chargeTypedAddresses: !parsed.data.userId,
+      typedAddressBucket: 'orgBulk',
+    });
     const cooldownKey = `rate-limit:invite-resend:${invite.id}:${address}`;
     const cooldown = await cacheRepository.tryAddWithinLimitFixedWindow(cooldownKey, 1, 1, INVITE_RESEND_COOLDOWN_MS);
     if (!cooldown.success) {

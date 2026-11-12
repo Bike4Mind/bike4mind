@@ -87,7 +87,10 @@ describe('POST /api/organizations/[id]/invite-resend', () => {
   it('resends a typed address, charging the typed budget and a per-invite cooldown', async () => {
     const res = await resend({ email: ' new@example.test ' });
     expect(res._getJSONData()).toEqual({ resent: true });
-    expect(mocks.reserve).toHaveBeenCalledWith('u-owner', ['new@example.test'], { chargeTypedAddresses: true });
+    expect(mocks.reserve).toHaveBeenCalledWith('u-owner', ['new@example.test'], {
+      chargeTypedAddresses: true,
+      typedAddressBucket: 'orgBulk',
+    });
     expect(mocks.tryAdd).toHaveBeenCalledWith(
       'rate-limit:invite-resend:invite-1:new@example.test',
       1,
@@ -108,7 +111,10 @@ describe('POST /api/organizations/[id]/invite-resend', () => {
     mocks.findUserById.mockResolvedValue({ id: 'user-2', email: 'Two@Example.test' });
     const res = await resend({ userId: 'user-2' });
     expect(res._getJSONData()).toEqual({ resent: true });
-    expect(mocks.reserve).toHaveBeenCalledWith('u-owner', ['two@example.test'], { chargeTypedAddresses: false });
+    expect(mocks.reserve).toHaveBeenCalledWith('u-owner', ['two@example.test'], {
+      chargeTypedAddresses: false,
+      typedAddressBucket: 'orgBulk',
+    });
     expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ recipients: ['two@example.test'] }));
   });
 

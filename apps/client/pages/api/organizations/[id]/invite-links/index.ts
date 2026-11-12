@@ -6,10 +6,14 @@ import { InviteType, isLinkOnlyInvite, Permission, roleForPermissions } from '@b
 import { inviteRepository } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { createDocumentInvite } from '@server/managers/createDocumentInvite';
-import { loadManagedOrganization, toOrgInviteLinkView } from '@server/organizations/orgInviteLinks';
+import {
+  canHandOutOrgInviteLink,
+  loadManagedOrganization,
+  toOrgInviteLinkView,
+} from '@server/organizations/orgInviteLinks';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
@@ -49,6 +53,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
       if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid request body');
       const { permissions, expiresAt, available, allowedDomains } = parsed.data;
       if (!roleForPermissions(permissions)) throw new BadRequestError('Invalid role for organization invite');
+      if (!canHandOutOrgInviteLink(req.user!, organization, permissions)) {
+        throw new ForbiddenError('Only the organization owner can create an Editor or Admin link');
+      }
 
       const created = await createDocumentInvite(req, {
         type: InviteType.Organization,

@@ -5,12 +5,15 @@ import {
   useRevokeOrganizationInviteLink,
   type OrgInviteLink,
 } from '@client/app/hooks/data/organizations';
+import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import LinkIcon from '@mui/icons-material/Link';
 import { Box, Button, Card, Chip, FormControl, FormLabel, Input, Option, Select, Stack, Typography } from '@mui/joy';
 import { FC, useState } from 'react';
 import { toast } from 'sonner';
 import OrgInviteRoleSelect from './OrgInviteRoleSelect';
 
+// Must stay in sync with sharingService.MAX_ORG_LINK_AVAILABLE (b4m-core/services/src/sharingService/create.ts).
+const MAX_ORG_LINK_AVAILABLE = 1000;
 const EXPIRY_PRESET_DAYS = [1, 7, 30] as const;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -34,10 +37,11 @@ const linkStatus = (link: OrgInviteLink): string => {
 
 interface InviteLinksPanelProps {
   organizationId: string;
-  canGrantAdmin: boolean;
+  /** isOrgOwnerOrPlatformAdmin: only the owner tier may mint a link above Viewer. */
+  isOwnerTier: boolean;
 }
 
-const InviteLinksPanel: FC<InviteLinksPanelProps> = ({ organizationId, canGrantAdmin }) => {
+const InviteLinksPanel: FC<InviteLinksPanelProps> = ({ organizationId, isOwnerTier }) => {
   const [role, setRole] = useState<OrgInviteRole>('viewer');
   const [days, setDays] = useState<number>(7);
   const [cap, setCap] = useState('');
@@ -45,9 +49,11 @@ const InviteLinksPanel: FC<InviteLinksPanelProps> = ({ organizationId, canGrantA
   const { data: links = [] } = useOrganizationInviteLinks(organizationId);
   const createLink = useCreateOrganizationInviteLink(organizationId);
   const revokeLink = useRevokeOrganizationInviteLink(organizationId);
+  const confirm = useConfirmation();
 
   const capValue = cap.trim() === '' ? undefined : Number(cap);
-  const capInvalid = capValue !== undefined && (!Number.isInteger(capValue) || capValue < 1);
+  const capInvalid =
+    capValue !== undefined && (!Number.isInteger(capValue) || capValue < 1 || capValue > MAX_ORG_LINK_AVAILABLE);
 
   const handleCreate = () => {
     const allowedDomains = parseDomains(domains);
@@ -73,8 +79,13 @@ const InviteLinksPanel: FC<InviteLinksPanelProps> = ({ organizationId, canGrantA
   };
 
   const handleRevoke = (link: OrgInviteLink) => {
-    if (!window.confirm('Revoke this invite link? Anyone holding it will no longer be able to join.')) return;
-    revokeLink.mutate(link.id);
+    confirm({
+      title: 'Revoke invite link',
+      description: 'Anyone holding this link will no longer be able to join.',
+      type: 'danger',
+      okLabel: 'Revoke',
+      onOk: () => revokeLink.mutate(link.id),
+    });
   };
 
   return (
@@ -86,7 +97,8 @@ const InviteLinksPanel: FC<InviteLinksPanelProps> = ({ organizationId, canGrantA
         <OrgInviteRoleSelect
           value={role}
           onChange={setRole}
-          canGrantAdmin={canGrantAdmin}
+          canGrantAdmin={isOwnerTier}
+          viewerOnly={!isOwnerTier}
           testId="org-invite-link-role-select"
         />
         <FormControl size="sm">
@@ -106,8 +118,8 @@ const InviteLinksPanel: FC<InviteLinksPanelProps> = ({ organizationId, canGrantA
         <FormControl size="sm" error={capInvalid}>
           <FormLabel>Max joins</FormLabel>
           <Input
-            slotProps={{ input: { 'data-testid': 'org-invite-link-cap-input' } }}
             type="number"
+            slotProps={{ input: { 'data-testid': 'org-invite-link-cap-input', min: 1, max: MAX_ORG_LINK_AVAILABLE } }}
             placeholder="Seats left"
             value={cap}
             onChange={event => setCap(event.target.value)}

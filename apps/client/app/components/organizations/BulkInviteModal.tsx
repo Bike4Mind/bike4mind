@@ -5,6 +5,8 @@ import {
   Button,
   Chip,
   ColorPaletteProp,
+  FormControl,
+  FormLabel,
   Modal,
   ModalClose,
   ModalDialog,
@@ -14,7 +16,7 @@ import {
   Typography,
 } from '@mui/joy';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
-import { ChangeEvent, FC, useMemo, useState } from 'react';
+import { ChangeEvent, FC, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BulkInviteRowStatus, BulkInviteResult, useBulkInviteOrganization } from '@client/app/hooks/data/organizations';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -64,6 +66,7 @@ const BulkInviteModal: FC<BulkInviteModalProps> = ({ organizationId, availableSe
   const [text, setText] = useState('');
   const [role, setRole] = useState<OrgInviteRole>('viewer');
   const [fileError, setFileError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const bulkInvite = useBulkInviteOrganization();
 
   const emails = useMemo(() => parseEmailList(text), [text]);
@@ -111,19 +114,35 @@ const BulkInviteModal: FC<BulkInviteModalProps> = ({ organizationId, availableSe
             canGrantAdmin={canGrantAdmin}
             testId="org-bulk-invite-role-select"
           />
-          <Textarea
-            minRows={4}
-            maxRows={10}
-            placeholder="ann@example.com, bob@example.com"
-            value={text}
-            onChange={event => setText(event.target.value)}
-            slotProps={{ textarea: { 'data-testid': 'org-bulk-invite-textarea' } }}
-          />
+          <FormControl>
+            <FormLabel>{t('organizations.modals.bulk_invite.addresses_label', 'Email addresses')}</FormLabel>
+            <Textarea
+              minRows={4}
+              maxRows={10}
+              placeholder="ann@example.com, bob@example.com"
+              value={text}
+              onChange={event => setText(event.target.value)}
+              slotProps={{ textarea: { 'data-testid': 'org-bulk-invite-textarea' } }}
+            />
+          </FormControl>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Button component="label" size="sm" variant="outlined" startDecorator={<UploadFileIcon />}>
+            <Button
+              size="sm"
+              variant="outlined"
+              startDecorator={<UploadFileIcon />}
+              data-testid="org-bulk-invite-upload"
+              onClick={() => fileInputRef.current?.click()}
+            >
               {t('organizations.modals.bulk_invite.upload', 'Upload CSV')}
-              <input hidden type="file" accept=".csv,.txt" data-testid="org-bulk-invite-file" onChange={handleFile} />
             </Button>
+            <input
+              ref={fileInputRef}
+              hidden
+              type="file"
+              accept=".csv,.txt"
+              data-testid="org-bulk-invite-file"
+              onChange={handleFile}
+            />
             <Typography level="body-xs" data-testid="org-bulk-invite-count">
               {emails.length} {emails.length === 1 ? 'address' : 'addresses'}
             </Typography>

@@ -8,18 +8,26 @@ interface OrgInviteRoleSelectProps {
   onChange: (role: OrgInviteRole) => void;
   /** Admin is offered only to callers the create route lets grant it (isOrgOwnerOrPlatformAdmin). */
   canGrantAdmin: boolean;
+  /** Offer Viewer only, e.g. a share link a non-owner manager mints (invite-links route gate). */
+  viewerOnly?: boolean;
   testId: string;
 }
 
-const OrgInviteRoleSelect: FC<OrgInviteRoleSelectProps> = ({ value, onChange, canGrantAdmin, testId }) => {
+const OrgInviteRoleSelect: FC<OrgInviteRoleSelectProps> = ({
+  value,
+  onChange,
+  canGrantAdmin,
+  viewerOnly = false,
+  testId,
+}) => {
   const { t } = useTranslation();
   return (
     <FormControl size="sm">
       <FormLabel>{t('organizations.modals.members.role_label', 'Role')}</FormLabel>
       <Select data-testid={testId} value={value} onChange={(_event, next) => next && onChange(next)}>
         <Option value="viewer">Viewer</Option>
-        <Option value="editor">Editor</Option>
-        {canGrantAdmin && <Option value="admin">Admin</Option>}
+        {!viewerOnly && <Option value="editor">Editor</Option>}
+        {!viewerOnly && canGrantAdmin && <Option value="admin">Admin</Option>}
       </Select>
     </FormControl>
   );

@@ -2,10 +2,17 @@
 // Invite many addresses to an organization in one call, reporting what happened to each row
 // instead of failing the whole batch on one existing member, bad address or missing seat.
 
-import { InviteType, isOrgMember, MAX_ORG_BULK_INVITE_ROWS, Permission, roleForPermissions } from '@bike4mind/common';
+import {
+  InviteType,
+  isOrgMember,
+  isOrgOwnerOrPlatformAdmin,
+  MAX_ORG_BULK_INVITE_ROWS,
+  Permission,
+  roleForPermissions,
+} from '@bike4mind/common';
 import { inviteRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { organizationService, sharingService } from '@bike4mind/services';
-import { BadRequestError, ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { createDocumentInvite } from '@server/managers/createDocumentInvite';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -38,13 +45,19 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     const parsed = bodySchema.safeParse(req.body);
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid request body');
     const { emails, permissions } = parsed.data;
-    if (!roleForPermissions(permissions)) throw new BadRequestError('Invalid role for organization invite');
+    const role = roleForPermissions(permissions);
+    if (!role) throw new BadRequestError('Invalid role for organization invite');
 
     const user = req.user!;
     const organization = await organizationRepository.findById(organizationId);
     // Same disclosure guard then authority gate as sharingService.createInvite's organization arm.
     if (!organization || !isOrgMember(user, organization)) throw new NotFoundError('Organization not found');
     organizationService.assertCanManageOrgGroups(user, organization);
+    // Repeats createInvite's admin gate before classification, so a batch with nothing invitable
+    // still refuses a non-owner rather than returning 200.
+    if (role === 'admin' && !isOrgOwnerOrPlatformAdmin(user, organization)) {
+      throw new ForbiddenError('Only the organization owner can invite an admin');
+    }
 
     const [members, owner, invites] = await Promise.all([
       userRepository.findByIds(organization.users.map(member => member.userId)),
