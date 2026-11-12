@@ -67,6 +67,15 @@ describe('ModelPricingCatalog', () => {
     expect(screen.getByTestId('model-pricing-source-gpt-y-per_token')).toHaveTextContent('operator');
   });
 
+  it('keeps the full catalog visible without locally paging away models', async () => {
+    mockGet.mockResolvedValue({
+      data: { rows: Array.from({ length: 30 }, (_, index) => ({ ...ROWS[0], modelId: `model-${index}` })) },
+    });
+    renderCatalog();
+    expect(await screen.findByTestId('model-pricing-row-model-29-per_token')).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^model-pricing-row-/)).toHaveLength(30);
+  });
+
   it('renders discovery rows as their own provenance, named by the feed that priced them', async () => {
     mockGet.mockResolvedValue({ data: { rows: [...ROWS, DISCOVERY_ROW] } });
     renderCatalog();
@@ -515,12 +524,12 @@ describe('ModelPricingCatalog', () => {
     renderCatalog();
     await screen.findByTestId('model-pricing-row-gpt-x-per_token');
 
-    fireEvent.change(screen.getByTestId('model-pricing-filter-input'), { target: { value: 'gpt-y' } });
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'gpt-y' } });
 
     expect(screen.getByTestId('model-pricing-row-gpt-y-per_token')).toBeInTheDocument();
     expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByTestId('model-pricing-filter-input'), { target: { value: 'nothing-like-this' } });
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'nothing-like-this' } });
     expect(screen.getByTestId('model-pricing-filter-empty')).toBeInTheDocument();
   });
 
@@ -528,7 +537,7 @@ describe('ModelPricingCatalog', () => {
     useCreditAnalysisStore.setState({ pricingModelId: 'gpt-y' });
     renderCatalog();
 
-    await waitFor(() => expect(screen.getByTestId('model-pricing-filter-input')).toHaveValue('gpt-y'));
+    await waitFor(() => expect(screen.getByTestId('admin-filter-search-input')).toHaveValue('gpt-y'));
     expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
     expect(useCreditAnalysisStore.getState().pricingModelId).toBeNull();
   });

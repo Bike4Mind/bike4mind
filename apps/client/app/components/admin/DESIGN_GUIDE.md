@@ -232,7 +232,7 @@ Build new admin pages from these, imported from `apps/client/app/components/admi
 ### Cards
 
 - A card is one `surface` with a 1 px `border`, 12 px radius, 16 px padding and no shadow. Group facts in a `SectionCard` and form fields in a `SettingsSection`.
-- **No card in a card.** Inside a card, separate groups with a 15 / 600 subheading, a `border` hairline or 16 px of space, never another bordered or grey box. The only surfaces allowed inside a card are a `DataTable`, a chart, a code block and an `Alert`.
+- **No card in a card.** Inside a card, separate groups with a 15 / 600 subheading, a `border` hairline or 16 px of space, never another bordered or grey box. The only surfaces allowed inside a card are a `DataTable`, a chart, a code block and an `Alert`. A `DataTable` that is a card's body (`SectionCard` with `body="custom"`) passes `framed={false}`, so the card's edge is the table's edge and there is no border or radius inside it.
 - No tinted backgrounds or colored borders on a card to signal state; put a `StatusChip` or an `Alert` in it instead.
 - Key numbers go in one `StatStrip`, not in separate tiles. A stat value is `ink` (`valueColor` only when the value is itself a status, such as a risk level); tiles are never solid green, orange or pastel, and carry no decorative icon.
 

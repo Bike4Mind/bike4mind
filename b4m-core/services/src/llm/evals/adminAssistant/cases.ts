@@ -44,6 +44,10 @@ export const ADMIN_EVAL_DECLINE_PATTERN = DECLINE;
 const NOT_FOUND =
   "\\b(?:not found|no (?:such )?org|no match|(?:couldn|didn)['\\u2019]?t find|could not find|did not find|do(?:es)? not exist|doesn['\\u2019]?t exist)";
 
+/** A reply saying the guide or the admin area has no such feature. */
+const NOT_COVERED =
+  "\\b(?:(?:don|doesn|isn)['\\u2019]?t (?:know|cover|have|exist|see)|do(?:es)? not (?:know|cover|have|exist|see)|not (?:aware|sure|familiar)|no (?:such|entry|tab|feature|information)|(?:couldn|didn)['\\u2019]?t find|could not find|did not find)";
+
 export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
   // where-is: the answer is a navigate_view hand-off to the right admin tab.
   {
@@ -81,6 +85,13 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     category: 'where-is',
     question: 'Where are the subscription plans managed?',
     expectViewIds: ['admin.subscriptions'],
+  },
+  {
+    // The Billing tab on a user profile: payments, subscription standing and credit funding in one place.
+    id: 'where-user-billing',
+    category: 'where-is',
+    question: "Where do I see one customer's payments, subscription and credit balance together?",
+    expectViewIds: ['admin.users'],
   },
 
   // how-to: the assistant is read-only, so it points at the tab rather than acting.
@@ -120,6 +131,13 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     question: 'How do I triage user bug reports?',
     expectViewIds: ['admin.feedback'],
   },
+  {
+    id: 'howto-advisories-guide',
+    category: 'how-to',
+    question: 'How do AI advisories work and where do I review them?',
+    expectViewIds: ['admin.dashboard', 'admin.users', 'admin.shadow_detections'],
+    expectTools: ['admin_search_guide'],
+  },
 
   // what-is: an explanation plus the tab it lives on.
   {
@@ -127,6 +145,7 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     category: 'what-is',
     question: 'What does Signup domain holds do?',
     expectViewIds: ['admin.signup_domain_holds'],
+    expectTools: ['admin_search_guide'],
     expect: ['\\bdomains?\\b', '\\b(?:holds?|held|suspicious|risky|paused)\\b'],
   },
   {
@@ -163,6 +182,22 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     question: 'What is Moderation review?',
     expectViewIds: ['admin.moderation_incidents'],
     expect: ['\\bmoderation\\b', '\\bimages?\\b'],
+  },
+  {
+    // No such feature: the guide has no entry, so the answer is "I don't know", not an invented tab.
+    id: 'what-unknown-feature',
+    category: 'what-is',
+    question: 'What does the Lighthouse Rewards tab do?',
+    expectTools: ['admin_search_guide'],
+    expect: [NOT_COVERED],
+  },
+  {
+    // Made up from real words, so the search returns related entries; none of them is this feature.
+    id: 'what-near-miss-feature',
+    category: 'what-is',
+    question: 'What does the credit rewards tab do?',
+    expectTools: ['admin_search_guide'],
+    expect: [NOT_COVERED],
   },
 
   // data: answered through an admin tool, against the seeded user where one is needed.

@@ -5,6 +5,7 @@ import { Config } from '../utils/config';
 import { registerToolGearObserver } from '../services/gears/toolGearObserver';
 import { contextToLogs } from '../utils/logger';
 import { Context, SQSEvent } from 'aws-lambda';
+import { recordFinalDlqFailures } from './dlqFailure';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();
@@ -53,12 +54,18 @@ export const dispatchWithLogger = <T = void>(
   return async (event: SQSEvent, context: Context): Promise<T> => {
     const logger = new Logger().withMetadata(contextToLogs(context));
 
-    await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
-
     try {
+      await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
       // logger.info(`Starting Queue Handler: ${context.functionName}`);
       return await handler(event, context, logger);
     } catch (error) {
+      try {
+        await recordFinalDlqFailures(event, error);
+      } catch (recordError) {
+        logger.warn(
+          `Could not record final DLQ failure: ${recordError instanceof Error ? recordError.message : String(recordError)}`
+        );
+      }
       // 4xx = expected business error (insufficient credits, validation) -> warn
       // 5xx / unknown = actual bug -> error (triggers CloudWatch -> SRE pipeline)
       if (error instanceof HTTPError && error.statusCode >= 400 && error.statusCode < 500) {

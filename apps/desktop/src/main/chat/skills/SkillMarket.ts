@@ -1,4 +1,5 @@
 import { isAxiosError } from 'axios';
+import { SKILL_SHARE_TOKEN_HEADER } from '@bike4mind/common';
 import type { OpenDialogOptions } from 'electron';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
@@ -80,7 +81,7 @@ export class SkillMarket {
     if (filters?.scope) params.scope = filters.scope;
     if (filters?.tools) params.tools = filters.tools;
     if (filters?.minRating) params.minRating = String(filters.minRating);
-    const read = await this.get(MARKET, params);
+    const read = await this.get(MARKET, { params });
     if ('error' in read) return { listings: [], hasMore: false, error: read.error };
     const body = asRecord(read.data);
     return { listings: toListings(body?.data), hasMore: body?.hasMore === true };
@@ -92,13 +93,12 @@ export class SkillMarket {
     return { listings: toListings(asRecord(read.data)?.data), hasMore: false };
   }
 
-  /** By id, or by an unlisted listing's share token (with or without the id), like the web. */
+  /** By an unlisted listing's share token when one is given, else by id; the id route ignores share tokens. */
   async listing(ref: SkillMarketListingRef): Promise<SkillMarketDetailResult> {
     if (typeof ref.id !== 'string' && typeof ref.token !== 'string') return { error: 'No listing to open.' };
-    const url = ref.id
-      ? `${MARKET}/${encodeURIComponent(ref.id)}`
-      : `${MARKET}/by-token/${encodeURIComponent(ref.token ?? '')}`;
-    const read = await this.get(url, ref.id && ref.token ? { token: ref.token } : undefined);
+    const read = ref.token
+      ? await this.get(`${MARKET}/by-token`, { headers: { [SKILL_SHARE_TOKEN_HEADER]: ref.token } })
+      : await this.get(`${MARKET}/${encodeURIComponent(ref.id ?? '')}`);
     if ('error' in read) return { error: read.error };
     const detail = toDetail(read.data);
     if (!detail) return { error: 'The server returned no listing.' };
@@ -143,7 +143,7 @@ export class SkillMarket {
 
   /** The account skills that came from the market, and whether the server has a newer version. */
   async imports(): Promise<SkillMarketImportsResult> {
-    const read = await this.get('/api/skills', { limit: String(SKILLS_LIMIT) });
+    const read = await this.get('/api/skills', { params: { limit: String(SKILLS_LIMIT) } });
     if ('error' in read) return { imports: [], error: read.error };
     const rows = asArray(asRecord(read.data)?.data);
     return {
@@ -373,7 +373,7 @@ export class SkillMarket {
     name: string,
     userId: string
   ): Promise<{ skill?: Record<string, unknown> } | { error: string }> {
-    const read = await this.get('/api/skills', { query: name, limit: String(SKILLS_LIMIT) });
+    const read = await this.get('/api/skills', { params: { query: name, limit: String(SKILLS_LIMIT) } });
     if ('error' in read) return read;
     const skill = asArray(asRecord(read.data)?.data)
       .map(asRecord)
@@ -443,13 +443,13 @@ export class SkillMarket {
 
   private async get(
     url: string,
-    params?: Record<string, string>,
+    request?: { params?: Record<string, string>; headers?: Record<string, string> },
     write = false
   ): Promise<{ data: unknown } | { error: string }> {
     const api = this.deps.getApiClient();
     if (!api) return { error: SIGNED_OUT };
     try {
-      const response = await api.getAxiosInstance().get(url, params ? { params } : undefined);
+      const response = await api.getAxiosInstance().get(url, request);
       return { data: response.data };
     } catch (err) {
       const error = describe(err, { write });

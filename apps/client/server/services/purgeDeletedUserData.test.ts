@@ -13,6 +13,7 @@ const {
   retainTracesMock,
   removeFromDetectionsMock,
   removeFromWatchesMock,
+  removeFromEvalSetsMock,
   deleteLimitEventsMock,
 } = vi.hoisted(() => ({
   deleteEmbedMock: vi.fn(),
@@ -27,6 +28,7 @@ const {
   retainTracesMock: vi.fn(),
   removeFromDetectionsMock: vi.fn(),
   removeFromWatchesMock: vi.fn(),
+  removeFromEvalSetsMock: vi.fn(),
   deleteLimitEventsMock: vi.fn(),
 }));
 
@@ -38,6 +40,7 @@ vi.mock('@bike4mind/database', () => ({
   hideDeletedAuthorAnnotations: hideAnnotationsMock,
   shadowDetectionRepository: { removeUser: removeFromDetectionsMock },
   campaignWatchRepository: { removeUser: removeFromWatchesMock },
+  abuseEvalSetRepository: { removeUser: removeFromEvalSetsMock },
   userLimitEventRepository: { deleteAllForUser: deleteLimitEventsMock },
 }));
 vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: retainTracesMock }));
@@ -69,6 +72,7 @@ beforeEach(() => {
   deleteAuthEventsMock.mockReset().mockResolvedValue(0);
   removeFromDetectionsMock.mockReset().mockResolvedValue(0);
   removeFromWatchesMock.mockReset().mockResolvedValue(undefined);
+  removeFromEvalSetsMock.mockReset().mockResolvedValue(0);
   retainTracesMock.mockReset().mockResolvedValue(0);
   revokeDriveMock.mockReset().mockResolvedValue('revoked');
   revokeAtlassianMock.mockReset().mockResolvedValue('revoked');
@@ -88,6 +92,7 @@ describe('purgeDeletedUserData', () => {
     expect(deleteAuthEventsMock).toHaveBeenCalledWith('u1');
     expect(removeFromDetectionsMock).toHaveBeenCalledWith('u1');
     expect(removeFromWatchesMock).toHaveBeenCalledWith('u1');
+    expect(removeFromEvalSetsMock).toHaveBeenCalledWith('u1');
     expect(deleteLimitEventsMock).toHaveBeenCalledWith('u1');
     expect(logger.error).not.toHaveBeenCalled();
   });
@@ -100,6 +105,16 @@ describe('purgeDeletedUserData', () => {
     ).resolves.toBeUndefined();
 
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('shadow detections'));
+  });
+
+  it('logs instead of throwing when removing the user from evaluation sets fails', async () => {
+    removeFromEvalSetsMock.mockRejectedValue(new Error('eval sets down'));
+
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('evaluation sets'));
   });
 
   it('logs instead of throwing when deleting auth events fails', async () => {

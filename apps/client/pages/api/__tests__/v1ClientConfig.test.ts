@@ -85,7 +85,7 @@ const INTERNAL_SETTINGS: Record<string, string> = {
   openaiDemoKey: 'sk-LEAK-MARKER-credential',
   anthropicDemoKey: 'sk-ant-LEAK-MARKER-credential',
   adminNotificationEmail: 'LEAK-MARKER-ops@example.com',
-  ReferralCreditsAmount: '424242',
+  signupGrantInviteBonusCredits: '424242',
 };
 
 function get() {

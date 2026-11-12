@@ -287,9 +287,8 @@ describe('public settings projection (M2.5 security boundary)', () => {
         'pricePerCredit',
         'MaxFileSize',
         'defaultEmbeddingModel',
-        // ReferralModal and useSystemPromptFiles() both read these by name with no
-        // admin guard - carry no secret, but were missed by the initial opt-in pass.
-        'ReferralCreditsAmount',
+        // useSystemPromptFiles() reads this by name with no admin guard - carries no
+        // secret, but was missed by the initial opt-in pass.
         'SystemFiles',
         // The Desktop app follows these rather than deciding deferral itself.
         'EnableDeferredToolLoading',

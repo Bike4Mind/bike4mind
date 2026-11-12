@@ -8,6 +8,7 @@ import {
 } from '../../../../../../../packages/database/src/__test__/createMongoServer';
 import {
   Quest,
+  Session,
   AdminSupportAccessAuditLog,
   adminSupportAccessAuditLogRepository,
   userRepository,
@@ -250,6 +251,57 @@ describe('GET /api/admin/model-logs/[id]', () => {
       expect(records[0]).toMatchObject({
         sessionId: 'session-1',
         details: { questId: quest.id, ownerUnresolved: true },
+      });
+    });
+
+    describe('owner resolved from the session when the log records none', () => {
+      const seedSessionOwnedLog = async () => {
+        const ownerUserId = new mongoose.Types.ObjectId().toString();
+        const session = await Session.create({
+          name: 'owned session',
+          userId: ownerUserId,
+          lastUpdated: new Date(),
+          firstCreated: new Date(),
+        });
+        const quest = await Quest.create({
+          sessionId: session.id,
+          type: 'message',
+          timestamp: new Date('2026-01-01T00:00:00Z'),
+          prompt: 'hello',
+          promptMeta: { session: { id: session.id, userId: 'placeholder' }, model: { name: 'claude-sonnet-5' } },
+        });
+        // The schema requires a recorded owner, so drop it past validation to mimic a legacy log.
+        await Quest.updateOne({ _id: quest._id }, { $unset: { 'promptMeta.session.userId': '' } });
+        return { ownerUserId, sessionId: session.id as string, quest };
+      };
+
+      it('audits the session owner as the target', async () => {
+        const { ownerUserId, sessionId, quest } = await seedSessionOwnedLog();
+        const { req, res } = run(quest.id);
+
+        await handler(req, res);
+
+        expect(res._getStatusCode()).toBe(200);
+        const records = await AdminSupportAccessAuditLog.find({}).lean();
+        expect(records).toHaveLength(1);
+        expect(records[0]).toMatchObject({ targetUserId: ownerUserId, sessionId });
+        expect(records[0].details).not.toHaveProperty('ownerUnresolved');
+      });
+
+      it('refuses when the session owner is in their deletion grace period, and records nothing', async () => {
+        const { ownerUserId, quest } = await seedSessionOwnedLog();
+        const findUserSpy = vi
+          .spyOn(userRepository, 'findById')
+          .mockResolvedValue({ deletion: { scheduledFor: new Date() } } as Awaited<
+            ReturnType<typeof userRepository.findById>
+          >);
+        const { req, res } = run(quest.id);
+
+        await expect(handler(req, res)).rejects.toMatchObject({ name: 'ForbiddenError' });
+        expect(findUserSpy).toHaveBeenCalledWith(ownerUserId);
+        expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+        expect(res._isEndCalled()).toBe(false);
+        findUserSpy.mockRestore();
       });
     });
 

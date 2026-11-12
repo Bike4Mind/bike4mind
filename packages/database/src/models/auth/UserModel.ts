@@ -7,6 +7,7 @@ import {
   VERIFIED_SLACK_IDENTITY_FILTER,
   canonicalizeEmail,
 } from '@bike4mind/common';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
   ADMIN_PERMISSIONS,
   AuthStrategy,
@@ -51,7 +52,6 @@ import BaseRepository from '@bike4mind/db-core';
 import { executeFacetCompatible } from '../../utils/documentdb-compat';
 import { buildCollectionSearchPipeline } from '../../queries/collectionSearchQuery';
 import { NETWORK_META_FIELDS } from './networkMetaFields';
-import { providerEndUserIdFor } from './providerEndUserId';
 
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -345,6 +345,31 @@ export type UserSignupLinkFacts = {
   signupMethod: string;
   landingNotebookOwnerId: string | null;
 };
+
+/**
+ * The signup and two-factor facts an advisory abuse assessment reads per account
+ * (UserRepository.findAccountRiskProfiles). The caller reduces them to flags before anything leaves.
+ */
+export type UserAccountRiskProfile = {
+  id: string;
+  createdAt: Date | null;
+  email: string | null;
+  /** As findSignupLinkFacts reads it. */
+  signupMethod: string;
+  signupIp: string | null;
+  signupJa4: string | null;
+  signupAsnKnown: boolean;
+  /** The signup ASN when known (a positive number); null otherwise. */
+  signupAsn: number | null;
+  signupDatacenter: boolean | null;
+  signupWafAnonIp: boolean | null;
+  totpEnabled: boolean;
+  /** When TOTP setup began; enabling follows within the same setup flow. */
+  mfaSetupAt: Date | null;
+};
+
+/** An account that may share a signup trait with another (UserRepository.findSignupLinkCandidates). */
+export type UserSignupLinkCandidate = UserLinkState & { signupIp: string | null; signupJa4: string | null };
 
 /** An account as the payment-risk linked-account checks read it; the blocked fields match accountBlockReasons. */
 export type UserLinkState = {
@@ -885,6 +910,81 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .maxTimeMS(2000)
       .lean();
     return docs.map(d => String(d._id));
+  }
+
+  /** Signup and two-factor facts per id; ids that are not users are absent. */
+  async findAccountRiskProfiles(ids: string[]): Promise<UserAccountRiskProfile[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select(
+        'createdAt email signupMeta.ip signupMeta.ja4 signupMeta.asn signupMeta.isDatacenter signupMeta.wafAnonIp ' +
+          'acquisition.signupMethod authProviders.strategy mfa.totpEnabled mfa.setupAt'
+      )
+      .lean();
+    return docs.map(doc => ({
+      id: String(doc._id),
+      createdAt: doc.createdAt ?? null,
+      email: doc.email ?? null,
+      signupMethod: doc.acquisition?.signupMethod ?? doc.authProviders?.[0]?.strategy ?? 'email',
+      signupIp: doc.signupMeta?.ip ?? null,
+      signupJa4: doc.signupMeta?.ja4 ?? null,
+      signupAsnKnown: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0,
+      signupAsn: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0 ? doc.signupMeta.asn : null,
+      signupDatacenter: doc.signupMeta?.isDatacenter ?? null,
+      signupWafAnonIp: doc.signupMeta?.wafAnonIp ?? null,
+      totpEnabled: doc.mfa?.totpEnabled === true,
+      mfaSetupAt: doc.mfa?.setupAt ?? null,
+    }));
+  }
+
+  /**
+   * Accounts created in [from, to] that share the signup IP, the signup JA4, a mailbox (any
+   * `+tag` of `mailbox.local` at any of `mailbox.domains`, dots ignored for Gmail) or a mail domain with the caller's account. Each
+   * criterion is optional; with none, nothing is read. Bounded by `limit` and the createdAt range.
+   */
+  async findSignupLinkCandidates(input: {
+    excludeIds: string[];
+    from: Date;
+    to: Date;
+    ip: string | null;
+    ja4: string | null;
+    mailbox: { local: string; domains: string[]; ignoreDots: boolean } | null;
+    mailDomain: string | null;
+    limit: number;
+  }): Promise<UserSignupLinkCandidate[]> {
+    const criteria: Record<string, unknown>[] = [];
+    if (input.ip) criteria.push({ 'signupMeta.ip': input.ip });
+    if (input.ja4) criteria.push({ 'signupMeta.ja4': input.ja4 });
+    if (input.mailbox) {
+      const local = [...input.mailbox.local].map(escapeRegExp).join(input.mailbox.ignoreDots ? '\\.?' : '');
+      const domains = input.mailbox.domains.map(escapeRegExp).join('|');
+      criteria.push({ email: { $regex: `^${local}(\\+[^@]*)?@(${domains})$`, $options: 'i' } });
+    }
+    if (input.mailDomain) criteria.push({ email: { $regex: `@${escapeRegExp(input.mailDomain)}$`, $options: 'i' } });
+    if (criteria.length === 0) return [];
+    const excluded = convertIds(input.excludeIds.filter(id => mongoose.Types.ObjectId.isValid(id)));
+    const docs = await this.model
+      .find({ createdAt: { $gte: input.from, $lte: input.to }, _id: { $nin: excluded }, $or: criteria })
+      .select(
+        'name email createdAt isBanned disputePending moderation.status signupMeta.ip signupMeta.ja4 currentCredits'
+      )
+      .limit(input.limit)
+      .maxTimeMS(2000)
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      name: d.name ?? null,
+      email: d.email ?? null,
+      createdAt: d.createdAt ?? null,
+      isBanned: d.isBanned ?? false,
+      disputePending: d.disputePending ?? false,
+      moderation: d.moderation?.status ? { status: d.moderation.status } : null,
+      signupIp: d.signupMeta?.ip ?? null,
+      signupJa4: d.signupMeta?.ja4 ?? null,
+      currentCredits: d.currentCredits ?? 0,
+    }));
   }
 
   /** Who `ids` are and whether each is blocked, for the payment-risk linked-account checks. */
@@ -1528,6 +1628,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // working password. Gates the SSO auto-link local-email-verified requirement in
     // verifyCallback.ts / okta/callback.ts.
     hasUsablePassword: { type: Boolean, default: false },
+    // toProviderEndUserId(_id): the identifier LLM providers receive for this account, stored so an
+    // admin can resolve a provider safety notice back to the account. Set on create; backfilled by
+    // migration 20260921241030. Hidden from reads like any other internal-only field.
+    providerEndUserId: { type: String, select: false },
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
     adminPermissions: { type: [String], enum: ADMIN_PERMISSIONS, default: [] },
@@ -1637,8 +1741,6 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     tshirtSize: { type: String, default: null },
     geoLocation: { type: String, default: null },
     stripeCustomerId: { type: String, default: null },
-    // Set by the save hook below; existing rows are backfilled by migration 20260921241030.
-    providerEndUserId: { type: String },
     securityQuestions: [SecurityQuestionSchema],
     userNotes: [UserNoteSchema],
     numReferralsAvailable: { type: Number, default: 0 },
@@ -1960,16 +2062,25 @@ UserSchema.pre('save', function (next) {
   next();
 });
 
-// Lets admins resolve a provider safety notice back to the account it names.
+// Derived from _id, so it never changes after create; insert paths that skip document middleware
+// (insertMany, bulkWrite) are covered by the backfill migration rather than this hook.
 UserSchema.pre('save', function (next) {
-  if (!this.providerEndUserId && this._id) this.providerEndUserId = providerEndUserIdFor(String(this._id));
+  if (this.isNew && !this.providerEndUserId) this.providerEndUserId = toProviderEndUserId(String(this._id));
   next();
 });
 
 // Stripe-customer resolution for business metrics.
 UserSchema.index({ stripeCustomerId: 1 }, { name: 'user_stripeCustomerId' });
-// Explicit name must match migration 20260921241030 so autoIndex and the migrator agree.
-UserSchema.index({ providerEndUserId: 1 }, { name: 'user_providerEndUserId', sparse: true });
+// Admin lookup of the account behind a provider safety notice. Partial so accounts created before the
+// backfill are not indexed as null. Explicit name so migration 20260921241030 and autoIndex agree.
+UserSchema.index(
+  { providerEndUserId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { providerEndUserId: { $type: 'string' } },
+    name: 'user_providerEndUserId',
+  }
+);
 
 // This will support the $or queries in findByUsernameOrEmail efficiently
 UserSchema.index({

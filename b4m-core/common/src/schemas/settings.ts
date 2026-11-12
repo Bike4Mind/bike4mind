@@ -52,7 +52,7 @@ import {
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
   TEAM_PLAN_SEATS_HARD_LIMIT,
 } from '../constants/organization';
-import { CHAT_MODELS, ChatModels } from '../models';
+import { CHAT_MODELS, ChatModels, supportedChatModels } from '../models';
 import { DECISION_MODEL_IDS } from '../decisions/catalog';
 import {
   BedrockEmbeddingModel,
@@ -374,7 +374,6 @@ export const SettingKeySchema = z.enum([
   'defaultTags',
   'EnableReferralToSlack',
   'EnableReferralToEmail',
-  'ReferralCreditsAmount',
   'ReferralFirstAnswerCredits',
   'ReferralFirstPaymentCredits',
   'ReferralSecondPaymentCredits',
@@ -482,6 +481,7 @@ export const SettingKeySchema = z.enum([
   'suspensionNoticeEmailEnabled',
   'abuseAssessmentConfig',
   'autoContainmentConfig',
+  'adminAiConfig',
   'thinkingVisibilityFree',
   'thinkingVisibilityPaid',
   'otcLimitSendPerEmailPerIp',
@@ -521,6 +521,7 @@ export const SettingKeySchema = z.enum([
   'signupNetworkAlertsEnabled',
   'signupNetworkAlertWindowMinutes',
   'signupNetworkAlertMaxPerIp',
+  'signupNetworkAlertMinUncorroboratedPerIp',
   'signupNetworkAlertMaxPerHostingAsn',
   'signupNetworkAlertMaxPerAsn',
   'shadowDetectionRecordingEnabled',
@@ -559,6 +560,7 @@ export const SettingKeySchema = z.enum([
   'signupGrantSignupPoolDaily',
   'signupGrantTricklePoolDaily',
   'signupGrantRiskPolicy',
+  'signupGrantUnprotectedMaxCredits',
   'signupGrantActivityMinActiveSeconds',
   'signupGrantActivityPreviewTestMode',
   'signupUnlockPaymentHoldHours',
@@ -1531,6 +1533,11 @@ export const UsagePatternSignalsConfigSchema = z.object({
         title: 'Quick API key',
         description: 'Score added when the first API key is created soon after email verification.',
       }),
+      scriptedGrantDrain: z.number().min(0).max(100).prefault(50).meta({
+        title: 'Scripted grant drain',
+        description:
+          'Score added when a fresh account unlocks the activity grant, spends most signup grants in few turns, then logs out. Equal to the default review threshold, so this signal alone flags needsReview.',
+      }),
     })
     .prefault({})
     .meta({
@@ -1572,6 +1579,22 @@ export const UsagePatternSignalsConfigSchema = z.object({
   quickApiKeyMaxDaysBeforeVerification: z.number().int().min(0).max(365).prefault(1).meta({
     title: 'Quick API key before verification (days)',
     description: 'A first key created up to this many days before verification also triggers quickApiKey.',
+  }),
+  scriptedDrainFreshHours: z.number().int().min(1).max(168).prefault(24).meta({
+    title: 'Scripted drain account age (hours)',
+    description: 'scriptedGrantDrain only applies to an account younger than this.',
+  }),
+  scriptedDrainMaxMinutes: z.number().int().min(5).max(1440).prefault(60).meta({
+    title: 'Scripted drain window (minutes)',
+    description: 'The whole sequence, from signup to logout, must fit within this many minutes.',
+  }),
+  scriptedDrainMinShare: z.number().min(0.1).max(1).prefault(0.6).meta({
+    title: 'Scripted drain minimum share',
+    description: 'Share (0.1-1) of the signup grants that one turn must spend.',
+  }),
+  scriptedDrainMaxTurns: z.number().int().min(1).max(50).prefault(3).meta({
+    title: 'Scripted drain maximum turns',
+    description: 'The sequence must take at most this many turns.',
   }),
 });
 
@@ -1657,8 +1680,103 @@ export const AutoContainmentConfigSchema = z.object({
     description:
       'A new account that signed up from the same IP as a blocked account within this many hours is assessed at once. 0 turns the rule off.',
   }),
+  deviceLinkWindowHours: z.number().int().min(0).max(720).prefault(168).meta({
+    title: 'Device-link window (hours)',
+    description:
+      'A new account used from the same uncommon device (screen, pixel ratio, user agent) as a banned account, plus one more agreeing signal (signups within this many hours, the same signup network, or the same uncommon TLS fingerprint), is recorded and assessed at once. 0 turns the rule off.',
+  }),
+  deviceLinkCommonNetworks: z.number().int().min(2).max(100).prefault(5).meta({
+    title: 'Device-link common networks',
+    description: 'A device seen on signups from this many distinct networks in 30 days is mainstream, never evidence.',
+  }),
 });
 export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
+
+export const ADMIN_AI_MODES = ['off', 'shadow', 'recommend', 'act'] as const;
+export type AdminAiMode = (typeof ADMIN_AI_MODES)[number];
+
+const adminAiFeatureLimits = {
+  mode: z.enum(ADMIN_AI_MODES).prefault('off').meta({
+    title: 'Mode',
+    description:
+      'off: no calls. shadow: suggest and record, show nothing. recommend: show the suggestion to admins. act: apply it as the system.',
+  }),
+  confidenceThreshold: z.number().min(0).max(1).prefault(0.8).meta({
+    title: 'Confidence threshold',
+    description:
+      'Probability (0-1) below which the escalation model is asked, and below which act mode does not apply.',
+  }),
+  dailyBudgetUsd: z.number().min(0).max(100).prefault(0).meta({
+    title: 'Daily budget (USD)',
+    description: 'Spend per day for this feature. 0 makes no calls.',
+  }),
+  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(0).meta({
+    title: 'Calls per day',
+    description:
+      "Model requests per day for this feature. A repair or an escalation is another request; a decision model's automatic retry counts with the request it retries. 0 makes no calls.",
+  }),
+};
+
+const decisionFeatureConfig = (title: string) =>
+  z
+    .object({
+      ...adminAiFeatureLimits,
+      model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null).meta({
+        title: 'Model',
+        description: 'Decisions model to ask; it must have a platform key. None makes no calls.',
+      }),
+      escalationModel: z.enum(DECISION_MODEL_IDS).nullable().prefault(null).meta({
+        title: 'Escalation model',
+        description: 'Decisions model asked once more when confidence is below the threshold. None skips escalation.',
+      }),
+    })
+    .prefault({})
+    .meta({ title });
+
+const textFeatureConfig = (title: string) =>
+  z
+    .object({
+      ...adminAiFeatureLimits,
+      model: supportedChatModels.nullable().prefault(null).meta({
+        title: 'Model',
+        description: 'Model id to ask. None uses the operations model.',
+      }),
+      escalationModel: supportedChatModels.nullable().prefault(null).meta({
+        title: 'Escalation model',
+        description: 'Model id asked once more when confidence is below the threshold. None skips escalation.',
+      }),
+    })
+    .prefault({})
+    .meta({ title });
+
+/**
+ * Switches and spend limits for admin AI suggestions (contract in schemas/adminAi.ts). Every default
+ * spends nothing: disabled, a zero monthly cap, and every feature off with a zero budget. Feature keys
+ * are explicit (not a record) so the admin settings form renders each as its own group; they must stay
+ * in sync with ADMIN_AI_FEATURES and ADMIN_AI_FEATURE_ENGINE.
+ */
+export const AdminAiConfigSchema = z.object({
+  enabled: z.boolean().prefault(false).meta({
+    title: 'Enabled',
+    description: 'Master switch for every admin AI feature.',
+  }),
+  monthlyCapUsd: z.number().min(0).max(1000).prefault(0).meta({
+    title: 'Monthly cap (USD)',
+    description: 'Total spend per calendar month across all features. 0 makes no calls.',
+  }),
+  features: z
+    .object({
+      abuseAssessment: decisionFeatureConfig('Abuse assessment'),
+      domainHold: decisionFeatureConfig('Domain hold'),
+      detectionTriage: decisionFeatureConfig('Detection triage'),
+      feedbackTriage: textFeatureConfig('Feedback triage'),
+      dlqTriage: textFeatureConfig('DLQ triage'),
+      morningBrief: textFeatureConfig('Morning brief'),
+    })
+    .prefault({})
+    .meta({ title: 'Features' }),
+});
+export type AdminAiConfig = z.infer<typeof AdminAiConfigSchema>;
 
 /**
  * Operator limits for the advisory assessment of young-domain signup holds
@@ -2637,6 +2755,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
       { key: 'signupGrantRiskPolicy', order: 8 },
+      { key: 'signupGrantUnprotectedMaxCredits', order: 8.1 },
       { key: 'signupGrantActivityMinActiveSeconds', order: 11.5 },
       { key: 'signupGrantActivityPreviewTestMode', order: 14.5 },
       { key: 'signupUnlockPaymentHoldHours', order: 14.6 },
@@ -2694,6 +2813,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupNetworkAlertsEnabled', order: 40 },
       { key: 'signupNetworkAlertWindowMinutes', order: 41 },
       { key: 'signupNetworkAlertMaxPerIp', order: 42 },
+      { key: 'signupNetworkAlertMinUncorroboratedPerIp', order: 42.5 },
       { key: 'signupNetworkAlertMaxPerHostingAsn', order: 43 },
       { key: 'signupNetworkAlertMaxPerAsn', order: 44 },
       { key: 'shadowDetectionRecordingEnabled', order: 44.5 },
@@ -2971,6 +3091,13 @@ export const API_SERVICE_GROUPS = {
       { key: 'abuseAssessmentConfig', order: 2 },
       { key: 'autoContainmentConfig', order: 3 },
     ],
+  },
+  ADMIN_AI: {
+    id: 'adminAiService',
+    name: 'Admin AI Suggestions',
+    description: 'Model suggestions on admin queues (abuse, domain holds, triage, morning brief), with spend caps',
+    icon: 'Security',
+    settings: [{ key: 'adminAiConfig', order: 1 }],
   },
   API_CLIENTS: {
     id: 'apiClientsService',
@@ -4250,17 +4377,6 @@ export const settingsMap = {
     description: 'Sends a notification to Slack when a referral is sent.',
     category: 'Referrals',
   }),
-  ReferralCreditsAmount: makeNumberSetting({
-    key: 'ReferralCreditsAmount',
-    name: 'Referral Credits Amount',
-    defaultValue: 10000,
-    description:
-      'Credits a user who signs up with a referral invite receives, as a floor: a larger amount on the invite wins. Other self-serve signups receive the signup grant schedule (Signup Grant Initial Credits) instead.',
-    category: 'Referrals',
-    // ReferralModal renders this for every non-admin sender - no secret, just the number
-    // displayed in the "invited person gets N credits" line.
-    userReadable: true,
-  }),
   ReferralFirstAnswerCredits: makeNumberSetting({
     key: 'ReferralFirstAnswerCredits',
     name: 'Referral Reward: First Answer',
@@ -4938,7 +5054,7 @@ export const settingsMap = {
     name: 'Usage Pattern Signals',
     defaultValue: false,
     description:
-      'Runs an hourly job that computes usage pattern signals for recently active free-tier accounts and stores the latest result per account for review. Read-only: it never changes an account, its keys or its credits.',
+      'Runs an hourly job that computes usage pattern signals for recently active free-tier accounts and stores the latest result per account for review. A scripted grant drain is also recorded as a shadow detection (while shadow detection recording is on), which the advisory assessment and automated containment may then pick up as their own settings allow. The job itself never changes an account, its keys or its credits.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.USAGE_PATTERN_SIGNALS.id,
     order: 1,
@@ -4948,7 +5064,7 @@ export const settingsMap = {
     name: 'Usage Pattern Signals: Thresholds and Weights',
     defaultValue: UsagePatternSignalsConfigSchema.parse({}),
     description:
-      'Which accounts are analyzed (activeWindowHours, maxUsersPerRun, maxEventsPerUser), the windows for the API-only signal (apiOnlyLookbackDays) and for cadence and polling (lookbackDays), the weight (0-100) of each signal, the score at which an account needs review, and the per-signal thresholds. Unknown fields are ignored.',
+      'Which accounts are analyzed (activeWindowHours, maxUsersPerRun, maxEventsPerUser), the windows for the API-only signal (apiOnlyLookbackDays) and for cadence and polling (lookbackDays), the weight (0-100) of each signal, the score at which an account needs review, and the per-signal thresholds. scriptedGrantDrain triggers on an account younger than scriptedDrainFreshHours that turned on 2FA and unlocked the activity grant, then spent at least scriptedDrainMinShare of its signup grants in one turn and logged out, all within scriptedDrainMaxMinutes of signup and in at most scriptedDrainMaxTurns turns. Unknown fields are ignored.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.USAGE_PATTERN_SIGNALS.id,
     order: 2,
@@ -4992,12 +5108,23 @@ export const settingsMap = {
     name: 'Automated Containment from Abuse Assessments',
     defaultValue: AutoContainmentConfigSchema.parse({}),
     description:
-      "What happens when an abuse assessment judges a detection as abuse at or above minConfidence (0.5-1). mode: off (nothing), shadow (records the decision for grading against the detection's admin verdict and changes no account; the default) or enforce (contains the accounts through the bulk Contain path: suspended, Stripe subscriptions canceled, positive balance removed, API keys revoked, sessions ended, attributed to the system with the evidence as the reason). Unsuspend on the user profile reverses the suspension; revoked keys stay revoked and a removed balance is not restored. maxPerHour caps decisions per hour, counted per mode (over it, the decision is recorded as capped and re-evaluated after the hour); maxAccountsPerDetection sends larger detections to an admin; blockEmailDomains also blocks the accounts' owned email domains, which refuses every new signup on that domain, so one false positive on a shared corporate or campus network blocks the whole domain (leave it off until shadow precision is known); strongLinkWindowHours assesses a new account at once when it signed up from the same IP as a blocked account within that many hours (0 turns the rule off). Needs the advisory assessment on.",
+      "What happens when an abuse assessment judges a detection as abuse at or above minConfidence (0.5-1). mode: off (nothing), shadow (records the decision for grading against the detection's admin verdict and changes no account; the default) or enforce (contains the accounts through the bulk Contain path: suspended, Stripe subscriptions canceled, positive balance removed, API keys revoked, sessions ended, attributed to the system with the evidence as the reason). Unsuspend on the user profile reverses the suspension; revoked keys stay revoked and a removed balance is not restored. maxPerHour caps decisions per hour, counted per mode (over it, the decision is recorded as capped and re-evaluated after the hour); maxAccountsPerDetection sends larger detections to an admin; blockEmailDomains also blocks the accounts' owned email domains, which refuses every new signup on that domain, so one false positive on a shared corporate or campus network blocks the whole domain (leave it off until shadow precision is known); strongLinkWindowHours assesses a new account at once when it signed up from the same IP as a blocked account within that many hours (0 turns the rule off); deviceLinkWindowHours does the same for a new account used from the same device (screen size, pixel ratio and browser) as a banned account, when the device is uncommon (seen on fewer than deviceLinkCommonNetworks networks in 30 days) and one more signal agrees: the same residential signup network, the same uncommon TLS fingerprint, or signups within that many hours (0 turns the rule off; abuse assessments still show device-link evidence, at the default window). Needs the advisory assessment on.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.ABUSE_ASSESSMENT.id,
     order: 3,
     dependsOn: 'abuseAssessmentEnabled',
     schema: AutoContainmentConfigSchema,
+  }),
+  adminAiConfig: makeObjectSetting({
+    key: 'adminAiConfig',
+    name: 'Admin AI Suggestions: Modes and Limits',
+    defaultValue: AdminAiConfigSchema.parse({}),
+    description:
+      'Master switch, a monthly USD cap across all features, and per feature: mode (off, shadow, recommend, act), model, escalation model, confidence threshold, daily USD budget and calls per day. The defaults make no calls. For text features (feedback triage, DLQ triage, morning brief) a model of None uses the operations model.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.ADMIN_AI.id,
+    order: 1,
+    schema: AdminAiConfigSchema,
   }),
   // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
   // the model picker (apps/client/server/utils/callerModelList.ts).
@@ -5329,7 +5456,18 @@ export const settingsMap = {
     defaultValue: { enabled: false },
     schema: z.record(z.string(), z.unknown()),
     description:
-      'Private server assessment policy for new staged signup tranches. Invalid or unavailable enabled policies hold the tranche.',
+      'Private server assessment policy for new staged signup tranches. Saving an invalid policy is refused; an enabled policy that is unavailable at payout holds the tranche.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantUnprotectedMaxCredits: makeNumberSetting({
+    key: 'signupGrantUnprotectedMaxCredits',
+    name: 'Unprotected Signup Grant Limit (credits)',
+    defaultValue: 1000,
+    min: 0,
+    int: true,
+    description:
+      'Largest Signup Grant Initial Credits or Invite Bonus Credits that can be saved while the Signup Grant Assessment Policy is off. A larger grant needs a valid, enabled policy, and the policy cannot be turned off while a grant is above this limit. While the policy is off, the first signup tranche paid at verification is also capped at this limit and the rest waits for the unlock. Full administrators only.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -5398,7 +5536,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero disables the drip and pays an invite in full at signup. While unset, nothing drips and an invite pays its initial share at signup, the rest on unlock.',
+      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero, or unset, disables the drip.',
     category: 'Users',
   }),
   signupGrantInviteBonusCredits: makeNumberSetting({
@@ -6166,7 +6304,19 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
-      'Alert when more self-serve accounts than this signed up from one IP within the window. 0 turns the check off.',
+      'Alert when more self-serve accounts than this signed up from one IP within the window and a corroborating signal ties them (see the uncorroborated threshold below). 0 turns the check off.',
+  }),
+  signupNetworkAlertMinUncorroboratedPerIp: makeNumberSetting({
+    key: 'signupNetworkAlertMinUncorroboratedPerIp',
+    name: 'Signup Network Alert: Min Signups per IP Without Corroboration',
+    defaultValue: 3,
+    int: true,
+    min: 1,
+    max: 1000,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Households and mobile carriers put a few unrelated people behind one IP. Below this many self-serve signups from one IP within the window, an IP alert also needs a corroborating signal: a hosting or anonymous-IP network, or an earlier signup on the IP sharing the JA4, mailbox or company mail domain, or already spending credits. Set it to one more than the max per IP to alert on the count alone.',
   }),
   signupNetworkAlertMaxPerHostingAsn: makeNumberSetting({
     key: 'signupNetworkAlertMaxPerHostingAsn',

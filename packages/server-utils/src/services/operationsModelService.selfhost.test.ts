@@ -43,6 +43,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('../utils/modelResolvers', () => ({
+  DEFAULT_OPERATIONS_IMAGE_MODEL: 'flux-3-image-klein',
   getDefaultImageModel: mockGetDefaultImageModel,
   getApiKeyTypeFromBackend: vi.fn(),
 }));

@@ -1,5 +1,7 @@
 import {
   API_KEY_COMPLETION_SOURCES,
+  API_COMPLETION_OUTCOMES,
+  type ApiCompletionObservation,
   type ApiKeyBillingOwnerType,
   type ApiKeyCompletionSource,
   CreditHolderType,
@@ -11,6 +13,7 @@ import {
 } from '@bike4mind/common';
 import mongoose, { Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { User } from './UserModel';
 
 export interface IApiKeyUsageLogDocument extends IMongoDocument {
   keyId: string;
@@ -28,6 +31,7 @@ export interface IApiKeyUsageLogDocument extends IMongoDocument {
   source?: ApiKeyCompletionSource;
   /** The key's billing owner when the request was made (same rule as reserveRequestCredits). */
   ownerType?: ApiKeyBillingOwnerType;
+  completionObservation?: ApiCompletionObservation;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -42,6 +46,18 @@ const ApiKeyUsageLogSchema = new mongoose.Schema<IApiKeyUsageLogDocument>(
     method: { type: String, required: true },
     responseTime: { type: Number, required: true },
     statusCode: { type: Number, required: true },
+    completionObservation: {
+      type: new mongoose.Schema(
+        {
+          requestId: { type: String, required: true, maxlength: 128 },
+          requestedModel: { type: String, required: true, maxlength: 256 },
+          startedAt: { type: String, required: true },
+          outcome: { type: String, required: true, enum: API_COMPLETION_OUTCOMES },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     source: { type: String, enum: API_KEY_COMPLETION_SOURCES },
     ownerType: { type: String, enum: [CreditHolderType.User, CreditHolderType.Organization] },
   },
@@ -66,6 +82,48 @@ export const ApiKeyUsageLog: Model<IApiKeyUsageLogDocument> =
 export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocument> {
   constructor(model: Model<IApiKeyUsageLogDocument>) {
     super(model);
+  }
+
+  /** A server-owned log id keeps caller correlation ids from deduplicating independent calls. */
+  async beginCompletionObservation(
+    input: Pick<
+      IApiKeyUsageLogDocument,
+      'keyId' | 'userId' | 'ipAddress' | 'endpoint' | 'method' | 'source' | 'ownerType' | 'completionObservation'
+    >
+  ): Promise<string | null> {
+    const available = () =>
+      User.exists({ _id: input.userId, deletedAt: null, 'deletion.purgeStartedAt': null }).maxTimeMS(2_000);
+    const id = new mongoose.Types.ObjectId();
+    await this.model.updateOne(
+      { _id: id },
+      { $setOnInsert: { ...input, timestamp: new Date(), responseTime: 0, statusCode: 0 } },
+      { upsert: true, maxTimeMS: 2_000 }
+    );
+    try {
+      if (await available()) return String(id);
+    } catch (error) {
+      try {
+        await this.model.deleteOne({ _id: id }).maxTimeMS(2_000);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Completion start reconciliation failed');
+      }
+      throw error;
+    }
+    await this.model.deleteOne({ _id: id }).maxTimeMS(2_000);
+    return null;
+  }
+
+  async finishCompletionObservation(
+    id: string,
+    userId: string,
+    input: Pick<IApiKeyUsageLogDocument, 'statusCode' | 'responseTime' | 'completionObservation'>
+  ): Promise<void> {
+    // Never upsert: account purge may have removed the start row while the request was running.
+    await this.model.updateOne(
+      { _id: id, userId },
+      { $set: { ...input, timestamp: new Date() } },
+      { maxTimeMS: 2_000 }
+    );
   }
 
   /**
@@ -105,8 +163,9 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
       .exec();
 
     const totalRequests = logs.length;
+    const timedLogs = logs.filter(log => log.statusCode !== 0);
     const avgResponseTime =
-      totalRequests > 0 ? logs.reduce((sum, log) => sum + log.responseTime, 0) / totalRequests : 0;
+      timedLogs.length > 0 ? timedLogs.reduce((sum, log) => sum + log.responseTime, 0) / timedLogs.length : 0;
     const uniqueIPs = Array.from(new Set(logs.map(log => log.ipAddress)));
     const timeRangeMinutes = (endDate.getTime() - startDate.getTime()) / (1000 * 60);
     const requestsPerMinute = timeRangeMinutes > 0 ? totalRequests / timeRangeMinutes : 0;
@@ -243,9 +302,15 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
               $group: {
                 _id: { endpoint: '$endpoint', method: '$method' },
                 requests: { $sum: 1 },
-                totalResponseTime: { $sum: '$responseTime' },
+                totalResponseTime: { $sum: { $cond: [{ $gt: ['$statusCode', 0] }, '$responseTime', 0] } },
+                timedRequests: { $sum: { $cond: [{ $gt: ['$statusCode', 0] }, 1, 0] } },
                 errors: { $sum: { $cond: [{ $gte: ['$statusCode', 400] }, 1, 0] } },
-                responseTimes: { $push: '$responseTime' },
+                responseTimes: { $push: { $cond: [{ $gt: ['$statusCode', 0] }, '$responseTime', null] } },
+              },
+            },
+            {
+              $addFields: {
+                responseTimes: { $filter: { input: '$responseTimes', cond: { $ne: ['$$this', null] } } },
               },
             },
             {
@@ -267,10 +332,10 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
                 method: '$_id.method',
                 requests: 1,
                 avgResponseTimeMs: {
-                  $cond: [{ $gt: ['$requests', 0] }, { $divide: ['$totalResponseTime', '$requests'] }, 0],
+                  $cond: [{ $gt: ['$timedRequests', 0] }, { $divide: ['$totalResponseTime', '$timedRequests'] }, 0],
                 },
                 p95ResponseTimeMs: {
-                  $arrayElemAt: [{ $sortArray: { input: '$responseTimes', sortBy: 1 } }, '$p95Index'],
+                  $ifNull: [{ $arrayElemAt: [{ $sortArray: { input: '$responseTimes', sortBy: 1 } }, '$p95Index'] }, 0],
                 },
                 errorRate: { $cond: [{ $gt: ['$requests', 0] }, { $divide: ['$errors', '$requests'] }, 0] },
               },

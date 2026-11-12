@@ -146,7 +146,7 @@ export const RiskEvidenceCard: React.FC<{ userId: string }> = ({ userId }) => {
     return (
       <Stack gap={1.5} sx={{ p: 2 }}>
         <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-          Shadow only - does not affect review state
+          Observed means data was collected, not that the account is safe. The Suspected label is explained in Signup classification above. This evidence is shadow only and does not affect review state.
         </Typography>
         {riskScore && (
           <Muted data-testid="risk-evidence-score">

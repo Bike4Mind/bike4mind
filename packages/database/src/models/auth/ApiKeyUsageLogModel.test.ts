@@ -34,6 +34,61 @@ const log = (userId: string, keyId: string, timestamp: Date) => ({
   statusCode: 200,
 });
 
+describe('ApiKeyUsageLogRepository latency statistics', () => {
+  it('counts unfinished requests while excluding them from mean and p95 latency', async () => {
+    const timestamp = new Date();
+    await ApiKeyUsageLog.collection.insertMany([
+      { ...log('u1', 'k1', timestamp), statusCode: 0, responseTime: 0 },
+      ...Array.from({ length: 19 }, (_, index) => ({
+        ...log('u1', 'k1', timestamp),
+        responseTime: (index + 1) * 10,
+      })),
+    ]);
+
+    expect(await apiKeyUsageLogRepository.getUsageStats('u1', 'k1', timestamp, timestamp)).toMatchObject({
+      totalRequests: 20,
+      avgResponseTime: 100,
+    });
+    const usage = await apiKeyUsageLogRepository.platformEndpointUsage();
+    expect(usage.byEndpoint).toEqual([
+      {
+        endpoint: '/api/chat',
+        method: 'POST',
+        requests: 20,
+        avgResponseTimeMs: 100,
+        p95ResponseTimeMs: 190,
+        errorRate: 0,
+      },
+    ]);
+    expect(usage.overTime).toEqual([{ day: timestamp.toISOString().slice(0, 10), requests: 20 }]);
+  });
+
+  it('returns zero latency when every request is unfinished', async () => {
+    const timestamp = new Date();
+    await ApiKeyUsageLog.collection.insertOne({
+      ...log('u1', 'k1', timestamp),
+      statusCode: 0,
+      responseTime: 0,
+    });
+
+    expect(await apiKeyUsageLogRepository.getUsageStats('u1', 'k1', timestamp, timestamp)).toMatchObject({
+      totalRequests: 1,
+      avgResponseTime: 0,
+    });
+    const usage = await apiKeyUsageLogRepository.platformEndpointUsage();
+    expect(usage.byEndpoint).toEqual([
+      {
+        endpoint: '/api/chat',
+        method: 'POST',
+        requests: 1,
+        avgResponseTimeMs: 0,
+        p95ResponseTimeMs: 0,
+        errorRate: 0,
+      },
+    ]);
+  });
+});
+
 describe('ApiKeyUsageLogRepository.countRequestsByKeyWindows', () => {
   it('counts the 24h and 7d windows per key for one user', async () => {
     await ApiKeyUsageLog.collection.insertMany([

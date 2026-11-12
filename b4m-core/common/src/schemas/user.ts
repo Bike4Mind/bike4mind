@@ -230,7 +230,6 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   newAccountSpendCapLifted: true,
   deletion: true,
   suspensionReasonCategory: true,
-  providerEndUserId: true,
 } as const satisfies Record<SelfViewPassthroughField, true>;
 
 /** A redacted integration object: only the named non-secret subfields survive. */

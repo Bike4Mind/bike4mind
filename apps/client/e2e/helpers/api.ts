@@ -150,7 +150,11 @@ export async function apiCreateTestUser(
  * or email, so without them a retry or `--repeat-each` run would die in apiCreateTestUser. The marker
  * stays before the `<id>-<runId>` tail so both cleanup regexes in pages/api/test/cleanup.ts match.
  */
-export async function apiCreateThrowawayUser(request: APIRequestContext, label: string) {
+export async function apiCreateThrowawayUser(
+  request: APIRequestContext,
+  label: string,
+  options: { initialCredits?: number } = {}
+) {
   const e2eId = getE2ETestId();
   const idSuffix = e2eId ? `${e2eId}-${getTestRunId()}` : getTestRunId();
   const { retry, repeatEachIndex } = test.info();
@@ -162,6 +166,7 @@ export async function apiCreateThrowawayUser(request: APIRequestContext, label: 
     name: `Auth ${label} ${idSuffix}`,
     password: `E2eAuth${label}Pass123!`,
     isAdmin: false,
+    ...(options.initialCredits !== undefined && { initialCredits: options.initialCredits }),
   });
   return {
     email,

@@ -127,7 +127,7 @@ type MockedRouter = {
   _routes: Record<string, Handler>;
   _middleware: Record<string, unknown[]>;
   _uses: unknown[];
-  _config?: { requiredScopes?: string[] };
+  _config?: { requiredScopes?: string[]; recordsActivity?: boolean; recordsKeyUse?: boolean };
 };
 
 /** The rate-limit options a route registered for a verb, or undefined if none. */
@@ -808,6 +808,14 @@ describe('hearth route scope declarations', () => {
     ['events', () => eventsRouter, ['hearth:write', 'admin:*']],
   ])('%s declares its scope list', (_name, router, expected) => {
     expect(router()._config?.requiredScopes).toEqual(expected);
+  });
+
+  it.each([
+    ['catchup', () => catchupRouter],
+    ['events', () => eventsRouter],
+  ])('%s counts as a use of the key but never stamps the user active', (_name, router) => {
+    // Agent hooks and the CLI send these on their own, around the clock.
+    expect(router()._config).toMatchObject({ recordsActivity: false, recordsKeyUse: true });
   });
 
   it('no route omits requiredScopes entirely', () => {

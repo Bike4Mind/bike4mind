@@ -61,6 +61,7 @@ import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@sh
 // registers, which defeats the point of keeping the auth handlers out of its reach.
 const api: DesktopApi = {
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.getAppInfo),
+  setTheme: (mode, backgroundColor) => ipcRenderer.invoke(IPC_CHANNELS.setTheme, mode, backgroundColor),
   update: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.updateGetState),
     check: () => ipcRenderer.invoke(IPC_CHANNELS.updateCheck),
@@ -209,6 +210,7 @@ const api: DesktopApi = {
     setSessionArchived: (sessionId: string, archived: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
     exportSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatExportSession, sessionId),
+    exportLocalData: () => ipcRenderer.invoke(IPC_CHANNELS.chatExportLocalData),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
     createSession: (request?: CreateSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession, request),
     createCodeSession: (request: CreateCodeSessionRequest) =>

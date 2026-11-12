@@ -8,6 +8,7 @@ import {
   User,
   userRepository,
   withTransaction,
+  favoriteRepository,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { accessibleBy } from '@casl/mongoose';
@@ -42,6 +43,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
         fabFiles: fabFileRepository,
         users: userRepository,
         projects: projectRepository,
+        favorites: favoriteRepository,
         adminSettings: adminSettingsRepository,
       },
       storage: {
