@@ -68,6 +68,7 @@ const handler = adminApi({
 
     const integrations = await Promise.all(
       healthSummaries.map(async summary => {
+        const lastCheckedAt = summary.lastCheckedAt?.toISOString() ?? null;
         try {
           const [circuitBreaker, rateLimitSnaps, auditErrors] = await Promise.all([
             getStatus(summary.integration),
@@ -133,7 +134,7 @@ const handler = adminApi({
             name: summary.integration,
             status: summary.status,
             latencyMs: summary.latencyMs,
-            lastCheckedAt: summary.lastCheckedAt?.toISOString() ?? null,
+            lastCheckedAt,
             successRate: summary.successRate,
             consecutiveFailures: summary.consecutiveFailures,
             error: summary.error,
@@ -156,7 +157,7 @@ const handler = adminApi({
             name: summary.integration,
             status: summary.status,
             latencyMs: summary.latencyMs,
-            lastCheckedAt: summary.lastCheckedAt?.toISOString() ?? null,
+            lastCheckedAt,
             successRate: summary.successRate,
             consecutiveFailures: summary.consecutiveFailures,
             error: summary.error || 'Failed to load integration details',
@@ -173,7 +174,8 @@ const handler = adminApi({
       })
     );
 
-    res.setHeader('Cache-Control', 'private, max-age=25');
+    // Mutations immediately refetch this dashboard; the browser must not reuse a pre-write response.
+    res.setHeader('Cache-Control', 'private, no-store');
     return res.json({
       generatedAt: new Date().toISOString(),
       timeRangeHours: hours,

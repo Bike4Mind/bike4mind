@@ -58,7 +58,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { name: 'adminSettings' },
   scopedSettingsRepository: { name: 'scopedSettings' },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
     userId: req.user.id,
     isAdmin: !!req.user.isAdmin,

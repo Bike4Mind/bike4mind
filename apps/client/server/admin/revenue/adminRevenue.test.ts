@@ -9,7 +9,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({ Subscription: {} }));
 vi.mock('../subscriptionsList/listAdminSubscriptions', () => ({ toAdminSubscriptionRows: vi.fn() }));
-vi.mock('./revenueSnapshot', () => ({ computeRevenueTotals: vi.fn() }));
+vi.mock('@bike4mind/server-utils/admin/revenue/revenueSnapshot', () => ({ computeRevenueTotals: vi.fn() }));
 
 import { toTrendPoint, trendPlans } from './adminRevenue';
 

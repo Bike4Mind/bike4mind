@@ -1,6 +1,6 @@
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { Connection, questRepository } from '@bike4mind/database';
-import { publishPushNotification, sessionDeepLink } from '@server/utils/pushNotifications';
+import { publishPushNotification, sessionDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
 import { publishImageQuestReadyPush } from './generationPush';
 import { dispatchQuestCallback } from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
 import { getImageGeneration } from '@server/imageGenerations/imageGeneration';

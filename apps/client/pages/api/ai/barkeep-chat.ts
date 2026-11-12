@@ -40,7 +40,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     }
 
     try {
-      const operations = await OperationsModelService.getOperationsModel();
+      const operations = await OperationsModelService.getOperationsModel({ endUserId: req.user.id });
       const { modelId } = operations;
       const llm = meterCompletionBackend(
         operations.llm,

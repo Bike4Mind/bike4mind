@@ -1,7 +1,10 @@
 import { ForbiddenError, isFullAdmin, type AdminPermissionId } from '@bike4mind/common';
 import { adminAuditLogRepository } from '@bike4mind/database';
 import type { Request } from 'express';
-import type { AdminUsersBulkAction, AdminUsersBulkExecuteRequest } from '@client/app/utils/adminUsersBulk';
+import type {
+  AdminUsersBulkAction,
+  AdminUsersBulkExecuteRequest,
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { getApprovalPolicy, requestApproval, type ApprovalPendingBody } from '@server/admin/approvals/service';
 import {
   creditGrantNeedsApproval,

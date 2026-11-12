@@ -6,7 +6,7 @@ import {
   getRequestActiveSubscriptions,
   type ActiveSubscriptionsRequest,
 } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
-import { holdsPaidStanding } from '@server/entitlements/paidStanding';
+import { holdsPaidStanding } from '@bike4mind/server-utils/entitlements/paidStanding';
 import { isPayingOrganization } from '@server/entitlements/orgPaidStanding';
 
 const SETTING_KEY = 'dataLakeRequirePaidPlan';

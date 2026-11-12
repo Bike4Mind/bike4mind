@@ -3,7 +3,7 @@ import {
   FileGeneratePresignedUrlRequestInputType,
   IUser,
 } from '@bike4mind/common';
-import type { AdminUserListItem } from './adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 import type { EmailDomainGroup } from '@bike4mind/server-utils/app/utils/signupAnomaly';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';

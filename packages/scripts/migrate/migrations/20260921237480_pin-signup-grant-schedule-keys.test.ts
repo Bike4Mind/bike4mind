@@ -92,7 +92,8 @@ const SHAPES: [string, Record<string, string>][] = [
 describe('pin signup grant schedule keys migration', () => {
   it.each(SHAPES)('keeps the schedule unchanged once only schedule keys are read: %s', async (_name, rows) => {
     await seed(rows);
-    const before = await legacyRuntimeSchedule();
+    // The runtime schedule no longer carries the legacy paysFlat flag.
+    const { paysFlat, ...before } = await legacyRuntimeSchedule();
     await migration.up();
     expect(await resolveSignupGrantSchedule(adminSettingsRepository)).toEqual({
       ...before,

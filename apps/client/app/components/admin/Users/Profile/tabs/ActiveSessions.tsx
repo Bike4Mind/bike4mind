@@ -155,6 +155,7 @@ export const ActiveSessions: React.FC<{ user: AdminUserProfile }> = ({ user }) =
             </Typography>
           }
           testId="user-sessions-table"
+          framed={false}
           rowTestId={() => 'user-sessions-row'}
         />
         <Stack sx={{ px: 2, py: 1.5, borderTop: '1px solid', borderColor: 'admin.border' }}>

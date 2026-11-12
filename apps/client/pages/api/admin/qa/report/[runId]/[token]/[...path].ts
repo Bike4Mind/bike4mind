@@ -34,6 +34,7 @@ const CONTENT_TYPES: Record<string, string> = {
  * relax the sandbox: the run page's trace download is the fallback if the
  * embedded viewer fails. HTML gets an in-memory Storage stand-in, since the
  * report crashes on startup when localStorage throws (server/qa/reportStorageShim.ts).
+ * The token segment is redacted from request logs (server/middlewares/requestLogUrl.ts).
  */
 const handler = baseApi({ auth: false }).get(async (req, res) => {
   const runId = typeof req.query.runId === 'string' ? req.query.runId : '';

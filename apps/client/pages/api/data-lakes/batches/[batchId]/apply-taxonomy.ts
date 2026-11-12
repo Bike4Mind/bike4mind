@@ -11,7 +11,7 @@ import {
 import { dataLakeService } from '@bike4mind/services';
 import { ApplyTaxonomyRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { recordTaxonomyTagsApplySkipped } from '@bike4mind/server-utils/utils/cloudwatch';
 import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
 

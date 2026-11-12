@@ -6,7 +6,7 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { sweepAbuseAssessments } from '@server/security/abuseAssessment/abuseAssessment';
 import { linkedAccountGroupEvidence } from '@server/security/abuseAssessment/linkedAccountEvidence';
-import { applyAutoContainment, liveAutoContainmentDeps } from '@server/security/autoContainment/executor';
+import { applyAutoContainment, liveAutoContainmentDeps } from '@workers/security/autoContainment/executor';
 
 /** Stop starting new assessments this long before the Lambda timeout. */
 const STOP_MARGIN_MS = 60_000;

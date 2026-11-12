@@ -115,6 +115,7 @@ vi.mock('@bike4mind/database', () => {
       pullFileReferences: (...args: unknown[]) => mockRefs.pullFileReferences(...args),
     },
     adminSettingsRepository: { __repo: 'adminSettings' },
+    favoriteRepository: { __repo: 'favorites' },
     withTransaction: vi.fn((fn: (session: unknown) => unknown) => fn({ __fakeSession: true })),
   };
 });
@@ -144,7 +145,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ bucket: 'generated', delete: generatedDelete }),
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: (...args: unknown[]) => {
     mockRefs.unpublishArgs = args;
     return Promise.resolve({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });

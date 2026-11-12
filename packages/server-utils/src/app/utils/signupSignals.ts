@@ -2,8 +2,9 @@ import { z } from 'zod';
 
 /**
  * The suspected-signup signals and the signup time-series response, shared by the classifier
- * (server/users/signupClassifier.ts), the endpoint (pages/api/admin/signup-timeseries.ts) and the
- * admin charts. Keep the order stable: the charts assign series colors by this order.
+ * (packages/server-utils/src/users/signupClassifier.ts), the endpoint
+ * (apps/client/pages/api/admin/signup-timeseries.ts) and the admin charts. Keep the order stable:
+ * the charts assign series colors by this order.
  */
 export const SIGNUP_SIGNALS = [
   'domainBurst',
@@ -114,7 +115,11 @@ export type SignupTimeseries = {
 export type SignupVerdict = { suspected: boolean; signals: SignupSignal[] };
 
 /** Response of /api/admin/users/signup-verdicts: null for an account the chart did not classify. */
-export type SignupVerdicts = { verdicts: Record<string, SignupVerdict | null> };
+export type SignupVerdicts = {
+  verdicts: Record<string, SignupVerdict | null>;
+  truncated?: boolean;
+  keysTruncated?: boolean;
+};
 
 /** Most ids one verdict request may carry: the largest Users page. */
 export const SIGNUP_VERDICTS_MAX_IDS = 100;

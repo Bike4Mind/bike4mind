@@ -6,7 +6,7 @@ import { dataLakeRepository, dataLakeAccessGrantRepository, fallbackLakeSettings
 import { UpdateFallbackLakeSettingsRequestInput, dataLakeResponseSchema } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { respond } from '@server/utils/respond';
 import { isSessionActivatablePromptId } from '@bike4mind/server-utils/utils/sessionActivatablePrompts';

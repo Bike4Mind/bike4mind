@@ -53,7 +53,7 @@ vi.mock('@server/services/publish', () => ({
 }));
 // The real settlePublication runs; its own collaborators are stubbed here.
 vi.mock('@server/services/publish/checkPublishQuota', () => ({ checkPublishQuota: dbMocks.checkPublishQuota }));
-vi.mock('@server/services/publish/invalidatePublishCdn', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/invalidatePublishCdn', () => ({
   invalidatePublishCdn: dbMocks.invalidatePublishCdn,
   toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
 }));
@@ -61,7 +61,7 @@ vi.mock('@server/services/publish/restrictDuplicatePublications', () => ({
   restrictDuplicatePublications: dbMocks.restrictDuplicatePublications,
 }));
 vi.mock('@server/services/publish/publishRateLimit', () => ({ consumePublishAction: dbMocks.consumePublishAction }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: dbMocks.unpublish,
 }));
 

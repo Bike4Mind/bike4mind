@@ -25,7 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: mocks.csrf }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: mocks.rate }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: mocks.rate }));
 vi.mock('@server/credits/recordActiveSession', () => ({ recordHeartbeat: mocks.heartbeat }));
 await import('../active-session');
 
@@ -33,7 +33,8 @@ describe('active session heartbeat route', () => {
   beforeEach(() => mocks.heartbeat.mockReset());
 
   it('requires a first-party session (no API key), CSRF and a per-user request cap', () => {
-    expect(mocks.config).toEqual({ auth: 'jwtOnly' });
+    // A heartbeat is not an action, so it never stamps lastActiveAt.
+    expect(mocks.config).toEqual({ auth: 'jwtOnly', recordsActivity: false });
     expect(mocks.csrf).toHaveBeenCalledExactlyOnceWith();
     expect(mocks.rate).toHaveBeenCalledExactlyOnceWith({ limit: 6, windowMs: 60000 });
     expect(mocks.middleware).toEqual(['csrf-middleware', 'rate-middleware']);

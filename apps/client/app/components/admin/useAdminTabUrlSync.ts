@@ -68,9 +68,12 @@ export function useAdminTabUrlSync(
   // rather than only the URL - the mirror below then writes the corrected slug back.
   useEffect(() => {
     if (typeof activeTab !== 'number' || isTabRenderable(activeTab)) return;
+    // A renderable deep link wins: the slug effect above set it in this same flush, but activeTab
+    // here is still the render-time store default (Dashboard, which a delegate cannot render).
+    if (resolveRequestedTab(requestedTabSlug) !== undefined) return;
     const fallback = fallbackTab(isTabRenderable);
     if (fallback !== undefined) setActiveTab(fallback);
-  }, [activeTab, setActiveTab, isTabRenderable]);
+  }, [activeTab, setActiveTab, isTabRenderable, resolveRequestedTab, requestedTabSlug]);
 
   const lastMirroredTabRef = useRef(activeTab);
   useEffect(() => {

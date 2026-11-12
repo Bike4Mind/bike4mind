@@ -50,7 +50,7 @@ import {
   scopedSettingsRepository,
   cacheRepository,
 } from '@bike4mind/database';
-import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
 import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
@@ -68,6 +68,7 @@ import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import {
   applyWorkspaceSessionSettings,
   workspaceAnswersTurns,
+  coreTutorialAnswersTurns,
   defaultEmbeddingModelForEnv,
   isSupportedEmbeddingModel,
   libraryFlagForScope,
@@ -84,7 +85,7 @@ import { Logger } from '@bike4mind/observability';
 import { Permission } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
-import { getUserEntitlements } from '@server/entitlements';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
@@ -92,6 +93,7 @@ import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/a
 import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { coreTutorialTurns } from '@server/tutorials/chatTurns';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import {
   ReActAgent,
@@ -266,7 +268,7 @@ import {
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
-import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { publishRunPendingAction } from './agentExecutor.pendingAction';
 import {
   createAgentPushDeps,
@@ -275,11 +277,11 @@ import {
   endAgentLiveActivity,
   type AgentPushSender,
 } from './agentExecutor.push';
-import { publishPushNotification, sessionDeepLink } from '@server/utils/pushNotifications';
+import { publishPushNotification, sessionDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
 import { createAgentToolEchoMarker, persistedExecutionSteps } from '@bike4mind/server-utils/utils/markAgentToolEchoes';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
-import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
+import { resolveAndPublishMementoCompletion } from '@bike4mind/server-utils/utils/publishMementoCompletion';
 import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIterationMementosPreamble';
 import { resolveExecutionMementoGates } from '@bike4mind/server-utils/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@workers/utils/getFirstIterationSkillsPreamble';
@@ -1117,12 +1119,19 @@ async function runExecution(
     }
     // Such a session's replies are scripted, so an agent model must not improvise one. A resumed run
     // passed this check when it started, so a failed lookup on resume lets it finish.
+    // The core marker check goes first and only widens the refusal: an unmarked session skips it and meets
+    // the workspace check exactly as before.
     if (
-      await workspaceAnswersTurns(
+      (await coreTutorialAnswersTurns(
+        { user, logger, session: { id: execution.sessionId, tutorial: loadedSession.tutorial } },
+        coreTutorialTurns,
+        isNewExecution
+      )) ||
+      (await workspaceAnswersTurns(
         { user, logger, session: loadedSession },
         premiumWorkspaceSessionSettings,
         isNewExecution
-      )
+      ))
     ) {
       await agentExecutionRepository.markFailed(executionId, {
         message: 'This session answers its own turns, so agent runs are not available in it',

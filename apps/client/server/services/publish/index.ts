@@ -13,7 +13,7 @@ export {
   type ScopePermissionResult,
 } from './checkScopePermission';
 export { mayRepublishSlug, SLUG_OWNED_BY_OTHER } from './slugOwnership';
-export { buildPublishS3KeyPrefix, buildPublishUrlPath } from './paths';
+export { buildPublishS3KeyPrefix, buildPublishUrlPath } from '@bike4mind/server-utils/services/publish/paths';
 export {
   archivedVersionBytes,
   checkPublishQuota,
@@ -29,7 +29,7 @@ export {
   publishCachePaths,
   toCacheTarget,
   type PublishCacheTarget,
-} from './invalidatePublishCdn';
+} from '@bike4mind/server-utils/services/publish/invalidatePublishCdn';
 export { restrictDuplicatePublications, type DuplicateKeeper } from './restrictDuplicatePublications';
 export {
   renderSandboxedBundle,
@@ -46,7 +46,7 @@ export {
   type CollectInlineAssetsResult,
   PER_ASSET_MAX_BYTES,
   TOTAL_INLINE_MAX_BYTES,
-} from './collectInlineAssets';
+} from '@bike4mind/server-utils/services/publish/collectInlineAssets';
 export { renderBundleLoaderShell } from './renderBundleLoaderShell';
 export { prepareShareMeta, stripToText, type ShareMetaInput, type ShareMetaOutput } from './prepareShareMeta';
 export { generateShareToken } from './shareToken';
@@ -80,6 +80,7 @@ export {
   signDraftUploadToken,
   verifyDraftUploadToken,
   mintDraftUploadUrl,
+  DRAFT_UPLOAD_TOKEN_HEADER,
   DRAFT_UPLOAD_EXPIRY_SECONDS,
   type DraftUploadClaims,
   type DraftUploadStorage,
@@ -103,7 +104,7 @@ export {
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
 export { renderArtifactIndexHtml } from './renderArtifactHtml';
-export { purgeUserPublishedArtifacts } from './purgeUserPublishedArtifacts';
+export { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 export { loadLiveOwner } from './loadLiveOwner';
 export {
   consumePublishAction,

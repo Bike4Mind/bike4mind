@@ -33,10 +33,10 @@ import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
 import { createUserMementoMemoryStore } from '@bike4mind/server-utils/memory/userMementoMemoryStore';
 import { createLakeMemberSourcesResolver } from '@bike4mind/server-utils/memory/lakeSourceReachability';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { DataLakeAuditEvents, logAuditEvent } from '@bike4mind/server-utils/utils/auditLog';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
-import type { EntitlementRequest } from '@server/entitlements';
+import type { EntitlementRequest } from '@bike4mind/server-utils/entitlements/index';
 
 // The kinds this endpoint reads/deletes. `lake` differs from the owner-scoped kinds: a lake is
 // org-shared, so its READ authz is entitlement/tag/org access (assertLakeAccess) and its DELETE is

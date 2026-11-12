@@ -92,7 +92,7 @@ const { default: feedHandler } = await import('@pages/api/v1/skills/market/claud
 const zipBaseApiIndex = baseApiOptions.length;
 const { default: zipHandler } = await import('@pages/api/v1/skills/market/[id]/claude-plugin.zip');
 const { default: bundleZipHandler } = await import('@pages/api/v1/skills/market/bundles/[id]/claude-plugin.zip');
-const { publicAppUrl } = await import('@server/utils/validators');
+const { publicAppUrl } = await import('@bike4mind/server-utils/utils/validators');
 
 const ORG_ID = '65a0000000000000000000aa';
 const LISTING_A = '65b000000000000000000001';

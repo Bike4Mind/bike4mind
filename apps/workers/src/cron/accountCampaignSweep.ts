@@ -4,6 +4,8 @@
  * and records each candidate group as an `accountCampaign` shadow detection for the admin Detections
  * page. Observation only: it never rescores, sets riskScore.reviewState, or touches access, credits or
  * API keys. Off with the shadowDetectionRecordingEnabled setting, like every shadow detector.
+ * It then runs the ban-evasion device rule over the same window; that rule hands its detections to
+ * the abuse assessment and automated containment, which act only as autoContainmentConfig allows.
  *
  * The same run also auto-grades stale signup bursts: see server/security/shadowDetectionAutoGrade.ts.
  */
@@ -17,6 +19,7 @@ import {
   connectDB,
   findSignupFingerprintClusters,
   loadCampaignScanAccounts,
+  loadRecentDeviceLinkAccounts,
   shadowDetectionRepository,
   type CampaignScanRow,
   type RecordCampaignGroupResult,
@@ -26,8 +29,13 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { truncateIp } from '@bike4mind/server-utils/utils/ip';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
+import {
+  DeviceLinkAssessError,
+  liveDeviceLinkDeps,
+  sweepDeviceLinks,
+} from '@workers/security/autoContainment/deviceLink';
 import { gradeStaleSignupBursts, liveStaleDetectionGradeDeps } from '@server/security/shadowDetectionAutoGrade';
-import { systemAuditWriter } from '@server/utils/systemAuditWriter';
+import { systemAuditWriter } from '@workers/utils/systemAuditWriter';
 
 const AUTO_GRADE_ACTOR = 'shadow-detection-auto-grade';
 const AUTO_GRADE_DEFAULT_DAYS = 7;
@@ -40,6 +48,7 @@ const COMMON_FINGERPRINT_BASELINE_DAYS = 30;
 const COMMON_FINGERPRINT_MIN_SIGNUPS = 50;
 const COMMON_FINGERPRINT_LIMIT = 1_000;
 
+const STOP_MARGIN_MS = 60_000;
 const HOUR_MS = 60 * 60 * 1000;
 const PERSONAL_MAIL_DOMAINS: ReadonlySet<string> = new Set([
   ...personalEmailProviders,
@@ -158,6 +167,30 @@ export async function handler(_event: unknown, context: Context) {
       logger.error('Account campaign group failed to record', { userIds: group.userIds, error: String(error) }),
   });
   logger.log('Account campaign sweep finished', report);
+
+  // The ban-evasion device rule's catch-up pass (security/autoContainment/deviceLink.ts): a device first
+  // seen at a sign-in after the signup, or a signup whose immediate check failed.
+  const deviceLinks = await sweepDeviceLinks({
+    ...liveDeviceLinkDeps(logger),
+    loadRecent: loadRecentDeviceLinkAccounts,
+    shouldStop: () => context.getRemainingTimeInMillis() < STOP_MARGIN_MS,
+    onError: (userId, error) =>
+      logger.error(
+        error instanceof DeviceLinkAssessError
+          ? 'Device-link detection recorded but failed to assess'
+          : 'Device-link detection failed to record',
+        { userId, error: String(error) }
+      ),
+  });
+  logger.log('Device-link sweep finished', deviceLinks);
+  if (deviceLinks.status === 'stopped' && deviceLinks.skipped > 0) {
+    logger.warn('Device-link sweep stopped before recording all linked accounts', { skipped: deviceLinks.skipped });
+  }
+
   // Thrown after the whole run so one bad group cannot starve the rest, but the invocation still fails.
   if (report.failed > 0) throw new Error(`Account campaign sweep failed to record ${report.failed} group(s)`);
+  if (deviceLinks.failed > 0) throw new Error(`Device-link sweep failed to record ${deviceLinks.failed} account(s)`);
+  if (deviceLinks.assessFailed > 0) {
+    throw new Error(`Device-link sweep recorded but failed to assess ${deviceLinks.assessFailed} account(s)`);
+  }
 }

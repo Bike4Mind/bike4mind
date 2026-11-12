@@ -119,7 +119,12 @@ async function resolveTargetChannel(userId: string, body: { channelId?: string; 
 
 const hearthLog = new HearthLog(hearthRepository.store);
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.HEARTH_WRITE, ApiKeyScope.ADMIN] })
+// Mostly agent hooks and bridges posting on their own, so a post is key use but not a user action.
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.HEARTH_WRITE, ApiKeyScope.ADMIN],
+  recordsActivity: false,
+  recordsKeyUse: true,
+})
   .use(requireFeatureEnabled('EnableHearth'))
   .use(requireUser)
   .post<NextApiRequest, NextApiResponse>(csrfProtection(), postRateLimit, async (req, res) => {

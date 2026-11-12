@@ -82,6 +82,7 @@ vi.mock('sst', () => ({
     APNS_TOPIC: { value: 'not-configured' },
     githubLakeIngestQueue: { url: 'https://sqs.test/githubLakeIngestQueue' },
     githubLakeRevokeQueue: { url: 'https://sqs.test/githubLakeRevokeQueue' },
+    generatedMediaPurgeQueue: { url: 'https://sqs.test/generatedMediaPurgeQueue' },
     GITHUB_MCP_CLIENT_ID: { value: 'test-github-mcp-client-id' },
     GITHUB_MCP_CLIENT_SECRET: { value: 'test-github-mcp-client-secret' },
     STRIPE_WEBHOOK_SECRET: { value: 'test-stripe-webhook-secret' },
@@ -189,7 +190,7 @@ vi.mock('@server/middlewares/checkBlockedIP', async importOriginal => {
 // seeded subscription. Allow by default; suites that exercise the gate mock or unmock it per file.
 // The real module is not spread in: it imports the Subscription model, which suites that stub
 // @bike4mind/database cannot load.
-vi.mock('@server/utils/apiKeyAccessGate', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
   API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
   CLI_ACCESS_DENIED_MESSAGE: 'The CLI and desktop app require an active paid subscription',
   SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',

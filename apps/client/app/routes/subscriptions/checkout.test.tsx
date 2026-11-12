@@ -3,10 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import SubscriptionsCheckoutPage from './checkout';
+import SubscriptionsCheckoutPage, { resolveCheckoutPlan } from './checkout';
 
 const mocks = vi.hoisted(() => ({
   plan: undefined as string | undefined,
+  returnTo: undefined as string | undefined,
   currentUser: { id: 'u1' } as { id: string } | null,
   enforceCredits: true as boolean,
   settingsPending: false,
@@ -24,7 +25,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mocks.navigate,
   useRouter: () => ({ history: { push: mocks.historyPush } }),
-  useSearch: () => ({ plan: mocks.plan }),
+  useSearch: () => ({ plan: mocks.plan, return_to: mocks.returnTo }),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: mocks.currentUser }),
@@ -38,6 +39,7 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
 }));
 vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => ({
   SUBSCRIPTION_PLANS_MAP: { price_known: { priceId: 'price_known' } },
+  PROFESSIONAL_PRICE_ID: 'price_known',
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -56,6 +58,7 @@ describe('SubscriptionsCheckoutPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.plan = 'price_known';
+    mocks.returnTo = undefined;
     mocks.currentUser = { id: 'u1' };
     mocks.enforceCredits = true;
     mocks.settingsPending = false;
@@ -127,5 +130,55 @@ describe('SubscriptionsCheckoutPage', () => {
       to: '/register?redirectTo=/subscriptions/checkout?plan=price_known',
     });
     expect(mocks.subscribe.mutate).not.toHaveBeenCalled();
+  });
+
+  it('takes the professional alias for the Professional price', () => {
+    mocks.plan = 'professional';
+    renderPage();
+
+    expect(mocks.subscribe.mutate).toHaveBeenCalledWith(
+      { priceId: 'price_known', callbackUrl: window.location.origin },
+      expect.anything()
+    );
+  });
+
+  it('carries an allowed return target through Stripe on this origin', () => {
+    mocks.plan = 'professional';
+    mocks.returnTo = 'https://paintbox.bike4mind.com/';
+    renderPage();
+
+    const callbackUrl = new URL(mocks.subscribe.mutate.mock.calls[0]![0].callbackUrl);
+    expect(callbackUrl.origin).toBe(window.location.origin);
+    expect(callbackUrl.searchParams.get('checkout_return_to')).toBe('https://paintbox.bike4mind.com/');
+  });
+
+  it('ignores a return target it does not allow', () => {
+    mocks.returnTo = 'https://evil.example/';
+    renderPage();
+
+    expect(mocks.subscribe.mutate).toHaveBeenCalledWith(
+      { priceId: 'price_known', callbackUrl: window.location.origin },
+      expect.anything()
+    );
+  });
+
+  it('keeps the return target through sign-up', () => {
+    mocks.currentUser = null;
+    mocks.plan = 'professional';
+    mocks.returnTo = 'https://paintbox.bike4mind.com/';
+    renderPage();
+
+    const to = (mocks.navigate.mock.calls[0]![0] as { to: string }).to;
+    const resume = new URL(new URLSearchParams(to.split('?')[1]).get('redirectTo')!, 'https://app.example');
+    expect(resume.pathname).toBe('/subscriptions/checkout');
+    expect(resume.searchParams.get('plan')).toBe('professional');
+    expect(resume.searchParams.get('return_to')).toBe('https://paintbox.bike4mind.com/');
+  });
+
+  it('resolves a plan name, passes a price id through, and ignores prototype keys', () => {
+    expect(resolveCheckoutPlan('professional')).toBe('price_known');
+    expect(resolveCheckoutPlan('price_other')).toBe('price_other');
+    expect(resolveCheckoutPlan(undefined)).toBeUndefined();
+    expect(resolveCheckoutPlan('constructor')).toBe('constructor');
   });
 });

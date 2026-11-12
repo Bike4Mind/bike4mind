@@ -2,7 +2,7 @@ import { creditTransactionRepository, shadowDetectionRepository, userRepository 
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { findDetectionLinkedAccounts } from '@server/admin/detectionLinkedAccounts';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;

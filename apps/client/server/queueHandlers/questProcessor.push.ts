@@ -6,7 +6,7 @@ import {
   hasLiveConnection,
   isPushDeliveryConfigured,
   truncateForPush,
-} from '@server/utils/pushNotifications';
+} from '@bike4mind/server-utils/utils/pushNotifications';
 
 export type ChatCompletedPushDeps = {
   connections: ConnectionLookup;

@@ -367,6 +367,13 @@ describe('validateUserApiKeyById + shared finalize gates', () => {
     expect(repo.updateLastUsed).toHaveBeenCalledWith('key-1');
   });
 
+  it('leaves last-used alone when the caller says the check is not a use', async () => {
+    const { repo, adapters } = repoWith(baseDoc);
+    const result = await validateUserApiKeyById('key-1', adapters, { recordUse: false });
+    expect(result.isValid).toBe(true);
+    expect(repo.updateLastUsed).not.toHaveBeenCalled();
+  });
+
   it('returns not_found when the id does not resolve', async () => {
     const { adapters } = repoWith(null);
     const result = await validateUserApiKeyById('missing', adapters);
@@ -418,6 +425,18 @@ describe('validateUserApiKey - SHA-256 digest fast path', () => {
     expect(compare).not.toHaveBeenCalled();
     expect(repo.setKeyDigest).not.toHaveBeenCalled();
     compare.mockRestore();
+  });
+
+  it('stamps last-used by default and skips it when the check is not a use', async () => {
+    const { key, repo, adapters } = await mint();
+
+    await validateUserApiKey(key, adapters);
+    expect(repo.updateLastUsed).toHaveBeenCalledWith('key-1');
+
+    repo.updateLastUsed.mockClear();
+    const result = await validateUserApiKey(key, adapters, { recordUse: false });
+    expect(result.isValid).toBe(true);
+    expect(repo.updateLastUsed).not.toHaveBeenCalled();
   });
 
   it('validates a digest-only key (no keyHash at all) without bcrypt or a backfill', async () => {

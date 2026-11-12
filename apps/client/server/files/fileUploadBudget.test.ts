@@ -20,7 +20,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap: mocks.getSettingsMap,
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ isDevelopment: mocks.isDevelopment }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateTier: mocks.resolveUserRateTier }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateTier: mocks.resolveUserRateTier }));
 
 import { TooManyRequestsError } from '@bike4mind/common';
 import { consumeFileUploadBudget, FILE_UPLOAD_LIMITED, FILE_UPLOAD_WINDOW_MS } from './fileUploadBudget';

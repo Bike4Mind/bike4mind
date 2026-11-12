@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMoveToBackgroundResult } from '@shared/chat';
@@ -623,8 +623,12 @@ describe('a worktree session reading its main checkout', () => {
   let context: ToolContext;
 
   beforeEach(async () => {
-    // Not under tmpdir(): the scan treats temp folders as granted, which would hide the outside check.
-    base = await realpath(await mkdtemp(join(process.cwd(), '.b4m-worktree-')));
+    base = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-worktree-')));
+    const sharedTemporaryDirectory = join(base, 'shared-temp');
+    await mkdir(sharedTemporaryDirectory);
+    vi.stubEnv('TMPDIR', sharedTemporaryDirectory);
+    vi.stubEnv('TMP', sharedTemporaryDirectory);
+    vi.stubEnv('TEMP', sharedTemporaryDirectory);
     main = join(base, 'main');
     worktree = join(base, 'main', '.b4m', 'worktrees', 'feature');
     await mkdir(main);
@@ -641,6 +645,7 @@ describe('a worktree session reading its main checkout', () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await rm(base, { recursive: true, force: true });
   });
 
@@ -661,25 +666,32 @@ describe('a worktree session reading its main checkout', () => {
     expect(await mainCheckoutOf(worktree)).toBeNull();
   });
 
+  it("does not map a folder whose .git is a link to a worktree onto that worktree's repository", async () => {
+    const foreign = join(base, 'foreign');
+    await mkdir(foreign);
+    await symlink(join(worktree, '.git'), join(foreign, '.git'));
+    expect(await mainCheckoutOf(foreign)).toBeNull();
+  });
+
   it.each([
-    (dir: string) => `git -C ${dir} status --short | head -20`,
-    (dir: string) => `git -C ${dir} log -1 --format=%h; git -C ${dir} branch --show-current`,
-    (dir: string) => `ls -la ${dir}/apps | head; cat ${dir}/package.json`,
+    (dir: string) => `git -C "${dir}" status --short | head -20`,
+    (dir: string) => `git -C "${dir}" log -1 --format=%h; git -C "${dir}" branch --show-current`,
+    (dir: string) => `ls -la "${dir}"/apps | head; cat "${dir}"/package.json`,
   ])('reads it unasked: %s', async command => {
     expect(await outsideFolders(command(main))).toEqual([]);
   });
 
   it.each([
-    (dir: string) => `git -C ${dir} checkout -b other`,
-    (dir: string) => `git -C ${dir} -c core.pager=less log`,
-    (dir: string) => `echo x > ${dir}/notes.txt`,
-    (dir: string) => `mkdir ${dir}/scratch`,
-    (dir: string) => `rm ${dir}/package.json`,
+    (dir: string) => `git -C "${dir}" checkout -b other`,
+    (dir: string) => `git -C "${dir}" -c core.pager=less log`,
+    (dir: string) => `echo x > "${dir}"/notes.txt`,
+    (dir: string) => `mkdir "${dir}"/scratch`,
+    (dir: string) => `rm "${dir}"/package.json`,
   ])('still asks before changing it: %s', async command => {
     expect(await outsideFolders(command(main))).not.toEqual([]);
   });
 
   it('still asks to read a folder outside the main checkout', async () => {
-    expect(await outsideFolders(`ls ${base}`)).toEqual([base]);
+    expect(await outsideFolders(`ls "${base}"`)).toEqual([base]);
   });
 });

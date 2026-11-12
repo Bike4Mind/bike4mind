@@ -21,7 +21,7 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   isSelfOrImpersonator: (user: { id: string }, id: string) => user.id === id,
   recordAdminActionFromRequest: mocks.record,
 }));
-vi.mock('@server/billing/cancelAccountSubscriptions', () => ({
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   subscriptionCancellationAudit: (cancellation: { canceled: string[] }) =>
     cancellation.canceled.length > 0
       ? { action: 'user.subscriptions.canceled', summary: 'canceled', details: { canceledSubscriptions: ['sub_1'] } }

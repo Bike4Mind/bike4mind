@@ -16,7 +16,7 @@ const writeScopedOverride = vi.hoisted(() => vi.fn());
 const clearScopedOverride = vi.hoisted(() => vi.fn());
 const listMemberConnections = vi.hoisted(() => vi.fn(async () => state.connections));
 
-vi.mock('@server/middlewares/featureFlag', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   isFeatureEnabled: vi.fn(async (key: string) => state.flags[key] === true),
 }));
 vi.mock('@bike4mind/database', () => ({

@@ -46,7 +46,7 @@ vi.mock('@bike4mind/database', () => ({
   User: { findByIdAndUpdate: h.findByIdAndUpdate },
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({
   sessionService: { createSession: h.createSession, resolveLakeSessionDefaults: vi.fn() },
   dataLakeService: { assertLakeAccess: vi.fn(), resolveCanManageLake: vi.fn() },

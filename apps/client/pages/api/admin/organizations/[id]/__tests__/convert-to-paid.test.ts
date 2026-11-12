@@ -25,9 +25,11 @@ import { BadRequestError, NotFoundError, HttpStatus } from '@bike4mind/common';
 
 const mockOrgFindById = vi.fn();
 const mockOrgFindOneAndUpdate = vi.fn();
+const mockGetSettingsValue = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: (...args: unknown[]) => mockOrgFindById(...args) },
   Organization: { findOneAndUpdate: (...args: unknown[]) => mockOrgFindOneAndUpdate(...args) },
+  adminSettingsRepository: { getSettingsValue: (...args: unknown[]) => mockGetSettingsValue(...args) },
 }));
 
 const mockFindActiveByOwner = vi.fn();
@@ -265,5 +267,51 @@ describe('POST /api/admin/organizations/[id]/convert-to-paid - 3-D Secure on fir
     await (handler as HandlerFn)(req, res);
 
     expect(mockSessionsCreate.mock.calls[0][0]).not.toHaveProperty('payment_method_options');
+  });
+});
+
+describe('POST /api/admin/organizations/[id]/convert-to-paid - checkout terms consent', () => {
+  const settings = (termsConsent: boolean) =>
+    mockGetSettingsValue.mockImplementation(async (key: string) =>
+      key === 'requireCheckoutTermsConsent' ? termsConsent : undefined
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFirstPurchaseCardOptions.mockResolvedValue({});
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockOrgFindById.mockResolvedValue({
+      id: '507f1f77bcf86cd799439011',
+      userId: '507f1f77bcf86cd799439012',
+      name: 'Org One',
+      seats: 5,
+      stripeCustomerId: 'cus_org',
+    });
+    mockFindActiveByOwner.mockResolvedValue([{ id: 'sub_grant' }]);
+    mockResolveSubscriptionSource.mockReturnValue('admin_grant');
+    mockSessionsCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe/session' });
+  });
+
+  it('requires terms on the session and names the org owner, not the admin, while the setting is on', async () => {
+    settings(true);
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockSessionsCreate.mock.calls[0][0]).toMatchObject({
+      consent_collection: { terms_of_service: 'required' },
+      client_reference_id: '507f1f77bcf86cd799439012',
+    });
+  });
+
+  it('leaves consent collection off while the setting is off', async () => {
+    settings(false);
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    const args = mockSessionsCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(args).not.toHaveProperty('consent_collection');
+    expect(args).not.toHaveProperty('client_reference_id');
   });
 });

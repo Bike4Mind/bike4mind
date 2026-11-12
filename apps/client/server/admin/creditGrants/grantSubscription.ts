@@ -10,7 +10,7 @@ import { organizationService, creditService } from '@bike4mind/services';
 import { type AdminApproval, ConflictError, CreditHolderType, IOrganizationDocument } from '@bike4mind/common';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
-import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
+import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { grantIndividualAdminSubscription } from '@server/subscriptions/grantIndividualAdminSubscription';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
@@ -23,7 +23,7 @@ import { Resource } from 'sst';
 import { randomUUID } from 'crypto';
 
 import type { Request } from 'express';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { approvalDetails, notifyAfterCommit } from './approval';
 
 export const GrantSubscriptionSchema = z.object({

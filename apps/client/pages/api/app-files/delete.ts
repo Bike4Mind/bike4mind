@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { AppFileEvents } from '@bike4mind/common';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';
-import { appFileCdnPath, invalidateRouterPaths } from '@server/services/cdn/invalidateRouterCdn';
+import { appFileCdnPath, invalidateRouterPaths } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 
 const AppFileDeleteRequestInput = z.object({
   id: z.string(),

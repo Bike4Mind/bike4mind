@@ -4,15 +4,23 @@ import { NotFoundError } from '@bike4mind/utils';
 import type { Request } from 'express';
 import { S3Storage } from '../../../../b4m-core/fab-pipeline/src/storage/S3Storage';
 
-const { getFabFile, generateSignedUrl, recordLakeAccessEvent, resolveAccessibleLakes, grantingLakes, findById } =
-  vi.hoisted(() => ({
-    getFabFile: vi.fn(),
-    generateSignedUrl: vi.fn(),
-    recordLakeAccessEvent: vi.fn(),
-    resolveAccessibleLakes: vi.fn(),
-    grantingLakes: vi.fn(),
-    findById: vi.fn(),
-  }));
+const {
+  getFabFile,
+  generateSignedUrl,
+  recordLakeAccessEvent,
+  resolveAccessibleLakes,
+  grantingLakes,
+  findById,
+  adminBypassLakeIds,
+} = vi.hoisted(() => ({
+  adminBypassLakeIds: vi.fn(),
+  getFabFile: vi.fn(),
+  generateSignedUrl: vi.fn(),
+  recordLakeAccessEvent: vi.fn(),
+  resolveAccessibleLakes: vi.fn(),
+  grantingLakes: vi.fn(),
+  findById: vi.fn(),
+}));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -24,7 +32,11 @@ vi.mock('@bike4mind/services', () => ({
   fabFilesService: { getFabFile, generateSignedUrl },
   dataLakeService: { recordLakeAccessEvent },
 }));
-vi.mock('@server/dataLakes', () => ({ resolveAccessibleLakes, grantingLakes }));
+vi.mock('@server/dataLakes', () => ({
+  adminBypassLakeIds,
+  resolveAccessibleLakes,
+  grantingLakes,
+}));
 vi.mock('@bike4mind/server-utils/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: () => ({}) }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => new S3Storage('files-bucket', 'us-east-2'),
@@ -51,6 +63,8 @@ describe('loadAccessibleFabFile data-lake fallback', () => {
     findById.mockResolvedValue(lakeFile);
     grantingLakes.mockReturnValue([lake]);
     generateSignedUrl.mockResolvedValue({ ...lakeFile, fileUrl: 'https://signed' });
+    recordLakeAccessEvent.mockResolvedValue(undefined);
+    adminBypassLakeIds.mockResolvedValue([]);
   });
 
   it('serves a lake-granted file to a JWT caller', async () => {
@@ -60,6 +74,30 @@ describe('loadAccessibleFabFile data-lake fallback', () => {
   it('serves a lake-granted file to a key holding datalake:read', async () => {
     const req = request({ scopes: [ApiKeyScope.READ_FILES, ApiKeyScope.DATALAKE_READ] });
     await expect(loadAccessibleFabFile(req, 'file-1')).resolves.toMatchObject({ fileUrl: 'https://signed' });
+  });
+
+  it('passes the admin-bypass marker to the audit write', async () => {
+    adminBypassLakeIds.mockResolvedValue(['lake-1']);
+    await loadAccessibleFabFile(request(), 'file-1');
+    expect(adminBypassLakeIds).toHaveBeenCalledWith(expect.anything(), ['lake-1']);
+    expect(recordLakeAccessEvent.mock.calls[0][1]).toMatchObject({ adminBypassLakeIds: ['lake-1'] });
+  });
+
+  it('omits the marker for a member read', async () => {
+    await loadAccessibleFabFile(request(), 'file-1');
+    expect(recordLakeAccessEvent.mock.calls[0][1]).not.toHaveProperty('adminBypassLakeIds');
+  });
+
+  it('returns no file and records nothing when member-access classification is incomplete', async () => {
+    adminBypassLakeIds.mockRejectedValue(new Error('classification unavailable'));
+    await expect(loadAccessibleFabFile(request(), 'file-1')).rejects.toThrow('classification unavailable');
+    expect(recordLakeAccessEvent).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the audit write rejects', async () => {
+    adminBypassLakeIds.mockResolvedValue(['lake-1']);
+    recordLakeAccessEvent.mockRejectedValue(new Error('mongo blip'));
+    await expect(loadAccessibleFabFile(request(), 'file-1')).rejects.toThrow('mongo blip');
   });
 
   it('keeps the 404 for a files:read-only key and never resolves its lakes', async () => {

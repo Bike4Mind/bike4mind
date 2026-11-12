@@ -33,7 +33,7 @@ const {
   orgFindById: vi.fn(),
 }));
 
-vi.mock('@server/billing/freeTierDailyCapGate', () => ({ checkFreeTierDailySpendCap: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', () => ({ checkFreeTierDailySpendCap: vi.fn() }));
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
   return {
