@@ -7,6 +7,14 @@ import {
   getSourceQueueUrl,
   type SourceQueueName,
 } from '@bike4mind/server-utils/utils/dlqRegistry';
+import {
+  buildLogsInsightsUrl,
+  CONSUMER_LOGS_BUDGET_MS,
+  messageLogWindow,
+  resolveConsumerLogsForSourceQueue,
+  settleWithinBudget,
+  type ConsumerLogs,
+} from '@bike4mind/server-utils/utils/dlqConsumerLogs';
 import { receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
 import { dlqFailureRepository } from '@bike4mind/database';
@@ -22,6 +30,12 @@ const QuerySchema = z.object({
       return Math.min(Math.max(parsed, 1), 10);
     }),
 });
+
+function messageLogsUrl(logs: ConsumerLogs | null, sentTimestamp: string | undefined): string | null {
+  if (!logs || !sentTimestamp) return null;
+  const window = messageLogWindow(parseInt(sentTimestamp, 10), logs.retryWindowMs);
+  return window ? buildLogsInsightsUrl({ region: logs.region, logGroups: logs.logGroups, ...window }) : null;
+}
 
 async function findFailures(queueLabel: string, sourceQueue: SourceQueueName | null, messageIds: string[]) {
   if (!sourceQueue || !messageIds.length) return { failures: [], lookupFailed: false };
@@ -45,7 +59,8 @@ async function findFailures(queueLabel: string, sourceQueue: SourceQueueName | n
  * Peeks at messages in a specific DLQ. Callers who can replay get a
  * 120-second visibility timeout so their receipt handles stay valid while
  * they decide. Read-only callers cannot replay, so their peek leaves the
- * messages visible and returns no receipt handles.
+ * messages visible and returns no receipt handles. Each message carries a Logs Insights link
+ * over its consumer's logs around its send time (null when either is unknown).
  */
 const handler = adminApi({
   adminPermissions: { GET: 'support:read' },
@@ -70,7 +85,12 @@ const handler = adminApi({
   Logger.info(`[DLQ Messages] Peeking at ${queueLabel}`, { adminUserId, maxMessages });
 
   const canReplay = meetsAdminPermissionRequirement(req.user, 'settings:manage');
-  const received = await receiveFromQueue(dlqUrl, maxMessages, canReplay ? 120 : 0);
+  const [received, consumerLogs] = await Promise.all([
+    receiveFromQueue(dlqUrl, maxMessages, canReplay ? 120 : 0),
+    settleWithinBudget([resolveConsumerLogsForSourceQueue(dlqEntry.sourceQueue)], CONSUMER_LOGS_BUDGET_MS).then(
+      ([logs]) => logs
+    ),
+  ]);
   // A visibility-0 receive can return the same message more than once; keep the latest copy.
   const receiveCount = (msg: (typeof received)[number]) =>
     parseInt(msg.Attributes?.ApproximateReceiveCount ?? '0', 10) || 0;
@@ -97,6 +117,7 @@ const handler = adminApi({
       sentTimestamp: msg.Attributes?.SentTimestamp,
       approximateReceiveCount: msg.Attributes?.ApproximateReceiveCount,
       approximateFirstReceiveTimestamp: msg.Attributes?.ApproximateFirstReceiveTimestamp,
+      logsUrl: messageLogsUrl(consumerLogs, msg.Attributes?.SentTimestamp),
       ...(lookupFailed ? { failureLookupFailed: true } : {}),
       failure: failure ? { errorMessage: failure.errorMessage, category: failure.category } : undefined,
     };

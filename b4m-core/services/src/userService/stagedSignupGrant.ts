@@ -11,6 +11,7 @@ import {
   signupGrantRemaining,
   signupGrantUnlockCredits,
   SignupRiskScoringSchema,
+  unprotectedSignupGrantLimit,
   type IUserDocument,
   type PaymentUnlockReason,
   type SignupGrant,
@@ -22,6 +23,7 @@ import { withTransaction } from '@bike4mind/db-core';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../creditService';
 import type { FreeCreditAdapters, GrantFreeCreditsResult } from './freeCredits';
 import {
+  capUnassessedSignupGrant,
   evaluateSignupRisk,
   isSignupGrantHeldForReview,
   signupRiskPolicySchema,
@@ -184,6 +186,11 @@ async function readRiskPolicy(adminSettings: GrantAdapters['db']['adminSettings'
   return { policy, parsedPolicy: signupRiskPolicySchema.safeParse(policy) };
 }
 
+async function readUnprotectedLimit(adminSettings: GrantAdapters['db']['adminSettings']) {
+  const setting = await adminSettings.findBySettingName('signupGrantUnprotectedMaxCredits');
+  return unprotectedSignupGrantLimit(setting?.settingValue);
+}
+
 async function releaseStage(
   userId: string,
   expected: SignupGrant['stage'],
@@ -275,8 +282,11 @@ async function releaseStage(
           }
           // Only collector output is recorded: the signupMeta fallback alone would read as an observed
           // sample with every other signal missing.
+          const decision = evaluateSignupRisk(policy, signals, grant.signupCredits);
           assessment = {
-            ...evaluateSignupRisk(policy, signals, grant.signupCredits),
+            ...(decision.status === 'disabled'
+              ? capUnassessedSignupGrant(decision, await readUnprotectedLimit(db.adminSettings))
+              : decision),
             ...(collected ? { signals } : {}),
           };
           assessedBand = assessment.band;

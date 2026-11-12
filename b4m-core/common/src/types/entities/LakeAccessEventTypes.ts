@@ -223,6 +223,9 @@ export interface ILakeAccessEvent {
    * reclassify every browse row ever written.
    */
   servedNothing?: boolean;
+  /** Subset of `resolvedLakeIds` the caller reached ONLY through the platform-admin bypass (not as
+   * a member of that lake). Absent on ordinary rows; non-empty makes the audit write strict. */
+  adminBypassLakeIds?: string[];
   surface: LakeAccessSurface;
   /**
    * The turn this retrieval happened during, for joining this audit row back to its Quest. A
@@ -274,6 +277,9 @@ export interface RecordLakeAccessEventInput {
   /** See `ILakeAccessEvent.servedNothing`. Pass `true` ONLY from a surface deliberately recording
    * its own empty outcome; omit it on every content-serving write. */
   servedNothing?: boolean;
+  /** See `ILakeAccessEvent.adminBypassLakeIds`. Non-empty makes `recordLakeAccessEvent` rethrow a
+   * failed write; `record()` stores only ids that are also in `resolvedLakeIds`. */
+  adminBypassLakeIds?: string[];
   surface: LakeAccessSurface;
   /** See `ILakeAccessEvent.questId`'s doc comment - diagnostic join key, not authorization data. */
   questId?: string;

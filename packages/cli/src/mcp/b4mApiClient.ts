@@ -647,12 +647,17 @@ export class B4mApiClient {
   /**
    * PUT one draft file to the URL upload-url minted. Plain fetch, never the app
    * client: that client injects auth headers, which break an S3 presigned
-   * signature. Self-host mints a relative proxy URL, so resolve against baseURL.
+   * signature. Self-host mints a relative proxy URL, so resolve against baseURL,
+   * and sends its upload token in the `headers` the entry came with.
    */
-  async uploadPublishDraftFile(uploadUrl: string, body: string, mimeType: string): Promise<void> {
-    const res = await fetch(new URL(uploadUrl, this.baseURL), {
+  async uploadPublishDraftFile(
+    upload: Pick<UploadUrlResponse['uploadUrls'][number], 'url' | 'headers'>,
+    body: string,
+    mimeType: string
+  ): Promise<void> {
+    const res = await fetch(new URL(upload.url, this.baseURL), {
       method: 'PUT',
-      headers: { 'Content-Type': mimeType },
+      headers: { ...upload.headers, 'Content-Type': mimeType },
       body,
     });
     if (!res.ok) throw new Error(`publish upload failed (${res.status})`);

@@ -8,6 +8,7 @@ import {
   fabFileRepository,
   projectRepository,
   userRepository,
+  favoriteRepository,
 } from '@bike4mind/database';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { fileContentUrl } from '@server/files/browserFileSigner';
@@ -58,6 +59,7 @@ export async function searchFilesForRequest<Params, ResBody, ReqBody, Query>(
         fabFiles: fabFileRepository,
         users: userRepository,
         projects: projectRepository,
+        favorites: favoriteRepository,
         adminSettings: adminSettingsRepository,
       },
       storage: {

@@ -46,8 +46,10 @@ import { useFeedbackPagination } from './hooks/useFeedbackPagination';
 import { getFeedbackDisplayContent, type IExtendedFeedbackDocument } from './types';
 import FeedbackDetailDrawer from './FeedbackDetailDrawer';
 import { useFeedbackDetailNavigation } from './hooks/useFeedbackDetailNavigation';
-import { copyFeedbackRecordLink, feedbackConversationPath } from './feedbackLinks';
+import { copyFeedbackRecordLink, feedbackConversationPath, feedbackReporterMailto } from './feedbackLinks';
 import HelpContextChip from './HelpContextChip';
+import FeedbackTrendStrip from './FeedbackTrendStrip';
+import { FEEDBACK_RECEIVED_LABELS, FEEDBACK_RECEIVED_WINDOWS } from './feedbackTrends';
 import {
   FEEDBACK_STATUS_LABELS,
   FEEDBACK_STATUS_ORDER,
@@ -73,6 +75,10 @@ const SUBJECT_FILTER_OPTIONS = FEEDBACK_SUBJECTS.map(subject => ({
 const TYPE_FILTER_OPTIONS = FEEDBACK_TYPE_ORDER.map(type => ({
   value: type,
   label: FEEDBACK_TYPE_LABELS[type],
+}));
+const RECEIVED_FILTER_OPTIONS = FEEDBACK_RECEIVED_WINDOWS.map(range => ({
+  value: range,
+  label: FEEDBACK_RECEIVED_LABELS[range],
 }));
 
 // Tags the producers add that only restate the type chip; the rest (help, slash command,
@@ -199,6 +205,7 @@ const ContentCell = ({ row }: { row: FeedbackRow }) => (
 
 const FeedbackRowMenu = ({ row, onDelete }: { row: FeedbackRow; onDelete: (row: FeedbackRow) => void }) => {
   const conversationPath = feedbackConversationPath(row);
+  const reporterMailto = feedbackReporterMailto(row);
   return (
     <Dropdown>
       <MenuButton
@@ -233,6 +240,11 @@ const FeedbackRowMenu = ({ row, onDelete }: { row: FeedbackRow; onDelete: (row: 
             {row.questId ? 'Open the conversation at this turn' : 'Open the conversation'}
           </MenuItem>
         )}
+        {reporterMailto && (
+          <MenuItem component="a" href={reporterMailto} data-testid={`feedback-row-email-reporter-${row._id}`}>
+            Email reporter
+          </MenuItem>
+        )}
         <ListDivider />
         <MenuItem onClick={() => onDelete(row)} data-testid={`feedback-row-delete-${row._id}`}>
           Delete feedback
@@ -255,6 +267,8 @@ const FeedbackTab: React.FC = () => {
     setSelectedOrganizations,
     setSubject,
     setTypes,
+    setReceived,
+    showOnly,
     toggleSortDirection,
     filterParams,
   } = useFeedbackFilters();
@@ -404,14 +418,9 @@ const FeedbackTab: React.FC = () => {
     statusNarrowed ||
     filters.subject !== undefined ||
     filters.types.length > 0 ||
+    filters.received !== undefined ||
     filters.selectedOrganizations.length > 0;
-  const clearFilters = () => {
-    setSearchTerm('');
-    setStatusFilters(toStatusFilters(FEEDBACK_STATUS_ORDER));
-    setSubject(undefined);
-    setTypes([]);
-    setSelectedOrganizations([]);
-  };
+  const clearFilters = () => showOnly({ statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
 
   // `loading` also covers a refetch with rows on screen (keepPreviousData): those rows stay, under a bar.
   const firstLoad = loading && currentFeedback.length === 0;
@@ -483,6 +492,8 @@ const FeedbackTab: React.FC = () => {
         }
       />
 
+      <FeedbackTrendStrip showOnly={showOnly} />
+
       <Stack
         direction="row"
         flexWrap="wrap"
@@ -512,6 +523,13 @@ const FeedbackTab: React.FC = () => {
           value={filters.types}
           options={TYPE_FILTER_OPTIONS}
           onChange={picked => setTypes(FEEDBACK_TYPE_ORDER.filter(type => picked.includes(type)))}
+        />
+        <FilterChip
+          id="feedback-received"
+          label="Received"
+          value={filters.received}
+          options={RECEIVED_FILTER_OPTIONS}
+          onChange={value => setReceived(FEEDBACK_RECEIVED_WINDOWS.find(range => range === value))}
         />
         {/* Single-select, because GET /api/feedback takes one subject or none. */}
         <FilterChip
@@ -608,11 +626,9 @@ const FeedbackTab: React.FC = () => {
           )
         }
         reasonPresets={ADMIN_REASON_PRESETS.feedbackDeletion}
-        // DELETE /api/feedback/:id/delete takes no reason, so the one picked here is neither sent nor stored.
-        reasonAudited={false}
         confirmLabel="Delete feedback"
         tone="danger"
-        onConfirm={() => confirmDeleteFeedback()}
+        onConfirm={confirmDeleteFeedback}
         data-testid="feedback-delete-dialog"
       />
 

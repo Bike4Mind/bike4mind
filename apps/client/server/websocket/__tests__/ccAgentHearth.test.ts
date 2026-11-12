@@ -243,6 +243,8 @@ describe('cc_agent_register dual-write', () => {
     const res = await func(makeEvent(REGISTER_BODY), {}, makeLogger());
 
     expect(res.statusCode).toBe(200);
+    // Registering an agent is what keeps a bridge-only key from reading as never used.
+    expect(resolveBridgeWsAuthMock).toHaveBeenCalledWith(expect.objectContaining({ recordKeyUse: true }));
     const appended = appendedEvent();
     expect(appended.kind).toBe('presence');
     expect(appended.channelId).toBe('ch-default');
@@ -368,6 +370,7 @@ describe('cc_agent_event dual-write', () => {
   it('reports the status VALUE as the reason and drops the status text summary', async () => {
     const func = await loadHandler('../ccAgentEvent');
     await func(makeEvent(statusBody('awaiting_permission')), {}, makeLogger());
+    expect(resolveBridgeWsAuthMock).toHaveBeenCalledWith(expect.objectContaining({ recordKeyUse: false }));
 
     const appended = appendedEvent();
     expect(appended.machine.payload.activity?.reason).toBe('awaiting_permission');
@@ -449,6 +452,7 @@ describe('cc_agent_disconnect dual-write', () => {
   it('reports a disconnect without forwarding the caller-supplied reason string', async () => {
     const func = await loadHandler('../ccAgentDisconnect');
     await func(makeEvent(DISCONNECT_BODY), {}, makeLogger());
+    expect(resolveBridgeWsAuthMock).toHaveBeenCalledWith(expect.objectContaining({ recordKeyUse: false }));
 
     const appended = appendedEvent();
     expect(appended.machine.payload.activity?.reason).toBe('disconnected');

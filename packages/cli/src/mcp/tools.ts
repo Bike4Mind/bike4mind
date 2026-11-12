@@ -1002,7 +1002,7 @@ export async function publishArtifact(
 
   const upload = draft.uploadUrls.find(u => u.path === PUBLISH_INDEX_PATH);
   if (!upload) throw new Error(`publish draft ${draft.draftId} returned no upload URL for ${PUBLISH_INDEX_PATH}`);
-  await client.uploadPublishDraftFile(upload.url, body, PUBLISH_INDEX_MIME);
+  await client.uploadPublishDraftFile(upload, body, PUBLISH_INDEX_MIME);
 
   const published = await client.finalizePublish(draft.draftId);
   return {

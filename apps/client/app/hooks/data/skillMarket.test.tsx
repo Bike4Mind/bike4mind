@@ -3,6 +3,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { SKILL_SHARE_TOKEN_HEADER } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({
@@ -28,15 +29,22 @@ const setup = () => {
 describe('skillMarket hooks', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('fetches by id without sending a token, and by share-token path when only a token is given', async () => {
+  it('fetches by id without sending a token', async () => {
     h.get.mockResolvedValue({ data: { listing: { id: 'l1' } } });
     const { wrapper } = setup();
     const byId = renderHook(() => useListingDetail({ id: 'l1', token: 'abc' }), { wrapper });
     await waitFor(() => expect(byId.result.current.isSuccess).toBe(true));
     expect(h.get).toHaveBeenLastCalledWith('/api/skills/market/l1');
-    const byToken = renderHook(() => useListingDetail({ token: 'abc' }), { wrapper });
-    await waitFor(() => expect(byToken.result.current.isSuccess).toBe(true));
-    expect(h.get).toHaveBeenLastCalledWith('/api/skills/market/by-token/abc');
+  });
+
+  it('fetches an unlisted listing by token alone through the header, not the URL', async () => {
+    h.get.mockResolvedValueOnce({ data: { listing: { id: 'l2' } } });
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useListingDetail({ token: 'xyz' }), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(h.get).toHaveBeenLastCalledWith('/api/skills/market/by-token', {
+      headers: { [SKILL_SHARE_TOKEN_HEADER]: 'xyz' },
+    });
   });
 
   it('invalidates the reports queue and listing detail after a report', async () => {

@@ -21,6 +21,9 @@ describe('fabFileKeys parity with pre-registry literals', () => {
     expect(fabFileKeys.ownList(params)).toEqual(['fabFiles', 'own', params]);
     expect(fabFileKeys.ownBySession('s1')).toEqual(['fabFiles', 'own', { sessionId: 's1' }]);
     expect(fabFileKeys.quest('q1')).toEqual(['fabFiles', 'quest', 'q1']);
+    expect(fabFileKeys.starredIds).toEqual(['fabFiles', 'starred']);
+    expect(fabFileKeys.generationModels).toEqual(['fabFiles', 'generationModels']);
+    expect(fabFileKeys.searchAll).toEqual(['fabFiles', 'search']);
   });
 
   it('search keys keep params in the key, including undefined', () => {

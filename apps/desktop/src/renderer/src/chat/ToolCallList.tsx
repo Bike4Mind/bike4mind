@@ -191,12 +191,50 @@ function AlwaysScopeLine({ call }: { call: ChatToolCall }) {
       {call.approvalAlways
         ? `"Allow in this chat" covers ${call.approvalAlways} for the rest of this conversation.`
         : '"Allow in this chat" applies for the rest of this conversation.'}
+      {call.approvalProjectRules && call.approvalProjectRules.length > 0 && call.approvalProject && (
+        <span data-testid="chat-tool-approval-project-rules">
+          {` "Allow in this project" saves ${call.approvalProjectRules.join(', ')} for every session in ${folderName(call.approvalProject)}.`}
+        </span>
+      )}
       {call.approvalRules && call.approvalRules.length > 0 && (
         <span data-testid="chat-tool-approval-rules">
           {` "Always allow" saves ${call.approvalRules.map(ruleScope).join(', ')} to Settings > Permissions, so no session asks again.`}
         </span>
       )}
     </Typography>
+  );
+}
+
+function folderName(directory: string): string {
+  return directory.split(/[\\/]/).filter(Boolean).at(-1) ?? directory;
+}
+
+/** The parts of a chain that still need a decision; the others are already allowed. */
+function ApprovalParts({ parts }: { parts: NonNullable<ChatToolCall['approvalParts']> }) {
+  return (
+    <Box sx={{ mt: 0.75 }} data-testid="chat-tool-approval-parts">
+      <Typography level="body-xs" fontWeight="lg">
+        {parts.length === 1 ? 'Only this part needs a decision:' : 'Only these parts need a decision:'}
+      </Typography>
+      <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+        {parts.map((part, index) => (
+          <Box key={index} data-testid="chat-tool-approval-part">
+            <Typography
+              level="body-xs"
+              fontFamily="monospace"
+              sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+            >
+              {part.text}
+            </Typography>
+            {part.reason && (
+              <Typography level="body-xs" textColor="text.tertiary">
+                {part.reason}
+              </Typography>
+            )}
+          </Box>
+        ))}
+      </Stack>
+    </Box>
   );
 }
 
@@ -275,6 +313,7 @@ function ApprovalPrompt({
           </Typography>
         </Box>
       )}
+      {!diff && call.approvalParts && call.approvalParts.length > 0 && <ApprovalParts parts={call.approvalParts} />}
 
       {choice ? (
         <ApprovalChoiceButtons
@@ -311,6 +350,18 @@ function ApprovalPrompt({
                 data-testid="chat-tool-approve-always"
               >
                 Allow in this chat
+              </Button>
+            )}
+            {!noAlways && call.approvalProjectRules && call.approvalProjectRules.length > 0 && (
+              <Button
+                size="sm"
+                variant="soft"
+                color="neutral"
+                title={call.approvalProjectRules.join('\n')}
+                onClick={() => onRespond(approvalId, { decision: 'always', project: true })}
+                data-testid="chat-tool-approve-project"
+              >
+                Allow in this project
               </Button>
             )}
             {!noAlways && call.approvalRules && call.approvalRules.length > 0 && (
