@@ -3598,9 +3598,9 @@ export interface components {
             | 'aws'
             | 'local-image';
           description: string | null;
-          /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on image models; null for every other type. */
+          /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on catalog image models; null otherwise. */
           blurb: string | null;
-          /** @description The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on image models; null for every other type. */
+          /** @description The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on catalog image models; null otherwise. */
           provider_label: string | null;
           /** @description Input context, in tokens. */
           context_window: number;
@@ -3866,9 +3866,9 @@ export interface components {
           | 'aws'
           | 'local-image';
         description: string | null;
-        /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on image models; null for every other type. */
+        /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on catalog image models; null otherwise. */
         blurb: string | null;
-        /** @description The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on image models; null for every other type. */
+        /** @description The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on catalog image models; null otherwise. */
         provider_label: string | null;
         /** @description Input context, in tokens. */
         context_window: number;
@@ -6261,9 +6261,9 @@ export interface components {
         object: 'video_model';
         display_name: string;
         provider: string;
-        /** @description The provider as shown to people (`Google`, `Black Forest Labs`), where `provider` is the id. Display text. */
+        /** @description The provider as shown to people (`Google`, `Black Forest Labs`), where `provider` is the id. Display text. Always sent by current servers. */
         provider_label?: string;
-        /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. */
+        /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Always sent by current servers. */
         blurb?: string;
         modes: ('text_to_video' | 'image_to_video')[];
         /** @description The inputs[] roles this model accepts and the most of each one request may carry. Roles today: first_frame, last_frame, reference, style; ignore any you do not know. */
@@ -6697,9 +6697,9 @@ export interface components {
         object: 'music_model';
         display_name: string;
         provider: string;
-        /** @description The provider as shown to people (`Google`, `Black Forest Labs`), where `provider` is the id. Display text. */
+        /** @description The provider as shown to people (`Google`, `Black Forest Labs`), where `provider` is the id. Display text. Always sent by current servers. */
         provider_label?: string;
-        /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. */
+        /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Always sent by current servers. */
         blurb?: string;
         /**
          * @description `never`: instrumental only.

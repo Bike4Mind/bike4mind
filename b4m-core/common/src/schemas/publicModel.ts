@@ -98,14 +98,14 @@ export const PublicModelSchema = z.object({
     .nullable()
     .describe(
       'How Studio introduces the model on its card: one line on what it is best at. Display text; may change. ' +
-        'Set on image models; null for every other type.'
+        'Set on catalog image models; null otherwise.'
     ),
   provider_label: z
     .string()
     .nullable()
     .describe(
       'The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. ' +
-        'Set on image models; null for every other type.'
+        'Set on catalog image models; null otherwise.'
     ),
   context_window: z.number().int().describe('Input context, in tokens.'),
   max_output_tokens: z.number().int(),
