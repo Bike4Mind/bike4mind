@@ -300,6 +300,7 @@ export const authHolders = {
     unrelatedPaths: ['regInvites'],
     secretPaths: [
       'password',
+      'personaLoginCodeHash',
       'mfa.totpSecret',
       'mfa.backupCodes',
       'mfa.pendingBackupCodes',

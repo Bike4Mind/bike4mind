@@ -15,6 +15,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/p
 import { randomUUID } from 'node:crypto';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
+import { newSessionDefaultsSchema, type NewSessionDefaults } from '@shared/sessionDefaults';
 import type {
   ChatApprovalMode,
   ChatMessage,
@@ -393,6 +394,18 @@ export class SessionStore implements SessionWritesStore {
     return join(directory, `${id}.json`);
   }
 
+  /** Read effective defaults without creating a conversation or recording a preference. */
+  async defaultsForNewSession(model?: string, approvalOverride?: ChatApprovalMode): Promise<NewSessionDefaults> {
+    const approvalMode = approvalOverride ?? (await this.approvalModes?.read()) ?? 'auto';
+    const promptCacheTtl = await this.promptCacheTtls?.read();
+    return newSessionDefaultsSchema.parse({
+      model: model || this.defaultModel,
+      approvalMode,
+      reasoningEffort: this.defaultReasoningEffort,
+      ...(promptCacheTtl ? { promptCacheTtl } : {}),
+    });
+  }
+
   /**
    * `model` is what the caller resolved against the server's catalog; omitting it falls back to
    * the build's preferred model, which is the right answer only until that catalog is readable.
@@ -410,8 +423,7 @@ export class SessionStore implements SessionWritesStore {
     const { project, origin, mode = project ? 'code' : 'chat' } = options;
     // A mode the caller named is a spawn inheriting its parent's, already clamped there. Only
     // a conversation the user started themselves reads the preference.
-    const approvalMode = options.approvalMode ?? (await this.approvalModes?.read()) ?? 'auto';
-    const promptCacheTtl = await this.promptCacheTtls?.read();
+    const defaults = await this.defaultsForNewSession(model, options.approvalMode);
     const now = new Date().toISOString();
     const session: ChatSession = {
       id: randomUUID(),
@@ -419,13 +431,13 @@ export class SessionStore implements SessionWritesStore {
       // sits under, so the row itself is still best named after the first thing asked.
       title: options.title ? deriveTitle(options.title) : UNTITLED,
       ...(options.title ? { titleLocked: true } : {}),
-      model: model || this.defaultModel,
+      model: defaults.model,
       createdAt: now,
       updatedAt: now,
       mode,
-      approvalMode,
-      reasoningEffort: this.defaultReasoningEffort,
-      ...(promptCacheTtl ? { promptCacheTtl } : {}),
+      approvalMode: defaults.approvalMode,
+      reasoningEffort: defaults.reasoningEffort,
+      ...(defaults.promptCacheTtl ? { promptCacheTtl: defaults.promptCacheTtl } : {}),
       ...(project && mode === 'code' ? { project } : {}),
       ...(options.grantedDirectories?.length ? { grantedDirectories: [...options.grantedDirectories] } : {}),
       ...(origin ? { origin } : {}),

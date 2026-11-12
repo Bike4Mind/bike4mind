@@ -212,6 +212,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/v1/credits/transactions',
     'GET /api/v1/me',
   ],
+  [ApiKeyScope.PERSONAS_MINT]: ['POST /api/v1/personas', 'DELETE /api/v1/personas/:id'],
   [ApiKeyScope.OVERWATCH_INGEST_WRITE]: ['POST /api/overwatch/v1/events', 'POST /api/overwatch/v1/hops'],
   [ApiKeyScope.REWARDS_GRANT]: ['POST /api/partners/rewards/grant'],
   [ApiKeyScope.EMBED_CHAT]: [

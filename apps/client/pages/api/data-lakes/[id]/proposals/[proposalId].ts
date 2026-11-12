@@ -13,8 +13,8 @@ import { NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
-import { admitProposedSource } from '@server/dataLakes/proposalAdmissionDeps';
-import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
+import { admitProposedSource } from '@bike4mind/server-utils/dataLakes/proposalAdmissionDeps';
+import { serializeLakeClaim } from '@bike4mind/server-utils/dataLakes/serializeLakeClaim';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { respond } from '@server/utils/respond';
@@ -26,11 +26,11 @@ const ReviewInput = z.object({
 });
 
 /**
- * POST /api/data-lakes/:id/proposals/:proposalId - rule on one acquisition proposal (#1671), or
+ * POST /api/data-lakes/:id/proposals/:proposalId - rule on one acquisition proposal, or
  * `restore` a declined one to the pending queue.
  *
- * The only way content a producer found reaches a lake, and it is a human action by construction:
- * there is no auto-approval lever here or anywhere else (#1658 decision 10). Authorization,
+ * The manual way content a producer found reaches a lake. The only automatic way is a trusted-site
+ * rule on the research config, applied by the worker, never by a score. Authorization,
  * writability, the once-only claim and the admission itself all live in the service; this route
  * resolves the actor, checks the proposal belongs to the lake in the path, and wires the ordinary
  * URL ingestion door as the admission adapter.

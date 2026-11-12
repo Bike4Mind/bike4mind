@@ -88,6 +88,7 @@ vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
 }));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
+  User: { findById: () => ({ select: () => ({ lean: async () => null }) }) },
   grantPackageRepository: {},
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),
