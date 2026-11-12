@@ -79,7 +79,7 @@ const ORG = {
   users: [
     { userId: 'owner1' },
     // Holds manage permissions but is neither owner nor manager: the one caller for whom the two
-    // gates disagree, so a deep link must be honoured for Settings and refused for Usage.
+    // gates disagree, so the phone select must offer Settings but not Usage.
     { userId: 'manager2', permissions: [Permission.read, Permission.update] },
   ],
 } as unknown as IOrganizationDocument;
