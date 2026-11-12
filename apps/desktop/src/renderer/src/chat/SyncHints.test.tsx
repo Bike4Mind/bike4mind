@@ -205,6 +205,21 @@ describe('Claude Code hint', () => {
 });
 
 describe('web hint', () => {
+  it('keeps compact single-line buttons and wraps the actions instead of their labels', async () => {
+    host.style.width = '220px';
+    await mount(stateWith({ codeSessions: 0 }), false);
+    const enable = query('sync-hint-web-enable-btn')!;
+    const dismiss = query('sync-hint-web-dismiss-btn')!;
+    for (const button of [enable, dismiss]) {
+      const style = getComputedStyle(button);
+      expect(style.whiteSpace).toBe('nowrap');
+      expect(style.flexShrink).toBe('0');
+    }
+    const actions = getComputedStyle(enable.parentElement!);
+    expect(actions.flexWrap).toBe('wrap');
+    expect(actions.alignItems).toBe('flex-start');
+  });
+
   it('shows when the Claude Code hint does not apply, and turns web sync on', async () => {
     await mount(stateWith({ codeSessions: 0 }), false);
     expect(query('sync-hint-web')?.textContent).toContain('You have 30 chats on Bike4Mind web');

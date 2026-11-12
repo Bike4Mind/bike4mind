@@ -112,11 +112,24 @@ function SourceHint({
           Could not turn on sync. Try again.
         </Typography>
       )}
-      <Stack direction="row" spacing={0.5}>
-        <Button size="sm" variant="solid" onClick={onEnable} data-testid={`${testId}-enable-btn`}>
+      <Stack direction="row" sx={{ gap: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        <Button
+          size="sm"
+          variant="solid"
+          onClick={onEnable}
+          sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+          data-testid={`${testId}-enable-btn`}
+        >
           Turn on sync
         </Button>
-        <Button size="sm" variant="plain" color="neutral" onClick={onDismiss} data-testid={`${testId}-dismiss-btn`}>
+        <Button
+          size="sm"
+          variant="plain"
+          color="neutral"
+          onClick={onDismiss}
+          sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+          data-testid={`${testId}-dismiss-btn`}
+        >
           Not now
         </Button>
       </Stack>
