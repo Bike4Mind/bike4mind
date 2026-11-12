@@ -33,12 +33,16 @@ export const findByIdentifier = async (
   const { db } = adapters;
   const { sessionId, type, identifier } = secureParameters(parameters, findByIdentifierSchema);
 
-  const rows = await db.artifacts.find({
-    sessionId,
-    type,
-    ...identifierFilter(identifier),
-    deletedAt: null,
-  });
+  // Only what canUserReadArtifact, the owner preference and the sort read.
+  const rows = await db.artifacts.find(
+    {
+      sessionId,
+      type,
+      ...identifierFilter(identifier),
+      deletedAt: null,
+    },
+    { id: 1, userId: 1, visibility: 1, permissions: 1, createdAt: 1 }
+  );
 
   const readable = rows
     .filter(row => canUserReadArtifact(userId, row))
