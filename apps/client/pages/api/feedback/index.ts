@@ -3,6 +3,7 @@ import {
   classifyStage,
   FEEDBACK_LIST_DEFAULT_LIMIT,
   FEEDBACK_LIST_MAX_LIMIT,
+  FEEDBACK_RESOLUTIONS,
   FEEDBACK_SUBJECTS,
   FeedbackEvents,
   FeedbackStatus,
@@ -70,6 +71,8 @@ export const FEEDBACK_LIST_FIELDS = [
   'content',
   'contentStored',
   'status',
+  'resolution',
+  'resolutionDuplicateId',
   'tags',
   'username',
   'userEmail',
@@ -108,6 +111,7 @@ const ListFeedbackQuerySchema = z.object({
   // (rollups, deep links) should use.
   organization: z.union([z.string(), z.array(z.string())]).optional(),
   status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
+  resolution: z.enum(FEEDBACK_RESOLUTIONS).optional(),
   subject: z.enum(FEEDBACK_SUBJECTS).optional(),
   type: z.union([z.enum(FeedbackType), z.array(z.enum(FeedbackType))]).optional(),
   received: z.enum(FEEDBACK_RECEIVED_WINDOWS).optional(),
@@ -273,6 +277,7 @@ const handler = baseApi()
     if (query.questId) clauses.push({ questId: query.questId });
     if (query.organizationId) clauses.push({ organizationId: query.organizationId });
     if (query.subject) clauses.push({ subject: query.subject });
+    if (query.resolution) clauses.push({ status: FeedbackStatus.Closed, resolution: query.resolution });
 
     const organizations = toArray(query.organization);
     if (organizations.length > 0) clauses.push({ organization: { $in: organizations } });
@@ -407,13 +412,13 @@ const handler = baseApi()
         : Promise.resolve(false),
     ]);
 
+    const autoClosed = isFeedbackTriageNoise({ type, hasContent: hasFeedbackComment(content), tags });
     const newFeedback = new FeedbackModel({
       _id: feedbackId,
       userId: req.isAuthenticated() ? req.user.id : userId,
       tags,
-      status: isFeedbackTriageNoise({ type, hasContent: hasFeedbackComment(content), tags })
-        ? FeedbackStatus.Closed
-        : FeedbackStatus.New,
+      status: autoClosed ? FeedbackStatus.Closed : FeedbackStatus.New,
+      ...(autoClosed && type === FeedbackType.THUMBS_UP ? { resolution: 'no_action_needed' } : {}),
       username: req.isAuthenticated() ? req.user.username : username,
       userEmail: req.isAuthenticated() ? req.user.email : userEmail,
       organization: organization,
