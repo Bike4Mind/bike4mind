@@ -31,6 +31,9 @@ const CATEGORY_DESCRIPTIONS: Record<EmailCategory, string> = {
   [EmailCategory.TRANSACTIONAL]: 'Account-related notifications (password resets, etc.)',
 };
 
+/** The link's token goes to the API in a header (pages/api/email/unsubscribe.ts), never the API URL. */
+const tokenHeader = (token: string) => ({ headers: { 'x-unsubscribe-token': token } });
+
 export default function UnsubscribePage() {
   const search = useSearch({ strict: false }) as { token?: string };
   const token = search.token;
@@ -50,7 +53,7 @@ export default function UnsubscribePage() {
 
     const fetchPreferences = async () => {
       try {
-        const response = await api.get('/api/email/unsubscribe', { params: { token } });
+        const response = await api.get('/api/email/unsubscribe', tokenHeader(token));
         setData(response.data);
       } catch (err: any) {
         setError(err.response?.data?.message || 'Failed to load preferences. The link may be invalid or expired.');
@@ -68,7 +71,7 @@ export default function UnsubscribePage() {
     setSuccessMessage(null);
 
     try {
-      const response = await api.post('/api/email/unsubscribe', { category }, { params: { token } });
+      const response = await api.post('/api/email/unsubscribe', { category }, tokenHeader(token));
       setSuccessMessage(response.data.message);
       if (data) {
         setData({
@@ -92,7 +95,7 @@ export default function UnsubscribePage() {
     setSuccessMessage(null);
 
     try {
-      const response = await api.post('/api/email/unsubscribe', { globalUnsubscribe: true }, { params: { token } });
+      const response = await api.post('/api/email/unsubscribe', { globalUnsubscribe: true }, tokenHeader(token));
       setSuccessMessage(response.data.message);
       if (data) {
         setData({

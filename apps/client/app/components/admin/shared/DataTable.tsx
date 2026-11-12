@@ -17,6 +17,8 @@ import type { AdminSelection } from './BulkActionBar';
 export type DataColumn<Row> = {
   id: string;
   label: string;
+  /** A help control after the header label, such as the definition of the term. */
+  help?: ReactNode;
   render: (row: Row) => ReactNode;
   /** Sorts the loaded rows locally. Ignored when the table's sort is controlled. */
   sortValue?: (row: Row) => string | number;
@@ -36,7 +38,11 @@ export type DataTablePagination = {
   onPageSizeChange: (pageSize: number) => void;
 };
 /** A header row followed by its rows. Rows in no group render last, without a header. */
-export type DataTableGroup = { id: string; header: ReactNode; rowIds: readonly string[] };
+export type DataTableGroup = {
+  id: string;
+  header: ReactNode | ((visibleCount: number) => ReactNode);
+  rowIds: readonly string[];
+};
 export type DataTableProps<Row> = {
   rows: readonly Row[];
   columns: readonly DataColumn<Row>[];
@@ -375,6 +381,20 @@ export function DataTable<Row>({
                   ) : (
                     column.label
                   )}
+                  {column.help && (
+                    <Box
+                      component="span"
+                      sx={{
+                        display: 'inline-flex',
+                        verticalAlign: 'middle',
+                        ml: 0.25,
+                        my: -1,
+                        '& svg': { fontSize: 16 },
+                      }}
+                    >
+                      {column.help}
+                    </Box>
+                  )}
                 </th>
               ))}
               {rowActions && <th style={{ width: '3.5rem' }} aria-label="Row actions" />}
@@ -548,7 +568,13 @@ function groupSections<Row>(
       placed.add(id);
       return true;
     });
-    if (groupRows.length > 0) sections.push({ id: group.id, header: group.header, rows: groupRows });
+    if (groupRows.length > 0) {
+      sections.push({
+        id: group.id,
+        header: typeof group.header === 'function' ? group.header(groupRows.length) : group.header,
+        rows: groupRows,
+      });
+    }
   }
   const rest = rows.filter(row => !placed.has(getRowId(row)));
   if (rest.length > 0) sections.push({ id: 'ungrouped', rows: rest });

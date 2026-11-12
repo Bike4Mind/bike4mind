@@ -42,6 +42,19 @@ const detection = {
 };
 
 describe('decideContainment', () => {
+  it.each(['completionSequence', 'completionSynchrony'] as const)(
+    'never automatically contains %s evidence, even with a high AI score',
+    detector => {
+      expect(
+        decideContainment({
+          assessment: { ...assessment, confidence: 1 },
+          detection: { ...detection, detector, wouldAction: 'contain' },
+          config: { ...config, mode: 'enforce' },
+        })
+      ).toEqual({ kind: 'skip', why: 'review_only_detector' });
+    }
+  );
+
   it('contains on a confident abuse judgment of an unreviewed containment detection', () => {
     const decision = decideContainment({ assessment, detection, config });
     expect(decision).toMatchObject({ kind: 'contain', userIds: ['u1'] });

@@ -21,6 +21,9 @@ export type SkillRiskTier = 'clean' | 'review' | 'high';
 export const SKILL_LISTING_TAG_PATTERN = /^[a-z0-9][a-z0-9-]{0,23}$/;
 export const SKILL_LISTING_MAX_TAGS = 5;
 
+/** Request header carrying an unlisted listing's share token to the listing detail routes. */
+export const SKILL_SHARE_TOKEN_HEADER = 'x-share-token';
+
 /** `critical` fails the scan; `high` / `medium` raise the tier; `low` is informational. */
 export type SkillScanSeverity = 'critical' | 'high' | 'medium' | 'low';
 

@@ -38,7 +38,7 @@ import { premiumRoutes } from './premium-generated/premiumRoutes.generated';
 import { partitionPremiumRoutes } from './premiumRoutePartition';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 import { lazyWithPreload } from './utils/lazyWithPreload';
-import { parseStudioModality } from './components/Studio/studioModality';
+import { parseStudioMedium } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
 import { parseAdminSearch } from './components/admin/adminTabParams';
 import { legacyUserLinkRedirect, parseUserProfileSearch } from './components/admin/Users/Profile/userProfileSearch';
@@ -120,6 +120,8 @@ const BedrockNewsClaimPage = lazy(() => import('./routes/partners/bedrocknews-cl
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const StudioPage = lazy(() => import('./routes/studio/$modality'));
+const StudioProductionsPage = lazy(() => import('./routes/studio/productions'));
+const StudioLibraryPage = lazy(() => import('./routes/studio/library'));
 
 // Shared coercion for the optional string search params nearly every route declares.
 // A few routes below deliberately keep a stricter `typeof === 'string'` guard instead,
@@ -579,7 +581,7 @@ export const studioRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/studio/$modality',
   params: {
-    parse: ({ modality }) => ({ modality: parseStudioModality(modality) }),
+    parse: ({ modality }) => ({ modality: parseStudioMedium(modality) }),
     stringify: ({ modality }) => ({ modality }),
   },
   component: function StudioRouteComponent() {
@@ -590,6 +592,27 @@ export const studioRoute = createRoute({
       </Suspense>
     );
   },
+});
+
+// Create v2's other two areas. Static, so they win over /studio/$modality; each 404s until its flag is open.
+export const studioProductionsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/studio/productions',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <StudioProductionsPage />
+    </Suspense>
+  ),
+});
+
+export const studioLibraryRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/studio/library',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <StudioLibraryPage />
+    </Suspense>
+  ),
 });
 
 // Agents index route (replaces /agents/index.tsx)
@@ -1383,6 +1406,8 @@ const routeTree = rootRoute.addChildren([
     hudRoute,
     hearthRoute,
     studioRoute,
+    studioProductionsRoute,
+    studioLibraryRoute,
     ...builtAppShellPremiumRoutes,
   ]),
   // QA status pages (admin layout without the sidenav)

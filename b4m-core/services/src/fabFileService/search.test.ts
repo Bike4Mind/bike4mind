@@ -4,19 +4,22 @@ import { search } from './search';
 // The ids/projectId filters express restriction ("only these files"), and used to be fed
 // into the fileIds EXCLUSION filter - inverting them. These tests pin the corrected mapping
 // onto restrictToFileIds, including the fail-closed empty scope for an unresolvable project.
-function adapters(project: { fileIds: string[] } | null = null) {
+function adapters(project: { fileIds: string[] } | null = null, starredIds: string[] = []) {
   const fabFilesSearch = vi.fn().mockResolvedValue({ data: [], hasMore: false, total: 0 });
+  const favoritesFind = vi.fn().mockResolvedValue(starredIds.map(documentId => ({ documentId })));
   return {
     adapters: {
       db: {
         fabFiles: { search: fabFilesSearch },
         projects: { findById: vi.fn().mockResolvedValue(project) },
+        favorites: { find: favoritesFind },
         // any: signed-url generation is not reached with an empty result set.
         users: { findById: vi.fn() } as any,
       },
       storage: { generateSignedUrl: vi.fn() },
     } as any,
     fabFilesSearch,
+    favoritesFind,
   };
 }
 
@@ -213,5 +216,55 @@ describe('fabFileService search - generated filter', () => {
     const params = { filters: { generated: 'yes' } } as unknown as Parameters<typeof search>[1];
 
     await expect(search('u1', params, a)).rejects.toThrow();
+  });
+});
+
+describe('fabFileService search - Library filters', () => {
+  it('passes uploaded and model through to the repository', async () => {
+    const { adapters: a, fabFilesSearch } = adapters();
+
+    await search('u1', { filters: { uploaded: 'true', model: 'flux-pro' } } as Parameters<typeof search>[1], a);
+
+    expect(filtersArgOf(fabFilesSearch)).toMatchObject({ uploaded: true, generationModelId: 'flux-pro' });
+  });
+
+  it("restricts a starred search to the caller's file stars", async () => {
+    const { adapters: a, fabFilesSearch, favoritesFind } = adapters(null, ['s1', 's2']);
+
+    await search('u1', { filters: { starred: true } }, a);
+
+    expect(favoritesFind).toHaveBeenCalledWith({ userId: 'u1', documentType: 'files' });
+    expect(filtersArgOf(fabFilesSearch).restrictToFileIds).toEqual(['s1', 's2']);
+  });
+
+  it('intersects starred with an existing allow-list instead of widening it', async () => {
+    const { adapters: a, fabFilesSearch } = adapters(null, ['s1', 's2']);
+
+    await search('u1', { filters: { ids: ['s2', 'x'], starred: true } }, a);
+
+    expect(filtersArgOf(fabFilesSearch).restrictToFileIds).toEqual(['s2']);
+  });
+
+  it('fail-closed: starred with no stars matches nothing', async () => {
+    const { adapters: a, fabFilesSearch } = adapters();
+
+    await search('u1', { filters: { starred: true } }, a);
+
+    expect(filtersArgOf(fabFilesSearch).restrictToFileIds).toEqual([]);
+  });
+
+  it('fails loudly when a caller without the favorites adapter is asked for stars', async () => {
+    const { adapters: a } = adapters();
+    delete a.db.favorites;
+
+    await expect(search('u1', { filters: { starred: true } }, a)).rejects.toThrow('favorites adapter');
+  });
+
+  it('does not read favorites when starred is off', async () => {
+    const { adapters: a, favoritesFind } = adapters();
+
+    await search('u1', { filters: { starred: 'false' } } as unknown as Parameters<typeof search>[1], a);
+
+    expect(favoritesFind).not.toHaveBeenCalled();
   });
 });

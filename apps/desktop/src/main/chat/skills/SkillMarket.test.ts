@@ -111,11 +111,11 @@ describe('SkillMarket', () => {
     });
 
     const byToken = await market.listing({ token: 'a/b' });
-    expect(get).toHaveBeenLastCalledWith('/api/skills/market/by-token/a%2Fb', undefined);
+    expect(get).toHaveBeenLastCalledWith('/api/skills/market/by-token', { headers: { 'x-share-token': 'a/b' } });
     expect(byToken.detail).toMatchObject({ canImport: true, version: { id: 'v2' }, myImport: null });
 
     await market.listing({ id: 'l1', token: 'tok' });
-    expect(get).toHaveBeenLastCalledWith('/api/skills/market/l1', { params: { token: 'tok' } });
+    expect(get).toHaveBeenLastCalledWith('/api/skills/market/by-token', { headers: { 'x-share-token': 'tok' } });
   });
 
   it('offers an update with a diff and the tool change when the imported copy is behind', async () => {

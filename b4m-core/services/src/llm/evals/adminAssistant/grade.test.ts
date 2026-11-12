@@ -11,6 +11,7 @@ const nav = (...viewIds: string[]) => ({
   name: 'navigate_view',
   parameters: { suggestions: viewIds.map(viewId => ({ viewId, reason: 'r' })) },
 });
+const guide = { name: 'admin_search_guide', parameters: { query: 'q' }, success: true };
 
 describe('gradeAdminCase', () => {
   it('passes a where-is row on the right view and fails the wrong one', () => {
@@ -36,7 +37,7 @@ describe('gradeAdminCase', () => {
 
   it('grades a what-is row on view and rubric', () => {
     const r = row('what-domain-holds');
-    const calls = [nav('admin.signup_domain_holds')];
+    const calls = [guide, nav('admin.signup_domain_holds')];
     expect(gradeAdminCase(r, { reply: 'It holds credits for a suspicious domain.', functionCalls: calls }).passed).toBe(
       true
     );
@@ -135,7 +136,7 @@ describe('gradeAdminCase', () => {
       'admin.shadow_detections',
     ],
   ])('accepts the natural wording for %s', (id, reply, viewId) => {
-    expect(gradeAdminCase(row(id), { reply, functionCalls: [nav(viewId)] }).passed).toBe(true);
+    expect(gradeAdminCase(row(id), { reply, functionCalls: [guide, nav(viewId)] }).passed).toBe(true);
   });
 
   it.each(['Zzyzx Nonexistent Holdings does not exist.', 'I couldn\u2019t find it.'])(

@@ -5,6 +5,8 @@
 
 import { DEFAULT_BILLING_RANGE, isBillingRange, type BillingRange } from '@client/app/utils/adminBillingOverview';
 import { parseActivitySearch, type ActivitySearch } from './activitySearch';
+import { z } from 'zod';
+import { SIGNUP_TIMESERIES_RANGES, type SignupTimeseriesRange } from '@bike4mind/server-utils/app/utils/signupSignals';
 
 export const USER_PROFILE_TABS = ['overview', 'activity', 'credits', 'billing', 'keys', 'signins', 'admin'] as const;
 
@@ -22,8 +24,22 @@ export const USER_PROFILE_TAB_LABELS: Readonly<Record<UserProfileTab, string>> =
   admin: 'Admin log',
 };
 
+export type SignupClassificationContext = {
+  signupRange?: SignupTimeseriesRange;
+  signupAsOf?: string;
+  signupTzOffset?: number;
+};
 /** `range` belongs to the Billing tab; the default window is left out of the URL. */
-export type UserProfileSearch = { tab?: UserProfileTab; range?: BillingRange } & ActivitySearch;
+export type UserProfileSearch = { tab?: UserProfileTab; range?: BillingRange } & ActivitySearch &
+  SignupClassificationContext;
+
+const classificationContextSchema = z.object({
+  signupRange: z.enum(SIGNUP_TIMESERIES_RANGES).optional().catch(undefined),
+  signupAsOf: z.string().datetime().optional().catch(undefined),
+  signupTzOffset: z.number().int().min(-840).max(840).optional().catch(undefined),
+});
+export const parseSignupClassificationContext = (search: Record<string, unknown>): SignupClassificationContext =>
+  classificationContextSchema.parse(search);
 
 export const isUserProfileTab = (value: unknown): value is UserProfileTab =>
   typeof value === 'string' && (USER_PROFILE_TABS as readonly string[]).includes(value);
@@ -43,8 +59,16 @@ export const parseUserProfileSearch = (search: Record<string, unknown>): UserPro
     tab === 'billing' && isBillingRange(search.range) && search.range !== DEFAULT_BILLING_RANGE
       ? search.range
       : undefined;
-  return { tab: isUserProfileTab(tab) && tab !== DEFAULT_USER_PROFILE_TAB ? tab : undefined, ...activity, range };
+  return {
+    tab: isUserProfileTab(tab) && tab !== DEFAULT_USER_PROFILE_TAB ? tab : undefined,
+    ...activity,
+    range,
+    ...parseSignupClassificationContext(search),
+  };
 };
+
+export const userProfileTabSearch = (previous: UserProfileSearch, next: UserProfileTab): UserProfileSearch =>
+  parseUserProfileSearch({ ...previous, tab: next === DEFAULT_USER_PROFILE_TAB ? undefined : next });
 
 /**
  * Where an old `/admin?userId=` link goes now that the user view is a page, or undefined when the

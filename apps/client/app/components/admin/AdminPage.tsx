@@ -247,7 +247,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.Subscriptions}>
             {activeTab === AdminTab.Subscriptions && <AdminSubscriptions />}
           </TabPanel>
-          <TabPanel value={AdminTab.Organizations} {...selfFramed}>
+          <TabPanel value={AdminTab.Organizations}>
             {activeTab === AdminTab.Organizations && <OrganizationsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.CreditAnalytics} {...selfFramed}>
