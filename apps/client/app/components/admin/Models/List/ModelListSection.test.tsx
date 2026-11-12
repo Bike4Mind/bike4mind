@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { ModelAccessBulkDryRun, ModelAccessBulkResult } from '@bike4mind/common';
+import {
+  MODEL_ACCESS_UNDO_EXPIRED_CODE,
+  type ModelAccessBulkDryRun,
+  type ModelAccessBulkResult,
+} from '@bike4mind/common';
 import { apiFailure, listResponse, modelRow, renderModelsRoute } from '../modelsTestUtils';
 import { useRunNowStore } from '../Discovery/runDiscoveryNow';
 
@@ -683,6 +687,11 @@ describe('ModelListSection bulk access', () => {
     undoToken: 'undo-2',
     revision: 'r3',
   };
+  const undoExpired = () =>
+    apiFailure(409, {
+      error: 'This undo has expired. Change the models back from the list.',
+      code: MODEL_ACCESS_UNDO_EXPIRED_CODE,
+    });
   const undoneOne = (id: string): { data: ModelAccessBulkResult } => ({
     data: {
       batchId: `undo-${id}`,
@@ -868,7 +877,7 @@ describe('ModelListSection bulk access', () => {
     serveBulk(async token => {
       if (token === 'undo-1') {
         if ((firstTries += 1) === 1) throw apiFailure(503, { error: 'Access store unavailable' });
-        throw apiFailure(409, { error: 'This undo has expired.' });
+        throw undoExpired();
       }
       return undoneOne('example-text-2');
     });
@@ -883,6 +892,15 @@ describe('ModelListSection bulk access', () => {
       "The original change (1 model) may not have been undone; check each model's page."
     );
     expect(report).not.toHaveTextContent('was not undone');
+  });
+
+  it('stops the undo on any other 409, even one whose message mentions expiry', async () => {
+    const report = await stopUndoWith(apiFailure(409, { error: 'The access lock expired; try again.' }));
+    expect(screen.getByTestId('undo-toast-error')).toHaveTextContent(
+      'Undo: 1 model reverted; the rest failed: The access lock expired; try again.'
+    );
+    expect(report).toHaveTextContent('Retry 1 (1 model) was not undone yet.');
+    expect(report).not.toHaveTextContent('its undo had expired');
   });
 
   it('gives a model already sent and a write still unsent their own guidance', async () => {
@@ -908,7 +926,7 @@ describe('ModelListSection bulk access', () => {
     serveList(twoRows);
     serveBulk(async token => {
       if (token === 'undo-1') {
-        throw apiFailure(409, { error: 'This undo has expired. Change the models back from the list.' });
+        throw undoExpired();
       }
       return undoneOne('example-text-2');
     });
@@ -994,7 +1012,7 @@ describe('ModelListSection bulk access', () => {
         return undoneOne('example-text-1');
       }
       if (body.undoToken) {
-        throw apiFailure(409, { error: 'This undo has expired. Change the models back from the list.' });
+        throw undoExpired();
       }
       if (body.dryRunToken) {
         if ((applies += 1) === 1) return { data: partlyApplied };

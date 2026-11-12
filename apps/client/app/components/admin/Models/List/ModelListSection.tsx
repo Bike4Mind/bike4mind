@@ -21,6 +21,7 @@ import {
   ADMIN_MODEL_SOURCES,
   ADMIN_MODEL_STATUSES,
   ADMIN_MODEL_VIEWS,
+  MODEL_ACCESS_UNDO_EXPIRED_CODE,
   type AdminModelFilter,
   type AdminModelRow,
   type AdminModelSort,
@@ -157,7 +158,7 @@ type BulkOutcome =
 
 const isExpiredUndo = (error: unknown) => {
   const { status, data } = apiErrorOf(error);
-  return status === 409 && /expired/i.test(String(data.error ?? data.message ?? ''));
+  return status === 409 && data.code === MODEL_ACCESS_UNDO_EXPIRED_CODE;
 };
 
 const EMPTY_CELL = (

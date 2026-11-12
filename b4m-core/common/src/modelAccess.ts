@@ -172,4 +172,7 @@ export type ModelAccessBulkResult = {
 /** A 409 from the bulk endpoint carries the dry run recomputed against current state. */
 export type ModelAccessBulkConflict = { error: string; dryRun: ModelAccessBulkDryRun };
 
+/** The `code` on the bulk endpoint's 409 for an undo token past its expiry; any other 409 there is not this. */
+export const MODEL_ACCESS_UNDO_EXPIRED_CODE = 'undo-expired';
+
 export type ModelUserTagCount = { tag: string; count: number };
