@@ -20,12 +20,12 @@ import {
 } from '@mui/joy';
 import debounce from 'lodash/debounce';
 import { FC, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import OrganizationUserCard, { OrganizationRosterRow } from './UserCard';
 import {
   filterMembers,
-  MEMBER_ROLE_LABELS,
-  MemberRole,
+  MEMBER_ROLES,
   paginate,
   REMOVE_MEMBER_EFFECT,
   RoleFilter,
@@ -70,6 +70,7 @@ const MemberRoster: FC<MemberRosterProps> = ({
   canManageCreditBudgets,
   canManageManagers,
 }) => {
+  const { t } = useTranslation();
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [role, setRole] = useState<RoleFilter>('all');
@@ -272,9 +273,7 @@ const MemberRoster: FC<MemberRosterProps> = ({
           slotProps={{ button: { 'aria-label': 'Filter by role', 'data-testid': 'organization-members-role-filter' } }}
         >
           {selectOption('role', 'all', 'All roles')}
-          {(Object.keys(MEMBER_ROLE_LABELS) as MemberRole[]).map(key =>
-            selectOption('role', key, MEMBER_ROLE_LABELS[key])
-          )}
+          {MEMBER_ROLES.map(key => selectOption('role', key, t(`organization.roles.${key}`)))}
         </Select>
         <Select
           size="sm"

@@ -54,15 +54,17 @@ type ProviderBase<TProviderId extends string, TModelId extends string> = {
   fetchOutput(output: ProviderOutput, ctx: ProviderContext): Promise<Buffer>;
 };
 
-/** Submit returns a handle the job engine polls (video). */
-export type AsyncGenerationProvider<TProviderId extends string, TModelId extends string, TRequest> = ProviderBase<
-  TProviderId,
-  TModelId
-> & {
+/** Submit returns a handle the job engine polls (video, BFL images). */
+export type AsyncGenerationProvider<
+  TProviderId extends string,
+  TModelId extends string,
+  TRequest,
+  TRole extends string = VideoInputRole,
+> = ProviderBase<TProviderId, TModelId> & {
   readonly mode: 'async';
   submit(
     request: TRequest,
-    inputs: ResolvedInputs,
+    inputs: ResolvedInputs<TRole>,
     ctx: ProviderContext
   ): Promise<GenerationProviderJobHandle<TProviderId>>;
   poll(handle: GenerationProviderJobHandle<TProviderId>, ctx: ProviderContext): Promise<ProviderPollResult>;

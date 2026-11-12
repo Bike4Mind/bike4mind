@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { Permission } from '@bike4mind/common';
 import {
   filterMembers,
   getMemberRole,
@@ -16,7 +15,7 @@ const row = (overrides: Partial<RosterMember> & { id: string }): RosterMember =>
   name: overrides.id,
   email: `${overrides.id}@example.test`,
   status: 'accepted',
-  role: 'viewer',
+  role: 'member',
   creditUsage: null,
   ...overrides,
 });
@@ -28,24 +27,21 @@ describe('getMemberRole', () => {
   const org = { userId: 'owner', adminUserIds: ['mgr'] };
 
   it.each([
-    ['owner', [Permission.read], 'owner'],
-    ['mgr', [Permission.read], 'manager'],
-    ['a', [Permission.read, Permission.update, Permission.share], 'admin'],
-    ['e', [Permission.read, Permission.update], 'editor'],
-    ['v', [Permission.read], 'viewer'],
-    ['none', [], 'viewer'],
-  ])('maps %s to %s', (userId, permissions, expected) => {
-    expect(getMemberRole(org, userId, permissions as Permission[])).toBe(expected);
+    ['owner', 'owner'],
+    ['mgr', 'manager'],
+    ['a', 'member'],
+  ])('maps %s to %s', (userId, expected) => {
+    expect(getMemberRole(org, userId)).toBe(expected);
   });
 
   it('treats a missing manager list as no managers', () => {
-    expect(getMemberRole({ userId: 'owner', adminUserIds: undefined }, 'mgr', [])).toBe('viewer');
+    expect(getMemberRole({ userId: 'owner', adminUserIds: undefined }, 'mgr')).toBe('member');
   });
 });
 
 describe('filterMembers', () => {
   const members = [
-    row({ id: 'ada', name: 'Ada Lovelace', email: 'ada@math.test', role: 'admin' }),
+    row({ id: 'ada', name: 'Ada Lovelace', email: 'ada@math.test', role: 'member' }),
     row({ id: 'bob', name: 'Bob', email: null, status: 'pending' }),
     row({ id: 'cy', name: 'Cy', email: undefined, role: 'manager' }),
   ];
@@ -76,17 +72,17 @@ describe('filterMembers', () => {
   });
 
   it('combines every filter', () => {
-    expect(filterMembers(members, { search: 'ada', role: 'admin', status: 'pending' })).toEqual([]);
+    expect(filterMembers(members, { search: 'ada', role: 'member', status: 'pending' })).toEqual([]);
   });
 });
 
 describe('sortMembers', () => {
   const members = [
-    row({ id: 'c', name: 'Cy', role: 'viewer', creditUsage: usage(5) }),
+    row({ id: 'c', name: 'Cy', role: 'member', creditUsage: usage(5) }),
     row({ id: 'a', name: 'Ada', role: 'manager', creditUsage: null }),
     row({ id: 'b', name: 'Bob', role: 'owner', creditUsage: usage(50) }),
-    row({ id: 'd', name: 'Dee', role: 'viewer', creditUsage: usage(5) }),
-    row({ id: 'e', name: 'Eve', role: 'editor', creditUsage: null }),
+    row({ id: 'd', name: 'Dee', role: 'member', creditUsage: usage(5) }),
+    row({ id: 'e', name: 'Eve', role: 'member', creditUsage: null }),
   ];
 
   it('does not mutate its input', () => {
@@ -100,7 +96,7 @@ describe('sortMembers', () => {
   });
 
   it('sorts by role rank both ways, ties by name A-Z', () => {
-    expect(ids(sortMembers(members, 'role', 'asc'))).toEqual(['b', 'a', 'e', 'c', 'd']);
+    expect(ids(sortMembers(members, 'role', 'asc'))).toEqual(['b', 'a', 'c', 'd', 'e']);
     expect(ids(sortMembers(members, 'role', 'desc'))).toEqual(['c', 'd', 'e', 'a', 'b']);
   });
 

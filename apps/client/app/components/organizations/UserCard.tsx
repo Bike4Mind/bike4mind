@@ -27,6 +27,7 @@ import {
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { FC, useCallback, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -40,7 +41,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { formatAccountAge, formatLastActiveTitle } from '@client/app/components/admin/Users/formatAccountAge';
 import CreditLimitModal from './CreditLimitModal';
 import { formatMemberCredits, formatMemberCreditUsage } from './memberCreditBudget';
-import { MEMBER_ROLE_LABELS, REMOVE_MEMBER_EFFECT, RosterMember, rosterGridColumns } from './memberRosterView';
+import { REMOVE_MEMBER_EFFECT, RosterMember, rosterGridColumns } from './memberRosterView';
 
 /** A roster row: the safe user shape plus its org standing. `creditUsage` is null for a pending invite. */
 export type OrganizationRosterRow = IUserDocument & RosterMember & { permissions: Permission[] };
@@ -85,6 +86,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   selected = false,
   onToggleSelect,
 }) => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const { currentUser } = useUser();
@@ -226,9 +228,18 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       color={isOwner ? 'primary' : isManager ? 'success' : 'neutral'}
       data-testid={`organization-user-card-${user.role}-chip`}
     >
-      {MEMBER_ROLE_LABELS[user.role]}
+      {t(`organization.roles.${user.role}`)}
     </Chip>
   );
+
+  // Not a role: share/update on the ACL row opens the Settings tab (canManageOrg in
+  // routes/organizations/$id.tsx), so the owner needs to see who holds it.
+  const settingsAccessChip = user.role === 'member' &&
+    user.permissions.some(p => p === Permission.share || p === Permission.update) && (
+      <Chip size="sm" variant="outlined" data-testid="organization-user-card-settings-access-chip">
+        {t('organization.access.can_edit_settings')}
+      </Chip>
+    );
 
   const selectCell = selectable && (
     <Box display="flex" alignItems="center">
@@ -297,7 +308,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       description={
         organization.maxCreditsPerMember == null
           ? 'Overrides the team default, which is currently no limit.'
-          : `Overrides the organization default of ${formatMemberCredits(organization.maxCreditsPerMember)} credits per month.`
+          : `Overrides the team default of ${formatMemberCredits(organization.maxCreditsPerMember)} credits per month.`
       }
       currentValue={creditUsage?.isOverride ? creditUsage.cap : null}
       allowZero
@@ -345,6 +356,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
               )}
               <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
                 {roleChip}
+                {settingsAccessChip}
                 {statusChips}
                 {creditUsageCell}
               </Stack>
@@ -393,7 +405,10 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       <Typography level="body-sm" noWrap data-testid="organization-user-card-email">
         {user.email}
       </Typography>
-      <Box>{roleChip}</Box>
+      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+        {roleChip}
+        {settingsAccessChip}
+      </Stack>
       <Box className="organization-user-card-credits">{creditUsageCell}</Box>
       <Box>{lastActiveCell}</Box>
       <Box className="organization-user-card-actions" display="flex" justifyContent="flex-end">

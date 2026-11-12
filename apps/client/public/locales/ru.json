@@ -102,7 +102,9 @@
     "no_subscription": "Нет подписки",
     "x_members": "{{count}} участников",
     "x_credits": "{{count}} кредитов",
-    "owner": "Владелец"
+    "roles": {
+      "owner": "Владелец"
+    }
   },
   "session": {
     "typeYourMessage": "Введите ваше сообщение здесь",

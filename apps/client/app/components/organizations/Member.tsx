@@ -105,14 +105,14 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         ...u,
         status: 'accepted' as const,
         permissions,
-        role: getMemberRole(organization, u.id, permissions),
+        role: getMemberRole(organization, u.id),
         creditUsage: showUsage ? getMemberCreditUsage(organization, u.id) : null,
       };
     });
-    // Invites are sent with read access (see handleAddMembers), so a pending row reads as a viewer.
+    // An invite cannot make someone the owner or a manager, so a pending row is a plain member.
     const pending = (pendingUsers ?? [])
       .filter(user => !pendingInvites || pendingInvites.some(invite => invite.recipients?.pending?.includes(user.id)))
-      .map(u => ({ ...u, status: 'pending' as const, permissions: [], role: 'viewer' as const, creditUsage: null }));
+      .map(u => ({ ...u, status: 'pending' as const, permissions: [], role: 'member' as const, creditUsage: null }));
     return [...accepted, ...pending];
   }, [users, pendingUsers, pendingInvites, organization, currentUser]);
 
@@ -146,7 +146,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     (selectedUserIds: string[]) => {
       selectedUserIds.forEach(id => {
         shareDocument.mutate({
-          description: `You've been invited to join the organization`,
+          description: `You've been invited to join the team`,
           recipients: [id],
           id: organization.id,
           type: InviteType.Organization,
@@ -185,7 +185,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
               loading={shareDocument.isPending}
               onClick={() =>
                 shareDocument.mutate({
-                  description: "You've been invited to join the organization",
+                  description: "You've been invited to join the team",
                   recipients: [email],
                   id: organization.id,
                   type: InviteType.Organization,

@@ -1,23 +1,17 @@
-import { IOrganizationDocument, Permission } from '@bike4mind/common';
+import { IOrganizationDocument } from '@bike4mind/common';
 import { MemberCreditUsage } from './memberCreditBudget';
 
 export type MemberStatus = 'accepted' | 'pending';
-export type MemberRole = 'owner' | 'manager' | 'admin' | 'editor' | 'viewer';
+export type MemberRole = 'owner' | 'manager' | 'member';
 export type RoleFilter = MemberRole | 'all';
 export type StatusFilter = MemberStatus | 'all';
 export type RosterSortKey = 'name' | 'role' | 'usage';
 export type SortDirection = 'asc' | 'desc';
 
-export const MEMBER_ROLE_LABELS: Record<MemberRole, string> = {
-  owner: 'Owner',
-  manager: 'Manager',
-  admin: 'Admin',
-  editor: 'Editor',
-  viewer: 'Viewer',
-};
+/** Team roles, most authority first; each is labelled by `organization.roles.<role>` in en.json. */
+export const MEMBER_ROLES: readonly MemberRole[] = ['owner', 'manager', 'member'];
 
-/** Order of the role sort, most authority first. */
-const ROLE_RANK: Record<MemberRole, number> = { owner: 0, manager: 1, admin: 2, editor: 3, viewer: 4 };
+const ROLE_RANK: Record<MemberRole, number> = { owner: 0, manager: 1, member: 2 };
 
 export const ROSTER_PAGE_SIZE = 50;
 
@@ -37,17 +31,14 @@ export interface RosterFilters {
   status: StatusFilter;
 }
 
-/** One role per row: owner and manager come from the org, the rest from the highest sharing permission. */
+/** One team role per row; sharing permissions are not roles (see the settings-access chip in UserCard). */
 export function getMemberRole(
   organization: Pick<IOrganizationDocument, 'userId' | 'adminUserIds'>,
-  userId: string,
-  permissions: readonly Permission[]
+  userId: string
 ): MemberRole {
   if (userId === organization.userId) return 'owner';
   if ((organization.adminUserIds ?? []).some(id => String(id) === userId)) return 'manager';
-  if (permissions.includes(Permission.share)) return 'admin';
-  if (permissions.includes(Permission.update)) return 'editor';
-  return 'viewer';
+  return 'member';
 }
 
 export function filterMembers<T extends RosterMember>(members: readonly T[], filters: RosterFilters): T[] {

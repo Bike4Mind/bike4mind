@@ -475,7 +475,7 @@ describe('OrganizationMembers roster wiring', () => {
     mocks.viewer = { id: 'owner1', isAdmin: false };
     mocks.members = [
       { id: 'owner1', name: 'Owner' },
-      { id: 'e1', name: 'Editor One' },
+      { id: 'e1', name: 'Member One' },
     ];
     mocks.pending = [{ id: 'p1', name: 'Pending One' }];
     mocks.invitations = [{ id: 'invite-p1', recipients: { pending: ['p1'] } }];
@@ -490,8 +490,8 @@ describe('OrganizationMembers roster wiring', () => {
       })
     );
     expect(screen.getByTestId('member-card-owner1')).toHaveAttribute('data-role', 'owner');
-    expect(screen.getByTestId('member-card-e1')).toHaveAttribute('data-role', 'editor');
-    expect(screen.getByTestId('member-card-p1')).toHaveAttribute('data-role', 'viewer');
+    expect(screen.getByTestId('member-card-e1')).toHaveAttribute('data-role', 'member');
+    expect(screen.getByTestId('member-card-p1')).toHaveAttribute('data-role', 'member');
     expect(screen.getByTestId('member-card-p1')).toHaveAttribute('data-status', 'pending');
   });
 

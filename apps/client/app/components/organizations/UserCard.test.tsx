@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument, Permission } from '@bike4mind/common';
+import i18next from 'i18next';
+import en from '@client/app/locales/en.json';
 import OrganizationUserCard, { OrganizationRosterRow } from './UserCard';
 import { MemberCreditUsage } from './memberCreditBudget';
 import { MemberRole } from './memberRosterView';
@@ -42,6 +44,12 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => hooks.navigate }))
 vi.mock('@client/app/utils/s3', () => ({ getAppFileUrl: ({ key }: { key: string }) => `https://files.test/${key}` }));
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('sonner', () => ({ toast: toasts }));
+// A real i18next over en.json, so the chip assertions pin the wording users see.
+const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: i18n.t }) }));
+const i18nInstance = i18next.createInstance();
+void i18nInstance.init({ lng: 'en', resources: { en: { translation: en } }, initAsync: false });
+i18n.t = i18nInstance.t.bind(i18nInstance) as (key: string) => string;
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const org = {
@@ -51,7 +59,7 @@ const org = {
   maxCreditsPerMember: 500,
 } as unknown as IOrganizationDocument;
 
-const defaultRole = (id: string): MemberRole => (id === 'owner1' ? 'owner' : id === 'mgr' ? 'manager' : 'viewer');
+const defaultRole = (id: string): MemberRole => (id === 'owner1' ? 'owner' : id === 'mgr' ? 'manager' : 'member');
 
 const member = (
   id: string,
@@ -254,15 +262,41 @@ describe('OrganizationUserCard manager role', () => {
 
   it('shows a Manager chip in place of the sharing label', () => {
     renderCard(member('mgr', usage), false, false, { organization: managedOrg });
-    expect(screen.getByTestId('organization-user-card-manager-chip')).toBeTruthy();
+    expect(screen.getByTestId('organization-user-card-manager-chip').textContent).toBe('Manager');
     expect(screen.queryByText('Viewer')).toBeNull();
+  });
+
+  it('labels a plain member by team role, never by an ACL name', () => {
+    renderCard(
+      { ...member('a', usage), permissions: [Permission.read, Permission.update, Permission.share] },
+      false,
+      false,
+      { organization: managedOrg }
+    );
+    expect(screen.getByTestId('organization-user-card-member-chip').textContent).toBe('Member');
+    for (const aclLabel of ['Admin', 'Editor', 'Viewer']) expect(screen.queryByText(aclLabel)).toBeNull();
+  });
+
+  it.each([[Permission.update], [Permission.share]])(
+    'flags a member whose %s permission opens team settings',
+    permission => {
+      renderCard({ ...member('a', usage), permissions: [Permission.read, permission] }, false, false, {
+        organization: managedOrg,
+      });
+      expect(screen.getByTestId('organization-user-card-settings-access-chip').textContent).toBe('Can edit settings');
+    }
+  );
+
+  it('does not flag a read-only member', () => {
+    renderCard(member('a', usage), false, false, { organization: managedOrg });
+    expect(screen.queryByTestId('organization-user-card-settings-access-chip')).toBeNull();
   });
 
   it('shows the Owner chip, not Manager, on the owner row', () => {
     renderCard(member('owner1', usage), false, false, {
       organization: { ...org, adminUserIds: ['owner1'] } as unknown as IOrganizationDocument,
     });
-    expect(screen.getByTestId('organization-user-card-owner-chip')).toBeTruthy();
+    expect(screen.getByTestId('organization-user-card-owner-chip').textContent).toBe('Owner');
     expect(screen.queryByTestId('organization-user-card-manager-chip')).toBeNull();
   });
 
@@ -435,9 +469,9 @@ describe('OrganizationUserCard row content', () => {
   });
 
   it('shows email and role columns', () => {
-    renderCard(member('a', usage, 'accepted', 'editor'), false);
+    renderCard(member('a', usage, 'accepted', 'member'), false);
     expect(screen.getByTestId('organization-user-card-email')).toHaveTextContent('a@example.test');
-    expect(screen.getByTestId('organization-user-card-editor-chip')).toHaveTextContent('Editor');
+    expect(screen.getByTestId('organization-user-card-member-chip')).toHaveTextContent('Member');
   });
 
   it('shows Pending and Deactivated chips and the avatar photo', () => {
@@ -492,7 +526,7 @@ describe('OrganizationUserCard row content', () => {
     it('stacks name, email, role and usage with the menu and checkbox', () => {
       renderCard(member('a', usage), true, false, { selectable: true, onToggleSelect: vi.fn() });
       expect(screen.getByTestId('organization-user-card-email')).toHaveTextContent('a@example.test');
-      expect(screen.getByTestId('organization-user-card-viewer-chip')).toBeTruthy();
+      expect(screen.getByTestId('organization-user-card-member-chip')).toBeTruthy();
       expect(screen.getByTestId('organization-user-card-select')).toBeTruthy();
       expect(screen.getByTestId('org-user-card-menu-btn')).toBeTruthy();
     });

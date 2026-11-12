@@ -5,6 +5,8 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument } from '@bike4mind/common';
+import i18next from 'i18next';
+import en from '@client/app/locales/en.json';
 import MemberRoster from './MemberRoster';
 import type { OrganizationRosterRow } from './UserCard';
 
@@ -21,6 +23,12 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
   removedMembersMessage: (kept: unknown[]) => `removed ${kept.length}`,
 }));
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess } }));
+// A real i18next over en.json, so the role filter options are the labels users see.
+const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: i18n.t }) }));
+const i18nInstance = i18next.createInstance();
+void i18nInstance.init({ lng: 'en', resources: { en: { translation: en } }, initAsync: false });
+i18n.t = i18nInstance.t.bind(i18nInstance) as (key: string) => string;
 vi.mock('./UserCard', () => ({
   default: (p: {
     user: OrganizationRosterRow;
@@ -55,7 +63,7 @@ const row = (overrides: Partial<OrganizationRosterRow> & { id: string }) =>
     name: overrides.id,
     email: `${overrides.id}@example.test`,
     status: 'accepted',
-    role: 'viewer',
+    role: 'member',
     permissions: [],
     creditUsage: null,
     ...overrides,
@@ -66,8 +74,8 @@ const usage = (used: number) => ({ tracked: true, used, cap: null, isOverride: f
 const roster = [
   row({ id: 'owner', name: 'Olive Owner', role: 'owner', creditUsage: usage(10) }),
   row({ id: 'me', name: 'Mia Self', role: 'manager', creditUsage: usage(1) }),
-  row({ id: 'ada', name: 'Ada Admin', role: 'admin', email: 'ada@math.test', creditUsage: usage(30) }),
-  row({ id: 'bob', name: 'Bob Viewer', creditUsage: usage(20) }),
+  row({ id: 'ada', name: 'Ada Adams', email: 'ada@math.test', creditUsage: usage(30) }),
+  row({ id: 'bob', name: 'Bob Brown', creditUsage: usage(20) }),
   row({ id: 'mgr', name: 'Max Manager', role: 'manager', creditUsage: usage(5) }),
   row({ id: 'pat', name: 'Pat Pending', status: 'pending' }),
 ];
@@ -181,7 +189,7 @@ describe('MemberRoster header and controls', () => {
       'data-revoke',
       'false'
     );
-    expect(screen.getByText('Bob Viewer').closest('[data-testid="roster-row"]')).toHaveAttribute('data-revoke', 'true');
+    expect(screen.getByText('Bob Brown').closest('[data-testid="roster-row"]')).toHaveAttribute('data-revoke', 'true');
   });
 });
 
@@ -274,7 +282,7 @@ describe('MemberRoster bulk selection', () => {
 
   it('offers a checkbox only on rows that can be removed', () => {
     renderRoster();
-    for (const name of ['Ada Admin', 'Bob Viewer']) expect(screen.getByLabelText(`Select ${name}`)).toBeTruthy();
+    for (const name of ['Ada Adams', 'Bob Brown']) expect(screen.getByLabelText(`Select ${name}`)).toBeTruthy();
     // Owner, yourself, a manager you may not remove, and a pending invite.
     for (const name of ['Olive Owner', 'Mia Self', 'Max Manager', 'Pat Pending']) {
       expect(screen.queryByLabelText(`Select ${name}`)).toBeNull();
@@ -293,11 +301,11 @@ describe('MemberRoster bulk selection', () => {
 
   it('shows a partial selection as indeterminate, and select-all completes it', () => {
     renderRoster();
-    fireEvent.click(screen.getByLabelText('Select Bob Viewer'));
+    fireEvent.click(screen.getByLabelText('Select Bob Brown'));
     expect(selectAll()).toHaveAttribute('aria-checked', 'mixed');
     fireEvent.click(selectAll());
     expect(selectAll()).toBeChecked();
-    fireEvent.click(screen.getByLabelText('Select Bob Viewer'));
+    fireEvent.click(screen.getByLabelText('Select Bob Brown'));
     expect(screen.getByTestId('organization-members-bulk-bar')).toHaveTextContent('1 selected');
   });
 
@@ -307,7 +315,7 @@ describe('MemberRoster bulk selection', () => {
     fireEvent.click(screen.getByText('Clear selection'));
     expect(screen.queryByTestId('organization-members-bulk-bar')).toBeNull();
     fireEvent.click(selectAll());
-    await choose('organization-members-role-filter', 'Viewer');
+    await choose('organization-members-role-filter', 'Member');
     expect(screen.queryByTestId('organization-members-bulk-bar')).toBeNull();
   });
 
@@ -323,8 +331,8 @@ describe('MemberRoster bulk selection', () => {
     render(<>{args.description}</>);
     const description = screen.getByTestId('organization-members-bulk-remove-description');
     expect(description).toHaveTextContent('Remove these 2 members from this team?');
-    expect(description).toHaveTextContent('Ada Admin');
-    expect(description).toHaveTextContent('Bob Viewer');
+    expect(description).toHaveTextContent('Ada Adams');
+    expect(description).toHaveTextContent('Bob Brown');
     expect(description).not.toHaveTextContent('more');
 
     await args.onOk();
@@ -333,13 +341,13 @@ describe('MemberRoster bulk selection', () => {
     expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);
     expect(mocks.toastSuccess).toHaveBeenCalledWith('removed 1');
     expect(mocks.toastError).toHaveBeenCalledTimes(1);
-    expect(mocks.toastError).toHaveBeenCalledWith('Could not remove Ada Admin');
+    expect(mocks.toastError).toHaveBeenCalledWith('Could not remove Ada Adams');
     await waitFor(() => expect(screen.queryByTestId('organization-members-bulk-bar')).toBeNull());
   });
 
   it('uses the singular for one member and reports no failure when all succeed', async () => {
     renderRoster();
-    fireEvent.click(screen.getByLabelText('Select Bob Viewer'));
+    fireEvent.click(screen.getByLabelText('Select Bob Brown'));
     fireEvent.click(screen.getByTestId('organization-members-remove-selected-btn'));
     expect(lastConfirm().title).toBe('Remove 1 member');
     await lastConfirm().onOk();
@@ -354,7 +362,7 @@ describe('MemberRoster bulk selection', () => {
     fireEvent.click(screen.getByTestId('organization-members-remove-selected-btn'));
     await lastConfirm().onOk();
     expect(mocks.toastSuccess).not.toHaveBeenCalled();
-    expect(mocks.toastError).toHaveBeenCalledWith('Could not remove Ada Admin, Bob Viewer');
+    expect(mocks.toastError).toHaveBeenCalledWith('Could not remove Ada Adams, Bob Brown');
   });
 
   it('lists the first ten names and counts the rest', () => {
