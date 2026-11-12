@@ -17,7 +17,7 @@ import {
 import { withdrawSkillListings } from '@bike4mind/server-utils/skillMarket/market';
 import { attachMarketStatus } from '@server/skillMarket/marketStatus';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.SKILLS_WRITE] })
+const handler = baseApi({ requiredScopes: [ApiKeyScope.SKILLS_WRITE], grandfatherLegacyKeys: true })
   .get<Request<{}, {}, {}, { id: string }>>(async (req, res) => {
     const { id } = req.query;
     const skill = (await skillRepository.findById(id as string)) as ShareableSkill | null;

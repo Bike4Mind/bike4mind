@@ -30,50 +30,52 @@ const shareSchema = z.object({
   isGlobalWrite: z.boolean().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.SKILLS_WRITE] }).put(async (req, res) => {
-  const { id } = req.query as { id: string };
+const handler = baseApi({ requiredScopes: [ApiKeyScope.SKILLS_WRITE], grandfatherLegacyKeys: true }).put(
+  async (req, res) => {
+    const { id } = req.query as { id: string };
 
-  const skill = (await skillRepository.findById(id)) as ShareableSkill | null;
-  if (!skill) throw new NotFoundError('Skill not found');
+    const skill = (await skillRepository.findById(id)) as ShareableSkill | null;
+    if (!skill) throw new NotFoundError('Skill not found');
 
-  if (!(await canManageSkillSharing(skill, { id: req.user!.id, isAdmin: req.user!.isAdmin }))) {
-    throw new ForbiddenError("You don't have permission to manage sharing for this skill");
+    if (!(await canManageSkillSharing(skill, { id: req.user!.id, isAdmin: req.user!.isAdmin }))) {
+      throw new ForbiddenError("You don't have permission to manage sharing for this skill");
+    }
+
+    const { users, isGlobalRead, isGlobalWrite } = shareSchema.parse(req.body);
+
+    // Instance-wide publishing goes through the Skill Market (scanned and reviewed); only a
+    // super-admin may turn the global flags on directly. Turning them OFF stays open to owners so
+    // a legacy global skill can be retracted. Keep in sync with `globalSkillScanFor` in skillAccess.ts,
+    // which scans content changes to an already-global skill.
+    if (!req.user!.isAdmin && (isGlobalRead === true || isGlobalWrite === true)) {
+      throw new ForbiddenError('Publishing a skill to everyone goes through the Skill Market');
+    }
+
+    // Enforce the invariant the UI couples but the API otherwise accepts à la carte:
+    // global-write implies global-read. A direct caller sending `isGlobalWrite: true`
+    // (with read absent or explicitly false) would otherwise persist a state the UI
+    // can never produce - global edit-for-all without global visibility.
+    const effectiveGlobalRead = isGlobalWrite === true ? true : isGlobalRead;
+
+    // De-dupe by userId (last write wins) and drop a self-share on the owner -
+    // the owner's access is implied by ownership, never by the users array.
+    const dedupedUsers =
+      users === undefined
+        ? undefined
+        : Array.from(new Map(users.filter(u => u.userId !== skill.userId).map(u => [u.userId, u])).values());
+
+    const updated = await skillRepository.update(
+      {
+        id,
+        ...(dedupedUsers !== undefined && { users: dedupedUsers as IUserShare[] }),
+        ...(effectiveGlobalRead !== undefined && { isGlobalRead: effectiveGlobalRead }),
+        ...(isGlobalWrite !== undefined && { isGlobalWrite }),
+      },
+      { new: true }
+    );
+
+    res.json(updated ?? (await skillRepository.findById(id)));
   }
-
-  const { users, isGlobalRead, isGlobalWrite } = shareSchema.parse(req.body);
-
-  // Instance-wide publishing goes through the Skill Market (scanned and reviewed); only a
-  // super-admin may turn the global flags on directly. Turning them OFF stays open to owners so
-  // a legacy global skill can be retracted. Keep in sync with `globalSkillScanFor` in skillAccess.ts,
-  // which scans content changes to an already-global skill.
-  if (!req.user!.isAdmin && (isGlobalRead === true || isGlobalWrite === true)) {
-    throw new ForbiddenError('Publishing a skill to everyone goes through the Skill Market');
-  }
-
-  // Enforce the invariant the UI couples but the API otherwise accepts à la carte:
-  // global-write implies global-read. A direct caller sending `isGlobalWrite: true`
-  // (with read absent or explicitly false) would otherwise persist a state the UI
-  // can never produce - global edit-for-all without global visibility.
-  const effectiveGlobalRead = isGlobalWrite === true ? true : isGlobalRead;
-
-  // De-dupe by userId (last write wins) and drop a self-share on the owner -
-  // the owner's access is implied by ownership, never by the users array.
-  const dedupedUsers =
-    users === undefined
-      ? undefined
-      : Array.from(new Map(users.filter(u => u.userId !== skill.userId).map(u => [u.userId, u])).values());
-
-  const updated = await skillRepository.update(
-    {
-      id,
-      ...(dedupedUsers !== undefined && { users: dedupedUsers as IUserShare[] }),
-      ...(effectiveGlobalRead !== undefined && { isGlobalRead: effectiveGlobalRead }),
-      ...(isGlobalWrite !== undefined && { isGlobalWrite }),
-    },
-    { new: true }
-  );
-
-  res.json(updated ?? (await skillRepository.findById(id)));
-});
+);
 
 export default handler;

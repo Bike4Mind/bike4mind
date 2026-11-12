@@ -11,7 +11,7 @@ import { attachMarketStatus } from '@server/skillMarket/marketStatus';
 const ALLOWED_ORDER_BY = new Set(['createdAt', 'updatedAt', 'name']);
 const ALLOWED_ORDER_DIRECTION = new Set(['asc', 'desc']);
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.SKILLS_WRITE] })
+const handler = baseApi({ requiredScopes: [ApiKeyScope.SKILLS_WRITE], grandfatherLegacyKeys: true })
   .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
     const { query = '', page = '1', limit = '10', orderBy = 'updatedAt', orderDirection = 'desc' } = req.query;
 

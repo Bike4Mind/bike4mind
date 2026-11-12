@@ -16,10 +16,14 @@ type Handler = (req: Request, res: Response) => unknown;
 vi.mock('@client/server/middlewares/baseApi', async () => {
   const { apiKeyAuth } = await import('@server/middlewares/apiKeyAuth');
   return {
-    baseApi: (options: { requiredScopes?: ApiKeyScope[] } = {}) => {
+    baseApi: (options: { requiredScopes?: ApiKeyScope[]; grandfatherLegacyKeys?: boolean } = {}) => {
       const handlers: Record<string, Handler> = {};
       const router = async (req: Request, res: Response) => {
-        await apiKeyAuth(options.requiredScopes)(req, res, () => undefined);
+        await apiKeyAuth(options.requiredScopes, undefined, { grandfatherLegacyKeys: options.grandfatherLegacyKeys })(
+          req,
+          res,
+          () => undefined
+        );
         return handlers[req.method.toLowerCase()](req, res);
       };
       for (const method of ['get', 'post', 'put', 'delete']) {
@@ -32,6 +36,16 @@ vi.mock('@client/server/middlewares/baseApi', async () => {
       }
       return router;
     },
+  };
+});
+// The shipped window has no cutoff yet, so every key is legacy; simulate one to tell the two apart.
+const SIMULATED_CUTOFF = new Date('2026-06-01T00:00:00Z');
+vi.mock('@bike4mind/server-utils/middlewares/apiKeyScopeGate', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/middlewares/apiKeyScopeGate')>();
+  return {
+    ...actual,
+    isLegacyApiKey: (createdAt: Date | undefined, now?: Date) =>
+      actual.isLegacyApiKey(createdAt, now, { cutoff: SIMULATED_CUTOFF, endsAt: null }),
   };
 });
 vi.mock('@bike4mind/services', async importOriginal => {
@@ -67,15 +81,23 @@ import listSkills from '../index';
 import skillById from '../[id]/index';
 import shareSkill from '../[id]/share';
 
+const loggerInfo = vi.fn();
 const KEY = 'b4m_live_0123456789abcdef0123456789abcdef';
 
-function keyWith(scopes: ApiKeyScope[]) {
+const LEGACY_CREATED_AT = new Date('2026-01-01T00:00:00Z');
+const POST_CUTOFF_CREATED_AT = new Date('2026-09-01T00:00:00Z');
+
+// The legacy-pass log is deduped per key id, so each key needs its own id.
+let keySeq = 0;
+function keyWith(scopes: ApiKeyScope[], createdAt: Date = POST_CUTOFF_CREATED_AT) {
+  keySeq += 1;
   validateUserApiKeyMock.mockResolvedValue({
     isValid: true,
-    keyId: 'key-1',
+    keyId: `key-${keySeq}`,
     userId: 'user-1',
     scopes,
     rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    createdAt,
   });
 }
 
@@ -87,7 +109,7 @@ async function call(handler: unknown, method: 'GET' | 'PUT' | 'DELETE', auth: 'k
     body: {},
     headers: auth === 'key' ? { 'x-api-key': KEY } : {},
   });
-  Object.assign(req, { logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+  Object.assign(req, { logger: { info: loggerInfo, warn: vi.fn(), error: vi.fn() } });
   if (auth === 'session') Object.assign(req, { user: { id: 'user-1', isAdmin: false } });
   await (handler as Handler)(req as unknown as Request, res as unknown as Response);
   return res;
@@ -106,8 +128,25 @@ describe.each([
   { name: 'DELETE /api/skills/[id]', handler: () => skillById, method: 'DELETE' as const },
   { name: 'PUT /api/skills/[id]/share', handler: () => shareSkill, method: 'PUT' as const },
 ])('$name', ({ handler, method }) => {
-  it('refuses an API key without skills:write before the handler runs', async () => {
+  it('refuses a key created after the cutoff without skills:write before the handler runs', async () => {
     keyWith([ApiKeyScope.READ_FILES, ApiKeyScope.WRITE_FILES]);
+    await expect(call(handler(), method, 'key')).rejects.toBeInstanceOf(ForbiddenError);
+    expect(searchAccessibleMock).not.toHaveBeenCalled();
+    expect(findSkillMock).not.toHaveBeenCalled();
+  });
+
+  it('admits a legacy key without skills:write and logs the pass', async () => {
+    keyWith([ApiKeyScope.READ_FILES], LEGACY_CREATED_AT);
+    const res = await call(handler(), method, 'key').catch((error: unknown) => error);
+    expect(res).not.toBeInstanceOf(ForbiddenError);
+    expect(loggerInfo).toHaveBeenCalledWith(
+      'API key scope check missed but legacy key grandfathered - allowing',
+      expect.objectContaining({ keyId: `key-${keySeq}`, requiredScopes: [ApiKeyScope.SKILLS_WRITE] })
+    );
+  });
+
+  it('refuses a confined key even when it is legacy', async () => {
+    keyWith([ApiKeyScope.EMBED_CHAT], LEGACY_CREATED_AT);
     await expect(call(handler(), method, 'key')).rejects.toBeInstanceOf(ForbiddenError);
     expect(searchAccessibleMock).not.toHaveBeenCalled();
     expect(findSkillMock).not.toHaveBeenCalled();
