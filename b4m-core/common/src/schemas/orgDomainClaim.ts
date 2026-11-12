@@ -9,12 +9,11 @@ export const ORG_DOMAIN_DEFAULT_ROLES = ['member', 'viewer'] as const;
 export const MAX_ORG_DOMAIN_CLAIMS = 20;
 
 /**
- * ACL row written for a user joining through a domain claim. Both roles include 'read' so the row
- * confers membership (`ORG_MEMBERSHIP_ACL_PERMISSIONS`, constants/organization.ts); neither grants
- * admin - org administration is `adminUserIds`, which a domain join never touches.
+ * ACL row written for a user joining through a domain claim: the same read-only row `addMember`
+ * writes. 'update' on an org ACL row is org edit access (organizationService.update), so no role grants it.
  */
 export const ORG_DOMAIN_ROLE_PERMISSIONS: Readonly<Record<OrgDomainDefaultRole, readonly Permission[]>> = {
-  member: [Permission.read, Permission.update],
+  member: [Permission.read],
   viewer: [Permission.read],
 };
 

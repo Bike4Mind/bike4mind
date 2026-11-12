@@ -54,7 +54,7 @@ const reload = async (orgId: string) => (await Organization.findById(orgId).lean
 
 describe('applyOrgDomainMembership (real Mongo)', () => {
   it.each([
-    ['member', ['read', 'update']],
+    ['member', ['read']],
     ['viewer', ['read']],
   ])('adds a verified user as %s, seeds userDetails, sets the org pointer, leaves seats alone', async (role, perms) => {
     const org = await makeOrg(5);

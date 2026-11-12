@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { addOrgDomainSchema, updateOrgDomainPolicySchema, ORG_DOMAIN_ROLE_PERMISSIONS } from './orgDomainClaim';
 import { orgAclRowConfersMembership } from '../constants/organization';
+import { Permission } from '../types/entities/ShareableDocumentTypes';
 
 describe('addOrgDomainSchema', () => {
   it('trims and lowercases the domain', () => {
@@ -48,4 +49,11 @@ describe('ORG_DOMAIN_ROLE_PERMISSIONS', () => {
   it.each(Object.entries(ORG_DOMAIN_ROLE_PERMISSIONS))('%s confers membership', (_role, permissions) => {
     expect(orgAclRowConfersMembership({ permissions })).toBe(true);
   });
+
+  it.each(Object.entries(ORG_DOMAIN_ROLE_PERMISSIONS))(
+    '%s grants no edit, share or delete access',
+    (_role, permissions) => {
+      expect(permissions).toEqual([Permission.read]);
+    }
+  );
 });
