@@ -841,6 +841,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
                   color="neutral"
                   onClick={() => refetchRateLimit()}
                   disabled={loadingRateLimit}
+                  aria-label="Refresh rate limit"
                   data-testid="org-github-rate-limit-refresh-btn"
                 >
                   <Refresh fontSize="small" />

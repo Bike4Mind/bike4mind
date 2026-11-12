@@ -300,3 +300,12 @@ describe('OrganizationUserCard manager role', () => {
     expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
   });
 });
+
+describe('OrganizationUserCard accessible names', () => {
+  it('names the kebab menu after the member it acts on', () => {
+    renderCard(member('a', null), true);
+    expect(screen.getByRole('button', { name: 'Actions for User a' })).toBe(
+      screen.getByTestId('org-user-card-menu-btn')
+    );
+  });
+});

@@ -414,6 +414,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
             variant="outlined"
             onClick={toggleSortOrder}
             title={`Sort ${sortOrder === 'desc' ? 'Z to A' : 'A to Z'}`}
+            aria-label={`Sort members ${sortOrder === 'desc' ? 'Z to A' : 'A to Z'}`}
           >
             <SortByAlphaIcon sx={{ transform: sortOrder === 'desc' ? 'scaleY(-1)' : 'scaleY(1)' }} />
           </IconButton>
@@ -514,7 +515,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
             gridTemplateColumns: '2fr 1fr 1fr',
             borderBottom: '1px solid',
             borderColor: 'divider',
-            color: 'divider',
+            color: 'text.secondary',
             fontSize: '14px',
             lineHeight: '14px',
             pb: '17px',

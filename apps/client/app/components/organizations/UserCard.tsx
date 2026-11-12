@@ -163,6 +163,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       <MenuButton
         className="organization-user-card-menu-button"
         data-testid="org-user-card-menu-btn"
+        aria-label={`Actions for ${user.name || user.email || 'member'}`}
         slots={{ root: IconButton }}
         slotProps={{ root: { variant: 'outlined', size: 'sm' } }}
       >

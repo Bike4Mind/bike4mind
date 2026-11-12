@@ -70,3 +70,16 @@ describe('OrgWebhookConfig test ping', () => {
     expect(testMutateAsync).toHaveBeenCalledWith({ orgId: 'org-1', targetUrl: 'https://hooks.example.com/ping' });
   });
 });
+
+describe('OrgWebhookConfig icon buttons', () => {
+  it('gives every icon-only control an accessible name', () => {
+    renderConfig();
+    for (const name of ['Copy webhook URL', 'Show webhook secret', 'Rotate webhook secret', 'Edit subscribed events']) {
+      expect(screen.getByRole('button', { name })).toBeTruthy();
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit subscribed events' }));
+    expect(screen.getByRole('button', { name: 'Save subscribed events' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel editing subscribed events' })).toBeTruthy();
+  });
+});
