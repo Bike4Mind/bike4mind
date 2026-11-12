@@ -1,12 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import mongoose, { type Schema } from 'mongoose';
-import { ForbiddenError } from '@bike4mind/common';
+import { ForbiddenError, ORG_MEMBERSHIP_ACL_PERMISSIONS } from '@bike4mind/common';
 
 type Scope = {
   principal: () => string | undefined;
   serviceOrganization?: () => string | undefined;
   blocked: Map<string, Promise<string[]>>;
-  parents: Map<string, Promise<unknown[]>>;
+  parents: Map<string, Promise<boolean>>;
 };
 
 const context = new AsyncLocalStorage<Scope>();
@@ -26,6 +26,7 @@ export function isOrganizationMfaServiceContext(userId: string, organizationId: 
 
 async function blockedOrganizations(scope: Scope): Promise<string[]> {
   const userId = scope.principal();
+  if (!userId) return [];
   const serviceOrganization = scope.serviceOrganization?.();
   const key = `${userId ?? ''}:${serviceOrganization ?? ''}`;
   const cached = scope.blocked.get(key);
@@ -45,7 +46,20 @@ async function blockedOrganizations(scope: Scope): Promise<string[]> {
     if (user?.mfa?.totpEnabled === true) return [];
     const orgs = await db
       .collection('organizations')
-      .find({ 'mfaPolicy.required': true, deletedAt: null }, { projection: { 'mfaPolicy.enforceAfter': 1 } })
+      .find(
+        {
+          'mfaPolicy.required': true,
+          deletedAt: null,
+          $or: [
+            { userId },
+            { users: { $elemMatch: { userId, permissions: { $in: [...ORG_MEMBERSHIP_ACL_PERMISSIONS] } } } },
+            ...(user?.isSystem === true && mongoose.isObjectIdOrHexString(user.orgServiceAccount?.organizationId)
+              ? [{ _id: new mongoose.Types.ObjectId(user.orgServiceAccount.organizationId) }]
+              : []),
+          ],
+        },
+        { projection: { 'mfaPolicy.enforceAfter': 1 } }
+      )
       .toArray();
     return orgs
       .filter(org => {
@@ -106,38 +120,92 @@ function isResource(schema: Schema, modelName: string): boolean {
   return RESOURCE_MODELS.has(modelName) || PARENT_FIELDS.some(([field]) => !!schema.path(field));
 }
 
-async function parentIds(scope: Scope, modelName: string, blocked: string[], ancestors: string[]): Promise<unknown[]> {
-  if (ancestors.includes(modelName)) return [];
+async function parentDenied(
+  scope: Scope,
+  modelName: string,
+  value: unknown,
+  blocked: string[],
+  ancestors: string[]
+): Promise<boolean> {
+  if (value == null || ancestors.includes(modelName)) return false;
   const parent = mongoose.models[modelName];
   if (!parent) throw new Error(`Organization policy parent model unavailable: ${modelName}`);
-  const key = `${scope.principal() ?? ''}:${blocked.join(',')}:${modelName}:${ancestors.join(',')}`;
-  let ids = scope.parents.get(key);
-  if (!ids) {
-    ids = (async () => {
+  const key = `${scope.principal() ?? ''}:${blocked.join(',')}:${modelName}:${String(value)}:${ancestors.join(',')}`;
+  let denied = scope.parents.get(key);
+  if (!denied) {
+    denied = (async () => {
       const db = mongoose.connection.db;
       if (!db) throw new Error('Organization policy database unavailable');
-      const filter = await resourceFilter(scope, parent.schema, modelName, blocked, ancestors);
-      if (!filter) return [];
-      const rows = await db
+      const id = String(value);
+      const identifiers: Record<string, unknown>[] = [];
+      if (mongoose.isObjectIdOrHexString(id)) identifiers.push({ _id: new mongoose.Types.ObjectId(id) });
+      if (parent.schema.path('_id')?.instance === 'String') identifiers.push({ _id: id });
+      if (parent.schema.path('id')) identifiers.push({ id });
+      if (!identifiers.length) return false;
+      const rows = db
         .collection(parent.collection.collectionName)
-        .find({ $nor: [filter] }, { projection: { _id: 1, id: 1 } })
-        .toArray();
-      return rows.flatMap(row => [row._id, String(row._id), ...(typeof row.id === 'string' ? [row.id] : [])]);
+        .find({ $or: identifiers }, { projection: bindingProjection(parent.schema), batchSize: 1, limit: 2 });
+      try {
+        for await (const row of rows) {
+          if (await documentDenied(scope, row, parent.schema, modelName, blocked, ancestors)) return true;
+        }
+      } finally {
+        await rows.close();
+      }
+      return false;
     })();
-    scope.parents.set(key, ids);
+    if (scope.parents.size >= 256) scope.parents.delete(scope.parents.keys().next().value!);
+    scope.parents.set(key, denied);
   }
-  return ids;
+  return denied;
+}
+
+function bindingProjection(schema: Schema): Record<string, 1> {
+  return Object.fromEntries(
+    ['organizationId', 'tier', 'scopeId', ...PARENT_FIELDS.map(([field]) => field)]
+      .filter(field => !!schema.path(field))
+      .map(field => [field, 1])
+  );
+}
+
+function bindingValue(document: Record<string, unknown>, field: string): unknown {
+  return field.split('.').reduce<unknown>((value, key) => {
+    return value && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined;
+  }, document);
+}
+
+async function documentDenied(
+  scope: Scope,
+  document: Record<string, unknown>,
+  schema: Schema,
+  modelName: string,
+  blocked: string[],
+  ancestors: string[]
+): Promise<boolean> {
+  if (blocked.includes(String(document.organizationId))) return true;
+  const path = [...ancestors, modelName];
+  for (const [field, model] of PARENT_FIELDS) {
+    if (schema.path(field) && (await parentDenied(scope, model, bindingValue(document, field), blocked, path)))
+      return true;
+  }
+  if (modelName === 'PublishedArtifact') {
+    if (document.tier === 'organization' && blocked.includes(String(document.scopeId))) return true;
+    if (document.tier === 'project' && (await parentDenied(scope, 'Project', document.scopeId, blocked, path)))
+      return true;
+  }
+  return false;
 }
 
 export async function organizationMfaResourceFilter(
   schema: Schema,
-  modelName: string
+  modelName: string,
+  candidates: Record<string, unknown> = {}
 ): Promise<Record<string, unknown> | null> {
   const scope = context.getStore();
   if (!scope || !isResource(schema, modelName)) return null;
   const blocked = await blockedOrganizations(scope);
   if (!blocked.length) return null;
-  return resourceFilter(scope, schema, modelName, blocked, []);
+  return resourceFilter(scope, schema, modelName, blocked, candidates);
 }
 
 async function resourceFilter(
@@ -145,21 +213,32 @@ async function resourceFilter(
   schema: Schema,
   modelName: string,
   blocked: string[],
-  ancestors: string[]
+  candidates: Record<string, unknown>
 ): Promise<Record<string, unknown> | null> {
   const clauses: Record<string, unknown>[] = [];
   if (schema.path('organizationId')) clauses.push({ organizationId: { $nin: blocked } });
-  for (const [field, model] of PARENT_FIELDS) {
-    if (!schema.path(field)) continue;
-    clauses.push({ [field]: { $nin: await parentIds(scope, model, blocked, [...ancestors, modelName]) } });
-  }
   if (modelName === 'PublishedArtifact') {
-    clauses.push({
-      $nor: [
-        { tier: 'organization', scopeId: { $in: blocked } },
-        { tier: 'project', scopeId: { $in: await parentIds(scope, 'Project', blocked, [...ancestors, modelName]) } },
-      ],
+    clauses.push({ $nor: [{ tier: 'organization', scopeId: { $in: blocked } }] });
+  }
+  if (PARENT_FIELDS.some(([field]) => !!schema.path(field)) || modelName === 'PublishedArtifact') {
+    const model = mongoose.models[modelName];
+    const db = mongoose.connection.db;
+    if (!db || !model) throw new Error('Organization policy database unavailable');
+    const query = model.find(candidates);
+    query.cast(model);
+    const rows = db.collection(model.collection.collectionName).find(query.getFilter() as Record<string, unknown>, {
+      projection: bindingProjection(schema),
+      batchSize: 100,
     });
+    const denied: unknown[] = [];
+    try {
+      for await (const row of rows) {
+        if (await documentDenied(scope, row, schema, modelName, blocked, [])) denied.push(row._id);
+      }
+    } finally {
+      await rows.close();
+    }
+    clauses.push({ _id: { $nin: denied } });
   }
   return clauses.length ? { $and: clauses } : null;
 }
@@ -173,25 +252,10 @@ async function assertDocumentAllowed(
   if (!scope || !isResource(schema, modelName)) return;
   const blocked = await blockedOrganizations(scope);
   if (!blocked.length) return;
-  const denied = () => {
+  const fields = Object.fromEntries(Object.keys(bindingProjection(schema)).map(field => [field, document.get(field)]));
+  fields.source = document.get('source');
+  if (await documentDenied(scope, fields, schema, modelName, blocked, [])) {
     throw new ForbiddenError('Organization requires MFA enrollment');
-  };
-  if (blocked.includes(String(document.get('organizationId')))) denied();
-  for (const [field, model] of PARENT_FIELDS) {
-    const value: unknown = document.get(field);
-    if (!schema.path(field) || value == null) continue;
-    const ids = await parentIds(scope, model, blocked, [modelName]);
-    if (ids.some(id => String(id) === String(value))) denied();
-  }
-  if (modelName === 'PublishedArtifact') {
-    const tier: unknown = document.get('tier');
-    const scopeId = String(document.get('scopeId'));
-    if (tier === 'organization' && blocked.includes(scopeId)) denied();
-    if (
-      tier === 'project' &&
-      (await parentIds(scope, 'Project', blocked, [modelName])).some(id => String(id) === scopeId)
-    )
-      denied();
   }
 }
 
@@ -241,7 +305,9 @@ async function guardPipeline(
     }
   }
   if (!filterSource) return;
-  const filter = await organizationMfaResourceFilter(schema, modelName);
+  const leadingMatch =
+    pipeline[0] && '$match' in pipeline[0] && !JSON.stringify(pipeline[0]).includes('$$') ? pipeline[0].$match : {};
+  const filter = await organizationMfaResourceFilter(schema, modelName, leadingMatch);
   if (!filter) return;
   const first = pipeline[0];
   pipeline.splice(first && ('$search' in first || '$vectorSearch' in first || '$geoNear' in first) ? 1 : 0, 0, {
@@ -253,7 +319,7 @@ export function organizationMfaResourcePlugin(schema: Schema): void {
   schema.pre('save', async function () {
     const modelName = (this.constructor as mongoose.Model<unknown>).modelName;
     await assertDocumentAllowed(this, schema, modelName);
-    const filter = await organizationMfaResourceFilter(schema, modelName);
+    const filter = await organizationMfaResourceFilter(schema, modelName, { _id: this._id });
     if (!this.isNew && filter && !(await this.$model().exists({ $and: [{ _id: this._id }, filter] }))) {
       throw new ForbiddenError('Organization requires MFA enrollment');
     }
@@ -274,7 +340,7 @@ export function organizationMfaResourcePlugin(schema: Schema): void {
       'findOneAndDelete',
     ],
     async function () {
-      const filter = await organizationMfaResourceFilter(schema, this.model.modelName);
+      const filter = await organizationMfaResourceFilter(schema, this.model.modelName, this.getFilter());
       if (!filter) return;
       const update = this.getUpdate();
       if (Array.isArray(update)) throw new ForbiddenError('Organization MFA requires a document update');
@@ -301,7 +367,16 @@ export function organizationMfaResourcePlugin(schema: Schema): void {
   });
   schema.pre('bulkWrite', async function (next, operations) {
     try {
-      const filter = await organizationMfaResourceFilter(schema, this.modelName);
+      const candidates = operations.flatMap(operation => {
+        if ('insertOne' in operation) return [];
+        const command = Object.values(operation)[0] as { filter: Record<string, unknown> };
+        return [command.filter];
+      });
+      const filter = await organizationMfaResourceFilter(
+        schema,
+        this.modelName,
+        candidates.length ? { $or: candidates } : { _id: { $in: [] } }
+      );
       if (filter) {
         for (const operation of operations) {
           if ('insertOne' in operation) {

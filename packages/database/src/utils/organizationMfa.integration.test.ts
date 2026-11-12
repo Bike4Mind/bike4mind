@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { withOrganizationMfaContext } from '@bike4mind/db-core';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../__test__/createMongoServer';
@@ -7,6 +7,7 @@ import { Session } from '../models/auth/SessionModel';
 import { Project } from '../models/content/ProjectModel';
 import { Artifact } from '../models/content/ArtifactModel';
 import { ArtifactVersion } from '../models/content/ArtifactVersionModel';
+import { PublishedArtifact } from '../models/content/PublishedArtifactModel';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 
@@ -33,6 +34,7 @@ describe('persisted organization MFA content boundary', () => {
       await Project.collection.insertMany(
         Array.from({ length: 5000 }, (_, index) => ({ name: `volume-${index}`, userId, organizationId: org.id }))
       );
+      const collections = vi.spyOn(mongoose.connection.db!, 'collection');
       const started = performance.now();
       await withOrganizationMfaContext(
         () => userId,
@@ -44,6 +46,8 @@ describe('persisted organization MFA content boundary', () => {
       console.info(
         `organization-mfa-volume: 5000 bound projects, 20 child reads, ${Math.round(performance.now() - started)}ms`
       );
+      expect(collections.mock.calls.some(([name]) => name === Project.collection.collectionName)).toBe(false);
+      collections.mockRestore();
     },
     MONGO_TEST_TIMEOUT_MS
   );
@@ -116,7 +120,7 @@ describe('persisted organization MFA content boundary', () => {
       await withOrganizationMfaContext(
         () => undefined,
         async () => {
-          expect(await Project.findById(bound.id)).toBeNull();
+          expect(await Project.findById(bound.id)).not.toBeNull();
           expect(await Project.findById(personal.id)).not.toBeNull();
         }
       );
@@ -226,16 +230,62 @@ describe('persisted organization MFA content boundary', () => {
         () => org.id
       );
       let principal: string | undefined;
-      await mongoose.connection
-        .db!.collection('users')
-        .updateOne({ _id: userId }, { $set: { mfa: { totpEnabled: true } } });
       await withOrganizationMfaContext(
         () => principal,
         async () => {
-          expect(await Project.findById(project.id)).toBeNull();
-          principal = String(userId);
           expect(await Project.findById(project.id)).not.toBeNull();
+          principal = String(userId);
+          expect(await Project.findById(project.id)).toBeNull();
         }
+      );
+    },
+    MONGO_TEST_TIMEOUT_MS
+  );
+
+  it(
+    'leaves public visibility to existing gates and applies policy only to current members',
+    async () => {
+      const memberId = String(new mongoose.Types.ObjectId());
+      const outsiderId = String(new mongoose.Types.ObjectId());
+      const org = await Organization.create({
+        name: 'Member MFA',
+        userId: String(new mongoose.Types.ObjectId()),
+        users: [{ userId: memberId, permissions: ['read'] }],
+        mfaPolicy: { required: true, graceDays: 0, enforceAfter: new Date(0) },
+      });
+      const project = await Project.create({ name: 'shared', userId: memberId, organizationId: org.id });
+      const publication = await PublishedArtifact.create({
+        publicId: 'mfa-public-view',
+        tier: 'project',
+        scopeId: project.id,
+        slug: 'mfa-public-view',
+        title: 'Public view',
+        ownerId: memberId,
+        visibility: 'public',
+        source: { kind: 'reply', sessionId: String(new mongoose.Types.ObjectId()) },
+      });
+      for (const principal of [undefined, outsiderId]) {
+        await withOrganizationMfaContext(
+          () => principal,
+          async () => {
+            expect(
+              await PublishedArtifact.findOne({ publicId: publication.publicId, visibility: 'public' })
+            ).not.toBeNull();
+            expect(await Project.findById(project.id)).not.toBeNull();
+          }
+        );
+      }
+      await withOrganizationMfaContext(
+        () => memberId,
+        async () => {
+          expect(await Project.findById(project.id)).toBeNull();
+          expect(await PublishedArtifact.findById(publication.id)).toBeNull();
+        }
+      );
+      await Organization.updateOne({ _id: org.id }, { $set: { 'users.0.permissions': ['delete'] } });
+      await withOrganizationMfaContext(
+        () => memberId,
+        async () => expect(await Project.findById(project.id)).not.toBeNull()
       );
     },
     MONGO_TEST_TIMEOUT_MS
