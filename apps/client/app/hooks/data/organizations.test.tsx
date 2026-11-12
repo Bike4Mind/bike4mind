@@ -255,6 +255,36 @@ describe('useDeleteOrganization', () => {
     expect(get).toHaveBeenCalledTimes(1);
   });
 
+  it('drops the deleted org from the cached org list before any refetch lands', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    get.mockResolvedValueOnce({
+      data: {
+        data: [
+          { id: 'org1', name: 'One' },
+          { id: 'org2', name: 'Two' },
+        ],
+        hasMore: false,
+        total: 2,
+      },
+    });
+    get.mockImplementation(() => new Promise(() => undefined));
+    const view = renderHook(() => ({ list: useGetUserOrganizations('u1'), remove: useDeleteOrganization() }), {
+      wrapper,
+    });
+    await waitFor(() => expect(view.result.current.list.isSuccess).toBe(true));
+
+    await act(async () => {
+      await view.result.current.remove.mutateAsync('org1');
+    });
+
+    expect(queryClient.getQueryData<{ id: string }[]>(['organizations', 'user', 'u1'])?.map(o => o.id)).toEqual([
+      'org2',
+    ]);
+  });
+
   it('still refetches other organization queries', async () => {
     const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
