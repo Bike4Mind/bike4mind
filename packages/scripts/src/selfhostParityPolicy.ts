@@ -647,7 +647,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:accountDataExportQueue',
-    'f481512b3ce8a4eaa7f9de9ff23402f5b82ec72e1586b3b2d8350ee52b37b1c1',
+    '87bfa4084fa4cfde884a58cd4c788e42073199e87dd0feba4346cb301b2be82f',
     {
       source: 'apps/workers/src/selfhost/accountDataExportQueue.ts',
       symbol: 'registerAccountDataExportQueue',
@@ -1105,7 +1105,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/apiProbeDetector.ts:apiProbeDetector',
-    '6fb2b015daddb2370f5f952330d9551db7c37666390f9537f219dff16366108f',
+    'fc238dab90c68e25fefacf618a2f11bd489455fbb3955154e1243e487179c07a',
     'Queries the hosted server function CloudWatch log group; a portable deployment has none.',
     [
       'bedrock:*',
