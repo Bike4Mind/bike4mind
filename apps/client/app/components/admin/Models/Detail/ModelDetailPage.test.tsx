@@ -136,6 +136,38 @@ describe('ModelDetailPage', () => {
     await waitFor(() => expect(screen.queryByTestId('model-detail-not-found')).not.toBeInTheDocument());
   });
 
+  it('shows the error state with Retry when the first load fails, and the model once Retry loads it', async () => {
+    get.mockRejectedValue(apiFailure(503, { error: 'Model list unavailable' }));
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+
+    const failed = await screen.findByTestId('admin-error-state');
+    expect(failed).toHaveTextContent('This model could not be loaded. Model list unavailable');
+    expect(screen.queryByTestId('model-detail-not-found')).not.toBeInTheDocument();
+
+    serve([offRow]);
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(await screen.findByTestId('model-detail-status')).toHaveTextContent('Hidden');
+    expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
+  });
+
+  it('keeps the loaded model on screen when a background refetch fails', async () => {
+    serve([offRow]);
+    const { queryClient } = await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, {
+      Detail: DetailRoute,
+    });
+    expect(await screen.findByTestId('model-detail-status')).toHaveTextContent('Hidden');
+
+    const reads = get.mock.calls.length;
+    get.mockRejectedValue(apiFailure(503, { error: 'Model list unavailable' }));
+    await queryClient.invalidateQueries();
+    expect(get.mock.calls.length).toBeGreaterThan(reads);
+
+    await waitFor(() => expect(screen.getByTestId('model-detail-toggle-btn')).toBeEnabled());
+    expect(screen.getByTestId('model-detail-status')).toHaveTextContent('Hidden');
+    expect(screen.getByTestId('model-detail-reason')).toHaveTextContent('Turned off by an admin');
+    expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
+  });
+
   it('shows the status, the reason with its fix action and the access summary', async () => {
     serve([offRow]);
     await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
@@ -259,7 +291,9 @@ describe('ModelDetailPage', () => {
     const onRow = modelRow({ id: 'only-one', name: 'Only one' });
     serve([onRow]);
     patch
-      .mockRejectedValueOnce(apiFailure(422, { error: 'Only admins will see this model. Confirm to continue.' }))
+      .mockRejectedValueOnce(
+        apiFailure(422, { error: 'Only admins will see this model. Confirm to continue.', adminOnlyIds: ['only-one'] })
+      )
       .mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });
     await renderModelsRoute('/admin/models/only-one?tab=access', () => null, { Detail: DetailRoute });
 
@@ -276,6 +310,43 @@ describe('ModelDetailPage', () => {
     await waitFor(() =>
       expect(patch.mock.calls[0][1]).toMatchObject({ change: { allowedEntitlements: [] }, confirmAdminOnly: true })
     );
+  });
+
+  it('asks for the admins-only confirm when the server answers 422 with the models it would leave to admins', async () => {
+    serve([offRow]);
+    patch
+      .mockRejectedValueOnce(
+        apiFailure(422, { error: 'Only admins will see this model. Confirm to continue.', adminOnlyIds: [BEDROCK_ID] })
+      )
+      .mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-detail-fix-btn'));
+    expect(screen.queryByTestId('model-access-admin-only')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+
+    expect(await screen.findByTestId('model-access-admin-only')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-access-error')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-access-dialog-confirm-btn')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('model-access-admin-only-checkbox'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+    await waitFor(() => expect(patch.mock.calls[1]?.[1]).toMatchObject({ confirmAdminOnly: true }));
+  });
+
+  it('shows any other 422 as an error, without the admins-only confirm', async () => {
+    serve([offRow]);
+    patch.mockRejectedValueOnce(apiFailure(422, { error: 'This change cannot be saved for this model.' }));
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-detail-fix-btn'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+
+    expect(await screen.findByTestId('model-access-error')).toHaveTextContent(
+      'This change cannot be saved for this model.'
+    );
+    expect(screen.queryByTestId('model-access-admin-only')).not.toBeInTheDocument();
   });
 
   it('blocks a rank outside 0 to 100 and saves a valid one', async () => {
