@@ -144,11 +144,7 @@ describeLakeReadAudit({
   lakeId: 'lake1',
   record: h.record,
   bypass: h.adminBypassLakeIds,
-  run: async () => {
-    h.computeLakeHealth.mockResolvedValue(HEALTH_WITH_IDS);
-    return runOnce();
-  },
-  runEmpty: runOnce,
+  run: runOnce,
 });
 
 describe('health audit file ids', () => {
@@ -156,5 +152,27 @@ describe('health audit file ids', () => {
     h.computeLakeHealth.mockResolvedValue(HEALTH_WITH_IDS);
     await runOnce();
     expect(h.record.mock.calls[0][0].fileIds.sort()).toEqual(['a1', 'd1', 'm1']);
+  });
+});
+
+describe('healthy lake metadata audit', () => {
+  it('records a populated healthy response without anomaly file identifiers', async () => {
+    const { res, json } = makeRes();
+    await invoke(makeReq(), res);
+    expect(json).toHaveBeenCalledWith(HEALTH);
+    expect(h.record).toHaveBeenCalledTimes(1);
+    expect(h.record.mock.calls[0][0]).not.toHaveProperty('fileIds');
+  });
+
+  it.each(['write', 'lookup'] as const)('withholds healthy metadata when the bypass %s fails', async failure => {
+    if (failure === 'write') {
+      h.adminBypassLakeIds.mockResolvedValue(['lake1']);
+      h.record.mockRejectedValueOnce(new Error('audit unavailable'));
+    } else {
+      h.adminBypassLakeIds.mockRejectedValueOnce(new Error('audit unavailable'));
+    }
+    const { res, json } = makeRes();
+    await expect(invoke(makeReq(), res)).rejects.toThrow('audit unavailable');
+    expect(json).not.toHaveBeenCalled();
   });
 });

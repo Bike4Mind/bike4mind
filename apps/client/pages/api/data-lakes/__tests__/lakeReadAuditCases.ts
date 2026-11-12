@@ -10,7 +10,7 @@ interface LakeReadAuditCases {
   /** Runs the handler against a lake with content to return; resolves true once it responded. */
   run: () => Promise<boolean>;
   /** Runs the handler against a lake with nothing to return. */
-  runEmpty: () => Promise<boolean>;
+  runEmpty?: () => Promise<boolean>;
 }
 
 /** The access-audit contract every lake read door shares. */
@@ -54,8 +54,10 @@ export const describeLakeReadAudit = ({ surface, lakeId, record, bypass, run, ru
       await expect(run()).resolves.toBe(true);
     });
 
-    it('records nothing when there is nothing to return', async () => {
-      await runEmpty();
-      expect(record).not.toHaveBeenCalled();
-    });
+    if (runEmpty) {
+      it('records nothing when there is nothing to return', async () => {
+        await runEmpty();
+        expect(record).not.toHaveBeenCalled();
+      });
+    }
   });

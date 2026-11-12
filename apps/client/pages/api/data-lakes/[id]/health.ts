@@ -64,7 +64,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       ...health.duplicateMembers.groups.flatMap(g => g.members.map(m => m.fabFileId)),
       ...health.membership.duplicateGroups.flatMap(g => g.members.map(m => m.fabFileId)),
     ];
-    if (fileIds.length > 0) await recordLakeRead(req, { lakeIds: [lake.id], fileIds, surface: 'data-lake-health' });
+    // Healthy responses still disclose lake-derived metadata without anomaly file identifiers.
+    await recordLakeRead(req, {
+      lakeIds: [lake.id],
+      ...(fileIds.length > 0 ? { fileIds } : {}),
+      surface: 'data-lake-health',
+    });
     return res.json(health);
   });
 
