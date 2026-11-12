@@ -44,6 +44,13 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'openBursts.actorUserId', matchBy: 'userId', action: 'pullFromArray' }],
   },
+  OrganizationAuditEvent: {
+    kind: 'holder',
+    references: [
+      { path: 'actorUserId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      { path: 'targetId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+    ],
+  },
   // Append-only: the model rejects every update, so the entry cannot be anonymized in place. Free-text `summary`,
   // `changes` and `details` are not scanned for the person.
   AdminAuditLog: {
