@@ -46,18 +46,19 @@ jobs:
           fi
           echo "Label '$LABEL' $ACTION: re-running preview gate run $run_id for $HEAD_SHA."
 
-          # A run that is still queued or executing refuses a re-run (409). It reads labels
-          # live when it executes, but it may already have read them, so wait and retry.
-          for attempt in 1 2 3 4 5 6; do
+          # A run that is still queued or executing refuses a re-run ("already running",
+          # reported as 403, or 409). It reads labels live when it executes, but it may
+          # already have read them, so wait for it and retry.
+          for attempt in 1 2 3 4 5 6 7 8; do
             if gh api -X POST "repos/$REPO/actions/runs/$run_id/rerun" >/dev/null 2>/tmp/rerun.err; then
               echo "Re-run requested."
               exit 0
             fi
-            if ! grep -q 'HTTP 409' /tmp/rerun.err; then
+            if ! grep -qE 'already running|HTTP 409' /tmp/rerun.err; then
               cat /tmp/rerun.err
               exit 1
             fi
-            echo "Gate run $run_id is still in progress; retrying in 15s ($attempt/6)."
+            echo "Gate run $run_id is still in progress; retrying in 15s ($attempt/8)."
             sleep 15
           done
           echo "::error title=Gate busy::Preview gate run $run_id stayed in progress; re-run it from the Checks tab."
