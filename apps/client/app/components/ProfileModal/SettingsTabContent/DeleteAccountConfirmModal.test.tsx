@@ -28,7 +28,10 @@ const confirmBtn = () => screen.getByTestId('confirm-modal-confirm-btn') as HTML
 describe('DeleteAccountConfirm', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.status = { data: { deletion: null, ownedOrganizations: [] }, isLoading: false };
+    h.status = {
+      data: { deletion: null, ownedOrganizations: [], soleOwnedOrganizations: [] },
+      isLoading: false,
+    };
   });
 
   it('says what happens now, when the purge lands and how to cancel', () => {
@@ -59,7 +62,10 @@ describe('DeleteAccountConfirm', () => {
   });
 
   it('tells an organization owner to transfer or delete each organization first and links to it', () => {
-    h.status = { data: { deletion: null, ownedOrganizations: [{ id: 'org-1', name: 'Acme' }] }, isLoading: false };
+    h.status = {
+      data: { deletion: null, ownedOrganizations: [{ id: 'org-1', name: 'Acme' }], soleOwnedOrganizations: [] },
+      isLoading: false,
+    };
     const onCancel = vi.fn();
     wrap(<DeleteAccountConfirm onCancel={onCancel} />);
     expect(screen.getByTestId('delete-account-org-owner').textContent).toContain('Transfer ownership');
@@ -68,5 +74,61 @@ describe('DeleteAccountConfirm', () => {
     fireEvent.click(screen.getByTestId('delete-account-org-link'));
     expect(onCancel).toHaveBeenCalled();
     expect(h.navigate).toHaveBeenCalledWith({ to: '/organizations/$id', params: { id: 'org-1' } });
+  });
+
+  it('names the organizations that will be deleted with the account and keeps the email confirmation', () => {
+    h.status = {
+      data: {
+        deletion: null,
+        ownedOrganizations: [],
+        soleOwnedOrganizations: [
+          { id: 'org-1', name: 'Acme' },
+          { id: 'org-2', name: 'Side Project' },
+        ],
+      },
+      isLoading: false,
+    };
+    wrap(<DeleteAccountConfirm onCancel={vi.fn()} />);
+    const text = screen.getByTestId('delete-account-sole-owned-orgs').textContent;
+    expect(text).toContain('will be deleted along with your account');
+    expect(text).toContain('Acme, Side Project');
+    expect(confirmBtn().disabled).toBe(true);
+    fireEvent.change(screen.getByTestId('delete-account-confirm-input'), { target: { value: 'ada@example.test' } });
+    expect(confirmBtn().disabled).toBe(false);
+  });
+
+  it('caps a long list of sole-owned organizations', () => {
+    h.status = {
+      data: {
+        deletion: null,
+        ownedOrganizations: [],
+        soleOwnedOrganizations: Array.from({ length: 7 }, (_, i) => ({ id: `org-${i}`, name: `Org ${i}` })),
+      },
+      isLoading: false,
+    };
+    wrap(<DeleteAccountConfirm onCancel={vi.fn()} />);
+    const text = screen.getByTestId('delete-account-sole-owned-orgs').textContent;
+    expect(text).toContain('Org 0, Org 1, Org 2, Org 3, Org 4 and 2 more');
+    expect(text).not.toContain('Org 5');
+  });
+
+  it('shows no organization notice when the user has no sole-owned organization', () => {
+    wrap(<DeleteAccountConfirm onCancel={vi.fn()} />);
+    expect(screen.queryByTestId('delete-account-sole-owned-orgs')).toBeNull();
+  });
+
+  it('still blocks on shared organizations even when sole-owned ones exist', () => {
+    h.status = {
+      data: {
+        deletion: null,
+        ownedOrganizations: [{ id: 'org-1', name: 'Acme' }],
+        soleOwnedOrganizations: [{ id: 'org-2', name: 'Side Project' }],
+      },
+      isLoading: false,
+    };
+    wrap(<DeleteAccountConfirm onCancel={vi.fn()} />);
+    expect(screen.getByTestId('delete-account-org-owner')).toBeTruthy();
+    expect(screen.queryByTestId('delete-account-sole-owned-orgs')).toBeNull();
+    expect(confirmBtn().disabled).toBe(true);
   });
 });
