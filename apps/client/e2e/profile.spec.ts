@@ -364,7 +364,8 @@ test.describe('Profile - API key gates', () => {
   }) => {
     test.slow();
     const { page } = profilePage;
-    const mode = await apiReadApiKeyAccessMode(request, getTestUsers().admin.accessToken);
+    const testAdmin = getTestUsers().admin;
+    const mode = await apiReadApiKeyAccessMode(request, testAdmin.accessToken, testAdmin.userId);
     // No predefined tags (Developer bypasses the switch) and trust-approved, so only the switch decides.
     const owner = await apiCreateThrowawayUser(request, 'keyswitch', {
       includePredefinedTags: false,

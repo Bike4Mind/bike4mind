@@ -1,5 +1,5 @@
 import { expect, type APIRequestContext, type APIResponse } from '@playwright/test';
-import { settingsMap } from '@bike4mind/common';
+import { adminUserApiKeysResponseSchema, settingsMap, type AdminApiKeyAccess } from '@bike4mind/common';
 import { wafBypassHeaders } from './waf-bypass';
 
 // Personal API key gates: the access switch (apiKeyAccessGate.ts) and the trust gate
@@ -72,15 +72,21 @@ async function apiFetchSettings(request: APIRequestContext, adminToken: string):
   return new Map(rows.map(row => [row.settingName, row.settingValue]));
 }
 
-export type ApiKeyAccessMode = 'all' | 'paid' | 'disabled';
+export type ApiKeyAccessMode = AdminApiKeyAccess['mode'];
+const accessResponseSchema = adminUserApiKeysResponseSchema.pick({ access: true });
 
-/** The access switch as the server reads it: anything but `all` or `disabled`, a missing row included, is `paid`. */
+/** Read the effective mode from the target server, including its deployment-specific default. */
 export async function apiReadApiKeyAccessMode(
   request: APIRequestContext,
-  adminToken: string
+  adminToken: string,
+  adminUserId: string
 ): Promise<ApiKeyAccessMode> {
-  const value = (await apiFetchSettings(request, adminToken)).get('apiKeyAccess');
-  return value === 'all' || value === 'disabled' ? value : 'paid';
+  const response = await request.get(`${baseURL()}/api/admin/users/${adminUserId}/user-api-keys`, {
+    headers: { ...wafBypassHeaders(), Authorization: `Bearer ${adminToken}` },
+  });
+  expect(response.status(), 'GET effective personal API key access').toBe(200);
+  const data: unknown = await response.json();
+  return accessResponseSchema.parse(data).access.mode;
 }
 
 export interface ApiKeyTrustSettings {
