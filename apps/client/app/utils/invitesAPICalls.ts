@@ -5,14 +5,14 @@ import isNull from 'lodash/isNull';
 import isUndefined from 'lodash/isUndefined';
 import pickBy from 'lodash/pickBy';
 
-export const fetchInvite = async (id: string): Promise<IInviteDocumentWithDetails | null | 'expired'> => {
+export const fetchInvite = async (id: string): Promise<IInviteDocumentWithDetails | null | 'expired' | 'revoked'> => {
   try {
     const { data } = await api.get(`/api/invites/${id}`);
     return data;
   } catch (error) {
     if (isAxiosError(error)) {
       if (error.response?.status === 404) return null;
-      if (error.response?.status === 410) return 'expired';
+      if (error.response?.status === 410) return error.response.data?.revoked === true ? 'revoked' : 'expired';
     }
     throw error;
   }

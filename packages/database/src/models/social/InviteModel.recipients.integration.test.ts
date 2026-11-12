@@ -139,6 +139,17 @@ describe('InviteRepository recipient writes', () => {
     expect(invite.recipients).toMatchObject({ pending: [], accepted: ['b@x.com'], refused: ['c@x.com'] });
   });
 
+  it('markRevoked spends every slot, stamps revokedAt once and keeps the first stamp', async () => {
+    const link = await seed({}, 3);
+
+    const first = await repo.markRevoked(link);
+    expect(first?.remaining).toBe(0);
+    expect(first?.revokedAt).toBeInstanceOf(Date);
+    const again = await repo.markRevoked(link);
+    expect(again?.revokedAt?.getTime()).toBe(first?.revokedAt?.getTime());
+    expect(await repo.acceptRecipient(link, 'a@x.com')).toBeNull();
+  });
+
   it('closeInvite leaves an invite without recipients without them', async () => {
     const id = await seed(null);
 

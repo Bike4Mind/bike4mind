@@ -42,6 +42,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
   useOrganizationInvites: () => ({ data: mocks.invitations, isError: false }),
   useSetMemberCreditDefault: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
+vi.mock('./InviteLinksPanel', () => ({ default: () => null }));
 vi.mock('./BulkInviteModal', () => ({
   default: (p: { availableSeats: number; onDone: () => void }) => (
     <div data-testid="bulk-invite-modal" data-seats={p.availableSeats}>

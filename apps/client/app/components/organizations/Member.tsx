@@ -30,6 +30,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import OrganizationUserCard from './UserCard';
 import BulkInviteModal from './BulkInviteModal';
+import InviteLinksPanel from './InviteLinksPanel';
 import OrgInviteRoleSelect from './OrgInviteRoleSelect';
 import MemberCreditBudgetCard from './MemberCreditBudgetCard';
 import { getMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
@@ -514,6 +515,8 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
           )}
         </Box>
       </Stack>
+
+      {canInviteMembers && <InviteLinksPanel organizationId={organization.id} canGrantAdmin={canGrantAdmin} />}
 
       {pendingInvitesError && (
         <Typography color="danger" data-testid="organization-pending-invites-error">

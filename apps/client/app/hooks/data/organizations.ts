@@ -565,3 +565,49 @@ export function useBulkInviteOrganization() {
     },
   });
 }
+
+// Mirrors OrgInviteLinkView in apps/client/server/organizations/orgInviteLinks.ts.
+export interface OrgInviteLink {
+  id: string;
+  link: string;
+  permissions: string[];
+  expiresAt: string | null;
+  remaining: number;
+  accepted: number;
+  allowedDomains: string[];
+  revokedAt: string | null;
+}
+
+const inviteLinksKey = (organizationId: string) => ['organizations', organizationId, 'invite-links'];
+
+export function useOrganizationInviteLinks(organizationId: string, enabled = true) {
+  return useQuery({
+    queryKey: inviteLinksKey(organizationId),
+    queryFn: async () => (await api.get<OrgInviteLink[]>(`/api/organizations/${organizationId}/invite-links`)).data,
+    enabled: enabled && !!organizationId,
+  });
+}
+
+export function useCreateOrganizationInviteLink(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: {
+      permissions: string[];
+      expiresAt: string;
+      available?: number;
+      allowedDomains?: string[];
+    }) => (await api.post<{ link: string }>(`/api/organizations/${organizationId}/invite-links`, body)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: inviteLinksKey(organizationId) }),
+    onError: error => toast.error(getErrorMessage(error)),
+  });
+}
+
+export function useRevokeOrganizationInviteLink(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (inviteId: string) =>
+      (await api.delete<OrgInviteLink>(`/api/organizations/${organizationId}/invite-links/${inviteId}`)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: inviteLinksKey(organizationId) }),
+    onError: error => toast.error(getErrorMessage(error)),
+  });
+}

@@ -1,5 +1,6 @@
 import { useAcceptDocument, useRefuseDocument, useRespondToInvites } from '@client/app/hooks/data/invites';
 import { fetchInvite } from '@client/app/utils/invitesAPICalls';
+import { describeAcceptFailure, type ShareAcceptFailure } from '@client/app/utils/shareAcceptErrors';
 import CheckIcon from '@mui/icons-material/Check';
 import HandymanOutlinedIcon from '@mui/icons-material/HandymanOutlined';
 import DoDisturbIcon from '@mui/icons-material/DoDisturb';
@@ -72,6 +73,7 @@ const StatusModal = ({
 
 const SharePage = () => {
   const [loading, setLoading] = React.useState<boolean>(false);
+  const [acceptFailure, setAcceptFailure] = React.useState<(ShareAcceptFailure & { documentId?: string }) | null>(null);
   const navigate = useNavigate();
   const { id } = useParams({ strict: false });
   const { currentUser } = useUser();
@@ -95,19 +97,24 @@ const SharePage = () => {
       const isPastExpiry = (inv: { expiresAt?: Date | string | null }) =>
         !!inv.expiresAt && new Date(inv.expiresAt).getTime() <= Date.now();
       const items = results.flatMap((r, i) =>
-        r.status === 'fulfilled' && r.value && r.value !== 'expired' && !isPastExpiry(r.value)
+        r.status === 'fulfilled' && r.value && r.value !== 'expired' && r.value !== 'revoked' && !isPastExpiry(r.value)
           ? [{ id: inviteIds[i], invite: r.value }]
           : []
       );
       const expired = results.some(
-        r => r.status === 'fulfilled' && r.value && (r.value === 'expired' || isPastExpiry(r.value))
+        r =>
+          r.status === 'fulfilled' &&
+          r.value &&
+          r.value !== 'revoked' &&
+          (r.value === 'expired' || isPastExpiry(r.value))
       );
+      const revoked = results.some(r => r.status === 'fulfilled' && r.value === 'revoked');
       const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
-      if (!items.length && !expired && failed) {
+      if (!items.length && !expired && !revoked && failed) {
         console.error('Failed to load invite', failed.reason);
         throw failed.reason;
       }
-      return { items, expired };
+      return { items, expired, revoked };
     },
     enabled: inviteIds.length > 0,
   });
@@ -117,6 +124,10 @@ const SharePage = () => {
 
   // Check if any invite is user's own
   const hasOwnInvite = invites.some(item => item.invite?.username === currentUser?.username);
+  // An Organization share link names nobody, so there is no pending entry for Refuse to clear.
+  const allOrgShareLinks = invites.every(
+    item => item.invite?.type === 'Organization' && item.invite?.isLinkOnly === true
+  );
 
   const acceptInvite = useAcceptDocument({
     onSuccess: () => {
@@ -154,7 +165,15 @@ const SharePage = () => {
           return action === 'accept' ? acceptInvite.mutateAsync(id) : refuseInvite.mutateAsync(id);
         }
       };
-      await Promise.allSettled([respond()]);
+      const [outcome] = await Promise.allSettled([respond()]);
+      const failure =
+        action === 'accept' && validInvites.length === 1 && outcome.status === 'rejected'
+          ? describeAcceptFailure(outcome.reason)
+          : null;
+      if (failure) {
+        setAcceptFailure({ ...failure, documentId: validInvites[0].invite?.documentId });
+        return;
+      }
       goHome();
     } finally {
       setLoading(false);
@@ -162,6 +181,21 @@ const SharePage = () => {
   };
 
   if (query.isLoading) return null;
+  if (acceptFailure) {
+    const { kind, title, body, documentId } = acceptFailure;
+    const openOrganization = kind === 'member' && documentId;
+    return (
+      <StatusModal
+        testId={`share-accept-${kind}-modal`}
+        title={title}
+        body={body}
+        actionTestId={`share-accept-${kind}-btn`}
+        actionLabel={openOrganization ? 'Open organization' : 'Go home'}
+        onAction={openOrganization ? () => navigate({ to: '/organizations/$id', params: { id: documentId } }) : goHome}
+        onClose={goHome}
+      />
+    );
+  }
   if (query.isError) {
     return (
       <StatusModal
@@ -177,13 +211,20 @@ const SharePage = () => {
   }
   if (invites.length === 0) {
     const expired = query.data?.expired;
-    const kind = expired ? 'expired' : 'unavailable';
+    const revoked = !expired && query.data?.revoked;
+    const kind = expired ? 'expired' : revoked ? 'revoked' : 'unavailable';
     return (
       <StatusModal
         testId={`share-${kind}-modal`}
-        title={expired ? 'This invite has expired' : 'This invite is no longer available'}
-        body={
+        title={
           expired
+            ? 'This invite has expired'
+            : revoked
+              ? 'This invite was revoked'
+              : 'This invite is no longer available'
+        }
+        body={
+          expired || revoked
             ? 'Ask the person who shared it to send you a new one.'
             : 'It may have expired, been revoked, or already been used.'
         }
@@ -254,17 +295,19 @@ const SharePage = () => {
                     <InfoOutlinedIcon sx={{ width: '20px', mr: '10px' }} />
                   </Tooltip>
                 )}
-                <Tooltip title={'Refuse'}>
-                  <IconButton
-                    sx={{ mr: '15px' }}
-                    variant={'outlined'}
-                    disabled={loading}
-                    color={'danger'}
-                    onClick={() => handleBulkAction('refuse')}
-                  >
-                    <DoDisturbIcon />
-                  </IconButton>
-                </Tooltip>
+                {!allOrgShareLinks && (
+                  <Tooltip title={'Refuse'}>
+                    <IconButton
+                      sx={{ mr: '15px' }}
+                      variant={'outlined'}
+                      disabled={loading}
+                      color={'danger'}
+                      onClick={() => handleBulkAction('refuse')}
+                    >
+                      <DoDisturbIcon />
+                    </IconButton>
+                  </Tooltip>
+                )}
                 <Tooltip title={hasOwnInvite ? "You can't accept your own invite" : 'Accept'}>
                   <IconButton
                     variant={'outlined'}

@@ -6,9 +6,11 @@ import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { fetchInvite } from '@client/app/utils/invitesAPICalls';
+import { AxiosError } from 'axios';
 import SharePage from './$id';
 
 const mockId = vi.hoisted(() => ({ value: 'abc' }));
+const navigateMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@client/app/utils/invitesAPICalls', () => ({
   fetchInvite: vi.fn(),
@@ -27,7 +29,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { username: 'me' } }),
 }));
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => navigateMock,
   useParams: () => ({ id: mockId.value }),
 }));
 
@@ -51,6 +53,7 @@ describe('SharePage', () => {
     vi.mocked(fetchInvite).mockReset();
     mockId.value = 'abc';
     Object.values(inviteMutations).forEach(m => m.mockReset().mockResolvedValue(undefined));
+    navigateMock.mockReset();
   });
 
   it('accepts a multi-invite link with one bulk request and no per-invite calls', async () => {
@@ -178,5 +181,69 @@ describe('SharePage', () => {
     expect(fetchInvite).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId('share-error-retry-btn'));
     await vi.waitFor(() => expect(fetchInvite).toHaveBeenCalledTimes(2));
+  });
+  const orgLink = {
+    name: 'Acme',
+    type: 'Organization',
+    isLinkOnly: true,
+    documentId: 'org-1',
+    username: 'owner',
+  } as never;
+  const acceptRejects = (message: string, status: number) =>
+    inviteMutations.accept.mockRejectedValue(
+      new AxiosError('fail', 'ERR', undefined, undefined, { status, data: { message } } as never)
+    );
+
+  it('shows a revoked modal, never Accept, when the link was revoked before opening', async () => {
+    vi.mocked(fetchInvite).mockResolvedValue('revoked');
+    renderPage();
+
+    expect(await screen.findByTestId('share-revoked-modal')).toBeTruthy();
+    expect(screen.queryByTestId('share-error-modal')).toBeNull();
+    expect(screen.queryByLabelText('Accept')).toBeNull();
+  });
+
+  it('offers Accept but not Refuse on an organization share link', async () => {
+    vi.mocked(fetchInvite).mockResolvedValue(orgLink);
+    renderPage();
+
+    expect(await screen.findByLabelText('Accept')).toBeTruthy();
+    expect(screen.queryByLabelText('Refuse')).toBeNull();
+  });
+
+  it.each([
+    ['Invite has been revoked', 422, 'revoked'],
+    ['This invite is limited to verified email addresses at example.com', 403, 'domain'],
+    ['Organization is full', 403, 'full'],
+  ])('explains a refused join (%s) instead of going home', async (message, status, kind) => {
+    vi.mocked(fetchInvite).mockResolvedValue(orgLink);
+    acceptRejects(message, status);
+    renderPage();
+
+    fireEvent.click(await screen.findByLabelText('Accept'));
+
+    expect(await screen.findByTestId(`share-accept-${kind}-modal`)).toBeTruthy();
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('sends an existing member to the organization', async () => {
+    vi.mocked(fetchInvite).mockResolvedValue(orgLink);
+    acceptRejects('You are already a member of this organization', 409);
+    renderPage();
+
+    fireEvent.click(await screen.findByLabelText('Accept'));
+    fireEvent.click(await screen.findByTestId('share-accept-member-btn'));
+
+    expect(navigateMock).toHaveBeenCalledWith({ to: '/organizations/$id', params: { id: 'org-1' } });
+  });
+
+  it('still goes home on an unmapped accept failure', async () => {
+    vi.mocked(fetchInvite).mockResolvedValue(orgLink);
+    acceptRejects('Something else', 500);
+    renderPage();
+
+    fireEvent.click(await screen.findByLabelText('Accept'));
+
+    await vi.waitFor(() => expect(navigateMock).toHaveBeenCalledWith({ to: '/' }));
   });
 });

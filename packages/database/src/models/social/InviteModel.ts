@@ -281,6 +281,13 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
     ]);
   }
 
+  async markRevoked(id: string): Promise<IInviteDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    return this.pipelineUpdate({ _id: id }, [
+      { $set: { remaining: 0, revokedAt: { $ifNull: ['$revokedAt', '$$NOW'] }, updatedAt: '$$NOW' } },
+    ]);
+  }
+
   private async updatePendingRecipient(id: string, email: string, stages: Record<string, unknown>[]) {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     return this.pipelineUpdate(

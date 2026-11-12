@@ -32,6 +32,8 @@ export interface IInviteRepository extends IBaseRepository<IInviteDocument> {
   cancelPendingRecipient: (id: string, email: string) => Promise<IInviteDocument | null>;
   /** Spend every slot and clear pending, keeping accepted/refused. */
   closeInvite: (id: string) => Promise<IInviteDocument | null>;
+  /** Spend every slot and stamp `revokedAt` (kept if already set). Null for an unknown id. */
+  markRevoked: (id: string) => Promise<IInviteDocument | null>;
   searchInvites: (
     query: Record<string, unknown>,
     limit: number,

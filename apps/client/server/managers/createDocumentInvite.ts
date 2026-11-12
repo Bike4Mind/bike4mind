@@ -102,7 +102,13 @@ export async function createDocumentInvite(
     id,
     body,
     typedAddressBucket,
-  }: { type: InviteType; id: string; body: CreateInviteBody; typedAddressBucket?: TypedAddressBucket }
+  }: {
+    type: InviteType;
+    id: string;
+    // link/allowedDomains: an Organization share link, built only by the org invite-links route.
+    body: CreateInviteBody & { link?: boolean; allowedDomains?: string[] };
+    typedAddressBucket?: TypedAddressBucket;
+  }
 ) {
   const user = req.user!;
   const { expiresAt, ...restBody } = body;
