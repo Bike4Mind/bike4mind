@@ -799,6 +799,21 @@ describe('the list page and the filter resolver', () => {
     const byName = (dir: 'asc' | 'desc') =>
       adminModelListPage(all, { filter: {}, sort: 'name', dir }).models.map(row => row.id);
     expect(byName('desc')).toEqual([...byName('asc')].reverse());
+
+    const byRank = (dir: 'asc' | 'desc') =>
+      adminModelListPage(all, { filter: {}, sort: 'rank', dir, pageSize: 500 }).models.map(row => [row.id, row.rank]);
+    for (const dir of ['asc', 'desc'] as const) {
+      const ranks = byRank(dir).map(([, rank]) => rank);
+      const firstBlank = ranks.indexOf(null);
+      expect(firstBlank).toBeGreaterThan(0);
+      expect(ranks.slice(firstBlank).every(rank => rank === null)).toBe(true);
+    }
+    const present = (dir: 'asc' | 'desc') => byRank(dir).filter(([, rank]) => rank !== null);
+    expect(present('desc').map(([, rank]) => rank)).toEqual(
+      present('asc')
+        .map(([, rank]) => rank)
+        .reverse()
+    );
   });
 
   it('applies the view, search, provider, type and source facets', async () => {
@@ -940,7 +955,18 @@ describe('the list page and the filter resolver', () => {
         'gpt-a',
         'gpt-marked',
       ]);
-      expect(sorted({}, 'desc')).toEqual([...sorted({})].reverse());
+      expect(sorted({}, 'desc')).toEqual([
+        'gpt-far',
+        'gpt-far-off',
+        'gpt-edge',
+        'gpt-off',
+        'flux-fill',
+        'gpt-x',
+        'gpt-overdue',
+        'gpt-marked',
+        'gpt-a',
+        'gpt-y',
+      ]);
       expect(sorted({ view: 'retiring' })).toEqual([
         'gpt-overdue',
         'gpt-x',
