@@ -174,7 +174,7 @@ test.describe('Teams', () => {
     await expect.poll(async () => (await teamsPage.seatsUsed()).used).toBe(before.used - 1);
   });
 
-  test('revoking an active member removes them from the roster', async ({ teamsPage, page, request }) => {
+  test('removing an active member takes them off the roster', async ({ teamsPage, page, request }) => {
     await apiAddTeamMember(request, adminToken, mainTeamId, invitee.userId);
 
     await teamsPage.gotoTeam(mainTeamId, 'members');
@@ -183,10 +183,48 @@ test.describe('Teams', () => {
     await expect(row).not.toContainText('Pending');
 
     await teamsPage.openMemberMenu(invitee.userId);
-    await page.getByTestId('organization-user-card-revoke-access').click();
+    await page.getByTestId('organization-user-card-remove-member').click();
     await teamsPage.confirm();
 
     await expect(row).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
+  });
+
+  test('selected members are removed together from the bulk bar', async ({ teamsPage, page, request }) => {
+    await apiAddTeamMember(request, adminToken, mainTeamId, invitee.userId);
+
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    const row = teamsPage.memberRow(invitee.userId);
+    await expect(row).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    // Neither the owner nor your own row can be selected.
+    await expect(teamsPage.memberRow(owner.userId).getByTestId('organization-user-card-select')).toHaveCount(0);
+
+    await row.getByTestId('organization-user-card-select').check();
+    await expect(page.getByTestId('organization-members-bulk-bar')).toContainText('1 selected');
+    await page.getByTestId('organization-members-remove-selected-btn').click();
+    await expect(page.getByTestId('organization-members-bulk-remove-description')).toContainText(seededName(invitee));
+    await teamsPage.confirm();
+
+    await expect(row).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
+    await expect(page.getByTestId('organization-members-bulk-bar')).toBeHidden();
+  });
+
+  test('role and status filters narrow the roster, and a miss offers Clear filters', async ({ page, teamsPage }) => {
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    await expect(teamsPage.memberRow(member.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+
+    await page.getByTestId('organization-members-role-filter').click();
+    await page.getByTestId('organization-members-role-option-owner').click();
+    await expect(teamsPage.memberRow(owner.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(teamsPage.memberRow(member.userId)).toBeHidden();
+
+    // No owner is ever a pending invite.
+    await page.getByTestId('organization-members-status-filter').click();
+    await page.getByTestId('organization-members-status-option-pending').click();
+    await expect(page.getByTestId('organization-members-no-match')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+
+    await page.getByTestId('organization-members-clear-filters-btn').click();
+    await expect(teamsPage.memberRow(member.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(teamsPage.memberRow(owner.userId)).toBeVisible();
   });
 
   test('member search filters the roster and sort reverses it', async ({ page, teamsPage }) => {

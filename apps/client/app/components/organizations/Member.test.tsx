@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -11,14 +11,22 @@ const mocks = vi.hoisted(() => ({
   share: vi.fn(),
   search: vi.fn(),
   cancel: vi.fn(),
-  invitations: [] as { id: string; recipients: { pending: string[] } }[],
+  invitations: [] as { id: string; recipients?: { pending?: string[] } }[],
   viewerId: 'viewer',
   viewer: undefined as { id: string; isAdmin: boolean } | null | undefined,
   members: [] as { id: string; name: string }[],
   pending: [] as { id: string; name: string }[],
-  searchUsers: [] as { id: string; name: string; username?: string; pendingInvite?: boolean }[],
+  searchUsers: [] as { id: string; name: string; username?: string; email?: string; pendingInvite?: boolean }[],
   seats: { maxSeats: 0, currentSeats: 0, availableSeats: 0 },
+  membersState: { isLoading: false, isError: false },
+  refetch: vi.fn(),
+  invitesError: false,
+  searchMissing: false,
+  shareOptions: undefined as { onSuccess: () => void; onError: (err: Error) => void } | undefined,
+  cancelOptions: undefined as { onSuccess: () => void; onError: (err: Error) => void } | undefined,
+  toast: { success: vi.fn(), error: vi.fn() },
 }));
+vi.mock('sonner', () => ({ toast: mocks.toast }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({
@@ -26,26 +34,33 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   }),
 }));
 vi.mock('@client/app/hooks/data/user', () => ({
-  useGetOrganizationUsers: () => ({ data: mocks.members }),
+  useGetOrganizationUsers: () => ({ data: mocks.members, ...mocks.membersState, refetch: mocks.refetch }),
   useGetPendingOrganizationUsers: () => ({ data: mocks.pending }),
   useGetUsers: (parameters: unknown) => {
     mocks.search(parameters);
-    return { data: { users: mocks.searchUsers }, isFetching: false };
+    return { data: mocks.searchMissing ? undefined : { users: mocks.searchUsers }, isFetching: false };
   },
 }));
 vi.mock('@client/app/hooks/data/invites', () => ({
-  useShareDocument: () => ({ mutate: mocks.share, isPending: false }),
-  useCancelInvite: () => ({ mutate: mocks.cancel, isPending: false }),
+  useShareDocument: (options: typeof mocks.shareOptions) => {
+    mocks.shareOptions = options;
+    return { mutate: mocks.share, isPending: false };
+  },
+  useCancelInvite: (options: typeof mocks.cancelOptions) => {
+    mocks.cancelOptions = options;
+    return { mutate: mocks.cancel, isPending: false };
+  },
 }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useOrganizationSeats: () => mocks.seats,
-  useOrganizationInvites: () => ({ data: mocks.invitations, isError: false }),
+  useOrganizationInvites: () => ({ data: mocks.invitations, isError: mocks.invitesError }),
   useSetMemberCreditDefault: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useRemoveMemberFromOrganization: () => ({ mutateAsync: vi.fn() }),
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('./UserCard', () => ({
   default: (p: {
-    user: { id: string; creditUsage: { used: number } | null };
+    user: { id: string; role: string; status: string; creditUsage: { used: number } | null };
     canInviteMembers: boolean;
     canRevokeMembers: boolean;
     canManageManagers: boolean;
@@ -56,6 +71,8 @@ vi.mock('./UserCard', () => ({
       data-revoke={String(p.canRevokeMembers)}
       data-manage-managers={String(p.canManageManagers)}
       data-credit-usage={p.user.creditUsage?.used ?? 'hidden'}
+      data-role={p.user.role}
+      data-status={p.user.status}
     />
   ),
 }));
@@ -67,6 +84,8 @@ vi.mock('@client/app/components/common/GenericAddItemsModal', () => ({
     selectedIds: string[];
     onSelectIds: (ids: string[]) => void;
     onAdd: (ids: string[]) => void;
+    getItemId: (user: { id: string }) => string;
+    isItemDisabled: (user: { id: string }) => boolean;
     renderItem: (
       user: { id: string; name: string; username: string },
       selected: boolean,
@@ -78,10 +97,18 @@ vi.mock('@client/app/components/common/GenericAddItemsModal', () => ({
         Search
       </button>
       {props.items.map(user => (
-        <div key={user.id}>
+        <div
+          key={user.id}
+          data-testid={`item-${props.getItemId(user)}`}
+          data-disabled={String(props.isItemDisabled(user))}
+        >
           {props.renderItem(user, props.selectedIds.includes(user.id), () => props.onSelectIds([user.id]))}
         </div>
       ))}
+      <button data-testid="select-three" onClick={() => props.onSelectIds(['a', 'b', 'c'])}>
+        Select three
+      </button>
+      <span data-testid="selected-count">{props.selectedIds.length}</span>
       <button data-testid="add-selected" onClick={() => props.onAdd(props.selectedIds)}>
         Add selected
       </button>
@@ -440,5 +467,164 @@ describe('OrganizationMembers manager controls', () => {
     mocks.viewerId = 'admin1';
     renderMembers(org());
     expect(screen.getByTestId('member-card-member1').getAttribute('data-manage-managers')).toBe('false');
+  });
+});
+
+describe('OrganizationMembers roster wiring', () => {
+  beforeEach(() => {
+    mocks.viewer = { id: 'owner1', isAdmin: false };
+    mocks.members = [
+      { id: 'owner1', name: 'Owner' },
+      { id: 'e1', name: 'Editor One' },
+    ];
+    mocks.pending = [{ id: 'p1', name: 'Pending One' }];
+    mocks.invitations = [{ id: 'invite-p1', recipients: { pending: ['p1'] } }];
+    mocks.membersState = { isLoading: false, isError: false };
+    mocks.refetch.mockReset();
+  });
+
+  it('derives each row role and status from the organization', () => {
+    renderMembers(
+      buildOrg({
+        users: [{ userId: 'e1', permissions: [Permission.read, Permission.update] }] as IOrganizationDocument['users'],
+      })
+    );
+    expect(screen.getByTestId('member-card-owner1')).toHaveAttribute('data-role', 'owner');
+    expect(screen.getByTestId('member-card-e1')).toHaveAttribute('data-role', 'editor');
+    expect(screen.getByTestId('member-card-p1')).toHaveAttribute('data-role', 'viewer');
+    expect(screen.getByTestId('member-card-p1')).toHaveAttribute('data-status', 'pending');
+  });
+
+  it('retries a failed member load', () => {
+    mocks.membersState = { isLoading: false, isError: true };
+    renderMembers(buildOrg({}));
+    fireEvent.click(screen.getByTestId('organization-members-retry-btn'));
+    expect(mocks.refetch).toHaveBeenCalled();
+  });
+
+  it('shows the loading state while members load', () => {
+    mocks.membersState = { isLoading: true, isError: false };
+    renderMembers(buildOrg({}));
+    expect(screen.getByTestId('organization-members-loading')).toBeTruthy();
+  });
+
+  it('builds an empty roster when no member data has arrived', () => {
+    mocks.members = undefined as unknown as typeof mocks.members;
+    mocks.pending = undefined as unknown as typeof mocks.pending;
+    renderMembers(buildOrg({}));
+    expect(screen.getByTestId('organization-members-empty')).toBeTruthy();
+  });
+});
+
+describe('OrganizationMembers invite plumbing', () => {
+  beforeEach(() => {
+    mocks.viewer = { id: 'owner1', isAdmin: false };
+    mocks.members = [];
+    mocks.pending = [];
+    mocks.searchUsers = [];
+    mocks.invitations = [];
+    mocks.invitesError = false;
+    mocks.searchMissing = false;
+    mocks.membersState = { isLoading: false, isError: false };
+    mocks.seats = { maxSeats: 4, currentSeats: 1, availableSeats: 2 };
+    mocks.toast.success.mockReset();
+    mocks.toast.error.mockReset();
+  });
+
+  it('reports invite and cancel outcomes', () => {
+    renderMembers(buildOrg({}));
+    act(() => mocks.shareOptions?.onSuccess());
+    expect(mocks.toast.success).toHaveBeenCalledWith('organizations.modals.members.invited');
+    mocks.shareOptions?.onError(new Error('share failed'));
+    expect(mocks.toast.error).toHaveBeenCalledWith('share failed');
+    mocks.cancelOptions?.onSuccess();
+    expect(mocks.toast.success).toHaveBeenCalledWith('Invitation cancelled');
+    mocks.cancelOptions?.onError(new Error('cancel failed'));
+    expect(mocks.toast.error).toHaveBeenCalledWith('cancel failed');
+  });
+
+  it('refuses a selection larger than the free seats', () => {
+    renderMembers(buildOrg({}));
+    fireEvent.click(screen.getByTestId('select-three'));
+    expect(mocks.toast.error).toHaveBeenCalledWith('You can only add up to 2 more members with your current plan');
+    expect(screen.getByTestId('selected-count')).toHaveTextContent('0');
+  });
+
+  it('allows any selection on an unlimited plan', () => {
+    mocks.seats = { maxSeats: 0, currentSeats: 1, availableSeats: 0 };
+    renderMembers(buildOrg({}));
+    fireEvent.click(screen.getByTestId('select-three'));
+    expect(screen.getByTestId('selected-count')).toHaveTextContent('3');
+  });
+
+  it.each([
+    [{ maxSeats: 4, currentSeats: 3, availableSeats: 1 }, '1 seats available'],
+    [{ maxSeats: 10, currentSeats: 9, availableSeats: 1 }, '1 seats available'],
+  ])('shows the seat chip for %o', (seats, text) => {
+    mocks.seats = seats;
+    renderMembers(buildOrg({}));
+    expect(screen.getByText(text)).toBeTruthy();
+  });
+
+  it('explains a full plan when Add Member is pressed', () => {
+    mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
+    renderMembers(buildOrg({}));
+    fireEvent.click(screen.getByTestId('organization-members-add-no-seats-btn'));
+    expect(mocks.toast.error).toHaveBeenCalledWith('organizations.errors.no_seats');
+  });
+
+  it('says when pending invitations fail to load', () => {
+    mocks.invitesError = true;
+    renderMembers(buildOrg({}));
+    expect(screen.getByTestId('organization-pending-invites-error')).toBeTruthy();
+  });
+
+  it('tolerates invites without recipients and a missing search result', () => {
+    mocks.invitations = [{ id: 'blank' }, { id: 'empty', recipients: {} }];
+    mocks.searchMissing = true;
+    renderMembers(buildOrg({}));
+    expect(screen.queryByTestId('organization-pending-email-invites')).toBeNull();
+  });
+
+  it('renders before pending invitations have loaded', () => {
+    mocks.invitations = undefined as unknown as typeof mocks.invitations;
+    mocks.pending = [{ id: 'p1', name: 'Pending One' }];
+    renderMembers(buildOrg({}));
+    expect(screen.getByTestId('member-card-p1')).toBeTruthy();
+  });
+
+  it('keeps an accepted member accepted when an old invite still lists them', () => {
+    mocks.invitations = [{ id: 'old', recipients: { pending: ['m1'] } }];
+    mocks.searchUsers = [{ id: 'm1', name: 'Member One' }];
+    renderMembers(
+      buildOrg({ users: [{ userId: 'm1', permissions: [Permission.read] }] as IOrganizationDocument['users'] })
+    );
+    expect(screen.getByTestId('candidate-m1')).toHaveAttribute('data-invite-status', 'accepted');
+  });
+
+  it('marks candidates already invited by email or username, and hides the owner', () => {
+    mocks.invitations = [{ id: 'i1', recipients: { pending: ['MAIL@EXAMPLE.TEST', 'handle'] } }];
+    mocks.searchUsers = [
+      { id: 'owner1', name: 'Owner' },
+      { id: 'by-mail', name: 'By Mail', email: 'mail@example.test' },
+      { id: 'by-handle', name: 'By Handle', username: 'handle' },
+      { id: 'fresh', name: 'Fresh' },
+    ];
+    renderMembers(buildOrg({}));
+    expect(screen.queryByTestId('item-owner1')).toBeNull();
+    expect(screen.getByTestId('item-by-mail')).toHaveAttribute('data-disabled', 'true');
+    expect(screen.getByTestId('item-by-handle')).toHaveAttribute('data-disabled', 'true');
+    expect(screen.getByTestId('item-fresh')).toHaveAttribute('data-disabled', 'false');
+  });
+
+  it.each([
+    ['falls back to the viewer as owner', { id: 'owner1', isAdmin: false }],
+    ['has no owner while the viewer is unresolved', null],
+  ])('%s when the org has no owner id', (_label, viewer) => {
+    mocks.viewer = viewer;
+    mocks.searchUsers = [{ id: 'owner1', name: 'Viewer' }];
+    renderMembers(buildOrg({ userId: undefined }));
+    // Only the add modal (owner path) renders candidates; the unresolved viewer gets no modal.
+    expect(screen.queryByTestId('item-owner1')).toBeNull();
   });
 });

@@ -5,7 +5,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import {
+  removedMembersMessage,
   useGetUserOrganizations,
+  useRemoveMemberFromOrganization,
   useSearchOrganizations,
   useSearchUserOrganizations,
   useSetMemberCreditDefault,
@@ -201,5 +203,58 @@ describe('manager and ownership mutations', () => {
     expect(post).toHaveBeenCalledWith('/api/organizations/org1/transfer-ownership', { newOwnerId: 'u1' });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['organizations'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['users', 'organization'] });
+  });
+});
+
+describe('member removal', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('keeps the single-removal messages', () => {
+    expect(removedMembersMessage([undefined])).toBe('Member removed successfully');
+    expect(removedMembersMessage([0])).toBe('Member removed successfully');
+    expect(removedMembersMessage([1])).toBe(
+      'Member removed. 1 share on personal data lakes was kept; the lake owners are being notified.'
+    );
+    expect(removedMembersMessage([null])).toBe(
+      'Member removed. Personal data lake shares could not be checked, so the lake owners were not notified.'
+    );
+  });
+
+  it('sums a bulk removal into one message', () => {
+    expect(removedMembersMessage([0, undefined])).toBe('2 members removed');
+    expect(removedMembersMessage([2, 1, null])).toBe(
+      '3 members removed. 3 shares on personal data lakes were kept; the lake owners are being notified. ' +
+        'Personal data lake shares could not be checked for 1 of them, so those lake owners were not notified.'
+    );
+  });
+
+  it('toasts each removal unless asked to stay quiet', async () => {
+    del.mockResolvedValue({ data: { id: 'org1', personalLakeSharesKept: 0 } });
+    const { result } = renderWithClient(useRemoveMemberFromOrganization);
+
+    await expect(result.current.mutateAsync({ organizationId: 'org1', userId: 'u1' })).resolves.toBe(0);
+    expect(del).toHaveBeenCalledWith('/api/organizations/org1/members/u1');
+    expect(toast.success).toHaveBeenCalledWith('Member removed successfully');
+
+    vi.mocked(toast.success).mockClear();
+    await result.current.mutateAsync({ organizationId: 'org1', userId: 'u2', quiet: true });
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed removal unless asked to stay quiet', async () => {
+    del.mockRejectedValue(new Error('boom'));
+    const { result } = renderWithClient(useRemoveMemberFromOrganization);
+
+    await expect(result.current.mutateAsync({ organizationId: 'org1', userId: 'u1' })).rejects.toThrow('boom');
+    expect(toast.error).toHaveBeenCalledWith('Failed to remove member: boom');
+
+    vi.mocked(toast.error).mockClear();
+    await expect(result.current.mutateAsync({ organizationId: 'org1', userId: 'u1', quiet: true })).rejects.toThrow(
+      'boom'
+    );
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });

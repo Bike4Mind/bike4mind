@@ -303,16 +303,40 @@ export function useGetUserOrganizations(
   });
 }
 
-function keptSharesMessage(kept: number): string {
-  const isSingle = kept === 1;
-  return `Member removed. ${kept} share${isSingle ? '' : 's'} on personal data lakes ${isSingle ? 'was' : 'were'} kept; the lake owners are being notified.`;
+/**
+ * Success text for one or more removals, given each response's `personalLakeSharesKept`. Notification
+ * is best-effort and already attempted server-side (the route awaits it ahead of res.json), so this
+ * never claims delivery. `null` means the post-departure read failed, so no owner was notified; an
+ * ABSENT field is an API response from before the count existed, which keeps the plain message.
+ */
+export function removedMembersMessage(kept: readonly (number | null | undefined)[]): string {
+  const single = kept.length === 1;
+  const shares = kept.reduce<number>((sum, k) => sum + (k ?? 0), 0);
+  const unchecked = kept.filter(k => k === null).length;
+  if (!shares && !unchecked) return single ? 'Member removed successfully' : `${kept.length} members removed`;
+  const parts = [single ? 'Member removed.' : `${kept.length} members removed.`];
+  if (shares) {
+    const one = shares === 1;
+    parts.push(
+      `${shares} share${one ? '' : 's'} on personal data lakes ${one ? 'was' : 'were'} kept; the lake owners are being notified.`
+    );
+  }
+  if (unchecked) {
+    parts.push(
+      single
+        ? 'Personal data lake shares could not be checked, so the lake owners were not notified.'
+        : `Personal data lake shares could not be checked for ${unchecked} of them, so those lake owners were not notified.`
+    );
+  }
+  return parts.join(' ');
 }
 
 export function useRemoveMemberFromOrganization() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ organizationId, userId }: { organizationId: string; userId: string }) => {
+    // `quiet` skips the toasts, for a bulk caller that reports one summary instead of one per member.
+    mutationFn: async ({ organizationId, userId }: { organizationId: string; userId: string; quiet?: boolean }) => {
       const response = await api.delete<WithId<IOrganizationDocument> & { personalLakeSharesKept?: number | null }>(
         `/api/organizations/${organizationId}/members/${userId}`
       );
@@ -327,22 +351,13 @@ export function useRemoveMemberFromOrganization() {
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       // Removing a member may hand their lakes to a successor, changing ownership-derived flags.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-      // Notification is best-effort and already attempted server-side before this response arrives
-      // (the route awaits it ahead of res.json), so the client still cannot claim delivery - only
-      // that it was kept and owners are being told. `null` means the post-departure read itself
-      // failed, so no owner was notified either; an ABSENT field is an API response from before the
-      // count existed, which must keep the plain message.
-      toast.success(
-        kept === null
-          ? 'Member removed. Personal data lake shares could not be checked, so the lake owners were not notified.'
-          : kept
-            ? keptSharesMessage(kept)
-            : 'Member removed successfully'
-      );
+      if (!variables.quiet) toast.success(removedMembersMessage([kept]));
     },
-    onError: (error: unknown) => {
+    onError: (error: unknown, variables) => {
       console.error('Failed to remove member:', error);
-      toast.error(`Failed to remove member: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      if (!variables.quiet) {
+        toast.error(`Failed to remove member: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
     },
   });
 }
