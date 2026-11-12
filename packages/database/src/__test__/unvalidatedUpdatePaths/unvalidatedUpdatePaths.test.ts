@@ -127,9 +127,9 @@ describe('unvalidated update paths inventory', () => {
     const lost = report
       .filter(r => r.ref === RUN_VALIDATORS_REF && byKey.get(rowKey(r))?.runValidators === false)
       .map(rowKey);
+    const reportedRefs = new Map(report.map(r => [rowKey(r), r.ref]));
     const unreported = scanned
-      .filter(w => w.runValidators)
-      .filter(w => report.find(r => rowKey(r) === rowKey(w))?.ref !== RUN_VALIDATORS_REF)
+      .filter(w => w.runValidators && reportedRefs.get(rowKey(w)) !== RUN_VALIDATORS_REF)
       .map(rowKey);
 
     expect(lost, 'these writers dropped runValidators - restore it or re-gate the row').toEqual([]);
@@ -171,6 +171,10 @@ describe('unvalidated update paths inventory', () => {
         problems.push(`${rowKey(row)}: gate ${row.gate} needs a ref of the form path/file.ts#symbol`);
       }
       if (row.gate === 'none' && row.ref) problems.push(`${rowKey(row)}: gate none takes no ref`);
+      // The hook-gate suite below exercises only in-package refs, so a schema gate must be one of those.
+      if (row.gate === 'schema' && !row.ref.startsWith('packages/database/')) {
+        problems.push(`${rowKey(row)}: a schema gate without runValidators must name the in-package pre-update hook`);
+      }
       if (!row.note) problems.push(`${rowKey(row)}: needs a note saying why`);
     }
 

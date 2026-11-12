@@ -120,9 +120,13 @@ function propertyKey(name: ts.PropertyName | undefined): string | undefined {
   if (ts.isComputedPropertyName(name)) {
     const expr = name.expression;
     if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) return expr.text;
-    // `[`quests.$[q].subQuests.${i}.status`]`: keep the literal head/tail, a placeholder segment collapses below.
+    // `[`quests.${i}.status`]`: a placeholder that fills a whole positional segment collapses below. One
+    // that leads the key or shares a segment with text names an unknown path, so the key is unreadable.
     if (ts.isTemplateExpression(expr)) {
-      return expr.head.text + expr.templateSpans.map(span => `0${span.literal.text}`).join('');
+      if (!expr.head.text.endsWith('.')) return undefined;
+      const spans = expr.templateSpans.map(span => span.literal.text);
+      if (!spans.every(text => text === '' || text.startsWith('.'))) return undefined;
+      return expr.head.text + spans.map(text => `0${text}`).join('');
     }
   }
   return undefined;

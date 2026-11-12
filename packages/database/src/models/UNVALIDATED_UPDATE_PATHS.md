@@ -35,6 +35,8 @@ can silently turn it into `none`.
 - Literal update calls only. A call whose update document is a variable or a spread is not read, so
   `BaseRepository.update` / `updateGuarded` / `updateMany` (db-core), which `$set` a caller-built patch
   with no validators, is not enumerated per path: it reaches every path of every model with a repository.
+- Mongoose model calls only. Raw-driver writes (`this.model.collection.updateOne(...)`) and `bulkWrite` skip
+  validators and pre-update hooks alike, and are not scanned.
 - Writers under `packages/database/src/models` only. Direct model writes in `apps/*` and `b4m-core/*` are
   not scanned.
 - `$unset`, `$rename`, `$currentDate`, `$pull`, `$pullAll` and `$pop` store no caller-chosen value, so they
