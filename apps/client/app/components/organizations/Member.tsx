@@ -194,7 +194,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     (selectedUserIds: string[]) => {
       selectedUserIds.forEach(id => {
         shareDocument.mutate({
-          description: `You've been invited to join the organization`,
+          description: `You've been invited to join the team`,
           recipients: [id],
           id: organization.id,
           type: InviteType.Organization,
@@ -233,7 +233,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
               loading={shareDocument.isPending}
               onClick={() =>
                 shareDocument.mutate({
-                  description: "You've been invited to join the organization",
+                  description: "You've been invited to join the team",
                   recipients: [email],
                   id: organization.id,
                   type: InviteType.Organization,

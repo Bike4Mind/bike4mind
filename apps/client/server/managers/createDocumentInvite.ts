@@ -16,6 +16,7 @@ import { sharingService } from '@bike4mind/services';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { toSharerInviteViews } from '@server/managers/inviteManager';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { recordOrganizationAuditEvent } from '@bike4mind/server-utils/utils/organizationAudit';
 import { getInviteTypeName } from '@server/utils/mailer/inviteNotificationEmail';
 import {
   MAX_INVITE_MESSAGE_LENGTH,
@@ -116,8 +117,8 @@ export async function createDocumentInvite(
     chargeTypedAddresses: type === InviteType.Organization,
     typedAddressBucket,
   });
-  const created = await withTransaction(() => {
-    return sharingService.createInvite(
+  const created = await withTransaction(async () => {
+    const invite = await sharingService.createInvite(
       user,
       // id and type come last so the route's resolved target wins over any body field.
       { ...restBody, ...(expiresAt !== undefined && { expiresAt }), id, type },
@@ -133,6 +134,15 @@ export async function createDocumentInvite(
         },
       }
     );
+    if (type === InviteType.Organization) {
+      await recordOrganizationAuditEvent({
+        organizationId: id,
+        actorUserId: user.id,
+        action: 'invite.created',
+        targetId: invite.id,
+      });
+    }
+    return invite;
   }).catch(async (error: unknown) => {
     await budget.release();
     throw error;

@@ -13,6 +13,9 @@ const mockRefs = vi.hoisted(() => ({
   putHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
+vi.mock('@server/admin/ai/feedbackTriage', () => ({ triageFeedback: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@server/admin/ai/feedbackVisibility', () => ({ feedbackAiVisible: vi.fn().mockResolvedValue(false) }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     use: () => chain,
@@ -87,12 +90,18 @@ describe('PUT /api/feedback/[id] - instance-level authorization', () => {
     expect(res._getStatusCode()).toBe(200);
   });
 
-  it.each(['handledBy', 'handledAt'])('refuses %s, which only the admin status route sets', async field => {
-    const { req, res } = mocks(() => true);
-    req.body = { ...req.body, [field]: 'admin1' };
-    await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ statusCode: 400 });
-    expect(model.findOneAndUpdate).not.toHaveBeenCalled();
-  });
+  it.each(['handledBy', 'handledAt', 'resolution', 'resolutionDuplicateId'])(
+    'refuses %s, which only the admin status route sets',
+    async field => {
+      const { req, res } = mocks(() => true);
+      req.body = { ...req.body, [field]: 'admin1' };
+      await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({
+        statusCode: 400,
+        message: `${field} cannot be set on a report.`,
+      });
+      expect(model.findOneAndUpdate).not.toHaveBeenCalled();
+    }
+  );
 
   it('refuses a status change but ignores the stored status echoed back', async () => {
     const changed = mocks(() => true);

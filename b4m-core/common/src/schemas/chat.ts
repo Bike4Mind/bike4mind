@@ -7,6 +7,7 @@ import {
   UPGRADE_REQUIRED_ERROR_CODE,
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
+  RUN_NOT_FOUND_ERROR_CODE,
   type ApiErrorCode,
 } from '../apiErrorCodes';
 import { StorageLimitErrorInfoSchema } from '../errors';
@@ -424,6 +425,11 @@ export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
       ...COMPLETION_TOOL_ERROR_CODES,
     ])
     .optional(),
+});
+
+/** 404 when a completion names a `run` that does not exist or that another user or billing owner minted. */
+export const RunNotFoundErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(RUN_NOT_FOUND_ERROR_CODE),
 });
 
 /** @deprecated Use CompletionsBadRequestErrorSchema; kept so the published export does not break. */

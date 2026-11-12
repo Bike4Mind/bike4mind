@@ -68,6 +68,9 @@ describe('organizationService - leave', () => {
           update: vi.fn().mockResolvedValue(undefined),
           removeGroupsFromUser: vi.fn().mockResolvedValue(undefined),
         },
+        userApiKeys: {
+          revokeLiveOrgBilledByUserId: vi.fn().mockResolvedValue([]),
+        },
         // No org groups by default, so the group purge is a no-op unless a test sets some.
         groups: {
           findByOrganization: vi.fn().mockResolvedValue([]),
@@ -203,6 +206,15 @@ describe('organizationService - leave', () => {
     expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).toHaveBeenCalledWith(
       expect.objectContaining({ dataLakeId: 'lake1', principalId: 'owner1', role: 'owner', expiresAt: null })
     );
+  });
+
+  it('revokes the leaver org-billed API keys, attributed to the leaver', async () => {
+    await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+    expect(mockAdapters.db.userApiKeys.revokeLiveOrgBilledByUserId).toHaveBeenCalledWith(mockMemberUser.id, 'org1', {
+      revokedBy: mockMemberUser.id,
+      revokedReason: 'org-membership-ended',
+    });
   });
 
   it('throws NotFoundError when organization is not found', async () => {

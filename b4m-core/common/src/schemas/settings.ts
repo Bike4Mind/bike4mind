@@ -819,6 +819,7 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryAutoRemap',
   'modelDiscoveryProbeNewModels',
   'modelListRevision',
+  'modelAccessRevision',
   // PR REPORT GENERATOR
   'prReportRepo',
   'prReportIdentityMap',
@@ -1777,6 +1778,32 @@ export const AdminAiConfigSchema = z.object({
     .meta({ title: 'Features' }),
 });
 export type AdminAiConfig = z.infer<typeof AdminAiConfigSchema>;
+
+// Stored feedback configs predate the decision engine. Obsolete chat models disable that model
+// choice on read; the strict write schema still requires a supported decision model or null.
+const storedFeedbackDecisionModel = z
+  .union([z.enum(DECISION_MODEL_IDS), supportedChatModels.transform(() => null)])
+  .nullable()
+  .prefault(null);
+const storedAdminAiConfig = AdminAiConfigSchema.extend({
+  features: AdminAiConfigSchema.shape.features
+    .unwrap()
+    .extend({
+      feedbackTriage: decisionFeatureConfig('Feedback triage')
+        .unwrap()
+        .extend({ model: storedFeedbackDecisionModel, escalationModel: storedFeedbackDecisionModel })
+        .prefault({}),
+    })
+    .prefault({}),
+});
+export const AdminAiStoredConfigSchema = z.preprocess(value => {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}, storedAdminAiConfig);
 
 /**
  * Operator limits for the advisory assessment of young-domain signup holds
@@ -5120,7 +5147,7 @@ export const settingsMap = {
     name: 'Admin AI Suggestions: Modes and Limits',
     defaultValue: AdminAiConfigSchema.parse({}),
     description:
-      'Master switch, a monthly USD cap across all features, and per feature: mode (off, shadow, recommend, act), model, escalation model, confidence threshold, daily USD budget and calls per day. The defaults make no calls. For text features (feedback triage, DLQ triage, morning brief) a model of None uses the operations model.',
+      'Master switch, a monthly USD cap across all features, and per feature: mode (off, shadow, recommend, act), model, escalation model, confidence threshold, daily USD budget and calls per day. The defaults make no calls. For text features (DLQ triage, morning brief) a model of None uses the operations model.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.ADMIN_AI.id,
     order: 1,
@@ -8435,6 +8462,14 @@ export const settingsMap = {
     defaultValue: '',
     description:
       'Internal stamp rewritten whenever a catalog or price change alters the model list, so open tabs refetch it. Written by packages/server-utils/src/modelDiscovery/modelListRevision.ts; not user-configurable.',
+    category: 'AI',
+  }),
+  modelAccessRevision: makeStringSetting({
+    key: 'modelAccessRevision',
+    name: 'Model Access Revision',
+    defaultValue: '',
+    description:
+      'Internal stamp rewritten whenever an admin changes model access (on / off, tags, entitlements, fallback, rank), so open pickers refetch it. Written by packages/server-utils/src/modelDiscovery/modelAccessRevision.ts; not user-configurable.',
     category: 'AI',
   }),
   prReportRepo: makeStringSetting({

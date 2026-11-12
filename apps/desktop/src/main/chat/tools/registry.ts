@@ -258,6 +258,8 @@ export function toolsForRequest(options: {
   delegates?: boolean;
   structuredTask?: boolean;
   managedDelegation?: boolean;
+  /** What a delegated session_spawn may name in requested_model_id; see modelRequestHint. */
+  spawnModelHint?: string | null;
   /**
    * Schemas contributed by the user's connected MCP servers, already namespaced and framed
    * (see chat/mcp/names.ts). They are appended rather than merged into a family above because
@@ -303,9 +305,9 @@ export function toolsForRequest(options: {
     ...available.map(tool => ({
       toolSchema:
         tool === sessionSpawn && options.delegates
-          ? delegatedSpawnSchema
+          ? delegatedSpawnSchema(options.spawnModelHint ?? null)
           : tool === sessionSpawn && options.managedDelegation
-            ? { ...tool.schema, parameters: delegatedSpawnSchema.parameters }
+            ? { ...tool.schema, parameters: delegatedSpawnSchema(options.spawnModelHint ?? null).parameters }
             : tool.schema,
     })),
     ...(options.media && options.video?.length ? [{ toolSchema: generateVideoSchema(options.video) }] : []),

@@ -9,6 +9,7 @@ import { SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/ty
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import en from '@client/app/locales/en.json';
 import OrganizationListPage from '../index';
+import i18next from 'i18next';
 
 /**
  * The org read now returns non-terminal rows, so a dunning org reaches this card instead of
@@ -45,15 +46,12 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 
 // Resolve through the real locale file rather than echoing the key back, so a chip wired to a
 // key that does not exist (or a renamed key) fails here instead of rendering the key string.
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, options?: { count?: number }) => {
-      const value = key.split('.').reduce<unknown>((node, part) => (node as never)?.[part], en);
-      if (typeof value !== 'string') return key;
-      return options?.count === undefined ? value : value.replace('{{count}}', String(options.count));
-    },
-  }),
-}));
+// A real i18next over en.json, so assertions pin the wording, plurals and interpolation users get.
+const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: i18n.t, i18n: { language: 'en' } }) }));
+const i18nInstance = i18next.createInstance();
+void i18nInstance.init({ lng: 'en', resources: { en: { translation: en } }, initAsync: false });
+i18n.t = i18nInstance.t.bind(i18nInstance) as (key: string) => string;
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 

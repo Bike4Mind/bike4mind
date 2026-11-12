@@ -211,15 +211,34 @@ describe('feedbackViewToSearch', () => {
   it('sets every default param to undefined so a write removes it from the URL', () => {
     expect(Object.keys(feedbackViewToSearch(DEFAULT_FEEDBACK_VIEW)).sort()).toEqual(
       [
+        'feedbackArea',
         'feedbackLimit',
         'feedbackOrder',
         'feedbackOrg',
         'feedbackPage',
         'feedbackReceived',
+        'feedbackResolution',
+        'feedbackSeverity',
         'feedbackStatus',
         'feedbackSubject',
         'feedbackType',
       ].sort()
     );
+  });
+});
+
+describe('resolution/status URL consistency', () => {
+  it.each([undefined, 'New', 'New,Closed'])(
+    'normalizes resolution with status=%s to exactly Closed',
+    feedbackStatus => {
+      const view = feedbackViewFromSearch({ feedbackResolution: 'fixed', feedbackStatus });
+      expect(view.statusFilters).toEqual(statusFilters(FeedbackStatus.Closed));
+      expect(view.resolution).toBe('fixed');
+    }
+  );
+  it('ignores an invalid resolution without changing independent statuses', () => {
+    const view = feedbackViewFromSearch({ feedbackResolution: 'invalid', feedbackStatus: 'New,Closed' });
+    expect(view.resolution).toBeUndefined();
+    expect(view.statusFilters).toEqual(statusFilters(FeedbackStatus.New, FeedbackStatus.Closed));
   });
 });

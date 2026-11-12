@@ -31,4 +31,18 @@ describe('account archive coverage', () => {
       updatedAt: undefined,
     });
   });
+  it('exports only metadata for private notes, including expired rows awaiting TTL cleanup', () => {
+    const row = {
+      _id: 'note-1',
+      createdAt: '2026-01-01',
+      body: 'Private note body',
+      author: { id: 'admin', name: 'Admin' },
+      expiresAt: new Date(0),
+    };
+    expect(accountArchiveMetadata(row)).toEqual({ id: 'note-1', createdAt: '2026-01-01', updatedAt: undefined });
+    const userId = 'ABCDEFABCDEFABCDEFABCDEF';
+    expect(accountArchiveFilter('FeedbackNote', userId, ['other-org'])).toMatchObject({
+      userId: { $in: expect.arrayContaining([userId.toLowerCase()]) },
+    });
+  });
 });

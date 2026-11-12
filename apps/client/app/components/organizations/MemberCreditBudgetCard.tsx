@@ -27,7 +27,7 @@ const MemberCreditBudgetCard: FC<MemberCreditBudgetCardProps> = ({ organization,
           <Typography level="title-sm">Monthly credit limit per member</Typography>
           <Typography level="body-sm" sx={{ color: 'text.secondary' }} data-testid="member-credit-budget-summary">
             {cap == null
-              ? 'No limit. Members can spend from the organization pool without a monthly cap.'
+              ? 'No limit. Members can spend from the team pool without a monthly cap.'
               : `Each member can spend up to ${formatMemberCredits(cap)} credits per month. Usage resets on ${formatMemberCreditReset()} (UTC).`}
           </Typography>
         </Stack>

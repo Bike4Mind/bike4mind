@@ -5,6 +5,9 @@ vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
 }));
 import { createMocks } from 'node-mocks-http';
 import { ZodError } from 'zod';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({
+  recordOrganizationAuditEvent: vi.fn(),
+}));
 
 /**
  * GET /api/[type]/[id]/invites delegates listing to sharingService.listInvitesForDocument
@@ -85,6 +88,7 @@ vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn()
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { recordOrganizationAuditEvent } from '@bike4mind/server-utils/utils/organizationAudit';
 import '@pages/api/[type]/[id]/invites/index';
 
 const isZodErrorOn = (field: string) => (error: unknown) =>
@@ -177,6 +181,12 @@ describe('POST /api/[type]/[id]/invites', () => {
     });
     Object.assign(req, { user: { id: 'u1' } });
     await mockRefs.postHandler!(req, res);
+    expect(recordOrganizationAuditEvent).toHaveBeenCalledWith({
+      organizationId: '507f1f77bcf86cd799439011',
+      actorUserId: 'u1',
+      action: 'invite.created',
+      targetId: 'i1',
+    });
     expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
       'rate-limit:u1:project-invite-typed-address',
       1,
