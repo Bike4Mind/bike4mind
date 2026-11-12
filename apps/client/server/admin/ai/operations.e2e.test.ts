@@ -125,4 +125,26 @@ describe('durable AI operations', () => {
       )
     ).resolves.toBeUndefined();
   });
+  it('honors global and feature switches in the readiness API itself', async () => {
+    await AdminAiClassModel.create({
+      ...key,
+      mode: 'recommend',
+      replayCases: 200,
+      replayAgreed: 180,
+      replayArtifact: 'v1',
+    });
+    expect((await getAdminAiClassReadiness(key, now)).canRecommend).toBe(false);
+    await AdminSettings.create({
+      settingName: 'adminAiConfig',
+      settingValue: { enabled: true, features: { feedbackTriage: { mode: 'recommend' } } },
+    });
+    expect((await getAdminAiClassReadiness(key, now)).canRecommend).toBe(true);
+    await AdminSettings.updateOne({ settingName: 'adminAiConfig' }, { $set: { 'settingValue.enabled': false } });
+    expect((await getAdminAiClassReadiness(key, now)).canRecommend).toBe(false);
+    await AdminSettings.updateOne(
+      { settingName: 'adminAiConfig' },
+      { $set: { 'settingValue.enabled': true, 'settingValue.features.feedbackTriage.mode': 'shadow' } }
+    );
+    expect((await getAdminAiClassReadiness(key, now)).canRecommend).toBe(false);
+  });
 });

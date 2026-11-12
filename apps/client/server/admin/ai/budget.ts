@@ -73,7 +73,8 @@ export async function reserveAdminAiSpend({
     throw new AdminAiSkip('budget');
   }
 
-  const hold = Math.max(0, toMicroUsd(maxCostUsd));
+  // A free request still needs an atomic claim below the spend cap; settlement releases this unit.
+  const hold = Math.max(1, toMicroUsd(maxCostUsd));
   const granted: Grant[] = [];
   try {
     const calls = await cacheRepository.tryAddWithinLimitFixedWindow(
