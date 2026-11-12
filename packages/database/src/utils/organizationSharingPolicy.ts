@@ -21,6 +21,8 @@ type BoundContent = {
   groups?: Array<{ groupId: string }>;
   sessionId?: string;
   projectId?: string;
+  sessionIds?: string[];
+  fileIds?: string[];
 };
 
 async function loadOrganization(id: string): Promise<IOrganizationDocument> {
@@ -100,6 +102,16 @@ async function assertContentSharing(content: BoundContent, previous: BoundConten
   }
 }
 
+export async function assertProjectContentGrants(content: BoundContent, recipientUserIds: string[]): Promise<void> {
+  if (!recipientUserIds.length) return;
+  const { sessionRepository } = await import('../models/auth/SessionModel');
+  const { fabFileRepository } = await import('../models/content/FabFileModel');
+  const sessions = content.sessionIds?.length ? await sessionRepository.findAllByIds(content.sessionIds) : [];
+  const files = content.fileIds?.length ? await fabFileRepository.findAllByIds(content.fileIds) : [];
+  const grants = recipientUserIds.map(userId => ({ userId, permissions: [] }));
+  for (const child of [...sessions, ...files]) await assertOrganizationUserGrants(child, grants);
+}
+
 // All grant writers, including project propagation, pass through these model boundaries.
 export function organizationContentPolicyPlugin(schema: Schema): void {
   schema.pre('save', async function () {
@@ -130,16 +142,31 @@ export function organizationContentPolicyPlugin(schema: Schema): void {
       const previous = this.isNew ? undefined : await this.$model().findById(this._id).lean<BoundContent>();
       await assertContentSharing(content, previous ?? {});
     }
+    if (this.isNew && (content.sessionIds?.length || content.fileIds?.length)) {
+      await assertProjectContentGrants(content, [
+        ...recipientIds(content),
+        ...(content.userId ? [content.userId] : []),
+      ]);
+    }
   });
   schema.pre(['updateOne', 'findOneAndUpdate'], async function () {
     const update = this.getUpdate();
     if (!update || Array.isArray(update)) return;
     const changes = (update.$set ?? update) as Record<string, unknown>;
-    const sharingKeys = ['users', 'groups', 'permissions', 'visibility', 'isGlobalRead', 'isGlobalWrite'];
+    const sharingKeys = [
+      'users',
+      'groups',
+      'permissions',
+      'visibility',
+      'isGlobalRead',
+      'isGlobalWrite',
+      'sessionIds',
+      'fileIds',
+    ];
     if (!Object.keys(changes).some(key => sharingKeys.some(field => key === field || key.startsWith(`${field}.`))))
       return;
     const current = await this.model.findOne(this.getFilter()).lean<BoundContent>();
-    if (!current?.organizationId) return;
+    if (!current) return;
     const next = { ...current };
     for (const [key, value] of Object.entries(changes)) {
       if (sharingKeys.includes(key)) Object.assign(next, { [key]: value });
@@ -148,5 +175,14 @@ export function organizationContentPolicyPlugin(schema: Schema): void {
       }
     }
     await assertContentSharing(next, current);
+    if (changes.sessionIds !== undefined || changes.fileIds !== undefined) {
+      await assertProjectContentGrants(
+        {
+          sessionIds: next.sessionIds?.filter(id => !current.sessionIds?.includes(id)),
+          fileIds: next.fileIds?.filter(id => !current.fileIds?.includes(id)),
+        },
+        [...recipientIds(next), ...(next.userId ? [next.userId] : [])]
+      );
+    }
   });
 }

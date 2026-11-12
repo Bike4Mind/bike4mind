@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
-import { PublishedArtifact } from '@bike4mind/database';
+import { PublishedArtifact, liveShareTokens, type PublishedArtifactShareToken } from '@bike4mind/database';
 import {
   FinalizeRequestSchema,
   PUBLISH_LIMITS,
@@ -263,7 +263,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     slug: manifest.slug,
     deletedAt: null,
   })
-    .select('publicId publishedAt ownerId lastPublishedBy size sha256Index versions accessGate visibility')
+    .select('publicId publishedAt ownerId lastPublishedBy size sha256Index versions accessGate visibility shareTokens')
     .lean<{
       publicId: string;
       publishedAt: Date;
@@ -274,11 +274,14 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
       versions?: Array<{ sha256Index: string; indexBytes?: number }>;
       accessGate?: unknown;
       visibility?: string;
+      shareTokens?: PublishedArtifactShareToken[];
     } | null>();
 
   if (previous && !mayRepublishSlug(previous.ownerId, publishUser)) {
     return res.status(403).json({ error: 'Only the owner can republish this slug', code: SLUG_OWNED_BY_OTHER });
   }
+  if (previous?.shareTokens?.length && liveShareTokens(previous).length > 0)
+    await assertPublicationPublicLink(manifest);
 
   // 5a. The prior canonical index.html, archived at step 6 before this overwrite so its bytes
   // survive in version history (served later via ?v={sha}). Read here because what it archives

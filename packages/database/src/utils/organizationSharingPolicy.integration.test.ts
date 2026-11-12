@@ -109,4 +109,23 @@ describe('persisted organization sharing boundary', () => {
     );
     expect((await Project.findById(project.id))?.users.map(user => user.userId)).toEqual(['old-outsider']);
   });
+  it('refuses attaching org content to a project already shared externally', async () => {
+    const org = await seed();
+    const session = await Session.create({
+      name: 'bound',
+      userId: 'owner',
+      organizationId: org.id,
+      firstCreated: new Date(),
+      lastUpdated: new Date(),
+    });
+    const project = await Project.create({
+      name: 'personal',
+      userId: 'owner',
+      users: [{ userId: 'outsider', permissions: ['read'] }],
+    });
+    await expect(Project.findOneAndUpdate({ _id: project.id }, { $set: { sessionIds: [session.id] } })).rejects.toThrow(
+      'approved email domains'
+    );
+    expect((await Project.findById(project.id))?.sessionIds).toHaveLength(0);
+  });
 });
