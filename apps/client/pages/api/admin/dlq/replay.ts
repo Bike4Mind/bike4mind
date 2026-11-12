@@ -11,6 +11,8 @@ import { z } from 'zod';
 
 const MAX_REPLAY_ATTEMPTS = 3;
 const MAX_BATCH_SIZE = 100;
+// Short polling can return fewer messages than the queue holds, ending the receive loop early or missing the fallback match.
+const RECEIVE_WAIT_SECONDS = 2;
 
 const DirectMessageSchema = z.object({
   messageId: z.string().min(1),
@@ -155,7 +157,7 @@ const handler = adminApi({
           });
 
           let fallbackDeleted = false;
-          const fallbackMessages = await receiveFromQueue(dlqUrl, 10, 60);
+          const fallbackMessages = await receiveFromQueue(dlqUrl, 10, 60, RECEIVE_WAIT_SECONDS);
           const match = fallbackMessages.find(m => m.MessageId === dm.messageId);
           if (match?.ReceiptHandle) {
             try {
@@ -243,7 +245,7 @@ const handler = adminApi({
   for (let i = 0; i < iterations; i++) {
     const remaining = receiveCount - allMessages.length;
     const toReceive = Math.min(remaining, 10);
-    const messages = await receiveFromQueue(dlqUrl, toReceive, 60);
+    const messages = await receiveFromQueue(dlqUrl, toReceive, 60, RECEIVE_WAIT_SECONDS);
     allMessages.push(...messages);
 
     // When targeting specific messages, stop early if we found them all
