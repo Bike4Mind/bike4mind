@@ -119,6 +119,14 @@ describe('S3Storage browser-facing signing endpoint', () => {
     expect(url.searchParams.get('X-Amz-SignedHeaders')?.split(';')).toContain('content-length');
   });
 
+  it('binds create-only PUTs without changing ordinary PUT signing', async () => {
+    const storage = new S3Storage('exports-bucket');
+    const createOnly = new URL(await storage.getSignedUrl('uploads/fixture.txt', 'put', { IfNoneMatch: '*' }));
+    const ordinary = new URL(await storage.getSignedUrl('uploads/fixture.txt', 'put'));
+    expect(createOnly.searchParams.get('X-Amz-SignedHeaders')?.split(';')).toContain('if-none-match');
+    expect(ordinary.searchParams.get('X-Amz-SignedHeaders')?.split(';')).not.toContain('if-none-match');
+  });
+
   it('leaves a PUT without a declared length unbound', async () => {
     const url = new URL(await new S3Storage('exports-bucket').getSignedUrl('uploads/fixture.txt', 'put'));
     expect(url.searchParams.get('X-Amz-SignedHeaders')?.split(';')).not.toContain('content-length');

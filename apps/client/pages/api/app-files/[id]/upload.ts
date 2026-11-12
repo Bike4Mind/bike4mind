@@ -87,12 +87,16 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES }).put(
     await getAppFilesStorage().upload(body, filePath, {
       ContentType: appFile.mimeType || (req.headers['content-type'] as string) || 'application/octet-stream',
       ContentLength: body.length,
+      IfNoneMatch: '*',
     });
 
     // A successful write proves the object landed, so mark complete here rather than depending on
     // the webhook; the webhook's own status write (when it arrives) is an idempotent no-op.
-    appFile.status = 'complete';
-    await appFile.save();
+    const completed = await AppFile.updateOne(
+      { _id: appFile._id, userId: req.user.id, path: filePath, status: 'pending' },
+      { $set: { status: 'complete' } }
+    );
+    if (completed.modifiedCount !== 1) return res.status(409).json({ error: 'Upload is no longer pending' });
 
     return res.status(200).json({ ok: true, appFileId: appFile.id });
   })

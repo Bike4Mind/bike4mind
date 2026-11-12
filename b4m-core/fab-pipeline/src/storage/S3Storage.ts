@@ -285,6 +285,7 @@ export class S3Storage extends BaseStorage {
       ACL,
       ContentType,
       ContentLength,
+      IfNoneMatch,
       ResponseContentType,
       ResponseContentDisposition,
       ResponseCacheControl,
@@ -299,6 +300,7 @@ export class S3Storage extends BaseStorage {
        * This is what makes a declared upload size, and the size and quota checks run on it, binding.
        */
       ContentLength?: number;
+      IfNoneMatch?: '*';
       /**
        * GET only: the Content-Type S3 answers with, regardless of the type stored on the object.
        * Lets a caller pin what a browser may render from a signed link.
@@ -326,6 +328,7 @@ export class S3Storage extends BaseStorage {
             ACL,
             ContentType,
             ContentLength,
+            IfNoneMatch,
           })
         : new GetObjectCommand({
             Bucket: this.bucketName,

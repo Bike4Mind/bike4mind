@@ -77,6 +77,7 @@ describe('POST /api/app-files/generate-presigned-url - ContentType binding', () 
     h.putObjectInputs.length = 0;
     await invoke({ fileName: 'logo.png', mimeType: 'image/png', fileSize: 10 });
     expect(h.putObjectInputs.at(-1)?.ContentLength).toBe(10);
+    expect(h.putObjectInputs.at(-1)?.IfNoneMatch).toBe('*');
     const options = vi.mocked(getSignedUrl).mock.calls.at(-1)?.[2];
     expect(options?.signableHeaders?.has('content-length')).toBe(true);
   });

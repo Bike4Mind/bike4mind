@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   updateOne: vi.fn(),
   findOneAndUpdate: vi.fn(),
   findById: vi.fn(),
+  exists: vi.fn(),
   userFindById: vi.fn(),
   getSettingsValue: vi.fn(),
   claimFileStatus: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock('@bike4mind/database', () => ({
       return Object.assign(result, { lean: () => result });
     },
     findById: h.findById,
+    exists: h.exists,
   },
   imageModerationIncidentRepository: {},
   User: { findById: h.userFindById },
@@ -103,6 +105,7 @@ const metadata = (over: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   h.withTransaction.mockImplementation((fn: (session: unknown) => Promise<unknown>) => fn(undefined));
+  h.exists.mockResolvedValue({ _id: 'ff1' });
   h.updateOne.mockResolvedValue({ modifiedCount: 1, matchedCount: 1 });
   h.findOneAndUpdate.mockResolvedValue({ id: 'ff1' });
   h.moderateUploadedFile.mockResolvedValue({ moderationStatus: 'clean' });
@@ -160,6 +163,17 @@ describe('objectCreated - measured-size gate', () => {
 });
 
 describe('objectCreated - overwrite of a judged object', () => {
+  it('ignores a delayed event after the file has moved to another immutable key', async () => {
+    h.findOne.mockResolvedValue(metadata({ status: 'complete' }));
+    h.exists.mockResolvedValue(null);
+
+    await run('uploads/old.pdf');
+
+    expect(h.recordLandedObject).not.toHaveBeenCalled();
+    expect(h.updateOne).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
   it('sends a verdict for another version back to pending before claiming, so the new bytes are scanned', async () => {
     h.findOne.mockResolvedValue(metadata({ status: 'complete', moderationStatus: 'clean', moderationETag: 'etag-a' }));
 
@@ -288,7 +302,7 @@ describe('objectCreated - upload status is recorded independently of post-proces
     await run();
 
     expect(h.updateOne).toHaveBeenCalledWith(
-      { _id: 'ff1', status: { $ne: 'complete' } },
+      { _id: 'ff1', filePath: 'uploads/report.pdf', status: { $ne: 'complete' } },
       { $set: { status: 'complete' } }
     );
   });
@@ -307,7 +321,7 @@ describe('objectCreated - upload status is recorded independently of post-proces
     await expect(run()).rejects.toThrow('Rekognition unavailable');
 
     expect(h.updateOne).toHaveBeenCalledWith(
-      { _id: 'ff1', status: { $ne: 'complete' } },
+      { _id: 'ff1', filePath: 'uploads/report.pdf', status: { $ne: 'complete' } },
       { $set: { status: 'complete' } }
     );
   });
@@ -316,7 +330,7 @@ describe('objectCreated - upload status is recorded independently of post-proces
     await run();
 
     expect(h.updateOne).toHaveBeenCalledWith(
-      { _id: 'ff1', status: { $ne: 'complete' } },
+      { _id: 'ff1', filePath: 'uploads/report.pdf', status: { $ne: 'complete' } },
       { $set: { status: 'complete' } }
     );
     expect(file.status).toBe('complete');
@@ -336,7 +350,7 @@ describe('objectCreated - upload status is recorded independently of post-proces
     await run();
 
     expect(h.updateOne).not.toHaveBeenCalledWith(
-      { _id: 'ff1', status: { $ne: 'complete' } },
+      { _id: 'ff1', filePath: 'uploads/report.pdf', status: { $ne: 'complete' } },
       { $set: { status: 'complete' } }
     );
   });
@@ -686,7 +700,7 @@ describe('objectCreated - storage charge', () => {
     await run();
 
     expect(h.updateOne).toHaveBeenCalledWith(
-      { _id: 'ff1', status: { $ne: 'complete' } },
+      { _id: 'ff1', filePath: 'uploads/report.pdf', status: { $ne: 'complete' } },
       { $set: { status: 'complete' } }
     );
   });

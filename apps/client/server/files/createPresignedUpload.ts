@@ -165,9 +165,8 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
     Bucket: Resource.fabFileBucket.name,
     Key: fileKey,
     ContentLength: data.fileSize,
-    // The narrow ai:generate upload also binds its validated type, and is create-only: the PUT fails
-    // if the key exists, so a scanned object cannot be overwritten.
-    ...(provenance && { ContentType: provenance.contentType, IfNoneMatch: '*' }),
+    IfNoneMatch: '*',
+    ...(provenance && { ContentType: provenance.contentType }),
   });
 
   // Spent after every admission gate above, so a refused upload costs nothing.

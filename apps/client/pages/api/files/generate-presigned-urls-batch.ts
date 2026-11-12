@@ -312,6 +312,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
         Bucket: Resource.fabFileBucket.name,
         Key: fileKey,
         ContentLength: fileItem.fileSize,
+        IfNoneMatch: '*',
       });
 
       // Hosted returns the direct S3 presign; self-host returns a same-origin proxy URL

@@ -130,6 +130,7 @@ const handler = adminApi({
         const presignedUrl = await storage.getSignedUrl(s3Key, 'put', {
           expiresIn: 600,
           ContentLength: data.fileSize,
+          IfNoneMatch: '*',
         });
 
         // Update logo settings

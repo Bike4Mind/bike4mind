@@ -117,7 +117,11 @@ describe('POST /api/fabfiles/[id]/apply-edit storage accounting', () => {
         expect.objectContaining({ fabFileId: FILE_ID, newSize: 12 }),
         expect.anything()
       );
-      expect(h.commitContentRewrite.mock.calls[0][0].filter).toBeUndefined();
+      const [args] = h.commitContentRewrite.mock.calls[0];
+      expect(args.filter).toEqual({ filePath: 'files/u1/doc' });
+      expect(args.set.filePath).toEqual(h.upload.mock.calls[1][1]);
+      expect(args.set.versions.map((v: { filePath: string }) => v.filePath)).toContain('files/u1/doc');
+      expect(h.upload.mock.calls[1][2]).toMatchObject({ IfNoneMatch: '*' });
     });
 
     it('refuses growth past the quota before writing anything, not even the backup', async () => {
@@ -135,6 +139,21 @@ describe('POST /api/fabfiles/[id]/apply-edit storage accounting', () => {
 
       await expect(call('new content!')).rejects.toMatchObject({ statusCode: 404 });
       expect(h.upload).not.toHaveBeenCalled();
+    });
+
+    it('keeps the old bytes when the DB repoint fails after upload', async () => {
+      h.commitContentRewrite.mockRejectedValueOnce(new Error('db unavailable'));
+
+      await expect(call('new content!')).rejects.toThrow('db unavailable');
+      expect(h.upload.mock.calls[1][1]).not.toBe('files/u1/doc');
+      expect(h.deleteObject).not.toHaveBeenCalled();
+    });
+
+    it('rejects a concurrent edit without deleting its prior bytes', async () => {
+      h.commitContentRewrite.mockResolvedValueOnce(false);
+
+      await expect(call('new content!')).rejects.toThrow('modified by another edit');
+      expect(h.deleteObject).not.toHaveBeenCalled();
     });
   });
 

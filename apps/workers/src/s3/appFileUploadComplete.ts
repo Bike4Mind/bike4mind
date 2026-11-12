@@ -58,8 +58,10 @@ export const func = withContext(async (event, context, logger) => {
 
     logger.updateMetadata({ appFileId: metadata.id, ownerId: metadata.userId });
 
-    metadata.status = 'complete';
-    await metadata.save();
+    await AppFile.updateOne(
+      { _id: metadata._id, path: objectKey, status: 'pending' },
+      { $set: { status: 'complete' } }
+    );
 
     logger.log(`Updated status for file: ${objectKey}`);
   }

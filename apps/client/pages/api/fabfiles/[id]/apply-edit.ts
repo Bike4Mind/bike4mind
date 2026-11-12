@@ -114,6 +114,7 @@ const handler = baseApi()
           // The nonce-keyed upload can never collide with a concurrent edit's bytes.
           await getFilesStorage().upload(newBuffer, newFilePath, {
             ContentType: file.mimeType || 'application/octet-stream',
+            IfNoneMatch: '*',
           });
 
           // Atomic version claim: only repoint if filePath still matches what we edited, so a
@@ -147,47 +148,64 @@ const handler = baseApi()
           });
         }
 
-        // Text files: keep the existing overwrite-with-single-backup behavior. The quota check runs
-        // first so a refused edit writes nothing, not even the backup.
+        // Text edits use the same immutable version claim as Office edits.
         await fabFilesService.assertRewriteFits(file, contentSize, rewriteStorageDb, user);
         const backupId = uuidv4();
         const backupPath = `${TEXT_EDIT_BACKUP_PREFIX}${user.id}/${backupId}_${file.fileName}`;
-
-        const signedUrl = await getFilesStorage().getSignedUrl(s3Key, 'get', {
-          expiresIn: 60,
-        });
+        const signedUrl = await getFilesStorage().getSignedUrl(s3Key, 'get', { expiresIn: 60 });
         const contentResponse = await fetch(signedUrl);
-        const currentContent = await contentResponse.text();
-
-        // Upload backup
-        await getFilesStorage().upload(currentContent, backupPath, {
+        if (!contentResponse.ok) throw new BadRequestError('Failed to fetch file content from storage');
+        await getFilesStorage().upload(await contentResponse.text(), backupPath, {
           ContentType: file.mimeType || 'text/plain',
-          Metadata: {
-            originalFileId: id,
-            backupDate: new Date().toISOString(),
-          },
+          Metadata: { originalFileId: id, backupDate: new Date().toISOString() },
+          IfNoneMatch: '*',
+        });
+        const now = new Date();
+        const maxEditedVersions = await getAiEditVersionRetention();
+        const { newFilePath, versions, droppedVersions } = appendEditedVersion({
+          userId: user.id,
+          fabFileId: String(file._id),
+          fileName: file.fileName,
+          currentFilePath: s3Key,
+          currentFileSize: file.fileSize ?? 0,
+          mimeType: file.mimeType || 'text/plain',
+          existingVersions: file.versions,
+          newFileSize: contentSize,
+          now,
+          nonce: uuidv4(),
+          maxEditedVersions,
+        });
+        await getFilesStorage().upload(newContent, newFilePath, {
+          ContentType: file.mimeType || 'text/plain',
+          IfNoneMatch: '*',
         });
 
-        // Apply the new content (using the same s3Key we extracted earlier)
-        await getFilesStorage().upload(newContent, s3Key, {
-          ContentType: file.mimeType || 'text/plain',
-        });
-
-        await fabFilesService.commitContentRewrite(
+        const claimed = await fabFilesService.commitContentRewrite(
           {
             fabFileId: String(file._id),
             newSize: contentSize,
-            set: { updatedAt: new Date(), ...FAB_FILE_CONTENT_REWRITE_PATCH },
+            filter: { filePath: s3Key },
+            set: {
+              filePath: newFilePath,
+              versions,
+              updatedAt: now,
+              ...FAB_FILE_CONTENT_REWRITE_PATCH,
+              fileUrl: null,
+              fileUrlExpireAt: null,
+            },
           },
           rewriteStorageDb
         );
+        if (!claimed) throw new BadRequestError('File was modified by another edit. Please reload and try again.');
+        await deleteDroppedVersions(droppedVersions);
 
         return res.json({
           success: true,
           fileId: id,
           fileName: file.fileName,
           backupId,
-          updatedAt: new Date(),
+          version: versions[versions.length - 1].version,
+          updatedAt: now,
         });
       } catch (error) {
         console.error('Apply edit error:', error);

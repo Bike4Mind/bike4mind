@@ -42,6 +42,7 @@ const handler = baseApi().post(
         Key: fileKey,
         ContentType: data.mimeType,
         ContentLength: data.fileSize,
+        IfNoneMatch: '*',
       });
 
       const file = await AppFile.create({

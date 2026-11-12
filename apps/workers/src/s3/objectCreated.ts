@@ -55,6 +55,9 @@ export const func = withContext(async (event, context, logger) => {
       continue;
     }
 
+    // The row may have moved to another immutable key after the lookup completed.
+    if (!(await FabFile.exists({ _id: metadata._id, filePath: objectKey }))) continue;
+
     logger.updateMetadata({ fabFileId: metadata.id, ownerId: metadata.userId });
 
     // `status` tracks the UPLOAD, and the bytes are in S3 by the time this event fires, so
@@ -80,7 +83,10 @@ export const func = withContext(async (event, context, logger) => {
       isStorageCharged({ ...chargeFields, status: 'complete' }) !==
         isStorageCharged({ ...chargeFields, status: metadata.status });
     const markComplete = () =>
-      FabFile.updateOne({ _id: metadata._id, status: { $ne: 'complete' } }, { $set: { status: 'complete' } });
+      FabFile.updateOne(
+        { _id: metadata._id, filePath: objectKey, status: { $ne: 'complete' } },
+        { $set: { status: 'complete' } }
+      );
     if (metadata.status !== 'complete') {
       if (!deferStatusFlip) await markComplete();
       metadata.status = 'complete';

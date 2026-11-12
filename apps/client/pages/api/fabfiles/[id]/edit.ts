@@ -461,6 +461,7 @@ Return only the edited content without any markdown code blocks or explanations.
               // The nonce-keyed upload can never collide with a concurrent edit's bytes.
               await getFilesStorage().upload(newBuffer, newFilePath, {
                 ContentType: file.mimeType || 'application/octet-stream',
+                IfNoneMatch: '*',
               });
               // Atomic version claim: only repoint if filePath still matches what we edited, so a
               // concurrent edit can't silently clobber this one (its bytes are just orphaned, uncharged).
@@ -486,18 +487,45 @@ Return only the edited content without any markdown code blocks or explanations.
             } else {
               const newSize = Buffer.byteLength(editedContent, 'utf8');
               await fabFilesService.assertRewriteFits(file, newSize, rewriteStorageDb, user);
-              await getFilesStorage().upload(editedContent, s3Key, {
+              const now = new Date();
+              const maxEditedVersions = await getAiEditVersionRetention();
+              const { newFilePath, versions, droppedVersions } = appendEditedVersion({
+                userId: user.id,
+                fabFileId: String(file._id),
+                fileName: file.fileName,
+                currentFilePath: s3Key,
+                currentFileSize: file.fileSize ?? 0,
+                mimeType: file.mimeType || 'text/plain',
+                existingVersions: file.versions,
+                newFileSize: newSize,
+                now,
+                nonce: uuidv4(),
+                maxEditedVersions,
+              });
+              await getFilesStorage().upload(editedContent, newFilePath, {
                 ContentType: file.mimeType || 'text/plain',
+                IfNoneMatch: '*',
               });
 
-              await fabFilesService.commitContentRewrite(
+              const claimed = await fabFilesService.commitContentRewrite(
                 {
                   fabFileId: String(file._id),
                   newSize,
-                  set: { updatedAt: new Date(), ...FAB_FILE_CONTENT_REWRITE_PATCH },
+                  filter: { filePath: s3Key },
+                  set: {
+                    filePath: newFilePath,
+                    versions,
+                    updatedAt: now,
+                    ...FAB_FILE_CONTENT_REWRITE_PATCH,
+                    fileUrl: null,
+                    fileUrlExpireAt: null,
+                  },
                 },
                 rewriteStorageDb
               );
+              if (!claimed)
+                throw new BadRequestError('File was modified by another edit. Please reload and try again.');
+              await deleteDroppedVersions(droppedVersions);
             }
 
             result.applied = true;

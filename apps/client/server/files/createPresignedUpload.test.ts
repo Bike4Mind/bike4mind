@@ -105,6 +105,7 @@ describe('createPresignedUpload - owning organization', () => {
     await createPresignedUpload(req, upload() as never);
     const [, command, options] = vi.mocked(getSignedUrl).mock.calls.at(-1)!;
     expect((command as { input: { ContentLength?: number } }).input.ContentLength).toBe(10);
+    expect((command as { input: { IfNoneMatch?: string } }).input.IfNoneMatch).toBe('*');
     expect(options?.signableHeaders?.has('content-length')).toBe(true);
     // Marks the row for the landed-size gate, which judges only client uploads.
     expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ clientUpload: true });

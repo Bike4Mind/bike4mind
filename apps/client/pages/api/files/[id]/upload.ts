@@ -96,13 +96,18 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES, requiredScopes: FILES
     await getFilesStorage().upload(body, filePath, {
       ContentType: fabFile.mimeType || (req.headers['content-type'] as string) || 'application/octet-stream',
       ContentLength: body.length,
+      IfNoneMatch: '*',
     });
 
     // A successful write proves the object landed, so mark complete here rather than depending on
     // the webhook. A lost webhook then only skips the chunk enqueue, which the safety-net scan
     // recovers; the webhook's own status write (when it arrives) is an idempotent no-op.
+    const completed = await FabFile.updateOne(
+      { _id: fabFile._id, userId: req.user.id, filePath, status: 'pending' },
+      { $set: { status: 'complete' } }
+    );
+    if (completed.modifiedCount !== 1) return res.status(409).json({ error: 'Upload is no longer pending' });
     fabFile.status = 'complete';
-    await fabFile.save();
 
     // Same reason the status write does not wait for the webhook: the PUT succeeded, so the file
     // is really in its lakes now. The webhook's own recompute, when it arrives, is idempotent.

@@ -69,6 +69,7 @@ const handler = baseApi().post(
         expiresIn: 600,
         ContentType: data.mimeType,
         ContentLength: data.fileSize,
+        IfNoneMatch: '*',
       });
 
       // Self-host swaps the (browser-unreachable) MinIO presign for the same-origin upload proxy.

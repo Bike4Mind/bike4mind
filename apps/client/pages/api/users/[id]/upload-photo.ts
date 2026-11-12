@@ -42,6 +42,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       expiresIn: 600,
       ContentType: data.mimeType,
       ContentLength: data.fileSize,
+      IfNoneMatch: '*',
     });
 
     // photoUrl is deliberately NOT written here: the browser has not PUT the bytes yet, and CloudFront
