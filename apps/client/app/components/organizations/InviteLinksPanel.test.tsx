@@ -8,6 +8,9 @@ import InviteLinksPanel, { parseDomains } from './InviteLinksPanel';
 
 const mocks = vi.hoisted(() => ({
   links: [] as OrgInviteLink[],
+  isPending: false,
+  isError: false,
+  refetch: vi.fn(),
   create: vi.fn(),
   revoke: vi.fn(),
   toastSuccess: vi.fn(),
@@ -15,9 +18,14 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
-  useOrganizationInviteLinks: () => ({ data: mocks.links }),
+  useOrganizationInviteLinks: () => ({
+    data: mocks.links,
+    isPending: mocks.isPending,
+    isError: mocks.isError,
+    refetch: mocks.refetch,
+  }),
   useCreateOrganizationInviteLink: () => ({ mutate: mocks.create, isPending: false }),
-  useRevokeOrganizationInviteLink: () => ({ mutate: mocks.revoke, isPending: false }),
+  useRevokeOrganizationInviteLink: () => ({ mutateAsync: mocks.revoke, isPending: false }),
 }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => mocks.confirm }));
 vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess, error: vi.fn() } }));
@@ -48,6 +56,9 @@ const renderPanel = (isOwnerTier = false) =>
 describe('InviteLinksPanel', () => {
   beforeEach(() => {
     mocks.links = [];
+    mocks.isPending = false;
+    mocks.isError = false;
+    mocks.refetch.mockReset();
     mocks.create.mockReset();
     mocks.revoke.mockReset();
     mocks.toastSuccess.mockReset();
@@ -139,6 +150,59 @@ describe('InviteLinksPanel', () => {
     renderPanel();
     fireEvent.change(screen.getByTestId('org-invite-link-cap-input'), { target: { value: '1000' } });
     expect(screen.getByTestId('org-invite-link-create-btn')).toHaveProperty('disabled', false);
+  });
+
+  it('shows a retryable initial error and keeps cached rows on refresh failure', () => {
+    mocks.isError = true;
+    const view = renderPanel();
+    expect(screen.getByRole('alert').textContent).toContain('Could not load invite links.');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(mocks.refetch).toHaveBeenCalledOnce();
+    mocks.links = [link()];
+    view.rerender(<InviteLinksPanel organizationId="org1" isOwnerTier={false} />);
+    expect(screen.getByRole('alert').textContent).toContain('Showing saved results.');
+    expect(screen.getByTestId('org-invite-link-revoke-l1')).toBeTruthy();
+    mocks.isError = false;
+    view.rerender(<InviteLinksPanel organizationId="org1" isOwnerTier={false} />);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('waits for the revoke request before settling confirmation', async () => {
+    let finish: (() => void) | undefined;
+    mocks.revoke.mockReturnValue(
+      new Promise<void>(resolve => {
+        finish = resolve;
+      })
+    );
+    mocks.links = [link()];
+    renderPanel();
+    fireEvent.click(screen.getByTestId('org-invite-link-revoke-l1'));
+    const completion = mocks.confirm.mock.calls[0][0].onOk();
+    expect(completion).toBeInstanceOf(Promise);
+    let settled = false;
+    void completion.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish?.();
+    await completion;
+    expect(mocks.revoke).toHaveBeenCalledOnce();
+  });
+
+  it('allows ten domains and refuses eleven or invalid hostnames', () => {
+    renderPanel();
+    const input = screen.getByTestId('org-invite-link-domains-input');
+    fireEvent.change(input, {
+      target: { value: Array.from({ length: 10 }, (_, index) => `domain${index}.test`).join(',') },
+    });
+    expect(screen.getByTestId('org-invite-link-create-btn')).toHaveProperty('disabled', false);
+    fireEvent.change(input, {
+      target: { value: Array.from({ length: 11 }, (_, index) => `domain${index}.test`).join(',') },
+    });
+    expect(screen.getByTestId('org-invite-link-create-btn')).toHaveProperty('disabled', true);
+    fireEvent.change(input, { target: { value: 'invalid!' } });
+    expect(screen.getByTestId('org-invite-link-create-btn')).toHaveProperty('disabled', true);
   });
 
   it('parseDomains drops blanks and duplicates', () => {

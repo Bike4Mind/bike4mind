@@ -190,6 +190,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
             onClick={() => resendInvite.mutate({ userId: user.id })}
             disabled={resendInvite.isPending}
             data-testid="organization-user-card-resend-invite"
+            aria-label={`Resend invitation to ${user.name || user.username || user.id}`}
           >
             Resend Invite
           </MenuItem>

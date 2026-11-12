@@ -187,7 +187,9 @@ describe('OrganizationUserCard roster actions', () => {
   it('resends a pending invite by user id', async () => {
     renderCard(member('p', null, 'pending'), false, { invite: true, revoke: false });
     openMenu();
-    fireEvent.click(await screen.findByTestId('organization-user-card-resend-invite'));
+    const resendAction = await screen.findByTestId('organization-user-card-resend-invite');
+    expect(resendAction.getAttribute('aria-label')).toContain('Resend invitation to ');
+    fireEvent.click(resendAction);
     expect(resend).toHaveBeenCalledWith({ userId: 'p' });
   });
 

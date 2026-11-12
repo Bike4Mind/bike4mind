@@ -15,6 +15,10 @@ import {
   ShareableAccessShape,
   isLinkOnlyInvite,
   ConflictError,
+  isOrgMember,
+  isOrgOwnerOrCurrentAdmin,
+  isOrgOwnerOrPlatformAdmin,
+  roleForPermissions,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -99,6 +103,17 @@ export const acceptInvite = async (
     throw new UnprocessableEntityError('Invite has expired');
   }
 
+  const acceptedEmail = user.email.toLowerCase();
+  if (
+    invite.type === InviteType.Organization &&
+    isLinkOnlyInvite(invite) &&
+    (invite.remaining <= 0 || invite.recipients?.accepted?.some(address => address.toLowerCase() === acceptedEmail))
+  ) {
+    const organization = await db.organization.findById(invite.documentId);
+    if (organization && isMemberOf(organization, user.id))
+      throw new ConflictError('You are already a member of this organization');
+  }
+
   if (invite.remaining <= 0) {
     throw new UnprocessableEntityError('Invite has no remaining users');
   }
@@ -107,7 +122,6 @@ export const acceptInvite = async (
   // out of `pending` into `accepted`, so on a multi-recipient invite where others are still
   // pending, checking membership first would misreport a re-accept as "not sent to your
   // account" instead of "already accepted".
-  const acceptedEmail = user.email.toLowerCase();
   if ((invite.recipients?.accepted || []).some(email => email.toLowerCase() === acceptedEmail)) {
     throw new UnprocessableEntityError('User has already accepted the invite');
   }
@@ -246,6 +260,7 @@ export const acceptInvite = async (
           organizationId: invite.documentId,
           permissions: inviteWithPermissions.permissions,
           isLink: isLinkOnlyInvite(invite),
+          inviterId: invite.inviterId,
         },
         { db }
       );
@@ -269,6 +284,7 @@ interface AcceptOrganizationParameters {
   organizationId: string;
   permissions: Permission[];
   isLink: boolean;
+  inviterId?: string;
 }
 
 const isMemberOf = (organization: IOrganizationDocument, userId: string) =>
@@ -290,12 +306,32 @@ const acceptOrganization = async (
   // The member keeps their current role: an invite never changes it, only an org owner does.
   if (isMemberOf(organization, user.id)) {
     if (isLink) throw new ConflictError('You are already a member of this organization');
+    if (organization.users.some(member => member.userId === user.id)) {
+      await db.organization.ensureUserDetails(organizationId, {
+        id: user.id,
+        email: user.email ?? user.username,
+        name: user.name,
+      });
+    }
     return 'already-member';
+  }
+
+  if (isLink) {
+    const minter = params.inviterId ? await db.users.findById(params.inviterId) : null;
+    if (
+      !minter ||
+      !isOrgMember(minter, organization) ||
+      !isOrgOwnerOrCurrentAdmin(minter, organization) ||
+      (roleForPermissions(permissions) !== 'viewer' && !isOrgOwnerOrPlatformAdmin(minter, organization))
+    ) {
+      throw new ForbiddenError('The inviter can no longer grant access to this organization');
+    }
   }
 
   // A named invite's seat was reserved when it was minted, so only a link join holds the others back.
   // The reservation is read from Invite docs while the conditional update reads only the Organization,
-  // so a named invite minted concurrently with a link join can overfill the org by that one seat.
+  // so concurrent bulk minting and link joins can over-reserve pending seats; the accepted roster
+  // remains bounded by the conditional Organization update.
   const ownEmail = (user.email ?? '').trim().toLowerCase();
   const orgInvites = isLink ? await db.invites.findAllByDocumentId(organizationId) : [];
   const reservedSeats = pendingOrgInviteRecipients(orgInvites).filter(address => address !== ownEmail).length;
@@ -311,6 +347,13 @@ const acceptOrganization = async (
     if (!current) throw new NotFoundError('Organization not found');
     if (isMemberOf(current, user.id)) {
       if (isLink) throw new ConflictError('You are already a member of this organization');
+      if (current.users.some(member => member.userId === user.id)) {
+        await db.organization.ensureUserDetails(organizationId, {
+          id: user.id,
+          email: user.email ?? user.username,
+          name: user.name,
+        });
+      }
       return 'already-member';
     }
     throw new ForbiddenError('Organization is full');

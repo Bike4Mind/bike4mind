@@ -32,12 +32,14 @@ const mocks = vi.hoisted(() => ({
   reserve: vi.fn(),
   release: vi.fn(),
   notify: vi.fn(),
+  audit: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
   inviteRepository: { findAllByDocumentId: mocks.findInvites },
   userRepository: { findById: mocks.findUserById },
   cacheRepository: { tryAddWithinLimitFixedWindow: mocks.tryAdd, decrementCounter: mocks.decrementCounter },
 }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mocks.audit }));
 vi.mock('@server/organizations/orgInviteLinks', () => ({ loadManagedOrganization: mocks.loadManagedOrganization }));
 vi.mock('@server/utils/inviteSendLimits', () => ({
   reserveInviteSendBudget: mocks.reserve,
@@ -56,6 +58,7 @@ const INVITE = {
   token: 'tok-1',
   documentId: ORG_ID,
   type: InviteType.Organization,
+  permissions: ['read'],
   remaining: 2,
   expiresAt: null,
   revokedAt: null,
@@ -88,6 +91,13 @@ describe('POST /api/organizations/[id]/invite-resend', () => {
   it('resends a typed address, charging the typed budget and a per-invite cooldown', async () => {
     const res = await resend({ email: ' new@example.test ' });
     expect(res._getJSONData()).toEqual({ resent: true });
+    expect(mocks.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.invite.resent',
+        details: { inviteId: 'invite-1', recipientCount: 1, permissions: ['read'] },
+      })
+    );
     expect(mocks.reserve).toHaveBeenCalledWith('u-owner', ['new@example.test'], {
       chargeTypedAddresses: true,
       typedAddressBucket: 'orgBulk',
@@ -123,6 +133,15 @@ describe('POST /api/organizations/[id]/invite-resend', () => {
     mocks.tryAdd.mockResolvedValue({ success: false, count: 1, expiresAt: new Date() });
     await expect(resend({ email: 'new@example.test' })).rejects.toBeInstanceOf(TooManyRequestsError);
     expect(mocks.release).toHaveBeenCalled();
+    expect(mocks.notify).not.toHaveBeenCalled();
+  });
+
+  it('refunds the send reservation when acquiring the cooldown throws, without releasing someone else’s cooldown', async () => {
+    mocks.tryAdd.mockRejectedValue(new Error('cooldown cache unavailable'));
+    mocks.release.mockRejectedValue(new Error('refund unavailable'));
+    await expect(resend({ email: 'new@example.test' })).rejects.toThrow('cooldown cache unavailable');
+    expect(mocks.release).toHaveBeenCalledOnce();
+    expect(mocks.decrementCounter).not.toHaveBeenCalled();
     expect(mocks.notify).not.toHaveBeenCalled();
   });
 

@@ -360,7 +360,7 @@ describe('OrganizationMembers email invitations', () => {
   it('resends a pending email invitation by address', () => {
     mocks.invitations = [{ id: 'invite1', recipients: { pending: ['new@example.test'] } }];
     renderMembers(buildOrg({}));
-    fireEvent.click(screen.getByTestId('organization-resend-email-invite-btn'));
+    fireEvent.click(screen.getByRole('button', { name: 'Resend invitation to new@example.test' }));
     expect(mocks.resend).toHaveBeenCalledWith({ email: 'new@example.test' });
   });
 
@@ -555,6 +555,18 @@ describe('OrganizationMembers bulk invite', () => {
     expect(screen.getByTestId('bulk-invite-modal').getAttribute('data-seats')).toBe('3');
     fireEvent.click(screen.getByText('close'));
     expect(screen.queryByTestId('bulk-invite-modal')).toBeNull();
+  });
+
+  it('closes an open team A invitation draft when the mounted route switches to team B', () => {
+    mocks.seats = { maxSeats: 5, currentSeats: 2, availableSeats: 3 };
+    const view = renderMembers(buildOrg({}));
+    fireEvent.click(screen.getByTestId('organization-members-bulk-invite-btn'));
+    expect(screen.getByTestId('bulk-invite-modal')).toBeTruthy();
+    view.rerender(<OrganizationMembers organization={buildOrg({ id: 'org2' })} />);
+    expect(screen.queryByTestId('bulk-invite-modal')).toBeNull();
+    expect(mocks.share).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('organization-members-bulk-invite-btn'));
+    expect(screen.getByTestId('bulk-invite-modal')).toBeTruthy();
   });
 
   it('is not offered when no seats are left', () => {

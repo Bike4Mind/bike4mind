@@ -50,7 +50,7 @@ export const toOrgInviteLinkView = (
     permissions,
     expiresAt: invite.expiresAt ?? null,
     remaining: invite.remaining,
-    accepted: invite.recipients?.accepted?.length ?? 0,
+    accepted: invite.recipients?.accepted?.length ?? invite.accepted ?? 0,
     allowedDomains: invite.allowedDomains ?? [],
     revokedAt: invite.revokedAt ?? null,
   };

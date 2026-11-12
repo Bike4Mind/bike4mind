@@ -175,6 +175,8 @@ export const InviteSchema: Schema<IInviteDocument> = new Schema<IInviteDocument>
   }
 );
 
+InviteSchema.index({ documentId: 1, type: 1 }, { name: 'invite_document_type' });
+
 // PARTIAL rather than sparse: DocumentDB honours `unique` on a sparse index but not the sparseness,
 // so every legacy tokenless invite collides on the missing value and the second one fails to save.
 // `$type: 'string'` (not `$exists`) also keeps an explicit null out of the constraint. Built by an
@@ -338,16 +340,18 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
   /** A bounded keyset page; callers may request one extra row to detect another page. */
   async findPageByDocumentId(
     documentId: string,
-    options: { type: InviteType; status?: 'pending' | 'accepted'; afterId?: string; limit: number }
+    options: { type: InviteType; status?: 'pending' | 'accepted'; afterId?: string; limit: number; linkOnly?: boolean }
   ): Promise<IInviteDocument[]> {
-    const { type, status, afterId, limit } = options;
+    const { type, status, afterId, limit, linkOnly } = options;
     const invites = await this.inviteModel
       .find({
         documentId,
         type,
+        ...(linkOnly !== undefined && { isLinkOnly: linkOnly }),
         ...(status !== undefined && { [`recipients.${status}.0`]: { $exists: true } }),
         ...(afterId !== undefined && { _id: { $gt: afterId } }),
       })
+      .select(linkOnly ? { recipients: 0 } : {})
       .sort({ _id: 1 })
       .limit(limit);
     return invites.map(invite => invite.toJSON() as IInviteDocument);

@@ -2,7 +2,7 @@
 // List and mint Organization share links: invites that name nobody and admit whoever holds the token,
 // each join seat-checked on accept (sharingService.acceptInvite).
 
-import { InviteType, isLinkOnlyInvite, Permission, roleForPermissions } from '@bike4mind/common';
+import { InviteType, Permission, roleForPermissions } from '@bike4mind/common';
 import { inviteRepository } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
@@ -35,12 +35,24 @@ const bodySchema = z.object({
 
 const handler = baseApi({ auth: 'jwtOnly' })
   .get(
-    asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
+    asyncHandler<{}, unknown, unknown, { id?: string; after?: string }>(async (req, res) => {
       const organization = await loadManagedOrganization(req.user!, req.query.id);
-      const invites = await inviteRepository.findAllByDocumentId(organization.id);
-      const links = invites
-        .filter(invite => invite.type === InviteType.Organization && isLinkOnlyInvite(invite))
-        .map(invite => toOrgInviteLinkView(invite, req.user!, organization));
+      const cursor = z
+        .string()
+        .regex(/^[a-f0-9]{24}$/i)
+        .optional()
+        .safeParse(req.query.after);
+      if (!cursor.success) throw new BadRequestError('Invalid invite link cursor');
+      const pageSize = 50;
+      const invites = await inviteRepository.findPageByDocumentId(organization.id, {
+        type: InviteType.Organization,
+        linkOnly: true,
+        afterId: cursor.data,
+        limit: pageSize + 1,
+      });
+      const page = invites.slice(0, pageSize);
+      const links = page.map(invite => toOrgInviteLinkView(invite, req.user!, organization));
+      if (invites.length > pageSize) res.setHeader('X-Next-Cursor', page[page.length - 1].id);
       res.setHeader('Cache-Control', 'private, no-store');
       res.json(links);
     })

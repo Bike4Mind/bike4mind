@@ -46,7 +46,7 @@ interface OrganizationMembersProps {
   organization: IOrganizationDocument;
 }
 
-const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => {
+const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization }) => {
   const { data: users } = useGetOrganizationUsers(organization.id);
   const [search, setSearch] = useState('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
@@ -552,6 +552,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
                   size="sm"
                   variant="plain"
                   data-testid="organization-resend-email-invite-btn"
+                  aria-label={`Resend invitation to ${email}`}
                   disabled={resendEmailInvite.isPending}
                   onClick={() => resendEmailInvite.mutate({ email })}
                 >
@@ -613,5 +614,9 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     </Card>
   );
 };
+
+const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => (
+  <OrganizationMembersView key={organization.id} organization={organization} />
+);
 
 export default OrganizationMembers;

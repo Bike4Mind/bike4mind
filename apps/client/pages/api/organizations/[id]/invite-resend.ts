@@ -5,6 +5,7 @@
 import { InviteType, isOrgOwnerOrPlatformAdmin, roleForPermissions, type IInviteDocument } from '@bike4mind/common';
 import { cacheRepository, inviteRepository, userRepository } from '@bike4mind/database';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { TooManyRequestsError } from '@bike4mind/utils';
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { generateInviteLink } from '@server/managers/createDocumentInvite';
@@ -67,13 +68,13 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       typedAddressBucket: 'orgBulk',
     });
     const cooldownKey = `rate-limit:invite-resend:${invite.id}:${address}`;
-    const cooldown = await cacheRepository.tryAddWithinLimitFixedWindow(cooldownKey, 1, 1, INVITE_RESEND_COOLDOWN_MS);
-    if (!cooldown.success) {
-      await budget.release();
-      throw new TooManyRequestsError('This invitation was resent recently. Try again in a few minutes.');
-    }
-
+    let acquiredCooldown = false;
     try {
+      const cooldown = await cacheRepository.tryAddWithinLimitFixedWindow(cooldownKey, 1, 1, INVITE_RESEND_COOLDOWN_MS);
+      if (!cooldown.success) {
+        throw new TooManyRequestsError('This invitation was resent recently. Try again in a few minutes.');
+      }
+      acquiredCooldown = true;
       await notifyInvitees({
         recipients: [address],
         sharerName: user.name || user.username || 'A user',
@@ -84,9 +85,19 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
         message: invite.description,
       });
     } catch (error) {
-      await Promise.allSettled([budget.release(), cacheRepository.decrementCounter(cooldownKey)]);
+      await Promise.allSettled([
+        budget.release(),
+        ...(acquiredCooldown ? [cacheRepository.decrementCounter(cooldownKey)] : []),
+      ]);
       throw error;
     }
+    await recordAdminActionFromRequest(req, {
+      action: 'org.invite.resent',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: organization.id, displayName: organization.name },
+      summary: 'resent an organization invitation',
+      details: { inviteId: invite.id, recipientCount: 1, permissions },
+    });
     res.json({ resent: true });
   })
 );

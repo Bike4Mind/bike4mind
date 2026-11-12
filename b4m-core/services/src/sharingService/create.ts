@@ -21,6 +21,9 @@ import {
   isOrgOwnerOrPlatformAdmin,
   ORG_INVITE_ROLES,
   roleForPermissions,
+  MAX_ORG_LINK_AVAILABLE,
+  MAX_INVITE_ALLOWED_DOMAINS,
+  INVITE_HOSTNAME_PATTERN as HOSTNAME_PATTERN,
 } from '@bike4mind/common';
 import { pendingOrgInviteRecipients } from './orgSeatReservations';
 import { BadRequestError, ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
@@ -29,11 +32,11 @@ import { assertCanManageOrgGroups } from '../organizationService/groupMembership
 
 const defaultExpiration = () => new Date(new Date().getFullYear() + 100, new Date().getMonth(), new Date().getDate());
 export const DEFAULT_AVAILABLE = 1;
-// Most joins a single Organization share link may admit; also its default when seats allow.
-export const MAX_ORG_LINK_AVAILABLE = 1000;
-export const MAX_INVITE_ALLOWED_DOMAINS = 10;
-export const HOSTNAME_PATTERN =
-  /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+export {
+  MAX_ORG_LINK_AVAILABLE,
+  MAX_INVITE_ALLOWED_DOMAINS,
+  INVITE_HOSTNAME_PATTERN as HOSTNAME_PATTERN,
+} from '@bike4mind/common';
 
 const createInviteSchema = z.object({
   id: z.string(),

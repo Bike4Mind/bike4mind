@@ -35,7 +35,7 @@ vi.mock('@bike4mind/services', async () => {
 });
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: mocks.findOrganization },
-  inviteRepository: { findAllByDocumentId: mocks.findInvites },
+  inviteRepository: { findPageByDocumentId: mocks.findInvites },
 }));
 vi.mock('@server/managers/createDocumentInvite', () => ({
   createDocumentInvite: mocks.createDocumentInvite,
@@ -49,8 +49,17 @@ const ORG_ID = '65a1f77bcf86cd7994390001';
 const manager = { id: 'u-owner', email: 'owner@example.com' };
 const DAY = 86_400_000;
 
-const call = async (method: 'get' | 'post', body?: unknown, user: unknown = manager) => {
-  const { req, res } = createMocks({ method: method.toUpperCase() as 'GET' | 'POST', query: { id: ORG_ID }, body });
+const call = async (
+  method: 'get' | 'post',
+  body?: unknown,
+  user: unknown = manager,
+  query: Record<string, string> = {}
+) => {
+  const { req, res } = createMocks({
+    method: method.toUpperCase() as 'GET' | 'POST',
+    query: { id: ORG_ID, ...query },
+    body,
+  });
   (req as unknown as { user: unknown }).user = user;
   await refs.handlers[method](req, res);
   return res;
@@ -67,6 +76,7 @@ describe('/api/organizations/[id]/invite-links', () => {
     vi.clearAllMocks();
     mocks.findOrganization.mockResolvedValue({ id: ORG_ID, name: 'Acme', userId: 'u-owner', users: [] });
     mocks.assertCanManageOrgGroups.mockReturnValue(undefined);
+    mocks.findInvites.mockResolvedValue([]);
     mocks.createDocumentInvite.mockResolvedValue({ id: 'inv-1', link: 'https://app.test/share/tok' });
   });
 
@@ -159,7 +169,7 @@ describe('/api/organizations/[id]/invite-links', () => {
     });
   });
 
-  it('lists only organization share links, with domains and revocation', async () => {
+  it('requests a bounded link-only page, with domains and revocation', async () => {
     const revokedAt = new Date();
     mocks.findInvites.mockResolvedValue([
       {
@@ -174,17 +184,15 @@ describe('/api/organizations/[id]/invite-links', () => {
         allowedDomains: ['example.com'],
         revokedAt,
       },
-      {
-        id: 'named-1',
-        type: InviteType.Organization,
-        isLinkOnly: false,
-        remaining: 1,
-        recipients: { pending: ['b@example.com'] },
-      },
-      { id: 'file-1', type: InviteType.FabFile, isLinkOnly: true, remaining: 5, recipients: {} },
     ]);
 
     const res = await call('get');
+    expect(mocks.findInvites).toHaveBeenCalledWith(ORG_ID, {
+      type: InviteType.Organization,
+      linkOnly: true,
+      afterId: undefined,
+      limit: 51,
+    });
 
     expect(res._getJSONData()).toEqual([
       {
@@ -198,6 +206,35 @@ describe('/api/organizations/[id]/invite-links', () => {
         revokedAt: revokedAt.toISOString(),
       },
     ]);
+  });
+
+  it('returns fifty rows and an additive next cursor while preserving the array response', async () => {
+    const rows = Array.from({ length: 51 }, (_, index) => ({
+      id: (index + 1).toString(16).padStart(24, '0'),
+      type: InviteType.Organization,
+      isLinkOnly: true,
+      permissions: ['read'],
+      remaining: 3,
+      accepted: 8,
+    }));
+    mocks.findInvites.mockResolvedValue(rows);
+    const response = await call('get');
+    expect(response._getJSONData()).toHaveLength(50);
+    expect(response._getJSONData()[0].accepted).toBe(8);
+    expect(response.getHeader('X-Next-Cursor')).toBe(rows[49].id);
+    mocks.findInvites.mockResolvedValue(rows.slice(50));
+    const last = await call('get', undefined, manager, { after: rows[49].id });
+    expect(last._getJSONData()).toHaveLength(1);
+    expect(last.getHeader('X-Next-Cursor')).toBeUndefined();
+    expect(mocks.findInvites).toHaveBeenLastCalledWith(
+      ORG_ID,
+      expect.objectContaining({ afterId: rows[49].id, limit: 51, linkOnly: true })
+    );
+  });
+
+  it('rejects a malformed cursor before querying invites', async () => {
+    await expect(call('get', undefined, manager, { after: 'invalid' })).rejects.toBeInstanceOf(BadRequestError);
+    expect(mocks.findInvites).not.toHaveBeenCalled();
   });
 
   describe('above-Viewer link URLs', () => {

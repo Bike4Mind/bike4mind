@@ -174,7 +174,7 @@ const BulkInviteModal: FC<BulkInviteModalProps> = ({ organizationId, availableSe
           )}
           {result && (
             <Stack spacing={1}>
-              <Typography level="title-sm" data-testid="org-bulk-invite-summary">
+              <Typography role="status" aria-live="polite" level="title-sm" data-testid="org-bulk-invite-summary">
                 {summarizeBulkInvite(result)}
               </Typography>
               <Table size="sm" stickyHeader>

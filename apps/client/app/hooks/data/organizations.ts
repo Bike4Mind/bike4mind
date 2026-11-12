@@ -660,9 +660,18 @@ export interface OrgInviteLink {
 const inviteLinksKey = (organizationId: string) => ['organizations', organizationId, 'invite-links'];
 
 export function useOrganizationInviteLinks(organizationId: string, enabled = true) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: inviteLinksKey(organizationId),
-    queryFn: async () => (await api.get<OrgInviteLink[]>(`/api/organizations/${organizationId}/invite-links`)).data,
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) => {
+      const response = await api.get<OrgInviteLink[]>(`/api/organizations/${organizationId}/invite-links`, {
+        params: pageParam ? { after: pageParam } : undefined,
+      });
+      const nextCursor: unknown = response.headers['x-next-cursor'];
+      return { links: response.data, nextCursor: typeof nextCursor === 'string' ? nextCursor : undefined };
+    },
+    getNextPageParam: page => page.nextCursor,
+    select: data => data.pages.flatMap(page => page.links),
     enabled: enabled && !!organizationId,
   });
 }
