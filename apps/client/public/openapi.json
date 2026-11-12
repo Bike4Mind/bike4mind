@@ -1359,6 +1359,9 @@
           "userId": {
             "type": "string"
           },
+          "organizationId": {
+            "type": "string"
+          },
           "knowledgeIds": {
             "type": "array",
             "items": {
@@ -1450,6 +1453,9 @@
             "type": "string"
           },
           "userId": {
+            "type": "string"
+          },
+          "organizationId": {
             "type": "string"
           },
           "knowledgeIds": {
@@ -1640,6 +1646,9 @@
             "type": "string"
           },
           "userId": {
+            "type": "string"
+          },
+          "organizationId": {
             "type": "string"
           },
           "knowledgeIds": {
@@ -8513,6 +8522,9 @@
           "userId": {
             "type": "string"
           },
+          "organizationId": {
+            "type": "string"
+          },
           "knowledgeIds": {
             "type": "array",
             "items": {
@@ -8596,6 +8608,11 @@
         "properties": {
           "name": {
             "type": "string"
+          },
+          "organizationId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Organization context for new content. Requires membership; immutable after creation."
           },
           "projectId": {
             "type": "string",
@@ -8755,6 +8772,9 @@
                   "type": "string"
                 },
                 "userId": {
+                  "type": "string"
+                },
+                "organizationId": {
                   "type": "string"
                 },
                 "knowledgeIds": {
@@ -13120,6 +13140,11 @@
             "type": "string",
             "minLength": 1
           },
+          "organization_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Organization context for new content. Requires membership; immutable after creation."
+          },
           "session_ids": {
             "type": "array",
             "items": {
@@ -14678,6 +14703,9 @@
                   "type": "string"
                 },
                 "userId": {
+                  "type": "string"
+                },
+                "organizationId": {
                   "type": "string"
                 },
                 "knowledgeIds": {
@@ -34674,7 +34702,7 @@
       "post": {
         "operationId": "createSession",
         "summary": "Create a session",
-        "description": "Creates a session (called a \"notebook\" in the product UI). Pass the returned `id` as `sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as `ai:chat`. A key holding `ai:generate` without `notebooks:write` may create a bare session only (`name`, `lastUsedModel`, `temperature`, `autoNamePlaceholder`); any other field is a 403. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from `GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on forced retrieval.",
+        "description": "Creates a session (called a \"notebook\" in the product UI). Pass the returned `id` as `sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as `ai:chat`. A key holding `ai:generate` without `notebooks:write` may create a bare session only (`name`, `lastUsedModel`, `temperature`, `autoNamePlaceholder`); any other field is a 403. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from `GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on forced retrieval. Set `organizationId` to create in an organization you belong to; this binding cannot be changed later.",
         "tags": [
           "Sessions"
         ],
@@ -47254,7 +47282,7 @@
       "post": {
         "operationId": "createProject",
         "summary": "Create a project",
-        "description": "Creates a project owned by the caller, optionally grouping existing sessions and files in it. Every listed session and file must be readable by the caller. A project's `file_ids` and `session_ids` are shared with it: anyone the project is shared with can read every file and session it groups. Sharing the project later shares them too. Unknown body fields are rejected.",
+        "description": "Creates a project owned by the caller, optionally grouping existing sessions and files in it. Every listed session and file must be readable by the caller. Set `organization_id` to create in an organization you belong to; this binding cannot be changed later. A project's `file_ids` and `session_ids` are shared with it: anyone the project is shared with can read every file and session it groups. Sharing the project later shares them too. Unknown body fields are rejected.",
         "tags": [
           "Projects"
         ],
@@ -47404,7 +47432,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `projects:write`.",
+            "description": "The API key lacks `projects:write`, or the caller is not a member of the selected organization.",
             "content": {
               "application/json": {
                 "schema": {

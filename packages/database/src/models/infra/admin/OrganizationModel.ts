@@ -171,6 +171,17 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       graceDays: { type: Number, min: 0, max: 30, default: 7 },
       enforceAfter: { type: Date, default: null },
     },
+    sharingPolicy: {
+      type: new Schema(
+        {
+          allowPublicLinks: { type: Boolean, required: true },
+          allowExternalSharing: { type: Boolean, required: true },
+          allowedDomains: { type: [String], default: [] },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
   },
   {
     virtuals: true,

@@ -1,4 +1,11 @@
-import { IOrganizationRepository, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
+import {
+  IOrganizationRepository,
+  IUserDocument,
+  MAX_STORAGE_LIMIT_MB,
+  OrganizationSharingPolicySchema,
+  isOrgOwnerOrCurrentAdmin,
+  ForbiddenError,
+} from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -10,6 +17,7 @@ const updateSchema = z.object({
   billingContact: z.string().optional(),
   systemPrompt: z.string().max(10000).optional(), // ~2500 tokens
   redactPushContent: z.boolean().optional(),
+  sharingPolicy: OrganizationSharingPolicySchema.optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   /** Decimal MB; null clears the override back to DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
@@ -26,7 +34,10 @@ interface UpdateAdapters {
 export const update = async (user: IUserDocument, params: UpdateParameters, adapters: UpdateAdapters) => {
   const { id, ...rest } = secureParameters(params, updateSchema);
 
-  let organization = await adapters.db.organizations.shareable.findUpdateAccessById(user, id);
+  let organization =
+    rest.sharingPolicy !== undefined
+      ? await adapters.db.organizations.findById(id)
+      : await adapters.db.organizations.shareable.findUpdateAccessById(user, id);
   if (user.isAdmin) {
     organization = await adapters.db.organizations.findById(id);
   }
@@ -43,6 +54,10 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
       ? (organization as unknown as { toJSON: () => NonNullable<typeof organization> }).toJSON()
       : organization
   ) as NonNullable<typeof organization>;
+
+  if (rest.sharingPolicy !== undefined && !isOrgOwnerOrCurrentAdmin(user, plain)) {
+    throw new ForbiddenError('Only organization owners and managers can change sharing policy.');
+  }
 
   const isManager = (plain.adminUserIds ?? []).includes(user.id);
   const isOwner = plain.userId === user.id;
@@ -62,6 +77,7 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   if (rest.systemPrompt !== undefined) update.systemPrompt = rest.systemPrompt;
   // Same audience as systemPrompt: a privacy posture for the whole org's devices.
   if (rest.redactPushContent !== undefined) update.redactPushContent = rest.redactPushContent;
+  if (rest.sharingPolicy !== undefined) update.sharingPolicy = rest.sharingPolicy;
 
   // Platform-admin path only. Owners and appointed org admins set the default through
   // memberCreditBudget.setMemberCreditDefault (PUT /api/organizations/:id/member-credit-budget),

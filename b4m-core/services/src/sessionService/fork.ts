@@ -60,6 +60,7 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
     stripSurfaceOwnedFields(
       {
         name: `Forked ${session.name}`,
+        organizationId: session.organizationId,
         knowledgeIds: session.knowledgeIds,
         tags: session.tags,
         summary: session.summary,

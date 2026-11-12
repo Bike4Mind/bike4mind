@@ -16,11 +16,17 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
 import { clearDeletedOrganizationReferences } from '@server/organizations/clearDeletedOrganizationReferences';
 import { creditService, organizationService } from '@bike4mind/services';
-import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  MAX_STORAGE_LIMIT_MB,
+  toSafeOrganization,
+  OrganizationSharingPolicySchema,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Request } from 'express';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { recordOrganizationAuditEvent } from '@bike4mind/server-utils/utils/organizationAudit';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 const updateOrgBodySchema = z.object({
@@ -34,6 +40,7 @@ const updateOrgBodySchema = z.object({
     .optional(),
   systemPrompt: z.string().max(10000).optional(),
   redactPushContent: z.boolean().optional(),
+  sharingPolicy: OrganizationSharingPolicySchema.optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });
@@ -124,10 +131,19 @@ const handler = baseApi()
         );
 
       const updatedOrganization =
-        req.user!.isAdmin && currentCredits !== undefined
+        profile.sharingPolicy !== undefined || (req.user!.isAdmin && currentCredits !== undefined)
           ? await withTransaction(async () => {
-              await applyAdminCreditEdit(req, orgId, currentCredits);
-              return updateProfile();
+              if (req.user!.isAdmin && currentCredits !== undefined)
+                await applyAdminCreditEdit(req, orgId, currentCredits);
+              const updated = await updateProfile();
+              if (profile.sharingPolicy !== undefined) {
+                await recordOrganizationAuditEvent({
+                  organizationId: orgId,
+                  actorUserId: req.user!.id,
+                  action: 'policy.updated',
+                });
+              }
+              return updated;
             })
           : await updateProfile();
 

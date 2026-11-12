@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({ recordOrganizationAuditEvent: vi.fn() }));
 
 /**
  * DELETE /api/organizations/[id] (org-groups #1172/#1219). Pins two things that were both

@@ -66,6 +66,7 @@ export const cloneSession = async (
 
   const buildCloneSession = {
     name: `Cloned ${session.name}`,
+    organizationId: session.organizationId,
     knowledgeIds: session.knowledgeIds,
     tags: session.tags ?? [],
     summary: session.summary,
