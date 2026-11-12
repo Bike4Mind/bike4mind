@@ -32,7 +32,9 @@ import { VideoJobsForCall } from './VideoJobCard';
 import { WebResultCount, WebToolDetail, useWebSearchHits } from './WebResults';
 import {
   diffTotals,
+  displayStatus,
   groupToolCalls,
+  isModelRequestRefusal,
   summarizeInput,
   toolDuration,
   toolRowLabel,
@@ -470,7 +472,7 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
             mt: 0.5,
             ...thinScrollbarSx,
           }}
-          textColor={call.error ? 'danger.400' : 'text.tertiary'}
+          textColor={call.error && !isModelRequestRefusal(call) ? 'danger.400' : 'text.tertiary'}
           data-testid={call.error ? 'chat-tool-detail-error' : 'chat-tool-detail-result'}
         >
           {call.error ?? call.preview ?? call.progress ?? 'Running...'}
@@ -540,7 +542,7 @@ function ToolCallEntry({ call, first, onMove }: { call: ChatToolCall; first: boo
           listStyle: 'none',
           px: 1,
           py: 0.5,
-          color: ROW_TONE[call.status],
+          color: ROW_TONE[displayStatus(call)],
           '&::-webkit-details-marker': { display: 'none' },
           '&:hover': { opacity: 0.85 },
         }}
