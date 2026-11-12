@@ -17,7 +17,8 @@ const MAX_LISTED_SOLE_ORGS = 5;
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
 
 // The scope copy below describes what POST /api/account/deletion does
-// (apps/client/server/users/accountDeletion.ts) - keep in sync.
+// (apps/client/server/users/accountDeletion.ts) - keep in sync. The sole-owned organizations notice instead
+// describes deleteSoleOwnedOrganizations (apps/client/server/users/ownedOrganizations.ts), run by the purge sweep.
 export function DeleteAccountConfirm({ onCancel }: { onCancel: () => void }) {
   const email = useUser(s => s.currentUser?.email) ?? '';
   const navigate = useNavigate();
