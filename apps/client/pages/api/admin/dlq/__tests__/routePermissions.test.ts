@@ -45,8 +45,9 @@ import '../messages';
 import '../queues';
 import '../history';
 import '../replay';
+import '../discard';
 
-const [messagesPerms, queuesPerms, historyPerms, replayPerms] = h.captured;
+const [messagesPerms, queuesPerms, historyPerms, replayPerms, discardPerms] = h.captured;
 
 describe('DLQ route permission declarations', () => {
   it('messages GET requires support:read (view), not settings:manage', () => {
@@ -64,6 +65,10 @@ describe('DLQ route permission declarations', () => {
 
   it('replay POST requires settings:manage (action)', () => {
     expect(replayPerms).toMatchObject({ POST: 'settings:manage' });
+  });
+
+  it('discard POST requires settings:manage (action)', () => {
+    expect(discardPerms).toMatchObject({ POST: 'settings:manage' });
   });
 
   it('no view route requires settings:manage', () => {
