@@ -16,7 +16,6 @@ import {
   Typography,
 } from '@mui/joy';
 import { RotateCcw, X, Copy, Eye, Search, FileText, Trash2 } from 'lucide-react';
-import useMediaQuery from '@mui/system/useMediaQuery';
 import { toast } from 'sonner';
 import {
   useDlqQueues,
@@ -32,6 +31,7 @@ import {
 } from '@client/app/hooks/data/dlqManagement';
 import {
   AdminPageHeader,
+  CopyValue,
   ActionDialog,
   DataTable,
   EmptyState,
@@ -149,9 +149,7 @@ const MessageDrawer: React.FC<{
             <Typography level="body-sm" fontWeight="bold">
               Message ID
             </Typography>
-            <Typography level="body-sm" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
-              {message.messageId}
-            </Typography>
+            <CopyValue value={message.messageId} label="message ID" mono truncate data-testid="dlq-drawer-copy-id" />
           </Box>
 
           {message.sentTimestamp && (
@@ -244,7 +242,6 @@ const MessageDrawer: React.FC<{
 };
 
 const DlqReplayTab: React.FC = () => {
-  const compact = useMediaQuery('(max-width: 767px)');
   const [selectedQueue, setSelectedQueue] = useState<string | null>(null);
   const [selectedMessage, setSelectedMessage] = useState<DlqMessage | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -457,87 +454,66 @@ const DlqReplayTab: React.FC = () => {
     width: '7rem',
     render: msg => <MessageExpiry {...msg} retentionSeconds={selectedQueueInfo?.messageRetentionSeconds} kind={kind} />,
   });
-  const messageColumns: DataColumn<DlqMessage>[] = compact
-    ? [
-        {
-          id: 'message',
-          label: 'Message / failure',
-          render: msg => (
-            <Stack gap={1} sx={{ py: 1, minWidth: 0 }}>
-              <Typography level="body-sm" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
-                {msg.messageId}
-              </Typography>
-              <Stack gap={0.5}>
-                <Typography level="body-xs" sx={{ overflowWrap: 'anywhere' }}>
-                  {msg.body?.slice(0, 100)}
-                </Typography>
-                {failure(msg)}
-                {category(msg)}
-              </Stack>
-              <Stack direction="row" gap={1} flexWrap="wrap">
-                <Typography level="body-xs">Age:</Typography>
-                <MessageExpiry {...msg} retentionSeconds={selectedQueueInfo?.messageRetentionSeconds} kind="age" />
-                <Typography level="body-xs">Expires in:</Typography>
-                <MessageExpiry {...msg} retentionSeconds={selectedQueueInfo?.messageRetentionSeconds} kind="expires" />
-                <Typography level="body-xs">Receives: {msg.approximateReceiveCount ?? '-'}</Typography>
-              </Stack>
-              {messageActions(msg)}
-            </Stack>
-          ),
-        },
-      ]
-    : [
-        {
-          id: 'id',
-          label: 'Message ID',
-          width: '12rem',
-          render: msg => (
-            <Typography level="body-xs" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
-              {msg.messageId}
-            </Typography>
-          ),
-        },
-        {
-          id: 'body',
-          label: 'Body preview',
-          width: '14rem',
-          render: msg => (
-            <Typography level="body-xs" sx={{ overflowWrap: 'anywhere' }}>
-              {msg.body?.slice(0, 100)}
-            </Typography>
-          ),
-        },
-        { id: 'failure', label: 'Failure reason', width: '12rem', render: failure },
-        { id: 'category', label: 'Category', width: '8rem', render: category },
-        {
-          id: 'sent',
-          label: 'Sent at',
-          width: '10rem',
-          render: msg => (msg.sentTimestamp ? new Date(parseInt(msg.sentTimestamp, 10)).toLocaleString() : '-'),
-        },
-        expiryColumn('age'),
-        expiryColumn('expires'),
-        {
-          id: 'receives',
-          label: 'Receives',
-          width: '6rem',
-          numeric: true,
-          render: msg => (
-            <Tooltip title="Approximate SQS receives, including views in this browser; not a count of handler failures">
-              <span>{msg.approximateReceiveCount ?? '-'}</span>
-            </Tooltip>
-          ),
-        },
-      ];
+  const messageColumns: DataColumn<DlqMessage>[] = [
+    {
+      id: 'id',
+      label: 'Message ID',
+      width: '12rem',
+      render: msg => (
+        <CopyValue
+          value={msg.messageId}
+          label="message ID"
+          mono
+          truncate
+          data-testid={`dlq-copy-id-${msg.messageId}`}
+        />
+      ),
+    },
+    {
+      id: 'body',
+      label: 'Body preview',
+      width: '14rem',
+      render: msg => (
+        <Typography level="body-xs" sx={{ overflowWrap: 'anywhere' }}>
+          {msg.body?.slice(0, 100)}
+        </Typography>
+      ),
+    },
+    { id: 'failure', label: 'Failure reason', width: '12rem', render: failure },
+    { id: 'category', label: 'Category', width: '8rem', render: category },
+    {
+      id: 'sent',
+      label: 'Sent at',
+      width: '10rem',
+      render: msg => (msg.sentTimestamp ? new Date(parseInt(msg.sentTimestamp, 10)).toLocaleString() : '-'),
+    },
+    expiryColumn('age'),
+    expiryColumn('expires'),
+    {
+      id: 'receives',
+      label: 'Receives',
+      width: '6rem',
+      numeric: true,
+      render: msg => (
+        <Tooltip title="Approximate SQS receives, including views in this browser; not a count of handler failures">
+          <span>{msg.approximateReceiveCount ?? '-'}</span>
+        </Tooltip>
+      ),
+    },
+  ];
   const historyColumns: DataColumn<DlqReplayLogEntry>[] = [
     { id: 'feature', label: 'Feature', render: entry => entry.sourceQueue },
     {
       id: 'message',
       label: 'Message ID',
       render: entry => (
-        <Typography level="body-xs" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
-          {entry.messageId}
-        </Typography>
+        <CopyValue
+          value={entry.messageId}
+          label="message ID"
+          mono
+          truncate
+          data-testid={`dlq-history-copy-id-${entry.id}`}
+        />
       ),
     },
     {
@@ -775,6 +751,11 @@ const DlqReplayTab: React.FC = () => {
       )}
 
       {selectedQueue && (
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+          Advisory only; review before acting.
+        </Typography>
+      )}
+      {selectedQueue && (
         <DataTable
           rows={messages ?? []}
           columns={messageColumns}
@@ -785,8 +766,8 @@ const DlqReplayTab: React.FC = () => {
           onRetry={() => void refetchMessages()}
           empty={<EmptyState title="No messages in this queue" action={null} />}
           onRowActivate={openMessage}
-          rowActions={compact ? undefined : messageActions}
-          minWidth={compact ? '0' : '94rem'}
+          rowActions={messageActions}
+          minWidth="94rem"
           pageResetKey={selectedQueue}
           testId="dlq-messages-table"
           rowTestId={msg => `dlq-message-row-${msg.messageId}`}
@@ -863,35 +844,14 @@ const DlqReplayTab: React.FC = () => {
 
           <DataTable
             rows={history ?? []}
-            columns={
-              compact
-                ? [
-                    {
-                      id: 'history',
-                      label: 'Replay history',
-                      render: entry => (
-                        <Stack gap={0.75} sx={{ py: 1 }}>
-                          {historyColumns.map(column => (
-                            <Box key={column.id}>
-                              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-                                {column.label}
-                              </Typography>
-                              {column.render(entry)}
-                            </Box>
-                          ))}
-                        </Stack>
-                      ),
-                    },
-                  ]
-                : historyColumns
-            }
+            columns={historyColumns}
             getRowId={entry => entry.id}
             label="Replay history"
             loading={historyLoading}
             error={historyError ? 'Replay history failed to load.' : undefined}
             onRetry={() => void refetchHistory()}
             empty={<EmptyState title="No replays match these filters" action={null} />}
-            minWidth={compact ? '0' : '60rem'}
+            minWidth="60rem"
             pageResetKey={JSON.stringify(historyFilters)}
             testId="dlq-history-table"
             rowTestId={entry => `dlq-history-row-${entry.id}`}
@@ -934,7 +894,7 @@ const DlqReplayTab: React.FC = () => {
         data-testid="dlq-single-replay-dialog"
         testIds={{ confirm: 'dlq-single-replay-confirm' }}
       >
-        <DlqReplaySummary queue={selectedQueueInfo} count={1} />
+        <DlqReplaySummary queue={selectedQueueInfo} count={1} messageId={singleReplayConfirm?.messageId} />
       </ActionDialog>
       <ActionDialog
         open={!!discardConfirm}
