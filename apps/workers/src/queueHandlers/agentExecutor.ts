@@ -1090,7 +1090,11 @@ async function runExecution(
               ? (['awaiting_dag_children'] as const)
               : (['continuing'] as const);
         const targetStatus = 'running';
-        const claimed = await agentExecutionRepository.claimExecution(executionId, [...expectedStatuses], targetStatus);
+        // Lifecycle claims must remain writable so a policy refusal can reach terminal cleanup.
+        const claimed = await withOrganizationMfaContext(
+          () => undefined,
+          () => agentExecutionRepository.claimExecution(executionId, [...expectedStatuses], targetStatus)
+        );
         if (!claimed) {
           logger.warn('[CAS] Another Lambda already claimed this execution, exiting gracefully', {
             expectedStatuses,
@@ -4208,7 +4212,10 @@ async function processSubagentDispatch(
         // this child and will complete it (success or failure) through its own normal
         // path, firing the hook itself then. Firing it here too would report a false
         // terminal status for a child that may still succeed.
-        const claimed = await agentExecutionRepository.claimExecution(childExecutionId, ['pending'], 'running');
+        const claimed = await withOrganizationMfaContext(
+          () => undefined,
+          () => agentExecutionRepository.claimExecution(childExecutionId, ['pending'], 'running')
+        );
         if (!claimed) {
           logger.warn('[CAS] Another Lambda already claimed this subagent, exiting gracefully', {
             actualStatus: child.status,

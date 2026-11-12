@@ -8,6 +8,7 @@ import { Project } from '../models/content/ProjectModel';
 import { Artifact } from '../models/content/ArtifactModel';
 import { ArtifactVersion } from '../models/content/ArtifactVersionModel';
 import { PublishedArtifact } from '../models/content/PublishedArtifactModel';
+import { agentExecutionRepository } from '../models/billing/AgentExecutionModel';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 
@@ -22,6 +23,49 @@ afterAll(async () => {
 });
 
 describe('persisted organization MFA content boundary', () => {
+  it(
+    'allows lifecycle claims outside the resource context while retaining session enforcement',
+    async () => {
+      const userId = String(new mongoose.Types.ObjectId());
+      const org = await Organization.create({
+        name: 'Queued MFA',
+        userId,
+        mfaPolicy: { required: true, graceDays: 0, enforceAfter: new Date(0) },
+      });
+      const session = await Session.create({
+        name: 'queued',
+        userId,
+        organizationId: org.id,
+        firstCreated: new Date(),
+        lastUpdated: new Date(),
+      });
+      const execution = await agentExecutionRepository.create({
+        userId,
+        sessionId: session.id,
+        questId: String(new mongoose.Types.ObjectId()),
+        query: 'queued',
+        model: 'test',
+        status: 'continuing',
+      });
+      await withOrganizationMfaContext(
+        () => userId,
+        async () => {
+          expect(await agentExecutionRepository.claimExecution(execution.id, ['continuing'], 'running')).toBe(false);
+          expect(
+            await withOrganizationMfaContext(
+              () => undefined,
+              () => agentExecutionRepository.claimExecution(execution.id, ['continuing'], 'running')
+            )
+          ).toBe(true);
+          expect(await Session.findById(session.id)).toBeNull();
+        }
+      );
+      await agentExecutionRepository.markFailed(execution.id, { message: 'Policy refusal' });
+      expect((await agentExecutionRepository.findById(execution.id))?.status).toBe('failed');
+    },
+    MONGO_TEST_TIMEOUT_MS
+  );
+
   it(
     'measures repeated child reads with thousands of bound parents',
     async () => {
