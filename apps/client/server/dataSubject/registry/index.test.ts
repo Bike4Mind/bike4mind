@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findUnclassifiedModels, mergeRegistries } from './index';
+import { DATA_HOLDER_REGISTRY, findUnclassifiedModels, mergeRegistries } from './index';
 import type { DataHolderRegistry } from '../types';
 
 const noData = { kind: 'noUserData', note: 'test' } as const;
@@ -24,5 +24,14 @@ describe('mergeRegistries', () => {
   it('throws when a model is classified in two registries', () => {
     const a: DataHolderRegistry = { A: noData };
     expect(() => mergeRegistries([a, a])).toThrow(/classified twice/);
+  });
+});
+
+describe('persona credential classification', () => {
+  it('excludes the persisted one-use login verifier from user exports', () => {
+    const user = DATA_HOLDER_REGISTRY.User;
+    expect(user.kind).toBe('subject');
+    if (user.kind !== 'subject') throw new Error('User must be a data subject');
+    expect(user.secretPaths).toContain('personaLoginCodeHash');
   });
 });

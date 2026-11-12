@@ -18,7 +18,7 @@ const h = vi.hoisted(() => ({
   disableExpiredPersonas: vi.fn(),
   createUser: vi.fn(),
   recordAdminAction: vi.fn(),
-  reserve: vi.fn(),
+  guard: vi.fn(),
   production: false,
 }));
 
@@ -52,7 +52,7 @@ vi.mock('@bike4mind/server-utils/utils/config', async importOriginal => ({
 vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.recordAdminAction }));
 vi.mock('@bike4mind/database', () => ({
-  cacheRepository: { tryIncrementWithinLimitFixedWindow: h.reserve },
+  AdminSettings: { updateOne: h.guard },
   withTransaction: (fn: () => unknown) => fn(),
   isTransientTransactionError: () => false,
   userRepository: {},
@@ -88,8 +88,8 @@ function fire(body: unknown = { name: 'alpha' }, user: Record<string, unknown> |
   return { req, res };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- next-connect handlers are untyped at this seam
-const call = (req: unknown, res: unknown) => (handler as any)(req, res);
+const call = (req: unknown, res: unknown) =>
+  (handler as unknown as (request: unknown, response: unknown) => Promise<void>)(req, res);
 
 async function post(...args: Parameters<typeof fire>) {
   const { req, res } = fire(...args);
@@ -126,7 +126,7 @@ beforeEach(() => {
   h.issuePersonaLoginCode.mockResolvedValue({ code: CODE, expiresAt: new Date('2026-11-10T12:05:00.000Z') });
   h.deletePersonaAccount.mockResolvedValue(undefined);
   h.disableExpiredPersonas.mockResolvedValue({ disabled: 0 });
-  h.reserve.mockResolvedValue({ success: true, expiresAt: new Date() });
+  h.guard.mockResolvedValue({ matchedCount: 1 });
   h.recordAdminAction.mockResolvedValue(undefined);
   h.createUser.mockImplementation(async (params: { username: string; email: string }) => ({
     id: PERSONA_ID,
@@ -242,7 +242,7 @@ describe('POST /api/v1/personas', () => {
       ['expired', { personaExpiresAt: new Date(Date.now() - 1000) }],
     ])('deletes a %s persona, then mints a fresh one with 201', async (_label, overrides) => {
       const dead = livePersona(overrides);
-      h.findPersonaByName.mockResolvedValue(dead);
+      h.findPersonaByName.mockResolvedValueOnce(dead).mockResolvedValue(null);
       const { res, body } = await post();
 
       expect(h.deletePersonaAccount).toHaveBeenCalledWith(expect.anything(), dead, expect.any(String));
@@ -252,7 +252,9 @@ describe('POST /api/v1/personas', () => {
     });
 
     it('deletes a dead persona held by another owner too, since it no longer holds the name', async () => {
-      h.findPersonaByName.mockResolvedValue(livePersona({ isBanned: true, personaOwnerId: 'someone-else' }));
+      h.findPersonaByName
+        .mockResolvedValueOnce(livePersona({ isBanned: true, personaOwnerId: 'someone-else' }))
+        .mockResolvedValue(null);
       const { res } = await post();
       expect(h.deletePersonaAccount).toHaveBeenCalled();
       expect(res._getStatusCode()).toBe(201);
@@ -274,18 +276,23 @@ describe('POST /api/v1/personas', () => {
       expect(h.createUser).not.toHaveBeenCalled();
     });
 
-    it('answers 429 when the atomic daily reservation is spent', async () => {
-      h.reserve.mockResolvedValue({ success: false, expiresAt: new Date() });
-      const { res } = await post();
-      expect(res._getStatusCode()).toBe(429);
-      expect(h.reserve).toHaveBeenCalledWith(expect.any(String), 20, 24 * 60 * 60 * 1000);
+    it('rechecks the persisted kill switch before every name or cap decision', async () => {
+      h.guard.mockResolvedValue({ matchedCount: 0 });
+      const { res, body } = await post();
+      expect(res._getStatusCode()).toBe(404);
+      expect(body.errorCode).toBe(PERSONA_ENDPOINT_OFF_CODE);
+      expect(h.findPersonaByName).not.toHaveBeenCalled();
       expect(h.createUser).not.toHaveBeenCalled();
     });
 
-    it('does not spend a reservation on a re-mint', async () => {
+    it('checks the shared guard before returning an existing persona', async () => {
       h.findPersonaByName.mockResolvedValue(livePersona());
       await post();
-      expect(h.reserve).not.toHaveBeenCalled();
+      expect(h.guard).toHaveBeenCalledWith(
+        { settingName: 'PersonaMintEnabled', settingValue: true },
+        { $inc: { __v: 1 } }
+      );
+      expect(h.guard.mock.invocationCallOrder[0]).toBeLessThan(h.findPersonaByName.mock.invocationCallOrder[0]);
     });
   });
 

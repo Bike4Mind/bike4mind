@@ -217,10 +217,12 @@ export function personaCapRefusal(
  * so deleting personas does not hand the day's allowance back.
  */
 export async function countPersonaCaps(now: Date): Promise<{ mintedLast24h: number; live: number }> {
-  const [mintedLast24h, live] = await Promise.all([
-    adminAuditLogRepository.countActionsSince(['user.persona.created'], new Date(now.getTime() - DAY_MS)),
-    User.countDocuments({ isPersona: true, isBanned: { $ne: true } }),
-  ]);
+  // These reads participate in the guarded mint transaction, so run them sequentially.
+  const mintedLast24h = await adminAuditLogRepository.countActionsSince(
+    ['user.persona.created'],
+    new Date(now.getTime() - DAY_MS)
+  );
+  const live = await User.countDocuments({ isPersona: true, isBanned: { $ne: true } });
   return { mintedLast24h, live };
 }
 
