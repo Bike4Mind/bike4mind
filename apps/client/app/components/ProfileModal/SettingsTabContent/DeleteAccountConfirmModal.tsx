@@ -12,6 +12,8 @@ import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+const MAX_LISTED_SOLE_ORGS = 5;
+
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
 
 // The scope copy below describes what POST /api/account/deletion does
@@ -26,6 +28,7 @@ export function DeleteAccountConfirm({ onCancel }: { onCancel: () => void }) {
   const requestDeletion = useRequestAccountDeletion();
   const pending = requestDeletion.isPending;
   const ownedOrganizations = status?.ownedOrganizations ?? [];
+  const soleOwnedOrganizations = status?.soleOwnedOrganizations ?? [];
 
   if (ownedOrganizations.length > 0) {
     return (
@@ -87,6 +90,23 @@ export function DeleteAccountConfirm({ onCancel }: { onCancel: () => void }) {
       loading={pending}
       disabledConfirm={isLoading || pending || !matches}
     >
+      {soleOwnedOrganizations.length > 0 ? (
+        <Typography level="body-sm" data-testid="delete-account-sole-owned-orgs" sx={{ mb: 2 }}>
+          You are the only member of {soleOwnedOrganizations.length === 1 ? 'this organization' : 'these organizations'}
+          , so {soleOwnedOrganizations.length === 1 ? 'it' : 'they'} will be deleted along with your account when
+          permanent deletion begins:{' '}
+          <Typography component="span" sx={{ fontWeight: 'lg' }}>
+            {soleOwnedOrganizations
+              .slice(0, MAX_LISTED_SOLE_ORGS)
+              .map(org => org.name)
+              .join(', ')}
+            {soleOwnedOrganizations.length > MAX_LISTED_SOLE_ORGS
+              ? ` and ${soleOwnedOrganizations.length - MAX_LISTED_SOLE_ORGS} more`
+              : ''}
+          </Typography>
+          .
+        </Typography>
+      ) : null}
       <FormControl>
         <FormLabel>
           Type your email
