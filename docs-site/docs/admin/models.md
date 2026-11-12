@@ -131,7 +131,7 @@ Model discovery checks the providers for new models, price changes, and retireme
 
 - **Discovery runs**: recent runs with when each started, what triggered it, its result, and a summary of what it found. A run still going shows **Running**; one with no result 20 minutes after it started was stopped before it could report, and shows **Did not finish**. Select a run to open its page
 - **Lifecycle suggestions**: deprecations, retirements, and replacements discovery suggests. **Accept change** applies one, with a successor model you choose, and says when the model leaves the pickers. **Dismiss suggestion** dismisses it for good: you type the model id to confirm, and discovery does not raise it again while the provider's signal is unchanged. Both record their reason in the audit log. **Model prices** opens the Prices section
-- **References to unavailable models**: settings and defaults that still name a model users can no longer pick. **Check references** asks every provider and shows the result; nothing is checked until you ask
+- **References to unavailable models**: settings and defaults that still name a model users can no longer pick. **Check references** asks every provider and shows the result; nothing is checked until you ask. After you accept or dismiss a lifecycle suggestion, a report you already loaded says it was made before your last change; check again to update it
 
 When discovery is off, the section says so and offers **Open settings**. **Run discovery** in the page header starts a run now; a toast links to the run when it finishes, and the list and prices refresh.
 

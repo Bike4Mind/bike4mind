@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Stack, Typography } from '@mui/joy';
 import {
   AdminPermissionAction,
@@ -9,7 +10,13 @@ import {
   StatusChip,
   type DataColumn,
 } from '../../shared';
-import { apiErrorMessage, useStaleReferences, type StaleReference } from './discoveryApi';
+import {
+  STALE_REFERENCES_OUTDATED_QUERY_KEY,
+  apiErrorMessage,
+  useStaleReferences,
+  useStaleReferencesOutdated,
+  type StaleReference,
+} from './discoveryApi';
 import { problemCopy } from './discoveryCopy';
 import { modelName, useModelIndex } from './useModelIndex';
 
@@ -23,11 +30,15 @@ const referenceId = (reference: StaleReference) => `${reference.surface}|${refer
 export function StaleReferencesPanel() {
   const [requested, setRequested] = useState(false);
   const report = useStaleReferences();
+  const outdated = useStaleReferencesOutdated();
+  const queryClient = useQueryClient();
   const index = useModelIndex().data?.byId;
 
   const check = () => {
     setRequested(true);
-    void report.refetch();
+    void report.refetch().then(result => {
+      if (result.status === 'success') queryClient.setQueryData(STALE_REFERENCES_OUTDATED_QUERY_KEY, false);
+    });
   };
 
   const columns: DataColumn<StaleReference>[] = [
@@ -122,6 +133,11 @@ export function StaleReferencesPanel() {
           <Alert color="warning" variant="soft" size="sm" data-testid="discovery-references-refresh-error">
             Showing the last check; checking again failed: {apiErrorMessage(report.error, 'Could not check references')}
           </Alert>
+        )}
+        {requested && outdated && report.data && !report.isFetching && (
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="discovery-references-outdated">
+            Made before your last change. Check references again to update it.
+          </Typography>
         )}
         {body}
       </Stack>

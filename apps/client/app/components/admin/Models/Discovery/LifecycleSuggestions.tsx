@@ -45,8 +45,8 @@ import { ModelWriteAction, useModelWriteBlock } from '../ModelWriteAction';
 import { useModelsNavigation } from '../modelsNavigation';
 import {
   LIFECYCLE_QUEUE_QUERY_KEY,
+  STALE_REFERENCES_OUTDATED_QUERY_KEY,
   STALE_REFERENCES_QUERY_KEY,
-  fetchStaleReferences,
   LIFECYCLE_STATUS_PATH,
   apiErrorMessage,
   useLifecycleQueue,
@@ -406,7 +406,10 @@ function DismissSuggestionDialog({
 }
 
 type BulkRequest = { action: BulkAction; items: LifecycleQueueItem[] };
-type Unsettled = Exclude<BulkRowResult, { outcome: 'settled' }>;
+// What the blockers of a blocked row were computed against: the successor and status the run saw.
+type Unsettled = Exclude<BulkRowResult, { outcome: 'settled' }> & { basis: string };
+const blockerBasis = (item: LifecycleQueueItem | undefined) =>
+  `${item?.suggestion?.replacedBy ?? ''}|${item?.suggestion?.status ?? ''}`;
 type BulkOutcome = { action: BulkAction; total: number; settled: number; unsettled: Unsettled[] };
 
 // The reason must still fit once the longest preset is picked in front of it.
@@ -529,7 +532,7 @@ function BulkOutcomeAlert({
   outcome: BulkOutcome;
   waiting: Unsettled[];
   index: ModelIndex;
-  onReview: (modelId: string, blockers: string[]) => void;
+  onReview: (result: Extract<Unsettled, { outcome: 'blocked' }>) => void;
   onClose: () => void;
 }) {
   const verb = outcome.action === 'accept' ? 'accepted' : 'dismissed';
@@ -570,7 +573,7 @@ function BulkOutcomeAlert({
                       size="sm"
                       variant="plain"
                       disabled={disabled}
-                      onClick={() => onReview(result.modelId, result.blockers)}
+                      onClick={() => onReview(result)}
                       data-testid={`discovery-bulk-review-${result.modelId}`}
                     >
                       Review
@@ -626,15 +629,10 @@ export function LifecycleSuggestions() {
     );
     void queryClient.invalidateQueries({ queryKey: LIFECYCLE_QUEUE_QUERY_KEY });
     void queryClient.invalidateQueries({ queryKey: ADMIN_MODELS_QUERY_KEY });
-    refreshLoadedReferences();
-  };
-
-  // Only a report the admin already loaded is re-run; nothing here may start the provider fan-out itself.
-  const refreshLoadedReferences = () => {
-    if (queryClient.getQueryData(STALE_REFERENCES_QUERY_KEY) === undefined) return;
-    void queryClient
-      .fetchQuery({ queryKey: STALE_REFERENCES_QUERY_KEY, queryFn: fetchStaleReferences, staleTime: 0 })
-      .catch(() => undefined);
+    // A loaded report is only marked; re-running it asks every provider, which only a request may do.
+    if (queryClient.getQueryData(STALE_REFERENCES_QUERY_KEY) !== undefined) {
+      queryClient.setQueryData(STALE_REFERENCES_OUTDATED_QUERY_KEY, true);
+    }
   };
 
   const settle = (modelId: string, message: string) => {
@@ -645,7 +643,11 @@ export function LifecycleSuggestions() {
   const finishBulk = (action: BulkAction, results: BulkRowResult[]) => {
     setBulk(null);
     const settled = results.filter(result => result.outcome === 'settled').map(result => result.modelId);
-    const unsettled = results.filter((result): result is Unsettled => result.outcome !== 'settled');
+    const unsettled = results.flatMap((result): Unsettled[] =>
+      result.outcome === 'settled'
+        ? []
+        : [{ ...result, basis: blockerBasis(bulk?.items.find(item => item.modelId === result.modelId)) }]
+    );
     if (settled.length > 0) removeSettled(settled);
     else void queryClient.invalidateQueries({ queryKey: LIFECYCLE_QUEUE_QUERY_KEY });
     // What still needs a decision stays selected, so the next pass starts from it.
@@ -697,9 +699,11 @@ export function LifecycleSuggestions() {
               outcome={outcome}
               waiting={outcomeWaiting}
               index={index}
-              onReview={(modelId, blockers) => {
-                setAcceptBlockers(blockers);
-                setAccepting(queue.find(item => item.modelId === modelId) ?? null);
+              onReview={result => {
+                const item = queue.find(row => row.modelId === result.modelId) ?? null;
+                // Blockers computed for another successor must not be acknowledged against the current one.
+                setAcceptBlockers(item && blockerBasis(item) === result.basis ? result.blockers : undefined);
+                setAccepting(item);
               }}
               onClose={() => setOutcome(null)}
             />

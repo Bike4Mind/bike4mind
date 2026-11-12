@@ -232,6 +232,9 @@ export const LIFECYCLE_QUEUE_QUERY_KEY = [...LIFECYCLE_STATUS_QUERY_KEY, 'queue'
 /** The full GET fans out to every provider on platform credentials, so only "Check references" fetches it. */
 export const STALE_REFERENCES_QUERY_KEY = [...LIFECYCLE_STATUS_QUERY_KEY, 'references'] as const;
 
+/** True while the loaded report predates a lifecycle change; a completed check clears it. */
+export const STALE_REFERENCES_OUTDATED_QUERY_KEY = [...LIFECYCLE_STATUS_QUERY_KEY, 'references-outdated'] as const;
+
 export const fetchDiscoveryStatus = async (): Promise<DiscoveryStatus> =>
   (await api.get<DiscoveryStatus>(DISCOVERY_STATUS_PATH)).data;
 
@@ -265,7 +268,7 @@ export const useLifecycleQueue = (enabled: boolean) =>
     enabled,
   });
 
-export const fetchStaleReferences = async (): Promise<LifecycleStatus> =>
+const fetchStaleReferences = async (): Promise<LifecycleStatus> =>
   (await api.get<LifecycleStatus>(LIFECYCLE_STATUS_PATH)).data;
 
 /** Never fetched on mount or by an invalidation: `refetch()` from "Check references" is the only way in. */
@@ -277,6 +280,15 @@ export const useStaleReferences = () =>
     refetchOnWindowFocus: false,
     staleTime: Infinity,
   });
+
+export const useStaleReferencesOutdated = () =>
+  useQuery({
+    queryKey: STALE_REFERENCES_OUTDATED_QUERY_KEY,
+    queryFn: async () => false,
+    enabled: false,
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
+  }).data === true;
 
 type ErrorLike = { response?: { status?: number; data?: unknown }; message?: string };
 

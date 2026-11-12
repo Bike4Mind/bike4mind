@@ -12,7 +12,12 @@ import {
   newQueryClient,
 } from './__tests__/discoveryTestKit';
 import type { AdminModelRow } from '@bike4mind/common';
-import { LIFECYCLE_QUEUE_QUERY_KEY, STALE_REFERENCES_QUERY_KEY, type LifecycleStatus } from './discoveryApi';
+import {
+  LIFECYCLE_QUEUE_QUERY_KEY,
+  STALE_REFERENCES_OUTDATED_QUERY_KEY,
+  STALE_REFERENCES_QUERY_KEY,
+  type LifecycleStatus,
+} from './discoveryApi';
 
 const m = vi.hoisted(() => ({
   get: vi.fn(),
@@ -665,22 +670,55 @@ describe('LifecycleSuggestions bulk settle', () => {
     expect(screen.queryByTestId('admin-bulk-action-bar')).not.toBeInTheDocument();
   });
 
-  it('re-runs a loaded reference report after a bulk accept, and never starts an unloaded one', async () => {
+  it('marks a loaded reference report outdated after a settle without re-running it', async () => {
+    const referenceGets = () => m.get.mock.calls.filter(([url, config]) => url === LIFECYCLE_PATH && !config).length;
+    const outdated = () => queryClient.getQueryData(STALE_REFERENCES_OUTDATED_QUERY_KEY);
     renderQueue();
     await selectRows('gpt-sunset');
     fireEvent.click(screen.getByTestId('discovery-bulk-accept-btn'));
     fireEvent.click(bulkConfirm());
     await waitFor(() => expect(m.post).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(lifecycleGets()).toBe(2));
-    expect(m.get.mock.calls.filter(([url, config]) => url === LIFECYCLE_PATH && !config)).toHaveLength(0);
+    expect(outdated()).toBeUndefined();
 
     queryClient.setQueryData(STALE_REFERENCES_QUERY_KEY, { ...LIFECYCLE, staleReferences: [] });
     await selectRows('anthropic.claude-v2');
     fireEvent.click(screen.getByTestId('discovery-bulk-accept-btn'));
     fireEvent.click(bulkConfirm());
+    await waitFor(() => expect(outdated()).toBe(true));
+    expect(referenceGets()).toBe(0);
+  });
+
+  it('opens Review without the run blockers once the suggested successor changed', async () => {
+    m.post.mockImplementation(async (_url: string, body: { modelId: string }) => {
+      if (body.modelId === 'gpt-sunset') {
+        throw apiError(409, { code: 'replacement-blocked', details: ['costs more than gpt-sunset'] });
+      }
+      return { data: {} };
+    });
+    renderQueue();
+    await selectRows('gpt-sunset');
+    fireEvent.click(screen.getByTestId('discovery-bulk-accept-btn'));
+    fireEvent.click(bulkConfirm());
+    await screen.findByTestId('discovery-bulk-result-gpt-sunset');
+
+    lifecycle = {
+      ...lifecycle,
+      queue: lifecycle.queue.map(item =>
+        item.modelId === 'gpt-sunset' && item.suggestion
+          ? { ...item, suggestion: { ...item.suggestion, replacedBy: 'gpt-newer' } }
+          : item
+      ),
+    };
+    await queryClient.invalidateQueries({ queryKey: LIFECYCLE_QUEUE_QUERY_KEY });
     await waitFor(() =>
-      expect(m.get.mock.calls.filter(([url, config]) => url === LIFECYCLE_PATH && !config)).toHaveLength(1)
+      expect(screen.getByTestId('discovery-suggestion-row-gpt-sunset')).toHaveTextContent('gpt-newer')
     );
+    fireEvent.click(screen.getByTestId('discovery-bulk-review-gpt-sunset'));
+
+    expect(await screen.findByTestId('discovery-accept-dialog')).toBeInTheDocument();
+    expect(screen.queryByTestId('discovery-accept-blockers')).not.toBeInTheDocument();
+    expect(confirm('accept')).not.toHaveTextContent('Accept anyway');
   });
 
   it("lists a failed row with the server's message", async () => {

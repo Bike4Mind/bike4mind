@@ -11,7 +11,7 @@ import {
   modelList,
   newQueryClient,
 } from './__tests__/discoveryTestKit';
-import type { LifecycleStatus } from './discoveryApi';
+import { STALE_REFERENCES_OUTDATED_QUERY_KEY, STALE_REFERENCES_QUERY_KEY, type LifecycleStatus } from './discoveryApi';
 
 const m = vi.hoisted(() => ({
   get: vi.fn(),
@@ -84,6 +84,29 @@ describe('StaleReferencesPanel', () => {
 
     fireEvent.click(screen.getByTestId('discovery-check-references-btn'));
     await waitFor(() => expect(checks()).toBe(2));
+  });
+
+  it('shows the outdated note for a report marked outdated, and clears it after a check', async () => {
+    queryClient.setQueryData(STALE_REFERENCES_QUERY_KEY, LIFECYCLE);
+    queryClient.setQueryData(STALE_REFERENCES_OUTDATED_QUERY_KEY, true);
+    renderPanel();
+    fireEvent.click(screen.getByTestId('discovery-check-references-btn'));
+    await screen.findByTestId('discovery-references-table');
+    expect(screen.queryByTestId('discovery-references-outdated')).not.toBeInTheDocument();
+
+    queryClient.setQueryData(STALE_REFERENCES_OUTDATED_QUERY_KEY, true);
+    expect(await screen.findByTestId('discovery-references-outdated')).toHaveTextContent(
+      'Made before your last change. Check references again to update it.'
+    );
+    fireEvent.click(screen.getByTestId('discovery-check-references-btn'));
+    await waitFor(() => expect(screen.queryByTestId('discovery-references-outdated')).not.toBeInTheDocument());
+    expect(screen.getByTestId('discovery-references-table')).toBeInTheDocument();
+  });
+
+  it('shows no outdated note when no report is loaded', async () => {
+    renderPanel();
+    await screen.findByTestId('discovery-references-idle');
+    expect(screen.queryByTestId('discovery-references-outdated')).not.toBeInTheDocument();
   });
 
   it('keeps the last report with a warning when checking again fails', async () => {
