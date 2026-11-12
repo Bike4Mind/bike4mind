@@ -11,6 +11,7 @@ import { WindowThemeSync } from './WindowThemeSync';
 afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.removeItem('window-theme-test');
+  vi.restoreAllMocks();
 });
 
 function ToggleTheme() {
@@ -54,6 +55,34 @@ it('syncs the resolved system theme and subsequent app theme changes', async () 
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="window-theme-light-btn"]')!.click());
     expect(setTheme).toHaveBeenLastCalledWith('light', '#FBFCFE');
     for (const [, color] of setTheme.mock.calls) expect(color).toMatch(/^#[0-9a-f]{6}$/i);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it('reports a failed native theme update without rejecting the renderer effect', async () => {
+  vi.stubGlobal('matchMedia', (media: string) => ({
+    matches: false,
+    media,
+    addListener: () => {},
+    removeListener: () => {},
+  }));
+  const failure = new Error('native update failed');
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.stubGlobal('b4m', { setTheme: vi.fn().mockRejectedValue(failure) });
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <CssVarsProvider theme={desktopTheme} defaultMode="system" modeStorageKey="window-theme-test">
+          <WindowThemeSync />
+        </CssVarsProvider>
+      )
+    );
+    expect(warning).toHaveBeenCalledWith('Could not sync native window theme:', failure);
   } finally {
     await act(async () => root.unmount());
     host.remove();

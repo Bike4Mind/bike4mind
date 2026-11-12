@@ -8,7 +8,10 @@ export function WindowThemeSync(): null {
   const backgroundColor = theme.palette.background.surface;
 
   useEffect(() => {
-    if (mode) void window.b4m.setTheme(mode, backgroundColor);
+    if (!mode) return;
+    void window.b4m.setTheme(mode, backgroundColor).catch((error: unknown) => {
+      console.warn('Could not sync native window theme:', error);
+    });
   }, [mode, backgroundColor]);
 
   return null;
