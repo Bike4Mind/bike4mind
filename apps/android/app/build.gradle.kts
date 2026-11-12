@@ -11,12 +11,12 @@ val debugServerUrl = providers.gradleProperty("b4m.serverUrl").orElse("https://a
 
 android {
     namespace = "com.bike4mind.app"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.bike4mind.app"
         minSdk = 28
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         // Sent as X-Client-Version; keep it one to three integers (ClientIdentity.semanticVersion), no suffix.
         versionName = "0.1.0"
