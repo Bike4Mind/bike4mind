@@ -10,7 +10,8 @@ import {
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { logSecondFactorSignIn, readSignInOrigin } from '@server/auth/signInSecondFactor';
-import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { MfaEnrollmentEvents, redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { recordForcedEnrollmentStep } from '@server/auth/mfaEnrollmentFunnel';
 import { respond } from '@server/utils/respond';
 import * as z from 'zod';
 
@@ -96,6 +97,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
         const tokens = { accessToken };
 
         await logAuthAudit(req, { userId: result.user.id, event: 'mfa_enrolled' });
+        // Judged on freshUser, read before this enrollment, so a forced one still counts as forced.
+        await recordForcedEnrollmentStep(req, freshUser, MfaEnrollmentEvents.COMPLETED);
         if (signInOrigin) await logSecondFactorSignIn(req, result.user.id, signInOrigin);
 
         setupBody = {
