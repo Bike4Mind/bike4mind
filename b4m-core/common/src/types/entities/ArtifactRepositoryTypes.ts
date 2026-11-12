@@ -40,6 +40,9 @@ export interface IArtifactVersionDocument {
 export interface IArtifactRepository extends IBaseRepository<IArtifactDocument> {
   shareable: IShareableStaticMethods<IArtifactDocument>;
 
+  /** `options` carries a field projection plus skip/limit/sort, as BaseRepository.find reads it. */
+  find(filter: Record<string, unknown>, options?: Record<string, unknown>): Promise<IArtifactDocument[]>;
+
   /**
    * Partial update keyed on the custom `id` that re-checks write access (owner or
    * permissions.canWrite) and not-deleted in the write filter; null when either fails.

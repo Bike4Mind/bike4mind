@@ -3,6 +3,8 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import OrganizationListPage from './index';
+import en from '@client/app/locales/en.json';
+import i18next from 'i18next';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -30,7 +32,12 @@ vi.mock('@client/app/components/help', () => ({ ContextHelpButton: () => null })
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => undefined }));
 vi.mock('@client/app/utils/s3', () => ({ getAppFileUrl: () => '' }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+// A real i18next over en.json, so assertions pin the wording, plurals and interpolation users get.
+const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: i18n.t, i18n: { language: 'en' } }) }));
+const i18nInstance = i18next.createInstance();
+void i18nInstance.init({ lng: 'en', resources: { en: { translation: en } }, initAsync: false });
+i18n.t = i18nInstance.t.bind(i18nInstance) as (key: string) => string;
 
 const theme = extendTheme({ ...getThemeConfig() });
 
@@ -78,7 +85,7 @@ describe('Teams list for an appointed manager', () => {
     expect(preview.tagName).toBe('A');
     expect(preview.getAttribute('href')).toBe('https://docs.bike4mind.com/features/team-admin-preview');
     expect(preview.textContent).toBe('Preview Team administration');
-    expect(screen.getByText('organization.no_organizations')).toBeTruthy();
+    expect(screen.getByText('No teams found')).toBeTruthy();
     expect(screen.getByTestId('organizations-create-team-btn').hasAttribute('disabled')).toBe(true);
     expect(mocks.openCreateTeamModal).not.toHaveBeenCalled();
   });
@@ -106,7 +113,7 @@ describe('Teams list for an appointed manager', () => {
 
     expect(screen.getByText('Managed Team')).toBeTruthy();
     expect(screen.getByText('Manager')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'organization.view_details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View Details' }));
     expect(mocks.navigate).toHaveBeenCalledWith({ to: '/organizations/org1' });
   });
 

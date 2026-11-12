@@ -1,4 +1,5 @@
 export * from './errors';
+export * from './dlqPolicy';
 export * from './adminUserNotes';
 export * from './signupGrant';
 export * from './signupGrantGuard';
@@ -129,6 +130,7 @@ export * from './schemas/shadowDetection';
 export * from './schemas/campaignWatch';
 export * from './schemas/abuseAssessment';
 export * from './schemas/adminAi';
+export * from './schemas/adminAiOperations';
 export * from './schemas/stripeDispute';
 export * from './schemas/autoContainment';
 export * from './utils/artifactHelpers';
