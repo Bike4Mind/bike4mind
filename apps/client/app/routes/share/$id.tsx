@@ -2,7 +2,7 @@ import { useAcceptDocument, useRefuseDocument, useRespondToInvites } from '@clie
 import { fetchInvite } from '@client/app/utils/invitesAPICalls';
 import {
   describeAcceptFailure,
-  describeAcceptOutcome,
+  acceptOutcomeScreen,
   type ShareAcceptScreen,
 } from '@client/app/utils/shareAcceptErrors';
 import CheckIcon from '@mui/icons-material/Check';
@@ -176,7 +176,7 @@ const SharePage = () => {
         ? null
         : outcome.status === 'rejected'
           ? describeAcceptFailure(outcome.reason)
-          : describeAcceptOutcome(outcome.value);
+          : acceptOutcomeScreen(outcome.value);
       if (screen) {
         setAcceptScreen({ ...screen, documentId: validInvites[0].invite?.documentId });
         return;

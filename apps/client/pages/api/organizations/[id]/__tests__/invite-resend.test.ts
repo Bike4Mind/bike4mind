@@ -76,6 +76,7 @@ describe('POST /api/organizations/[id]/invite-resend', () => {
     mocks.loadManagedOrganization.mockResolvedValue({ id: ORG_ID, name: 'Acme' });
     mocks.findInvites.mockResolvedValue([INVITE]);
     mocks.reserve.mockResolvedValue({ release: mocks.release });
+    mocks.release.mockResolvedValue(undefined);
     mocks.tryAdd.mockResolvedValue({ success: true, count: 1, expiresAt: new Date() });
     mocks.notify.mockResolvedValue(undefined);
   });
@@ -137,6 +138,27 @@ describe('POST /api/organizations/[id]/invite-resend', () => {
     await expect(resend({ email: 'new@example.test' })).rejects.toThrow('mailer down');
     expect(mocks.release).toHaveBeenCalled();
     expect(mocks.decrementCounter).toHaveBeenCalledWith('rate-limit:invite-resend:invite-1:new@example.test');
+  });
+
+  it('still clears the cooldown when giving the budget back fails', async () => {
+    mocks.notify.mockRejectedValue(new Error('mailer down'));
+    mocks.release.mockRejectedValue(new Error('cache down'));
+    await expect(resend({ email: 'new@example.test' })).rejects.toThrow('mailer down');
+    expect(mocks.decrementCounter).toHaveBeenCalledWith('rate-limit:invite-resend:invite-1:new@example.test');
+  });
+
+  it('403s a non-owner manager resending an admin invitation, before charging anything', async () => {
+    mocks.findInvites.mockResolvedValue([{ ...INVITE, permissions: ['read', 'update', 'share'] }]);
+    await expect(resend({ email: 'new@example.test' })).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mocks.reserve).not.toHaveBeenCalled();
+    expect(mocks.notify).not.toHaveBeenCalled();
+  });
+
+  it('lets the owner resend an admin invitation', async () => {
+    mocks.loadManagedOrganization.mockResolvedValue({ id: ORG_ID, name: 'Acme', userId: 'u-owner' });
+    mocks.findInvites.mockResolvedValue([{ ...INVITE, permissions: ['read', 'update', 'share'] }]);
+    await resend({ email: 'new@example.test' });
+    expect(mocks.notify).toHaveBeenCalled();
   });
 
   it.each([

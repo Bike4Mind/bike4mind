@@ -46,7 +46,7 @@ export function describeAcceptFailure(error: unknown): ShareAcceptScreen | null 
 }
 
 // A named org invite accepted by someone already in the org succeeds without changing their role.
-export function describeAcceptOutcome(result: unknown): ShareAcceptScreen | null {
+export function acceptOutcomeScreen(result: unknown): ShareAcceptScreen | null {
   if (!result || typeof result !== 'object') return null;
   if ((result as { acceptOutcome?: unknown }).acceptOutcome !== 'already-member') return null;
   return {

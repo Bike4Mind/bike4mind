@@ -2,9 +2,9 @@
 // Email a pending organization invitation again. Each invite+address can be resent once per
 // cooldown window, and every resend is charged against the inviter's normal send budget.
 
-import { InviteType, type IInviteDocument } from '@bike4mind/common';
+import { InviteType, isOrgOwnerOrPlatformAdmin, roleForPermissions, type IInviteDocument } from '@bike4mind/common';
 import { cacheRepository, inviteRepository, userRepository } from '@bike4mind/database';
-import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { TooManyRequestsError } from '@bike4mind/utils';
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { generateInviteLink } from '@server/managers/createDocumentInvite';
@@ -54,6 +54,11 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
         (candidate.recipients?.pending ?? []).some(recipient => recipient.trim().toLowerCase() === address)
       );
     if (!invite) throw new NotFoundError('Pending invitation not found');
+    // The resend goes out under the caller's name, so it follows the same owner-only rule as minting one.
+    const permissions = 'permissions' in invite ? invite.permissions : [];
+    if (roleForPermissions(permissions) === 'admin' && !isOrgOwnerOrPlatformAdmin(user, organization)) {
+      throw new ForbiddenError('Only the organization owner can resend an admin invitation');
+    }
 
     // Only a typed address was charged to the typed-address budget when the invite was created. Every
     // org invite resend, single or bulk-sent, draws on the org-bulk bucket shared with bulk-invite.ts.
@@ -79,7 +84,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
         message: invite.description,
       });
     } catch (error) {
-      await Promise.all([budget.release(), cacheRepository.decrementCounter(cooldownKey)]);
+      await Promise.allSettled([budget.release(), cacheRepository.decrementCounter(cooldownKey)]);
       throw error;
     }
     res.json({ resent: true });
