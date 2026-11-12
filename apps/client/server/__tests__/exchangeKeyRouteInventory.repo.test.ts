@@ -149,6 +149,16 @@ const EXCHANGE_KEY_OPT_IN_OCCURRENCES: Record<string, number> = {
   'client/server/cli/resolveContractAuth.ts': 3,
 };
 
+// Every file that names `admitExchangeKeys`: the option's plumbing plus the routes that set it.
+const ADMIT_EXCHANGE_KEYS_OCCURRENCES: Record<string, number> = {
+  'client/server/middlewares/apiKeyAuth.ts': 5,
+  'client/server/middlewares/baseApi.ts': 3,
+  'client/pages/api/ai/transcribe/index.ts': 1,
+  'client/pages/api/ai/transcribe/init.ts': 1,
+  'client/pages/api/generated-content/[ref].ts': 1,
+  'client/pages/api/models.ts': 1,
+};
+
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
     const full = path.join(dir, entry.name);
@@ -237,5 +247,20 @@ describe('keys minted for a connected app reach only their scoped routes', () =>
     scan(WORKERS_SRC_DIR, 'workers/src');
     scan(SERVER_UTILS_SRC_DIR, 'server-utils/src');
     expect(found).toEqual(EXCHANGE_KEY_OPT_IN_OCCURRENCES);
+  });
+
+  it('references admitExchangeKeys only from the pinned files', () => {
+    const found: Record<string, number> = {};
+    const scan = (dir: string, prefix: string) => {
+      for (const file of sourceFiles(dir)) {
+        const count = readFileSync(file, 'utf8').split('admitExchangeKeys').length - 1;
+        if (count > 0) found[`${prefix}/${posixRel(dir, file)}`] = count;
+      }
+    };
+    scan(CLIENT_SERVER_DIR, 'client/server');
+    scan(API_DIR, 'client/pages/api');
+    scan(WORKERS_SRC_DIR, 'workers/src');
+    scan(SERVER_UTILS_SRC_DIR, 'server-utils/src');
+    expect(found).toEqual(ADMIT_EXCHANGE_KEYS_OCCURRENCES);
   });
 });

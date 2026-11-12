@@ -68,10 +68,15 @@ const makeReq = () =>
 const makeRes = () => ({ once: vi.fn(), statusCode: 200 }) as unknown as Response;
 
 /** Runs the middleware and reports whether it called next() or threw. */
-const run = async (required: ApiKeyScope[] | undefined, req: Request, alsoRequired?: ApiKeyScope[]) => {
+const run = async (
+  required: ApiKeyScope[] | undefined,
+  req: Request,
+  alsoRequired?: ApiKeyScope[],
+  options?: Parameters<typeof apiKeyAuth>[2]
+) => {
   const next = vi.fn() as unknown as NextFunction;
   try {
-    await apiKeyAuth(required, alsoRequired)(req, makeRes(), next);
+    await apiKeyAuth(required, alsoRequired, options)(req, makeRes(), next);
   } catch (err) {
     return { passed: false, error: err as Error };
   }
@@ -717,6 +722,17 @@ describe('apiKeyAuth with an exchange key', () => {
 
   it('still admits a personal key with the same scopes on a scope-less route', async () => {
     validateUserApiKeyMock.mockResolvedValue(keyWith({}));
+    expect((await run(undefined, makeReq())).passed).toBe(true);
+  });
+
+  it('admits it on a scope-less route that sets admitExchangeKeys', async () => {
+    validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+    expect((await run(undefined, makeReq(), undefined, { admitExchangeKeys: true })).passed).toBe(true);
+  });
+
+  it('does not let admitExchangeKeys change an ordinary key', async () => {
+    validateUserApiKeyMock.mockResolvedValue(keyWith({}));
+    expect((await run(undefined, makeReq(), undefined, { admitExchangeKeys: true })).passed).toBe(true);
     expect((await run(undefined, makeReq())).passed).toBe(true);
   });
 });

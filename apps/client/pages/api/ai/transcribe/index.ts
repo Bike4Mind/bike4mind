@@ -9,7 +9,7 @@ const TranscribeRequestSchema = z.object({
   fileKey: z.string().min(1),
 });
 
-const handler = baseApi().post(
+const handler = baseApi({ admitExchangeKeys: true }).post(
   asyncHandler<unknown, speechToTextService.TranscriptionResult>(async (req, res) => {
     const parsed = TranscribeRequestSchema.safeParse(req.body);
     if (!parsed.success) {

@@ -16,7 +16,7 @@ interface InitResponse {
   fileKey: string;
 }
 
-const handler = baseApi().post(
+const handler = baseApi({ admitExchangeKeys: true }).post(
   asyncHandler<unknown, InitResponse>(async (req, res) => {
     const parsed = InitRequestSchema.safeParse(req.body);
     if (!parsed.success) {

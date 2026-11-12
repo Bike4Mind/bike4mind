@@ -76,13 +76,19 @@ const hashApiKeyForLogging = (apiKey: string): string => {
  * @param options.recordUse - `false` for routes the app calls on its own (baseApi's
  *   `recordsActivity: false`): the key's `lastUsedAt` is not stamped and no USED event is
  *   counted. ApiKeyUsageLog still records the call, as it does every authenticated request.
+ * @param options.admitExchangeKeys - Scope-gate a connected-app key like an ordinary key
+ *   (baseApi's `admitExchangeKeys`).
  * @param options.grandfatherLegacyKeys - Admit legacy keys that miss `requiredScopes`
  *   (baseApi's `grandfatherLegacyKeys`); see LEGACY_API_KEY_WINDOW in apiKeyScopeGate.ts.
  */
 export const apiKeyAuth = (
   requiredScopes?: ApiKeyScopeValue[],
   alsoRequiredScopes?: ApiKeyScopeValue[],
-  { recordUse = true, grandfatherLegacyKeys = false }: { recordUse?: boolean; grandfatherLegacyKeys?: boolean } = {}
+  {
+    recordUse = true,
+    grandfatherLegacyKeys = false,
+    admitExchangeKeys = false,
+  }: { recordUse?: boolean; grandfatherLegacyKeys?: boolean; admitExchangeKeys?: boolean } = {}
 ) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // If already authenticated via JWT, skip API key auth
@@ -147,7 +153,7 @@ export const apiKeyAuth = (
       const grandfathered = grandfatherLegacyKeys && isLegacyApiKey(validation.createdAt);
       const gate = decideScopeGate(requiredScopes, validation.scopes, staged, alsoRequiredScopes, {
         grandfathered,
-        exchangeKey: !!validation.oauthExchangeClientId,
+        exchangeKey: !admitExchangeKeys && !!validation.oauthExchangeClientId,
       });
       if (gate.outcome !== 'allow') {
         // A scope 403 fires before req.apiKeyInfo is set, so log from `validation`

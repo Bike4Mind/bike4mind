@@ -63,6 +63,12 @@ interface BaseAPIOptions {
    */
   grandfatherLegacyKeys?: boolean;
   /**
+   * Treat a key minted for a connected app like an ordinary key at this route's scope gate.
+   * Keys minted that way are otherwise refused unless the route declares a scope they hold.
+   * Pinned to an exact route list in exchangeKeyRouteInventory.repo.test.ts.
+   */
+  admitExchangeKeys?: boolean;
+  /**
    * OAuth reachability for this route. Relying-party OAuth access tokens are default-denied at
    * every JWT-authed route; set this to opt a route in.
    * - omitted (default): first-party-only (OAuth tokens rejected 403).
@@ -265,6 +271,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
         apiKeyAuth(resolvedOptions.requiredScopes, resolvedOptions.alsoRequiredScopes, {
           recordUse: resolvedOptions.recordsKeyUse ?? resolvedOptions.recordsActivity !== false,
           grandfatherLegacyKeys: resolvedOptions.grandfatherLegacyKeys,
+          admitExchangeKeys: resolvedOptions.admitExchangeKeys,
         })
       );
 
