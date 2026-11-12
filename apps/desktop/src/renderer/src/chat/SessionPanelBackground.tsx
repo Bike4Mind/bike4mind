@@ -44,6 +44,7 @@ export function backgroundSummary(
 
 const linkSx = {
   all: 'unset',
+  fontSize: 'xs',
   cursor: 'pointer',
   minWidth: 0,
   overflow: 'hidden',

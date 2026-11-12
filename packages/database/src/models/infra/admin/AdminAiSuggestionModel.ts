@@ -25,6 +25,9 @@ export interface IAdminAiSuggestionDocument extends Document {
   entityId: string;
   inputHash: string;
   policyVersion: string;
+  actionClass?: string;
+  overrideCostly?: boolean | null;
+  costUnknown?: boolean;
   // `model` would shadow Document#model.
   aiModel: string;
   escalated: boolean;
@@ -65,6 +68,9 @@ export const AdminAiSuggestionSchema: Schema<IAdminAiSuggestionDocument> = new S
     entityId: { type: String, required: true },
     inputHash: { type: String, required: true },
     policyVersion: { type: String, required: true },
+    actionClass: String,
+    overrideCostly: { type: Boolean, default: null },
+    costUnknown: { type: Boolean, default: false },
     aiModel: { type: String, required: true },
     escalated: { type: Boolean, default: false },
     verdict: { type: String, required: true },
@@ -111,12 +117,13 @@ export type AdminAiSuggestionKey = Pick<AdminAiSuggestionItem, 'feature' | 'enti
 
 export type CreatePendingAdminAiSuggestionInput = AdminAiSuggestionKey &
   Pick<AdminAiSuggestionItem, 'entityType' | 'model' | 'verdict' | 'confidence' | 'reasons' | 'costUsd' | 'latencyMs'> &
-  Partial<Pick<AdminAiSuggestionItem, 'escalated' | 'proposedAction'>>;
+  Partial<Pick<AdminAiSuggestionItem, 'escalated' | 'proposedAction' | 'actionClass' | 'costUnknown'>>;
 
 export type AdminAiSuggestionDecision = {
   decidedBy?: { userId: string; name: string } | null;
   overrideAction?: unknown;
   overrideReason?: string | null;
+  overrideCostly?: boolean | null;
 };
 
 type LeanAdminAiSuggestion = Omit<IAdminAiSuggestionDocument, keyof Document> & { _id: Types.ObjectId };
@@ -130,6 +137,9 @@ const toItem = (doc: LeanAdminAiSuggestion): AdminAiSuggestionItem => ({
   entityId: doc.entityId,
   inputHash: doc.inputHash,
   policyVersion: doc.policyVersion,
+  actionClass: doc.actionClass,
+  overrideCostly: doc.overrideCostly,
+  costUnknown: doc.costUnknown,
   model: doc.aiModel,
   escalated: doc.escalated,
   verdict: doc.verdict,
@@ -201,6 +211,7 @@ export class AdminAiSuggestionRepository {
     if (decision.decidedBy !== undefined) set.decidedBy = decision.decidedBy;
     if (decision.overrideAction !== undefined) set.overrideAction = decision.overrideAction;
     if (decision.overrideReason !== undefined) set.overrideReason = decision.overrideReason;
+    if (decision.overrideCostly !== undefined) set.overrideCostly = decision.overrideCostly;
     const doc = await AdminAiSuggestionModel.findOneAndUpdate(
       { _id: new Types.ObjectId(id), status: { $in: [...from] } },
       { $set: set },
