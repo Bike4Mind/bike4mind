@@ -52,6 +52,7 @@ describe('AI operations page', () => {
     expect(screen.getByText(/offline replay agreement at least 90%/)).toHaveTextContent(
       'at least 100 decided suggestions over 14 days'
     );
+    expect(screen.getByRole('table', { name: 'AI feature metrics' })).toHaveStyle({ minWidth: '90rem' });
     fireEvent.click(screen.getByTestId('ai-operations-global-switch'));
     expect(fetch).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));

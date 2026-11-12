@@ -138,6 +138,7 @@ export default function AiOperationsTab() {
             rows={data.features}
             getRowId={row => row.feature}
             label="AI feature metrics"
+            minWidth="90rem"
             onRetry={() => query.refetch()}
             columns={[
               { id: 'feature', label: 'Feature', render: row => row.feature },
