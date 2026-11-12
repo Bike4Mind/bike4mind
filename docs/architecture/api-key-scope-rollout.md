@@ -143,6 +143,35 @@ is in its grace period only while EVERY scope it accepts is staged, and `admin:*
 never be staged - one mention leaves the family with no grace period at all. Admin keys
 calling those routes are part of the same re-mint list as any other key.
 
+## Grandfathering legacy keys (preferred for routes keys already reach)
+
+Give the route its scopes with `grandfatherLegacyKeys: true` next to `requiredScopes`:
+
+```ts
+baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN], grandfatherLegacyKeys: true })
+```
+
+A legacy key (see `LEGACY_API_KEY_WINDOW` and `isLegacyApiKey` in
+`packages/server-utils/src/middlewares/apiKeyScopeGate.ts`) that misses the scopes is still
+admitted, and every such pass logs `API key scope check missed but legacy key grandfathered -
+allowing` with its `keyId`. That log is the list of owners who still need to create a scoped
+key. A key created after the cutoff, a confined key, and a key missing an `alsoRequiredScopes`
+entry are refused as usual. A method narrowed in the handler passes the same option:
+`assertApiKeyScope(req, [scope], message, { grandfatherLegacyKeys: true })`.
+
+Rules:
+
+- **Only on a route keys could reach before it declared scopes.** A route that already enforced
+  a scope must never opt in: old keys would gain access they do not have today.
+- **No re-mint and no preflight gate before merging.** Grandfathering is per route, so unlike
+  `API_KEY_SCOPE_STAGING` it never re-opens other routes that enforce the same scope, and it
+  works for scopes that already enforce elsewhere. Run the preflight anyway to see who relies on
+  the window.
+- **The window:** until `cutoff` is set every key is legacy. Once every route keys use has its
+  scopes, set `cutoff` and `endsAt` together in one PR, announce the end date to the owners of
+  legacy keys, and let it pass. From `endsAt` grandfathering stops with no deploy. Rotating a
+  key keeps its creation date, so a rotated key keeps its status.
+
 ## Staging the gate
 
 `API_KEY_SCOPE_STAGING` is a comma-separated list of scopes whose gates are still
