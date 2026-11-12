@@ -223,10 +223,11 @@ export const updateSingleQueryDataFast = <
           };
         }
       } else if ('data' in currentData) {
+        const paginated = currentData as PaginatedResponse<T>;
         if (type === 'delete') {
           return {
-            ...currentData,
-            data: currentData.data.filter(item => item.id !== data.id),
+            ...paginated,
+            data: paginated.data.filter(item => item.id !== data.id),
           };
         } else {
           const itemIndex = currentData.data.findIndex(item => item.id === data.id);
@@ -244,7 +245,7 @@ export const updateSingleQueryDataFast = <
           }
 
           return {
-            ...currentData,
+            ...paginated,
             data: updatedData,
           };
         }
