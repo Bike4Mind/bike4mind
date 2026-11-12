@@ -112,3 +112,27 @@ describe('music form payer note', () => {
     expect(screen.queryByTestId('music-form-payer-note')).not.toBeInTheDocument();
   });
 });
+
+describe('MusicStudioForm in Create v2', () => {
+  const v2Tree = (models: readonly [PublicMusicModel, ...PublicMusicModel[]]) => (
+    <CssVarsProvider theme={appTheme}>
+      <MusicStudioForm models={models} isSubmitting={false} onSubmit={onSubmit} createV2 />
+    </CssVarsProvider>
+  );
+
+  it('keeps the duration on a switch to a fixed-length model, marks it, and submits after the fix', () => {
+    render(v2Tree([musicV2, clip]));
+    expect(screen.queryByTestId('music-form-model-select')).not.toBeInTheDocument();
+    typePrompt('a happy tune');
+    fireEvent.click(screen.getByTestId(`music-form-model-card-${clip.id}-radio`));
+
+    expect(screen.getByTestId(`music-form-model-card-${clip.id}`)).toHaveAttribute('data-selected', 'true');
+    expect(screen.queryByTestId('music-form-changes')).not.toBeInTheDocument();
+    expect(screen.getByTestId('music-form-duration-invalid')).not.toBeEmptyDOMElement();
+    expect(screen.getByTestId('music-form-submit-btn')).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('music-form-duration-fix-btn'));
+    fireEvent.click(screen.getByTestId('music-form-submit-btn'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ model: 'lyria-3-clip-preview' }));
+  });
+});

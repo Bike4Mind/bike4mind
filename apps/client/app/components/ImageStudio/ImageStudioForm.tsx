@@ -1,30 +1,21 @@
 import { useMemo, useState } from 'react';
-import {
-  Button,
-  FormControl,
-  FormHelperText,
-  FormLabel,
-  Option,
-  Select,
-  Stack,
-  Textarea,
-  ToggleButtonGroup,
-  Typography,
-} from '@mui/joy';
-import { IMAGE_JOB_PROMPT_MAX_CHARS, type ImageModels } from '@bike4mind/common';
-import { STUDIO_IMAGE_COUNT_MAX, type CreateStudioImageJobsBody } from '@client/app/hooks/data/studioImageJobs';
+import { Typography } from '@mui/joy';
+import type { ImageModels } from '@bike4mind/common';
+import ImageBrowserModal from '@client/app/components/Agent/ImageBrowserModal';
+import CapabilityForm from '@client/app/components/Studio/CapabilityForm';
 import type { NonEmptyList } from '@client/app/components/Studio/useCapabilityFormState';
+import { useImageBrowser } from '@client/app/hooks/agent/useImageBrowser';
+import type { CreateStudioImageJobsBody } from '@client/app/hooks/data/studioImageJobs';
+import { imageCapabilityFields, type ImageFormState } from './imageFields';
 import {
-  buildImageModelOptions,
-  imageAspectRatioOptions,
-  imageSizeOptions,
+  EMPTY_IMAGE_INTENT,
+  imageCreditsPerImage,
+  imageModelCards,
+  imageModelWhyNot,
+  isCatalogImageModel,
   pickDefaultImageModel,
   type ImageIntent,
 } from './imageModelOptions';
-
-const COUNTS = Array.from({ length: STUDIO_IMAGE_COUNT_MAX }, (_, index) => index + 1);
-// The Select value for "leave it to the model".
-const MODEL_DEFAULT = '';
 
 type ImageStudioFormProps = {
   // The user's runnable image models, as /api/models lists them.
@@ -33,29 +24,37 @@ type ImageStudioFormProps = {
   onSubmit: (body: CreateStudioImageJobsBody) => void;
 };
 
+const INITIAL_FORM: ImageFormState = { prompt: '', count: 1, intent: EMPTY_IMAGE_INTENT };
+
+const toCreateBody = (model: ImageModels, { prompt, count, intent }: ImageFormState): CreateStudioImageJobsBody => ({
+  count,
+  request: {
+    model,
+    mode: 'generate',
+    prompt: prompt.trim(),
+    ...(intent.size && { size: intent.size }),
+    ...(intent.aspectRatio && { aspectRatio: intent.aspectRatio }),
+    ...(intent.quality && { quality: intent.quality }),
+    ...(intent.references.length > 0 && {
+      inputs: intent.references.map(file => ({ role: 'reference' as const, fileId: file.fileId })),
+    }),
+  },
+});
+
 /**
- * Create's image form. The prompt and "make N" lead; the model picker opens on a sensible default and lists every
- * model, with the ones that cannot make the current request disabled and the reason why. Size and aspect ratio list
- * the picked model's own choices, and a choice persists across models, which is what disables the others.
+ * Create's image form. Every model is a card that says whether it can make what the settings ask for; one sensible
+ * default is picked on a visible card the user can swap, never a hidden auto-pick. Settings persist across a model
+ * switch; one the picked model does not take is marked with its reason and a fix, and holds Generate.
  */
 const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProps) => {
-  const [prompt, setPrompt] = useState('');
-  const [count, setCount] = useState(1);
-  const [intent, setIntent] = useState<ImageIntent>({});
-  const options = useMemo(() => buildImageModelOptions(models, intent), [models, intent]);
+  const [form, setForm] = useState<ImageFormState>(INITIAL_FORM);
   const [pickedModel, setPickedModel] = useState<ImageModels | undefined>();
-  // The user's pick stands while it is still listed; until then, and if a models refetch drops it, the default.
-  const model = options.some(option => option.model === pickedModel) ? pickedModel : pickDefaultImageModel(options);
-
-  // A size or ratio the new model does not list would leave its Select blank, so it falls back to the default.
-  const pickModel = (next: ImageModels) => {
-    setPickedModel(next);
-    setIntent(current => ({
-      ...(current.size && imageSizeOptions(next).includes(current.size) && { size: current.size }),
-      ...(current.aspectRatio &&
-        imageAspectRatioOptions(next).includes(current.aspectRatio) && { aspectRatio: current.aspectRatio }),
-    }));
-  };
+  const imageBrowser = useImageBrowser();
+  const cards = useMemo(() => imageModelCards(models, form.intent), [models, form.intent]);
+  // The user's pick stands while its card can be picked; until then, and if a models refetch drops it, the default.
+  const model = cards.some(card => card.id === pickedModel && card.unavailableReason === null)
+    ? pickedModel
+    : pickDefaultImageModel(cards);
 
   if (model === undefined) {
     return (
@@ -65,143 +64,61 @@ const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProp
     );
   }
 
-  const selected = options.find(option => option.model === model);
-  const sizes = imageSizeOptions(model);
-  const aspectRatios = imageAspectRatioOptions(model);
-  const trimmedPrompt = prompt.trim();
-  const canSubmit = trimmedPrompt.length > 0 && selected?.disabledReason === null && !isSubmitting;
-
-  const submit = () => {
-    if (!canSubmit) return;
-    onSubmit({
-      count,
-      request: {
-        model,
-        mode: 'generate',
-        prompt: trimmedPrompt,
-        ...(intent.size && { size: intent.size }),
-        ...(intent.aspectRatio && { aspectRatio: intent.aspectRatio }),
-      },
-    });
+  const update = (patch: Partial<ImageFormState>) => setForm(current => ({ ...current, ...patch }));
+  const updateIntent = (patch: Partial<ImageIntent>) =>
+    setForm(current => ({ ...current, intent: { ...current.intent, ...patch } }));
+  const selectModel = (modelId: string) => {
+    const card = cards.find(candidate => candidate.id === modelId);
+    if (isCatalogImageModel(modelId) && card?.unavailableReason === null) setPickedModel(modelId);
   };
 
+  const modelName = cards.find(card => card.id === model)?.name ?? model;
+  // Matches the notice the shared form state gives video and music when a models refetch drops the pick.
+  const changes =
+    pickedModel !== undefined && pickedModel !== model
+      ? [`The selected model is no longer available; switched to ${modelName}.`]
+      : [];
+  const perImage = imageCreditsPerImage(model, form.intent);
+  const canSubmit = form.prompt.trim().length > 0 && imageModelWhyNot(model, form.intent) === null;
+
   return (
-    <Stack gap={2} data-testid="image-studio-form">
-      <FormControl>
-        <FormLabel>Prompt</FormLabel>
-        <Textarea
-          minRows={3}
-          placeholder="Describe the image you want"
-          value={prompt}
-          onChange={event => setPrompt(event.target.value)}
-          slotProps={{
-            textarea: { maxLength: IMAGE_JOB_PROMPT_MAX_CHARS, 'data-testid': 'image-studio-prompt-input' },
-          }}
-        />
-      </FormControl>
-
-      <Stack direction={{ xs: 'column', sm: 'row' }} gap={2} flexWrap="wrap">
-        <FormControl sx={{ minWidth: 240, flex: 1 }}>
-          <FormLabel>Model</FormLabel>
-          <Select
-            value={model}
-            onChange={(_event, value) => {
-              if (value) pickModel(value);
-            }}
-            // The options carry a reason line; the closed picker shows the model name alone.
-            renderValue={() => selected?.label ?? model}
-            slotProps={{ button: { 'data-testid': 'image-studio-model-select' } }}
-          >
-            {options.map(option => (
-              <Option
-                key={option.model}
-                value={option.model}
-                disabled={option.disabledReason !== null}
-                data-testid={`image-studio-model-option-${option.model}`}
-              >
-                <Stack>
-                  <Typography level="body-sm" textColor="inherit">
-                    {option.label}
-                  </Typography>
-                  {option.disabledReason && (
-                    <Typography level="body-xs" data-testid={`image-studio-model-reason-${option.model}`}>
-                      {option.disabledReason}
-                    </Typography>
-                  )}
-                </Stack>
-              </Option>
-            ))}
-          </Select>
-        </FormControl>
-
-        {sizes.length > 0 && (
-          <FormControl sx={{ minWidth: 160 }}>
-            <FormLabel>Size</FormLabel>
-            <Select
-              value={intent.size ?? MODEL_DEFAULT}
-              onChange={(_event, value) => setIntent(current => ({ ...current, size: value || undefined }))}
-              slotProps={{ button: { 'data-testid': 'image-studio-size-select' } }}
-            >
-              <Option value={MODEL_DEFAULT}>Default</Option>
-              {sizes.map(size => (
-                <Option key={size} value={size} data-testid={`image-studio-size-option-${size}`}>
-                  {size}
-                </Option>
-              ))}
-            </Select>
-          </FormControl>
-        )}
-
-        {aspectRatios.length > 0 && (
-          <FormControl sx={{ minWidth: 140 }}>
-            <FormLabel>Aspect ratio</FormLabel>
-            <Select
-              value={intent.aspectRatio ?? MODEL_DEFAULT}
-              onChange={(_event, value) => setIntent(current => ({ ...current, aspectRatio: value || undefined }))}
-              slotProps={{ button: { 'data-testid': 'image-studio-aspect-select' } }}
-            >
-              <Option value={MODEL_DEFAULT}>Default</Option>
-              {aspectRatios.map(aspectRatio => (
-                <Option key={aspectRatio} value={aspectRatio} data-testid={`image-studio-aspect-option-${aspectRatio}`}>
-                  {aspectRatio}
-                </Option>
-              ))}
-            </Select>
-          </FormControl>
-        )}
-
-        <FormControl>
-          <FormLabel>Images</FormLabel>
-          <ToggleButtonGroup
-            value={String(count)}
-            onChange={(_event, value) => {
-              if (value) setCount(Number(value));
-            }}
-            aria-label="Number of images"
-          >
-            {COUNTS.map(option => (
-              <Button key={option} value={String(option)} data-testid={`image-studio-count-${option}`}>
-                {option}
-              </Button>
-            ))}
-          </ToggleButtonGroup>
-        </FormControl>
-      </Stack>
-
-      {selected?.disabledReason && (
-        <FormHelperText data-testid="image-studio-model-why-not">{selected.disabledReason}</FormHelperText>
-      )}
-
-      <Button
-        onClick={submit}
-        disabled={!canSubmit}
-        loading={isSubmitting}
-        sx={{ alignSelf: 'flex-start' }}
-        data-testid="image-studio-generate-btn"
-      >
-        {count === 1 ? 'Generate image' : `Generate ${count} images`}
-      </Button>
-    </Stack>
+    <CapabilityForm
+      testIdPrefix="image-form"
+      modelCards={cards}
+      modelId={model}
+      onModelChange={selectModel}
+      changes={changes}
+      fields={imageCapabilityFields(model, form, {
+        update,
+        updateIntent,
+        pickReference: () => imageBrowser.openImageBrowser(),
+      })}
+      estimateCredits={perImage === null ? null : perImage * form.count}
+      submitLabel={form.count === 1 ? 'Generate image' : `Generate ${form.count} images`}
+      canSubmit={canSubmit}
+      isSubmitting={isSubmitting}
+      onSubmit={() => onSubmit(toCreateBody(model, form))}
+    >
+      <ImageBrowserModal
+        isOpen={imageBrowser.isImageBrowserOpen}
+        onClose={imageBrowser.closeImageBrowser}
+        imageSearch={imageBrowser.imageSearch}
+        onImageSearchChange={imageBrowser.setImageSearch}
+        isLoadingImages={imageBrowser.isLoadingImages}
+        imageFiles={imageBrowser.imageFiles}
+        selectedImage={imageBrowser.selectedImage}
+        onSelectImage={imageBrowser.selectImage}
+        onApplyImage={file => {
+          if (!form.intent.references.some(reference => reference.fileId === file.id)) {
+            updateIntent({ references: [...form.intent.references, { fileId: file.id, fileName: file.fileName }] });
+          }
+          imageBrowser.closeImageBrowser();
+        }}
+        onSearch={() => void imageBrowser.fetchImageFiles(imageBrowser.imageSearch)}
+        title="Choose a reference image"
+        emptyHint="No images yet. Upload one in Files, then choose it here."
+      />
+    </CapabilityForm>
   );
 };
 
