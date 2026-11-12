@@ -53,6 +53,7 @@ import { adminPageFrame } from './shared/adminStyles';
 export { AdminTab } from './adminSidebarConfig';
 
 const AdminDashboardTab = dynamic(() => import('./AdminDashboardTab'), { ssr: false });
+const AiOperationsTab = dynamic(() => import('./AiOperationsTab'), { ssr: false });
 
 const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTriageMultiConfigTab'), {
   ssr: false,
@@ -172,6 +173,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
         >
           <TabPanel value={AdminTab.Dashboard}>
             {activeTab === AdminTab.Dashboard && <AdminDashboardTab onNavigate={setActiveTab} />}
+          </TabPanel>
+          <TabPanel value={AdminTab.AiOperations}>
+            {activeTab === AdminTab.AiOperations && <AiOperationsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.Users} {...selfFramed}>
             {activeTab === AdminTab.Users && <UsersTab />}

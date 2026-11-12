@@ -1006,6 +1006,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.ai_operations',
+    section: 'admin',
+    label: 'AI operations',
+    description: 'Admin AI spend, agreement, budget caps, kill switches and autonomy readiness',
+    navigationType: 'tab',
+    target: '78',
+    keywords: ['AI operations', 'AI spend', 'agreement', 'kill switch', 'autonomy', 'AI budget'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.rate_limits',
     section: 'admin',
     label: 'Rate limits',

@@ -149,6 +149,7 @@ export enum AdminTab {
   StripeDisputes = 75,
   Approvals = 76,
   Tutorials = 77,
+  AiOperations = 78,
 }
 
 /**
@@ -308,6 +309,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: Sparkles,
     label: 'AI',
     items: [
+      { Icon: Gauge, tab: AdminTab.AiOperations, label: 'AI operations', testid: 'admin-ai-operations-btn' },
       {
         Icon: Brain,
         tab: AdminTab.Models,

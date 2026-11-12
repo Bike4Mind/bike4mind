@@ -41,6 +41,38 @@ const QUEUE_ONE = {
   approximateNotVisibleCount: 0,
 };
 
+const q = vi.hoisted(() => ({ isError: false, refetch: vi.fn() }));
+
+// A minimal URL store: navigate writes the search, useSearch re-renders on change.
+const router = vi.hoisted(() => {
+  let search: Record<string, unknown> = {};
+  const listeners = new Set<() => void>();
+  const set = (next: Record<string, unknown>) => {
+    search = next;
+    listeners.forEach(listener => listener());
+  };
+  return {
+    get: () => search,
+    set,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    navigate: vi.fn(
+      (opts: { search: Record<string, unknown> | ((prev: Record<string, unknown>) => Record<string, unknown>) }) =>
+        set(typeof opts.search === 'function' ? opts.search(search) : opts.search)
+    ),
+  };
+});
+
+vi.mock('@tanstack/react-router', async () => {
+  const { useSyncExternalStore } = await import('react');
+  return {
+    useSearch: () => useSyncExternalStore(router.subscribe, router.get),
+    useNavigate: () => router.navigate,
+  };
+});
+
 const h = vi.hoisted(() => ({
   discard: vi.fn(),
   replay: vi.fn(),
@@ -54,9 +86,10 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: v
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({
     data: state.queues.map(q => ({ messageRetentionSeconds: state.retentionSeconds, logsUrl: h.queueLogsUrl, ...q })),
+    dataUpdatedAt: Date.UTC(2026, 10, 11, 9, 30),
     isLoading: false,
-    isError: false,
-    refetch: vi.fn(),
+    isError: q.isError,
+    refetch: q.refetch,
   }),
   useDlqMessages: () => ({
     data: h.messages.length ? h.messages : state.messages,
@@ -124,6 +157,140 @@ beforeEach(() => {
   h.replay.mockReset();
   h.queueLogsUrl = null;
   h.messages = [];
+  q.isError = false;
+  q.refetch.mockClear();
+  router.set({});
+  router.navigate.mockClear();
+});
+
+const renderPlain = () =>
+  render(
+    <CssVarsProvider theme={theme}>
+      <DlqReplayTab />
+    </CssVarsProvider>
+  );
+
+describe('DlqReplayTab all-clear state', () => {
+  it('replaces the counts with an all-clear card when every queue is empty', () => {
+    state.queues = [
+      { ...QUEUE_ONE, approximateMessageCount: 0 },
+      { ...QUEUE_ONE, label: 'q2', approximateMessageCount: 0 },
+    ];
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-all-clear')).toHaveTextContent('No dead letters');
+    expect(screen.getByTestId('dlq-all-clear')).toHaveTextContent(
+      `Last checked ${new Date(Date.UTC(2026, 10, 11, 9, 30)).toLocaleTimeString()}`
+    );
+    expect(screen.queryByTestId('dlq-stats-total')).toBeNull();
+  });
+
+  it.each([
+    ['a queue has messages', { approximateMessageCount: 2 }],
+    ['a message is in flight', { approximateMessageCount: 0, approximateNotVisibleCount: 1 }],
+    ['a queue count failed to load', { approximateMessageCount: -1, approximateNotVisibleCount: -1 }],
+  ])('keeps the counts when %s, even beside an empty queue', (_label, counts) => {
+    state.queues = [
+      { ...QUEUE_ONE, label: 'q0', approximateMessageCount: 0 },
+      { ...QUEUE_ONE, ...counts },
+    ];
+    renderPlain();
+
+    expect(screen.queryByTestId('dlq-all-clear')).toBeNull();
+    expect(screen.getByTestId('dlq-stats-total')).toBeInTheDocument();
+  });
+});
+
+describe('DlqReplayTab queues this stage does not create', () => {
+  const NOT_DEPLOYED = {
+    ...QUEUE_ONE,
+    label: 'nightly-job',
+    displayName: 'Nightly Job',
+    deployed: false,
+    approximateMessageCount: -1,
+    approximateNotVisibleCount: -1,
+  };
+
+  it('shows the all-clear when every queue the stage creates is empty', () => {
+    state.queues = [{ ...QUEUE_ONE, approximateMessageCount: 0 }, NOT_DEPLOYED];
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-all-clear')).toBeInTheDocument();
+  });
+
+  it('leaves them out of the queue total', () => {
+    state.queues = [QUEUE_ONE, NOT_DEPLOYED];
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-stats-total')).toHaveTextContent('1');
+  });
+
+  it('lists them in the picker as disabled, marked not on this stage', async () => {
+    state.queues = [QUEUE_ONE, NOT_DEPLOYED];
+    renderPlain();
+    await userEvent.click(screen.getByRole('combobox'));
+
+    const option = await screen.findByTestId('dlq-queue-option-nightly-job');
+    expect(option).toHaveAttribute('aria-disabled', 'true');
+    expect(option).toHaveTextContent('Not on this stage');
+    expect(option).not.toHaveTextContent('Count unavailable');
+  });
+
+  it('explains a deep link to one instead of selecting it', () => {
+    state.queues = [QUEUE_ONE, NOT_DEPLOYED];
+    router.set({ dlqQueue: 'nightly-job' });
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-unknown-queue')).toHaveTextContent('Nightly Job queue is not created on this stage');
+    expect(screen.queryByTestId('dlq-messages-table')).toBeNull();
+  });
+});
+
+describe('DlqReplayTab all-clear refresh', () => {
+  it('refetches the queues from Check again', async () => {
+    state.queues = [{ ...QUEUE_ONE, approximateMessageCount: 0 }];
+    renderPlain();
+
+    await userEvent.click(screen.getByTestId('dlq-all-clear-refresh'));
+    expect(q.refetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DlqReplayTab all-clear after a failed refetch', () => {
+  it('shows the load error, not the all-clear card, when the last good read was empty', () => {
+    state.queues = [{ ...QUEUE_ONE, approximateMessageCount: 0 }];
+    q.isError = true;
+    renderPlain();
+
+    expect(screen.queryByTestId('dlq-all-clear')).toBeNull();
+    expect(screen.getByText('The dead-letter queues failed to load.')).toBeInTheDocument();
+  });
+});
+
+describe('DlqReplayTab queue deep link', () => {
+  it('opens on the queue named in the URL', () => {
+    router.set({ dlqQueue: 'q1' });
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-replay-all')).toBeInTheDocument();
+    expect(screen.getByTestId('dlq-messages-table')).toBeInTheDocument();
+    expect(screen.queryByTestId('dlq-unknown-queue')).toBeNull();
+  });
+
+  it('explains a queue the page does not list instead of selecting it', () => {
+    router.set({ dlqQueue: 'alarm-only' });
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-unknown-queue')).toHaveTextContent('alarm-only');
+    expect(screen.queryByTestId('dlq-messages-table')).toBeNull();
+  });
+
+  it('writes a picked queue to the URL', async () => {
+    await renderWithQueueSelected();
+
+    expect(router.navigate).toHaveBeenCalledWith(expect.objectContaining({ replace: true }));
+    expect(router.get()).toMatchObject({ dlqQueue: 'q1' });
+  });
 });
 
 describe('DlqReplayTab failure metadata', () => {
