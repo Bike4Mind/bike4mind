@@ -59,6 +59,7 @@ export function toOrgApiKeyView(key: IUserApiKeyDocument, creatorNames: Map<stri
     expiresAt: key.expiresAt,
     // Key validation stamps the top-level field; `usage.lastRequest` has no writer.
     lastUsedAt: key.lastUsedAt,
+    creditsUsed: key.usage?.totalSpendCredits ?? 0,
     createdBy: creatorId ? { id: creatorId, name: creatorNames.get(creatorId) ?? null } : null,
   };
 }

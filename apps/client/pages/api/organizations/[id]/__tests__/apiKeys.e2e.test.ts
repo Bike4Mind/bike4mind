@@ -218,6 +218,9 @@ describe('org-owned API keys', () => {
       const relisted = await call<IOrgApiKeyView[]>(listHandler, 'GET', owner.id, { id: orgId });
       expect(relisted.data[0].lastUsedAt).toBeTruthy();
     });
+    await userApiKeyRepository.incrementSpend(created.data.apiKey.id, 7.25);
+    const charged = await call<IOrgApiKeyView[]>(listHandler, 'GET', owner.id, { id: orgId });
+    expect(charged.data[0].creditsUsed).toBe(7.25);
   });
 
   it('rotates without handing the key to the rotating admin, and refuses a revoked key', async () => {

@@ -17,6 +17,7 @@ import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookCon
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
 import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
+import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
@@ -363,6 +364,10 @@ const OrganizationPage: FC = () => {
                   API Keys
                 </Typography>
                 <OrgApiKeysSection key={organization.id} organizationId={organization.id} />
+                <Typography level="title-md" sx={{ mt: 4, mb: 2 }}>
+                  Member API keys
+                </Typography>
+                <OrgMemberApiKeysSection key={`members-${organization.id}`} organizationId={organization.id} />
               </TabPanel>
             )}
             {canManageOrg && (

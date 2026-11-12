@@ -48,22 +48,45 @@ vi.mock('@server/middlewares/baseApi', () => {
 const rotateUserApiKey = vi.hoisted(() =>
   vi.fn().mockResolvedValue({ id: 'key-1', name: 'k', keyPrefix: 'b4m_live_x', key: 'b4m_live_secret' })
 );
-const revokeUserApiKey = vi.hoisted(() => vi.fn().mockResolvedValue({ name: 'k' }));
+const selfRevoke = { id: 'key-1', name: 'k', keyPrefix: 'b4m_live_x', holderUserId: 'admin-user', didRevoke: true };
+const revokeUserApiKey = vi.hoisted(() => vi.fn());
 const resolveOwnedApiKey = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'key-1' }));
 vi.mock('@bike4mind/services', () => ({
   userApiKeyService: { rotateUserApiKey, revokeUserApiKey, resolveOwnedApiKey },
 }));
 
 const notifyApiKeyRotationReown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/apiKeyRotationNotifier', () => ({ notifyApiKeyRotationReown }));
+const notifyApiKeyOrgRevoke = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/apiKeyRotationNotifier', () => ({ notifyApiKeyRotationReown, notifyApiKeyOrgRevoke }));
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+const inTransaction = vi.hoisted(() => ({ active: false }));
 
 const userApiKeyRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
-const organizationRepository = vi.hoisted(() => ({ findIdsAdministeredBy: vi.fn() }));
+const organizationRepository = vi.hoisted(() => ({
+  findIdsAdministeredBy: vi.fn(),
+  findById: vi.fn().mockResolvedValue({ id: 'org-1', name: 'Acme' }),
+}));
 vi.mock('@bike4mind/database', () => ({
   organizationRepository,
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    inTransaction.active = true;
+    try {
+      return await fn();
+    } finally {
+      inTransaction.active = false;
+    }
+  },
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
 }));
+const endKeyRealtimeConnections = vi.hoisted(() =>
+  vi.fn(async (_keyId: string, _logger: unknown) => {
+    // Its writes never join the transaction, so it must run only after the revoke commits.
+    expect(inTransaction.active).toBe(false);
+  })
+);
+vi.mock('@server/utils/adminApiKeyActions', () => ({ endKeyRealtimeConnections }));
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
@@ -191,7 +214,99 @@ describe('POST /api/user-api-keys/[id]/rotate', () => {
 });
 
 describe('POST /api/user-api-keys/[id]/revoke', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    revokeUserApiKey.mockResolvedValue(selfRevoke);
+  });
+
+  it('records no org audit row and sends no notice when the minter revokes their own key', async () => {
+    revokeUserApiKey.mockResolvedValueOnce({ ...selfRevoke, organizationId: 'org-1' });
+    const { req, res } = post('key-1');
+    await mockRefs.revokeHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+    expect(notifyApiKeyOrgRevoke).not.toHaveBeenCalled();
+  });
+
+  it("audits an org admin's revoke of a member key inside the revoke transaction, then notifies the holder", async () => {
+    revokeUserApiKey.mockResolvedValueOnce({ ...selfRevoke, holderUserId: 'member-1', organizationId: 'org-1' });
+    recordAdminActionFromRequest.mockImplementationOnce(async () => expect(inTransaction.active).toBe(true));
+    const { req, res } = post('key-1', { reason: 'left team' });
+    await mockRefs.revokeHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.api_key.member_revoked',
+        actorScope: 'organization',
+        target: { kind: 'organization', id: 'org-1', displayName: 'Acme' },
+        details: { keyId: 'key-1', keyPrefix: 'b4m_live_x', creatorUserId: 'member-1', reason: 'left team' },
+      })
+    );
+    expect(notifyApiKeyOrgRevoke).toHaveBeenCalledWith('member-1', 'k', 'Acme', req.logger);
+  });
+
+  it('still audits and notifies the holder when the billing org document is gone', async () => {
+    revokeUserApiKey.mockResolvedValueOnce({ ...selfRevoke, holderUserId: 'member-1', organizationId: 'org-1' });
+    organizationRepository.findById.mockResolvedValueOnce(null);
+    const { req, res } = post('key-1');
+    await mockRefs.revokeHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ target: { kind: 'organization', id: 'org-1', displayName: 'org-1' } })
+    );
+    expect(notifyApiKeyOrgRevoke).toHaveBeenCalledWith('member-1', 'k', 'your organization', req.logger);
+  });
+
+  it('trims the reason before it reaches the service and the audit row', async () => {
+    revokeUserApiKey.mockResolvedValueOnce({ ...selfRevoke, holderUserId: 'member-1', organizationId: 'org-1' });
+    const { req, res } = post('key-1', { reason: '  left team  ' });
+    await mockRefs.revokeHandler!(req, res);
+    expect(revokeUserApiKey).toHaveBeenCalledWith(
+      'admin-user',
+      { keyId: 'key-1', reason: 'left team' },
+      expect.anything()
+    );
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ details: expect.objectContaining({ reason: 'left team' }) })
+    );
+  });
+
+  it('revokes on a bodyless POST that arrives as an empty string', async () => {
+    revokeUserApiKey.mockResolvedValueOnce(selfRevoke);
+    const { req, res } = post('key-1');
+    req.body = '';
+    await mockRefs.revokeHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(revokeUserApiKey).toHaveBeenCalledWith(
+      'admin-user',
+      { keyId: 'key-1', reason: undefined },
+      expect.anything()
+    );
+  });
+
+  it('rejects a reason over 500 characters before revoking', async () => {
+    const { req, res } = post('key-1', { reason: 'x'.repeat(501) });
+    await expect(mockRefs.revokeHandler!(req, res)).rejects.toThrow();
+    expect(revokeUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('records nothing, logs no event and notifies nobody when the key was already revoked', async () => {
+    revokeUserApiKey.mockResolvedValueOnce({
+      ...selfRevoke,
+      holderUserId: 'member-1',
+      organizationId: 'org-1',
+      didRevoke: false,
+    });
+    const { req, res } = post('key-1');
+    await mockRefs.revokeHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+    expect(logEventSafe).not.toHaveBeenCalled();
+    expect(notifyApiKeyOrgRevoke).not.toHaveBeenCalled();
+  });
 
   it('threads the organizations adapter into revokeUserApiKey and returns 200', async () => {
     const { req, res } = post('key-1', { reason: 'rotated out' });
@@ -205,10 +320,11 @@ describe('POST /api/user-api-keys/[id]/revoke', () => {
     const [, , adapters] = revokeUserApiKey.mock.calls[0] as unknown as [
       unknown,
       unknown,
-      { db: { organizations: unknown; realtimeConnections: unknown } },
+      { db: { organizations: unknown; realtimeConnections?: unknown } },
     ];
     expect(adapters.db.organizations).toBe(organizationRepository);
-    expect(adapters.db.realtimeConnections).toBe(realtimeConnectionRepository);
+    expect(adapters.db.realtimeConnections).toBeUndefined();
+    expect(endKeyRealtimeConnections).toHaveBeenCalledWith('key-1', req.logger);
   });
 
   it('propagates a service NotFoundError', async () => {
@@ -224,7 +340,10 @@ describe('POST /api/user-api-keys/[id]/revoke', () => {
  * gets recorded, not turned into a 5xx the client will retry.
  */
 describe('rotate and revoke - analytics is best effort', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    revokeUserApiKey.mockResolvedValue(selfRevoke);
+  });
 
   it('rotate logs through logEventSafe with the request logger', async () => {
     const { req, res } = post('key-1');

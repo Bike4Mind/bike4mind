@@ -32,31 +32,17 @@ import {
   useRotateOrgApiKey,
 } from '@client/app/hooks/data/orgApiKeys';
 import { toast } from 'sonner';
+import { STATUS_LABEL, effectiveStatus, formatDate } from './orgApiKeyDisplay';
 
 interface OrgApiKeysSectionProps {
   organizationId: string;
 }
-
-const formatDate = (value?: Date | string): string => (value ? new Date(value).toLocaleDateString() : '\u2014');
 
 const todayLocal = (): string => {
   const now = new Date();
   const pad = (part: number) => String(part).padStart(2, '0');
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 };
-
-const STATUS_LABEL: Readonly<Record<ApiKeyStatus, { label: string; color: 'success' | 'neutral' | 'warning' }>> = {
-  [ApiKeyStatus.ACTIVE]: { label: 'Active', color: 'success' },
-  [ApiKeyStatus.DISABLED]: { label: 'Revoked', color: 'neutral' },
-  [ApiKeyStatus.EXPIRED]: { label: 'Expired', color: 'neutral' },
-  [ApiKeyStatus.RATE_LIMITED]: { label: 'Rate limited', color: 'warning' },
-};
-
-// Expiry is checked at request time and never written back to status, so derive it here.
-const effectiveStatus = (key: IOrgApiKeyView): ApiKeyStatus =>
-  key.status === ApiKeyStatus.ACTIVE && key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now()
-    ? ApiKeyStatus.EXPIRED
-    : key.status;
 
 /** Shown once, right after a create or rotate: the server never returns the secret again. */
 const SecretModal: FC<{ secret: { name: string; key: string } | null; onClose: () => void }> = ({
