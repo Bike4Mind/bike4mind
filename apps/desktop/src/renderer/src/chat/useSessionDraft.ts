@@ -1,9 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { newSessionDefaultsSchema, type NewSessionDefaults } from '@shared/sessionDefaults';
 import type { ChatAttachment, ChatSession, ChatSessionMode, CreateCodeSessionRequest } from '@shared/chat';
 import type { ConversationController, SessionPlacement } from './useChat';
 import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 
 export const isSessionDraft = (id: string | null): boolean => !!id?.startsWith('draft-');
+
+const DEFAULT_FIELDS = ['model', 'approvalMode', 'reasoningEffort', 'promptCacheTtl'] as const;
+
+async function retireDraftAttachments(id: string): Promise<void> {
+  try {
+    await window.b4m.chat.discardDraftAttachments(id);
+  } catch (cause) {
+    console.warn('Could not discard draft attachments', cause);
+  }
+}
 
 export function useSessionDraft(onCreated: (id: string) => void, onListChanged: () => Promise<void>) {
   const [session, setSession] = useState<ChatSession | null>(null);
@@ -11,6 +22,8 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
   current.current = session;
   const placement = useRef<SessionPlacement | undefined>(undefined);
   const sending = useRef(false);
+  const defaultsVersion = useRef(0);
+  const explicitDefaults = useRef(new Set<keyof NewSessionDefaults>());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
@@ -21,24 +34,48 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
     setSession(null);
     setError(null);
     setProjectError(null);
-    if (previous && !sending.current) void window.b4m.chat.discardDraftAttachments(previous.id).catch(() => undefined);
+    if (previous && !sending.current) void retireDraftAttachments(previous.id);
   }, []);
 
   useEffect(
     () => () => {
       const previous = current.current;
       current.current = null;
-      if (previous && !sending.current)
-        void window.b4m.chat.discardDraftAttachments(previous.id).catch(() => undefined);
+      if (previous && !sending.current) void retireDraftAttachments(previous.id);
     },
     []
   );
+
+  const loadDefaults = useCallback(async (draftId: string): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const version = ++defaultsVersion.current;
+    try {
+      const defaults = newSessionDefaultsSchema.parse(await window.b4m.chat.defaultsForNewSession());
+      const before = current.current;
+      if (before?.id !== draftId || defaultsVersion.current !== version) return { ok: true };
+      const next = { ...before };
+      if (!explicitDefaults.current.has('model')) next.model = defaults.model;
+      if (!explicitDefaults.current.has('approvalMode')) next.approvalMode = defaults.approvalMode;
+      if (!explicitDefaults.current.has('reasoningEffort')) next.reasoningEffort = defaults.reasoningEffort;
+      if (!explicitDefaults.current.has('promptCacheTtl')) next.promptCacheTtl = defaults.promptCacheTtl;
+      current.current = next;
+      setSession(next);
+      return { ok: true };
+    } catch (cause) {
+      const message = 'Could not load new conversation preferences. Try again.';
+      if (current.current?.id === draftId && defaultsVersion.current === version) {
+        console.warn('Could not load new conversation preferences', cause);
+        setError(message);
+      }
+      return { ok: false, error: message };
+    }
+  }, []);
 
   const start = useCallback(
     (mode: ChatSessionMode, request: CreateCodeSessionRequest = {}, place?: SessionPlacement) => {
       if (current.current?.mode === mode && !request.directory && placement.current?.sectionId === place?.sectionId)
         return current.current.id;
       discard();
+      explicitDefaults.current = new Set();
       const now = new Date().toISOString();
       const next: ChatSession = {
         id: `draft-${crypto.randomUUID()}`,
@@ -66,23 +103,17 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
       placement.current = place;
       current.current = next;
       setSession(next);
-      void window.b4m.chat
-        .modelForNewSession()
-        .then(model => {
-          const draft = current.current;
-          if (typeof model !== 'string' || !model || draft?.id !== next.id || draft.model || sending.current) return;
-          const updated = { ...draft, model };
-          current.current = updated;
-          setSession(updated);
-        })
-        .catch(() => undefined);
+      void loadDefaults(next.id);
       return next.id;
     },
-    [discard]
+    [discard, loadDefaults]
   );
 
   const patch = useCallback(async (change: Partial<ChatSession>) => {
     if (!current.current || sending.current) return;
+    for (const field of DEFAULT_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(change, field)) explicitDefaults.current.add(field);
+    }
     const next = { ...current.current, ...change };
     current.current = next;
     setSession(next);
@@ -139,14 +170,20 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
 
   const send = useCallback(
     async (text: string, attachments: readonly ChatAttachment[] = []) => {
-      const draft = current.current;
-      if (!draft || sending.current) return false;
+      const initial = current.current;
+      if (!initial || sending.current) return false;
+      const draftId = initial.id;
       sending.current = true;
       setBusy(true);
       setError(null);
       let id: string | null = null;
       let accepted = false;
       try {
+        const loaded = await loadDefaults(draftId);
+        if (!loaded.ok) throw new Error(loaded.error);
+        const draft = current.current;
+        if (!draft || draft.id !== draftId) return false;
+        const deliberate = new Set(explicitDefaults.current);
         const place = placement.current;
         const section = place ? { sectionId: place.sectionId } : undefined;
         const created =
@@ -167,10 +204,12 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
         const requireSaved = (value: unknown) => {
           if (!value) throw new Error('Could not apply the draft settings.');
         };
-        if (draft.model) requireSaved(await window.b4m.chat.setSessionModel(id, draft.model));
-        requireSaved(await window.b4m.chat.setApprovalMode(id, draft.approvalMode));
-        requireSaved(await window.b4m.chat.setSessionReasoningEffort(id, draft.reasoningEffort));
-        if (draft.promptCacheTtl)
+        if (deliberate.has('model') && draft.model)
+          requireSaved(await window.b4m.chat.setSessionModel(id, draft.model));
+        if (deliberate.has('approvalMode')) requireSaved(await window.b4m.chat.setApprovalMode(id, draft.approvalMode));
+        if (deliberate.has('reasoningEffort'))
+          requireSaved(await window.b4m.chat.setSessionReasoningEffort(id, draft.reasoningEffort));
+        if (deliberate.has('promptCacheTtl') && draft.promptCacheTtl)
           requireSaved(await window.b4m.chat.setSessionPromptCacheTtl(id, draft.promptCacheTtl));
         if (draft.generation) requireSaved(await window.b4m.chat.setSessionGeneration(id, draft.generation));
         if (draft.historyEnabled !== undefined)
@@ -207,21 +246,20 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
           try {
             await window.b4m.chat.deleteSession(id);
           } catch {
-            if (current.current?.id === draft.id)
+            if (current.current?.id === draftId)
               setError('Could not remove the unsent conversation. Delete it from the sidebar before retrying.');
             return false;
           }
         }
-        if (current.current?.id === draft.id) setError(cause instanceof Error ? cause.message : String(cause));
+        if (current.current?.id === draftId) setError(cause instanceof Error ? cause.message : String(cause));
         return accepted;
       } finally {
-        if (current.current?.id !== draft.id)
-          void window.b4m.chat.discardDraftAttachments(draft.id).catch(() => undefined);
+        if (current.current?.id !== draftId) void retireDraftAttachments(draftId);
         sending.current = false;
         setBusy(false);
       }
     },
-    [onCreated, onListChanged]
+    [onCreated, onListChanged, loadDefaults]
   );
 
   const wrap = (base: ConversationController): ConversationController => {
@@ -253,6 +291,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
       },
       runCommand: async (name, args) => {
         if (name === 'add-dir') await share(args.trim() || undefined);
+        else setError(`Send a message first before using /${name}.`);
       },
       project: {
         busy,

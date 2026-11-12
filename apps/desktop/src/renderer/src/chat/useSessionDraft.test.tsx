@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { NewSessionDefaults } from '@shared/sessionDefaults';
 import type { ConversationController } from './useChat';
 import { useSessionDraft } from './useSessionDraft';
 
@@ -19,7 +20,10 @@ const addContextDirectory = vi.fn();
 const copyDraftAttachments = vi.fn();
 const discardDraftAttachments = vi.fn();
 const deleteSession = vi.fn();
-const modelForNewSession = vi.fn();
+const defaultsForNewSession = vi.fn();
+const setApprovalMode = vi.fn();
+const setSessionReasoningEffort = vi.fn();
+const setSessionPromptCacheTtl = vi.fn();
 const controller = () => draft.wrap({} as ConversationController);
 function Harness() {
   draft = useSessionDraft(opened, reload);
@@ -36,13 +40,21 @@ beforeEach(async () => {
   copyDraftAttachments.mockResolvedValue(undefined);
   discardDraftAttachments.mockResolvedValue(undefined);
   deleteSession.mockResolvedValue(undefined);
-  modelForNewSession.mockResolvedValue('default-model');
+  defaultsForNewSession.mockResolvedValue({
+    model: 'default-model',
+    approvalMode: 'auto',
+    reasoningEffort: 'high',
+    promptCacheTtl: '1h',
+  });
   const saved = async () => ({ id: 'created' });
+  setApprovalMode.mockResolvedValue({ id: 'created' });
+  setSessionReasoningEffort.mockResolvedValue({ id: 'created' });
+  setSessionPromptCacheTtl.mockResolvedValue({ id: 'created' });
   Object.assign(window, {
     b4m: {
       chat: {
         createSession,
-        modelForNewSession,
+        defaultsForNewSession,
         createCodeSession,
         sendMessage,
         setSessionModel,
@@ -50,10 +62,10 @@ beforeEach(async () => {
         copyDraftAttachments,
         discardDraftAttachments,
         deleteSession,
-        setApprovalMode: saved,
-        setSessionReasoningEffort: saved,
+        setApprovalMode,
+        setSessionReasoningEffort,
         setSessionGeneration: saved,
-        setSessionPromptCacheTtl: saved,
+        setSessionPromptCacheTtl,
         setSessionHistory: saved,
       },
     },
@@ -70,9 +82,9 @@ afterEach(() => {
 
 describe('renderer-only session drafts', () => {
   it('uses the remembered starting model without overriding a deliberate draft choice', async () => {
-    let resolve!: (model: string) => void;
-    modelForNewSession.mockReturnValueOnce(
-      new Promise<string>(done => {
+    let resolve!: (defaults: NewSessionDefaults) => void;
+    defaultsForNewSession.mockReturnValueOnce(
+      new Promise<NewSessionDefaults>(done => {
         resolve = done;
       })
     );
@@ -80,7 +92,9 @@ describe('renderer-only session drafts', () => {
       draft.start('chat');
     });
     await act(async () => controller().setModel('chosen'));
-    await act(async () => resolve('remembered'));
+    await act(async () =>
+      resolve({ model: 'remembered', approvalMode: 'auto', reasoningEffort: 'high', promptCacheTtl: '1h' })
+    );
     expect(draft.session?.model).toBe('chosen');
     expect(createSession).not.toHaveBeenCalled();
   });
@@ -234,5 +248,124 @@ describe('renderer-only session drafts', () => {
     expect(addContextDirectory).toHaveBeenCalledWith('created', '/notes');
     expect(copyDraftAttachments).toHaveBeenCalledWith(id, 'created', ['file-one']);
     expect(sendMessage).toHaveBeenCalledWith({ sessionId: 'created', text: 'Read this', attachments: [attachment] });
+  });
+  it('displays effective preferences without rewriting untouched preferences on first send', async () => {
+    await act(async () => {
+      draft.start('chat');
+    });
+    expect(draft.session).toMatchObject({ approvalMode: 'auto', reasoningEffort: 'high', promptCacheTtl: '1h' });
+    expect(createSession).not.toHaveBeenCalled();
+    await act(async () => {
+      expect(await controller().send('Hello')).toBe(true);
+    });
+    expect(setApprovalMode).not.toHaveBeenCalled();
+    expect(setSessionReasoningEffort).not.toHaveBeenCalled();
+    expect(setSessionPromptCacheTtl).not.toHaveBeenCalled();
+  });
+
+  it('preserves deliberate settings through delayed defaults and applies only those choices', async () => {
+    let resolve: ((value: NewSessionDefaults) => void) | undefined;
+    defaultsForNewSession.mockImplementationOnce(
+      () =>
+        new Promise<NewSessionDefaults>(done => {
+          resolve = done;
+        })
+    );
+    await act(async () => {
+      draft.start('chat');
+    });
+    await act(async () => {
+      await controller().setApprovalMode('full');
+      await controller().setReasoningEffort('low');
+      await controller().setPromptCacheTtl('5m');
+    });
+    if (!resolve) throw new Error('Missing defaults barrier');
+    await act(async () =>
+      resolve?.({ model: 'remembered', approvalMode: 'auto', reasoningEffort: 'high', promptCacheTtl: '1h' })
+    );
+    expect(draft.session).toMatchObject({ approvalMode: 'full', reasoningEffort: 'low', promptCacheTtl: '5m' });
+    await act(async () => {
+      await controller().send('Hello');
+    });
+    expect(setApprovalMode).toHaveBeenCalledExactlyOnceWith('created', 'full');
+    expect(setSessionReasoningEffort).toHaveBeenCalledExactlyOnceWith('created', 'low');
+    expect(setSessionPromptCacheTtl).toHaveBeenCalledExactlyOnceWith('created', '5m');
+  });
+
+  it('refreshes defaults before an immediate send without applying placeholder settings', async () => {
+    let releaseInitial: ((value: NewSessionDefaults) => void) | undefined;
+    defaultsForNewSession.mockImplementationOnce(
+      () =>
+        new Promise<NewSessionDefaults>(resolve => {
+          releaseInitial = resolve;
+        })
+    );
+    await act(async () => {
+      draft.start('chat');
+    });
+    await act(async () => {
+      expect(await controller().send('Immediate')).toBe(true);
+    });
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(setApprovalMode).not.toHaveBeenCalled();
+    expect(setSessionReasoningEffort).not.toHaveBeenCalled();
+    await act(async () => releaseInitial?.({ model: 'old', approvalMode: 'ask', reasoningEffort: 'default' }));
+    expect(draft.session).toBeNull();
+  });
+
+  it('ignores defaults after navigating to a different draft', async () => {
+    let resolve: ((value: NewSessionDefaults) => void) | undefined;
+    defaultsForNewSession.mockImplementationOnce(
+      () =>
+        new Promise<NewSessionDefaults>(done => {
+          resolve = done;
+        })
+    );
+    await act(async () => {
+      draft.start('chat');
+    });
+    const previous = draft.session!.id;
+    await act(async () => {
+      draft.discard();
+      draft.start('code');
+    });
+    await act(async () => resolve?.({ model: 'old', approvalMode: 'ask', reasoningEffort: 'low' }));
+    expect(draft.session?.id).not.toBe(previous);
+    expect(draft.session).toMatchObject({ model: 'default-model', approvalMode: 'auto', reasoningEffort: 'high' });
+  });
+
+  it.each(['loop', 'pr', 'compact', 'clear'])('reports unsupported pre-send /%s without materializing', async name => {
+    await act(async () => {
+      draft.start('chat');
+    });
+    await act(async () => {
+      await controller().runCommand(name, '');
+    });
+    expect(controller().sendError).toBe(`Send a message first before using /${name}.`);
+    expect(createSession).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+  it('keeps an unsent draft retryable when reading preferences fails', async () => {
+    await act(async () => {
+      draft.start('chat');
+    });
+    const id = draft.session!.id;
+    defaultsForNewSession.mockRejectedValueOnce(new Error('preferences unavailable'));
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await act(async () => {
+        expect(await controller().send('Keep this')).toBe(false);
+      });
+      expect(draft.session?.id).toBe(id);
+      expect(controller().sendError).toBe('Could not load new conversation preferences. Try again.');
+      expect(createSession).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(discardDraftAttachments).not.toHaveBeenCalled();
+      await act(async () => {
+        expect(await controller().send('Keep this')).toBe(true);
+      });
+    } finally {
+      warning.mockRestore();
+    }
   });
 });

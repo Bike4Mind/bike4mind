@@ -54,6 +54,12 @@ export class AttachmentStore {
    * Seeded at intake, which has just extracted the text; least recently used goes first.
    */
   private readonly pdfTexts = new Map<string, PdfPromptText>();
+  private readonly disposedDrafts = new Set<string>();
+  private readonly intakeWrites = new Map<string, Set<Promise<void>>>();
+
+  private assertDraftActive(sessionId: string): void {
+    if (this.disposedDrafts.has(sessionId)) throw new Error('This draft was discarded.');
+  }
 
   private sessionDirectory(sessionId: string): string {
     if (!isValidSessionId(sessionId)) throw new Error(`invalid session id: ${sessionId}`);
@@ -72,6 +78,25 @@ export class AttachmentStore {
    * attach the three and say why the fourth did not, not refuse the gesture.
    */
   async add(sessionId: string, inputs: readonly ChatAttachmentInput[]): Promise<AddAttachmentsResult> {
+    this.sessionDirectory(sessionId);
+    this.assertDraftActive(sessionId);
+    let finish!: () => void;
+    const completed = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    const pending = this.intakeWrites.get(sessionId) ?? new Set<Promise<void>>();
+    pending.add(completed);
+    this.intakeWrites.set(sessionId, pending);
+    try {
+      return await this.intake(sessionId, inputs);
+    } finally {
+      finish();
+      pending.delete(completed);
+      if (pending.size === 0) this.intakeWrites.delete(sessionId);
+    }
+  }
+
+  private async intake(sessionId: string, inputs: readonly ChatAttachmentInput[]): Promise<AddAttachmentsResult> {
     const result: AddAttachmentsResult = { attachments: [], rejected: [] };
 
     for (const input of inputs.slice(0, MAX_ATTACHMENTS_PER_TURN)) {
@@ -90,6 +115,7 @@ export class AttachmentStore {
         continue;
       }
 
+      this.assertDraftActive(sessionId);
       const id = randomUUID();
       const path = this.filePath(sessionId, id);
       await mkdir(this.sessionDirectory(sessionId), { recursive: true });
@@ -190,6 +216,21 @@ export class AttachmentStore {
 
   async deleteSession(sessionId: string): Promise<void> {
     await rm(this.sessionDirectory(sessionId), { recursive: true, force: true });
+  }
+
+  /** Terminal for renderer-only UUID drafts; ordinary persisted-session deletion is unchanged. */
+  async disposeDraft(draftId: string): Promise<void> {
+    if (!draftId.startsWith('draft-')) throw new Error('Invalid draft id.');
+    const directory = this.sessionDirectory(draftId);
+    this.disposedDrafts.add(draftId);
+    // Intake callers own their errors; cleanup must settle every writer before removing its files.
+    await Promise.allSettled([...(this.intakeWrites.get(draftId) ?? [])]);
+    try {
+      for (const id of await readdir(directory)) this.pdfTexts.delete(id);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
+    }
+    await this.deleteSession(draftId);
   }
 
   async copyDraft(draftId: string, sessionId: string, attachmentIds: string[]): Promise<void> {

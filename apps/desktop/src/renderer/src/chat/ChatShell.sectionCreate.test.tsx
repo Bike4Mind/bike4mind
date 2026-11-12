@@ -82,6 +82,7 @@ beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
       chat: quietBridge({
+        defaultsForNewSession: async () => ({ model: 'test-model', approvalMode: 'auto', reasoningEffort: 'default' }),
         listSessions: async () => (createSession.mock.calls.length ? [FRESH, OPEN] : [OPEN]),
         getSession: async (id: string) =>
           ({ ...(id === FRESH.id ? FRESH : OPEN), messages: [] }) as unknown as ChatSession,

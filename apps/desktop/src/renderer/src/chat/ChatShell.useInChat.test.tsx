@@ -120,6 +120,7 @@ function stubBridge() {
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
       chat: quietBridge({
+        defaultsForNewSession: async () => ({ model: HOSTED, approvalMode: 'auto', reasoningEffort: 'default' }),
         listSessions: async () => [summary('old-1', HOSTED)],
         getSession: async (id: string) => ({ ...summary(id, HOSTED), messages: [] }) as ChatSession,
         getQueuedMessages: async () => [],

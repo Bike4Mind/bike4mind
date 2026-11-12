@@ -732,11 +732,13 @@ export function ChatShell({
   // A Code session can orchestrate before it has any agents; a Chat session only shows its agents.
   // One at the depth cap, or on a model sent no tools, could start none: main ignores its flag
   // there (orchestratesAgents, toolsSupported) and so does this.
+  const orchestrationSession =
+    sessionDraft.session && sessionDraft.session.id === conversation.session?.id ? conversation.session : activeSummary;
   const orchestrateCapable =
-    !!activeSummary?.project &&
-    canSpawnDeeper(activeSummary) &&
-    modelSupportsTools(activeSummary.model, findModelOption(catalog.models, activeSummary.model));
-  const delegating = activeSummary?.orchestrate === true;
+    !!orchestrationSession?.project &&
+    canSpawnDeeper(orchestrationSession) &&
+    modelSupportsTools(orchestrationSession.model, findModelOption(catalog.models, orchestrationSession.model));
+  const delegating = orchestrationSession?.orchestrate === true;
   // The stage exists only once there is an agent to show, whatever the Orchestrate behaviour: a fresh
   // orchestrating session gets its example quests above the composer instead (ExampleQuestStrip).
   const hasAgents = spawnedStates.length > 0;

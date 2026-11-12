@@ -811,7 +811,9 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
     service.listModels(force === 'local' ? 'local' : force === true)
   );
-  ipcMain.handle(IPC_CHANNELS.chatDraftModel, () => service.modelForNewSession());
+  ipcMain.handle(IPC_CHANNELS.chatDraftDefaults, async () =>
+    store.defaultsForNewSession(await service.modelForNewSession())
+  );
   registerModelServersIpc(ipcMain, modelServers, async () => {
     const probed = await localHardware.probed();
     return probed && machineView(probed);
@@ -1231,7 +1233,7 @@ export function registerChat(
   );
   ipcMain.handle(IPC_CHANNELS.chatDiscardDraftAttachments, (_event, draftId: string) => {
     if (!draftId.startsWith('draft-')) throw new Error('Invalid draft id.');
-    return attachments.deleteSession(draftId);
+    return attachments.disposeDraft(draftId);
   });
 
   registerImageMenuIpc(ipcMain, {
