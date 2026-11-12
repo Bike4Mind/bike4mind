@@ -397,6 +397,49 @@ const ROWS: [string, string, string][] = [
   ['exec -c git -C origin.git log', '', 'aaaa'],
   ['cp -r evil/.git/. bare/ && exec -c git -C bare log', '', 'aaaa'],
   ['export PATH="$PWD/nt6//:$PATH" && mkdir nt6 && cp srcx/git-hello nt6/ && git hello', '', 'aaaa'],
+  ['git -C rem/helper fetch origin', '', 'aaaa'],
+  ['git -C rem/helper fetch', '', 'aaaa'],
+  ['git -C rem/helper pull', '', 'aaaa'],
+  ['git -C rem/helper ls-remote origin', '', 'aaaa'],
+  ['git -C rem/helper remote show origin', '', 'aaaa'],
+  ['git -C rem/helper remote show -n origin', '', 'rrrr'],
+  ['git -C rem/helper log -1', '', 'rrrr'],
+  ['git fetch origin', 'rem/helper', 'aaaa'],
+  ['git -C rem/rewrite fetch origin', '', 'aaaa'],
+  ['git -C rem/rewrite fetch https://example.com/r.git', '', 'aaaa'],
+  ['git -C rem/vcs fetch origin', '', 'rrrr'],
+  ['git -C rem/vcs fetch upstream', '', 'aaaa'],
+  ['git -C rem/vcs fetch --all', '', 'aaaa'],
+  ['git -C rem/pushurl fetch origin', '', 'rrrr'],
+  ['git -C rem/pushurl push origin main', '', 'aaaa'],
+  ['git -C rem/plain fetch origin', '', 'rrrr'],
+  ['git -C rem/plain fetch --all', '', 'rrrr'],
+  ['git -C rem/vcs fetch https://example.com/r.git', '', 'aaaa'],
+  ['git -C rem/vcs clone https://example.com/r.git cl10', '', 'aaaa'],
+  ['git -C rem/group fetch --multiple grp', '', 'aaaa'],
+  ['git -C rem/group remote update grp', '', 'aaaa'],
+  ['git -C rem/group fetch grp', '', 'aaaa'],
+  ['git -C rem/group fetch origin', '', 'rrrr'],
+  ['git -C rem/branch fetch', '', 'aaaa'],
+  ['git -C rem/branch pull', '', 'aaaa'],
+  ['git -C rem/branch fetch origin', '', 'rrrr'],
+  ['git -C rem/pushdefault push', '', 'aaaa'],
+  ['git -C rem/tracked fetch', '', 'rrrr'],
+  ['git -C rem/tracked pull', '', 'rrrr'],
+  ['git -C rem/tracked push', '', 'raar'],
+  ['echo foo::x | xargs git fetch', '', 'aaaa'],
+  ['git -c remote.origin.url=foo::x fetch origin', '', 'aaaa'],
+  ['git config url.foo::x.insteadOf https://example.com/ && git fetch https://example.com/r.git', '', 'aaaa'],
+  ['git archive --remote=foo::x HEAD', '', 'aaaa'],
+  ['git push --repo=foo::x', '', 'aaaa'],
+  ['cp rem/helper/.git/config rem/plain/.git/config && git -C rem/plain fetch origin', '', 'aaaa'],
+  ['export PATH="$PWD/ptools:$PATH" && git fetch origin', '', 'aaaa'],
+  ['export PATH="$PWD/ptools:$PATH" && git submodule update --init', '', 'aaaa'],
+  ['export PATH="$PWD/ptools:$PATH" && git log --format=%G? -1', '', 'aaaa'],
+  ['export PATH="$PWD/ptools:$PATH" && git log -1 "$X"', '', 'aaaa'],
+  ['export PATH="$PWD/ptools:$PATH" && git help commit', '', 'aaaa'],
+  ['export PATH="$PWD/ptools:$PATH" && git log -1', '', 'arrr'],
+  ['export PATH="$PWD/ptools:$PATH" && git help -a', '', 'arrr'],
 ];
 
 describe('shell approval of git programs, sourced files and fresh folders', () => {
@@ -501,6 +544,26 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     git(join(proj, 'gf', '.bare'), 'config', 'alias.st', '!touch MARK');
     file(join(proj, 'gf', '.git'), 'gitdir: ./.bare\n');
     file(join(proj, 'tpl2', 'f'), 'f');
+    for (const [name, settings] of Object.entries({
+      helper: [['remote', 'add', 'origin', 'foo::x']],
+      rewrite: [['config', 'url.foo::x.insteadOf', 'https://example.com/']],
+      vcs: [['config', 'remote.upstream.vcs', 'svn']],
+      pushurl: [['config', 'remote.origin.pushurl', 'foo::x']],
+      plain: [['config', 'url.https://mirror.example.com/.insteadOf', 'https://example.com/']],
+      group: [['config', 'remotes.grp', 'foo::x']],
+      branch: [['config', 'branch.main.remote', 'foo::x']],
+      pushdefault: [['config', 'remote.pushDefault', 'foo::x']],
+      tracked: [
+        ['config', 'branch.main.remote', 'origin'],
+        ['config', 'branch.main.merge', 'refs/heads/main'],
+      ],
+    })) {
+      const dir = join(proj, 'rem', name);
+      repository(dir, { 'x.ts': 'x' });
+      if (name !== 'helper') git(dir, 'remote', 'add', 'origin', 'https://example.com/r.git');
+      for (const args of settings) git(dir, ...args);
+    }
+    for (const name of ['ssh', 'gpg', 'man']) file(join(proj, 'ptools', name), '#!/bin/sh\nexit 0\n', 0o755);
     roots = permissionProtectedLocations(userData, home, join(base, 'managed'), { warn: () => {} }).paths();
     const compiled: CompiledRule[] = [];
     for (const program of [
@@ -675,6 +738,23 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
 
     it('asks in every mode for a program copied into the folder', async () => {
       expect(await cells('mkdir ntools5 && cp srcx/git-hello ntools5/ && git hello', '')).toBe('aaaa');
+    });
+  });
+
+  describe('outside a repository', () => {
+    const globalConfig = (): string => join(dirname(proj), '.gitconfig');
+
+    it.each([
+      ['git -C .. ls-remote https://example.com/r.git', '', 'rrrr'],
+      ['git -C .. ls-remote up', '[remote "up"]\n\turl = foo::x\n', 'aaaa'],
+      ['git -C .. ls-remote https://example.com/r.git', '[remote "origin"]\n\tvcs = svn\n', 'aaaa'],
+    ])('decides %s with a user config of %j as %s', async (command, config, expected) => {
+      file(globalConfig(), config);
+      try {
+        expect(await cells(command, '')).toBe(expected);
+      } finally {
+        rmSync(globalConfig(), { force: true });
+      }
     });
   });
 

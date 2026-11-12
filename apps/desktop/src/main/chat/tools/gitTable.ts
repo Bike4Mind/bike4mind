@@ -14,9 +14,34 @@ export interface GitWord {
   glob?: boolean;
 }
 
+/** The options a call gives, each with the values it took. */
+type Given = ReadonlyMap<string, readonly GitWord[]>;
+
+/** The remotes a call contacts, by the words naming them (a remote, URL or path), or `all` for the default or a group. */
+export interface GitContacts {
+  remotes: readonly string[] | 'all';
+  push: boolean;
+}
+
 export type GitListing =
-  | { listed: true; form: string; given: ReadonlySet<string>; operands: readonly GitWord[] }
+  | {
+      listed: true;
+      form: string;
+      given: Given;
+      operands: readonly GitWord[];
+      /** Whether a word the shell fills stands where git reads options, so it may be any option of the form. */
+      open: boolean;
+      contacts?: GitContacts;
+      /** Programs git looks up on PATH for the call. */
+      programs: readonly string[];
+    }
   | { listed: false; reason: string };
+
+interface Call {
+  given: Given;
+  operands: readonly GitWord[];
+  open: boolean;
+}
 
 type Kind = 'flag' | 'valued' | 'optional' | 'lastArg';
 
@@ -33,9 +58,13 @@ interface FormSpec {
   /** Where a word the shell fills may stand before `--`: anywhere, or once git stops reading options at the first operand. */
   open?: 'any' | 'afterOperand';
   maxOperands?: number;
-  /** The operands git contacts as a remote or URL. */
-  remotes?: (operands: readonly GitWord[], given: ReadonlySet<string>) => readonly GitWord[];
-  check?: (operands: readonly GitWord[], given: ReadonlySet<string>) => string | null;
+  /** The operands git reads as a remote or URL. */
+  remotes?: (operands: readonly GitWord[], given: Given) => readonly GitWord[];
+  /** The remotes the call contacts: those `remotes` gives, every one, or none (null). */
+  contacts?: (operands: readonly GitWord[], given: Given) => readonly GitWord[] | 'all' | null;
+  push?: boolean;
+  programs?: (call: Call) => readonly string[];
+  check?: (operands: readonly GitWord[], given: Given) => string | null;
   verbs?: Readonly<Record<string, FormSpec>>;
   /** Flags git reads before the verb. */
   leading?: string;
@@ -126,13 +155,23 @@ const strategy = (value: string): boolean => STRATEGIES.has(value);
 const REMOTE_SCHEMES = new Set(['https', 'http', 'ssh', 'git', 'file', 'git+ssh', 'ssh+git', 'ftp', 'ftps']);
 
 /** Whether git reaches `value` with its own transports: a name, path, scp-like address or URL of a listed scheme. */
-function plainRemote(value: string): boolean {
+export function plainRemote(value: string): boolean {
   if (value.includes('::') || value.startsWith('-')) return false;
   const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(value)?.[1];
   return scheme === undefined || REMOTE_SCHEMES.has(scheme);
 }
 
 const firstOperand = (operands: readonly GitWord[]): readonly GitWord[] => operands.slice(0, 1);
+/** The remote a call names first, or the default one git picks when it names none. */
+const firstOrDefault = (operands: readonly GitWord[]): readonly GitWord[] | 'all' =>
+  operands.length === 0 ? 'all' : firstOperand(operands);
+
+/** What git verifies signatures with, for a format that shows one (`%G?`, `%(signature)`) or an option bash fills in. */
+function signaturePrograms({ given, open }: Call): readonly string[] {
+  const formats = ['--format', '--pretty'].flatMap(name => given.get(name) ?? []);
+  const shown = formats.some(value => !value.whole || /%G|%\(signature/.test(value.text));
+  return open || shown ? ['gpg', 'gpgsm', 'ssh-keygen'] : [];
+}
 
 const ANY_VALUE_SETTINGS = new Set(
   `user.name user.email author.name author.email committer.name committer.email column.ui core.abbrev core.quotepath
@@ -203,7 +242,7 @@ const STASH_PUSH: FormSpec = {
   options:
     '-quakS -m: --quiet --include-untracked --no-include-untracked --all --(no-)keep-index --staged --message= --pathspec-file-nul',
 };
-const REFLOG_SHOW: FormSpec = { options: LOG_DIFF, open: 'any' };
+const REFLOG_SHOW: FormSpec = { options: LOG_DIFF, open: 'any', programs: signaturePrograms };
 const SUBMODULE_STATUS: FormSpec = { options: '-q --quiet --cached --recursive' };
 
 const FORMS: Readonly<Record<string, FormSpec>> = {
@@ -214,18 +253,23 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
     open: 'any',
   },
   diff: { options: `${DIFF_SHORT} ${DIFF_LONG} --cached --staged --no-index`, open: 'any' },
-  log: { options: LOG_DIFF, open: 'any' },
-  show: { options: LOG_DIFF, open: 'any' },
+  log: { options: LOG_DIFF, open: 'any', programs: signaturePrograms },
+  show: { options: LOG_DIFF, open: 'any', programs: signaturePrograms },
   shortlog: {
     options: `-iEFPg -L: -nsec -w? ${LOG_LONG} --(no-)numbered --(no-)summary --(no-)email --(no-)committer --group=`,
     open: 'any',
+    programs: signaturePrograms,
   },
   'range-diff': {
     options: `${DIFF_SHORT} ${DIFF_LONG} --creation-factor= --(no-)dual-color --(no-)left-only --(no-)right-only
       --max-memory=`,
     open: 'any',
   },
-  'diff-tree': { options: `${LOG_DIFF} -v --root --no-commit-id --always`, open: 'any' },
+  'diff-tree': {
+    options: `${LOG_DIFF} -v --root --no-commit-id --always`,
+    open: 'any',
+    programs: signaturePrograms,
+  },
   'rev-parse': {
     options: `-q --short[=] --abbrev-ref[=] --verify --quiet --git-dir --git-common-dir --absolute-git-dir
       --show-toplevel --show-prefix --show-cdup --is-inside-git-dir --is-inside-work-tree --is-bare-repository
@@ -240,6 +284,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --object-names --disk-usage[=] --quiet --bisect-vars --bisect-all --timestamp --header --unpacked --missing=
       --filter= --no-filter --filter-print-omitted --indexed-objects --exclude-promisor-objects --use-bitmap-index`,
     open: 'any',
+    programs: signaturePrograms,
   },
   'merge-base': { options: '-a --all --octopus --independent --is-ancestor --fork-point', open: 'any' },
   'merge-tree': {
@@ -272,6 +317,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --color[=] --no-color --exclude= --sort= --points-at= --merged=? --no-merged=? --contains=? --no-contains=?
       --(no-)ignore-case --(no-)include-root-refs`,
     open: 'any',
+    programs: signaturePrograms,
   },
   'show-ref': {
     options: `-dsq --(no-)tags --(no-)branches --(no-)heads --(no-)exists --(no-)verify --(no-)head --(no-)dereference
@@ -379,11 +425,13 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --(no-)create-reflog --(no-)force --column[=] --no-column --sort= --points-at= --(no-)ignore-case
       --(no-)recurse-submodules --format=`,
     open: 'any',
+    programs: signaturePrograms,
   },
   tag: {
     options: `-ldafi -n? -m: -F: --list --delete --(no-)annotate --message= --file= --trailer= --cleanup= --(no-)force
       --(no-)create-reflog --column[=] --no-column --contains=? --no-contains=? --merged=? --no-merged=?
       --(no-)omit-empty --sort= --points-at= --format= --color[=] --no-color --(no-)ignore-case`,
+    programs: signaturePrograms,
   },
   stash: {
     verbs: {
@@ -391,8 +439,8 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       save: { options: '-quakS --quiet --include-untracked --no-include-untracked --all --(no-)keep-index --staged' },
       pop: { options: '-q --quiet --index', maxOperands: 1 },
       apply: { options: '-q --quiet --index', maxOperands: 1 },
-      list: { options: LOG, open: 'any' },
-      show: { options: `${LOG_DIFF} --include-untracked --only-untracked`, open: 'any' },
+      list: { options: LOG, open: 'any', programs: signaturePrograms },
+      show: { options: `${LOG_DIFF} --include-untracked --only-untracked`, open: 'any', programs: signaturePrograms },
       drop: { options: '-q --quiet', maxOperands: 1 },
       clear: { maxOperands: 0 },
       branch: { maxOperands: 2 },
@@ -439,6 +487,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --no-cc --from[=] --no-from --in-reply-to= --attach[=] --no-attach --inline[=] --thread[=] --no-thread
       --signature= --no-signature --base= --signature-file= --(no-)quiet --(no-)progress --interdiff= --range-diff=
       --creation-factor= --(no-)force-in-body-from`,
+    programs: signaturePrograms,
   },
   'send-email': {
     options: `--to= --cc= --bcc= --from= --reply-to= --in-reply-to= --subject= --no-to --no-cc --no-bcc --(no-)thread
@@ -468,6 +517,11 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
     options: '-agmcv --all --guides --config --(no-)external-commands --(no-)aliases --(no-)man --(no-)verbose',
     maxOperands: 1,
     knownShort: 'agmcviw',
+    // A listing prints from git itself; a page is shown by man.
+    programs: ({ operands, given }) =>
+      operands.length > 0 && !['-a', '--all', '-g', '--guides', '-c', '--config'].some(list => given.has(list))
+        ? ['man']
+        : [],
   },
   config: {
     verbs: {
@@ -508,6 +562,9 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --filter= --(no-)auto-maintenance --(no-)auto-gc --(no-)show-forced-updates --(no-)write-commit-graph`,
     remotes: (operands, given) =>
       given.has('--all') ? [] : given.has('--multiple') || given.has('-m') ? operands : firstOperand(operands),
+    // `--multiple` may name groups, which hold any remote.
+    contacts: (operands, given) =>
+      ['--all', '--multiple', '-m'].some(option => given.has(option)) ? 'all' : firstOrDefault(operands),
   },
   pull: {
     options: `-vqnaftpk46 -r? -s: -X: -o: -j? --(no-)verbose --(no-)quiet --(no-)progress --recurse-submodules[=]
@@ -525,6 +582,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       '--rebase': value => ['true', 'false', 'merges'].includes(value),
     },
     remotes: firstOperand,
+    contacts: firstOrDefault,
   },
   push: {
     options: `-vqdnfu46 -o: --(no-)verbose --(no-)quiet --(no-)all --(no-)branches --(no-)mirror --(no-)delete --(no-)tags
@@ -532,11 +590,14 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --recurse-submodules= --no-recurse-submodules --(no-)thin --(no-)set-upstream --(no-)progress --(no-)prune
       --no-verify --verify --(no-)follow-tags --no-signed --(no-)atomic --push-option= --ipv4 --ipv6`,
     remotes: firstOperand,
+    contacts: firstOrDefault,
+    push: true,
   },
   'ls-remote': {
     options: `-qtb -o: --(no-)quiet --(no-)tags --(no-)branches --(no-)heads --(no-)refs --(no-)get-url --sort=
       --(no-)exit-code --(no-)symref --server-option=`,
     remotes: firstOperand,
+    contacts: firstOrDefault,
   },
   clone: {
     options: `-vqnls46 -j: -o: -b: --(no-)verbose --(no-)quiet --(no-)progress --(no-)reject-shallow --no-checkout
@@ -546,6 +607,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --server-option= --ipv4 --ipv6 --filter= --(no-)also-filter-submodules --(no-)remote-submodules --(no-)sparse`,
     maxOperands: 2,
     remotes: firstOperand,
+    contacts: firstOperand,
   },
   remote: {
     leading: '-v --verbose',
@@ -555,15 +617,25 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
         options: '-f -t: -m: --(no-)tags --mirror=',
         maxOperands: 2,
         remotes: operands => operands.slice(1),
+        contacts: (operands, given) => (given.has('-f') ? operands.slice(1) : null),
       },
       'set-url': { options: '--push --add --delete', maxOperands: 3, remotes: operands => operands.slice(1) },
       rename: { options: '--(no-)progress', maxOperands: 2 },
       remove: { maxOperands: 1 },
       rm: { maxOperands: 1 },
-      'set-head': { options: '-ad --auto --delete', maxOperands: 2, remotes: firstOperand },
-      show: { options: '-n', remotes: operands => operands },
-      prune: { options: '-n --dry-run', remotes: operands => operands },
-      update: { options: '-p --prune', remotes: operands => operands },
+      'set-head': {
+        options: '-ad --auto --delete',
+        maxOperands: 2,
+        remotes: firstOperand,
+        contacts: (operands, given) => (given.has('-a') || given.has('--auto') ? firstOperand(operands) : null),
+      },
+      show: {
+        options: '-n',
+        remotes: operands => operands,
+        contacts: (operands, given) => (given.has('-n') ? null : operands),
+      },
+      prune: { options: '-n --dry-run', remotes: operands => operands, contacts: operands => operands },
+      update: { options: '-p --prune', remotes: operands => operands, contacts: () => 'all' },
     },
     otherwise: { options: '-v --verbose', maxOperands: 0 },
   },
@@ -577,6 +649,8 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       update: {
         options: `-qNf -j: --quiet --init --remote --no-fetch --checkout --rebase --merge --force --recursive
           --(no-)single-branch --(no-)recommend-shallow --depth= --jobs= --filter= --(no-)progress`,
+        // git limits submodule fetches to its own transports, of which ssh is looked up on PATH.
+        programs: () => ['ssh'],
       },
     },
     otherwise: SUBMODULE_STATUS,
@@ -635,15 +709,18 @@ function readOption(
   form: Form,
   words: readonly GitWord[],
   at: number,
-  given: Set<string>,
+  given: Map<string, GitWord[]>,
   label: string
 ): number | 'open' | 'exits' | Miss {
   const word = words[at] as GitWord;
   const { text, whole } = word;
   const known = form.options;
+  const take = (name: string, value?: GitWord): void => {
+    given.set(name, [...(given.get(name) ?? []), ...(value ? [value] : [])]);
+  };
   if (known.numeric && /^-\d+$/.test(text)) {
     if (!whole) return 'open';
-    given.add('-<n>');
+    take('-<n>');
     return at;
   }
   if (text.startsWith('--')) {
@@ -652,14 +729,17 @@ function readOption(
     const name = equals === -1 ? text : text.slice(0, equals);
     const kind = known.long.get(name);
     if (kind === undefined) return miss(`${label} ${shown(name)}`);
-    given.add(name);
     if (equals !== -1) {
       if (kind === 'flag') return miss(`${label} ${name}=`);
-      return checkValue(form, name, { text: text.slice(equals + 1), whole, splits: false }, label) ?? at;
+      const value = { text: text.slice(equals + 1), whole, splits: false };
+      take(name, value);
+      return checkValue(form, name, value, label) ?? at;
     }
     if (kind === 'valued' || (kind === 'lastArg' && at + 1 < words.length)) {
+      take(name, words[at + 1]);
       return nextValue(form, name, words, at, label);
     }
+    take(name);
     return at;
   }
   for (let index = 1; index < text.length; index++) {
@@ -667,12 +747,17 @@ function readOption(
     const kind = known.short.get(letter);
     if (kind === undefined && form.knownShort !== undefined && !form.knownShort.includes(letter)) return 'exits';
     if (kind === undefined) return miss(`${label} -${letter}`);
-    given.add(`-${letter}`);
-    if (kind === 'flag') continue;
+    if (kind === 'flag') {
+      take(`-${letter}`);
+      continue;
+    }
     const rest = text.slice(index + 1);
     if (rest !== '' || !whole || kind === 'optional') {
-      return checkValue(form, `-${letter}`, { text: rest, whole, splits: false }, label) ?? at;
+      const value = { text: rest, whole, splits: false };
+      take(`-${letter}`, value);
+      return checkValue(form, `-${letter}`, value, label) ?? at;
     }
+    take(`-${letter}`, words[at + 1]);
     return nextValue(form, `-${letter}`, words, at, label);
   }
   return whole ? at : 'open';
@@ -700,14 +785,25 @@ function readVerb(form: Form, words: readonly GitWord[], label: string): GitList
   return readForm(form.otherwise, words, label);
 }
 
+/** A listing that contacts no remote and starts no program. */
+const plainListing = (form: string, given: Given): GitListing => ({
+  listed: true,
+  form,
+  given,
+  operands: [],
+  open: false,
+  programs: [],
+});
+
 function readForm(form: Form, words: readonly GitWord[], label: string): GitListing {
-  const given = new Set<string>();
+  const given = new Map<string, GitWord[]>();
   if (words.length === 1 && words[0]?.whole && words[0].text === '-h') {
-    return { listed: true, form: label, given: new Set(['-h']), operands: [] };
+    return plainListing(label, new Map([['-h', []]]));
   }
   if (form.verbs) return readVerb(form, words, label);
   const operands: GitWord[] = [];
   let reading = true;
+  let open = false;
   for (let at = 0; at < words.length; at++) {
     const word = words[at] as GitWord;
     if (!reading) {
@@ -721,9 +817,10 @@ function readForm(form: Form, words: readonly GitWord[], label: string): GitList
     const option = !isOpen(word) && word.text.startsWith('-') && word.text !== '-';
     const read = isOpen(word) ? 'open' : option ? readOption(form, words, at, given, label) : at;
     if (typeof read === 'object') return read;
-    if (read === 'exits') return { listed: true, form: label, given, operands };
+    if (read === 'exits') return plainListing(label, given);
     if (read === 'open') {
       if (form.open !== 'any') return miss(`${label} ${OPEN}`);
+      open = true;
       operands.push(word);
       continue;
     }
@@ -745,7 +842,16 @@ function readForm(form: Form, words: readonly GitWord[], label: string): GitList
   }
   const reason = form.check?.(operands, given);
   if (reason) return miss(`${label} ${reason}`);
-  return { listed: true, form: label, given, operands };
+  const contacted = form.contacts?.(operands, given) ?? [];
+  const contacts =
+    contacted === 'all' || contacted.length > 0
+      ? {
+          remotes: contacted === 'all' ? ('all' as const) : contacted.map(remote => remote.text),
+          push: form.push === true,
+        }
+      : undefined;
+  const programs = form.programs?.({ given, operands, open }) ?? [];
+  return { listed: true, form: label, given, operands, open, ...(contacts ? { contacts } : {}), programs };
 }
 
 /** The setting a `-c` or `--config-env` word names, and whether its value passes: null when the key is not fixed. */
@@ -773,7 +879,7 @@ export function gitListed(words: readonly GitWord[]): GitListing {
       return form ? readForm(form, words.slice(at + 1), `git ${text}`) : miss(`git ${shown(text)}`);
     }
     if (whole && (text === '--version' || text === '-v' || text === '--exec-path' || text.startsWith('--list-cmds='))) {
-      return { listed: true, form: `git ${text}`, given: new Set(), operands: [] };
+      return plainListing(`git ${text}`, new Map());
     }
     if (whole && (text === '--help' || text === '-h')) {
       return readForm(COMPILED.get('help') as Form, words.slice(at + 1), 'git help');
@@ -798,5 +904,5 @@ export function gitListed(words: readonly GitWord[]): GitListing {
     }
     return miss(`git ${shown(name)}`);
   }
-  return { listed: true, form: 'git', given: new Set(), operands: [] };
+  return plainListing('git', new Map());
 }

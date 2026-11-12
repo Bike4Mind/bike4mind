@@ -328,6 +328,63 @@ describe('gitListed', () => {
   });
 
   it.each([
+    ['fetch', 'all'],
+    ['fetch origin', ['origin']],
+    ['fetch --all', 'all'],
+    ['fetch --multiple origin upstream', 'all'],
+    ['pull --rebase', 'all'],
+    ['pull origin main', ['origin']],
+    ['push', 'all'],
+    ['push -u origin topic', ['origin']],
+    ['ls-remote https://example.com/r.git', ['https://example.com/r.git']],
+    ['clone ../r d', ['../r']],
+    ['remote add -f fork ../r', ['../r']],
+    ['remote set-head origin -a', ['origin']],
+    ['remote show origin upstream', ['origin', 'upstream']],
+    ['remote prune origin', ['origin']],
+    ['remote update', 'all'],
+  ])('names the remotes git %s contacts', (line, expected) => {
+    const listing = gitListed(words(line));
+    expect(listing.listed && listing.contacts?.remotes).toEqual(expected);
+  });
+
+  it.each(['log -1', 'remote -v', 'remote add fork ../r', 'remote show -n origin', 'remote set-head origin main'])(
+    'contacts no remote for %s',
+    line => {
+      const listing = gitListed(words(line));
+      expect(listing.listed && listing.contacts).toBeUndefined();
+    }
+  );
+
+  it.each([
+    ['push origin', true],
+    ['fetch origin', false],
+  ])('says whether %s pushes', (line, expected) => {
+    const listing = gitListed(words(line));
+    expect(listing.listed && listing.contacts?.push).toBe(expected);
+  });
+
+  const SIGNERS = ['gpg', 'gpgsm', 'ssh-keygen'];
+  it.each([
+    ['log -1', []],
+    ['log --format=%G? -1', SIGNERS],
+    ['show --pretty=format:%GS HEAD', SIGNERS],
+    ['for-each-ref --format=%(signature)', SIGNERS],
+    ['log --format=$', SIGNERS],
+    ['log -1 $', SIGNERS],
+    ['branch -D $', SIGNERS],
+    ['help commit', ['man']],
+    ['help -a', []],
+    ['help -g', []],
+    ['help', []],
+    ['submodule update --init', ['ssh']],
+    ['status $', []],
+  ])('names the programs git %s looks up on PATH', (line, expected) => {
+    const listing = gitListed(words(line));
+    expect(listing.listed && listing.programs).toEqual(expected);
+  });
+
+  it.each([
     ['config user.name', true],
     ['config --get remote.origin.url', true],
     ['config --get-regexp alias', true],

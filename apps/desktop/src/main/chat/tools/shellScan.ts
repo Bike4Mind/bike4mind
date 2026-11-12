@@ -12,7 +12,7 @@ import {
 } from './bashArity';
 import { parseBash } from './bashParser';
 import { isEnvFile } from './envFiles';
-import { gitListed, type GitWord } from './gitTable';
+import { gitListed, plainRemote, type GitContacts, type GitWord } from './gitTable';
 import { own } from '@shared/ownKeys';
 import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
 import {
@@ -25,6 +25,7 @@ import {
   operandTargets,
   physicalTarget,
   realpathNearest,
+  resolveOperand,
   resolveWithinRootsPhysically,
   type OperandReader,
 } from './paths';
@@ -42,6 +43,8 @@ import {
   gitDirectories,
   gitListsBuiltin,
   gitRefusesImplicitBare,
+  gitRemoteSettings,
+  gitRemoteUrls,
   gitSubcommand,
   gitToplevel,
   indexListed,
@@ -53,6 +56,7 @@ import {
   splitGitAlias,
   withGrantedRoots,
   type GitAliases,
+  type GitRemoteSettings,
   type GitScript,
 } from './shellWrites';
 import { wslLocation, wslUncPath, wslUserEnvironment } from '../../wsl/wslPath';
@@ -6438,8 +6442,15 @@ export async function scanShell(
       };
     };
 
-    /** Why git, run with `args` (its words after `git`) by the command `tokens`, runs a form gitTable does not list. */
-    const gitUnlistedReason = (tokens: readonly string[], args: readonly string[]): string | null => {
+    /**
+     * Why git, run with `args` (its words after `git`) by the command `tokens`, runs a form gitTable does not list or
+     * contacts a remote the scan cannot check; the programs a listed form looks up on PATH go through checkPathPrograms.
+     */
+    const gitUnlistedReason = async (
+      node: Node,
+      tokens: readonly string[],
+      args: readonly string[]
+    ): Promise<string | null> => {
       const feeds = xargsFeeds(tokens) !== null;
       const replace = feeds ? xargsReplace(tokens) : null;
       const [first = '', ...rest] = withoutWrappers(tokens);
@@ -6453,8 +6464,120 @@ export async function scanShell(
         // xargs adds the words it reads after the ones it was given.
         const listing = gitListed(feeds && replace === null ? [...words, OPEN_GIT_WORD] : words);
         if (!listing.listed) return listing.reason;
+        const folder = gitFolder(words);
+        const programs = [...listing.programs, ...(listing.contacts ? ['ssh'] : [])];
+        if (programs.length > 0) await checkPathPrograms(node, folder ?? state.cwd, programs);
+        if (listing.contacts === undefined) continue;
+        if (folder === null || sourced || aliasEnvironment || dropsGitConfig(tokens)) {
+          return `${listing.form} with a remote in config the scan cannot read`;
+        }
+        if (!(await configSettled(node, folder))) return `${listing.form} after a config change in the same script`;
+        if (!(await remotesPlain(folder, listing.contacts))) {
+          return `${listing.form} with a remote git reaches through a program of its own`;
+        }
       }
       return null;
+    };
+
+    /** The folder git runs in for a call with `words` (those after `git`); null when the scan cannot place its repository. */
+    const gitFolder = (words: readonly GitWord[]): string | null => {
+      if (state.lost) return null;
+      let folder = state.cwd;
+      for (let at = 0; at < words.length; at++) {
+        const { text } = words[at] as GitWord;
+        if (!text.startsWith('-')) break;
+        if (/^--(git-dir|work-tree)(=|$)/.test(text)) return null;
+        if (text === '-C') {
+          const value = words[++at];
+          if (value === undefined || !value.whole) return null;
+          folder = resolveOperand(folder, value.text);
+        } else if (text === '-c' || text === '--config-env') {
+          at++;
+        }
+      }
+      return folder;
+    };
+
+    const remoteSettings = new Map<string, Promise<GitRemoteSettings | null>>();
+    const remoteUrls = new Map<string, Promise<string[] | 'none' | null>>();
+
+    /**
+     * Whether every remote `contacts` names in `folder`, with the groups and defaults git may pick in its place, leads
+     * somewhere git reaches with its own transports, its URL rewrites applied: no `<helper>::` or unknown scheme, and
+     * no `remote.<name>.vcs`.
+     */
+    const remotesPlain = async (folder: string, contacts: GitContacts): Promise<boolean> => {
+      let settings = remoteSettings.get(folder);
+      if (settings === undefined) remoteSettings.set(folder, (settings = gitRemoteSettings(folder)));
+      const known = await settings;
+      if (known === null || known.rewrites.some(rule => !plainRemote(rule.base))) return false;
+      // git rewrites by the longest matching prefix, a push URL by a pushInsteadOf one first.
+      const rewritten = (url: string, push: boolean): string => {
+        const longest = (pushRules: boolean) =>
+          known.rewrites
+            .filter(rule => rule.push === pushRules && url.startsWith(rule.prefix))
+            .sort((a, b) => b.prefix.length - a.prefix.length)[0];
+        const rule = (push ? longest(true) : undefined) ?? longest(false);
+        return rule ? rule.base + url.slice(rule.prefix.length) : url;
+      };
+      const pushes = contacts.push ? [false, true] : [false];
+      // A name no remote has may name a group. A default or group member of `.` is the repository itself.
+      const members = (name: string): string[] =>
+        known.remotes.includes(name)
+          ? []
+          : known.groups.filter(group => group.name === name.toLowerCase()).flatMap(group => group.members);
+      const elsewhere = (name: string): boolean => name !== '.';
+      const names =
+        contacts.remotes === 'all'
+          ? [...known.remotes, ...known.helpers, ...known.defaults.filter(elsewhere)]
+          : contacts.remotes.flatMap(name => [name, ...members(name).filter(elsewhere)]);
+      for (const name of names) {
+        if (known.helpers.includes(name)) return false;
+        // Outside a repository `git remote get-url` cannot run to resolve a remote the user config names.
+        if (known.outside && known.remotes.includes(name)) return false;
+        for (const push of pushes) {
+          const key = JSON.stringify([folder, name, push]);
+          let urls = remoteUrls.get(key);
+          // No remote name holds a `:`, so such a word is an address.
+          if (urls === undefined) {
+            remoteUrls.set(
+              key,
+              (urls = name.includes(':') || known.outside ? Promise.resolve('none') : gitRemoteUrls(folder, name, push))
+            );
+          }
+          const listed = await urls;
+          if (listed === null) return false;
+          // A clone reads the `vcs` of the remote it files the address under, `origin` by default.
+          if (listed === 'none' && known.helpers.length > 0) return false;
+          if ((listed === 'none' ? [rewritten(name, push)] : listed).some(url => !plainRemote(url))) return false;
+        }
+      }
+      return true;
+    };
+
+    /**
+     * Whether no write before `node` may have changed the config git reads in `folder`; one that may race it is
+     * checked after the walk, as for an alias.
+     */
+    const configSettled = async (node: Node, folder: string): Promise<boolean> => {
+      const { folder: read, user, from } = await aliasSource(folder);
+      const config = await aliasesAt(read, user, from);
+      if (config === null) return false;
+      const check = {
+        own: node.id,
+        anywhere: branching > 0 || backgrounded,
+        alongside: alongsideOf(node),
+        cwd: read,
+        places: await aliasPlaces(config.includes),
+        folders: [],
+        programs: false,
+        legacy: !(await gitRefusesImplicitBare(read)),
+      };
+      for (const write of configWrites) {
+        if (write.id !== node.id && (await aliasConfigTouched(write, check))) return false;
+      }
+      aliasChecks.push(check);
+      return true;
     };
 
     /**
@@ -7421,7 +7544,7 @@ export async function scanShell(
         if (launchedExpansion === null || untrackableCommand(checked) || programEnvironment(node, checked))
           unreadOperands++;
         if (launchedExpansion !== null)
-          unlisted ??= gitUnlistedReason(written, withoutWrappers(launchedExpansion).slice(1));
+          unlisted ??= await gitUnlistedReason(node, written, withoutWrappers(launchedExpansion).slice(1));
         const git = gitSubcommand(withoutWrappers(checked).slice(1).map(unquote), state.cwd);
         if (git !== null && !git.unread) await checkGitPrograms(node, git);
         if (expanded !== null && launchedExpansion !== null && launchedExpansion.join(' ') !== launched.join(' ')) {
@@ -7522,7 +7645,7 @@ export async function scanShell(
       if (LAUNCHES_COMMANDS.has(inner) && dropsBareRepositoryBehind(tokens)) unreadOperands++;
       if (inner === 'git') {
         gitCommands.add(node.id);
-        if (expanded !== null) unlisted ??= gitUnlistedReason(tokens, wrappedRest);
+        if (expanded !== null) unlisted ??= await gitUnlistedReason(node, tokens, wrappedRest);
         if (dropsBareRepository(tokens) || setsBareRepository(wrappedRest) || unsetsConfig) {
           unreadOperands++;
         }
