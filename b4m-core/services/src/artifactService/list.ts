@@ -1,6 +1,7 @@
 import { IArtifactRepository } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { identifierFilter } from './identifierFilter';
 
 const listArtifactsSchema = z.object({
   type: z.string().optional(),
@@ -59,8 +60,7 @@ export const list = async (userId: string, parameters: ListArtifactsParameters, 
   if (projectId) filter.projectId = projectId;
   if (sessionId) filter.sessionId = sessionId;
   if (identifier !== undefined) {
-    // Rows written before `identifier` became a field recorded it only in metadata.
-    filter.$or = [{ identifier }, { identifier: { $exists: false }, 'metadata.originalIdentifier': identifier }];
+    Object.assign(filter, identifierFilter(identifier));
   }
   if (tags && tags.length > 0) {
     filter.tags = { $in: tags };

@@ -20,11 +20,18 @@ import {
   useLLMModelConfigurationsWithDefaults,
   useSaveLLMModelConfigurations,
 } from '@client/app/hooks/data/llmModelConfig';
+import {
+  modelAccessChanges,
+  committedModelSnapshot,
+  retainPendingModelEdits,
+  type LoadedModelConfiguration,
+} from '@client/app/hooks/data/modelAccessDraft';
 import { useGetUsers } from '@client/app/hooks/data/user';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { KNOWN_ENTITLEMENT_KEYS } from '@bike4mind/server-utils/lib/entitlements/registry';
 import {
+  ActionDialog,
   AdminPageHeader,
   AdminSearchInput,
   BulkActionBar,
@@ -91,7 +98,7 @@ const DATE_FORMAT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'num
 const formatDate = (date?: Date) => (date ? DATE_FORMAT.format(date) : '-');
 
 type ModelDates = Record<string, { createdAt?: Date; updatedAt?: Date }>;
-type Snapshot = { models: LLMModelConfig[]; dates: ModelDates };
+type Snapshot = { models: LoadedModelConfiguration[]; dates: ModelDates };
 
 const sameMembers = (left: readonly string[] = [], right: readonly string[] = []) =>
   left.length === right.length && [...left].sort().join('\n') === [...right].sort().join('\n');
@@ -112,18 +119,28 @@ const isLeavingTab = (current: { pathname: string; search: object }, next: { pat
 
 const LLMDashboardTab: React.FC = () => {
   const router = useRouter();
-  const { data: modelInfos, isPending: modelInfoPending, error, refetch: refetchModelInfo } = useModelInfo();
+  const {
+    data: modelInfos,
+    isPending: modelInfoPending,
+    error: modelInfoError,
+    refetch: refetchModelInfo,
+  } = useModelInfo();
   // Pass the query's own pending state: inferring it from missing data would report a failed
   // model-info fetch as loading forever and hide the error.
-  const { data: models, isLoading: configLoading } = useLLMModelConfigurationsWithDefaults(
-    modelInfos,
-    modelInfoPending
-  );
+  const {
+    data: models,
+    isLoading: configLoading,
+    error: configError,
+    refetch: refetchConfigurations,
+  } = useLLMModelConfigurationsWithDefaults(modelInfos, modelInfoPending);
   const { data: usersData, isLoading: usersLoading } = useGetUsers({
     page: 1,
     limit: 1000, // Get all users to extract their tags
   });
-  const [localModels, setLocalModels] = useState<LLMModelConfig[]>([]);
+  const error = modelInfoError ?? configError;
+  const [localModels, setLocalModels] = useState<LoadedModelConfiguration[]>([]);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [confirmAdminOnly, setConfirmAdminOnly] = useState(false);
   const [saved, setSaved] = useState<Snapshot>({ models: [], dates: {} });
   const [initialized, setInitialized] = useState(false);
   const [filterType, setFilterType] = useState<string>();
@@ -142,9 +159,13 @@ const LLMDashboardTab: React.FC = () => {
   const [modelDates, setModelDates] = useState<ModelDates>({});
   const savingRef = useRef<Snapshot | null>(null);
 
-  const saveLLMConfigurations = useSaveLLMModelConfigurations(() => {
-    // The sent copy becomes the baseline; edits made while the request was in flight stay unsaved.
-    if (savingRef.current) setSaved(savingRef.current);
+  const saveLLMConfigurations = useSaveLLMModelConfigurations(result => {
+    const snapshot = savingRef.current;
+    if (!snapshot) return;
+    const committed = committedModelSnapshot(snapshot.models, result);
+    setSaved({ ...snapshot, models: committed });
+    setLocalModels(current => retainPendingModelEdits(current, snapshot.models, committed));
+    savingRef.current = null;
   });
 
   // Initialize local models when configurations are loaded
@@ -243,7 +264,7 @@ const LLMDashboardTab: React.FC = () => {
     });
   };
 
-  const updateModel = (modelId: string, update: (model: LLMModelConfig) => LLMModelConfig) => {
+  const updateModel = (modelId: string, update: (model: LoadedModelConfiguration) => LoadedModelConfiguration) => {
     setLocalModels(prev => prev.map(model => (model.id === modelId ? update(model) : model)));
     touchModels([modelId]);
   };
@@ -284,9 +305,11 @@ const LLMDashboardTab: React.FC = () => {
     updateModel(modelId, model => ({ ...model, rank }));
   };
 
-  const handleSave = () => {
+  const handleSave = async (reason: string) => {
+    const changes = modelAccessChanges(localModels, saved.models);
     savingRef.current = { models: localModels, dates: modelDates };
-    saveLLMConfigurations.mutate(localModels);
+    await saveLLMConfigurations.mutateAsync({ changes, reason, confirmAdminOnly });
+    setSaveOpen(false);
   };
 
   const handleDiscard = () => {
@@ -513,11 +536,17 @@ const LLMDashboardTab: React.FC = () => {
   }
 
   // A failed background refetch keeps the loaded models (and any unsaved edits) on screen.
-  if (error && !modelInfos) {
+  if (error && (!modelInfos || (configError && !initialized))) {
     return (
       <Stack sx={rootSx} data-testid="llm-dashboard-root">
         {header}
-        <ErrorState message={`Could not load models: ${error.message}`} onRetry={() => void refetchModelInfo()} />
+        <ErrorState
+          message={`Could not load models: ${error.message}`}
+          onRetry={() => {
+            void refetchModelInfo();
+            void refetchConfigurations();
+          }}
+        />
       </Stack>
     );
   }
@@ -525,6 +554,16 @@ const LLMDashboardTab: React.FC = () => {
   return (
     <Stack sx={rootSx} data-testid="llm-dashboard-root">
       {header}
+
+      {error && initialized && (
+        <ErrorState
+          message="Could not refresh models. The loaded editor and unsaved changes are retained."
+          onRetry={() => {
+            void refetchModelInfo();
+            void refetchConfigurations();
+          }}
+        />
+      )}
 
       <Alert color="neutral" data-testid="llm-dashboard-access-banner">
         <span>
@@ -589,7 +628,10 @@ const LLMDashboardTab: React.FC = () => {
         pageResetKey={filterKey}
         minWidth={tableMinWidth}
         alwaysShowScrollbar
-        onRetry={() => void refetchModelInfo()}
+        onRetry={() => {
+          void refetchModelInfo();
+          void refetchConfigurations();
+        }}
         empty={
           hasFilters ? (
             <EmptyState
@@ -666,13 +708,34 @@ const LLMDashboardTab: React.FC = () => {
             <SaveBar
               count={changedCount}
               pending={saveLLMConfigurations.isPending}
-              onSave={handleSave}
+              onSave={() => {
+                setConfirmAdminOnly(false);
+                setSaveOpen(true);
+              }}
               onDiscard={handleDiscard}
             />
           </Box>
         </Stack>
       )}
 
+      <ActionDialog
+        open={saveOpen}
+        onClose={() => setSaveOpen(false)}
+        title="Save model access"
+        description="Save the changed models against the versions loaded in this editor. A conflicting edit requires a reload."
+        reasonPresets={['Update model availability', 'Adjust model access', 'Change model routing']}
+        confirmLabel="Save changes"
+        onConfirm={handleSave}
+        pending={saveLLMConfigurations.isPending}
+        data-testid="llm-dashboard-save-dialog"
+      >
+        <Checkbox
+          checked={confirmAdminOnly}
+          onChange={event => setConfirmAdminOnly(event.target.checked)}
+          disabled={saveLLMConfigurations.isPending}
+          label="Confirm any changed models restricted to administrators only"
+        />
+      </ActionDialog>
       <UnsavedChangesGuard dirty={dirty} pending={saveLLMConfigurations.isPending} isLeaving={isLeavingTab} />
     </Stack>
   );
