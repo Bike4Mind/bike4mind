@@ -55,7 +55,7 @@ Use **Watch campaign** for follow-up. If your review supports stopping additiona
 
 ## Search
 
-The search box at the top of the Users tab finds users by name, username, email, or user ID. Search is debounced to avoid excessive API calls while typing, and it returns to page 1. Press `/` anywhere in the admin panel to focus it.
+The search box at the top of the Users tab finds users by name, username, email, user ID, or LLM provider identifier (see [Tracing an LLM provider safety notice to an account](#tracing-an-llm-provider-safety-notice-to-an-account)). Search is debounced to avoid excessive API calls while typing, and it returns to page 1. Press `/` anywhere in the admin panel to focus it.
 
 ## Views
 
@@ -385,7 +385,7 @@ Requests to Anthropic and OpenAI carry an opaque per-user identifier: a 64-chara
 2. Paste the 64-character identifier. The matching account is listed with its masked email and account status: `active`, `throttled`, `suspend_pending` (the suspension threshold was reached and is waiting for an admin to confirm), `suspended`, `banned` or `deleted`.
 3. Select it to open the user profile, where you see the full email and can act on the account.
 
-Each lookup is recorded in the admin audit log without the identifier itself. No result means the identifier does not belong to a user on this deployment: for example, a Decisions API caller can send its own `safety_identifier`.
+Each lookup in **Admin commands** is recorded in the admin audit log without the identifier itself. You can also paste the identifier into the Users tab search. No result means the identifier does not belong to a user on this deployment.
 
 ### Handling Support Requests
 
