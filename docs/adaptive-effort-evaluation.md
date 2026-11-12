@@ -86,21 +86,21 @@ before starting either arm; do not drop observations after seeing outcomes.
 The input has `schemaVersion: 1`, the plan's `corpusHash`, and `rows` containing
 exactly one observation per `(promptId, arm)`. Each row requires:
 
-| Field | Meaning |
-| --- | --- |
-| `promptId`, `arm` | Plan ID; arm is `default` or `medium` |
-| `requestId` | Actual unique completion correlation ID, not a generated ordinal |
-| `complexity`, `classifierEvidence` | `complex`; private trace reference |
-| `status`, `attempt`, `restarts` | `completed`, `0`, `0` for this complete-pair analysis |
-| `model` | `claude-opus-5-5`, with exact provider version pinned in environment |
-| `requestedEffort` | `null` for default; `medium` for treatment |
-| `effectiveEffort`, `wireEvidence` | Verified provider effort and private trace reference |
-| `environmentHash` | Same 64-character lowercase SHA-256 for every observation |
-| `response` | Full final answer, stored privately |
-| `firstTokenMs`, `totalMs` | Positive finite timings; total includes tools |
-| `quality`, `correct` | Integer 0-4 and boolean from independent review |
-| `blindReviewId`, `gradeEvidence` | Blinded packet ID and private rubric rationale reference |
-| `toolCorrect`, `toolEvidence` | Boolean and private audit reference, mandatory for tool tasks |
+| Field                              | Meaning                                                              |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `promptId`, `arm`                  | Plan ID; arm is `default` or `medium`                                |
+| `requestId`                        | Actual unique completion correlation ID, not a generated ordinal     |
+| `complexity`, `classifierEvidence` | `complex`; private trace reference                                   |
+| `status`, `attempt`, `restarts`    | `completed`, `0`, `0` for this complete-pair analysis                |
+| `model`                            | `claude-opus-5-5`, with exact provider version pinned in environment |
+| `requestedEffort`                  | `null` for default; `medium` for treatment                           |
+| `effectiveEffort`, `wireEvidence`  | Verified provider effort and private trace reference                 |
+| `environmentHash`                  | Same 64-character lowercase SHA-256 for every observation            |
+| `response`                         | Full final answer, stored privately                                  |
+| `firstTokenMs`, `totalMs`          | Positive finite timings; total includes tools                        |
+| `quality`, `correct`               | Integer 0-4 and boolean from independent review                      |
+| `blindReviewId`, `gradeEvidence`   | Blinded packet ID and private rubric rationale reference             |
+| `toolCorrect`, `toolEvidence`      | Boolean and private audit reference, mandatory for tool tasks        |
 
 Evidence references are operator attestations, not cryptographic verification of
 provider behavior or reviewer independence. Review the linked evidence before
