@@ -500,6 +500,13 @@ describe('canManageOrgDomains', () => {
     expect(canManageOrgDomains({ id: 'owner1' }, undefined)).toBe(false);
   });
 
+  it('hides the tab on a personal organization, even for its owner or a platform admin', () => {
+    const personal = { ...org, personal: true };
+    expect(canManageOrgDomains({ id: 'owner1' }, personal)).toBe(false);
+    expect(canManageOrgDomains({ id: 'stranger', isAdmin: true }, personal)).toBe(false);
+    expect(canManageOrgDomains({ id: 'owner1' }, { ...org, personal: false })).toBe(true);
+  });
+
   it('bounces a ?tab=domains deep link to Overview for a caller who may not manage domains', () => {
     const access = {
       canManageOrg: true,

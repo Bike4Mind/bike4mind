@@ -92,13 +92,14 @@ export const canManageOrgConnectors = (
 ): boolean => !!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization);
 
 /**
- * Who may see the Domains tab: the same canAdministerOrganization check the
- * `organizations/[id]/domains/*` routes run (owner, current manager or platform admin).
+ * Who may see the Domains tab: the same checks `loadOrgForDomainAdmin` runs for the
+ * `organizations/[id]/domains/*` routes (owner, current manager or platform admin; never a personal org).
  */
 export const canManageOrgDomains = (
   currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
-  organization: AdministrableOrg | null | undefined
-): boolean => !!currentUser && !!organization && canAdministerOrganization(currentUser, organization);
+  organization: (AdministrableOrg & { personal?: boolean }) | null | undefined
+): boolean =>
+  !!currentUser && !!organization && !organization.personal && canAdministerOrganization(currentUser, organization);
 
 export interface OrgTabAccess {
   canManageOrg: boolean;
