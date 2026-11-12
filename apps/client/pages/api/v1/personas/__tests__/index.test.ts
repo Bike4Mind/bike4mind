@@ -9,7 +9,14 @@ import { createMocks } from 'node-mocks-http';
 import { PERSONA_ENDPOINT_OFF_CODE } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
-  settings: { enabled: true, dailyLimit: 20, maxLive: 40, ttlDays: 1, emailDomain: null as string | null },
+  settings: {
+    enabled: true,
+    dailyLimit: 20,
+    maxLive: 40,
+    ttlDays: 1,
+    startingCredits: 0,
+    emailDomain: null as string | null,
+  },
   existing: null as Record<string, unknown> | null,
   counts: { mintedLast24h: 0, live: 0 },
   findPersonaByName: vi.fn(),
@@ -120,7 +127,7 @@ const livePersona = (overrides: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   h.production = false;
-  h.settings = { enabled: true, dailyLimit: 20, maxLive: 40, ttlDays: 1, emailDomain: null };
+  h.settings = { enabled: true, dailyLimit: 20, maxLive: 40, ttlDays: 1, startingCredits: 0, emailDomain: null };
   h.counts = { mintedLast24h: 0, live: 0 };
   h.findPersonaByName.mockResolvedValue(null);
   h.issuePersonaLoginCode.mockResolvedValue({ code: CODE, expiresAt: new Date('2026-11-10T12:05:00.000Z') });
@@ -185,6 +192,17 @@ describe('POST /api/v1/personas', () => {
       const wire = JSON.stringify(body);
       expect(wire).not.toMatch(/accessToken|refreshToken/);
       expect(h.issuePersonaLoginCode).toHaveBeenCalledWith(PERSONA_ID, expect.any(Date));
+    });
+
+    it('starts a new persona with PersonaStartingCredits and records the amount in the audit', async () => {
+      h.settings.startingCredits = 500;
+      await post();
+      const [params] = h.createUser.mock.calls[0];
+      expect(params.initialCredits).toBe(500);
+      expect(h.recordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ details: expect.objectContaining({ startingCredits: 500 }) })
+      );
     });
 
     it('creates a flagged, credit-less, non-admin persona owned by the caller, and audits it', async () => {

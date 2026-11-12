@@ -12,6 +12,7 @@ import { authSessionService } from '@bike4mind/services';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { readAdminReturnCookie, readRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { PERSONA_ENDPOINT_OFF_CODE } from '@bike4mind/common';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { issueBrowserSession, issueSessionForRequest } from '@server/auth/issueSession';
@@ -28,6 +29,11 @@ const sessionParams = (persona: { tokenVersion?: number; personaExpiresAt?: Date
     authSessionService.PERSONA_SESSION_IDLE_TTL_MS,
     new Date(persona.personaExpiresAt ?? now).getTime() - now.getTime()
   ),
+});
+
+const loginClient = (req: Request) => ({
+  userAgent: String(req.headers['user-agent'] || 'Unknown').slice(0, 512),
+  ip: getClientIp(req),
 });
 
 const noStore = (res: Response) => {
@@ -50,7 +56,7 @@ const handler = baseApi({ auth: false })
       }
       const code = typeof req.query.code === 'string' ? req.query.code : '';
       const now = new Date();
-      const persona = await redeemPersonaLoginCode(code, now);
+      const persona = await redeemPersonaLoginCode(code, now, loginClient(req));
       if (!persona) return res.status(400).json({ error: INVALID_CODE });
       await issueBrowserSession(req, res, persona.id, sessionParams(persona, now));
       return res.redirect(303, '/');
@@ -65,7 +71,7 @@ const handler = baseApi({ auth: false })
       const parsed = RedeemBodySchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: INVALID_CODE });
       const now = new Date();
-      const persona = await redeemPersonaLoginCode(parsed.data.code, now);
+      const persona = await redeemPersonaLoginCode(parsed.data.code, now, loginClient(req));
       if (!persona) return res.status(400).json({ error: INVALID_CODE });
       const { accessToken, refreshToken } = await issueSessionForRequest(req, persona.id, sessionParams(persona, now));
       return res.status(200).json({

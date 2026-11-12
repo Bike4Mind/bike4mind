@@ -671,6 +671,7 @@ export const SettingKeySchema = z.enum([
   'PersonaMintDailyLimit',
   'PersonaMaxLive',
   'PersonaTtlDays',
+  'PersonaStartingCredits',
   'PersonaEmailDomain',
 
   // Two-person approval for high-risk admin actions
@@ -1182,6 +1183,7 @@ export interface BaseSetting {
 export const PERSONA_MINT_DAILY_LIMIT_DEFAULT = 20;
 export const PERSONA_MAX_LIVE_DEFAULT = 40;
 export const PERSONA_TTL_DAYS_DEFAULT = 14;
+export const PERSONA_STARTING_CREDITS_DEFAULT = 0;
 
 /** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
 export const LOW_CREDITS_THRESHOLD_DEFAULT = 1000;
@@ -4764,6 +4766,17 @@ export const settingsMap = {
     max: 90,
     int: true,
     description: 'Days after creation when the expiry sweep disables a test persona and signs it out everywhere.',
+    category: 'SecOps',
+  }),
+  PersonaStartingCredits: makeNumberSetting({
+    key: 'PersonaStartingCredits',
+    name: 'Test Persona Starting Credits',
+    defaultValue: PERSONA_STARTING_CREDITS_DEFAULT,
+    min: 0,
+    max: 1_000_000,
+    int: true,
+    description:
+      'Credits each new test persona starts with. The daily and live persona caps bound the total. Re-minting an existing persona does not top it up.',
     category: 'SecOps',
   }),
   PersonaEmailDomain: makeStringSetting({

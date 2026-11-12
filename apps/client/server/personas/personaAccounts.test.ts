@@ -305,6 +305,8 @@ describe('persona login codes', () => {
     adminPermissions: [],
   };
 
+  const CLIENT = { userAgent: 'qa-bot/1.0', ip: '203.0.113.7' };
+
   it('issues a 43-character base64url code and stores only its sha256 hash', async () => {
     h.updateOne.mockResolvedValue({ matchedCount: 1 });
     const { code, expiresAt } = await issuePersonaLoginCode(personaDoc._id, NOW);
@@ -335,7 +337,7 @@ describe('persona login codes', () => {
     h.findOneAndUpdate.mockResolvedValue(personaDoc);
     const code = 'A'.repeat(43);
 
-    const persona = await redeemPersonaLoginCode(code, NOW);
+    const persona = await redeemPersonaLoginCode(code, NOW, CLIENT);
 
     expect(persona).toMatchObject({ id: personaDoc._id, username: personaDoc.username });
     expect(h.findOneAndUpdate).toHaveBeenCalledWith(
@@ -345,33 +347,43 @@ describe('persona login codes', () => {
         isPersona: true,
         isBanned: { $ne: true },
       },
-      { $unset: { personaLoginCodeHash: 1, personaLoginCodeExpiresAt: 1 } },
+      {
+        $unset: { personaLoginCodeHash: 1, personaLoginCodeExpiresAt: 1 },
+        $push: { loginRecords: { $each: [expect.objectContaining(CLIENT)], $position: 0, $slice: 15 } },
+      },
       { new: true }
     );
+  });
+
+  it('records the sign-in in the same write that consumes the code', async () => {
+    h.findOneAndUpdate.mockResolvedValue(personaDoc);
+    await redeemPersonaLoginCode('E'.repeat(43), NOW, CLIENT);
+    const [, update] = h.findOneAndUpdate.mock.calls[0];
+    expect(update.$push.loginRecords.$each[0]).toMatchObject({ loginTime: NOW, ...CLIENT });
   });
 
   it('works once: the second redemption finds nothing and returns null', async () => {
     h.findOneAndUpdate.mockResolvedValueOnce(personaDoc).mockResolvedValueOnce(null);
     const code = 'B'.repeat(43);
-    expect(await redeemPersonaLoginCode(code, NOW)).not.toBeNull();
-    expect(await redeemPersonaLoginCode(code, NOW)).toBeNull();
+    expect(await redeemPersonaLoginCode(code, NOW, CLIENT)).not.toBeNull();
+    expect(await redeemPersonaLoginCode(code, NOW, CLIENT)).toBeNull();
   });
 
   it('returns null for an expired, unknown or disabled-persona code (the query matches nothing)', async () => {
     h.findOneAndUpdate.mockResolvedValue(null);
-    expect(await redeemPersonaLoginCode('C'.repeat(43), NOW)).toBeNull();
+    expect(await redeemPersonaLoginCode('C'.repeat(43), NOW, CLIENT)).toBeNull();
   });
 
   it.each(['', 'short', 'A'.repeat(42), 'A'.repeat(44), `${'A'.repeat(42)}=`, `${'A'.repeat(42)}+`])(
     'returns null for the malformed code %j without touching the database',
     async code => {
-      expect(await redeemPersonaLoginCode(code, NOW)).toBeNull();
+      expect(await redeemPersonaLoginCode(code, NOW, CLIENT)).toBeNull();
       expect(h.findOneAndUpdate).not.toHaveBeenCalled();
     }
   );
 
   it('returns null when the matched account no longer passes the persona fence', async () => {
     h.findOneAndUpdate.mockResolvedValue({ ...personaDoc, isAdmin: true });
-    expect(await redeemPersonaLoginCode('D'.repeat(43), NOW)).toBeNull();
+    expect(await redeemPersonaLoginCode('D'.repeat(43), NOW, CLIENT)).toBeNull();
   });
 });

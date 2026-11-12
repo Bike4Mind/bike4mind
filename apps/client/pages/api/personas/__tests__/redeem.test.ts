@@ -88,7 +88,11 @@ describe('GET /api/personas/redeem', () => {
     expect(res._getRedirectUrl()).toBe('/');
     expect(res.getHeader('Cache-Control')).toBe('no-store');
     expect(res.getHeader('Referrer-Policy')).toBe('no-referrer');
-    expect(h.redeemPersonaLoginCode).toHaveBeenCalledWith(CODE, expect.any(Date));
+    expect(h.redeemPersonaLoginCode).toHaveBeenCalledWith(
+      CODE,
+      expect.any(Date),
+      expect.objectContaining({ userAgent: expect.any(String) })
+    );
     expect(h.issueBrowserSession).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
@@ -121,7 +125,7 @@ describe('GET /api/personas/redeem', () => {
   it('treats a missing code as invalid', async () => {
     h.redeemPersonaLoginCode.mockResolvedValue(null);
     const res = await run('GET');
-    expect(h.redeemPersonaLoginCode).toHaveBeenCalledWith('', expect.any(Date));
+    expect(h.redeemPersonaLoginCode).toHaveBeenCalledWith('', expect.any(Date), expect.anything());
     expect(res._getStatusCode()).toBe(400);
   });
 

@@ -6,6 +6,7 @@ import {
   hasDeveloperUserTag,
   PERSONA_MAX_LIVE_DEFAULT,
   PERSONA_MINT_DAILY_LIMIT_DEFAULT,
+  PERSONA_STARTING_CREDITS_DEFAULT,
   PERSONA_TTL_DAYS_DEFAULT,
   RESERVED_USERNAME_PREFIX,
   canAccessAdmin,
@@ -14,6 +15,7 @@ import {
   personalEmailProviders,
   regionalPersonalEmailProviders,
   type AuditActor,
+  type ILoginRecord,
   type IUserDocument,
   type StoredAuditContext,
 } from '@bike4mind/common';
@@ -81,8 +83,22 @@ export async function issuePersonaLoginCode(personaId: string, now: Date): Promi
  * Consumes a login code atomically: the first redemption clears it, so a code signs in once. Returns
  * the persona, or null when the code is unknown, used, expired, or belongs to a disabled persona.
  */
-export async function redeemPersonaLoginCode(code: string, now: Date) {
+export async function redeemPersonaLoginCode(code: string, now: Date, client: { userAgent: string; ip: string }) {
   if (!PERSONA_LOGIN_CODE_PATTERN.test(code)) return null;
+  // Same record shape and 15-entry cap as OTC sign-in; the admin profile's "Last sign-in" reads it.
+  const loginRecord: ILoginRecord = {
+    loginTime: now,
+    userAgent: client.userAgent,
+    browser: 'Unknown',
+    operatingSystem: 'Unknown',
+    deviceType: 'Unknown',
+    screenResolution: 'Unknown',
+    viewportSize: 'Unknown',
+    colorDepth: 0,
+    pixelDepth: 0,
+    devicePixelRatio: 1,
+    ip: client.ip,
+  };
   const user = await User.findOneAndUpdate(
     {
       personaLoginCodeHash: hashPersonaLoginCode(code),
@@ -90,7 +106,10 @@ export async function redeemPersonaLoginCode(code: string, now: Date) {
       isPersona: true,
       isBanned: { $ne: true },
     },
-    { $unset: { personaLoginCodeHash: 1, personaLoginCodeExpiresAt: 1 } },
+    {
+      $unset: { personaLoginCodeHash: 1, personaLoginCodeExpiresAt: 1 },
+      $push: { loginRecords: { $each: [loginRecord], $position: 0, $slice: 15 } },
+    },
     { new: true }
   ).lean();
   if (!user) return null;
@@ -115,6 +134,7 @@ export type PersonaSettings = {
   dailyLimit: number;
   maxLive: number;
   ttlDays: number;
+  startingCredits: number;
   /** Null when unset, malformed or refused by personaEmailDomainRefusal: production minting stays off. */
   emailDomain: string | null;
 };
@@ -147,7 +167,14 @@ export async function loadPersonaSettings(logger?: Logger): Promise<PersonaSetti
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
     {
-      names: ['PersonaMintEnabled', 'PersonaMintDailyLimit', 'PersonaMaxLive', 'PersonaTtlDays', 'PersonaEmailDomain'],
+      names: [
+        'PersonaMintEnabled',
+        'PersonaMintDailyLimit',
+        'PersonaMaxLive',
+        'PersonaTtlDays',
+        'PersonaStartingCredits',
+        'PersonaEmailDomain',
+      ],
     }
   );
   const domain = String(getSettingsValue('PersonaEmailDomain', settings, '') ?? '')
@@ -166,6 +193,7 @@ export async function loadPersonaSettings(logger?: Logger): Promise<PersonaSetti
     dailyLimit: getSettingsValue('PersonaMintDailyLimit', settings, PERSONA_MINT_DAILY_LIMIT_DEFAULT),
     maxLive: getSettingsValue('PersonaMaxLive', settings, PERSONA_MAX_LIVE_DEFAULT),
     ttlDays: getSettingsValue('PersonaTtlDays', settings, PERSONA_TTL_DAYS_DEFAULT),
+    startingCredits: getSettingsValue('PersonaStartingCredits', settings, PERSONA_STARTING_CREDITS_DEFAULT),
     emailDomain,
   };
 }
@@ -187,7 +215,7 @@ export function personaIdentity(
   return options.emailDomain ? { username, email: `${name}@${options.emailDomain}` } : null;
 }
 
-/** Whether the persona key may act on this account: flagged, persona-shaped, and holding no admin access. */
+/** Whether this account may be signed into or deleted as a persona: flagged, persona-shaped, and holding no admin access. */
 export function isPersonaAccount(
   user: Pick<IUserDocument, 'username' | 'isPersona' | 'isAdmin' | 'adminPermissions'> | null | undefined
 ): boolean {

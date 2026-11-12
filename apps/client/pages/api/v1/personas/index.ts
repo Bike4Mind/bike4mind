@@ -118,7 +118,7 @@ const route = nextRouteForContract(mintPersonaContract, {
             email: identity.email,
             name: `Persona ${name}`,
             isAdmin: false,
-            initialCredits: 0,
+            initialCredits: settings.startingCredits,
             tags: [],
             // The server owns the address, so there is nothing for the persona to prove.
             emailVerified: true,
@@ -141,7 +141,11 @@ const route = nextRouteForContract(mintPersonaContract, {
           action: 'user.persona.created',
           target: personaAuditTarget(created),
           summary: `created test persona ${created.username}`,
-          details: { username: created.username, expiresAt: expiresAt.toISOString() },
+          details: {
+            username: created.username,
+            expiresAt: expiresAt.toISOString(),
+            startingCredits: settings.startingCredits,
+          },
         });
         return {
           kind: 'ready' as const,
