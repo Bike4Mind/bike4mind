@@ -7,6 +7,8 @@ import type { ChatApprovalMode, ChatStreamEvent, ChatToolCall } from '@shared/ch
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
+import { MessageQueue } from './MessageQueue';
+import type { SkillCatalog } from './skills/SkillCatalog';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 
@@ -27,6 +29,7 @@ describe('ChatService loop tool', () => {
   let events: ChatStreamEvent[];
   let streams: PassThrough[];
   let id: string;
+  const getSkill = vi.fn();
 
   const call = (callId: string, status: ChatToolCall['status']) =>
     events
@@ -48,6 +51,7 @@ describe('ChatService loop tool', () => {
   beforeEach(async () => {
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-loop-tool-')), 'test-model');
     approvals = new ApprovalGate();
+    getSkill.mockReset().mockResolvedValue({ name: 'check', body: 'Check', source: 'account', filePath: '/check' });
     const testEvents: ChatStreamEvent[] = [];
     const testStreams: PassThrough[] = [];
     events = testEvents;
@@ -61,6 +65,8 @@ describe('ChatService loop tool', () => {
       store,
       access: { list: async () => [] } as unknown as AccessStore,
       approvals,
+      queue: new MessageQueue(() => undefined),
+      skills: { get: getSkill, forModel: async () => [], dispose: vi.fn() } as unknown as SkillCatalog,
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
         ({
@@ -160,4 +166,78 @@ describe('ChatService loop tool', () => {
     expect(refused.error).toContain('cannot start another loop');
     expect(service.getLoop(id)?.prompt).toBe('check');
   });
+  it.each(['tool', 'user'] as const)('retains loop origin after its schedule is stopped by the %s', async stopper => {
+    await service.setApprovalMode(id, 'full');
+    await service.loopCommand(id, '1h check');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    if (stopper === 'tool') {
+      streams[0].write(toolTurn('stop-loop', { action: 'stop' }));
+      streams[0].write(frame('[DONE]'));
+      expect((await settled('stop-loop')).status).toBe('done');
+      await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
+    } else {
+      await service.loopCommand(id, 'stop');
+    }
+    expect(service.getLoop(id)).toBeNull();
+    const current = streams.length - 1;
+    streams[current].write(toolTurn('nested-after-stop', { action: 'start', prompt: 'nested', interval: '30s' }));
+    streams[current].write(frame('[DONE]'));
+    const refused = await settled('nested-after-stop');
+    expect(refused.status).toBe('error');
+    expect(refused.error).toContain('cannot start another loop');
+    expect(call('nested-after-stop', 'awaiting-approval')).toBeUndefined();
+    expect(service.getLoop(id)).toBeNull();
+    expect(
+      (await store.get(id))?.messages.filter(message => message.role === 'user' && message.content === 'check')
+    ).toHaveLength(1);
+  });
+
+  it('does not install an abandoned start after Send now interrupts skill preparation', async () => {
+    await startTurn('full');
+    const skill = { name: 'check', body: 'Check', source: 'account', filePath: '/check' };
+    let release: ((value: typeof skill) => void) | undefined;
+    const preparation = new Promise<typeof skill>(resolve => {
+      release = resolve;
+    });
+    getSkill.mockImplementationOnce(() => preparation);
+    streams[0].write(toolTurn('late-start', { action: 'start', prompt: '/check', interval: '1h' }));
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => getSkill.mock.calls.length > 0, { timeout: 5000, interval: 5 });
+    const queued = await service.send(id, 'Send this instead');
+    if (!queued.ok || !queued.queued) throw new Error('Expected queued user message');
+    service.sendQueuedNow(id, queued.message.id);
+    await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
+    if (!release) throw new Error('Missing skill preparation barrier');
+    release(skill);
+    await preparation;
+    expect(service.getLoop(id)).toBeNull();
+    streams[1].write(DONE);
+    await vi.waitUntil(() => !service.isSessionBusy(id), { timeout: 5000, interval: 5 });
+    expect(service.getLoop(id)).toBeNull();
+    expect(streams).toHaveLength(2);
+  });
+
+  it.each([false, true])(
+    'binds clock approval to its original absolute deadline across midnight=%s',
+    async crossesMidnight => {
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(new Date(2026, 10, 12, 23, 56).getTime());
+      await startTurn('ask');
+      streams[0].write(toolTurn('clock-start', { action: 'start', prompt: 'check', interval: '1h', until: '23:59' }));
+      streams[0].write(frame('[DONE]'));
+      const asked = await vi.waitUntil(() => call('clock-start', 'awaiting-approval'), { timeout: 5000, interval: 5 });
+      clock.mockReturnValue(
+        crossesMidnight ? new Date(2026, 10, 13, 0, 0).getTime() : new Date(2026, 10, 12, 23, 58).getTime()
+      );
+      approvals.resolve(asked.approvalId as string, { decision: 'once' });
+      const result = await settled('clock-start');
+      if (crossesMidnight) {
+        expect(result.status).toBe('error');
+        expect(result.error).toContain('changed after approval');
+        expect(service.getLoop(id)).toBeNull();
+      } else {
+        expect(result.status).toBe('done');
+        expect(service.getLoop(id)?.until).toBe(new Date(2026, 10, 12, 23, 59).getTime());
+      }
+    }
+  );
 });

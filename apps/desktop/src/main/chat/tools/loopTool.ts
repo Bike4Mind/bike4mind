@@ -20,6 +20,10 @@ function startRequest(input: Record<string, unknown>, context: ToolContext): Loo
   return request;
 }
 
+function approvalKey(request: LoopStart): string {
+  return `${LOOP_TOOL_NAME}\x00${JSON.stringify(request)}`;
+}
+
 function cadence(intervalMs: number | null): string {
   return intervalMs === null
     ? 'model-paced: each run ends with LOOP_NEXT: <interval>'
@@ -90,7 +94,7 @@ export const loopTool: ToolDefinition = {
         `Interval: ${cadence(request.intervalMs)}`,
         `Until: ${request.until === undefined ? 'stopped by you' : formatLoopUntil(request.until)}`,
       ].join('\n'),
-      key: `${LOOP_TOOL_NAME}\x00${JSON.stringify(request)}`,
+      key: approvalKey(request),
       askInAuto: true,
       allowOnce: true,
     };
@@ -110,7 +114,10 @@ export const loopTool: ToolDefinition = {
       return 'Loop stopped. A run already in progress is left to finish.';
     }
     if (input.action !== 'start') throw new Error('The "action" argument must be start, list or stop.');
-    const result = await loop.start(startRequest(input, context));
+    const request = startRequest(input, context);
+    if (context.approvedKey !== approvalKey(request))
+      throw new Error('The loop request changed after approval. Start it again to approve the current deadline.');
+    const result = await loop.start(request);
     if (!result.ok) throw new Error(result.error);
     context.report?.label('Started a loop');
     return [

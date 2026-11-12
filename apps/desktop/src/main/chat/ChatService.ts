@@ -782,7 +782,8 @@ export class ChatService {
   }
 
   /** Both /loop and the agent's `loop` tool start here, so every check below applies to both. */
-  private async startLoop(sessionId: string, action: LoopStart): Promise<LoopResult> {
+  private async startLoop(sessionId: string, action: LoopStart, callingSignal?: AbortSignal): Promise<LoopResult> {
+    if (callingSignal?.aborted) return { ok: false, error: 'Loop start was cancelled.' };
     this.loopRequests.get(sessionId)?.abort();
     const request = new AbortController();
     this.loopRequests.set(sessionId, request);
@@ -815,7 +816,7 @@ export class ChatService {
         : undefined;
       if (invocation && !command)
         return { ok: false, error: `No skill called /${invocation.name}. Type / to see what is available.` };
-      if (request.signal.aborted || this.deps.store.scopeKey() !== scope)
+      if (request.signal.aborted || callingSignal?.aborted || this.deps.store.scopeKey() !== scope)
         return { ok: false, error: 'Loop stopped or account changed. Start the loop again.' };
       this.loops.start(
         {
@@ -2911,7 +2912,8 @@ export class ChatService {
       historyScope,
       undefined,
       released?.relay?.hops ?? seedHops ?? 0,
-      options.loop?.settled
+      options.loop?.settled,
+      Boolean(options.loop)
     );
     this.noteNotify(sessionId, released?.relay);
 
@@ -3252,7 +3254,8 @@ export class ChatService {
      * `continueReply`, which is carrying an existing turn on and keeps the depth it had.
      */
     hops?: number,
-    onSettled?: (outcome: TurnOutcome, reply: { content: string; stopReason?: string }) => void
+    onSettled?: (outcome: TurnOutcome, reply: { content: string; stopReason?: string }) => void,
+    isLoopTurn = false
   ): string {
     const sessionId = session.id;
     const replyId = resume?.id ?? randomUUID();
@@ -3262,9 +3265,18 @@ export class ChatService {
     if (hops !== undefined) this.turnRelay.set(sessionId, { hops, sends: 0 });
 
     let finalReply = { content: '' } as { content: string; stopReason?: string };
-    void this.runReply(session, replyId, api, controller, historyScope, resume, reply => {
-      finalReply = reply;
-    })
+    void this.runReply(
+      session,
+      replyId,
+      api,
+      controller,
+      historyScope,
+      resume,
+      reply => {
+        finalReply = reply;
+      },
+      isLoopTurn
+    )
       // runReply already catches, so this only covers a throw from its own bookkeeping. A turn
       // whose end cannot be classified is treated as failed, which HOLDS the queue rather than
       // firing it - the safe direction when the outcome is unknown.
@@ -3459,7 +3471,8 @@ export class ChatService {
     controller: AbortController,
     historyScope: string | null,
     resume?: ResumedReply,
-    completed?: (reply: { content: string; stopReason?: string }) => void
+    completed?: (reply: { content: string; stopReason?: string }) => void,
+    isLoopTurn = false
   ): Promise<TurnOutcome> {
     const sessionId = session.id;
     // A new id from each mid-turn message on: see takeArrivals and the round loop below.
@@ -4193,6 +4206,7 @@ export class ChatService {
                 patchEdits,
                 ask,
                 attended,
+                isLoopTurn,
                 title: session.title,
                 directories: directoryTurn,
                 ...(deferred ? { offered: new Set(toolsFor(roots).map(tool => tool.toolSchema.name)) } : {}),
@@ -4879,6 +4893,8 @@ export class ChatService {
       ask: boolean;
       /** Whether the user typed this turn, as opposed to a relay, an automatic turn or a seed prompt. */
       attended: boolean;
+      /** Captured when the reply starts; stopping its schedule does not change its origin. */
+      isLoopTurn: boolean;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
       /** Absent outside a reply's own loop, where request_directory then has no turn to track. */
@@ -5077,9 +5093,9 @@ export class ChatService {
           ...(ask
             ? {
                 loop: {
-                  // Only a loop run is in flight while its entry is 'running': the scheduler waits for an idle session.
-                  inRun: () => this.loops.get(sessionId)?.phase === 'running',
-                  start: request => this.startLoop(sessionId, request),
+                  // The schedule may be stopped while its model turn is still running.
+                  inRun: () => scope.isLoopTurn,
+                  start: request => this.startLoop(sessionId, request, signal),
                   current: () => this.getLoop(sessionId),
                   stop: () => this.stopLoop(sessionId),
                 },
