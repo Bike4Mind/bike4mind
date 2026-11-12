@@ -11,6 +11,7 @@ describe('toPublicSession', () => {
       id: '65c000000000000000000001',
       name: 'Notebook',
       userId: 'u1',
+      organizationId: '65c000000000000000000002',
       knowledgeIds: [],
       artifactIds: [],
       tags: [{ name: 't', strength: 1 }],
@@ -29,5 +30,6 @@ describe('toPublicSession', () => {
 
     expect(Object.keys(output).sort()).toEqual(Object.keys(SessionResponseSchema.shape).sort());
     expect(SessionResponseSchema.safeParse(output).success).toBe(true);
+    expect(output.organizationId).toBe(session.organizationId);
   });
 });
