@@ -204,6 +204,12 @@ const ROWS: [string, string, string][] = [
   ['git submodule status', '', 'rrrr'],
   ['git fetch && git status', '', 'rrrr'],
   ["git add -A && git commit -m 'x' && git push", '', 'rrrr'],
+  ['git ls-tree --name-only $(git merge-base origin/main HEAD)', '', 'rrrr'],
+  ['git rev-list --count $(git merge-base origin/main HEAD)..HEAD', '', 'rrrr'],
+  ['git diff $(git merge-base origin/main HEAD)..HEAD', '', 'rrrr'],
+  ['git log --oneline "$(cat msg.txt)"', '', 'rrrr'],
+  ['git log --$X', '', 'rrrr'],
+  ['git branch -D "$(cat msg.txt)"', '', 'rrrr'],
 ];
 
 describe('shell approval of common agent git commands', () => {

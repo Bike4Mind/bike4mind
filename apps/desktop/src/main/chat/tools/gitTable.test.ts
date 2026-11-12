@@ -250,6 +250,16 @@ describe('gitListed', () => {
     ['status $', true],
     ['show --stat $', true],
     ['rev-parse $', true],
+    ['range-diff $', true],
+    ['diff-tree -r $', true],
+    ['reflog show $', true],
+    ['stash show $', true],
+    ['stash list $', true],
+    ['shortlog -s $', true],
+    ['rev-list --count $', true],
+    ['blame $', true],
+    ['ls-files $$', true],
+    ['ls-tree --name-only $', true],
     ['push origin feature/$', true],
     ['checkout src/*', true],
     ['branch --unset-upstream $', true],
@@ -273,6 +283,21 @@ describe('gitListed', () => {
   ])('places a word the shell fills in %s', (line, expected) => {
     expect(listed(line)).toBe(expected);
   });
+
+  it.each(['branch -D -$', 'branch --sort $$ -a', 'cat-file -$ HEAD', 'log -1 -$', 'log -n $$', 'diff -U $$'])(
+    'reads %s as a call any option of its form may stand in',
+    line => {
+      const listing = gitListed(words(line));
+      expect(listing.listed && listing.open).toBe(true);
+    }
+  );
+
+  it.each(['commit -m x -$', 'commit -m $$', 'grep -e $$ x'])(
+    'refuses %s, where a word bash fills may become an option that starts a program',
+    line => {
+      expect(listed(line)).toBe(false);
+    }
+  );
 
   it.each([
     ['fetch origin -o *', false],
@@ -372,6 +397,8 @@ describe('gitListed', () => {
     ['for-each-ref --format=%(signature)', SIGNERS],
     ['log --format=$', SIGNERS],
     ['log -1 $', SIGNERS],
+    ['log -n $$', SIGNERS],
+    ['for-each-ref $', SIGNERS],
     ['branch -D $', SIGNERS],
     ['help commit', ['man']],
     ['help -a', []],

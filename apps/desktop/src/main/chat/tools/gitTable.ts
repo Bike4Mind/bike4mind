@@ -814,7 +814,8 @@ function readForm(form: Form, words: readonly GitWord[], label: string): GitList
       reading = false;
       continue;
     }
-    const option = !isOpen(word) && word.text.startsWith('-') && word.text !== '-';
+    // A lone `-` is a word of its own; `-$x` may become any option.
+    const option = !isOpen(word) && word.text.startsWith('-') && (word.text !== '-' || !word.whole);
     const read = isOpen(word) ? 'open' : option ? readOption(form, words, at, given, label) : at;
     if (typeof read === 'object') return read;
     if (read === 'exits') return plainListing(label, given);
@@ -827,6 +828,11 @@ function readForm(form: Form, words: readonly GitWord[], label: string): GitList
     if (!option) {
       operands.push(word);
       if (form.open === 'afterOperand') reading = false;
+    }
+    // A value that splits leaves its later words where git reads options.
+    if (words.slice(at + 1, read + 1).some(value => value.splits)) {
+      if (form.open !== 'any') return miss(`${label} ${OPEN}`);
+      open = true;
     }
     at = read;
   }

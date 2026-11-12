@@ -334,6 +334,7 @@ const ROWS: [string, string, string][] = [
   ['npm --prefix . exec -- git status', '', 'aaaa'],
   ['git branch --unset-upstream "$B"', '', 'rrrr'],
   ['git log --grep=unset "$X"', '', 'rrrr'],
+  ['export GIT_EXTERNAL_DIFF=./x.sh; git log -1 -p "$X"', '', 'aaaa'],
   ['git log --format="%H unset $x"', '', 'rrrr'],
   ['unset -v GIT_CONFIG_COUNT; git log', '', 'aaaa'],
   ['unset GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; git log', '', 'aaaa'],
