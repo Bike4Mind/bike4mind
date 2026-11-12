@@ -8,6 +8,7 @@ import {
   LEGACY_API_KEY_WINDOW,
   LEGACY_SCOPE_PASS_LOG,
   parseStagedScopes,
+  shouldLogLegacyPass,
 } from './apiKeyScopeGate';
 
 vi.mock('../premium-generated/premiumApiKeyScopes.generated', () => ({
@@ -305,6 +306,15 @@ describe('decideScopeGate grandfathering', () => {
     expect(decideScopeGate(required, [ApiKeyScope.ME_READ], NONE, undefined, true).outcome).toBe('allow');
   });
 
+  it('reports a staged pass over a legacy one, so the key stays on the staging backlog', () => {
+    expect(
+      decideScopeGate(required, [ApiKeyScope.AI_GENERATE], new Set([ApiKeyScope.ME_READ]), undefined, true)
+    ).toEqual({
+      outcome: 'stagedAllow',
+      stagedScopes: required,
+    });
+  });
+
   it('never admits a confined key', () => {
     expect(decideScopeGate(required, [ApiKeyScope.EMBED_CHAT], NONE, undefined, true).outcome).toBe('deny');
   });
@@ -346,5 +356,15 @@ describe('holdsApiKeyScope grandfathering', () => {
     const { req, info } = keyReq([ApiKeyScope.WRITE_NOTEBOOKS]);
     expect(holdsApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], { grandfatherLegacyKeys: true })).toBe(true);
     expect(info).not.toHaveBeenCalled();
+  });
+});
+
+describe('shouldLogLegacyPass', () => {
+  it('logs a key and route once per hour', () => {
+    const t0 = 1_000_000_000;
+    expect(shouldLogLegacyPass('dedupe-key', '/api/x', t0)).toBe(true);
+    expect(shouldLogLegacyPass('dedupe-key', '/api/x', t0 + 59 * 60 * 1000)).toBe(false);
+    expect(shouldLogLegacyPass('dedupe-key', '/api/y', t0)).toBe(true);
+    expect(shouldLogLegacyPass('dedupe-key', '/api/x', t0 + 60 * 60 * 1000)).toBe(true);
   });
 });

@@ -159,8 +159,22 @@ export function parseStagedScopes(raw: string | undefined): {
  *
  * `grandfathered` is true when the route opts into `grandfatherLegacyKeys` and the key is
  * {@link isLegacyApiKey}. It admits a key that misses `requiredScopes`, never one that
- * misses an AND scope and never a confined key: both are checked above it.
+ * misses an AND scope and never a confined key: both are checked above it. A staged
+ * pass wins over a legacy one, so the key lands on the staging backlog it belongs to.
  */
+export function decideScopeGate(
+  requiredScopes: ApiKeyScopeValue[] | undefined,
+  heldScopes: readonly ApiKeyScopeValue[] | undefined,
+  staged: ReadonlySet<string>,
+  alsoRequiredScopes?: ApiKeyScopeValue[]
+): Exclude<ScopeGateDecision, { outcome: 'legacyAllow' }>;
+export function decideScopeGate(
+  requiredScopes: ApiKeyScopeValue[] | undefined,
+  heldScopes: readonly ApiKeyScopeValue[] | undefined,
+  staged: ReadonlySet<string>,
+  alsoRequiredScopes: ApiKeyScopeValue[] | undefined,
+  grandfathered: boolean
+): ScopeGateDecision;
 export function decideScopeGate(
   requiredScopes: ApiKeyScopeValue[] | undefined,
   heldScopes: readonly ApiKeyScopeValue[] | undefined,
@@ -218,7 +232,7 @@ export function holdsApiKeyScope(
   const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
   const grandfathered = grandfatherLegacyKeys && isLegacyApiKey(req.apiKeyInfo.createdAt);
   const { outcome } = decideScopeGate(required, held, staged, undefined, grandfathered);
-  if (outcome === 'legacyAllow') {
+  if (outcome === 'legacyAllow' && shouldLogLegacyPass(req.apiKeyInfo.keyId, required.join(','))) {
     // Same line as apiKeyAuth's door, so one query finds every key still relying on the window.
     req.logger?.info(LEGACY_SCOPE_PASS_LOG, {
       keyId: req.apiKeyInfo.keyId,
@@ -229,8 +243,25 @@ export function holdsApiKeyScope(
   return outcome !== 'deny';
 }
 
-/** Logged on every grandfathered pass; the list of keys whose owners still need to re-create them. */
+/** Logged on grandfathered passes; the list of keys whose owners still need to re-create them. */
 export const LEGACY_SCOPE_PASS_LOG = 'API key scope check missed but legacy key grandfathered - allowing';
+
+const LEGACY_PASS_LOG_INTERVAL_MS = 60 * 60 * 1000;
+const LEGACY_PASS_LOG_MAX_ENTRIES = 10_000;
+const lastLegacyPassLog = new Map<string, number>();
+
+/**
+ * At most one log line per key and route (or scope set) per hour in each process: a busy key on
+ * a hot route would otherwise log on every request, and the line is a list of keys, not a meter.
+ */
+export function shouldLogLegacyPass(keyId: string | undefined, where: string, now: number = Date.now()): boolean {
+  const entry = `${keyId ?? ''}|${where}`;
+  const last = lastLegacyPassLog.get(entry);
+  if (last !== undefined && now - last < LEGACY_PASS_LOG_INTERVAL_MS) return false;
+  if (lastLegacyPassLog.size >= LEGACY_PASS_LOG_MAX_ENTRIES) lastLegacyPassLog.clear();
+  lastLegacyPassLog.set(entry, now);
+  return true;
+}
 
 export function assertApiKeyScope(
   req: ScopedRequest,

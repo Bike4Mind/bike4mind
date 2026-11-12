@@ -25,6 +25,7 @@ import {
   isLegacyApiKey,
   LEGACY_SCOPE_PASS_LOG,
   parseStagedScopes,
+  shouldLogLegacyPass,
   SCOPE_STAGING_ENV_VAR,
 } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
@@ -162,7 +163,7 @@ export const apiKeyAuth = (
         if (gate.outcome === 'stagedAllow') {
           req.logger?.warn('API key scope check missed but staged - allowing', context);
         } else if (gate.outcome === 'legacyAllow') {
-          req.logger?.info(LEGACY_SCOPE_PASS_LOG, context);
+          if (shouldLogLegacyPass(validation.keyId, endpointPath)) req.logger?.info(LEGACY_SCOPE_PASS_LOG, context);
         } else {
           req.logger?.warn('API key scope check failed', context);
           throw new ForbiddenError(

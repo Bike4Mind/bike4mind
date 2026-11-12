@@ -184,7 +184,6 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
         const heldScopes = scopesByKeyId.get(entry.keyId) ?? [];
         // No grandfathering here: the preflight lists who breaks once the legacy key window ends.
         const { outcome } = decideScopeGate(requiredScopes, heldScopes, staged);
-        if (outcome === 'legacyAllow') throw new Error('decideScopeGate grandfathered without being asked to');
         return { ...entry, heldScopes, outcome };
       })
       .sort((a, b) => OUTCOME_RANK[a.outcome] - OUTCOME_RANK[b.outcome] || b.requests - a.requests);
