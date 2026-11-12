@@ -64,10 +64,15 @@ const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, m
     : [];
   const contentCount = inventory.data ? CONTENT_ROWS.reduce((sum, row) => sum + inventory.data[row.key].count, 0) : 0;
   const keyCount = inventory.data?.orgBilledApiKeys.count ?? 0;
-  const transferring = disposition === 'transfer';
+  const transferring = disposition === 'transfer' && contentCount > 0;
   const canConfirm = !!inventory.data && !removeMember.isPending && (!transferring || !!reassignTo);
 
+  const handleClose = () => {
+    if (!removeMember.isPending) onClose();
+  };
+
   const handleConfirm = async () => {
+    if (!canConfirm) return;
     try {
       await removeMember.mutateAsync({
         organizationId,
@@ -81,9 +86,9 @@ const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, m
   };
 
   return (
-    <Modal open onClose={onClose}>
+    <Modal open onClose={handleClose}>
       <ModalDialog sx={{ maxWidth: 520, width: '100%' }} data-testid="offboard-dialog">
-        <ModalClose />
+        <ModalClose disabled={removeMember.isPending} aria-label="Close removal dialog" />
         <Typography level="title-lg">Remove {member.name}</Typography>
         <Typography level="body-sm">
           {member.name} loses access to this team. Their org-billed API keys
@@ -94,6 +99,14 @@ const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, m
         {inventory.error && (
           <Alert color="danger" data-testid="offboard-dialog-error">
             Could not load this member&apos;s content: {getErrorMessage(inventory.error)}
+            <Button
+              size="sm"
+              variant="outlined"
+              disabled={inventory.isFetching || removeMember.isPending}
+              onClick={() => void inventory.refetch()}
+            >
+              Retry
+            </Button>
           </Alert>
         )}
 
@@ -127,8 +140,14 @@ const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, m
                 onChange={event => setDisposition(event.target.value as Disposition)}
                 data-testid="offboard-dialog-disposition"
               >
-                <Radio value="keep" label={`Keep with ${member.name}`} data-testid="offboard-dialog-keep-radio" />
                 <Radio
+                  disabled={removeMember.isPending}
+                  value="keep"
+                  label={`Keep with ${member.name}`}
+                  data-testid="offboard-dialog-keep-radio"
+                />
+                <Radio
+                  disabled={removeMember.isPending}
                   value="transfer"
                   label="Transfer to another member"
                   data-testid="offboard-dialog-transfer-radio"
@@ -139,6 +158,8 @@ const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, m
             {transferring && (
               <Select
                 placeholder="Choose a member"
+                disabled={removeMember.isPending}
+                slotProps={{ button: { 'aria-label': 'Transfer team content to' } }}
                 value={reassignTo}
                 onChange={(_event, value) => setReassignTo(value)}
                 data-testid="offboard-dialog-target-select"
@@ -158,7 +179,13 @@ const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, m
         )}
 
         <Stack direction="row" spacing={1} justifyContent="flex-end">
-          <Button variant="outlined" color="neutral" onClick={onClose} data-testid="offboard-dialog-cancel-btn">
+          <Button
+            variant="outlined"
+            color="neutral"
+            disabled={removeMember.isPending}
+            onClick={handleClose}
+            data-testid="offboard-dialog-cancel-btn"
+          >
             Cancel
           </Button>
           <Button

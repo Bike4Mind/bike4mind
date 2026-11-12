@@ -248,7 +248,8 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
    * (User-billed) keys, legacy rows with no billingOwnerType, and embed keys (bound to an agent;
    * they serve the org's embedded widget, not the member) are left alone. No batch id: a
    * removal is not undoable, so these must not be restorable through `reactivateByIds`.
-   * Returns the ids it flipped.
+   * Returns the selected live ids. Call within withTransaction when these ids are used as an
+   * exact audit receipt, so a concurrent revocation retries the read and write together.
    */
   async revokeLiveOrgBilledByUserId(
     userId: string,

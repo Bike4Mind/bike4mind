@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
+import { NotFoundError } from '@bike4mind/common';
 
 type Handler = (req: NextApiRequest, res: NextApiResponse) => unknown;
 type Chain = { get: (fn: Handler) => Chain };
@@ -81,11 +82,12 @@ describe('GET /api/organizations/[id]/members/[userId]/offboarding', () => {
   });
 
   it('propagates the service refusal (not-found for a non-member)', async () => {
-    getMemberOffboardingInventory.mockRejectedValue(
-      Object.assign(new Error('Organization not found'), { status: 404 })
-    );
+    getMemberOffboardingInventory.mockRejectedValue(new NotFoundError('Organization not found'));
     const { req, res } = request();
 
-    await expect(mockRefs.getHandler!(req, res)).rejects.toThrow('Organization not found');
+    await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({
+      message: 'Organization not found',
+      statusCode: 404,
+    });
   });
 });

@@ -21,9 +21,11 @@ const emptyInventory = {
 const hooks = vi.hoisted(() => ({
   inventory: { data: undefined as unknown, isLoading: false, error: null as unknown },
   mutateAsync: vi.fn(),
+  isPending: false,
+  refetch: vi.fn(),
 }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
-  useMemberOffboardingInventory: () => hooks.inventory,
+  useMemberOffboardingInventory: () => ({ ...hooks.inventory, refetch: hooks.refetch }),
   useGetOrganization: () => ({
     data: {
       id: 'org1',
@@ -35,7 +37,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
       ],
     },
   }),
-  useRemoveMemberFromOrganization: () => ({ mutateAsync: hooks.mutateAsync, isPending: false }),
+  useRemoveMemberFromOrganization: () => ({ mutateAsync: hooks.mutateAsync, isPending: hooks.isPending }),
 }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetOrganizationUsers: () => ({
@@ -65,6 +67,8 @@ const confirmButton = () => screen.getByTestId('offboard-dialog-confirm-btn') as
 describe('OffboardMemberDialog', () => {
   beforeEach(() => {
     hooks.mutateAsync.mockReset().mockResolvedValue(0);
+    hooks.isPending = false;
+    hooks.refetch.mockReset().mockResolvedValue(undefined);
     hooks.inventory = {
       data: {
         ...emptyInventory,
@@ -135,5 +139,52 @@ describe('OffboardMemberDialog', () => {
 
     expect(screen.getByTestId('offboard-dialog-error').textContent).toContain('boom');
     expect(confirmButton().disabled).toBe(true);
+  });
+
+  it('removes without a transfer when refreshed inventory becomes empty after choosing transfer', async () => {
+    const onClose = vi.fn();
+    const dialog = () => (
+      <OffboardMemberDialog organizationId="org1" member={{ id: 'b', name: 'Bea' }} onClose={onClose} />
+    );
+    const view = render(dialog(), { wrapper: TestWrapper });
+    fireEvent.click(screen.getByLabelText('Transfer to another member'));
+    expect(confirmButton()).toBeDisabled();
+
+    hooks.inventory.data = emptyInventory;
+    view.rerender(dialog());
+
+    expect(screen.queryByTestId('offboard-dialog-target-select')).toBeNull();
+    expect(confirmButton()).toBeEnabled();
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(hooks.mutateAsync).toHaveBeenCalledWith({ organizationId: 'org1', userId: 'b' }));
+  });
+
+  it('keeps dismissal and another submission disabled while removal is pending', () => {
+    hooks.isPending = true;
+    const onClose = renderDialog();
+    const cancel = screen.getByTestId('offboard-dialog-cancel-btn');
+    const close = screen.getByRole('button', { name: 'Close removal dialog' });
+    expect(cancel).toBeDisabled();
+    expect(close).toBeDisabled();
+    expect(confirmButton()).toBeDisabled();
+    fireEvent.click(cancel);
+    fireEvent.click(close);
+    fireEvent.keyDown(screen.getByTestId('offboard-dialog'), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(hooks.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('labels the recipient selector', () => {
+    renderDialog();
+    fireEvent.click(screen.getByLabelText('Transfer to another member'));
+    expect(screen.getByRole('combobox', { name: 'Transfer team content to' })).toBeInTheDocument();
+  });
+
+  it('offers a visible retry after inventory fails while keeping removal blocked', () => {
+    hooks.inventory = { data: undefined, isLoading: false, error: new Error('boom') };
+    renderDialog();
+    expect(confirmButton()).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(hooks.refetch).toHaveBeenCalledTimes(1);
   });
 });
