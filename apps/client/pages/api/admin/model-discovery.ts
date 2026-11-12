@@ -6,6 +6,7 @@ import type { IModelDiscoveryRun } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { DiscoveryDispatchUnavailableError, dispatchDiscoveryRunNow } from '@server/modelDiscovery/runNow';
+import { requireFullAdmin } from '@server/admin/models/requireFullAdmin';
 
 /**
  * Discovery status card, its run history and its "Run now" (spec sec 7).
@@ -159,6 +160,7 @@ const handler = adminApi({
     });
   })
   .post(async (req, res) => {
+    requireFullAdmin(req);
     // The service returns a 'skipped' result before it ever creates a run
     // document, so dispatching with the master switch off would answer 202 and
     // then never report anything. Refuse here instead.
