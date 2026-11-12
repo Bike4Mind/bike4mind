@@ -153,7 +153,10 @@ export async function apiCreateTestUser(
 export async function apiCreateThrowawayUser(
   request: APIRequestContext,
   label: string,
-  options: { initialCredits?: number } = {}
+  options: Pick<
+    Parameters<typeof apiCreateTestUser>[1],
+    'initialCredits' | 'includePredefinedTags' | 'emailVerified' | 'apiKeyTrustApproved'
+  > = {}
 ) {
   const e2eId = getE2ETestId();
   const idSuffix = e2eId ? `${e2eId}-${getTestRunId()}` : getTestRunId();
@@ -166,7 +169,7 @@ export async function apiCreateThrowawayUser(
     name: `Auth ${label} ${idSuffix}`,
     password: `E2eAuth${label}Pass123!`,
     isAdmin: false,
-    ...(options.initialCredits !== undefined && { initialCredits: options.initialCredits }),
+    ...options,
   });
   return {
     email,
