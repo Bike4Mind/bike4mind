@@ -13,6 +13,8 @@ export interface ConsumerLogs {
   logGroups: string[];
   /** How long a message keeps being retried before it lands in the DLQ, in ms. */
   retryWindowMs: number;
+  consumerDeployedAt?: string;
+  consumerVersion?: string;
 }
 
 const MIN_RETRY_WINDOW_MS = 15 * 60_000;
@@ -141,20 +143,37 @@ async function lookupConsumerLogs(sourceQueueUrl: string): Promise<LookupResult>
       lambdaClients.set(region, lambda);
     }
     const functionArns = new Set<string>();
+    let hasQualifiedConsumer = false;
     let marker: string | undefined;
     do {
       const page = await lambda.send(new ListEventSourceMappingsCommand({ EventSourceArn: queueArn, Marker: marker }));
       for (const mapping of page.EventSourceMappings ?? []) {
         const arn = activeFunctionArn(mapping);
-        if (arn) functionArns.add(arn);
+        if (arn) {
+          functionArns.add(arn);
+          if (mapping.FunctionArn!.split(':').length > 7) hasQualifiedConsumer = true;
+        }
       }
       marker = page.NextMarker;
     } while (marker);
 
     const logGroups = new Set<string>();
+    let consumerDeployedAt: string | undefined;
+    let consumerVersion: string | undefined;
     for (const functionArn of functionArns) {
-      // Only LoggingConfig and FunctionName are read: the response also carries the function's env vars.
+      // Never retain the response's environment variables.
       const config = await lambda.send(new GetFunctionConfigurationCommand({ FunctionName: functionArn }));
+      // Multiple consumers cannot be attributed to a single recorded failure.
+      if (
+        !hasQualifiedConsumer &&
+        functionArns.size === 1 &&
+        config.LastUpdateStatus === 'Successful' &&
+        config.LastModified &&
+        Number.isFinite(Date.parse(config.LastModified))
+      ) {
+        consumerDeployedAt = new Date(config.LastModified).toISOString();
+        consumerVersion = config.Version;
+      }
       const functionName = config.FunctionName ?? functionArn.split(':')[6];
       logGroups.add(config.LoggingConfig?.LogGroup ?? `/aws/lambda/${functionName}`);
     }
@@ -165,6 +184,7 @@ async function lookupConsumerLogs(sourceQueueUrl: string): Promise<LookupResult>
         region,
         logGroups: [...logGroups].sort(),
         retryWindowMs: retryWindow(attrs.VisibilityTimeout, attrs.RedrivePolicy),
+        ...(consumerDeployedAt ? { consumerDeployedAt, consumerVersion } : {}),
       },
       retryable: false,
     };

@@ -20,6 +20,7 @@ export enum OrganizationTabs {
   Webhooks = 'webhooks',
   Connectors = 'connectors',
   Domains = 'domains',
+  ApiKeys = 'api-keys',
   Settings = 'settings',
 }
 
@@ -130,6 +131,8 @@ export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabA
   if (!access.canManageGroups && selected === OrganizationTabs.Groups) return OrganizationTabs.Overview;
   if (!access.canManageConnectors && selected === OrganizationTabs.Connectors) return OrganizationTabs.Overview;
   if (!access.canManageDomains && selected === OrganizationTabs.Domains) return OrganizationTabs.Overview;
+  // Same verifyOrgAccess gate as Connectors (pages/api/organizations/[id]/api-keys/*).
+  if (!access.canManageConnectors && selected === OrganizationTabs.ApiKeys) return OrganizationTabs.Overview;
   // Billing has its own gate rather than riding canManageOrg: every action on it is owner-only.
   if (!access.canViewBilling && selected === OrganizationTabs.Billing) return OrganizationTabs.Overview;
   return selected;

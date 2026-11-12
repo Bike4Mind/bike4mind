@@ -204,3 +204,14 @@ describe('POST /api/user-api-keys/[id]/callback-secret', () => {
     expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
   });
 });
+
+describe('POST /api/user-api-keys/[id]/callback-secret - org service account', () => {
+  it('refuses a service-account caller without touching the key', async () => {
+    vi.clearAllMocks();
+    const { req, res } = post('key-1');
+    Object.assign(req, { user: { id: 'sa1', isSystem: true, serviceAccountOrganizationId: 'org-1' } });
+    await expect(mockRefs.handler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(userApiKeyRepository.findByUserIdAndId).not.toHaveBeenCalled();
+    expect(userApiKeyRepository.setCallbackSigningSecret).not.toHaveBeenCalled();
+  });
+});

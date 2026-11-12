@@ -1,5 +1,11 @@
 # @bike4mind/resource
 
+## 3.2.1
+
+### Patch Changes
+
+- [#7159](https://github.com/Bike4Mind/bike4mind/pull/7159) [`4512d72`](https://github.com/Bike4Mind/bike4mind/commit/4512d72946b2ca0920f1bb54b7fc2bf6a2c6493e) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - finish generated-media purges and batch CDN invalidations
+
 ## 3.2.0
 
 ### Minor Changes

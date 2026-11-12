@@ -1,6 +1,7 @@
 import Box from '@mui/joy/Box';
 import { keyframes } from '@mui/system';
 import type { CSSProperties } from 'react';
+import { TAVERN_LAYOUT } from './tavernLayout';
 
 /**
  * The room's mood: `day` for the light theme, `night` for the dark one, and `last-call` while the
@@ -8,33 +9,11 @@ import type { CSSProperties } from 'react';
  */
 export type TavernMood = 'day' | 'night' | 'last-call';
 
-type Light = {
-  /** Centre, in percent of the scene box. */
-  x: number;
-  y: number;
-  /** Glow radius, in percent of the scene width. */
-  size: number;
-  kind: 'fire' | 'candle';
-};
+// Picked for backdrop.png, in assets/orchestrator/tavern/layout.json beside it.
+export const TAVERN_LIGHTS = TAVERN_LAYOUT.lights;
 
-// Picked for backdrop.png (1280x720); re-pick with TAVERN_SLOTS whenever the backdrop is regenerated.
-export const TAVERN_LIGHTS: readonly Light[] = [
-  { x: 92, y: 36, size: 22, kind: 'fire' },
-  { x: 11.5, y: 18.5, size: 7, kind: 'candle' },
-  { x: 30.6, y: 23.5, size: 6, kind: 'candle' },
-  { x: 44, y: 11.5, size: 6, kind: 'candle' },
-  { x: 55, y: 9.5, size: 6, kind: 'candle' },
-  { x: 69.1, y: 9.5, size: 6, kind: 'candle' },
-  { x: 71.7, y: 26, size: 5, kind: 'candle' },
-  { x: 85.6, y: 17.2, size: 6, kind: 'candle' },
-  { x: 95.3, y: 19.5, size: 6, kind: 'candle' },
-  { x: 88.1, y: 45.4, size: 5, kind: 'candle' },
-  { x: 24.8, y: 63.5, size: 9, kind: 'candle' },
-  { x: 62, y: 69.8, size: 9, kind: 'candle' },
-];
-
-const WINDOW = { x: 23.8, y: 7.5 };
-const HEARTH = { x: 92, y: 40 };
+const WINDOW = TAVERN_LAYOUT.window;
+const HEARTH = TAVERN_LAYOUT.hearthGlow;
 const EMBERS = 7;
 const NO_MOTION = '@media (prefers-reduced-motion: reduce)';
 const MOOD_FADE = 'opacity 2.4s ease-in-out';

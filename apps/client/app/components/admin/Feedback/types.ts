@@ -1,6 +1,7 @@
 import { IFeedbackDocument, FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
 import type { FeedbackView } from './feedbackTabSearch';
 import type { FeedbackReceivedWindow } from './feedbackTrends';
+import type { FeedbackResolution, UpdateFeedbackStatusRequest } from '@bike4mind/common';
 
 // Extended feedback document with MongoDB _id field. `contentExpired` is added by the API's
 // hydrateFeedbackText join - true when content was submitted but has since aged out under the
@@ -31,6 +32,7 @@ export interface FeedbackFilters {
   selectedOrganizations: string[];
   /** Undefined is every subject: the server reads an absent `subject` as no filter at all. */
   subject?: FeedbackSubject;
+  resolution?: FeedbackResolution;
   /** Empty is every type. */
   types: FeedbackType[];
   /** Undefined is any age. */
@@ -54,6 +56,7 @@ export interface FeedbackListFilterParams {
   questId?: string;
   organizationId?: string;
   subject?: FeedbackSubject;
+  resolution?: FeedbackResolution;
   status?: FeedbackStatus[];
   /** `Feedback` also matches reports with no type (help modal, older reports). */
   type?: FeedbackType[];
@@ -97,6 +100,7 @@ export interface UseFeedbackFiltersReturn {
   setSelectedOrganizations: (orgs: string[]) => void;
   /** Undefined clears the filter back to every subject. */
   setSubject: (subject: FeedbackSubject | undefined) => void;
+  setResolution: (resolution: FeedbackResolution | undefined) => void;
   /** Empty clears the filter back to every type. */
   setTypes: (types: FeedbackType[]) => void;
   /** Undefined clears the filter back to any age. */
@@ -128,6 +132,11 @@ export interface UseFeedbackOperationsReturn {
   isError: boolean;
   refreshFeedback: () => Promise<void>;
   handleStatusChange: (feedbackItem: IExtendedFeedbackDocument, newValue: FeedbackStatus | null) => Promise<void>;
+  feedbackToClose: IExtendedFeedbackDocument | null;
+  cancelClose: () => void;
+  confirmClose: (
+    body: Pick<UpdateFeedbackStatusRequest, 'resolution' | 'resolutionDuplicateId' | 'reason'>
+  ) => Promise<void>;
   handleDeleteFeedbackClick: (feedback: IExtendedFeedbackDocument) => void;
   confirmDeleteFeedback: (reason: string) => Promise<void>;
   feedbackToDelete: string | null;

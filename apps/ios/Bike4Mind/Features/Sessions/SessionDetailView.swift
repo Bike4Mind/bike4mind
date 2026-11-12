@@ -10,7 +10,7 @@ struct SessionDetailView: View {
   var body: some View {
     ChatScreen(
       session: session, api: services.api, realtime: services.realtime, activities: services.questActivities,
-      agentRuns: services.agentRuns)
+      agentRuns: services.agentRuns, firstTurn: services.navigator.takeOpeningTurn(forSession: session.id))
   }
 }
 
@@ -27,14 +27,14 @@ private struct ChatScreen: View {
 
   init(
     session: SessionSummary, api: any B4MAPI, realtime: any RealtimeClient, activities: any QuestActivityTracking,
-    agentRuns: any AgentRunStarting
+    agentRuns: any AgentRunStarting, firstTurn: QuestTurn?
   ) {
     self.session = session
     _title = State(initialValue: session.name)
     _model = State(
       initialValue: ChatViewModel(
         sessionID: session.id, api: api, realtime: realtime, title: session.name, activities: activities,
-        agentRuns: agentRuns))
+        agentRuns: agentRuns, firstTurn: firstTurn))
   }
 
   var body: some View {
@@ -132,7 +132,7 @@ private struct ChatScreen: View {
   private var transcriptList: some View {
     ScrollViewReader { proxy in
       ScrollView {
-        LazyVStack(spacing: Tokens.Spacing.m) {
+        LazyVStack(spacing: Tokens.Spacing.l) {
           if case .failed(let error) = model.transcript.state {
             InlineErrorBanner(message: error.message) { Task { await model.refresh() } }
           }
@@ -146,8 +146,10 @@ private struct ChatScreen: View {
           }
           footer
         }
+        .frame(maxWidth: Tokens.Layout.transcriptMaxWidth)
         .padding(.horizontal, Tokens.Spacing.m)
         .padding(.vertical, Tokens.Spacing.s)
+        .frame(maxWidth: .infinity)
       }
       .scrollDismissesKeyboard(.interactively)
       .defaultScrollAnchor(.bottom)
@@ -161,8 +163,10 @@ private struct ChatScreen: View {
         }
       )
       .onChange(of: model.messages.last) { _, last in
-        guard let last else { return }
-        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
+        // From iOS 18 the bottom anchor also holds through size changes. An animated scrollTo racing a
+        // reply's height change can leave the lazy stack blank until the next scroll, so it is not animated.
+        guard #unavailable(iOS 18.0), let last else { return }
+        proxy.scrollTo(last.id, anchor: .bottom)
       }
       .accessibilityIdentifier("transcript-scroll")
     }
