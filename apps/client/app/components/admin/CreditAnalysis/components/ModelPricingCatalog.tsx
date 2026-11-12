@@ -246,7 +246,7 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
   const [historyError, setHistoryError] = useState<string | null>(null);
   // Latest requested history model; a slower earlier response must not
   // overwrite the drawer for the model currently displayed.
-  const historyRequestRef = useRef<string | null>(null);
+  const historyRequestRef = useRef(0);
 
   // Loads overlap (refresh, post-write reload, a finished discovery run); only the latest may land.
   const latestFetchRef = useRef(0);
@@ -378,7 +378,7 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
   };
 
   const openHistory = async (modelId: string) => {
-    historyRequestRef.current = modelId;
+    const requestId = ++historyRequestRef.current;
     setHistoryModel(modelId);
     setHistory(null);
     setHistoryError(null);
@@ -386,16 +386,16 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
       const res = await api.get<{ history: PriceRow[] }>(
         `/api/admin/model-prices?history=${encodeURIComponent(modelId)}`
       );
-      if (historyRequestRef.current !== modelId) return;
+      if (requestId !== historyRequestRef.current) return;
       setHistory(res.data.history);
     } catch (err) {
-      if (historyRequestRef.current !== modelId) return;
+      if (requestId !== historyRequestRef.current) return;
       setHistoryError(apiErrorMessage(err, 'Failed to load history'));
     }
   };
 
   const closeHistory = () => {
-    historyRequestRef.current = null;
+    historyRequestRef.current++;
     setHistoryModel(null);
     setHistoryError(null);
   };

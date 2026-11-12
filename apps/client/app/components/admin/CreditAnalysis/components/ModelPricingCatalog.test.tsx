@@ -590,6 +590,64 @@ describe('ModelPricingCatalog', () => {
     expect(mockGet).toHaveBeenLastCalledWith('/api/admin/model-prices?history=gpt-x');
   });
 
+  const historyEntry = (note: string) => ({
+    data: {
+      history: [
+        {
+          modelId: 'gpt-x',
+          pricing: { '0': { input: 1e-6, output: 2e-6 } },
+          effectiveFrom: '2026-06-01T00:00:00.000Z',
+          note,
+        },
+      ],
+    },
+  });
+
+  const closeHistoryDrawer = async () => {
+    fireEvent.keyDown(screen.getByTestId('history-drawer'), { key: 'Escape' });
+    await waitFor(() => expect(screen.getByTestId('history-drawer')).not.toHaveTextContent('gpt-x'));
+  };
+
+  it('ignores a late failure from a closed drawer when the same model was reopened', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+
+    let rejectFirst: (e: unknown) => void = () => {};
+    mockGet.mockReturnValueOnce(new Promise((_, reject) => (rejectFirst = reject)));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+    await closeHistoryDrawer();
+
+    let resolveSecond: (v: unknown) => void = () => {};
+    mockGet.mockReturnValueOnce(new Promise(resolve => (resolveSecond = resolve)));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+
+    await act(async () => rejectFirst(new Error('first failed')));
+    await act(async () => resolveSecond(historyEntry('second ok')));
+
+    expect(await screen.findAllByTestId('history-row')).toHaveLength(1);
+    expect(screen.getByTestId('history-drawer')).toHaveTextContent('second ok');
+    expect(screen.queryByTestId('model-pricing-history-error')).not.toBeInTheDocument();
+  });
+
+  it('shows the newest response when an older request for the same model resolves last', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+
+    let resolveFirst: (v: unknown) => void = () => {};
+    mockGet.mockReturnValueOnce(new Promise(resolve => (resolveFirst = resolve)));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+    await closeHistoryDrawer();
+
+    mockGet.mockResolvedValueOnce(historyEntry('entry Y'));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+    await screen.findAllByTestId('history-row');
+
+    await act(async () => resolveFirst(historyEntry('entry X')));
+
+    expect(screen.getByTestId('history-drawer')).toHaveTextContent('entry Y');
+    expect(screen.getByTestId('history-drawer')).not.toHaveTextContent('entry X');
+  });
+
   it('does not turn the table into its load-error state when history fails with no rows on screen', async () => {
     renderCatalog();
     await screen.findByTestId('model-pricing-row-gpt-x-per_token');
