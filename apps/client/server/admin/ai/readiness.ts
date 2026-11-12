@@ -3,7 +3,7 @@ import {
   adminAiReadiness,
   type AdminAiClassEvidence,
   type AdminAiClassRegistration,
-  AdminAiConfigSchema,
+  AdminAiStoredConfigSchema,
   type AdminAiConfig,
   type AdminAiFeature,
 } from '@bike4mind/common';
@@ -156,7 +156,7 @@ export async function getAdminAiClassReadiness(key: AdminAiClassKey, now = new D
       typeof r.undo === 'function'
   );
   const readiness = adminAiReadiness(evidence, registration);
-  config ??= AdminAiConfigSchema.parse(
+  config ??= AdminAiStoredConfigSchema.parse(
     (await AdminSettings.findOne({ settingName: 'adminAiConfig' }).lean())?.settingValue ?? {}
   );
   const featureMode = config.features[key.feature].mode;
@@ -177,7 +177,7 @@ export async function getAdminAiClassReadiness(key: AdminAiClassKey, now = new D
 export async function validateAdminAiConfigPromotion(config: AdminAiConfig) {
   if (!config.enabled) return;
   const stored = await AdminSettings.findOne({ settingName: 'adminAiConfig' }).lean();
-  const previous = AdminAiConfigSchema.parse(stored?.settingValue ?? {});
+  const previous = AdminAiStoredConfigSchema.parse(stored?.settingValue ?? {});
   const rank = { off: 0, shadow: 1, recommend: 2, act: 3 };
   for (const [feature, value] of Object.entries(config.features)) {
     if (value.mode !== 'recommend' && value.mode !== 'act') continue;

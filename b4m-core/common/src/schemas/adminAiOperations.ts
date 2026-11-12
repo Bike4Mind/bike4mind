@@ -81,4 +81,4 @@ export function adminAiDemotedMode(
 }
 
 export const ADMIN_AI_LADDER_COPY =
-  'Recommend: offline replay agreement at least 90% on at least 200 cases. Act: registered reversible action with Undo, at least 95% online agreement on at least 100 decided suggestions over 14 days, with no costly-direction override. Automatic demotion: one rung when 7-day overrides exceed 10%, using new decisions since the last demotion.';
+  'Recommend: offline replay agreement at least 90% on at least 200 cases. Replay counts and artifact references are supplied by an administrator, not verified by this console. Act: registered reversible action with Undo, at least 95% online agreement on at least 100 decided suggestions over 14 days, with no costly-direction override. Demotion: one rung when 7-day overrides exceed 10%, using new decisions since the last demotion with no minimum sample. Online evidence is currently wired to feedback-label reviews; demotion is evaluated when readiness is refreshed.';

@@ -1,11 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { FEEDBACK_AI_POLICY, confidenceBand, type DecisionAnswer, type AdminAiAttempt } from '@bike4mind/common';
+import {
+  FEEDBACK_AI_POLICY,
+  FeedbackAiReportIdSchema,
+  confidenceBand,
+  type DecisionAnswer,
+  type AdminAiAttempt,
+} from '@bike4mind/common';
 import {
   FeedbackAiModel,
   FeedbackModel,
   FeedbackTextModel,
   adminAiSuggestionRepository,
   cacheRepository,
+  withTransaction,
+  lockFeedbackNoteParent,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { executeDecision } from '@server/decisions/executeDecision';
@@ -18,7 +26,8 @@ import { recordAdminAiAttempt } from './telemetry';
 import { AdminAiSkip } from './adminAiSkip';
 import { decisionFailureCode } from '@server/decisions/platformDecision';
 
-export async function triageFeedback(feedbackId: string): Promise<void> {
+export async function triageFeedback(rawFeedbackId: string): Promise<void> {
+  const feedbackId = FeedbackAiReportIdSchema.parse(rawFeedbackId);
   const logger = new Logger({ metadata: { service: 'feedbackAi' } });
   const claimKey = `feedbackAi:inflight:${feedbackId}`;
   const owner = randomUUID();
@@ -162,31 +171,40 @@ export async function triageFeedback(feedbackId: string): Promise<void> {
         latencyMs: Date.now() - started,
       });
     }
-    const currentText = await FeedbackTextModel.findById(feedbackId).lean();
-    if (
-      !currentText ||
-      currentText.content !== text.content ||
-      currentText.revision !== text.revision ||
-      !(await FeedbackModel.exists({ _id: feedbackId }))
-    )
-      return;
-    await FeedbackAiModel.updateOne(
-      { feedbackId },
-      {
-        $set: {
-          inputHash,
-          model: embedded.model,
-          vector: embedded.vector,
-          suggestionId: suggestion.id,
-          labels: suggestion.proposedAction,
-          similar: candidates,
-          reportCreatedAt: report.createdAt,
-          expiresAt: text.expiresAt,
+    const finalSuggestion = suggestion;
+    // Share the reporter/report write fence with private notes and both deletion paths.
+    const persisted = await withTransaction(async session => {
+      const parent = await lockFeedbackNoteParent(feedbackId, session);
+      if (!parent || parent.expiresAt <= new Date()) return false;
+      const currentText = await FeedbackTextModel.findById(parent.feedbackId).session(session).lean();
+      if (
+        !currentText ||
+        currentText.expiresAt <= new Date() ||
+        currentText.expiresAt.getTime() !== text.expiresAt.getTime() ||
+        currentText.content !== text.content ||
+        currentText.revision !== text.revision
+      )
+        return false;
+      await FeedbackAiModel.updateOne(
+        { feedbackId: parent.feedbackId },
+        {
+          $set: {
+            inputHash,
+            model: embedded.model,
+            vector: embedded.vector,
+            suggestionId: finalSuggestion.id,
+            labels: finalSuggestion.proposedAction,
+            similar: candidates,
+            reportCreatedAt: report.createdAt,
+            expiresAt: text.expiresAt,
+          },
+          $unset: { override: 1 },
         },
-        $unset: { override: 1 },
-      },
-      { upsert: true }
-    );
+        { upsert: true, session }
+      );
+      return true;
+    });
+    if (!persisted) return;
     attempt.outcome = 'suggestion';
     attempt.suggestionId = suggestion.id;
     attempt.skipReason = undefined;

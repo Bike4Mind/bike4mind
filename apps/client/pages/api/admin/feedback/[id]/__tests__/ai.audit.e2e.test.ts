@@ -8,7 +8,10 @@ import { FEEDBACK_AI_POLICY } from '@bike4mind/common';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
+  MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../../packages/database/src/__test__/createMongoServer';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 type Handler = (req: Request, res: Response) => Promise<unknown>;
 const mocks = vi.hoisted(() => ({
@@ -59,10 +62,15 @@ const labels = {
   needsReply: false,
   duplicateId: null,
 };
-const setup = async () => {
+const setup = async (reportId?: mongoose.Types.ObjectId) => {
   mocks.visible.mockResolvedValue(true);
   mocks.audit.mockResolvedValue({ id: 'audit' });
-  const report = await FeedbackModel.create({ userId: 'reporter', username: 'Reporter', status: 'New' });
+  const report = await FeedbackModel.create({
+    ...(reportId ? { _id: reportId } : {}),
+    userId: 'reporter',
+    username: 'Reporter',
+    status: 'New',
+  });
   const suggestion = await adminAiSuggestionRepository.createPending({
     feature: 'feedbackTriage',
     entityType: 'feedback',
@@ -90,7 +98,7 @@ const setup = async () => {
   });
   return { report, suggestion };
 };
-const call = async (method: 'GET' | 'PATCH', id: string, body = {}) => {
+const call = async (method: 'GET' | 'PATCH', id: string, body = {}): Promise<unknown> => {
   const { req, res } = createMocks({ method, query: { id }, body });
   Object.assign(req, { user: { id: 'admin', username: 'Admin', isAdmin: true } });
   await (method === 'GET' ? mocks.get! : mocks.patch!)(req as unknown as Request, res as unknown as Response);
@@ -132,5 +140,29 @@ describe('feedback AI manual decisions', () => {
     await expect(
       call('PATCH', report.id, { suggestionId: suggestion.id, labels, reason: 'Accepted suggestion' })
     ).rejects.toMatchObject({ statusCode: 409 });
+  });
+  it('uses canonical joins for uppercase report IDs on both reads and decisions', async () => {
+    const { report, suggestion } = await setup(new mongoose.Types.ObjectId('abcdefabcdefabcdefabcdef'));
+    const uppercase = report.id.toUpperCase();
+    expect(await call('GET', uppercase)).toMatchObject({ suggestion: { id: suggestion.id }, labels });
+    await call('PATCH', uppercase, { suggestionId: suggestion.id, labels, reason: 'Accepted suggestion' });
+    expect((await adminAiSuggestionRepository.findLatestForEntity('feedbackTriage', report.id))?.status).toBe(
+      'accepted'
+    );
+    expect(mocks.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ details: { feedbackId: report.id, aiSuggestionId: suggestion.id } })
+    );
+  });
+
+  it('rejects invalid report IDs before querying report data', async () => {
+    const query = vi.spyOn(FeedbackModel, 'exists');
+    try {
+      await expect(call('GET', 'not-a-report-id')).rejects.toMatchObject({ statusCode: 404 });
+      expect(query).not.toHaveBeenCalled();
+      expect(mocks.visible).not.toHaveBeenCalled();
+    } finally {
+      query.mockRestore();
+    }
   });
 });

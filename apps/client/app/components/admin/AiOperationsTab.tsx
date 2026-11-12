@@ -258,8 +258,8 @@ export default function AiOperationsTab() {
             <Stack gap={2}>
               <Typography level="title-md">Class evidence and mode</Typography>
               <Typography level="body-sm">
-                Record a reproducible offline replay artifact, case count and agreement count. Policy changes require
-                fresh evidence. This does not register an action handler.
+                An administrator supplies the replay artifact reference and counts; this console does not verify them.
+                Policy changes require fresh evidence. This does not register an action handler.
               </Typography>
               <FormControl>
                 <FormLabel>Feature</FormLabel>
@@ -297,7 +297,7 @@ export default function AiOperationsTab() {
                 />
               </FormControl>
               <FormControl>
-                <FormLabel>Replay artifact reference</FormLabel>
+                <FormLabel>Replay artifact reference supplied by admin</FormLabel>
                 <Input
                   disabled={saving}
                   value={classDraft.replayArtifact}
@@ -360,7 +360,7 @@ export default function AiOperationsTab() {
               { id: 'mode', label: 'Mode', render: row => row.mode },
               {
                 id: 'replay',
-                label: 'Offline replay',
+                label: 'Replay counts supplied by admin',
                 render: row => `${row.evidence.replayAgreed}/${row.evidence.replayCases}`,
               },
               {

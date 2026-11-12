@@ -2,13 +2,13 @@ import {
   FEEDBACK_AI_POLICY,
   FeedbackAiDecisionSchema,
   FeedbackAiLabelsSchema,
+  FeedbackAiReportIdSchema,
   BadRequestError,
   ConflictError,
   NotFoundError,
 } from '@bike4mind/common';
 import { FeedbackAiModel, FeedbackModel, adminAiSuggestionRepository, withTransaction } from '@bike4mind/database';
 import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
-import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { adminApi } from '@server/middlewares/adminApi';
 import { feedbackAiVisible } from '@server/admin/ai/feedbackVisibility';
 
@@ -17,8 +17,9 @@ const handler = adminApi({
   adminPermissions: { GET: ['support:read', 'users:moderate'], PATCH: 'users:moderate' },
 })
   .get(async (req, res) => {
-    const id = String(req.query.id ?? '');
-    if (!isValidObjectId(id)) throw new NotFoundError('Feedback not found');
+    const parsedId = FeedbackAiReportIdSchema.safeParse(req.query.id);
+    if (!parsedId.success) throw new NotFoundError('Feedback not found');
+    const id = parsedId.data;
     if (!(await feedbackAiVisible())) return res.json({ suggestion: null, labels: null, similar: [] });
     if (!(await FeedbackModel.exists({ _id: id }))) return res.json({ suggestion: null, labels: null, similar: [] });
     const row = await FeedbackAiModel.findOne({ feedbackId: id, expiresAt: { $gt: new Date() } }).lean();
@@ -49,8 +50,9 @@ const handler = adminApi({
     });
   })
   .patch(async (req, res) => {
-    const id = String(req.query.id ?? '');
-    if (!isValidObjectId(id)) throw new NotFoundError('Feedback not found');
+    const parsedId = FeedbackAiReportIdSchema.safeParse(req.query.id);
+    if (!parsedId.success) throw new NotFoundError('Feedback not found');
+    const id = parsedId.data;
     if (!(await feedbackAiVisible())) throw new ConflictError('Feedback suggestions are not ready for review');
     const { suggestionId, labels, reason } = FeedbackAiDecisionSchema.parse(req.body);
     await withTransaction(async () => {

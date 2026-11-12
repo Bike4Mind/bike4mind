@@ -1,10 +1,10 @@
-import { ADMIN_AI_FEATURES, AdminAiConfigSchema, type AdminAiFeature } from '@bike4mind/common';
+import { ADMIN_AI_FEATURES, AdminAiStoredConfigSchema, type AdminAiFeature } from '@bike4mind/common';
 import { AdminAiAttemptModel, AdminAiClassModel, AdminAiSuggestionModel, AdminSettings } from '@bike4mind/database';
 import { getAdminAiClassReadiness } from './readiness';
 
 export async function loadAdminAiConfig() {
   const row = await AdminSettings.findOne({ settingName: 'adminAiConfig' }).lean();
-  return AdminAiConfigSchema.parse(row?.settingValue ?? {});
+  return AdminAiStoredConfigSchema.parse(row?.settingValue ?? {});
 }
 
 export async function getAdminAiOperations(now = new Date()) {

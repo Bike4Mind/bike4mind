@@ -16,7 +16,7 @@ import {
 } from '../../../../../packages/database/src/__test__/createMongoServer';
 import { getAdminAiOperations } from './operations';
 import { getAdminAiClassReadiness, validateAdminAiConfigPromotion } from './readiness';
-import { AdminAiConfigSchema } from '@bike4mind/common';
+import { AdminAiConfigSchema, supportedChatModels, DECISION_MODEL_IDS } from '@bike4mind/common';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let server: MongoMemoryReplSet;
@@ -156,4 +156,35 @@ describe('durable AI operations', () => {
     );
     expect((await getAdminAiClassReadiness(key, now)).canRecommend).toBe(false);
   });
+  it.each(['object', 'json'])(
+    'loads legacy feedback engine config and keeps manual controls usable (%s)',
+    async representation => {
+      const decisions = new Set<string>(DECISION_MODEL_IDS);
+      const legacyModel = supportedChatModels.options.find(model => !decisions.has(model));
+      if (!legacyModel) throw new Error('Expected a legacy chat-only model fixture');
+      const stored = {
+        enabled: true,
+        monthlyCapUsd: 20,
+        features: {
+          feedbackTriage: { mode: 'shadow', model: legacyModel, escalationModel: legacyModel, dailyBudgetUsd: 3 },
+          dlqTriage: { mode: 'shadow', model: legacyModel },
+        },
+      };
+      await AdminSettings.create({
+        settingName: 'adminAiConfig',
+        settingValue: representation === 'json' ? JSON.stringify(stored) : stored,
+      });
+      const data = await getAdminAiOperations(now);
+      expect(data.config).toMatchObject({
+        enabled: true,
+        monthlyCapUsd: 20,
+        features: {
+          feedbackTriage: { mode: 'shadow', model: null, escalationModel: null, dailyBudgetUsd: 3 },
+          dlqTriage: { mode: 'shadow', model: legacyModel },
+        },
+      });
+      await expect(getAdminAiClassReadiness(key, now)).resolves.toMatchObject({ canAct: false });
+      await expect(validateAdminAiConfigPromotion(data.config)).resolves.toBeUndefined();
+    }
+  );
 });

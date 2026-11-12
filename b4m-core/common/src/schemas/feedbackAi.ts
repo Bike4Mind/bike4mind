@@ -13,6 +13,10 @@ export const FEEDBACK_AI_AREAS = [
 ] as const;
 export const FEEDBACK_AI_SEVERITIES = ['cosmetic', 'minor', 'major', 'blocking'] as const;
 export const FEEDBACK_AI_POLICY = 'feedback-v1';
+export const FeedbackAiReportIdSchema = z
+  .string()
+  .regex(/^[a-f0-9]{24}$/i)
+  .transform(id => id.toLowerCase());
 export const FeedbackAiLabelsSchema = z
   .object({
     area: z.enum(FEEDBACK_AI_AREAS),
