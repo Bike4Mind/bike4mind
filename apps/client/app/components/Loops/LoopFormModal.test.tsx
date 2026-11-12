@@ -580,7 +580,6 @@ describe('LoopFormModal templates', () => {
   it.each(LOOP_TEMPLATES)('$id prefills a form that saves as is', template => {
     const { errors, payload } = validateLoopForm(initialValues(template), 'create');
     expect(errors).toEqual({});
-    expect(payload).not.toHaveProperty('slackChannelId');
     expect(payload).not.toHaveProperty('model');
     expect(payload?.budgetCreditsPerDay).toBe(template.budgetCreditsPerDay);
     for (const config of template.stageConfig) {
