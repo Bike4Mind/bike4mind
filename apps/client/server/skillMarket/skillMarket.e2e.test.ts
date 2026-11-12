@@ -781,6 +781,28 @@ describe('Skill Market (real mongod)', () => {
     await expect(call(importHandler, 'POST', OTHER, { id: listing.id })).rejects.toMatchObject({ statusCode: 404 });
   });
 
+  it('reports: the queue splits counting reports from the total, and an importer sees the hidden state', async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public');
+    const imported = await call(importHandler, 'POST', OTHER, { id: listing.id });
+    const copy = (await skillRepository.findById(imported._getJSONData().skill.id))!;
+    for (const u of ['new-1', 'new-2']) {
+      await call(reportHandler, 'POST', u, { id: listing.id }, { reason: 'spam' }, false, new Date());
+    }
+    for (const u of ['old-1', 'old-2', 'old-3']) {
+      await call(reportHandler, 'POST', u, { id: listing.id }, { reason: 'spam' });
+    }
+
+    const queue = (await call(reviewQueueHandler, 'GET', ADMIN, { filter: 'reports' }, {}, true))._getJSONData();
+    expect(queue.data).toHaveLength(1);
+    expect(queue.data[0]).toMatchObject({ count: 5, countingCount: 3 });
+
+    let [status] = await attachMarketStatus([copy]);
+    expect(status.marketStatus?.state).toBe('hidden');
+    await call(moderateHandler, 'POST', ADMIN, { id: listing.id }, { action: 'restore' }, true);
+    [status] = await attachMarketStatus([copy]);
+    expect(status.marketStatus?.state).toBe('current');
+  });
+
   it('update: refuses to apply a version other than the one the importer reviewed', async () => {
     const source = await makeSkill(AUTHOR, 'Rewrite as bullets v1.');
     const { listing, version: v1 } = await publish(source, 'public');

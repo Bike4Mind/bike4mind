@@ -3,6 +3,7 @@ import { Alert, Box, Button, Checkbox, Stack, Typography } from '@mui/joy';
 import SystemUpdateAltIcon from '@mui/icons-material/SystemUpdateAlt';
 import BlockIcon from '@mui/icons-material/Block';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
@@ -11,9 +12,14 @@ import { conflictInfo, useImportListing, useListingDetail } from '@client/app/ho
 import { getErrorMessage } from '@client/app/utils/error';
 import { BodyDiff, HonestSummaryPanel, MismatchAlert } from './parts';
 
+const UPDATE_ORIGIN: Record<string, string> = {
+  auto_approved: 'The author published a new version that passed the safety checks.',
+  approved: 'The author published a new version that a reviewer approved.',
+};
+
 /**
  * Market provenance for an imported skill on its detail page: an update offer (with a diff and an
- * overwrite warning when the copy was edited locally), or a delisted / withdrawn warning.
+ * overwrite warning when the copy was edited locally), or a delisted / withdrawn / hidden warning.
  */
 const SkillUpdatePanel: FC<{ skill: ISkillWithSharing }> = ({ skill }) => {
   const navigate = useNavigate();
@@ -38,6 +44,13 @@ const SkillUpdatePanel: FC<{ skill: ISkillWithSharing }> = ({ skill }) => {
             you keep using it.
           </Typography>
         </Box>
+      </Alert>
+    );
+  }
+  if (status.state === 'hidden') {
+    return (
+      <Alert color="warning" variant="soft" startDecorator={<VisibilityOffIcon />} data-testid="skill-market-hidden">
+        This listing is hidden while a moderator reviews reports. Your copy keeps working.
       </Alert>
     );
   }
@@ -135,7 +148,8 @@ const SkillUpdatePanel: FC<{ skill: ISkillWithSharing }> = ({ skill }) => {
             Update available (v{status.importedVersion} {'->'} v{status.latestVersion})
           </Typography>
           <Typography level="body-sm">
-            The author published a new version that passed the safety checks. Nothing changes until you update.
+            {UPDATE_ORIGIN[data?.version?.reviewStatus ?? ''] ?? 'The author published a new version.'} Nothing changes
+            until you update.
           </Typography>
         </Box>
 
