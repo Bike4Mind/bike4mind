@@ -30,7 +30,8 @@ import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/bil
 import { recordInsufficientCredits } from '@bike4mind/server-utils/billing/userLimitEvents';
 import { Logger } from '@bike4mind/observability';
 import { modelDiscoveryService } from '@bike4mind/services';
-import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
+import { GenerationJobEngine, emitStudioJobCompletion } from '@bike4mind/services/generationJobs';
+import { StudioEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { createMusicJobHandler, type CreateMusicJobDeps, type MusicJobDeps } from '@bike4mind/services/musicJobs';
 import { createImageJobHandler, type CreateImageJobsDeps, type ImageJobDeps } from '@bike4mind/services/imageJobs';
@@ -502,6 +503,17 @@ const notify = async (job: IGenerationJobDocument): Promise<void> => {
   }
 };
 
+// Fans out through EventBridge so every surface (web toast today, native notifications later) shares one event.
+const announceStudioCompletion = async (job: IGenerationJobDocument): Promise<void> => {
+  await emitStudioJobCompletion(job, {
+    repository: generationJobRepository,
+    publish: async event => {
+      await StudioEvents.JobCompleted.publish(event);
+    },
+    now: () => new Date(),
+  });
+};
+
 let videoJobDeps: VideoJobDeps | undefined;
 export const getVideoJobDeps = (): VideoJobDeps => {
   videoJobDeps ??= {
@@ -608,6 +620,7 @@ export const getGenerationJobEngine = (): GenerationJobEngine => {
     ],
     enqueue: enqueueGenerationJob,
     notify,
+    onTerminalHandled: announceStudioCompletion,
     now: () => new Date(),
     logger,
     leaseMs: LEASE_MS,

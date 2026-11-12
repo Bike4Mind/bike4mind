@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CreditHolderType, type IGenerationJob } from '@bike4mind/common';
+import { CreditHolderType, type IGenerationJob, type IGenerationJobDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from './__test__/inMemoryGenerationJobRepository';
 import { MAX_STEP_ATTEMPTS } from './backoff';
@@ -23,9 +23,11 @@ const LEASE_MS = 330_000;
 const setup = ({
   submitMode = 'async',
   aiAccessDenial,
+  onTerminalHandled,
 }: {
   submitMode?: GenerationJobHandler['submitMode'];
   aiAccessDenial?: (userId: string) => Promise<string | null>;
+  onTerminalHandled?: (job: IGenerationJobDocument) => Promise<void>;
 } = {}) => {
   let clock = new Date('2026-10-06T00:00:00Z');
   const now = () => clock;
@@ -58,6 +60,7 @@ const setup = ({
     logger,
     leaseMs: LEASE_MS,
     aiAccessDenial,
+    onTerminalHandled,
   });
   const create = (overrides: Partial<IGenerationJob> = {}) =>
     repository.createJob({
@@ -652,6 +655,33 @@ describe('GenerationJobEngine', () => {
       expect(await t.engine.failBeforeStart(job.id, enqueueFailed)).toBe('skipped');
       expect(t.repository.jobs.get(job.id)!.error).toBeUndefined();
       expect(t.handler.onTerminal).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onTerminalHandled', () => {
+    const enqueueFailed = { code: 'enqueue_failed' as const, message: 'The job could not be queued' };
+
+    it('runs once, after terminal handling is recorded', async () => {
+      const storedHandledAt: Array<Date | null | undefined> = [];
+      let readStored: (id: string) => Date | null | undefined = () => undefined;
+      const onTerminalHandled = vi.fn(async (job: IGenerationJobDocument) => {
+        storedHandledAt.push(readStored(job.id));
+      });
+      const t = setup({ onTerminalHandled });
+      readStored = id => t.repository.jobs.get(id)?.terminalHandledAt;
+      const job = await t.create();
+      await t.engine.failBeforeStart(job.id, enqueueFailed);
+      await t.engine.step(job.id);
+      expect(onTerminalHandled).toHaveBeenCalledTimes(1);
+      expect(onTerminalHandled).toHaveBeenCalledWith(expect.objectContaining({ id: job.id, state: 'failed' }));
+      expect(storedHandledAt).toEqual([expect.any(Date)]);
+    });
+
+    it('a throw never fails the terminal step', async () => {
+      const t = setup({ onTerminalHandled: async () => Promise.reject(new Error('bus down')) });
+      const job = await t.create();
+      expect(await t.engine.failBeforeStart(job.id, enqueueFailed)).toBe('failed');
+      expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -62,6 +62,11 @@ export type GenerationJobEngineDeps = {
    * outlives the request that admitted it, so an account blocked since then must not reach the provider.
    */
   aiAccessDenial?(userId: string): Promise<string | null>;
+  /**
+   * Runs once per job, after its terminal handling (credit settlement) is recorded. Best effort: a throw is logged,
+   * never retried, since settlement already happened and must not be re-run.
+   */
+  onTerminalHandled?(job: IGenerationJobDocument): Promise<void>;
 };
 
 export type StepOutcome = 'skipped' | 'advanced' | 'terminal';

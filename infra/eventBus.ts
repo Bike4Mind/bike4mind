@@ -159,7 +159,29 @@ export const notificationPushSubscription = eventBus.subscribe(
   }
 );
 
-pushEventsDeadLetter.allowRules([notificationPushSubscription]);
+// Relays a finished Studio group to the requester's open sessions (apps/workers/src/events/studioJobCompleted.ts).
+// A user-facing notification like push, so it shares the push DLQ; a native notifier adds its own rule on the
+// same detail-type.
+export const studioJobCompletedSubscription = eventBus.subscribe(
+  'studio-job-completed',
+  {
+    handler: 'apps/workers/src/events/studioJobCompleted.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, websocketApi],
+    // VPC for the database egress path (websocket connections are read from Mongo).
+    vpc: lambdaVpc,
+    timeout: '30 seconds',
+    environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+    permissions: [pushEventsDeadLetter.sendPermission],
+    transform: pushEventsDeadLetter.functionTarget,
+  },
+  {
+    pattern: { detailType: ['studio.job.completed'] },
+    transform: pushEventsDeadLetter.ruleTarget,
+  }
+);
+
+pushEventsDeadLetter.allowRules([notificationPushSubscription, studioJobCompletedSubscription]);
 
 // Session events
 //
