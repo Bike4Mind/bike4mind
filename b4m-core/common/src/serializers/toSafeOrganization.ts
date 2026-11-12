@@ -1,5 +1,6 @@
 import type { IOrganizationDocument } from '../types/entities/OrganizationTypes';
-import { isOrgOwnerOrCurrentAdmin } from '../constants/organization';
+import { canViewOrgMemberCredits } from '../constants/organization';
+import { orgMemberHasPermission } from '../constants/orgRoles';
 
 /**
  * Response-boundary serializer for organization documents.
@@ -28,8 +29,9 @@ export const ORGANIZATION_SECRET_FIELDS = [
   'signupGrantUnlockCount',
   'signupInviteBonusCount',
 ] as const;
+/** Withheld over REST from everyone without `manageBilling` (owner, billing managers) or platform admin. */
 export const ORGANIZATION_OWNER_ONLY_FIELDS = ['billingContact'] as const;
-/** Per-member credit paths withheld from everyone but owners, current managers and site admins. */
+/** Per-member credit paths withheld from everyone `canViewOrgMemberCredits` refuses. */
 export const ORGANIZATION_MEMBER_CREDIT_FIELDS = [
   'userDetails.usedCredits',
   'userDetails.maxCredits',
@@ -52,19 +54,24 @@ export function toSafeOrganization(org: OrgLike, viewer: OrgViewer): Record<stri
 
   for (const f of ORGANIZATION_SECRET_FIELDS) delete o[f];
 
-  const isOwner = viewer?.userId != null && plain.userId === viewer.userId;
-  const privileged = isOwner || !!viewer?.isAdmin;
-  if (!privileged) {
+  const roles =
+    plain.userId != null
+      ? {
+          userId: plain.userId,
+          adminUserIds: plain.adminUserIds,
+          billingManagerUserIds: plain.billingManagerUserIds,
+          users: plain.users,
+        }
+      : null;
+  const canViewBillingContact =
+    !!viewer?.isAdmin ||
+    (viewer?.userId != null && roles !== null && orgMemberHasPermission(roles, viewer.userId, 'manageBilling'));
+  if (!canViewBillingContact) {
     delete o.billingContact;
   }
   const canViewMemberCredits =
     !!viewer?.isAdmin ||
-    (viewer?.userId != null &&
-      plain.userId != null &&
-      isOrgOwnerOrCurrentAdmin(
-        { id: viewer.userId },
-        { userId: plain.userId, adminUserIds: plain.adminUserIds, users: plain.users }
-      ));
+    (viewer?.userId != null && roles !== null && canViewOrgMemberCredits({ id: viewer.userId }, roles));
   if (!canViewMemberCredits && Array.isArray(o.userDetails)) {
     o.userDetails = o.userDetails.map(details => {
       // A member keeps their own row: the budget warning reads it from this response.

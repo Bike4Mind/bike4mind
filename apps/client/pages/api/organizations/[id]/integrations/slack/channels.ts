@@ -4,14 +4,14 @@
  * GET /api/organizations/[id]/integrations/slack/channels - channels of the org's workspace with API posting on
  * PUT /api/organizations/[id]/integrations/slack/channels - turn API posting on or off for one channel
  *
- * Owner only (verifyOrgOwner), like the sibling integrations/slack routes: it decides what external
+ * Requires manageIntegrations (verifyOrgPermission), like the sibling integrations/slack routes: it decides what external
  * systems may say in the org's Slack. Session only: an API key must not widen its own reach.
  */
 
 import { z } from 'zod';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { orgSlackWorkspaceRepository, slackChannelConfigRepository } from '@bike4mind/database/infra';
 import { ConflictError, NotFoundError, SLACK_CHANNEL_ID_PATTERN, type ISlackChannelConfig } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -61,7 +61,7 @@ async function lookUpChannel(botToken: string, channelId: string): Promise<{ fou
 const handler = baseApi({ auth: 'jwtOnly' })
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-      const org = await verifyOrgOwner(req.user!, orgIdOf(req));
+      const org = await verifyOrgPermission(req.user!, orgIdOf(req), 'manageIntegrations');
       const workspace = await orgSlackWorkspaceRepository.findByOrganizationId(org.id);
       if (!workspace) throw new NotFoundError('No Slack workspace connected');
 
@@ -71,7 +71,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
   )
   .put(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-      const org = await verifyOrgOwner(req.user!, orgIdOf(req));
+      const org = await verifyOrgPermission(req.user!, orgIdOf(req), 'manageIntegrations');
       const update = parseOrBadRequest(UpdateApiPostingSchema, req.body);
 
       const workspace = await orgSlackWorkspaceRepository.findByOrganizationIdWithToken(org.id);

@@ -4,11 +4,12 @@
  * Shared utility for verifying user access to organization resources.
  * Used by org-scoped API endpoints (webhooks, GitHub connection, etc.)
  *
- * Five tiers, widest last. State which one you mean at every call site; picking the wrong one
+ * Administration is gated by NAMED PERMISSION (`verifyOrgPermission`); which role grants which
+ * permission is the catalogue in b4m-core/common/src/constants/orgRoles.ts. Membership and status
+ * reads have their own tiers. State which one you mean at every call site; picking the wrong one
  * either leaks across a tenant boundary or breaks a members' screen:
- * - `verifyOrgOwner`           - owner only
- * - `verifyOrgAccess`          - owner or manager (`adminUserIds` on the roster)
- * - `verifyOrgAdminRead`       - owner or manager, matching `adminUserIds` without the roster row (reads only)
+ * - `verifyOrgPermission`      - the caller's role grants the named permission (writes and admin reads)
+ * - `verifyOrgAdminRead`       - manager-tier status reads, matching `adminUserIds` without the roster row
  * - `verifyOrgMemberOrManager` - any member, or a manager whose row lacks a membership permission (reads only)
  * - `verifyOrgMembership`      - any member (shareable ACL)
  *
@@ -18,49 +19,33 @@
  */
 
 import { organizationRepository } from '@bike4mind/database/infra';
-import {
-  canAdministerOrganization,
-  isOrgOwnerOrPlatformAdmin,
-  type AdministrableOrg,
-  type IUserDocument,
-} from '@bike4mind/common';
+import { hasOrgPermission, type IUserDocument, type OrgPermission } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { isValidObjectId } from './objectId';
 import { resolveActiveOrg } from './resolveActiveOrg';
 import type { Logger } from '@bike4mind/observability';
 
 /**
- * The one owner / manager / platform-admin predicate behind `verifyOrgAccess` (the write gate) and
- * `verifyOrgAdminRead`'s `canManage`, so the read tier's answer cannot drift from what the write
- * routes accept. Delegates to the common predicate the roster services also use.
- */
-function canManageOrg(user: { id: string; isAdmin: boolean }, org: AdministrableOrg) {
-  return canAdministerOrganization(user, org);
-}
-
-/**
- * Verify user has update access to the organization
+ * Verify the caller's org role grants `permission`, returning the organization document. The one
+ * gate for org administration routes: name the permission the route exercises rather than a role.
  *
- * @param user - The authenticated user
- * @param orgId - The organization ID to verify access for
- * @returns The organization document if access is granted
+ * Non-oracular: a nonexistent org and an org where the caller lacks the permission both answer
+ * NotFoundError, so the route cannot be used to enumerate which organization ids exist.
+ *
  * @throws BadRequestError if orgId is invalid format
- * @throws NotFoundError if org doesn't exist or user doesn't have access
+ * @throws NotFoundError if the org doesn't exist or the caller lacks the permission
  */
-export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, orgId: string) {
-  // P1: Validate orgId format to prevent invalid database queries
+export async function verifyOrgPermission(
+  user: { id: string; isAdmin: boolean },
+  orgId: string,
+  permission: OrgPermission
+) {
   if (!orgId || !isValidObjectId(orgId)) {
     throw new BadRequestError('Invalid organization ID');
   }
 
   const org = await organizationRepository.findById(orgId);
-  if (!org) {
-    throw new NotFoundError('Organization not found');
-  }
-
-  // Platform admins pass for every org; everyone else must be its owner or a manager. Same error for
-  // not found and not authorized (prevents enumeration).
-  if (!canManageOrg(user, org)) {
+  if (!org || !hasOrgPermission(user, org, permission)) {
     throw new NotFoundError('Organization not found');
   }
 
@@ -68,13 +53,13 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
 }
 
 /**
- * Read-tier sibling of `verifyOrgAccess` for status surfaces: admits the owner, any `adminUserIds`
+ * Read-tier sibling of `verifyOrgPermission(..., 'manageContent')` for status surfaces: admits the owner, any `adminUserIds`
  * manager and a platform admin. That is the same set `findIdsWithAdminRights` and
  * `canManageLake` resolve from the user's side, read here off the org document because the org is
  * already in hand: a manager is matched on `adminUserIds` alone, unlike `canAdministerOrganization`
  * (`b4m-core/common/src/constants/organization.ts`), which also requires a current `users[]` row - so
  * a manager whose row has lapsed may still see status but not operate. Never use it to guard a write
- * - `canManage` is the `verifyOrgAccess` answer, so a caller can render the write controls only for
+ * - `canManage` is the `verifyOrgPermission(..., 'manageContent')` answer, so a caller can render the write controls only for
  * who may use them.
  *
  * Non-oracular like its siblings: a missing org and an unrelated caller both answer NotFoundError.
@@ -89,7 +74,7 @@ export async function verifyOrgAdminRead(user: { id: string; isAdmin: boolean },
     throw new NotFoundError('Organization not found');
   }
 
-  const canManage = canManageOrg(user, org);
+  const canManage = hasOrgPermission(user, org, 'manageContent');
   const isAppointedAdmin = (org.adminUserIds ?? []).some(adminId => String(adminId) === user.id);
   if (!canManage && !isAppointedAdmin) {
     throw new NotFoundError('Organization not found');
@@ -99,59 +84,11 @@ export async function verifyOrgAdminRead(user: { id: string; isAdmin: boolean },
 }
 
 /**
- * Verify the caller OWNS the organization, returning the organization document.
- *
- * The strictest of the five tiers in this file - owner only, where `verifyOrgAccess` also admits
- * the manager and `verifyOrgMembership` admits any member. Use it wherever only the party that
- * owns the org may act: billing writes (committing the org to a charge, or changing what it pays),
- * the org's credit spend and ledger (`usage/index.ts`, `admin/transactions.ts`,
- * `admin/session-usage.ts`), and org-level integration wiring and secrets (`integrations/slack/*`,
- * `organizations/[id]/github/*`, `organizations/[id]/webhooks/github*`), which act for the whole
- * tenant. A manager has agreed to none of these. The client's tab gates for them
- * (routes/organizations/orgTabAccess.ts) must stay in sync with this list.
- *
- * Non-oracular, like its siblings: a nonexistent org and an org the caller does not own both answer
- * NotFoundError, so the route cannot be used to enumerate which organization ids exist.
- *
- * Three routes still spell this same bar out inline. All three answer ForbiddenError /
- * BadRequestError after an unconditional lookup, so unlike this helper they DO leak which org ids
- * exist; each is left alone only because changing the status it returns is a visible API change.
- * If you touch one, move it onto this helper rather than copying the inline form again:
- * - `organizations/subscriptions/update-seats.ts:40`
- * - `stripe/portal.ts:43`
- * - `organizations/[id]/admins.ts:27-29`
- *
- * Grep for BOTH spellings when re-deriving this list. The last one writes `org.userId === user.id`
- * into an `isOwner` local and negates it later, so a search for the `!==` form alone misses it -
- * which is how an earlier version of this comment came to call a two-entry list complete.
- *
- * Separately, `webhooks/github/subscriptions/index.ts:35-62` is a private copy of
- * `verifyOrgMembership`, not of this function - fold it into that sibling, not this one.
- */
-export async function verifyOrgOwner(user: { id: string; isAdmin: boolean }, orgId: string) {
-  if (!orgId || !isValidObjectId(orgId)) {
-    throw new BadRequestError('Invalid organization ID');
-  }
-
-  const org = await organizationRepository.findById(orgId);
-  if (!org) {
-    throw new NotFoundError('Organization not found');
-  }
-
-  // Platform admins pass through, matching every other gate in this file.
-  if (!isOrgOwnerOrPlatformAdmin(user, org)) {
-    throw new NotFoundError('Organization not found');
-  }
-
-  return org;
-}
-
-/**
  * Verify the caller BELONGS to the organization, returning the organization document.
  *
- * The membership-level sibling of `verifyOrgAccess`: use this for org-scoped READS a plain member
- * legitimately makes (the org's own subscription plan, say), and `verifyOrgAccess` for anything
- * only an owner/manager should see or change. Picking the wrong one either leaks across a tenant
+ * The membership-level sibling of `verifyOrgPermission`: use this for org-scoped READS a plain member
+ * legitimately makes (the org's own subscription plan, say), and `verifyOrgPermission` for anything
+ * only a role holder should see or change. Picking the wrong one either leaks across a tenant
  * boundary or breaks a members' screen, so state which you mean at every call site.
  *
  * Deliberately non-oracular: `findAccessibleById` returns null for BOTH a nonexistent org and one
@@ -207,7 +144,7 @@ export async function verifyOrgMemberOrManager(user: IUserDocument, orgId: strin
   }
 
   const org = await organizationRepository.findById(orgId);
-  if (!org || !canManageOrg(user, org)) {
+  if (!org || !hasOrgPermission(user, org, 'manageMembers')) {
     throw new NotFoundError('Organization not found');
   }
   return org;

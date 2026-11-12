@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { workItemRepository } from '@bike4mind/database';
 import { IWorkItem } from '@bike4mind/common';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
 import {
   parseStatusFilter,
@@ -69,7 +69,11 @@ const handler = baseApi()
     const dependencies = validateWorkItemDependencies(body.dependencies) ?? [];
 
     if (body.organizationId) {
-      await verifyOrgAccess({ id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) }, body.organizationId);
+      await verifyOrgPermission(
+        { id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) },
+        body.organizationId,
+        'manageContent'
+      );
     }
 
     await assertDependenciesUsable(req.user!.id, dependencies);

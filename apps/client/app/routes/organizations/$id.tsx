@@ -1,10 +1,4 @@
-import {
-  IOrganizationDocument,
-  Permission,
-  WithId,
-  isOrgOwnerOrCurrentAdmin,
-  isOrgOwnerOrPlatformAdmin,
-} from '@bike4mind/common';
+import { IOrganizationDocument, Permission, WithId, isOrgOwnerOrPlatformAdmin } from '@bike4mind/common';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
@@ -59,7 +53,9 @@ import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import {
+  canManageOrgApiKeys,
   canManageOrgConnectors,
+  canManageOrgGroups,
   canManageOrgIntegrations,
   canViewOrgAnalysis,
   canViewOrgBilling,
@@ -108,8 +104,8 @@ const OrganizationPage: FC = () => {
     return userPermissions.includes(Permission.share) || userPermissions.includes(Permission.update);
   }, [userPermissions]);
 
-  // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs are owner-only;
-  // Analysis is open to managers. None of them follows the permission set - see orgTabAccess.ts.
+  // Every tab below asks the org permission its routes check (orgTabAccess.ts); none follows the
+  // sharing ACL that drives canManageOrg.
   const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
   const canViewAudit = canViewOrgAudit(currentUser, organization);
   const canViewAnalysis = useMemo(() => canViewOrgAnalysis(currentUser, organization), [currentUser, organization]);
@@ -118,21 +114,15 @@ const OrganizationPage: FC = () => {
     [currentUser, organization]
   );
 
-  // Who may manage group instances + membership: the same isOrgOwnerOrCurrentAdmin rule
-  // assertCanManageOrgGroups enforces, so a stale adminUserIds entry is never shown a surface whose
-  // every write would 403. Personal orgs never have groups.
-  const canManageGroups = useMemo(() => {
-    if (!currentUser || !organization || organization.personal) return false;
-    return isOrgOwnerOrCurrentAdmin(currentUser, organization);
-  }, [currentUser, organization]);
+  const canManageGroups = useMemo(() => canManageOrgGroups(currentUser, organization), [currentUser, organization]);
 
-  // Billing is owner-only, narrower than canManageOrg - see canViewOrgBilling for why, and for
-  // why a platform admin is not admitted here either.
+  // See canViewOrgBilling for why a platform admin is not admitted here.
   const canViewBilling = useMemo(() => canViewOrgBilling(currentUser, organization), [currentUser, organization]);
   const canManageConnectors = useMemo(
     () => canManageOrgConnectors(currentUser, organization),
     [currentUser, organization]
   );
+  const canManageApiKeys = useMemo(() => canManageOrgApiKeys(currentUser, organization), [currentUser, organization]);
 
   // Only the billing owner or a platform admin may add or remove managers (admins route authz).
   const canSetAdmins = useMemo(() => {
@@ -156,6 +146,7 @@ const OrganizationPage: FC = () => {
     canManageGroups,
     canViewBilling,
     canManageConnectors,
+    canManageApiKeys,
   });
 
   useDocumentTitle(organization?.name, t('organization.document_title_suffix'));
@@ -279,7 +270,7 @@ const OrganizationPage: FC = () => {
                 {t('organization.tabs.connectors')}
               </Tab>
             )}
-            {canManageConnectors && (
+            {canManageApiKeys && (
               <Tab value={OrganizationTabs.ApiKeys} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <KeyOutlinedIcon sx={{ fontSize: 16 }} />
                 API Keys
@@ -372,7 +363,7 @@ const OrganizationPage: FC = () => {
                 <OrgCustomMcpPolicySection key={organization.id} organization={organization} />
               </TabPanel>
             )}
-            {canManageConnectors && (
+            {canManageApiKeys && (
               <TabPanel value={OrganizationTabs.ApiKeys}>
                 <Typography level="title-lg" startDecorator={<KeyOutlinedIcon />} sx={{ mb: 3 }}>
                   API Keys

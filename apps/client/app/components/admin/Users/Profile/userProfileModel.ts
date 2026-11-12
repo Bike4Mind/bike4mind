@@ -107,6 +107,7 @@ export const activeOrganizationId = (user: Pick<AdminUserListItem, 'organization
 export const ORGANIZATION_ROLE_LABELS: Readonly<Record<OrganizationMemberRole, string>> = {
   owner: 'Owner',
   manager: 'Manager',
+  billingManager: 'Billing manager',
   member: 'Member',
 };
 

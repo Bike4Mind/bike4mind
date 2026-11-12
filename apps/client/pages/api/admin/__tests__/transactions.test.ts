@@ -25,9 +25,9 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: { queryLedgerPage: (...a: unknown[]) => mockQueryLedgerPage(...a) },
 }));
 
-const mockVerifyOrgOwner = vi.fn();
+const mockVerifyOrgPermission = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgOwner: (...a: unknown[]) => mockVerifyOrgOwner(...a),
+  verifyOrgPermission: (...a: unknown[]) => mockVerifyOrgPermission(...a),
 }));
 
 vi.mock('@server/utils/resolveUserNames', () => ({
@@ -53,7 +53,7 @@ function call(options: { isAdmin?: boolean; adminPermissions?: string[]; hasUser
 describe('GET /api/admin/transactions — access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockVerifyOrgOwner.mockResolvedValue({ id: ORG });
+    mockVerifyOrgPermission.mockResolvedValue({ id: ORG });
     mockQueryLedgerPage.mockResolvedValue({ data: [], total: 0 });
   });
 
@@ -68,24 +68,24 @@ describe('GET /api/admin/transactions — access', () => {
     expect(mockQueryLedgerPage).not.toHaveBeenCalled();
   });
 
-  it('gates access through verifyOrgOwner for the requested org', async () => {
+  it('gates access through verifyOrgPermission for the requested org', async () => {
     const { run } = call({ isAdmin: false });
     await run();
-    expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: 'user-1', isAdmin: false }, ORG);
+    expect(mockVerifyOrgPermission).toHaveBeenCalledWith({ id: 'user-1', isAdmin: false }, ORG, 'viewUsage');
   });
 
   it.each([
     ['a full admin', { isAdmin: true }, true],
     ['a support:read delegate', { adminPermissions: ['support:read'] }, true],
     ['a delegate holding a different permission', { adminPermissions: ['settings:manage'] }, false],
-  ])('passes %s to verifyOrgOwner with admin reach %s', async (_label, user, adminReach) => {
+  ])('passes %s to verifyOrgPermission with admin reach %s', async (_label, user, adminReach) => {
     const { run } = call(user);
     await run();
-    expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: 'user-1', isAdmin: adminReach }, ORG);
+    expect(mockVerifyOrgPermission).toHaveBeenCalledWith({ id: 'user-1', isAdmin: adminReach }, ORG, 'viewUsage');
   });
 
-  it('propagates verifyOrgOwner denial and never queries the ledger', async () => {
-    mockVerifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
+  it('propagates verifyOrgPermission denial and never queries the ledger', async () => {
+    mockVerifyOrgPermission.mockRejectedValue(new NotFoundError('Organization not found'));
     const { run } = call({ isAdmin: false });
     await expect(run()).rejects.toThrow(/not found/i);
     expect(mockQueryLedgerPage).not.toHaveBeenCalled();

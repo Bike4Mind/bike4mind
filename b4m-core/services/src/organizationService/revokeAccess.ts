@@ -96,6 +96,7 @@ export const revokeAccess = async (
   // admin, the principal whose action ended the access.
   const purged = await purgeOrgMembershipArtifacts(userId, organization, { userId: user.id }, adapters);
   organization.adminUserIds = purged.adminUserIds;
+  organization.billingManagerUserIds = purged.billingManagerUserIds;
 
   await adapters.db.organizations.removeMember(organization.id, userId);
 

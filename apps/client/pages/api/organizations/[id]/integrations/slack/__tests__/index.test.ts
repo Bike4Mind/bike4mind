@@ -25,7 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-// Deliberately NOT mocking verifyOrgOwner. The one behaviour this route's gate swap changes -
+// Deliberately NOT mocking verifyOrgPermission. The one behaviour this route's gate swap changes -
 // a malformed id answering 400 where the deleted inline helper answered 404 - lives inside the
 // shared helper, so mocking it would assert the mock rather than the delta. Stubbing the
 // repository instead exercises route + helper together, which also pins the document contract

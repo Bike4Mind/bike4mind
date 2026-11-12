@@ -37,7 +37,7 @@ export type CreateLakeScope = {
   organizationId?: string;
   /**
    * Whether the caller may act for that organization: its billing owner, its manager, or a platform
-   * admin. Mirrors the server's `verifyOrgAccess`, which is the gate the connect route gets held to.
+   * admin. Mirrors the server's `verifyOrgPermission (manageContent)`, which is the gate the connect route gets held to.
    * Meaningless (and false) without an `organizationId`.
    */
   isOrgOwnerOrManager: boolean;

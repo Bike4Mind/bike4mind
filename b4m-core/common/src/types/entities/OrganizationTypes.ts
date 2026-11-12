@@ -31,6 +31,11 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * and need not appear here.
    */
   adminUserIds: string[];
+  /**
+   * User ids holding the Billing manager role (constants/orgRoles.ts): billing and usage, no roster
+   * control. Disjoint from `adminUserIds`; like it, an entry counts only with a `users[]` row.
+   */
+  billingManagerUserIds?: string[];
   description: string;
   billingContact: string;
   seats: number;
@@ -245,7 +250,7 @@ export interface IOrganizationRepository
    */
   ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void>;
 
-  /** Remove a member from users/userDetails/adminUserIds (one targeted, idempotent update). */
+  /** Remove a member from users/userDetails and every role list (one targeted, idempotent update). */
   removeMember(organizationId: string, userId: string): Promise<void>;
 
   /**

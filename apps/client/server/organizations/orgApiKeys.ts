@@ -7,7 +7,7 @@ import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 /**
  * Org-owned API keys: held by the org's service account (b4m-core/common constants/orgServiceAccount.ts)
  * instead of a member, so they keep working when any member leaves. Served by
- * pages/api/organizations/[id]/api-keys/*, which authorize the caller (verifyOrgAccess) first.
+ * pages/api/organizations/[id]/api-keys/*, which authorize the caller (manageKeys) first.
  */
 
 export const getOrCreateServiceAccount = (organization: {

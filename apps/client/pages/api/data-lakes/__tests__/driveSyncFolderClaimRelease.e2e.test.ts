@@ -29,7 +29,7 @@ const h = vi.hoisted(() => ({
   // regression the 'unregistered' case below pins.
   resourceUnregistered: { value: false },
   sendToQueue: vi.fn(),
-  verifyOrgAccess: vi.fn(),
+  verifyOrgPermission: vi.fn(),
   getValidUserDriveAccessToken: vi.fn(),
   createDriveClient: vi.fn(),
   getFolderAccess: vi.fn(),
@@ -47,7 +47,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission: h.verifyOrgPermission }));
 // common.ts reads Config at import, so importOriginal crashes here: take the real predicate from its own module.
 vi.mock('@bike4mind/server-utils/integrations/google/drive/common', async () => ({
   getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
@@ -151,7 +151,7 @@ afterEach(async () => {
 });
 
 beforeEach(() => {
-  h.verifyOrgAccess.mockResolvedValue(undefined);
+  h.verifyOrgPermission.mockResolvedValue(undefined);
   h.getValidUserDriveAccessToken.mockResolvedValue('user-access-token');
   h.createDriveClient.mockReturnValue({});
   h.getFolderAccess.mockResolvedValue({ ok: true, exists: true, isFolder: true, canRead: true });

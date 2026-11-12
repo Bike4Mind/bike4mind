@@ -1,7 +1,7 @@
 // POST /api/organizations/:id/api-keys/:keyId/rotate
 // Replaces an active org-owned key's secret and returns the new one once. The key stays with the org's
 // service account (rotateUserApiKey never re-owns an org-owned key). Owner, current manager or
-// platform admin (verifyOrgAccess).
+// platform admin (manageKeys).
 
 import { ApiKeyStatus, type IOrgApiKeySecretResponse, type IUserApiKeyDocument } from '@bike4mind/common';
 import { organizationRepository, withTransaction } from '@bike4mind/database';
@@ -14,7 +14,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { loadOrgOwnedKey, resolveCreatorNames, toOrgApiKeyView } from '@server/organizations/orgApiKeys';
 import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
 import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgPermission } from '@server/utils/orgAccess';
 
 const stringParam = (value: unknown): string => (typeof value === 'string' ? value : '');
 
@@ -28,7 +28,7 @@ function assertRotatable(key: Pick<IUserApiKeyDocument, 'status' | 'expiresAt'>)
 const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, unknown, unknown, { id?: string; keyId?: string }>(async (req, res) => {
     const user = req.user!;
-    const org = await verifyOrgAccess(user, stringParam(req.query.id));
+    const org = await verifyOrgPermission(user, stringParam(req.query.id), 'manageKeys');
     const { serviceAccount, apiKey } = await loadOrgOwnedKey(org.id, stringParam(req.query.keyId));
     assertRotatable(apiKey);
 

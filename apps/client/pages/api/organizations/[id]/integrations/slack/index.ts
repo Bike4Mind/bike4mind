@@ -14,7 +14,7 @@ import {
 } from '@bike4mind/database/infra';
 import { NotFoundError } from '@bike4mind/utils';
 import { IOrgSlackWorkspaceDocument, IOrgSlackWorkspaceResponse } from '@bike4mind/common';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { recordOrganizationAuditEventSafe } from '@bike4mind/server-utils/utils/organizationAudit';
 
@@ -42,7 +42,7 @@ const handler = baseApi()
       const orgId = req.query.id!;
       const user = req.user!;
 
-      await verifyOrgOwner(user, orgId);
+      await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const workspace = await orgSlackWorkspaceRepository.findByOrganizationId(orgId);
       if (!workspace) {
@@ -59,7 +59,7 @@ const handler = baseApi()
       const orgId = req.query.id!;
       const user = req.user!;
 
-      await verifyOrgOwner(user, orgId);
+      await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const workspace = await orgSlackWorkspaceRepository.findByOrganizationId(orgId);
       if (!workspace) {

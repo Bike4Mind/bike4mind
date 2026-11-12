@@ -4,7 +4,7 @@ import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * GET /api/organizations/users names individual members and their login/export/download
- * counts, so it is an owner/manager view - it now gates on verifyOrgAccess (which answers
+ * counts, so it is an owner/manager view - it now gates on verifyOrgPermission (which answers
  * NotFoundError identically for a missing org and one the caller may not administer) before
  * ever reading the organization.
  *
@@ -28,8 +28,8 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const verifyOrgAccess = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
+const verifyOrgPermission = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission }));
 
 const findById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({
@@ -60,16 +60,16 @@ function mocks(user: unknown, query: Record<string, unknown> = {}) {
   return { req, res };
 }
 
-describe('GET /api/organizations/users - verifyOrgAccess gate', () => {
+describe('GET /api/organizations/users - verifyOrgPermission gate', () => {
   beforeEach(() => {
-    verifyOrgAccess.mockReset();
+    verifyOrgPermission.mockReset();
     findById.mockReset();
   });
 
-  it('calls verifyOrgAccess with the resolved org id before Organization.findById runs', async () => {
+  it('calls verifyOrgPermission with the resolved org id before Organization.findById runs', async () => {
     const order: string[] = [];
-    verifyOrgAccess.mockImplementation(async (_user: unknown, orgId: string) => {
-      order.push(`verifyOrgAccess:${orgId}`);
+    verifyOrgPermission.mockImplementation(async (_user: unknown, orgId: string) => {
+      order.push(`verifyOrgPermission:${orgId}`);
       return { id: orgId };
     });
     findById.mockImplementation(() => {
@@ -83,12 +83,12 @@ describe('GET /api/organizations/users - verifyOrgAccess gate', () => {
     // large fixture that proves nothing extra about the gate.
     await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 404 });
 
-    expect(order).toEqual(['verifyOrgAccess:org1', 'findById']);
-    expect(verifyOrgAccess).toHaveBeenCalledWith(req.user, 'org1');
+    expect(order).toEqual(['verifyOrgPermission:org1', 'findById']);
+    expect(verifyOrgPermission).toHaveBeenCalledWith(req.user, 'org1', 'manageMembers');
   });
 
-  it('never reaches Organization.findById when verifyOrgAccess rejects', async () => {
-    verifyOrgAccess.mockRejectedValueOnce(new NotFoundError('Organization not found'));
+  it('never reaches Organization.findById when verifyOrgPermission rejects', async () => {
+    verifyOrgPermission.mockRejectedValueOnce(new NotFoundError('Organization not found'));
 
     const { req, res } = mocks({ id: 'u1', isAdmin: false, organizationId: 'org1' });
     await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 404 });
@@ -108,7 +108,7 @@ describe('GET /api/organizations/users - verifyOrgAccess gate', () => {
       name: 'NotFoundError',
     });
 
-    expect(verifyOrgAccess).not.toHaveBeenCalled();
+    expect(verifyOrgPermission).not.toHaveBeenCalled();
     expect(findById).not.toHaveBeenCalled();
   });
 
@@ -116,7 +116,7 @@ describe('GET /api/organizations/users - verifyOrgAccess gate', () => {
   // rather than escaping, or this fix would have turned every incidental throw into an unhandled
   // rejection.
   it('still answers 500 for an unexpected error carrying no statusCode', async () => {
-    verifyOrgAccess.mockRejectedValueOnce(new TypeError('boom'));
+    verifyOrgPermission.mockRejectedValueOnce(new TypeError('boom'));
 
     const { req, res } = mocks({ id: 'u1', isAdmin: false, organizationId: 'org1' });
     await expect(mockRefs.getHandler!(req, res)).resolves.toBeUndefined();

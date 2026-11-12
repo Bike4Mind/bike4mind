@@ -14,7 +14,7 @@ const creatorName = (key: IOrgMemberApiKeyView): string => key.createdBy.name ??
 
 /**
  * Members' own API keys billed to this organization. Owner, managers and platform admins can see and revoke
- * them (the same gate as the routes, verifyOrgAccess); the member who created a key is told when it is revoked.
+ * them (the same gate as the routes, manageKeys permission); the member who created a key is told when it is revoked.
  */
 const OrgMemberApiKeysSection: FC<OrgMemberApiKeysSectionProps> = ({ organizationId }) => {
   const { data: keys, isLoading, isError } = useOrgMemberApiKeys(organizationId);

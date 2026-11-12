@@ -17,7 +17,7 @@ const h = vi.hoisted(() => ({
   getInstallation: vi.fn(),
   deleteInstallation: vi.fn(),
   getGitHubLakeAppConfig: vi.fn(),
-  verifyOrgAccess: vi.fn(),
+  verifyOrgPermission: vi.fn(),
   dlFindById: vi.fn(),
   dlRenameIfPlaceholder: vi.fn(),
   grantsListByLake: vi.fn(),
@@ -71,7 +71,7 @@ vi.mock('./githubLakeAuthGrant', async importOriginal => {
     consumeGitHubLakeAuthGrant: h.consumeGitHubLakeAuthGrant,
   };
 });
-vi.mock('../../../utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('../../../utils/orgAccess', () => ({ verifyOrgPermission: h.verifyOrgPermission }));
 vi.mock('../../../utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 // apps/client/vitest.setup.ts mocks sst globally; this package does not. utils/config reads its
 // secrets from Resource at import, and the connect/disconnect paths read the two queue urls.
@@ -378,7 +378,7 @@ describe('resolveConnectableLake', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue(ACTIVE_LAKE);
-    h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.verifyOrgPermission.mockResolvedValue({ id: 'orgA' });
     h.ghConnFindByDataLakeIdAny.mockResolvedValue(null);
     h.driveConnFindByDataLakeIdAny.mockResolvedValue(null);
     h.claimFindByLakeId.mockResolvedValue(null);
@@ -387,7 +387,7 @@ describe('resolveConnectableLake', () => {
   it('404s a missing lake', async () => {
     h.dlFindById.mockResolvedValue(null);
     await expect(resolveConnectableLake(USER, 'lake1')).rejects.toThrow(/not found/i);
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
   });
 
   it('admits the creator of a personal (org-less) lake without an org check', async () => {
@@ -397,7 +397,7 @@ describe('resolveConnectableLake', () => {
       owner: PERSONAL_OWNER,
       curated: false,
     });
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
   });
 
   it('404s a personal lake for anyone but its creator, even a platform admin', async () => {
@@ -405,15 +405,15 @@ describe('resolveConnectableLake', () => {
     await expect(resolveConnectableLake({ id: 'user-2', isAdmin: true }, 'lake1')).rejects.toMatchObject({
       statusCode: 404,
     });
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
     expect(h.ghConnFindByDataLakeIdAny).not.toHaveBeenCalled();
   });
 
   it('verifies org access before checking the lake status', async () => {
     // If the status check ran first it would throw the 'archived' status message instead - this
-    // proves verifyOrgAccess is the very first gate.
+    // proves verifyOrgPermission is the very first gate.
     h.dlFindById.mockResolvedValue({ ...ACTIVE_LAKE, status: 'archived' });
-    h.verifyOrgAccess.mockRejectedValue(new Error('Organization not found'));
+    h.verifyOrgPermission.mockRejectedValue(new Error('Organization not found'));
     await expect(resolveConnectableLake(USER, 'lake1')).rejects.toThrow('Organization not found');
     expect(h.ghConnFindByDataLakeIdAny).not.toHaveBeenCalled();
   });
@@ -514,7 +514,7 @@ describe('authorizeGitHubLakeConnection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue(ACTIVE_LAKE);
-    h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.verifyOrgPermission.mockResolvedValue({ id: 'orgA' });
     h.ghConnFindByDataLakeIdAny.mockResolvedValue(null);
     h.driveConnFindByDataLakeIdAny.mockResolvedValue(null);
     h.exchangeInstallerCode.mockResolvedValue('user-token');
@@ -590,7 +590,7 @@ describe('listGitHubLakeRepositoryChoices', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue(ACTIVE_LAKE);
-    h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.verifyOrgPermission.mockResolvedValue({ id: 'orgA' });
     h.ghConnFindByDataLakeIdAny.mockResolvedValue(null);
     h.driveConnFindByDataLakeIdAny.mockResolvedValue(null);
     mockLiveGrant();
@@ -758,7 +758,7 @@ describe('completeGitHubLakeConnection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue(ACTIVE_LAKE);
-    h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.verifyOrgPermission.mockResolvedValue({ id: 'orgA' });
     h.ghConnFindByDataLakeIdAny.mockResolvedValue(null);
     h.driveConnFindByDataLakeIdAny.mockResolvedValue(null);
     mockLiveGrant();
@@ -796,7 +796,7 @@ describe('completeGitHubLakeConnection', () => {
     const created = h.ghConnCreate.mock.calls[0][0];
     expect(created).not.toHaveProperty('organizationId');
     expect(created).toMatchObject({ targetDataLakeId: 'lake1', connectedBy: USER.id });
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
   });
 
   it('hands the authorized owner to assertAllowed and writes nothing when it refuses', async () => {
@@ -810,7 +810,7 @@ describe('completeGitHubLakeConnection', () => {
   });
 
   it('does not run assertAllowed for a caller who fails lake authorization', async () => {
-    h.verifyOrgAccess.mockRejectedValue(new ForbiddenError('no standing'));
+    h.verifyOrgPermission.mockRejectedValue(new ForbiddenError('no standing'));
     const assertAllowed = vi.fn();
     await expect(completeGitHubLakeConnection({ ...params(), assertAllowed })).rejects.toThrow();
     expect(assertAllowed).not.toHaveBeenCalled();
@@ -960,7 +960,7 @@ describe('completeGitHubLakeConnection - first ingest', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue(ACTIVE_LAKE);
-    h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.verifyOrgPermission.mockResolvedValue({ id: 'orgA' });
     h.ghConnFindByDataLakeIdAny.mockResolvedValue(null);
     h.driveConnFindByDataLakeIdAny.mockResolvedValue(null);
     mockLiveGrant();

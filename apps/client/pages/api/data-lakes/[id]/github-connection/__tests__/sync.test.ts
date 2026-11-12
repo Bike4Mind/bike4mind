@@ -8,7 +8,7 @@ import {
 } from '@bike4mind/server-utils/utils/errors';
 
 const h = vi.hoisted(() => ({
-  verifyOrgAccess: vi.fn(),
+  verifyOrgPermission: vi.fn(),
   dlFindById: vi.fn(),
   connFindByDataLakeIdAny: vi.fn(),
   connRecordLastError: vi.fn(),
@@ -38,7 +38,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => h.requireFeatureEnabled(flag),
 }));
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission: h.verifyOrgPermission }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
@@ -71,7 +71,7 @@ describe('POST /api/data-lakes/[id]/github-connection/sync', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status: 'active' });
-    h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.verifyOrgPermission.mockResolvedValue({ id: 'orgA' });
     h.connFindByDataLakeIdAny.mockResolvedValue(CONN);
     h.sendToQueue.mockResolvedValue(undefined);
     h.assertLakePlanAllowed.mockResolvedValue(undefined);
@@ -94,7 +94,7 @@ describe('POST /api/data-lakes/[id]/github-connection/sync', () => {
   });
 
   it('checks org access before looking up the connection', async () => {
-    h.verifyOrgAccess.mockRejectedValue(new NotFoundError('Data lake not found'));
+    h.verifyOrgPermission.mockRejectedValue(new NotFoundError('Data lake not found'));
     await expect(run(makeReq(), makeRes().res)).rejects.toBeInstanceOf(NotFoundError);
     expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
   });
@@ -127,7 +127,7 @@ describe('POST /api/data-lakes/[id]/github-connection/sync', () => {
     it('lets the creator re-sync without an org check', async () => {
       const { res, status, json } = makeRes();
       await run(makeReq(), res);
-      expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+      expect(h.verifyOrgPermission).not.toHaveBeenCalled();
       expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeIngestQueue', {
         connectionId: 'conn1',
         manual: true,

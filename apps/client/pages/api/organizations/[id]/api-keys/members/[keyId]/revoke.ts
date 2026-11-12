@@ -1,6 +1,6 @@
 // POST /api/organizations/:id/api-keys/members/:keyId/revoke
 // Disables a member's own key billed to the org; it is refused from then on. Owner, current manager or
-// platform admin (verifyOrgAccess). The holder is emailed unless they revoked it themselves.
+// platform admin (manageKeys). The holder is emailed unless they revoked it themselves.
 // Revoking an already-disabled key is a no-op: 200, no second audit row, no email.
 
 import { ApiKeyStatus, UserApiKeyEvents } from '@bike4mind/common';
@@ -14,7 +14,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { loadOrgMemberKey } from '@server/organizations/orgMemberApiKeys';
 import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
 import { notifyApiKeyOrgRevoke } from '@server/utils/apiKeyRotationNotifier';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgPermission } from '@server/utils/orgAccess';
 import { z } from 'zod';
 
 const RevokeOrgMemberApiKeyBodySchema = z.object({ reason: z.string().trim().max(500).optional() }).optional();
@@ -24,7 +24,7 @@ const stringParam = (value: unknown): string => (typeof value === 'string' ? val
 const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, unknown, unknown, { id?: string; keyId?: string }>(async (req, res) => {
     const user = req.user!;
-    const org = await verifyOrgAccess(user, stringParam(req.query.id));
+    const org = await verifyOrgPermission(user, stringParam(req.query.id), 'manageKeys');
     // A bodyless POST without a JSON content type reaches here as '', as in pages/api/user-api-keys/[id]/revoke.ts.
     const reason = parseOrBadRequest(RevokeOrgMemberApiKeyBodySchema, req.body || undefined)?.reason || undefined;
     const apiKey = await loadOrgMemberKey(org.id, stringParam(req.query.keyId));

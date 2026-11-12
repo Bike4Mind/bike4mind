@@ -88,6 +88,8 @@ export async function transferOwnership(
     users.push({ userId: previousOwner.id, permissions: [Permission.read] });
   }
   const adminUserIds = (organization.adminUserIds ?? []).filter(id => String(id) !== newOwnerId);
+  // The owner holds every permission; a leftover role entry would only outlive a later transfer away.
+  const billingManagerUserIds = (organization.billingManagerUserIds ?? []).filter(id => String(id) !== newOwnerId);
 
   const previousOwnerEmail = previousOwner?.email?.trim().toLowerCase();
   const newOwnerEmail = newOwner.email?.trim().toLowerCase();
@@ -100,6 +102,7 @@ export async function transferOwnership(
     userId: newOwnerId,
     users,
     adminUserIds,
+    billingManagerUserIds,
     ...(billingContactChanged ? { billingContact } : {}),
   });
 

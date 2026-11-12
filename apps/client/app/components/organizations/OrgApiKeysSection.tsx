@@ -203,7 +203,7 @@ const CreateKeyModal: FC<{
 
 /**
  * Org-owned API keys: held by the organization rather than a member, billed to the org, and unaffected by
- * any member leaving. Owner, managers and platform admins (the same gate as the routes, verifyOrgAccess).
+ * any member leaving. Owner, managers and platform admins (the same gate as the routes, manageKeys permission).
  */
 const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
   const { data: keys, isLoading, isError } = useOrgApiKeys(organizationId);

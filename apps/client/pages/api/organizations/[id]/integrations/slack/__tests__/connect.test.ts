@@ -26,7 +26,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 // dependency graph (sst Resource, ability, storage, ...). Nothing here needs it.
 vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 
-// Deliberately NOT mocking verifyOrgOwner, matching the sibling index.test.ts: the behaviour the
+// Deliberately NOT mocking verifyOrgPermission, matching the sibling index.test.ts: the behaviour the
 // gate swap changes lives INSIDE the helper, so mocking it would assert the mock. Stubbing the
 // repository exercises route + helper together and pins the document contract between them.
 const mockOrgFindById = vi.fn();

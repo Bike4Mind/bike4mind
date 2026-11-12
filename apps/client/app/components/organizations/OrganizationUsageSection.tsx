@@ -13,7 +13,7 @@ type UsageTab = 'usage' | 'ledger' | 'storage';
 /**
  * Org owner surface for their own org's AI spend: the same Usage and
  * Ledger dashboards as the admin Credit Analytics tab, but pinned to this org
- * (picker hidden), plus the org's storage pool. Credit access is enforced server-side via verifyOrgOwner
+ * (picker hidden), plus the org's storage pool. Credit access is enforced server-side via the viewUsage permission
  * plus the owner-scoped queries; this is only rendered for the owner or a platform admin. Storage reads
  * go through verifyOrgAdminRead (the read tier in orgAccess.ts).
  */

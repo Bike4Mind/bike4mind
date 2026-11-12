@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { hasOrgUpdateAccess } from './orgAccessGate';
 
-/** Mirrors server/utils/orgAccess.ts verifyOrgAccess - owner or any manager, plus platform admins. */
+/** Mirrors server/utils/orgAccess.ts verifyOrgPermission (manager tier) - owner or any manager, plus platform admins. */
 describe('hasOrgUpdateAccess', () => {
   const org = { userId: 'owner-1', adminUserIds: ['manager-1'], users: [{ userId: 'manager-1' }] };
 
