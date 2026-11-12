@@ -87,6 +87,26 @@ describe('applyScenePreset', () => {
   });
 });
 
+describe('applyScenePreset with fragments typed by hand', () => {
+  const slate = preset('wet-slate');
+  const kitchen = preset('kitchen-counter');
+  const picnic = preset('picnic');
+
+  it('cuts every scene, so only the picked one remains', () => {
+    const prompt = `A tart, ${slate.promptFragment}, ${kitchen.promptFragment}`;
+    const next = applyScenePreset(prompt, picnic);
+    expect(next).toBe(`A tart, ${picnic.promptFragment}`);
+    expect(appliedScenePreset(next)?.id).toBe('picnic');
+  });
+
+  it('cuts a repeated fragment and rejoins the words around it', () => {
+    expect(applyScenePreset(`A, ${slate.promptFragment}, B ${slate.promptFragment}`, undefined)).toBe('A, B');
+    expect(applyScenePreset(`A tart ${slate.promptFragment}, overhead`, picnic)).toBe(
+      `A tart, overhead, ${picnic.promptFragment}`
+    );
+  });
+});
+
 describe('appliedScenePreset', () => {
   it('finds the scene the prompt carries', () => {
     expect(appliedScenePreset(applyScenePreset('A tart', preset('picnic')))?.id).toBe('picnic');

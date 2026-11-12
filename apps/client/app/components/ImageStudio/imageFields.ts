@@ -12,7 +12,6 @@ import {
   type CapabilityControl,
   type CapabilityField,
   type CapabilityOption,
-  type ChipOption,
   type ChipsField,
 } from '@client/app/components/Studio/capabilityFields';
 import { STUDIO_IMAGE_COUNT_MAX } from '@client/app/hooks/data/studioImageJobs';
@@ -145,30 +144,36 @@ const settingFields = (model: ImageModels, intent: ImageIntent, actions: ImageFi
   return fields;
 };
 
-const SCENE_OPTIONS: readonly ChipOption[] = SCENE_PRESETS.map(preset => ({
-  value: preset.id,
-  label: preset.name,
-  swatch: SCENE_SWATCHES[preset.swatch],
-}));
-
 /**
  * The scene presets as chips. The selected chip is read from the prompt itself, so editing a preset's words away
- * clears it; picking one adds its words to the user's own, and a pick that would overflow the prompt is ignored.
+ * clears it; picking one adds its words to the user's own. A chip whose words would not fit in the prompt is disabled.
  */
-const lookField = (prompt: string, actions: ImageFieldActions): ChipsField => ({
-  kind: 'chips',
-  id: 'look',
-  label: 'Look',
-  value: appliedScenePreset(prompt)?.id ?? null,
-  options: SCENE_OPTIONS,
-  onChange: presetId => {
-    const next = applyScenePreset(
+const lookField = (prompt: string, actions: ImageFieldActions): ChipsField => {
+  const promptWith = (presetId: string | null) =>
+    applyScenePreset(
       prompt,
       SCENE_PRESETS.find(preset => preset.id === presetId)
     );
-    if (next.length <= IMAGE_JOB_PROMPT_MAX_CHARS) actions.update({ prompt: next });
-  },
-});
+  const fits = (next: string) => next.length <= IMAGE_JOB_PROMPT_MAX_CHARS;
+  const selected = appliedScenePreset(prompt)?.id ?? null;
+
+  return {
+    kind: 'chips',
+    id: 'look',
+    label: 'Look',
+    value: selected,
+    options: SCENE_PRESETS.map(preset => ({
+      value: preset.id,
+      label: preset.name,
+      swatch: SCENE_SWATCHES[preset.swatch],
+      disabled: preset.id !== selected && !fits(promptWith(preset.id)),
+    })),
+    onChange: presetId => {
+      const next = promptWith(presetId);
+      if (fits(next)) actions.update({ prompt: next });
+    },
+  };
+};
 
 /** The image Create controls for the selected model, in display order. */
 export function imageCapabilityFields(

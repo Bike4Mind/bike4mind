@@ -223,7 +223,7 @@ const ChipsControl = ({ field, testId }: { field: ChipsField; testId: string }) 
             size="md"
             variant={selected ? 'solid' : 'outlined'}
             color={selected ? 'primary' : 'neutral'}
-            disabled={field.disabled}
+            disabled={field.disabled || option.disabled}
             onClick={() => field.onChange(selected ? null : option.value)}
             startDecorator={
               option.swatch && (

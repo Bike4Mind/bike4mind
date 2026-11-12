@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { describe, expect, it, vi } from 'vitest';
-import { ImageModels, SCENE_PRESETS } from '@bike4mind/common';
+import { IMAGE_JOB_PROMPT_MAX_CHARS, ImageModels, SCENE_PRESETS } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 // The picker modal and its file search are the Agent's; the form only opens it and takes the applied file.
@@ -228,6 +228,15 @@ describe('ImageStudioForm', () => {
       fireEvent.click(chip(slate.id));
       typePrompt('A tart on dark stone');
       expect(chip(slate.id)).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('disables a chip whose words would not fit in the prompt', () => {
+      renderForm();
+      const nearlyFull = 'x'.repeat(IMAGE_JOB_PROMPT_MAX_CHARS - 10);
+      typePrompt(nearlyFull);
+      expect(chip(slate.id)).toBeDisabled();
+      fireEvent.click(chip(slate.id));
+      expect(promptInput()).toHaveValue(nearlyFull);
     });
 
     it('submits the prompt with the scene in it', () => {

@@ -100,7 +100,7 @@ export type ReferencesField = FieldBase & {
 /** A gradient a chip shows beside its label, e.g. a scene preset's swatch. Colors are CSS hex values. */
 export type ChipSwatch = { from: string; to: string };
 
-export type ChipOption = { value: string; label: string; swatch?: ChipSwatch };
+export type ChipOption = { value: string; label: string; swatch?: ChipSwatch; disabled?: boolean };
 
 /**
  * Optional quick picks shown as toggle chips (e.g. image scene presets). At most one is selected; picking the selected

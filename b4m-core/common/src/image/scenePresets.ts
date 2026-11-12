@@ -2,8 +2,9 @@ import { z } from 'zod';
 
 /**
  * Studio's curated scene presets ("Looks"): a named setting whose prompt fragment is added to the user's own prompt.
- * Defined once here so the web Create form and the mobile app show the same list; each client draws a preset's
- * swatch from SCENE_SWATCHES by its token.
+ * Defined once here, with the composition helpers below, so every client shows the same list and edits the prompt
+ * the same way; a client draws a preset's swatch from SCENE_SWATCHES by its token. A non-TypeScript client (the
+ * native mobile app) needs these served to it, which is not done yet.
  */
 
 export const SCENE_SWATCH_TOKENS = ['slate', 'butcher-block', 'paper-white', 'gingham'] as const;
@@ -97,20 +98,24 @@ const tidy = (prompt: string): string => {
   return prompt.slice(start, end);
 };
 
+// Every copy of `fragment` cut out, rejoining the words around each cut with one separator.
 const withoutFragment = (prompt: string, fragment: string): string =>
-  prompt.replace(`${FRAGMENT_SEPARATOR}${fragment}`, '').replace(fragment, '');
+  prompt
+    .split(fragment)
+    .map(tidy)
+    .filter(part => part.length > 0)
+    .join(FRAGMENT_SEPARATOR);
 
 /**
- * The prompt with `next` as its scene: any other preset's fragment is swapped out and `next`'s is appended after the
- * user's own words (or becomes the prompt when it is empty). `next` undefined removes the current scene.
+ * The prompt with `next` as its scene: every preset's fragment is cut out and `next`'s is appended after the user's
+ * own words (or becomes the prompt when it is empty). `next` undefined removes the scene.
  */
 export function applyScenePreset(
   prompt: string,
   next: ScenePreset | undefined,
   presets: readonly ScenePreset[] = SCENE_PRESETS
 ): string {
-  const current = appliedScenePreset(prompt, presets);
-  const base = tidy(current ? withoutFragment(prompt, current.promptFragment) : prompt);
+  const base = tidy(presets.reduce((text, preset) => withoutFragment(text, preset.promptFragment), prompt));
   if (!next) return base;
   return base.length === 0 ? next.promptFragment : `${base}${FRAGMENT_SEPARATOR}${next.promptFragment}`;
 }
