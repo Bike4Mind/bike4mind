@@ -486,6 +486,7 @@ describe('LifecycleSuggestions dismiss', () => {
     });
     await waitFor(() => expect(screen.queryByTestId('discovery-suggestion-row-gpt-sunset')).not.toBeInTheDocument());
     expect(m.toast.success).toHaveBeenCalledWith('Dismissed the suggestion for GPT Sunset.');
+    expect(queryClient.getQueryData(STALE_REFERENCES_OUTDATED_QUERY_KEY)).toBeUndefined();
   });
 
   it('posts nothing when cancelled', async () => {
@@ -687,6 +688,19 @@ describe('LifecycleSuggestions bulk settle', () => {
     fireEvent.click(bulkConfirm());
     await waitFor(() => expect(outdated()).toBe(true));
     expect(referenceGets()).toBe(0);
+  });
+
+  it('does not mark a loaded reference report outdated after a dismiss', async () => {
+    const outdated = () => queryClient.getQueryData(STALE_REFERENCES_OUTDATED_QUERY_KEY);
+    queryClient.setQueryData(STALE_REFERENCES_QUERY_KEY, { ...LIFECYCLE, staleReferences: [] });
+    renderQueue();
+    await selectRows('gpt-sunset');
+    fireEvent.click(screen.getByTestId('discovery-bulk-dismiss-btn'));
+    fireEvent.click(screen.getByTestId('discovery-bulk-dialog-reason-input-preset-0'));
+    fireEvent.change(screen.getByTestId('discovery-bulk-dialog-typed-input'), { target: { value: '1' } });
+    fireEvent.click(bulkConfirm());
+    await waitFor(() => expect(m.toast.success).toHaveBeenCalledWith('Dismissed 1 suggestion.'));
+    expect(outdated()).toBeUndefined();
   });
 
   it('opens Review without the run blockers once the suggested successor changed', async () => {

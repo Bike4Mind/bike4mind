@@ -622,21 +622,22 @@ export function LifecycleSuggestions() {
     liveSelection.mode === 'allMatching' ? queue : queue.filter(item => liveSelection.ids.includes(item.modelId));
   const outcomeWaiting = outcome?.unsettled.filter(result => waitingIds.has(result.modelId)) ?? [];
 
-  const removeSettled = (modelIds: readonly string[]) => {
+  const removeSettled = (modelIds: readonly string[], changedCatalog: boolean) => {
     const settled = new Set(modelIds);
     queryClient.setQueryData<LifecycleQueue>(LIFECYCLE_QUEUE_QUERY_KEY, current =>
       current ? { ...current, queue: current.queue.filter(item => !settled.has(item.modelId)) } : current
     );
     void queryClient.invalidateQueries({ queryKey: LIFECYCLE_QUEUE_QUERY_KEY });
     void queryClient.invalidateQueries({ queryKey: ADMIN_MODELS_QUERY_KEY });
-    // A loaded report is only marked; re-running it asks every provider, which only a request may do.
-    if (queryClient.getQueryData(STALE_REFERENCES_QUERY_KEY) !== undefined) {
+    // A dismiss writes no catalog row, so only an accept can change the references. A loaded report is
+    // only marked; re-running it asks every provider, which only a request may do.
+    if (changedCatalog && queryClient.getQueryData(STALE_REFERENCES_QUERY_KEY) !== undefined) {
       queryClient.setQueryData(STALE_REFERENCES_OUTDATED_QUERY_KEY, true);
     }
   };
 
-  const settle = (modelId: string, message: string) => {
-    removeSettled([modelId]);
+  const settle = (modelId: string, message: string, changedCatalog: boolean) => {
+    removeSettled([modelId], changedCatalog);
     toast.success(message);
   };
 
@@ -648,7 +649,7 @@ export function LifecycleSuggestions() {
         ? []
         : [{ ...result, basis: blockerBasis(bulk?.items.find(item => item.modelId === result.modelId)) }]
     );
-    if (settled.length > 0) removeSettled(settled);
+    if (settled.length > 0) removeSettled(settled, action === 'accept');
     else void queryClient.invalidateQueries({ queryKey: LIFECYCLE_QUEUE_QUERY_KEY });
     // What still needs a decision stays selected, so the next pass starts from it.
     setSelection({ mode: 'explicit', ids: unsettled.map(result => result.modelId) });
@@ -793,7 +794,7 @@ export function LifecycleSuggestions() {
           onClose={() => setAccepting(null)}
           onAccepted={status => {
             setAccepting(null);
-            settle(accepting.modelId, `Recorded ${modelName(index, accepting.modelId)} as ${status}.`);
+            settle(accepting.modelId, `Recorded ${modelName(index, accepting.modelId)} as ${status}.`, true);
           }}
         />
       )}
@@ -805,7 +806,7 @@ export function LifecycleSuggestions() {
           onClose={() => setDismissing(null)}
           onDismissed={() => {
             setDismissing(null);
-            settle(dismissing.modelId, `Dismissed the suggestion for ${modelName(index, dismissing.modelId)}.`);
+            settle(dismissing.modelId, `Dismissed the suggestion for ${modelName(index, dismissing.modelId)}.`, false);
           }}
         />
       )}

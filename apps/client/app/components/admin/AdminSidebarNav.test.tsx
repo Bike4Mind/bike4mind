@@ -293,6 +293,15 @@ describe('SidebarNav', () => {
       expect(filterInput()).toHaveValue('');
     });
 
+    it('lists Dependencies first for "dep"', () => {
+      const { onTabSelect } = renderNav();
+
+      fireEvent.change(filterInput(), { target: { value: 'dep' } });
+      fireEvent.keyDown(filterInput(), { key: 'Enter' });
+
+      expect(onTabSelect).toHaveBeenCalledExactlyOnceWith(AdminTab.Dependencies);
+    });
+
     it('does nothing on Enter when nothing matches', () => {
       const { onTabSelect } = renderNav();
 
