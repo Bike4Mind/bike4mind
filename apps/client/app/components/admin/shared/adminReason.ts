@@ -115,6 +115,7 @@ export const ADMIN_REASON_PRESETS = {
   ],
   githubKeyRotate: ['Routine rotation', 'Key compromised or leaked', 'Key about to expire'],
   githubRepoAccess: ['Pausing GitHub automation', 'Repository access under review', 'Security incident'],
+  dlqDiscard: ['Account refused', 'Job obsolete', 'Fixed with no replay needed', 'Bad payload', 'Other'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;
