@@ -50,6 +50,7 @@ describe('the Settings screen', () => {
   it('groups each General setting once under a named section', () => {
     const groups = html.split(/data-testid="settings-group-[^"]+"/).slice(1);
     expect(groups).toHaveLength(5);
+    expect(html).not.toContain('data-testid="settings-group-other"');
     const expected = [
       ['appearance', 'orchestrator-sound', 'nested-sessions'],
       ['prompt-suggestions', 'worktree-default', 'orchestration-policy'],

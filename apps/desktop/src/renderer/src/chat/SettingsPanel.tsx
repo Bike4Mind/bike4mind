@@ -70,7 +70,10 @@ function appearanceEntry(
     icon: <ContrastIcon />,
     label: 'Appearance',
     summary: themeModeSummary(mode, resolved),
-    description: 'Choose a light or dark appearance, or follow your system settings.',
+    description:
+      currentThemeMode(mode) === 'system'
+        ? `Choose a light or dark appearance, or follow your system settings (currently ${resolved}).`
+        : 'Choose a light or dark appearance, or follow your system settings.',
     control: (
       <ToggleButtonGroup
         size="sm"
@@ -122,7 +125,7 @@ function suggestionsEntry(enabled: boolean, toggle: () => void, model: string | 
               level="body-sm"
               sx={{ display: 'list-item', cursor: 'pointer', color: 'text.secondary' }}
             >
-              Suggestion model
+              Suggestion model: {model ?? 'Automatic'}
             </Typography>
             <Box sx={{ mt: 1.5 }}>
               <SuggestionModelPicker />
@@ -261,9 +264,12 @@ function curatedListEntry(
     icon: <DownloadIcon />,
     label: 'Curated models list',
     summary: !settings && error ? error : curatedListSummary(settings),
-    description: settings?.available
-      ? 'Check for an updated list when you open Models, at most every 6 hours. Models are never downloaded automatically.'
-      : curatedListSummary(settings),
+    description:
+      !settings && error
+        ? error
+        : settings?.available
+          ? 'Check for an updated list when you open Models, at most every 6 hours. Models are never downloaded automatically.'
+          : curatedListSummary(settings),
     control: (
       <CuratedListSettings settings={settings} onEnabled={onEnabled} error={error} onRetry={onRetry} saving={saving} />
     ),
@@ -591,32 +597,44 @@ const GENERAL_GROUPS = [
 
 const EXPANDED_SETTINGS = new Set(['orchestration-policy', 'local-context', 'server', 'updates']);
 
+/** Entries missing from GENERAL_GROUPS land in a trailing "Other" group instead of vanishing. */
+function groupEntries(entries: ConfigEntry[]) {
+  const grouped = new Set(GENERAL_GROUPS.flatMap(group => group.entries));
+  const groups = [
+    ...GENERAL_GROUPS.map(group => ({
+      group,
+      rows: group.entries.flatMap(id => entries.filter(entry => entry.id === id)),
+    })),
+    { group: { id: 'other', label: 'Other' }, rows: entries.filter(entry => !grouped.has(entry.id)) },
+  ];
+  return groups.filter(({ rows }) => rows.length > 0);
+}
+
 function SectionPage({ section, entries }: { section: SettingsSection; entries: ConfigEntry[] }) {
   if (entries.length === 1) return <SingleEntryPage entry={entries[0]} />;
   return (
     <Stack spacing={4}>
       <Stack spacing={1}>
-        <Typography level="h3" sx={{ fontSize: 26 }}>
+        <Typography component="h2" level="h3" sx={{ fontSize: 26 }}>
           {SECTION_LABEL[section]}
         </Typography>
         <Typography level="body-sm" textColor="text.tertiary">
           {SETTINGS_INTRO}
         </Typography>
       </Stack>
-      {GENERAL_GROUPS.map(group => (
+      {groupEntries(entries).map(({ group, rows }) => (
         <Box
           component="section"
           key={group.id}
           aria-labelledby={`settings-group-${group.id}`}
           data-testid={`settings-group-${group.id}`}
         >
-          <Typography id={`settings-group-${group.id}`} component="h2" level="title-md" sx={{ mb: 0.5 }}>
+          <Typography id={`settings-group-${group.id}`} component="h3" level="title-md" sx={{ mb: 0.5 }}>
             {group.label}
           </Typography>
-          {group.entries.flatMap(id => {
-            const entry = entries.find(entry => entry.id === id);
-            return entry ? [<SettingsRow key={id} entry={entry} expanded={EXPANDED_SETTINGS.has(id)} />] : [];
-          })}
+          {rows.map(entry => (
+            <SettingsRow key={entry.id} entry={entry} expanded={EXPANDED_SETTINGS.has(entry.id)} />
+          ))}
         </Box>
       ))}
     </Stack>
