@@ -11,6 +11,7 @@ import { listOwn } from './listOwn';
 import { listPendingUsers } from './listPendingUsers';
 import { revokeAccess } from './revokeAccess';
 import { getMemberOffboardingInventory } from './getMemberOffboardingInventory';
+import { reassignMemberContent } from './reassignMemberContent';
 import { leave } from './leave';
 import { transferOwnership } from './transferOwnership';
 import type { TransferOwnershipResult } from './transferOwnership';
@@ -58,6 +59,7 @@ export {
   listPendingUsers,
   revokeAccess,
   getMemberOffboardingInventory,
+  reassignMemberContent,
   leave,
   transferOwnership,
   setOrganizationManager,
