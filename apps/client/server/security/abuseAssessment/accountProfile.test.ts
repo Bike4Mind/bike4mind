@@ -1,9 +1,18 @@
 import { abuseAssessmentAccountProfileSchema } from '@bike4mind/common';
 import type { UserAccountRiskProfile, UserSignupLinkCandidate } from '@bike4mind/database';
 import { describe, expect, it, vi } from 'vitest';
+
+const settingsMocks = vi.hoisted(() => ({ getSettingsMap: vi.fn(), getSettingsValue: vi.fn() }));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: settingsMocks.getSettingsMap,
+  getSettingsValue: settingsMocks.getSettingsValue,
+}));
+
 import {
   LINK_CANDIDATE_LIMIT,
   buildAccountProfile,
+  liveDeps,
   loadAccountProfiles,
   type AccountProfileDeps,
 } from './accountProfile';
@@ -235,5 +244,33 @@ describe('loadAccountProfiles', () => {
       deps({ findSignupLinkCandidates: vi.fn().mockRejectedValue(new Error('timeout')) })
     );
     expect(profiles.get('65f0000000000000000000a1')).toMatchObject({ linkedAccounts: null, minutesToTwoFactor: 4 });
+  });
+});
+
+describe('spend model ids', () => {
+  it("replaces a model id the contract would reject with 'other'", () => {
+    const profile = buildAccountProfile({
+      spendSince: SPEND_SINCE,
+      account: farmAccount(),
+      spend: {
+        firstSpendAt: spend.firstSpendAt,
+        totalCredits: 100,
+        byModel: [{ model: 'bad model id', credits: 100, events: 2 }],
+      },
+      links: null,
+    });
+    expect(profile.spend?.byModel[0].model).toBe('other');
+    expect(abuseAssessmentAccountProfileSchema.safeParse(profile).success).toBe(true);
+  });
+});
+
+describe('liveDeps.loadLinkWindowHours', () => {
+  it.each([
+    [0, 72],
+    [24, 24],
+  ])('reads strongLinkWindowHours %i as %i hours', async (configured, expected) => {
+    settingsMocks.getSettingsMap.mockResolvedValue({});
+    settingsMocks.getSettingsValue.mockReturnValue({ strongLinkWindowHours: configured });
+    await expect(liveDeps.loadLinkWindowHours()).resolves.toBe(expected);
   });
 });

@@ -117,7 +117,7 @@ export const abuseAssessmentRequestActivitySchema = z.discriminatedUnion('status
 ]);
 export type AbuseAssessmentRequestActivity = z.infer<typeof abuseAssessmentRequestActivitySchema>;
 /** Model ids are catalog identifiers recorded server-side; the pattern still keeps free text out. */
-const modelIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/);
+export const modelIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/);
 const nonNegativeInt = z.number().int().nonnegative();
 
 export const ABUSE_ASSESSMENT_SIGNUP_METHODS = ['otc', 'oauth', 'email', 'other'] as const;

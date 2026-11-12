@@ -3,6 +3,7 @@ import {
   AuthStrategy,
   AutoContainmentConfigSchema,
   mailboxAliasesOf,
+  modelIdSchema,
   type AbuseAssessmentAccountProfile,
 } from '@bike4mind/common';
 import { adminSettingsRepository, usageEventRepository, userRepository } from '@bike4mind/database';
@@ -55,7 +56,7 @@ function spendOf(spend: IUserSpendProfile | null): AbuseAssessmentAccountProfile
   return {
     totalCredits: round(spend.totalCredits, 2),
     byModel: spend.byModel.slice(0, ABUSE_ASSESSMENT_MAX_PROFILE_MODELS).map(entry => ({
-      model: entry.model,
+      model: entry.model !== null && !modelIdSchema.safeParse(entry.model).success ? 'other' : entry.model,
       creditShare: round(entry.credits / spend.totalCredits, 2),
       events: entry.events,
       creditsPerEvent: entry.events > 0 ? round(entry.credits / entry.events, 2) : 0,
@@ -137,7 +138,7 @@ export type AccountProfileDeps = {
   now: () => Date;
 };
 
-const liveDeps: AccountProfileDeps = {
+export const liveDeps: AccountProfileDeps = {
   findAccountRiskProfiles: ids => userRepository.findAccountRiskProfiles(ids),
   spendProfileByUsers: (ids, since) => usageEventRepository.spendProfileByUsers(ids, since),
   findSignupLinkCandidates: input => userRepository.findSignupLinkCandidates(input),

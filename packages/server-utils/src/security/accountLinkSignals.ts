@@ -7,6 +7,7 @@ import {
   regionalPersonalEmailProviders,
 } from '@bike4mind/common';
 import { userService } from '@bike4mind/services';
+import { truncateIp } from '../utils/ip';
 
 /**
  * Shared account traits and email-shape signals for review; none establishes common ownership alone. Shared by
@@ -55,6 +56,35 @@ export const CONSUMER_MAIL_DOMAINS: ReadonlySet<string> = new Set([
   'fastmail.com',
   'fastmail.fm',
   'tutanota.com',
+  'comcast.net',
+  'att.net',
+  'sbcglobal.net',
+  'verizon.net',
+  'bellsouth.net',
+  'cox.net',
+  'charter.net',
+  'earthlink.net',
+  'btinternet.com',
+  'sky.com',
+  'virginmedia.com',
+  't-online.de',
+  'freenet.de',
+  'orange.fr',
+  'free.fr',
+  'sfr.fr',
+  'laposte.net',
+  'wanadoo.fr',
+  'libero.it',
+  'virgilio.it',
+  'alice.it',
+  'foxmail.com',
+  'rambler.ru',
+  'seznam.cz',
+  'wp.pl',
+  'o2.pl',
+  'interia.pl',
+  'rediffmail.com',
+  'hey.com',
 ]);
 
 export const isConsumerMailDomain = (domain: string): boolean =>
@@ -109,7 +139,8 @@ export type AccountLinkKeys = {
 export function accountLinkKeys(account: Omit<LinkableAccount, 'id'>): AccountLinkKeys {
   const domain = account.email ? emailDomainOf(account.email.trim().toLowerCase()) : null;
   return {
-    signupIp: account.signupIp || null,
+    // Retention truncates old signup IPs to a prefix, which many unrelated accounts share.
+    signupIp: account.signupIp && truncateIp(account.signupIp) !== account.signupIp ? account.signupIp : null,
     ja4: account.signupJa4 || null,
     mailbox: account.email ? canonicalizeEmail(account.email) : null,
     mailDomain: domain && !isConsumerMailDomain(domain) && !userService.isPrivacyRelayDomain(domain) ? domain : null,

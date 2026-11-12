@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emailPatternSignals, groupLinkedAccounts, sharedLinkKinds } from './accountLinkSignals';
+import { accountLinkKeys, emailPatternSignals, groupLinkedAccounts, sharedLinkKinds } from './accountLinkSignals';
 
 describe('emailPatternSignals', () => {
   it('reads a plus-addressed webmail address with a random-looking tag', () => {
@@ -110,5 +110,29 @@ describe('groupLinkedAccounts', () => {
       { memberIds: ['b'], kinds: [] },
       { memberIds: ['d'], kinds: [] },
     ]);
+  });
+});
+
+describe('truncated signup IPs and ISP mail domains', () => {
+  it('does not link two accounts whose signup IP is a retention-truncated prefix', () => {
+    const a = { email: 'one@acme-labs.io', signupIp: '198.51.100.0', signupJa4: null };
+    const b = { email: 'two@other-corp.io', signupIp: '198.51.100.0', signupJa4: null };
+    expect(sharedLinkKinds(a, b)).toEqual([]);
+  });
+
+  it('keys a truncated IP to null and keeps a full one', () => {
+    const base = { email: 'one@acme-labs.io', signupJa4: null };
+    expect(accountLinkKeys({ ...base, signupIp: '198.51.100.0' }).signupIp).toBeNull();
+    expect(accountLinkKeys({ ...base, signupIp: '198.51.100.7' }).signupIp).toBe('198.51.100.7');
+  });
+
+  it('does not link two accounts on a shared ISP mail domain', () => {
+    const a = { email: 'alice@comcast.net', signupIp: null, signupJa4: null };
+    const b = { email: 'bob@comcast.net', signupIp: null, signupJa4: null };
+    expect(sharedLinkKinds(a, b)).toEqual([]);
+  });
+
+  it('gives no mail domain key for a regional webmail domain', () => {
+    expect(accountLinkKeys({ email: 'a@t-online.de', signupIp: null, signupJa4: null }).mailDomain).toBeNull();
   });
 });
