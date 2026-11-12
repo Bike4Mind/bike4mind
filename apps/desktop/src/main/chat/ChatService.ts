@@ -4,6 +4,7 @@ import {
   renderTaskBrief,
   resolveWorkerModel,
   validateWorkerModel,
+  type WorkerLocality,
   spawnOptionsSchema,
   taskActionSchema,
   rolePolicySchema,
@@ -1307,6 +1308,10 @@ export class ChatService {
     return !this.deps.getApiClient() && this.deps.isDeviceLocal?.() === true;
   }
 
+  private workerLocality(localWork: boolean): WorkerLocality {
+    return this.deviceLocal() ? 'device' : localWork && 'local-work';
+  }
+
   /**
    * The base a workspace session is cut from: the picked branch, else the repository's default.
    * Only a repository with nothing to base on is refused.
@@ -1773,8 +1778,9 @@ export class ChatService {
     if (session?.workerSelection) {
       if (this.hasTurnInFlight(sessionId))
         throw new Error('Stop the worker attempt before explicitly changing its model.');
+      // An explicit pick is how local work moves to a hosted model, so only device-local mode blocks it.
       validateWorkerModel(model, (await this.listModels()).models, {
-        localOnly: this.deviceLocal() || isLocalModel(session.model),
+        localOnly: this.workerLocality(false),
         ...session.workerSelection?.requirements,
       });
       const updated = await this.deps.store.setWorkerModel(sessionId, model, scope);
@@ -1849,7 +1855,7 @@ export class ChatService {
       ...policy.allowedOverrides,
       ...policy.escalation.allowedModels,
     ])) {
-      if (model !== 'inherit') validateWorkerModel(model, models, { localOnly: this.deviceLocal() });
+      if (model !== 'inherit') validateWorkerModel(model, models, { localOnly: this.workerLocality(false) });
     }
     if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen settings.');
     return this.deps.store.setRolePolicy(policy);
@@ -1925,7 +1931,7 @@ export class ChatService {
             throw new Error('Model upgrade is outside this run policy. Revise the task or cancel it.');
           nextModel = action.modelId;
           validateWorkerModel(nextModel, (await this.listModels()).models, {
-            localOnly: this.deviceLocal() || isLocalModel(child.model),
+            localOnly: this.workerLocality(isLocalModel(child.model)),
             ...child.workerSelection?.requirements,
           });
           seed = `The user approved this targeted model change. Continue the same task using the existing changes and evidence.\n\n${renderTaskBrief(task.contract)}`;
@@ -2632,7 +2638,7 @@ export class ChatService {
     if (claimed.workerSelection) {
       try {
         validateWorkerModel(claimed.model, (await this.listModels()).models, {
-          localOnly: this.deviceLocal() || isLocalModel(claimed.workerSelection.effectiveModel),
+          localOnly: this.workerLocality(isLocalModel(claimed.workerSelection.effectiveModel)),
           ...claimed.workerSelection.requirements,
         });
       } catch (error) {
@@ -2836,7 +2842,7 @@ export class ChatService {
     if (session.workerSelection) {
       try {
         validateWorkerModel(session.model, (await this.listModels()).models, {
-          localOnly: this.deviceLocal() || isLocalModel(session.model),
+          localOnly: this.workerLocality(isLocalModel(session.model)),
           ...session.workerSelection?.requirements,
         });
       } catch (error) {
@@ -5965,7 +5971,7 @@ export class ChatService {
           const contextWindow = models.find(model => model.id === selection.effectiveModel)?.contextWindow;
           const briefTokens = Math.ceil((validated.contract ? renderTaskBrief(validated.contract) : seed).length / 3);
           validateWorkerModel(selection.effectiveModel, models, {
-            localOnly: this.deviceLocal() || isLocalModel(parent.model),
+            localOnly: this.workerLocality(isLocalModel(parent.model)),
             ...validated.requirements,
             contextTokens:
               validated.requirements?.contextTokens !== undefined

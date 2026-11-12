@@ -99,10 +99,24 @@ export function resolveWorkerModel(
   };
 }
 
+/**
+ * Why a worker model must be local: `device` when the app runs device-local and cannot reach a
+ * hosted model at all, `local-work` when work already on a local model would otherwise be moved to
+ * a hosted one without the user picking it.
+ */
+export type WorkerLocality = false | 'device' | 'local-work';
+
+const LOCALITY_BLOCKS: Record<Exclude<WorkerLocality, false>, string> = {
+  device:
+    'this app is running device-local, so only local models can run here. Choose a local model, or sign in to use hosted models.',
+  'local-work':
+    'work on a local model is never moved to a hosted model automatically. To move it, pick a hosted model for this worker in the model picker.',
+};
+
 export function validateWorkerModel(
   model: string,
   models: readonly ChatModelOption[],
-  requirements: { localOnly: boolean; vision?: boolean; contextTokens?: number }
+  requirements: { localOnly: WorkerLocality; vision?: boolean; contextTokens?: number }
 ): void {
   const option = models.find(entry => entry.id === model);
   const problem = !option
@@ -117,10 +131,11 @@ export function validateWorkerModel(
             : requirements.contextTokens && (!option.contextWindow || option.contextWindow < requirements.contextTokens)
               ? 'context window is too small'
               : null));
-  if (problem || (requirements.localOnly && !isLocalModel(model))) {
-    throw new Error(
-      `Worker model ${model} is blocked: ${problem ?? 'device-local work cannot use a hosted model'}. Choose a replacement explicitly; no fallback was started.`
-    );
+  if (problem) {
+    throw new Error(`Worker model ${model} is blocked: ${problem}. Choose a different model; no fallback was started.`);
+  }
+  if (requirements.localOnly && !isLocalModel(model)) {
+    throw new Error(`Worker model ${model} is blocked: ${LOCALITY_BLOCKS[requirements.localOnly]}`);
   }
 }
 

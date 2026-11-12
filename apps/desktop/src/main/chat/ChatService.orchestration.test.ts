@@ -509,4 +509,82 @@ describe('role routing and task runtime compatibility', () => {
     expect(post.mock.calls.length).toBe(calls);
     expect((await store.get(child.id))?.workerTask?.state.status).toBe('canceled');
   });
+  const LOCAL = 'local:ollama:qwen3.8:27b';
+  async function localWorker(task?: 'escalating') {
+    const root = await store.create('planner');
+    const policy = {
+      ...inheritancePolicy(),
+      escalation: {
+        mode: 'ask' as const,
+        allowedModels: ['worker'],
+        allowedRoles: ['implementation' as const],
+        maxAutomaticUpgrades: 0 as const,
+      },
+    };
+    return store.create(LOCAL, {
+      origin: { parentSessionId: root.id, depth: 1, seedPrompt: 'Brief' },
+      orchestrationPolicy: { rootSessionId: root.id, rootRunId: 'run-one', policy },
+      workerSelection: { role: 'implementation', effectiveModel: LOCAL, source: 'parent', rootRunId: 'run-one' },
+      ...(task
+        ? {
+            workerTask: {
+              version: 1 as const,
+              contract,
+              automaticUpgrades: 0,
+              resolvedDecisions: [],
+              attempts: [{ id: 'attempt-one', model: LOCAL, startedAt: '2026-11-12', trigger: 'initial' as const }],
+              state: {
+                status: 'escalation-requested' as const,
+                decisionId: 'upgrade-one',
+                reason: 'Needs a stronger model',
+                evidence: ['Local attempt stalled'],
+                requestedModelId: 'worker',
+              },
+            },
+          }
+        : {}),
+    });
+  }
+  it('lets an explicit pick move a worker off an unavailable local model onto a hosted one', async () => {
+    const child = await localWorker();
+    expect(await service.send(child.id, 'Carry on')).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/not in the connected catalog/),
+    });
+    const updated = await service.setSessionModel(child.id, 'worker');
+    expect(updated?.model).toBe('worker');
+    expect((await store.get(child.id))?.workerSelection?.effectiveModel).toBe('worker');
+    expect(await service.send(child.id, 'Carry on')).toMatchObject({ ok: true });
+    await waitStream(0);
+    expect(wire(0).model).toBe('worker');
+    service.stop(child.id);
+  });
+  it('still refuses to move local work to a hosted model on an approved escalation', async () => {
+    const child = await localWorker('escalating');
+    await expect(
+      service.actOnTask(null, child.id, { kind: 'upgrade', modelId: 'worker', decisionId: 'upgrade-one' })
+    ).rejects.toThrow(/never moved to a hosted model automatically\. To move it, pick a hosted model/);
+    expect((await store.get(child.id))?.model).toBe(LOCAL);
+    expect(post).not.toHaveBeenCalled();
+  });
+  it('keeps a device-local app on local models even for an explicit pick', async () => {
+    const child = await localWorker();
+    service.dispose();
+    models = [...models, { id: LOCAL, name: 'Qwen', supportsTools: true }];
+    service = new ChatService({
+      store,
+      access: { list: async () => [] } as unknown as AccessStore,
+      models: { list: async () => ({ models }), cached: () => models } as unknown as ModelCatalog,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      getApiClient: () => null,
+      isDeviceLocal: () => true,
+      getEnvironmentUrl: () => 'http://localhost:3000',
+      emit: event => events.push(event),
+    });
+    await expect(service.setSessionModel(child.id, 'worker')).rejects.toThrow(
+      /device-local, so only local models can run here\. Choose a local model, or sign in/
+    );
+    expect((await store.get(child.id))?.model).toBe(LOCAL);
+    expect((await service.setSessionModel(child.id, LOCAL))?.model).toBe(LOCAL);
+  });
 });
