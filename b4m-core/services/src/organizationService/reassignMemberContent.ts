@@ -1,5 +1,6 @@
 import {
   ConflictError,
+  IArtifactRepository,
   IGroupRepository,
   IOrganizationRepository,
   isOrgMember,
@@ -35,7 +36,7 @@ export interface ReassignMemberContentAdapters {
     groups: Pick<IGroupRepository, 'findByOrganization'>;
     users: Pick<IUserRepository, 'findById'>;
     fabFiles: Reassignable;
-    artifacts: Reassignable;
+    artifacts: Pick<IArtifactRepository, 'reassignMemberContent'>;
     projects: Reassignable & {
       find: (filter: Filter, options?: Record<string, unknown>) => Promise<{ id: string; name: string }[]>;
     };
@@ -59,7 +60,8 @@ const modifiedCount = (result: unknown): number =>
 
 /**
  * Moves a member's org-context content (the set getMemberOffboardingInventory lists) to another
- * current member or the billing owner. Only `userId` changes: org stamps stay, so org-billed file
+ * current member or the billing owner. Artifact grants for the departing member are removed; org
+ * stamps stay, so org-billed file
  * bytes stay on the org counter and neither member's personal counter (PERSONAL_STORAGE_FILTER)
  * sees them. Call it before revoking the member, inside the caller's transaction.
  */
@@ -80,7 +82,12 @@ export async function reassignMemberContent(
     throw new BadRequestError('Content can only be transferred to a current member of the organization.');
   }
   const recipient = await db.users.findById(reassignTo);
-  if (!recipient || recipient.isBanned || recipient.deletion?.scheduledFor) {
+  if (
+    !recipient ||
+    recipient.isBanned ||
+    recipient.moderation?.status === 'suspended' ||
+    recipient.deletion?.scheduledFor
+  ) {
     throw new BadRequestError('Content can only be transferred to an active member of the organization.');
   }
 
@@ -92,7 +99,7 @@ export async function reassignMemberContent(
 
   // Sequential so a caller's transaction sees one write at a time.
   const files = await move(db.fabFiles, orgStampedFilter(scope));
-  const artifacts = await move(db.artifacts, orgStampedFilter(scope));
+  const artifacts = modifiedCount(await db.artifacts.reassignMemberContent(orgStampedFilter(scope), reassignTo));
   const notebooks = await move(db.sessions, orgSessionFilter(scope));
   const agents = await move(db.agents, orgAgentFilter(scope));
   const movedProjects = await moveProjects(db.projects, orgProjectFilter(scope), reassignTo);

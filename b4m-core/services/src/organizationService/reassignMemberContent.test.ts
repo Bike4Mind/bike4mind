@@ -23,7 +23,7 @@ const makeAdapters = () => ({
     groups: { findByOrganization: vi.fn().mockResolvedValue([{ id: 'g1' }]) },
     users: { findById: vi.fn().mockResolvedValue({ id: 'member2', isBanned: false }) },
     fabFiles: writable(2),
-    artifacts: writable(1),
+    artifacts: { reassignMemberContent: vi.fn().mockResolvedValue({ modifiedCount: 1 }) },
     projects: {
       ...writable(1),
       find: vi.fn(async (filter: { userId: string }) =>
@@ -49,14 +49,14 @@ describe('reassignMemberContent', () => {
     await expect(run()).resolves.toEqual({ files: 2, artifacts: 1, projects: 1, notebooks: 3, agents: 1 });
   });
 
-  it('uses the inventory scope server-side and only rewrites userId', async () => {
+  it('uses the inventory scope server-side and delegates artifact permission cleanup', async () => {
     await run();
     const { db } = adapters;
     const to = { userId: 'member2' };
     const stamped = { userId: 'member1', organizationId: 'org1', deletedAt: null };
 
     expect(db.fabFiles.updateMany).toHaveBeenCalledWith(stamped, to);
-    expect(db.artifacts.updateMany).toHaveBeenCalledWith(stamped, to);
+    expect(db.artifacts.reassignMemberContent).toHaveBeenCalledWith(stamped, 'member2');
     const grouped = { userId: 'member1', deletedAt: null, 'groups.groupId': { $in: ['g1'] } };
     expect(db.projects.updateMany).toHaveBeenCalledWith({ ...grouped, _id: 'p1' }, to);
     // A project's group share does not reach the notebooks or agents inside it.
@@ -90,9 +90,10 @@ describe('reassignMemberContent', () => {
   });
 
   it('reports zero on a re-run once nothing is left to move', async () => {
-    for (const repo of [adapters.db.fabFiles, adapters.db.artifacts, adapters.db.projects, adapters.db.sessions]) {
+    for (const repo of [adapters.db.fabFiles, adapters.db.projects, adapters.db.sessions]) {
       repo.updateMany.mockResolvedValue({ modifiedCount: 0 });
     }
+    adapters.db.artifacts.reassignMemberContent.mockResolvedValue({ modifiedCount: 0 });
     adapters.db.agents.updateMany.mockResolvedValue({ modifiedCount: 0 });
 
     await expect(run()).resolves.toEqual({ files: 0, artifacts: 0, projects: 0, notebooks: 0, agents: 0 });
@@ -136,10 +137,12 @@ describe('reassignMemberContent', () => {
     expect(adapters.db.fabFiles.updateMany).not.toHaveBeenCalled();
   });
 
-  it('refuses a recipient whose user is missing, banned or pending deletion', async () => {
+  it('refuses a recipient whose user is missing, banned, suspended or pending deletion', async () => {
     adapters.db.users.findById.mockResolvedValueOnce(null);
     await expect(run()).rejects.toThrow('active member');
     adapters.db.users.findById.mockResolvedValueOnce({ id: 'member2', isBanned: true });
+    await expect(run()).rejects.toThrow('active member');
+    adapters.db.users.findById.mockResolvedValueOnce({ id: 'member2', moderation: { status: 'suspended' } });
     await expect(run()).rejects.toThrow('active member');
     adapters.db.users.findById.mockResolvedValueOnce({ id: 'member2', deletion: { scheduledFor: new Date() } });
     await expect(run()).rejects.toThrow('active member');

@@ -93,6 +93,16 @@ describe('OffboardMemberDialog', () => {
     expect(hooks.mutateAsync).toHaveBeenCalledWith({ organizationId: 'org1', userId: 'b' });
   });
 
+  it('allows removal of an accepted roster row without membership permissions', async () => {
+    hooks.inventory = { data: emptyInventory, isLoading: false, error: null };
+    render(<OffboardMemberDialog organizationId="org1" member={{ id: 'pending', name: 'Pat' }} onClose={vi.fn()} />, {
+      wrapper: TestWrapper,
+    });
+    expect(confirmButton()).toBeEnabled();
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(hooks.mutateAsync).toHaveBeenCalledWith({ organizationId: 'org1', userId: 'pending' }));
+  });
+
   it('lists counts and samples, keeping content with the member by default', async () => {
     renderDialog();
 

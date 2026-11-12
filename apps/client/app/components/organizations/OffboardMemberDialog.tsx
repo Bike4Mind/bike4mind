@@ -15,7 +15,7 @@ import {
   Typography,
 } from '@mui/joy';
 import { FC, useEffect, useState } from 'react';
-import { isOrgMember } from '@bike4mind/common';
+import { isOrgMember, organizationMemberRole } from '@bike4mind/common';
 import {
   MemberOffboardingInventory,
   useGetOrganization,
@@ -46,9 +46,12 @@ type Disposition = 'keep' | 'transfer';
 const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, member, onClose }) => {
   const [disposition, setDisposition] = useState<Disposition>('keep');
   const [reassignTo, setReassignTo] = useState<string | null>(null);
-  const inventory = useMemberOffboardingInventory(organizationId, member?.id ?? null);
+  const organizationQuery = useGetOrganization(member ? organizationId : null);
+  const organization = organizationQuery.data;
+  const currentMember = !!member && !!organization && organizationMemberRole(organization, member.id) !== null;
+  const inventory = useMemberOffboardingInventory(organizationId, member?.id ?? null, { enabled: currentMember });
   const { data: members = [] } = useGetOrganizationUsers(member ? organizationId : null);
-  const { data: organization } = useGetOrganization(member ? organizationId : null);
+  const inventoryError = organizationQuery.error ?? inventory.error;
   const removeMember = useRemoveMemberFromOrganization();
 
   useEffect(() => {
@@ -65,7 +68,7 @@ const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, m
   const contentCount = inventory.data ? CONTENT_ROWS.reduce((sum, row) => sum + inventory.data[row.key].count, 0) : 0;
   const keyCount = inventory.data?.orgBilledApiKeys.count ?? 0;
   const transferring = disposition === 'transfer' && contentCount > 0;
-  const canConfirm = !!inventory.data && !removeMember.isPending && (!transferring || !!reassignTo);
+  const canConfirm = currentMember && !!inventory.data && !removeMember.isPending && (!transferring || !!reassignTo);
 
   const handleClose = () => {
     if (!removeMember.isPending) onClose();
@@ -95,15 +98,17 @@ const OffboardMemberDialog: FC<OffboardMemberDialogProps> = ({ organizationId, m
           {keyCount > 0 ? ` (${keyCount})` : ''} are revoked.
         </Typography>
 
-        {inventory.isLoading && <CircularProgress size="sm" data-testid="offboard-dialog-loading" />}
-        {inventory.error && (
+        {(organizationQuery.isLoading || inventory.isLoading) && (
+          <CircularProgress size="sm" data-testid="offboard-dialog-loading" />
+        )}
+        {inventoryError && (
           <Alert color="danger" data-testid="offboard-dialog-error">
-            Could not load this member&apos;s content: {getErrorMessage(inventory.error)}
+            Could not load this member&apos;s content: {getErrorMessage(inventoryError)}
             <Button
               size="sm"
               variant="outlined"
-              disabled={inventory.isFetching || removeMember.isPending}
-              onClick={() => void inventory.refetch()}
+              disabled={organizationQuery.isFetching || inventory.isFetching || removeMember.isPending}
+              onClick={() => void (organizationQuery.error ? organizationQuery.refetch() : inventory.refetch())}
             >
               Retry
             </Button>

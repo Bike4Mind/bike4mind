@@ -1,4 +1,4 @@
-import { useMutation, useMutationState, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import {
   IOrganizationDocument,
@@ -140,9 +140,10 @@ export function useSearchOrganizations(
 export function useGetOrganization(orgId: string | null | undefined) {
   return useQuery({
     queryKey: ['organizations', orgId],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!orgId) return null;
-      const response = await api.get<WithId<IOrganizationDocument>>(`/api/organizations/${orgId}`);
+      const response = await api.get<WithId<IOrganizationDocument>>(`/api/organizations/${orgId}`, { signal });
+      signal.throwIfAborted();
       return response.data;
     },
     enabled: !!orgId,
@@ -336,13 +337,12 @@ interface RemoveMemberVariables {
   reassignTo?: string;
 }
 
-export function useMemberOffboardingInventory(organizationId: string, userId: string | null) {
-  // Once the member is removed the route 404s, so a re-render must not rebuild and refetch the query.
-  const removed = useMutationState({
-    filters: { mutationKey: removeMemberKey, status: 'success' },
-    select: mutation => mutation.state.variables as RemoveMemberVariables | undefined,
-  }).some(variables => variables?.organizationId === organizationId && variables.userId === userId);
-
+export function useMemberOffboardingInventory(
+  organizationId: string,
+  userId: string | null,
+  { enabled }: { enabled: boolean }
+) {
+  // Current membership suppresses post-removal reads and allows a later re-added member to load.
   return useQuery({
     queryKey: memberOffboardingKey(organizationId, userId ?? ''),
     queryFn: async () => {
@@ -351,7 +351,7 @@ export function useMemberOffboardingInventory(organizationId: string, userId: st
       );
       return data;
     },
-    enabled: !!userId && !removed,
+    enabled: !!userId && enabled,
     staleTime: 0,
   });
 }
@@ -371,7 +371,12 @@ export function useRemoveMemberFromOrganization() {
       >(`/api/organizations/${organizationId}/members/${userId}`, reassignTo ? { data: { reassignTo } } : undefined);
       const { personalLakeSharesKept, revokedOrgBilledKeys, reassigned, ...organization } = response.data;
 
-      updateAllQueryData(queryClient, 'organizations', 'write', organization);
+      // A pre-removal roster/search response must not restore the departed member in the cache.
+      await queryClient.cancelQueries({ queryKey: ['organizations'] });
+      updateAllQueryData(queryClient, 'organizations', 'write', organization, {
+        keysAllowedToCreate: [],
+        synchronous: true,
+      });
 
       return personalLakeSharesKept;
     },

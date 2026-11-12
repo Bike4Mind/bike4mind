@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
-import type { IUserDocument } from '@bike4mind/common';
+import {
+  canUserReadArtifact,
+  canUserWriteArtifact,
+  canUserDeleteArtifact,
+  createDefaultPermissions,
+  type IUserDocument,
+} from '@bike4mind/common';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import {
   createMongoReplSet,
@@ -133,10 +139,62 @@ describe('member offboarding against real models', () => {
     expect(notebook?.userId).toBe(MEMBER);
   });
 
+  it('removes departing-member artifact grants while preserving collaborators and scope', async () => {
+    const collaborator = 'collaborator-1';
+    const permissions = {
+      ...createDefaultPermissions(MEMBER),
+      canRead: [MEMBER, collaborator],
+      canWrite: [MEMBER, collaborator],
+      canDelete: [MEMBER, collaborator],
+    };
+    const artifact = {
+      id: 'moving-artifact',
+      userId: MEMBER,
+      organizationId: ORG,
+      title: 'Private document',
+      visibility: 'private',
+      permissions,
+    };
+    await Artifact.collection.insertMany([
+      artifact,
+      { ...artifact, id: 'personal-artifact', organizationId: undefined },
+      { ...artifact, id: 'other-team-artifact', organizationId: 'other-org' },
+      { ...artifact, id: 'deleted-artifact', deletedAt: new Date() },
+    ]);
+    const counts = await withTransaction(() =>
+      reassignMemberContent(owner, { id: ORG, userId: MEMBER, reassignTo: RECIPIENT }, { db })
+    );
+    expect(counts.artifacts).toBe(1);
+    const moved = await Artifact.findOne({ id: artifact.id }).lean();
+    expect(moved).toMatchObject({
+      userId: RECIPIENT,
+      permissions: {
+        canRead: [collaborator],
+        canWrite: [collaborator],
+        canDelete: [collaborator],
+        isPublic: false,
+        inheritFromProject: true,
+      },
+    });
+    for (const canAccess of [canUserReadArtifact, canUserWriteArtifact, canUserDeleteArtifact]) {
+      expect(canAccess(moved!, MEMBER)).toBe(false);
+      expect(canAccess(moved!, RECIPIENT)).toBe(true);
+      expect(canAccess(moved!, collaborator)).toBe(true);
+    }
+    for (const id of ['personal-artifact', 'other-team-artifact', 'deleted-artifact']) {
+      expect(await Artifact.collection.findOne({ id })).toMatchObject({ userId: MEMBER, permissions });
+    }
+  });
+
   it('leaves every transferred document with the member when a later step in the transaction fails', async () => {
     const stampedExtra = { organizationId: ORG, deletedAt: null };
     await FabFile.collection.insertOne({ userId: MEMBER, ...stampedExtra, fileName: 'a.txt' });
-    await Artifact.collection.insertOne({ userId: MEMBER, ...stampedExtra, title: 'Doc' });
+    await Artifact.collection.insertOne({
+      userId: MEMBER,
+      ...stampedExtra,
+      title: 'Doc',
+      permissions: createDefaultPermissions(MEMBER),
+    });
     await seedProject(MEMBER, 'Launch', { groups: groupShare });
     await seedNotebook('Shared notes', { groups: groupShare });
     await Agent.collection.insertOne({
@@ -162,5 +220,6 @@ describe('member offboarding against real models', () => {
       )
     );
     expect(owners).toEqual([[MEMBER], [MEMBER], [MEMBER], [MEMBER], [MEMBER]]);
+    expect((await Artifact.collection.findOne({}))?.permissions).toEqual(createDefaultPermissions(MEMBER));
   });
 });

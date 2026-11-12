@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import React from 'react';
+import { organizationMemberRole } from '@bike4mind/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -7,6 +8,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { fabFileKeys } from './fabFileKeys';
 import { dataLakeKeys } from './dataLakeKeys';
 import {
+  useGetOrganization,
   useGetUserOrganizations,
   useMemberOffboardingInventory,
   useRemoveMemberFromOrganization,
@@ -133,13 +135,14 @@ describe('cancelled organization refreshes', () => {
   });
 
   it.each([
+    ['single organization', () => useGetOrganization('org1')],
     ['user organizations', () => useGetUserOrganizations('user1')],
     ['organization search', () => useSearchOrganizations({ page: 1, limit: 16, search: '' })],
     ['user organization search', () => useSearchUserOrganizations('user1', '')],
   ] as const)('%s does not fan out a late response after cancellation', async (_name, useHook) => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const organizationKey = ['organizations', 'org1'];
-    queryClient.setQueryData(organizationKey, { id: 'org1', currentCredits: 100 });
+    queryClient.setQueryData(organizationKey, { id: 'org1', currentCredits: 100 }, { updatedAt: 0 });
     let resolveResponse!: (response: {
       data: { data: { id: string; currentCredits: number }[]; hasMore: boolean; total: number };
     }) => void;
@@ -269,21 +272,45 @@ describe('member offboarding ownership caches', () => {
 describe('member offboarding inventory after removal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    del.mockResolvedValue({ data: { id: 'org1', personalLakeSharesKept: 0 } });
-    get.mockResolvedValue({ data: { files: { count: 0, sample: [] } } });
+    const removed = { id: 'org1', userId: 'owner', users: [{ userId: 'other', permissions: ['read'] }] };
+    del.mockResolvedValue({ data: { ...removed, personalLakeSharesKept: 0 } });
+    get.mockImplementation(async (url: string) => ({
+      data: url === '/api/organizations/org1' ? removed : { files: { count: 0, sample: [] } },
+    }));
   });
 
-  it('does not refetch the removed member inventory, but still loads another member', async () => {
+  it('suppresses removed-member reads and reloads a re-added member despite retained mutation history', async () => {
+    const idleCallbacks: (() => void)[] = [];
+    vi.stubGlobal('requestIdleCallback', (callback: () => void) => {
+      idleCallbacks.push(callback);
+      return idleCallbacks.length;
+    });
     const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    for (let index = 0; index < 11; index += 1) {
+      queryClient.setQueryData(['organizations', 'cached', index], { id: 'org1' });
+    }
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     );
+    queryClient.setQueryData(['organizations', 'org1'], {
+      id: 'org1',
+      userId: 'owner',
+      users: [
+        { userId: 'member', permissions: [] },
+        { userId: 'other', permissions: ['read'] },
+      ],
+    });
     const view = renderHook(
-      ({ userId }: { userId: string }) => ({
-        inventory: useMemberOffboardingInventory('org1', userId),
-        removeMember: useRemoveMemberFromOrganization(),
-      }),
-      { wrapper, initialProps: { userId: 'member' } }
+      ({ userId }: { userId: string | null }) => {
+        const organization = useGetOrganization('org1');
+        return {
+          inventory: useMemberOffboardingInventory('org1', userId, {
+            enabled: !!userId && !!organization.data && organizationMemberRole(organization.data, userId) !== null,
+          }),
+          removeMember: useRemoveMemberFromOrganization(),
+        };
+      },
+      { wrapper, initialProps: { userId: 'member' as string | null } }
     );
     const inventoryUrl = (userId: string) => `/api/organizations/org1/members/${userId}/offboarding`;
     const inventoryFetches = (userId: string) => get.mock.calls.filter(([url]) => url === inventoryUrl(userId)).length;
@@ -293,6 +320,10 @@ describe('member offboarding inventory after removal', () => {
 
       await act(async () => {
         await view.result.current.removeMember.mutateAsync({ organizationId: 'org1', userId: 'member' });
+      });
+      expect(idleCallbacks).toHaveLength(0);
+      expect(queryClient.getQueryData(['organizations', 'org1'])).toMatchObject({
+        users: [{ userId: 'other', permissions: ['read'] }],
       });
       view.rerender({ userId: 'member' });
       await act(async () => {
@@ -304,9 +335,27 @@ describe('member offboarding inventory after removal', () => {
 
       view.rerender({ userId: 'other' });
       await waitFor(() => expect(inventoryFetches('other')).toBe(1));
+      view.rerender({ userId: null });
+      await act(async () => {
+        queryClient.setQueryData(['organizations', 'org1'], {
+          id: 'org1',
+          userId: 'owner',
+          users: [
+            { userId: 'member', permissions: [] },
+            { userId: 'other', permissions: ['read'] },
+          ],
+        });
+      });
+      expect(
+        queryClient.getMutationCache().findAll({ mutationKey: ['organizations', 'remove-member'], status: 'success' })
+      ).toHaveLength(1);
+      view.rerender({ userId: 'member' });
+      await waitFor(() => expect(inventoryFetches('member')).toBe(2));
+      await waitFor(() => expect(view.result.current.inventory.isSuccess).toBe(true));
     } finally {
       view.unmount();
       queryClient.clear();
+      vi.unstubAllGlobals();
     }
   });
 });
