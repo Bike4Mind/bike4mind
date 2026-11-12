@@ -122,6 +122,8 @@ export * from './schemas/bulkAbuse';
 export * from './schemas/signupRiskReview';
 export * from './schemas/riskEvidence';
 export * from './schemas/accountCampaign';
+export * from './schemas/completionSequence';
+export * from './schemas/completionSynchrony';
 export * from './schemas/shadowDetection';
 export * from './schemas/campaignWatch';
 export * from './schemas/abuseAssessment';
