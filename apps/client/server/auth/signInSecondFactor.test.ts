@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import jwt from 'jsonwebtoken';
-import { AuthEvents, type IUserDocument } from '@bike4mind/common';
+import { AuthEvents, MfaEnrollmentEvents, type IUserDocument } from '@bike4mind/common';
 
 const {
   mockCountByUser,
@@ -10,7 +10,9 @@ const {
   mockGetSettingsMap,
   mockLogEvent,
   mockLogAuthAudit,
+  mockRecordMfaEnrollmentEvent,
 } = vi.hoisted(() => ({
+  mockRecordMfaEnrollmentEvent: vi.fn(),
   mockGetSettingsMap: vi.fn(),
   mockLogEvent: vi.fn(),
   mockLogAuthAudit: vi.fn(),
@@ -38,6 +40,9 @@ vi.mock('@server/auth/trustedDevice', () => ({
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: unknown[]) => mockLogAuthAudit(...a) }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
+vi.mock('@server/auth/mfaEnrollmentFunnel', () => ({
+  recordMfaEnrollmentEvent: (...a: unknown[]) => mockRecordMfaEnrollmentEvent(...a),
+}));
 
 import {
   logSecondFactorSignIn,
@@ -105,6 +110,7 @@ describe('resolveSecondFactor', () => {
     mockConsumeTrustedDevice.mockResolvedValue(device);
 
     expect((await resolveSecondFactor(req, enrolled, { origin, honourTrustedDevice: false })).kind).toBe('challenge');
+    expect(mockRecordMfaEnrollmentEvent).not.toHaveBeenCalled();
     expect(mockConsumeTrustedDevice).not.toHaveBeenCalled();
   });
 
@@ -119,6 +125,11 @@ describe('resolveSecondFactor', () => {
       mfaPending: true,
       signInStrategy: 'otc',
       signInVia: 'otc',
+    });
+    expect(mockRecordMfaEnrollmentEvent).toHaveBeenCalledExactlyOnceWith('u2', MfaEnrollmentEvents.REQUIRED, {
+      surface: 'signin',
+      source: 'otc',
+      strategy: 'otc',
     });
   });
 
@@ -144,6 +155,7 @@ describe('resolveSecondFactor', () => {
 
   it('is satisfied for an unenrolled user when MFA is not enforced', async () => {
     expect(await resolveSecondFactor(req, unenrolled, { origin })).toEqual({ kind: 'satisfied', trustedDevice: null });
+    expect(mockRecordMfaEnrollmentEvent).not.toHaveBeenCalled();
   });
 });
 
