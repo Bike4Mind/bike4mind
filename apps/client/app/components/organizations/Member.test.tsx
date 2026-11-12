@@ -42,6 +42,13 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
   useOrganizationInvites: () => ({ data: mocks.invitations, isError: false }),
   useSetMemberCreditDefault: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
+vi.mock('./BulkInviteModal', () => ({
+  default: (p: { availableSeats: number; onDone: () => void }) => (
+    <div data-testid="bulk-invite-modal" data-seats={p.availableSeats}>
+      <button onClick={p.onDone}>close</button>
+    </div>
+  ),
+}));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('./UserCard', () => ({
   default: (p: {
@@ -518,5 +525,30 @@ describe('OrganizationMembers invite role', () => {
     ];
     renderMembers(buildOrg({}));
     expect(screen.getByTestId('member-card-pending1').getAttribute('data-permissions')).toBe('read,update');
+  });
+});
+
+describe('OrganizationMembers bulk invite', () => {
+  beforeEach(() => {
+    mocks.viewer = { id: 'owner1', isAdmin: false };
+    mocks.members = [];
+    mocks.invitations = [];
+    mocks.pending = [];
+  });
+
+  it('opens the bulk invite modal with the available seat count and closes it', () => {
+    mocks.seats = { maxSeats: 5, currentSeats: 2, availableSeats: 3 };
+    renderMembers(buildOrg({}));
+    expect(screen.queryByTestId('bulk-invite-modal')).toBeNull();
+    fireEvent.click(screen.getByTestId('organization-members-bulk-invite-btn'));
+    expect(screen.getByTestId('bulk-invite-modal').getAttribute('data-seats')).toBe('3');
+    fireEvent.click(screen.getByText('close'));
+    expect(screen.queryByTestId('bulk-invite-modal')).toBeNull();
+  });
+
+  it('is not offered when no seats are left', () => {
+    mocks.seats = { maxSeats: 5, currentSeats: 5, availableSeats: 0 };
+    renderMembers(buildOrg({}));
+    expect(screen.queryByTestId('organization-members-bulk-invite-btn')).toBeNull();
   });
 });

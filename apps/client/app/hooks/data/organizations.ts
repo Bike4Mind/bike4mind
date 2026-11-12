@@ -523,3 +523,45 @@ export const useOrganizationSeats = (organizationId?: string): OrganizationSeats
     [maxSeats, pendingSeats, currentSeats, availableSeats]
   );
 };
+
+// Mirrors OrgInviteRow in b4m-core/services/src/sharingService/classifyOrgInviteRows.ts.
+export type BulkInviteRowStatus =
+  'invite' | 'already_member' | 'already_pending' | 'invalid' | 'duplicate' | 'seat_limit';
+
+export interface BulkInviteRow {
+  email: string;
+  raw: string;
+  status: BulkInviteRowStatus;
+}
+
+export interface BulkInviteResult {
+  rows: BulkInviteRow[];
+  invitedCount: number;
+  inviteId: string | null;
+}
+
+export function useBulkInviteOrganization() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      organizationId,
+      emails,
+      permissions,
+    }: {
+      organizationId: string;
+      emails: string[];
+      permissions: string[];
+    }) => {
+      const response = await api.post<BulkInviteResult>(`/api/organizations/${organizationId}/bulk-invite`, {
+        emails,
+        permissions,
+      });
+      return response.data;
+    },
+    onSuccess: (_result, { organizationId }) => {
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'invites'] });
+      queryClient.invalidateQueries({ queryKey: ['users', 'organization', organizationId] });
+    },
+  });
+}

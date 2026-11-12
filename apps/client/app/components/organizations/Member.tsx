@@ -19,28 +19,18 @@ import { useCancelInvite, useShareDocument } from '@client/app/hooks/data/invite
 import { useGetOrganizationUsers, useGetPendingOrganizationUsers, useGetUsers } from '@client/app/hooks/data/user';
 import { IGetUsersParams } from '@client/app/utils/userAPICalls';
 import SearchIcon from '@mui/icons-material/Search';
-import {
-  Box,
-  Button,
-  Card,
-  Chip,
-  FormControl,
-  FormLabel,
-  IconButton,
-  Input,
-  Option,
-  Select,
-  Stack,
-  Typography,
-} from '@mui/joy';
+import { Box, Button, Card, Chip, IconButton, Input, Stack, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import debounce from 'lodash/debounce';
 import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
 import AddIcon from '@mui/icons-material/Add';
+import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import { FC, Fragment, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import OrganizationUserCard from './UserCard';
+import BulkInviteModal from './BulkInviteModal';
+import OrgInviteRoleSelect from './OrgInviteRoleSelect';
 import MemberCreditBudgetCard from './MemberCreditBudgetCard';
 import { getMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
 import { useOrganizationInvites, useOrganizationSeats } from '@client/app/hooks/data/organizations';
@@ -81,6 +71,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
   const { data: usersData, isFetching } = useGetUsers(params, { enabled: modalSearch.length >= 3 });
 
   const [role, setRole] = useState<OrgInviteRole>('viewer');
+  const [bulkInviteOpen, setBulkInviteOpen] = useState(false);
   // Mirrors the server gate in sharingService.createInvite: only the owner tier may invite an admin.
   const canGrantAdmin = !!currentUser && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
@@ -478,18 +469,12 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
                 isLoadingMore={isFetching}
                 showButtonBadge={false}
                 leftGridContent={
-                  <FormControl size="sm">
-                    <FormLabel>{t('organizations.modals.members.role_label', 'Role')}</FormLabel>
-                    <Select
-                      data-testid="organization-members-role-select"
-                      value={role}
-                      onChange={(_event, value) => value && setRole(value)}
-                    >
-                      <Option value="viewer">Viewer</Option>
-                      <Option value="editor">Editor</Option>
-                      {canGrantAdmin && <Option value="admin">Admin</Option>}
-                    </Select>
-                  </FormControl>
+                  <OrgInviteRoleSelect
+                    value={role}
+                    onChange={setRole}
+                    canGrantAdmin={canGrantAdmin}
+                    testId="organization-members-role-select"
+                  />
                 }
               />
             ) : (
@@ -508,6 +493,25 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
                 {t('organizations.modals.members.button_label', 'Add Member')}
               </Button>
             ))}
+          {canInviteMembers && hasAvailableSeats && (
+            <Button
+              data-testid="organization-members-bulk-invite-btn"
+              size="sm"
+              variant="outlined"
+              startDecorator={<GroupAddIcon />}
+              onClick={() => setBulkInviteOpen(true)}
+            >
+              {t('organizations.modals.bulk_invite.button_label', 'Bulk invite')}
+            </Button>
+          )}
+          {bulkInviteOpen && (
+            <BulkInviteModal
+              organizationId={organization.id}
+              availableSeats={availableSeats}
+              canGrantAdmin={canGrantAdmin}
+              onDone={() => setBulkInviteOpen(false)}
+            />
+          )}
         </Box>
       </Stack>
 
