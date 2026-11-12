@@ -3,10 +3,8 @@ import {
   Alert,
   Box,
   Button,
-  Chip,
   FormControl,
   FormLabel,
-  IconButton,
   Option,
   Select,
   Slider,
@@ -17,7 +15,6 @@ import {
   Typography,
 } from '@mui/joy';
 import { formatCredits } from '@client/app/utils/formatUsd';
-import CloseIcon from '@mui/icons-material/Close';
 import {
   hasInvalidField,
   type AspectField,
@@ -29,6 +26,7 @@ import {
   type TextField,
 } from './capabilityFields';
 import { insertSnippet } from './insertSnippet';
+import ReferenceChip from './ReferenceChip';
 import StudioModelCards, { type StudioModelCard } from './StudioModelCards';
 
 // The model picker: a dropdown of names, or a card per model with its strength, price and fit (Create v2).
@@ -173,25 +171,14 @@ const ReferencesControl = ({ field, testId }: { field: ReferencesField; testId: 
     </FormLabel>
     <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
       {field.files.map(file => (
-        <Chip
+        <ReferenceChip
           key={file.fileId}
-          variant="soft"
-          data-testid={`${testId}-file-${file.fileId}`}
-          endDecorator={
-            <IconButton
-              size="sm"
-              variant="plain"
-              aria-label={`Remove ${file.fileName}`}
-              disabled={field.disabled}
-              onClick={() => field.onRemove(file.fileId)}
-              data-testid={`${testId}-remove-${file.fileId}-btn`}
-            >
-              <CloseIcon fontSize="small" />
-            </IconButton>
-          }
-        >
-          {file.fileName}
-        </Chip>
+          file={file}
+          disabled={field.disabled}
+          testId={testId}
+          onRemove={field.onRemove}
+          onToggleCutout={field.onToggleCutout}
+        />
       ))}
       {field.files.length < field.max && (
         <Button

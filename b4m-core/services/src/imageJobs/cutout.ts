@@ -86,7 +86,7 @@ export async function prepareCutoutInputs(
   request: Pick<ImageJobRequest, 'size'>,
   inputs: ImageInputs
 ): Promise<PreparedCutout | { error: string }> {
-  const source = inputs.images.find(image => image.role === 'edit_source');
+  const source = inputs.images?.find(image => image.role === 'edit_source');
   if (!source || !isCanvasSize(request.size)) return { error: 'cutout job has no source or canvas size' };
   try {
     const padded = await padForMatte(source.bytes, request.size);

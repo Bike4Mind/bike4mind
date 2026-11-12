@@ -6,6 +6,7 @@ import { useGetFabFile } from '@client/app/hooks/data/fabFileQueries';
 import type { StudioImageJob } from '@client/app/hooks/data/studioImageJobs';
 import StudioTrailDialog from '@client/app/components/Studio/trail/StudioTrailDialog';
 import type { StudioTrailRestore } from '@client/app/components/Studio/trail/StudioTrail';
+import { CHECKERBOARD_SX } from '@client/app/components/Studio/checkerboard';
 
 const LIVE_LABELS: Partial<Record<GenerationJobState, string>> = {
   pending: 'Queued',
@@ -62,7 +63,13 @@ const ImageJobCard = ({ job, onRestore }: ImageJobCardProps) => {
   const fileId = job.output?.fileId ?? null;
   return (
     <Card variant="outlined" data-testid={`image-job-card-${job.id}`} data-state={job.state}>
-      <AspectRatio ratio="1" objectFit="cover" variant="soft">
+      {/* A cutout is shown whole, on a checkerboard, so its transparent background reads as transparent. */}
+      <AspectRatio
+        ratio="1"
+        objectFit={job.purpose === 'cutout' ? 'contain' : 'cover'}
+        variant="soft"
+        sx={job.purpose === 'cutout' ? { '& > div': CHECKERBOARD_SX } : undefined}
+      >
         <JobBody job={job} />
       </AspectRatio>
       <CardContent>
@@ -70,7 +77,7 @@ const ImageJobCard = ({ job, onRestore }: ImageJobCardProps) => {
           level="body-sm"
           sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
         >
-          {job.request.prompt}
+          {job.purpose === 'cutout' ? 'Background removed' : job.request.prompt}
         </Typography>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mt: 0.5 }}>
           <Chip size="sm" variant="soft">

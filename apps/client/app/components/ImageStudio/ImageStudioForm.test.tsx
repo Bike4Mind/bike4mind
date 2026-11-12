@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IMAGE_JOB_PROMPT_MAX_CHARS, ImageModels, SCENE_PRESETS } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -29,6 +29,21 @@ vi.mock('@client/app/components/Agent/ImageBrowserModal', () => ({
     h.applyImage = onApplyImage;
     return null;
   },
+}));
+
+// Cutout state is useReferenceCutouts' (tested on its own); the form only reads it and forwards the toggle.
+const cutouts = vi.hoisted(() => ({
+  byFileId: {} as Record<string, import('@client/app/components/Studio/capabilityFields').ReferenceCutout>,
+  toggleCutout: vi.fn(),
+}));
+vi.mock('./useReferenceCutouts', () => ({
+  useReferenceCutouts: () => ({
+    cutoutOf: (fileId: string) => cutouts.byFileId[fileId],
+    toggleCutout: cutouts.toggleCutout,
+  }),
+}));
+vi.mock('@client/app/hooks/data/fabFileQueries', () => ({
+  useGetFabFile: (fileId: string) => ({ data: { fileUrl: `https://files.test/${fileId}.png` } }),
 }));
 
 import ImageStudioForm from './ImageStudioForm';
@@ -63,6 +78,11 @@ const pickCard = (model: ImageModels) => fireEvent.click(screen.getByTestId(`ima
 const submitButton = () => screen.getByTestId('image-form-submit-btn');
 
 describe('ImageStudioForm', () => {
+  beforeEach(() => {
+    cutouts.byFileId = {};
+    cutouts.toggleCutout.mockClear();
+  });
+
   it('opens on a visible default card and keeps Generate off until there is a prompt', () => {
     renderForm();
     expect(card(ImageModels.GPT_IMAGE_1_5)).toHaveAttribute('data-selected', 'true');
@@ -157,6 +177,62 @@ describe('ImageStudioForm', () => {
         prompt: 'a fox like this one',
         inputs: [{ role: 'reference', fileId: 'file-1' }],
       },
+    });
+  });
+
+  describe('Remove background on a reference', () => {
+    const addReference = () => act(() => h.applyImage?.({ id: 'file-1', fileName: 'can.jpg' }));
+
+    it('turns the cutout on from the reference chip', () => {
+      renderForm();
+      addReference();
+      fireEvent.click(screen.getByTestId('image-form-references-cutout-file-1-switch'));
+      expect(cutouts.toggleCutout).toHaveBeenCalledWith('file-1', true);
+    });
+
+    it('holds Generate while the cutout is running', () => {
+      cutouts.byFileId = { 'file-1': { status: 'pending' } };
+      renderForm();
+      addReference();
+      typePrompt('the can on a beach');
+      expect(screen.getByTestId('image-form-references-cutout-file-1-pending')).toBeInTheDocument();
+      expect(screen.getByTestId('image-form-references-invalid')).toHaveTextContent('Removing the background');
+      expect(submitButton()).toBeDisabled();
+    });
+
+    it('shows the ready cutout on a checkerboard and sends it instead of the original', () => {
+      cutouts.byFileId = { 'file-1': { status: 'ready', fileId: 'cutout-1' } };
+      const { onSubmit } = renderForm();
+      addReference();
+      typePrompt('the can on a beach');
+      expect(screen.getByTestId('image-form-references-cutout-file-1-preview').querySelector('img')).toHaveAttribute(
+        'src',
+        'https://files.test/cutout-1.png'
+      );
+      fireEvent.click(submitButton());
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({ inputs: [{ role: 'reference', fileId: 'cutout-1' }] }),
+        })
+      );
+    });
+
+    it('offers the original when the cutout failed', () => {
+      cutouts.byFileId = { 'file-1': { status: 'failed', message: 'Remove background works on PNG or JPEG images' } };
+      renderForm();
+      addReference();
+      typePrompt('the can on a beach');
+      expect(screen.getByTestId('image-form-references-invalid')).toHaveTextContent('PNG or JPEG');
+      expect(submitButton()).toBeDisabled();
+      fireEvent.click(screen.getByTestId('image-form-references-fix-btn'));
+      expect(cutouts.toggleCutout).toHaveBeenCalledWith('file-1', false);
+    });
+
+    it('forgets the cutout when the reference is removed', () => {
+      renderForm();
+      addReference();
+      fireEvent.click(screen.getByTestId('image-form-references-remove-file-1-btn'));
+      expect(cutouts.toggleCutout).toHaveBeenCalledWith('file-1', false);
     });
   });
 
