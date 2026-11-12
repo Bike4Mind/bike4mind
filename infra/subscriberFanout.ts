@@ -1,5 +1,5 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES, STAGE_LOG_RETENTION } from './constants';
 import { ecsResourceSecrets, ecsSecretsVersion } from './ecsSecrets';
 import { allSecrets, secrets } from './secrets';
 import { cluster, lambdaVpc } from './vpc';
@@ -44,7 +44,7 @@ export const subscriberFanout = new sst.aws.Service('subscriberFanoutV2', {
   // websocketApi link grants (execute-api:ManageConnections on this stage's API). MONGODB_URI
   // reaches the container as an ECS secret, read by the execution role rather than the task role.
   logging: {
-    retention: $app.stage === 'production' ? '1 month' : '1 week',
+    retention: STAGE_LOG_RETENTION,
   },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,

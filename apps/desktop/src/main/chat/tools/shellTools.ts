@@ -542,6 +542,7 @@ export async function shellApproval(
     !!script ||
     scriptCheckFailed ||
     !!gitProgram ||
+    scan.gitPathUnplaced === true ||
     scan.remoteTree === true ||
     unreachable.length > 0 ||
     touchesProtected ||
@@ -567,6 +568,9 @@ export async function shellApproval(
       ? ['Runs git in a repository whose .git or .husky folder was changed in this session.']
       : []),
     ...(gitProgram ? [`Sets ${gitProgram}, which makes git run a program.`] : []),
+    ...(scan.gitPathUnplaced
+      ? ['Puts a folder on PATH that Desktop cannot place, where git may find a program to run for a git command.']
+      : []),
     ...(scan.remoteTree ? ['Clones a repository from another computer, whose files cannot be checked first.'] : []),
     ...(touchesProtected || secret
       ? ['Reaches a location Desktop protects, such as its own data or permission and hook settings.']
@@ -610,9 +614,17 @@ export async function shellApproval(
     ...(byPart ? { byPart: true as const } : {}),
     always: {
       namespace: tool,
-      commands: scan.commands.map(({ text, always, coverable, words, opaque }, index) => {
+      commands: scan.commands.map(({ text, always, coverable, words, opaque, expanded }, index) => {
         const ask = byPart ? parts[index] : undefined;
-        return { text, pattern: always, coverable, words, ...(opaque ? { opaque } : {}), ...(ask ? { ask } : {}) };
+        return {
+          text,
+          pattern: always,
+          coverable,
+          words,
+          ...(expanded ? { expanded } : {}),
+          ...(opaque ? { opaque } : {}),
+          ...(ask ? { ask } : {}),
+        };
       }),
       directories: [...new Set([...directories, ...outside])],
       paths: scan.paths ?? [],

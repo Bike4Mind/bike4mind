@@ -29,6 +29,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 }));
 
 vi.mock('@server/services/publish', () => ({
+  DRAFT_UPLOAD_TOKEN_HEADER: 'x-upload-token',
   verifyDraftUploadToken: (t: string) => mocks.verify(t),
 }));
 
@@ -86,7 +87,7 @@ describe('PUT /api/publish/artifact/draft-upload', () => {
 
   it('401s when the token is invalid or expired', async () => {
     mocks.verify.mockReturnValue(null);
-    const { res, promise } = run({ query: { token: 'bad' } });
+    const { res, promise } = run({ headers: { 'x-upload-token': 'bad' } });
     await promise;
     expect(res._getStatusCode()).toBe(401);
     expect(mocks.upload).not.toHaveBeenCalled();
@@ -94,7 +95,7 @@ describe('PUT /api/publish/artifact/draft-upload', () => {
 
   it('400s on a non-uuid draftId claim before touching storage', async () => {
     mocks.verify.mockReturnValue({ draftId: 'not-a-uuid', path: 'index.html' });
-    const { res, promise } = run({ query: { token: 'good' } });
+    const { res, promise } = run({ headers: { 'x-upload-token': 'good' } });
     await promise;
     expect(res._getStatusCode()).toBe(400);
     expect(mocks.upload).not.toHaveBeenCalled();
@@ -102,7 +103,7 @@ describe('PUT /api/publish/artifact/draft-upload', () => {
 
   it('400s on a traversal path even with a valid token (defense in depth)', async () => {
     mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: '../secret' });
-    const { res, promise } = run({ query: { token: 'good' } });
+    const { res, promise } = run({ headers: { 'x-upload-token': 'good' } });
     await promise;
     expect(res._getStatusCode()).toBe(400);
     expect(mocks.upload).not.toHaveBeenCalled();
@@ -111,8 +112,7 @@ describe('PUT /api/publish/artifact/draft-upload', () => {
   it('streams the body to storage under the pinned draft key on a valid token', async () => {
     mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'index.html', size: 26 });
     const { res, promise } = run({
-      query: { token: 'good' },
-      headers: { 'content-type': 'text/html; charset=utf-8' },
+      headers: { 'x-upload-token': 'good', 'content-type': 'text/html; charset=utf-8' },
       body: '<!doctype html><h1>hi</h1>',
     });
     await promise;
@@ -125,13 +125,29 @@ describe('PUT /api/publish/artifact/draft-upload', () => {
     expect(opts).toEqual({ ContentType: 'text/html' });
   });
 
+  it('reads the token from the x-upload-token header ahead of the query string', async () => {
+    mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'index.html', size: 2 });
+    const { res, promise } = run({ headers: { 'x-upload-token': 'header' }, query: { token: 'query' }, body: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.verify).toHaveBeenCalledWith('header');
+  });
+
+  it('still accepts the deprecated ?token= query parameter', async () => {
+    mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'index.html', size: 2 });
+    const { res, promise } = run({ query: { token: 'legacy' }, body: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.verify).toHaveBeenCalledWith('legacy');
+  });
+
   // Hosted S3 refuses any length but the presign's bound one with 403; the proxy matches it.
   it.each([
     ['longer', '<!doctype html><h1>hi</h1>!'],
     ['shorter', '<!doctype html>'],
   ])('403s and skips storage when the body is %s than the declared size', async (_label, body) => {
     mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'index.html', size: 26 });
-    const { res, promise } = run({ query: { token: 'good' }, body });
+    const { res, promise } = run({ headers: { 'x-upload-token': 'good' }, body });
     await promise;
     expect(res._getStatusCode()).toBe(403);
     expect(mocks.upload).not.toHaveBeenCalled();
@@ -140,7 +156,7 @@ describe('PUT /api/publish/artifact/draft-upload', () => {
   it('413s and skips storage when the body exceeds the per-file cap', async () => {
     mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'big.bin', size: PUBLISH_LIMITS.maxFileBytes + 1 });
     const { res, promise } = run({
-      query: { token: 'good' },
+      headers: { 'x-upload-token': 'good' },
       body: Buffer.alloc(PUBLISH_LIMITS.maxFileBytes + 1),
     });
     await promise;

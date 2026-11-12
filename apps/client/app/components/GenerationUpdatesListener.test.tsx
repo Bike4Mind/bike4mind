@@ -24,6 +24,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 import { listOf, readyOutput, videoJob } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
 import { musicJob, musicOutput } from '@client/app/hooks/data/__test__/musicGenerationFixtures';
 import { musicGenerationKeys } from '@client/app/hooks/data/musicGenerationKeys';
+import { studioImageJobKeys, type StudioImageJob } from '@client/app/hooks/data/studioImageJobs';
 import { videoGenerationKeys } from '@client/app/hooks/data/videoGenerationKeys';
 import GenerationUpdatesListener from './GenerationUpdatesListener';
 
@@ -103,7 +104,7 @@ describe('GenerationUpdatesListener', () => {
     expect(invalidate).not.toHaveBeenCalled();
   });
 
-  it('refreshes only the credit balance when an image job finishes', async () => {
+  it('refreshes only the credit balance when an image job finishes and no gallery is loaded', async () => {
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     renderListener();
     await send(frame({ id: 'img-1', kind: 'image', state: 'running' }));
@@ -165,11 +166,12 @@ describe('GenerationUpdatesListener', () => {
       exact: true,
       refetchType: 'all',
     });
-    // The two video details plus the video and music gallery lists.
-    expect(invalidate).toHaveBeenCalledTimes(4);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: studioImageJobKeys.list });
+    // The two video details plus the video, music and Studio image gallery lists.
+    expect(invalidate).toHaveBeenCalledTimes(5);
 
     rerender(tree());
-    expect(invalidate).toHaveBeenCalledTimes(4);
+    expect(invalidate).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -309,5 +311,58 @@ describe('GenerationUpdatesListener inactive music details', () => {
     h.readyState = 1;
     rerender(tree());
     await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('GenerationUpdatesListener Studio image jobs', () => {
+  const imageJob = (overrides: Partial<StudioImageJob> = {}): StudioImageJob => ({
+    id: 'img-1',
+    groupId: 'group-1',
+    state: 'pending',
+    request: { model: 'gpt-image-1.5', mode: 'generate', prompt: 'a fox' } as StudioImageJob['request'],
+    error: null,
+    output: null,
+    createdAt: '2026-11-01T00:00:00.000Z',
+    ...overrides,
+  });
+  const seedList = (jobs: StudioImageJob[]) =>
+    queryClient.setQueryData(studioImageJobKeys.list, { pages: [{ data: jobs, next_cursor: null }], pageParams: [] });
+  const cachedState = (id: string) =>
+    queryClient
+      .getQueryData<{ pages: { data: StudioImageJob[] }[] }>(studioImageJobKeys.list)
+      ?.pages[0]?.data.find(job => job.id === id)?.state;
+
+  it('moves a live gallery row forward without refetching', async () => {
+    seedList([imageJob()]);
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'running' }));
+    expect(cachedState('img-1')).toBe('running');
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('never moves a row backwards', async () => {
+    seedList([imageJob({ state: 'storing' })]);
+    renderListener();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'running' }));
+    expect(cachedState('img-1')).toBe('storing');
+  });
+
+  it('refetches the gallery and the credit balance when a job finishes', async () => {
+    seedList([imageJob({ state: 'running' })]);
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'succeeded', output: { contentType: 'image/png' } }));
+    expect(cachedState('img-1')).toBe('succeeded');
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: studioImageJobKeys.list });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'], refetchType: 'all' });
+  });
+
+  it('refetches the gallery for a job it does not hold yet', async () => {
+    seedList([imageJob()]);
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'img-from-elsewhere', kind: 'image', state: 'pending' }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: studioImageJobKeys.list });
   });
 });

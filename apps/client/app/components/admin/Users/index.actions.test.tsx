@@ -171,7 +171,11 @@ describe('UsersTab actions', () => {
     fireEvent.click(await screen.findByTestId('admin-users-row-actions-u2'));
     expect(screen.queryByText('Copy email')).toBeNull();
     fireEvent.click(await screen.findByTestId('admin-users-row-open-u2'));
-    expect(openProfile).toHaveBeenCalledWith('u2');
+    expect(openProfile).toHaveBeenCalledWith('u2', {
+      signupRange: '7d',
+      signupAsOf: undefined,
+      signupTzOffset: -new Date().getTimezoneOffset(),
+    });
   });
 
   it('exports the csv and warns when the export is truncated', async () => {

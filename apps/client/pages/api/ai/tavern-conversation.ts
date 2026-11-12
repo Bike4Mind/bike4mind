@@ -134,7 +134,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     // agentIds: optional Record<string, string> mapping character id to agent database id
 
     try {
-      const operations = await OperationsModelService.getOperationsModel();
+      const operations = await OperationsModelService.getOperationsModel({ endUserId: req.user.id });
       const { modelId } = operations;
       const meter = createRequestCompletionMeter(req, 'tavern conversation', { systemModel: true });
       const llm = meterCompletionBackend(operations.llm, meter, operations.modelInfo);
@@ -237,7 +237,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       // Fire-and-forget: extract memories for agent characters
       if (agentIds && typeof agentIds === 'object' && Object.keys(agentIds).length > 0) {
         (async () => {
-          const memOps = await OperationsModelService.getOperationsModel();
+          const memOps = await OperationsModelService.getOperationsModel({ endUserId: req.user.id });
           const memModelId = memOps.modelId;
           const memLlm = meterCompletionBackend(memOps.llm, meter, memOps.modelInfo);
 

@@ -639,12 +639,12 @@ export async function publishArtifactBundle(input: {
     ({ data: draft } = await requestDraft(`${slug}-${uniqueSlugDiscriminator()}`));
   }
 
-  // Step 2 - PUT the bytes directly to S3 (plain fetch; no app auth header).
+  // Step 2 - PUT the bytes to the minted URL (plain fetch; no app auth header, only the headers it was issued with).
   const put = draft.uploadUrls.find(u => u.path === 'index.html');
   if (!put) throw new Error('Upload URL was not issued for index.html');
   const res = await fetch(put.url, {
     method: 'PUT',
-    headers: { 'Content-Type': 'text/html' },
+    headers: { ...put.headers, 'Content-Type': 'text/html' },
     body: indexHtml,
   });
   if (!res.ok) throw new Error(`Upload failed (${res.status})`);

@@ -10,11 +10,8 @@ import {
   FormLabel,
   IconButton,
   Input,
-  Modal,
-  ModalDialog,
   Sheet,
   Stack,
-  Table,
   Textarea,
   Typography,
 } from '@mui/joy';
@@ -28,6 +25,7 @@ import ReplayIcon from '@mui/icons-material/Replay';
 import { getPriceMargin, type IModelPriceTier } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useCreditAnalysisStore } from '../store';
+import { AdminDialog, AdminPageHeader, DataTable, FilterBar } from '../../shared';
 
 /** Wire shape of a catalog row (dates arrive as ISO strings). */
 interface PriceRow {
@@ -339,246 +337,246 @@ export const ModelPricingCatalog: React.FC = () => {
 
   return (
     <Box data-testid="model-pricing-catalog">
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
-        <Box>
-          <Typography level="title-md">Model pricing (provider cost, USD; token rates shown per 1M)</Typography>
-          <Typography level="body-sm" color="neutral">
-            Users pay this cost times the published uniform markup. Changes append versioned rows; history is never
-            edited.
-          </Typography>
-        </Box>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Input
-            size="sm"
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
-            placeholder="Filter by model id"
-            sx={{ width: 220 }}
-            slotProps={{ input: { 'data-testid': 'model-pricing-filter-input', 'aria-label': 'Filter by model id' } }}
-          />
-          <IconButton
-            size="sm"
-            onClick={fetchRows}
-            disabled={isLoading}
-            aria-label="Refresh the price catalog"
-            data-testid="model-pricing-refresh-btn"
-          >
-            <RefreshIcon />
-          </IconButton>
-        </Stack>
+      <Stack gap={2}>
+        <AdminPageHeader
+          level="section"
+          title="Model pricing"
+          count={visibleRows.length}
+          description="Provider cost in USD; token rates per 1M. Changes append versioned rows and preserve history."
+          actions={
+            <IconButton
+              size="sm"
+              onClick={fetchRows}
+              disabled={isLoading}
+              aria-label="Refresh the price catalog"
+              data-testid="model-pricing-refresh-btn"
+            >
+              <RefreshIcon />
+            </IconButton>
+          }
+        />
+        <FilterBar
+          state={{ query: filter, view: '', filters: {} }}
+          searchLabel="Filter by model id"
+          onChange={patch => {
+            if (patch.query !== undefined) setFilter(patch.query);
+          }}
+        />
       </Stack>
 
-      {error && (
+      {error && (repriceTarget || revertTarget || historyModel) && (
         <Alert color="danger" sx={{ mb: 1 }} data-testid="model-pricing-error">
           {error}
         </Alert>
       )}
 
-      {isLoading && rows.length === 0 ? (
-        <CircularProgress size="sm" />
-      ) : (
-        // Viewport-relative so the catalog fills the tab; scroll stays internal.
-        <Sheet sx={{ maxHeight: 'calc(100vh - 240px)', minHeight: 320, overflow: 'auto' }}>
-          <Table stickyHeader hoverRow size="sm" data-testid="model-pricing-table">
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>Unit</th>
-                <th>Input</th>
-                <th>Output</th>
-                <th>Audio in</th>
-                <th>Audio out</th>
-                <th>Effective from</th>
-                <th>Source</th>
-                <th aria-label="actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.length === 0 && rows.length > 0 && (
-                <tr>
-                  <td colSpan={9}>
-                    <Typography level="body-sm" color="neutral" data-testid="model-pricing-filter-empty">
-                      No model id matches &quot;{filter}&quot;.
-                    </Typography>
-                  </td>
-                </tr>
-              )}
-              {visibleRows.map(row => {
-                const tier = firstTier(row);
-                const provenance = provenanceOf(row);
-                const source = discoverySource(row);
-                return (
-                  <tr key={`${row.modelId}|${row.unit}`} data-testid={`model-pricing-row-${row.modelId}-${row.unit}`}>
-                    <td>
-                      <Typography level="body-sm">{row.modelId}</Typography>
-                      {Object.keys(row.pricing).length > 1 && (
-                        <Typography level="body-xs" color="neutral">
-                          {Object.keys(row.pricing).length} tiers
-                        </Typography>
-                      )}
-                    </td>
-                    <td>{UNIT_SUFFIX[row.unit] ?? row.unit}</td>
-                    <td style={numberCell}>{formatRate(row.unit, tier.input)}</td>
-                    <td style={numberCell}>{formatRate(row.unit, tier.output)}</td>
-                    <td style={numberCell}>{formatRate(row.unit, tier.audio_input)}</td>
-                    <td style={numberCell}>{formatRate(row.unit, tier.audio_output)}</td>
-                    <td>{new Date(row.effectiveFrom).toLocaleDateString()}</td>
-                    <td>
-                      <Chip
-                        size="sm"
-                        color={SOURCE_CHIP_COLOR[provenance]}
-                        variant="soft"
-                        title={source ? `priced by ${source}` : undefined}
-                        // The color is the visual cue; this is the assertable one.
-                        data-provenance={provenance}
-                        data-testid={`model-pricing-source-${row.modelId}-${row.unit}`}
-                      >
-                        {provenance}
-                      </Chip>
-                    </td>
-                    <td>
-                      <Stack direction="row" spacing={0.5}>
-                        <IconButton
-                          size="sm"
-                          title="Reprice"
-                          aria-label={`Reprice ${row.modelId}`}
-                          onClick={() => openReprice(row)}
-                          data-testid={`model-pricing-reprice-${row.modelId}-${row.unit}`}
-                        >
-                          <EditIcon fontSize="small" />
-                        </IconButton>
-                        <IconButton
-                          size="sm"
-                          title="History"
-                          aria-label={`Price history for ${row.modelId}`}
-                          onClick={() => openHistory(row.modelId)}
-                          data-testid={`model-pricing-history-${row.modelId}-${row.unit}`}
-                        >
-                          <HistoryIcon fontSize="small" />
-                        </IconButton>
-                        {!isSeedRow(row) && (
-                          <IconButton
-                            size="sm"
-                            title="Revert to seed pricing"
-                            aria-label={`Revert ${row.modelId} to seed pricing`}
-                            onClick={() => setRevertTarget(row)}
-                            data-testid={`model-pricing-revert-${row.modelId}-${row.unit}`}
-                          >
-                            <ReplayIcon fontSize="small" />
-                          </IconButton>
-                        )}
-                      </Stack>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
-        </Sheet>
-      )}
-
-      <Modal open={repriceTarget !== null} onClose={() => setRepriceTarget(null)}>
-        <ModalDialog sx={{ minWidth: 420 }} data-testid="reprice-modal">
-          <Typography level="title-md">Reprice {repriceTarget?.modelId}</Typography>
-          {error && (
-            // pre-line: a guardrail rejection enumerates one violation per
-            // line, and every line has to be readable before "Apply anyway".
-            <Alert color="danger" size="sm" sx={{ whiteSpace: 'pre-line' }} data-testid="reprice-modal-error">
-              {error}
-            </Alert>
-          )}
-          <Typography level="body-sm" color="neutral" data-testid="reprice-unit-help">
-            Raw provider cost in USD {repriceUnitLabel}, as providers publish it. This appends a new operator row taking
-            effect immediately; seeding will no longer manage this model until reverted.
-          </Typography>
-          <Stack spacing={1} sx={{ mt: 1 }}>
-            {Object.entries(draftRates).map(([threshold, fields]) => (
-              <Box key={threshold}>
-                {Object.keys(draftRates).length > 1 && (
+      <DataTable
+        label="Model pricing"
+        testId="model-pricing-table"
+        rows={visibleRows}
+        getRowId={row => `${row.modelId}|${row.unit}`}
+        rowTestId={row => `model-pricing-row-${row.modelId}-${row.unit}`}
+        loading={isLoading}
+        error={!repriceTarget && !revertTarget && !historyModel ? (error ?? undefined) : undefined}
+        onRetry={() => void fetchRows()}
+        pagination={false}
+        minWidth="64rem"
+        maxHeight="calc(100vh - 240px)"
+        empty={
+          filter ? (
+            <Typography data-testid="model-pricing-filter-empty">No model id matches &quot;{filter}&quot;.</Typography>
+          ) : undefined
+        }
+        columns={[
+          {
+            id: 'model',
+            label: 'Model',
+            render: row => (
+              <>
+                {row.modelId}
+                {Object.keys(row.pricing).length > 1 && (
                   <Typography level="body-xs" color="neutral">
-                    Tier threshold {Number(threshold).toLocaleString()} tokens
+                    {Object.keys(row.pricing).length} tiers
                   </Typography>
                 )}
-                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                  {Object.entries(fields).map(([field, raw]) => (
-                    <FormControl key={field} sx={{ width: 130 }}>
-                      <FormLabel>
-                        {RATE_LABELS[field as RateField]} {UNIT_FIELD_SUFFIX[repriceUnit] ?? repriceUnit}
-                      </FormLabel>
-                      <Input
-                        size="sm"
-                        value={raw}
-                        onChange={e => editRate(threshold, field, e.target.value)}
-                        slotProps={{ input: { 'data-testid': `reprice-rate-${threshold}-${field}` } }}
-                      />
-                    </FormControl>
-                  ))}
-                </Stack>
-                <Typography level="body-xs" color="neutral" data-testid={`reprice-markup-${threshold}`}>
-                  At the published {getPriceMargin()}x markup a user pays about {markedUpRate(fields.input)} in /{' '}
-                  {markedUpRate(fields.output)} out {repriceUnitLabel}. Entered rates stay raw cost.
-                </Typography>
-              </Box>
-            ))}
-            <FormControl required>
-              <FormLabel>Note (audit trail: where does this price come from?)</FormLabel>
-              <Textarea
-                minRows={2}
-                value={note}
-                onChange={e => setNote(e.target.value)}
-                slotProps={{ textarea: { 'data-testid': 'reprice-note-input' } }}
-              />
-            </FormControl>
-            <Stack direction="row" spacing={1} justifyContent="flex-end">
-              <Button variant="plain" color="neutral" onClick={() => setRepriceTarget(null)}>
-                Cancel
-              </Button>
-              <Button
-                disabled={note.trim() === '' || draftInvalid || isSaving}
-                loading={isSaving}
-                onClick={() => submitReprice()}
-                data-testid="reprice-save-btn"
+              </>
+            ),
+          },
+          { id: 'unit', label: 'Unit', render: row => UNIT_SUFFIX[row.unit] ?? row.unit },
+          { id: 'input', label: 'Input', numeric: true, render: row => formatRate(row.unit, firstTier(row).input) },
+          { id: 'output', label: 'Output', numeric: true, render: row => formatRate(row.unit, firstTier(row).output) },
+          {
+            id: 'audio-in',
+            label: 'Audio in',
+            numeric: true,
+            render: row => formatRate(row.unit, firstTier(row).audio_input),
+          },
+          {
+            id: 'audio-out',
+            label: 'Audio out',
+            numeric: true,
+            render: row => formatRate(row.unit, firstTier(row).audio_output),
+          },
+          { id: 'effective', label: 'Effective from', render: row => new Date(row.effectiveFrom).toLocaleDateString() },
+          {
+            id: 'source',
+            label: 'Source',
+            render: row => (
+              <Chip
+                size="sm"
+                color={SOURCE_CHIP_COLOR[provenanceOf(row)]}
+                variant="soft"
+                title={discoverySource(row) ? `priced by ${discoverySource(row)}` : undefined}
+                data-provenance={provenanceOf(row)}
+                data-testid={`model-pricing-source-${row.modelId}-${row.unit}`}
               >
-                Append price row
-              </Button>
-              {confirmToken !== null && (
-                <Button
-                  color="danger"
-                  disabled={note.trim() === '' || draftInvalid || isSaving}
-                  loading={isSaving}
-                  onClick={() => submitReprice(confirmToken)}
-                  data-testid="reprice-confirm-band-btn"
-                >
-                  Apply anyway
-                </Button>
-              )}
-            </Stack>
-          </Stack>
-        </ModalDialog>
-      </Modal>
+                {provenanceOf(row)}
+              </Chip>
+            ),
+          },
+        ]}
+        rowActions={row => (
+          <>
+            <IconButton
+              size="sm"
+              title="Reprice"
+              aria-label={`Reprice ${row.modelId}`}
+              onClick={() => openReprice(row)}
+              data-testid={`model-pricing-reprice-${row.modelId}-${row.unit}`}
+            >
+              <EditIcon fontSize="small" />
+            </IconButton>
+            <IconButton
+              size="sm"
+              title="History"
+              aria-label={`Price history for ${row.modelId}`}
+              onClick={() => void openHistory(row.modelId)}
+              data-testid={`model-pricing-history-${row.modelId}-${row.unit}`}
+            >
+              <HistoryIcon fontSize="small" />
+            </IconButton>
+            {!isSeedRow(row) && (
+              <IconButton
+                size="sm"
+                title="Revert to seed pricing"
+                aria-label={`Revert ${row.modelId} to seed pricing`}
+                onClick={() => setRevertTarget(row)}
+                data-testid={`model-pricing-revert-${row.modelId}-${row.unit}`}
+              >
+                <ReplayIcon fontSize="small" />
+              </IconButton>
+            )}
+          </>
+        )}
+      />
 
-      <Modal open={revertTarget !== null} onClose={() => setRevertTarget(null)}>
-        <ModalDialog data-testid="revert-modal">
-          <Typography level="title-md">Revert {revertTarget?.modelId} to seed pricing?</Typography>
-          {error && (
-            <Alert color="danger" size="sm" data-testid="revert-modal-error">
-              {error}
-            </Alert>
-          )}
-          <Typography level="body-sm" color="neutral">
-            Appends the adapter table&apos;s current rates under the seed note, so future adapter reprices flow to this
-            model automatically again. The operator row stays in history.
-          </Typography>
-          <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
-            <Button variant="plain" color="neutral" onClick={() => setRevertTarget(null)}>
+      <AdminDialog
+        open={repriceTarget !== null}
+        onClose={() => setRepriceTarget(null)}
+        title={`Reprice ${repriceTarget?.modelId ?? ''}`}
+        width={500}
+        data-testid="reprice-modal"
+      >
+        {error && (
+          // pre-line: a guardrail rejection enumerates one violation per
+          // line, and every line has to be readable before "Apply anyway".
+          <Alert color="danger" size="sm" sx={{ whiteSpace: 'pre-line' }} data-testid="reprice-modal-error">
+            {error}
+          </Alert>
+        )}
+        <Typography level="body-sm" color="neutral" data-testid="reprice-unit-help">
+          Raw provider cost in USD {repriceUnitLabel}, as providers publish it. This appends a new operator row taking
+          effect immediately; seeding will no longer manage this model until reverted.
+        </Typography>
+        <Stack spacing={1} sx={{ mt: 1 }}>
+          {Object.entries(draftRates).map(([threshold, fields]) => (
+            <Box key={threshold}>
+              {Object.keys(draftRates).length > 1 && (
+                <Typography level="body-xs" color="neutral">
+                  Tier threshold {Number(threshold).toLocaleString()} tokens
+                </Typography>
+              )}
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                {Object.entries(fields).map(([field, raw]) => (
+                  <FormControl key={field} sx={{ width: 130 }}>
+                    <FormLabel>
+                      {RATE_LABELS[field as RateField]} {UNIT_FIELD_SUFFIX[repriceUnit] ?? repriceUnit}
+                    </FormLabel>
+                    <Input
+                      size="sm"
+                      value={raw}
+                      onChange={e => editRate(threshold, field, e.target.value)}
+                      slotProps={{ input: { 'data-testid': `reprice-rate-${threshold}-${field}` } }}
+                    />
+                  </FormControl>
+                ))}
+              </Stack>
+              <Typography level="body-xs" color="neutral" data-testid={`reprice-markup-${threshold}`}>
+                At the published {getPriceMargin()}x markup a user pays about {markedUpRate(fields.input)} in /{' '}
+                {markedUpRate(fields.output)} out {repriceUnitLabel}. Entered rates stay raw cost.
+              </Typography>
+            </Box>
+          ))}
+          <FormControl required>
+            <FormLabel>Note (audit trail: where does this price come from?)</FormLabel>
+            <Textarea
+              minRows={2}
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              slotProps={{ textarea: { 'data-testid': 'reprice-note-input' } }}
+            />
+          </FormControl>
+          <Stack direction="row" spacing={1} justifyContent="flex-end">
+            <Button variant="plain" color="neutral" onClick={() => setRepriceTarget(null)}>
               Cancel
             </Button>
-            <Button color="warning" loading={isSaving} onClick={submitRevert} data-testid="revert-confirm-btn">
-              Revert
+            <Button
+              disabled={note.trim() === '' || draftInvalid || isSaving}
+              loading={isSaving}
+              onClick={() => submitReprice()}
+              data-testid="reprice-save-btn"
+            >
+              Append price row
             </Button>
+            {confirmToken !== null && (
+              <Button
+                color="danger"
+                disabled={note.trim() === '' || draftInvalid || isSaving}
+                loading={isSaving}
+                onClick={() => submitReprice(confirmToken)}
+                data-testid="reprice-confirm-band-btn"
+              >
+                Apply anyway
+              </Button>
+            )}
           </Stack>
-        </ModalDialog>
-      </Modal>
+        </Stack>
+      </AdminDialog>
+
+      <AdminDialog
+        open={revertTarget !== null}
+        onClose={() => setRevertTarget(null)}
+        title={`Revert ${revertTarget?.modelId ?? ''} to seed pricing?`}
+        data-testid="revert-modal"
+      >
+        {error && (
+          <Alert color="danger" size="sm" data-testid="revert-modal-error">
+            {error}
+          </Alert>
+        )}
+        <Typography level="body-sm" color="neutral">
+          Appends the adapter table&apos;s current rates under the seed note, so future adapter reprices flow to this
+          model automatically again. The operator row stays in history.
+        </Typography>
+        <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
+          <Button variant="plain" color="neutral" onClick={() => setRevertTarget(null)}>
+            Cancel
+          </Button>
+          <Button color="warning" loading={isSaving} onClick={submitRevert} data-testid="revert-confirm-btn">
+            Revert
+          </Button>
+        </Stack>
+      </AdminDialog>
 
       <Drawer anchor="right" open={historyModel !== null} onClose={() => setHistoryModel(null)} size="md">
         <Box sx={{ p: 2 }} data-testid="history-drawer">
