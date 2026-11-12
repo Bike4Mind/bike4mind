@@ -1,4 +1,4 @@
-import { FC, useEffect, useState } from 'react';
+import { FC, useEffect, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -22,6 +22,7 @@ import {
   useTutorialDrafts,
   type TutorialDraftAction,
 } from '@client/app/hooks/tutorials/useTutorialDrafts';
+import { ADMIN_REASON_PRESETS, ActionDialog } from '@client/app/components/admin/shared';
 import { downloadModuleBundle } from './tutorialOverrideExport';
 
 const REASON_MAX = 500;
@@ -101,6 +102,8 @@ function buffersOf(draft: TutorialDraftView): Buffers {
   };
 }
 
+const sameBuffers = (a: Buffers, b: Buffers) => JSON.stringify(a) === JSON.stringify(b);
+
 const Rules: FC<{ rules: ValidationIssue[]; testid: string }> = ({ rules, testid }) =>
   rules.length === 0 ? null : (
     <Stack gap={0.25} data-testid={testid}>
@@ -129,57 +132,111 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
   const [openId, setOpenId] = useState<string | null>(null);
   const [buffers, setBuffers] = useState<Buffers | null>(null);
   const [refused, setRefused] = useState<ValidationIssue[]>([]);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [changedSince, setChangedSince] = useState(false);
+  const seeded = useRef<{ moduleId: string; contentSeq: number; buffers: Buffers } | null>(null);
   const reasonGiven = reason.trim().length > 0;
   const draft = drafts.data?.drafts.find(d => d.moduleId === openId);
   const asksVisibility = drafts.data?.choices.visibility ?? false;
   const showCanvasNode = (drafts.data?.choices.canvasTabs.length ?? 0) > 0;
 
+  const original = draft ? buffersOf(draft) : null;
+  const dirty = !!buffers && !!original && !sameBuffers(buffers, original);
+
+  const seed = (from: TutorialDraftView) => {
+    const next = buffersOf(from);
+    seeded.current = { moduleId: from.moduleId, contentSeq: from.contentSeq, buffers: next };
+    setBuffers(next);
+    setChangedSince(false);
+  };
+
+  // A server-side change must not overwrite what the admin is typing: a dirty editor keeps its buffers and warns.
   useEffect(() => {
-    setBuffers(draft ? buffersOf(draft) : null);
+    if (!draft) {
+      seeded.current = null;
+      setBuffers(null);
+      setChangedSince(false);
+      setRefused([]);
+      return;
+    }
+    const last = seeded.current;
+    if (last && last.moduleId === draft.moduleId) {
+      if (last.contentSeq === draft.contentSeq) return;
+      if (buffers && !sameBuffers(buffers, last.buffers)) {
+        seeded.current = { ...last, contentSeq: draft.contentSeq };
+        setChangedSince(true);
+        return;
+      }
+    }
+    seed(draft);
     setRefused([]);
   }, [draft?.moduleId, draft?.contentSeq]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const run = (input: TutorialDraftAction) => {
     setRefused([]);
     act.mutate(input, {
-      onSuccess: () => {
+      onSuccess: data => {
+        const written = data?.drafts?.find(d => d.moduleId === input.moduleId);
+        if (written && (input.action === 'save' || input.action === 'sheet')) seed(written);
         if (input.action === 'capture') {
           setOpenId(input.moduleId);
           setCapture({ sessionId: '', moduleId: '', title: '' });
           setCaptureVisibility(NO_VISIBILITY);
         }
-        if (input.action === 'delete') setOpenId(null);
+        if (input.action === 'delete') {
+          setOpenId(null);
+          setDeleteOpen(false);
+        }
       },
       onError: error => setRefused(error instanceof TutorialDraftRefused ? error.rules : []),
     });
   };
 
+  const replyEmpty =
+    !!draft &&
+    !!buffers &&
+    Object.entries(buffers.replies).some(
+      ([turn, reply]) => reply !== draft.content.transcript[Number(turn)]?.reply && reply.trim() === ''
+    );
+  const visibilityMissing = asksVisibility && !!buffers && !visibilityOf(buffers.visibility);
+
   const save = () => {
-    if (!draft || !buffers) return;
-    const visibilityChanged =
-      JSON.stringify(visibilityOf(buffers.visibility)) !== JSON.stringify(draft.content.visibility ?? null);
+    if (!draft || !buffers || !original) return;
     let steps: unknown;
-    try {
-      steps = JSON.parse(buffers.steps);
-    } catch {
-      setRefused([{ rule: 'draft-step', message: 'The steps are not valid JSON' }]);
-      return;
+    if (buffers.steps !== original.steps) {
+      try {
+        steps = JSON.parse(buffers.steps);
+      } catch {
+        setRefused([{ rule: 'draft-step', message: 'The steps are not valid JSON' }]);
+        return;
+      }
     }
+    const attachChanged = buffers.attachTurn !== original.attachTurn;
     run({
       action: 'save',
       moduleId: draft.moduleId,
       contentSeq: draft.contentSeq,
       reason,
-      title: buffers.title,
-      pitch: buffers.pitch,
-      ...(buffers.canvasNodeId && { canvasNodeId: buffers.canvasNodeId }),
-      ...(asksVisibility && visibilityChanged && { visibility: visibilityOf(buffers.visibility) }),
-      finale: { title: buffers.finaleTitle, body: buffers.finaleBody },
-      steps,
-      replies: Object.entries(buffers.replies)
-        .filter(([turn, reply]) => reply !== draft.content.transcript[Number(turn)]?.reply)
-        .map(([turn, reply]) => ({ turn: Number(turn), reply })),
-      attachTurn: buffers.attachTurn !== null && buffers.attachTurn >= 0 ? buffers.attachTurn : null,
+      ...(buffers.title !== original.title && { title: buffers.title }),
+      ...(buffers.pitch !== original.pitch && { pitch: buffers.pitch }),
+      ...(buffers.canvasNodeId !== original.canvasNodeId &&
+        buffers.canvasNodeId && { canvasNodeId: buffers.canvasNodeId }),
+      ...(asksVisibility &&
+        JSON.stringify(buffers.visibility) !== JSON.stringify(original.visibility) && {
+          visibility: visibilityOf(buffers.visibility),
+        }),
+      ...((buffers.finaleTitle !== original.finaleTitle || buffers.finaleBody !== original.finaleBody) && {
+        finale: { title: buffers.finaleTitle, body: buffers.finaleBody },
+      }),
+      ...(steps !== undefined && { steps }),
+      ...(JSON.stringify(buffers.replies) !== JSON.stringify(original.replies) && {
+        replies: Object.entries(buffers.replies)
+          .filter(([turn, reply]) => reply !== draft.content.transcript[Number(turn)]?.reply)
+          .map(([turn, reply]) => ({ turn: Number(turn), reply })),
+      }),
+      ...(attachChanged && {
+        attachTurn: buffers.attachTurn !== null && buffers.attachTurn >= 0 ? buffers.attachTurn : null,
+      }),
     });
   };
 
@@ -277,7 +334,7 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
       {drafts.isLoading ? (
         <CircularProgress size="sm" />
       ) : drafts.isError ? (
-        <Typography level="body-sm" color="danger">
+        <Typography level="body-sm" color="danger" data-testid="tutorial-drafts-error">
           Could not read the tutorial drafts.
         </Typography>
       ) : (
@@ -361,11 +418,26 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
                 type="file"
                 accept=".csv,text/csv"
                 data-testid="tutorial-draft-sheet-input"
-                disabled={!reasonGiven}
-                onChange={event => void uploadSheet(event.target.files?.[0])}
+                disabled={!reasonGiven || dirty}
+                onChange={event => {
+                  const file = event.target.files?.[0];
+                  event.target.value = '';
+                  void uploadSheet(file);
+                }}
               />
             </Button>
-            <Button size="sm" variant="outlined" data-testid="tutorial-draft-export" onClick={exportDraft}>
+            {dirty && (
+              <Typography level="body-xs" sx={{ color: 'text.tertiary' }} data-testid="tutorial-draft-sheet-hint">
+                Save or discard your edits before uploading a sheet.
+              </Typography>
+            )}
+            <Button
+              size="sm"
+              variant="outlined"
+              data-testid="tutorial-draft-export"
+              disabled={dirty}
+              onClick={exportDraft}
+            >
               Export
             </Button>
             <Button
@@ -374,11 +446,41 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
               color="danger"
               data-testid="tutorial-draft-delete"
               disabled={!reasonGiven || act.isPending}
-              onClick={() => run({ action: 'delete', moduleId: draft.moduleId, reason })}
+              onClick={() => setDeleteOpen(true)}
             >
               Delete
             </Button>
           </Stack>
+          <ActionDialog
+            open={deleteOpen}
+            onClose={() => setDeleteOpen(false)}
+            title="Delete tutorial draft"
+            description={
+              <>
+                Deletes <b>{draft.title}</b> for good. Its content stays in the change log, but this cannot be undone
+                here.
+              </>
+            }
+            reasonPresets={ADMIN_REASON_PRESETS.tutorialDraftDelete}
+            tone="danger"
+            typedConfirm={{ expected: draft.moduleId, noun: 'module id' }}
+            confirmLabel="Delete draft"
+            pending={act.isPending}
+            onConfirm={deleteReason =>
+              run({ action: 'delete', moduleId: draft.moduleId, contentSeq: draft.contentSeq, reason: deleteReason })
+            }
+            data-testid="tutorial-draft-delete-dialog"
+          />
+          {changedSince && (
+            <Stack direction="row" gap={1} alignItems="center" data-testid="tutorial-draft-changed-warning">
+              <Typography level="body-sm" color="warning">
+                This draft changed since you started editing. Saving will replace that change.
+              </Typography>
+              <Button size="sm" variant="outlined" data-testid="tutorial-draft-discard" onClick={() => seed(draft)}>
+                Discard my edits
+              </Button>
+            </Stack>
+          )}
 
           <Stack gap={1}>
             <FormControl>
@@ -490,7 +592,7 @@ const TutorialDraftsCard: FC<TutorialDraftsCardProps> = ({ apiBase, owner }) => 
               <Button
                 size="sm"
                 data-testid="tutorial-draft-save"
-                disabled={!reasonGiven || act.isPending}
+                disabled={!reasonGiven || act.isPending || !dirty || visibilityMissing || replyEmpty}
                 onClick={save}
               >
                 Save (clears approval)

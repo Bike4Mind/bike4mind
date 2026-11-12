@@ -56,6 +56,9 @@ export function useTutorialDraftAction(apiBase: string) {
       toast.success(`${input.moduleId}: ${input.action} done`);
     },
     onError: error => {
+      if (error instanceof TutorialDraftRefused && error.code === 'STALE') {
+        void queryClient.invalidateQueries({ queryKey: tutorialDraftsKey(apiBase) });
+      }
       toast.error(error instanceof TutorialDraftRefused ? error.message : 'Could not change the tutorial draft');
     },
   });

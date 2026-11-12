@@ -31,6 +31,14 @@ describe('moduleBundleOf', () => {
   });
 });
 
+describe('moduleBundleOf with another owner', () => {
+  it('stamps owner alpha, not core', () => {
+    const bundle = moduleBundleOf(content, 'alpha', NOW);
+    expect(bundle.owner).toBe('alpha');
+    expect(ModuleBundleSchema.parse(bundle).owner).toBe('alpha');
+  });
+});
+
 describe('overrideBundleOf', () => {
   const row = {
     moduleId: 'alpha',

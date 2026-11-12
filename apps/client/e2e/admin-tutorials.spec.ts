@@ -24,6 +24,7 @@ test.describe('Admin - Tutorials tab', () => {
     const drafts = page.getByTestId('tutorial-drafts-card');
     await expect(drafts).toBeVisible();
     await expect(drafts.getByTestId('tutorial-capture-submit')).toBeVisible();
+    await expect(drafts.getByTestId('tutorial-drafts-error')).toHaveCount(0);
 
     const toggle = page.getByTestId('tutorials-switch');
     await expect(toggle).toBeAttached();
