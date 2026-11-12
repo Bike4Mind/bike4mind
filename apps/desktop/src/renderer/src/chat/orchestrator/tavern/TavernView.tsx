@@ -5,9 +5,15 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { SESSION_SETUP_LABEL } from '@shared/chat';
 import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
-import { describeAgentStates } from '../OrchestrateToggle';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
-import { AGENT_STATE_LABEL, spawnerName, type AgentState, type AgentView, type ParentView } from '../roster';
+import {
+  AGENT_STATE_LABEL,
+  describeAgentStates,
+  spawnerName,
+  type AgentState,
+  type AgentView,
+  type ParentView,
+} from '../roster';
 import type { AgentPersona } from '@shared/agentPersona';
 import { INNKEEPER_GREETING, OrderSlip, ReplyBubble } from './InnkeeperDesk';
 import { useAgentAnnouncements } from './announcements';
