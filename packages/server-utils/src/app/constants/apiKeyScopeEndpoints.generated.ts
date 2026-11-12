@@ -383,6 +383,9 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/v1/skills/market/listings/:id',
   ],
   [ApiKeyScope.SKILLS_WRITE]: [
+    'GET|POST /api/skills',
+    'GET|PUT|DELETE /api/skills/:id',
+    'PUT /api/skills/:id/share',
     'POST /api/v1/skills',
     'GET|PUT /api/v1/skills/:id',
     'GET|POST /api/v1/skills/market/listings',
