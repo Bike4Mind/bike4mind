@@ -147,9 +147,9 @@ export enum ApiKeyScope {
   /**
    * Author on the Skill Market from a script or the CLI (`/api/v1/skills/market/listings*`):
    * publish a listing, submit a new version, list your own listings, rescan, withdraw, browse, read
-   * a listing, and import one into your library. Not confined, because `b4m skills push --publish`
-   * upserts the skill through the scope-less `/api/skills` with the same key, which a confined key is
-   * denied. Kept out of the New-Key modal's Read & write preset despite its suffix, since publishing
+   * a listing, and import one into your library. Not confined: `b4m skills push --publish` upserts the
+   * skill through `/api/skills`, which now requires skills:write, and a confined key would be refused
+   * there. Kept out of the New-Key modal's Read & write preset despite its suffix, since publishing
    * is outward-facing (UserApiKeysTab.tsx).
    */
   SKILLS_WRITE = 'skills:write',
