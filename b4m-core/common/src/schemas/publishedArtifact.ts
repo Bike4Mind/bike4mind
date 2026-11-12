@@ -583,7 +583,15 @@ export type UploadUrlRequest = z.infer<typeof UploadUrlRequestSchema>;
 
 export const UploadUrlResponseSchema = z.object({
   draftId: z.uuid(),
-  uploadUrls: z.array(z.object({ path: z.string(), url: z.string(), expiresAt: z.string() })),
+  uploadUrls: z.array(
+    z.object({
+      path: z.string(),
+      url: z.string(),
+      expiresAt: z.string(),
+      /** Headers the PUT must send. Absent for a presigned URL, which carries its own signature. */
+      headers: z.record(z.string(), z.string()).optional(),
+    })
+  ),
 });
 export type UploadUrlResponse = z.infer<typeof UploadUrlResponseSchema>;
 

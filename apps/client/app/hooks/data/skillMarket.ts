@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import { SKILL_SHARE_TOKEN_HEADER } from '@bike4mind/common';
 import type {
   ISkillBundle,
   ISkillHonestSummary,
@@ -107,10 +108,9 @@ export const useListingDetail = (args: { id?: string; token?: string }) =>
   useQuery({
     queryKey: ['skill-market', 'listing', args.id ?? null, args.id ? null : (args.token ?? null)],
     queryFn: async () => {
-      const url = args.id
-        ? `/api/skills/market/${args.id}`
-        : `/api/skills/market/by-token/${encodeURIComponent(args.token ?? '')}`;
-      return (await api.get<ListingDetail>(url)).data;
+      if (args.id) return (await api.get<ListingDetail>(`/api/skills/market/${args.id}`)).data;
+      const headers = { [SKILL_SHARE_TOKEN_HEADER]: args.token ?? '' };
+      return (await api.get<ListingDetail>('/api/skills/market/by-token', { headers })).data;
     },
     enabled: Boolean(args.id || args.token),
     retry: false,
