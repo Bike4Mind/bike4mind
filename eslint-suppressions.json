@@ -4194,7 +4194,7 @@
   },
   "b4m-core/services/src/userService/register.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 10
+      "count": 9
     }
   },
   "b4m-core/services/src/userService/requestEmailChange.test.ts": {
