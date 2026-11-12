@@ -45,10 +45,14 @@ export const grantsFor = (
 };
 
 /** A one-line summary of a key's reach for the key table. */
-export const describeReach = (grants: readonly OrgApiKeyGrant[], groupNames: ReadonlyMap<string, string>): string => {
+export const describeReach = (
+  grants: readonly OrgApiKeyGrant[],
+  groupNames: ReadonlyMap<string, string> | undefined
+): string => {
   const mode = reachModeOf(grants);
   if (mode === 'organization') return 'All org-shared content';
   if (mode === 'none') return 'Own content only';
+  if (!groupNames) return `${grants.length} selected group(s)`;
   return grants
     .flatMap(grant => (grant.resourceType === 'group' ? [groupNames.get(grant.resourceId) ?? 'Removed group'] : []))
     .join(', ');
@@ -78,6 +82,8 @@ export const OrgApiKeyAccessFields: FC<{
 }> = ({ organizationId, value, onChange }) => {
   const { data: options, isLoading, isError } = useOrgApiKeyOptions(organizationId);
   const groupIds = value.grants.flatMap(grant => (grant.resourceType === 'group' ? [grant.resourceId] : []));
+  // Remembers the group picks across a switch to another reach mode and back.
+  const [lastGroupIds, setLastGroupIds] = useState<string[]>(groupIds);
 
   if (isLoading) return <CircularProgress size="sm" />;
   if (isError || !options) {
@@ -93,6 +99,7 @@ export const OrgApiKeyAccessFields: FC<{
     option => options.scopes.includes(option.value) || value.scopes.includes(option.value)
   );
   const setReach = (nextMode: OrgApiKeyReachMode, nextGroupIds: readonly string[]) => {
+    if (nextMode === 'groups') setLastGroupIds([...nextGroupIds]);
     onChange({ ...value, mode: nextMode, grants: grantsFor(nextMode, organizationId, nextGroupIds) });
   };
 
@@ -120,7 +127,7 @@ export const OrgApiKeyAccessFields: FC<{
         <FormLabel>Access to shared content</FormLabel>
         <RadioGroup
           value={value.mode}
-          onChange={event => setReach(event.target.value as OrgApiKeyReachMode, groupIds)}
+          onChange={event => setReach(event.target.value as OrgApiKeyReachMode, lastGroupIds)}
           data-testid="org-api-key-reach"
         >
           <Radio

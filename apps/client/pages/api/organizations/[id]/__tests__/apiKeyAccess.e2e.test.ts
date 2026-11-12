@@ -11,6 +11,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   ApiKeyScope,
+  ApiKeyStatus,
   Permission,
   type IOrgApiKeySecretResponse,
   type IOrgApiKeyView,
@@ -230,6 +231,88 @@ describe('PATCH /api/organizations/:id/api-keys/:keyId', () => {
     expect(updated.statusCode).toBe(200);
     expect((await storedKey(key.id)).scopes).toEqual([gatedScope]);
     expect(resolveOrgScopeAccess).toHaveBeenCalledWith(orgId);
+  });
+
+  it('rolls the change back when its audit row cannot be written', async () => {
+    const { creator, orgId, researchId, salesId } = await seedOrg();
+    const key = await mintKey(creator.id, orgId, [groupGrant(researchId)]);
+    recordAdminActionFromRequest.mockRejectedValueOnce(new Error('audit down'));
+
+    await expect(
+      patch(creator.id, orgId, key.id, {
+        scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.READ_PROJECTS],
+        grants: [groupGrant(salesId)],
+      })
+    ).rejects.toThrow('audit down');
+
+    const stored = await storedKey(key.id);
+    expect(stored.scopes).toEqual([ApiKeyScope.AI_CHAT]);
+    expect(stored.orgOwned?.grants.map(({ resourceId }) => resourceId)).toEqual([researchId]);
+  });
+
+  it('refuses a key that is no longer live: disabled or past its expiry (400)', async () => {
+    const { creator, orgId, researchId } = await seedOrg();
+    const disabled = await mintKey(creator.id, orgId);
+    const expired = await mintKey(creator.id, orgId);
+    await userApiKeyRepository.update({ id: disabled.id, status: ApiKeyStatus.DISABLED });
+    await userApiKeyRepository.update({ id: expired.id, expiresAt: new Date(Date.now() - 60_000) });
+
+    expect((await patch(creator.id, orgId, disabled.id, { grants: [groupGrant(researchId)] })).statusCode).toBe(400);
+    expect((await patch(creator.id, orgId, expired.id, { grants: [groupGrant(researchId)] })).statusCode).toBe(400);
+    expect((await storedKey(expired.id)).orgOwned?.grants ?? []).toHaveLength(0);
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('drops a held grant whose group was deleted, without blocking the rest of the edit', async () => {
+    const { creator, orgId, researchId, salesId } = await seedOrg();
+    const key = await mintKey(creator.id, orgId, [groupGrant(researchId), groupGrant(salesId)]);
+    await Group.deleteOne({ _id: researchId });
+
+    const updated = await patch(creator.id, orgId, key.id, {
+      scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.READ_PROJECTS],
+      grants: [groupGrant(researchId), groupGrant(salesId)],
+    });
+
+    expect(updated.statusCode).toBe(200);
+    expect((await storedKey(key.id)).orgOwned?.grants.map(({ resourceId }) => resourceId)).toEqual([salesId]);
+  });
+
+  it('still refuses a new grant on a deleted group the key did not hold (400)', async () => {
+    const { creator, orgId, researchId } = await seedOrg();
+    const key = await mintKey(creator.id, orgId);
+    await Group.deleteOne({ _id: researchId });
+
+    expect((await patch(creator.id, orgId, key.id, { grants: [groupGrant(researchId)] })).statusCode).toBe(400);
+  });
+
+  it('judges only newly added scopes on the plan: a held gated scope survives a grants-only edit', async () => {
+    const { creator, orgId, researchId } = await seedOrg();
+    const key = await mintKey(creator.id, orgId);
+    await userApiKeyRepository.update({ id: key.id, scopes: [ApiKeyScope.AI_CHAT, gatedScope] });
+
+    const kept = await patch(creator.id, orgId, key.id, {
+      scopes: [ApiKeyScope.AI_CHAT, gatedScope],
+      grants: [groupGrant(researchId)],
+    });
+    expect(kept.statusCode).toBe(200);
+    expect((await storedKey(key.id)).scopes).toEqual([ApiKeyScope.AI_CHAT, gatedScope]);
+
+    const otherGated = Object.keys(GATED_API_KEY_SCOPES)[1]!;
+    const added = await patch(creator.id, orgId, key.id, { scopes: [ApiKeyScope.AI_CHAT, gatedScope, otherGated] });
+    expect(added.statusCode).toBe(403);
+    expect((await storedKey(key.id)).scopes).toEqual([ApiKeyScope.AI_CHAT, gatedScope]);
+  });
+
+  it('stores duplicate scopes once', async () => {
+    const { creator, orgId } = await seedOrg();
+    const key = await mintKey(creator.id, orgId);
+
+    const updated = await patch(creator.id, orgId, key.id, {
+      scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.READ_PROJECTS, ApiKeyScope.READ_PROJECTS],
+    });
+
+    expect(updated.statusCode).toBe(200);
+    expect((await storedKey(key.id)).scopes).toEqual([ApiKeyScope.AI_CHAT, ApiKeyScope.READ_PROJECTS]);
   });
 
   it('refuses a grant naming another org or a group outside the org (400)', async () => {

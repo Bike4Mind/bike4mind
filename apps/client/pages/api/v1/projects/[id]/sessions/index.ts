@@ -14,11 +14,10 @@ import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
-import { toPublicProject } from '@server/projects/toPublicProject';
 import { toPublicSession } from '@server/sessions/toPublicSession';
 import { attachSessionsToProject } from '@server/projects/attachSessionsToProject';
 import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
-import { projectItemIdsReadableBy } from '@server/projects/projectItemReach';
+import { projectItemIdsReadableBy, toPublicProjectFor } from '@server/projects/projectItemReach';
 
 const CURSOR_SCOPE = 'v1.projects.sessions';
 
@@ -65,7 +64,7 @@ const addRoute = nextRouteForContract(addProjectSessionsContract, {
   await attachSessionsToProject({ user: req.user, ability: req.ability, logger: req.logger }, id, sessionIds);
 
   // addSessions returns the sessions, not the project, so re-read for the response.
-  return res.json(toPublicProject(await getReadableProject(req.user.id, id)));
+  return res.json(await toPublicProjectFor(req.user, await getReadableProject(req.user.id, id)));
 });
 
 export const config = {

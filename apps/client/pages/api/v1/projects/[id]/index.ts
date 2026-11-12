@@ -19,8 +19,8 @@ import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRa
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
-import { toPublicProject } from '@server/projects/toPublicProject';
 import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { toPublicProjectFor } from '@server/projects/projectItemReach';
 
 // Named so every project id shares one bucket per method instead of one per pathname.
 const perUserRateLimit = (bucket: string) =>
@@ -38,7 +38,7 @@ const getRoute = nextRouteForContract(getProjectContract, {
     { id: req.validatedParams.id },
     { db: { projects: projectRepository, users: requesterScopedUsers(req, userRepository) } }
   );
-  return res.json(toPublicProject(project));
+  return res.json(await toPublicProjectFor(req.user, project));
 });
 
 const updateRoute = nextRouteForContract(updateProjectContract, {
@@ -51,7 +51,7 @@ const updateRoute = nextRouteForContract(updateProjectContract, {
   if (Object.keys(req.validated).length === 0) {
     const owned = await projectRepository.findByIdAndUserId(id, req.user.id);
     if (!owned) throw new NotFoundError('Project not found');
-    return res.json(toPublicProject(owned));
+    return res.json(await toPublicProjectFor(req.user, owned));
   }
 
   let project;
@@ -81,7 +81,7 @@ const updateRoute = nextRouteForContract(updateProjectContract, {
     req.logger
   );
 
-  return res.json(toPublicProject(project));
+  return res.json(await toPublicProjectFor(req.user, project));
 });
 
 const deleteRoute = nextRouteForContract(deleteProjectContract, {

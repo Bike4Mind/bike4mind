@@ -198,7 +198,7 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
   const rotateKey = useRotateOrgApiKey(organizationId);
   const revokeKey = useRevokeOrgApiKey(organizationId);
   const { data: options } = useOrgApiKeyOptions(organizationId);
-  const groupNames = new Map((options?.groups ?? []).map(group => [group.id, group.name]));
+  const groupNames = options ? new Map(options.groups.map(group => [group.id, group.name])) : undefined;
   const [createOpen, setCreateOpen] = useState(false);
   const [secret, setSecret] = useState<{ name: string; key: string } | null>(null);
   const [editing, setEditing] = useState<IOrgApiKeyView | null>(null);

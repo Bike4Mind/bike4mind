@@ -6,6 +6,7 @@ import {
   attachOrgApiKeyReach,
   orgApiKeyReachOf,
   readableGroupIds,
+  withoutOrgApiKeyReach,
   type OrgApiKeyReach,
 } from './orgApiKeyReach';
 
@@ -114,5 +115,18 @@ describe('readableGroupIds', () => {
     const user = attachOrgApiKeyReach({ groups: [] as string[] }, reach([GROUP_A]));
     expect(readableGroupIds(user)).toEqual([GROUP_A]);
     expect(readableGroupIds({ ...user })).toEqual([]);
+  });
+});
+
+describe('withoutOrgApiKeyReach', () => {
+  it('keeps the id and groups and drops the attached reach', () => {
+    const user = attachOrgApiKeyReach({ id: 'u1', groups: [GROUP_A], name: 'x' }, reach([GROUP_B]));
+    expect(orgApiKeyReachOf(user)).toBeDefined();
+
+    const plain = withoutOrgApiKeyReach(user);
+
+    expect(plain).toEqual({ id: 'u1', groups: [GROUP_A] });
+    expect(orgApiKeyReachOf(plain)).toBeUndefined();
+    expect(readableGroupIds(plain)).toEqual([GROUP_A]);
   });
 });

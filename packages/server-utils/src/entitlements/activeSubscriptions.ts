@@ -93,10 +93,12 @@ export async function getRequestActiveSubscriptions(
   if (req.activeSubscriptions && (!options?.strict || req.activeSubscriptionsStrict)) {
     return req.activeSubscriptions;
   }
-  const subscriptions = user.serviceAccountOrganizationId
-    ? await getActiveSubscriptionsForOrganization(user.serviceAccountOrganizationId)
+  // An org service account's plan is its organization's; that read always throws on failure (strict).
+  const orgId = user.serviceAccountOrganizationId;
+  const subscriptions = orgId
+    ? await getActiveSubscriptionsForOrganization(orgId)
     : await getActiveSubscriptionsForUser(user.id, options);
   req.activeSubscriptions = subscriptions;
-  req.activeSubscriptionsStrict = options?.strict === true;
+  req.activeSubscriptionsStrict = !!orgId || options?.strict === true;
   return subscriptions;
 }

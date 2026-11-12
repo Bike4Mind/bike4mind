@@ -1,4 +1,5 @@
 import {
+  ApiKeyStatus,
   type IOrgApiKeyView,
   type IUserApiKeyDocument,
   type IUserDocument,
@@ -95,28 +96,40 @@ export async function assertOrgApiKeyScopesOffered(organizationId: string, scope
   }
 }
 
+/** Rotate and edit apply only to a key that still authenticates: active and not past its expiry. */
+export function assertOrgApiKeyLive(key: Pick<IUserApiKeyDocument, 'status' | 'expiresAt'>, action: string): void {
+  const expired = !!key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now();
+  if (key.status !== ApiKeyStatus.ACTIVE || expired) {
+    throw new BadRequestError(`Only an active key can be ${action}`);
+  }
+}
+
 /**
  * Validates and de-duplicates an org key's grants: an `organization` grant must name this org, a
- * `group` grant one of its live groups. Anything else is a 400 rather than a silently dead grant.
+ * `group` grant one of its live groups. Anything else is a 400 rather than a silently dead grant,
+ * except a group grant the key already held (`held`) whose group has since been deleted: that one
+ * is dropped, so an edit of an older key is never blocked by a group nobody can pick any more.
  */
 export async function normalizeOrgApiKeyGrants(
   organizationId: string,
-  grants: readonly OrgApiKeyGrant[]
+  grants: readonly OrgApiKeyGrant[],
+  held: readonly OrgApiKeyGrant[] = []
 ): Promise<OrgApiKeyGrant[]> {
   if (grants.some(grant => grant.resourceType === 'organization' && grant.resourceId !== organizationId)) {
     throw new BadRequestError('An organization grant must name this organization');
   }
   const groupIds = grants.flatMap(grant => (grant.resourceType === 'group' ? [grant.resourceId] : []));
+  let orgGroupIds = new Set<string>();
   if (groupIds.length > 0) {
-    const orgGroupIds = new Set(
-      (await groupRepository.findByOrganization(organizationId)).map(group => String(group.id))
-    );
-    if (groupIds.some(id => !orgGroupIds.has(id))) {
+    orgGroupIds = new Set((await groupRepository.findByOrganization(organizationId)).map(group => String(group.id)));
+    const heldGroupIds = new Set(held.flatMap(grant => (grant.resourceType === 'group' ? [grant.resourceId] : [])));
+    if (groupIds.some(id => !orgGroupIds.has(id) && !heldGroupIds.has(id))) {
       throw new BadRequestError("A group grant must name one of this organization's groups");
     }
   }
   const seen = new Set<string>();
   return grants.filter(grant => {
+    if (grant.resourceType === 'group' && !orgGroupIds.has(grant.resourceId)) return false;
     const key = `${grant.resourceType}:${grant.resourceId}`;
     if (seen.has(key)) return false;
     seen.add(key);

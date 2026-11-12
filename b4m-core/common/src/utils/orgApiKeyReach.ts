@@ -56,3 +56,15 @@ export function readableGroupIds(user: { groups?: readonly string[] | null }): s
   const granted = orgApiKeyReachOf(user)?.readGroupIds ?? [];
   return granted.length === 0 ? [...own] : [...new Set([...own, ...granted])];
 }
+
+/**
+ * The caller's own access, with any org key reach left out. For gates that admit an item INTO
+ * something the caller owns (project create, add files/sessions/system prompts): a project's
+ * invite acceptance re-shares every item it holds, so admitting a granted item there would turn a
+ * read-only grant into a share. A plain copy, so the non-enumerable reach does not come with it.
+ */
+export function withoutOrgApiKeyReach<T extends { id: string; groups?: readonly string[] | null }>(
+  user: T
+): Pick<T, 'id' | 'groups'> {
+  return { id: user.id, groups: user.groups };
+}

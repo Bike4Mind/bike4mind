@@ -15,10 +15,9 @@ import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { toPublicFileSummary } from '@server/files/toPublicFile';
-import { toPublicProject } from '@server/projects/toPublicProject';
 import { addFilesToProject } from '@server/projects/projectContentMutations';
 import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
-import { projectItemIdsReadableBy } from '@server/projects/projectItemReach';
+import { projectItemIdsReadableBy, toPublicProjectFor } from '@server/projects/projectItemReach';
 
 const CURSOR_SCOPE = 'v1.projects.files';
 
@@ -61,7 +60,7 @@ const addRoute = nextRouteForContract(addProjectFilesContract, {
     req.validatedParams.id,
     fileIds
   );
-  return res.json(toPublicProject(project));
+  return res.json(await toPublicProjectFor(req.user, project));
 });
 
 export const config = {

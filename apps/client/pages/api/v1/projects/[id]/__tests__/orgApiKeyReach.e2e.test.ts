@@ -56,6 +56,8 @@ let getHandler: any;
 let filesHandler: any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let sessionsHandler: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let listCreateHandler: any;
 
 beforeAll(async () => {
   mongoServer = await createMongoServer();
@@ -63,6 +65,7 @@ beforeAll(async () => {
   getHandler = (await import('../index')).default;
   filesHandler = (await import('../files/index')).default;
   sessionsHandler = (await import('../sessions/index')).default;
+  listCreateHandler = (await import('../../index')).default;
 });
 
 beforeEach(async () => {
@@ -78,6 +81,14 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
 async function call(handler: unknown, user: object, query: Record<string, string>) {
   const { req, res } = createMocks({ method: 'GET', query });
+  Object.assign(req, { user, logger });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (handler as any)(req, res);
+  return res;
+}
+
+async function post(handler: unknown, user: object, body: Record<string, unknown>) {
+  const { req, res } = createMocks({ method: 'POST', body });
   Object.assign(req, { user, logger });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (handler as any)(req, res);
@@ -204,5 +215,49 @@ describe('GET /api/v1/projects/{id}/(files|sessions) for an org-owned key', () =
         .data.map((row: { id: string }) => row.id)
         .sort()
     ).toEqual([String(sharedFile.id), String(personalFile.id)].sort());
+  });
+});
+
+describe('GET /api/v1/projects/{id} item ids for an org-owned key', () => {
+  it("omits a member's personal items attached to the shared project; a member still sees all", async () => {
+    const { memberId, serviceAccountId } = await seedAccounts();
+    const sharedFile = await file(memberId, 'shared.txt', groupShare(SHARED_GROUP));
+    const personalFile = await file(memberId, 'personal.txt');
+    const sharedNotebook = await notebook(memberId, groupShare(SHARED_GROUP));
+    const personalNotebook = await notebook(memberId);
+    const project = await Project.create({
+      name: 'Shared',
+      userId: memberId,
+      fileIds: [String(sharedFile.id), String(personalFile.id)],
+      sessionIds: [String(sharedNotebook.id), String(personalNotebook.id)],
+      ...groupShare(SHARED_GROUP),
+    });
+
+    const keyRes = await call(getHandler, orgKeyUser(serviceAccountId, [SHARED_GROUP]), { id: String(project.id) });
+    expect(keyRes._getStatusCode()).toBe(200);
+    expect(keyRes._getJSONData().file_ids).toEqual([String(sharedFile.id)]);
+    expect(keyRes._getJSONData().session_ids).toEqual([String(sharedNotebook.id)]);
+
+    const memberRes = await call(getHandler, { id: memberId, groups: [] }, { id: String(project.id) });
+    expect(memberRes._getJSONData().file_ids.sort()).toEqual([String(sharedFile.id), String(personalFile.id)].sort());
+    expect(memberRes._getJSONData().session_ids.sort()).toEqual(
+      [String(sharedNotebook.id), String(personalNotebook.id)].sort()
+    );
+  });
+});
+
+describe('POST /api/v1/projects for an org-owned key', () => {
+  it('refuses file_ids that are readable only through the granted group (400)', async () => {
+    const { memberId, serviceAccountId } = await seedAccounts();
+    const sharedFile = await file(memberId, 'shared.txt', groupShare(SHARED_GROUP));
+
+    await expect(
+      post(listCreateHandler, orgKeyUser(serviceAccountId, [SHARED_GROUP]), {
+        name: 'Smuggle',
+        description: 'd',
+        file_ids: [String(sharedFile.id)],
+      })
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(await Project.countDocuments({ name: 'Smuggle' })).toBe(0);
   });
 });
