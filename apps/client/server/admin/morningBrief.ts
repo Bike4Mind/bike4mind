@@ -11,6 +11,7 @@ import { ADMIN_ACTION_COUNT_LABELS, ADMIN_ACTION_COUNT_CAP } from '@client/app/c
 import { computeAdminActionCounts, computeAdminActionOldest } from './actionCounts';
 import { adminAiTextOutputSchema, runAdminAi } from './ai/runAdminAi';
 import { readAdminAiSpend } from './ai/budget';
+import { getAdminAiClassReadiness } from './ai/readiness';
 import { getAlarms } from '../security/incidentSignals';
 import { Resource } from 'sst';
 
@@ -167,12 +168,15 @@ export const morningBriefDeps: MorningBriefDeps = {
       { names: ['adminAiConfig'], skipCache: true }
     );
     const config = getSettingsValue('adminAiConfig', settings, AdminAiConfigSchema.parse({}));
-    // Publication stays closed until the operations readiness contract is available.
-    if (!config.enabled || config.features.morningBrief.mode !== 'shadow') return null;
-    await runAdminAi('morningBrief', {
+    const mode = config.features.morningBrief.mode;
+    if (!config.enabled || mode === 'off') return null;
+    const key = { feature: 'morningBrief' as const, actionClass: 'summary', policyVersion: 'v1' };
+    if (mode !== 'shadow' && !(await getAdminAiClassReadiness(key)).canRecommend) return null;
+    const result = await runAdminAi('morningBrief', {
       entityType: 'adminMorningBrief',
       entityId: id,
-      policyVersion: 'v1',
+      actionClass: key.actionClass,
+      policyVersion: key.policyVersion,
       evidence: { facts },
       prompt: {
         system:
@@ -180,6 +184,8 @@ export const morningBriefDeps: MorningBriefDeps = {
         outputSchema: adminAiTextOutputSchema,
       },
     });
-    return null;
+    if (mode === 'shadow' || !result.ok) return null;
+    // The kill switches may change while the provider is answering.
+    return (await getAdminAiClassReadiness(key)).canRecommend ? result.suggestion.verdict : null;
   },
 };
