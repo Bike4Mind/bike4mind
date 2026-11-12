@@ -39,6 +39,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('../utils/modelResolvers', () => ({
+  DEFAULT_OPERATIONS_IMAGE_MODEL: 'flux-3-image-klein',
   getDefaultImageModel: mockGetDefaultImageModel,
   getApiKeyTypeFromBackend: vi.fn(),
 }));
@@ -197,7 +198,11 @@ describe('OperationsModelService.getOperationsModel without the configured backe
     expect(update).toEqual({
       $setOnInsert: {
         settingName: 'operationsModel',
-        settingValue: expect.objectContaining({ modelId: 'gpt-5.6-luna' }),
+        settingValue: {
+          modelId: 'gpt-5.6-luna',
+          imageModelId: 'flux-3-image-klein',
+          speechModelId: 'whisper-1',
+        },
       },
     });
     expect(options).toEqual({ upsert: true });

@@ -32,6 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
+  DEFAULT_OPERATIONS_SPEECH_MODEL: 'whisper-1',
   DEFAULT_OPERATIONS_TEXT_MODEL: 'gpt-5.6-luna',
   OperationsModelService: {
     updateOperationsModel: h.update,
