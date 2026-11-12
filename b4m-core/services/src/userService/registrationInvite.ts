@@ -57,21 +57,6 @@ export async function resolveRegistrationInvite(
 }
 
 /**
- * Grant total a referral invitee is owed: the invite's own startingCredits, else the admin
- * ReferralCreditsAmount. Mirrors registerUser's priority for a referral code (subscriber
- * allocations never apply to a refer-flow code). 0 means "no override, use the default grant".
- */
-export async function referralInviteCredits(
-  invite: Pick<IRegInviteDocument, 'startingCredits'>,
-  adminSettings: { findBySettingName: (name: 'ReferralCreditsAmount') => Promise<{ settingValue?: unknown } | null> }
-): Promise<number> {
-  if (invite.startingCredits && invite.startingCredits > 0) return invite.startingCredits;
-  const setting = await adminSettings.findBySettingName('ReferralCreditsAmount');
-  const parsed = parseInt(String(setting?.settingValue ?? '0'), 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-}
-
-/**
  * Takes a single-use code before the account is created, so two concurrent signups that both
  * passed resolveRegistrationInvite cannot both redeem it. Returns null when another signup took it
  * first; otherwise `release` reopens the code if the account is then not created.

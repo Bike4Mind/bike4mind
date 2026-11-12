@@ -12,3 +12,6 @@ export const useStudioFeature = (feature: StudioFeature): boolean => {
   const { isAdminFeatureEnabled } = useFeatureEnabled();
   return isStudioFeatureOpen({ isAdmin, flagEnabled: studioFeatureSettingKeys(feature).every(isAdminFeatureEnabled) });
 };
+
+/** True until the admin settings and user preferences behind useStudioFeature have loaded. */
+export const useStudioFeaturesLoading = (): boolean => useFeatureEnabled().isLoading;

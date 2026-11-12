@@ -15,13 +15,15 @@ import { CreditAdjustmentsLog } from './components/CreditAdjustmentsLog';
 import { UserCreditsManager } from './components/UserCreditsManager';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useCreditAnalysisStore, type CreditAnalysisTab } from './store';
+import { AdminPageHeader } from '../shared';
 
 export const CreditAnalyticsTab: React.FC = () => {
   const activeTab = useCreditAnalysisStore(state => state.activeTab);
   const setActiveTab = useCreditAnalysisStore(state => state.setActiveTab);
 
   return (
-    <Box sx={{ height: '100%', overflow: 'auto', px: 2, py: 1 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <AdminPageHeader title="Credits" description="Balances, margins and credit usage across the platform." />
       <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as CreditAnalysisTab)} sx={{ mb: 2 }}>
         <TabList sx={{ overflowX: { xs: 'auto', sm: 'visible' }, minWidth: { xs: 'max-content', sm: 'auto' } }}>
           <Tab value="users">

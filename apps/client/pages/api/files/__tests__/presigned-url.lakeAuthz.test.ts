@@ -33,6 +33,7 @@ vi.mock('@bike4mind/database', () => ({
 const resolveAccessibleLakes = vi.fn();
 const isFileInAccessibleLake = vi.fn();
 vi.mock('@server/dataLakes', () => ({
+  adminBypassLakeIds: vi.fn(async () => []),
   resolveAccessibleLakes: (...args: unknown[]) => resolveAccessibleLakes(...args),
   isFileInAccessibleLake: (...args: unknown[]) => isFileInAccessibleLake(...args),
 }));

@@ -5,7 +5,7 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
-import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import {
   evaluateCounterLockout,
   resetApiKeyRateLimit,
@@ -51,6 +51,7 @@ const handler = adminApi({
       if (typeof id !== 'string' || !id) {
         throw new BadRequestError('Invalid API key ID');
       }
+      const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
       const apiKey = await userApiKeyRepository.findById(id);
       if (!apiKey) {
@@ -93,6 +94,7 @@ const handler = adminApi({
         action: 'user.api_key.rate_limit_reset',
         target: { kind: 'apiKey', id: apiKey.id, displayName: apiKey.name },
         summary: 'reset API key rate-limit counters',
+        reason,
         details: { ownerUserId: apiKey.userId, lockout },
       });
 

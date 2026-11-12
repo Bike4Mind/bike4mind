@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -58,10 +58,10 @@ const DISCOVERY_ROW = {
   repricedBy: 'model-discovery',
 };
 
-function renderCatalog() {
+function renderCatalog(toolbarActions?: React.ReactNode) {
   return render(
     <TestWrapper>
-      <ModelPricingCatalog />
+      <ModelPricingCatalog toolbarActions={toolbarActions} />
     </TestWrapper>
   );
 }
@@ -85,6 +85,15 @@ describe('ModelPricingCatalog', () => {
     expect(admin).toHaveTextContent('Set by admin');
     expect(admin).toHaveAttribute('title', 'Value an admin saved here');
     for (const chip of [seed, admin]) expect(chip).toHaveClass('MuiChip-colorNeutral');
+  });
+
+  it('keeps the full catalog visible without locally paging away models', async () => {
+    mockGet.mockResolvedValue({
+      data: { rows: Array.from({ length: 30 }, (_, index) => ({ ...ROWS[0], modelId: `model-${index}` })) },
+    });
+    renderCatalog();
+    expect(await screen.findByTestId('model-pricing-row-model-29-per_token')).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^model-pricing-row-/)).toHaveLength(30);
   });
 
   it('renders discovery rows as their own provenance, named by the feed that priced them', async () => {
@@ -544,28 +553,69 @@ describe('ModelPricingCatalog', () => {
     renderCatalog();
     await screen.findByTestId('model-pricing-row-gpt-x-per_token');
 
-    fireEvent.change(screen.getByTestId('model-pricing-filter-input'), { target: { value: 'gpt-y' } });
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'gpt-y' } });
 
     expect(screen.getByTestId('model-pricing-row-gpt-y-per_token')).toBeInTheDocument();
     expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByTestId('model-pricing-filter-input'), { target: { value: 'nothing-like-this' } });
-    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No prices match these filters');
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'nothing-like-this' } });
+    expect(screen.getByTestId('model-pricing-filter-empty')).toHaveTextContent('No prices match these filters');
     expect(screen.queryByTestId('model-pricing-table')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('model-pricing-clear-filters-btn'));
-    expect(screen.getByTestId('model-pricing-filter-input')).toHaveValue('');
+    expect(screen.getByTestId('admin-filter-search-input')).toHaveValue('');
     expect(screen.getByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
   });
 
-  it('shows a loading state until the first rows arrive', async () => {
+  it('shows skeleton rows until the first rows arrive', async () => {
     let resolve: (value: unknown) => void = () => undefined;
     mockGet.mockReturnValueOnce(new Promise(r => (resolve = r)));
     renderCatalog();
-    expect(screen.getByTestId('model-pricing-loading')).toHaveTextContent('Loading prices');
+    expect(screen.getAllByTestId('admin-table-skeleton-row').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('model-pricing-updating')).not.toBeInTheDocument();
     resolve({ data: { seeded: SEEDED, rows: ROWS } });
     expect(await screen.findByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
-    expect(screen.queryByTestId('model-pricing-loading')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('admin-table-skeleton-row')).not.toBeInTheDocument();
+  });
+
+  it('keeps the rows on screen under an updating bar while a refresh is in flight', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    let resolve: (value: unknown) => void = () => undefined;
+    mockGet.mockReturnValueOnce(new Promise(r => (resolve = r)));
+    fireEvent.click(screen.getByTestId('model-pricing-refresh-btn'));
+
+    expect(screen.getByTestId('model-pricing-updating')).toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-table-skeleton-row')).not.toBeInTheDocument();
+    resolve({ data: { seeded: SEEDED, rows: ROWS } });
+    await waitFor(() => expect(screen.queryByTestId('model-pricing-updating')).not.toBeInTheDocument());
+  });
+
+  it('lets only the latest of overlapping loads land', async () => {
+    let resolveFirst: (value: unknown) => void = () => undefined;
+    let resolveSecond: (value: unknown) => void = () => undefined;
+    mockGet
+      .mockReturnValueOnce(new Promise(r => (resolveFirst = r)))
+      .mockReturnValueOnce(new Promise(r => (resolveSecond = r)));
+    const { rerender } = render(
+      <TestWrapper>
+        <ModelPricingCatalog refreshKey={0} />
+      </TestWrapper>
+    );
+    rerender(
+      <TestWrapper>
+        <ModelPricingCatalog refreshKey={1} />
+      </TestWrapper>
+    );
+    await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
+
+    resolveSecond({ data: { seeded: SEEDED, rows: [ROWS[1]] } });
+    expect(await screen.findByTestId('model-pricing-row-gpt-y-per_token')).toBeInTheDocument();
+    resolveFirst({ data: { seeded: SEEDED, rows: [ROWS[0]] } });
+    await act(async () => {});
+    expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-row-gpt-y-per_token')).toBeInTheDocument();
   });
 
   it('shows the load error with a retry when there are no rows, and recovers on retry', async () => {
@@ -662,7 +712,7 @@ describe('ModelPricingCatalog', () => {
   it('lets the table scroll sideways on a phone instead of squeezing its columns', async () => {
     renderCatalog();
     const table = await screen.findByTestId('model-pricing-table');
-    expect(getComputedStyle(table).minWidth).toBe('50rem');
+    expect(getComputedStyle(table).minWidth).toBe('64rem');
   });
 
   it('shows only the model a controlled filter names, and reports edits to the host', async () => {
@@ -673,11 +723,35 @@ describe('ModelPricingCatalog', () => {
       </TestWrapper>
     );
     await screen.findByTestId('model-pricing-row-gpt-y-per_token');
-    expect(screen.getByTestId('model-pricing-filter-input')).toHaveValue('gpt-y');
+    expect(screen.getByTestId('admin-filter-search-input')).toHaveValue('gpt-y');
     expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByTestId('model-pricing-filter-input'), { target: { value: 'gpt' } });
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'gpt' } });
     expect(onChange).toHaveBeenCalledWith('gpt');
+  });
+
+  it('titles itself as a section with the toolbar actions in the header', async () => {
+    renderCatalog(<button data-testid="host-action-btn">Add price</button>);
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    expect(screen.getByRole('heading', { level: 2, name: 'Model pricing (2)' })).toBeInTheDocument();
+    const actions = screen.getByTestId('admin-page-header-actions');
+    expect(within(actions).getByTestId('model-pricing-refresh-btn')).toBeInTheDocument();
+    expect(within(actions).getByTestId('host-action-btn')).toBeInTheDocument();
+  });
+
+  it('drops its heading when embedded and keeps the toolbar actions beside the search', async () => {
+    render(
+      <TestWrapper>
+        <ModelPricingCatalog hideHeading toolbarActions={<button data-testid="host-action-btn">Add price</button>} />
+      </TestWrapper>
+    );
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    expect(screen.queryByTestId('admin-page-header')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading')).not.toBeInTheDocument();
+    expect(screen.getByTestId('admin-filter-search-input')).toBeInTheDocument();
+    const actions = screen.getByTestId('model-pricing-toolbar-actions');
+    expect(within(actions).getByTestId('model-pricing-refresh-btn')).toBeInTheDocument();
+    expect(within(actions).getByTestId('host-action-btn')).toBeInTheDocument();
   });
 
   it('narrows a full id to that model alone', async () => {

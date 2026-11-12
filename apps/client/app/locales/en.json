@@ -75,7 +75,10 @@
     "send_referral_success": "Referral sent successfully!",
     "send_referral_failed": "{{count}} invite(s) could not be sent. Please try again.",
     "send_referral_error": "Error sending referral. Please try again.",
-    "slack_notification_default": "Referral sent by user USER_NAME:USER_ID to FRIEND_EMAIL"
+    "slack_notification_default": "Referral sent by user USER_NAME:USER_ID to FRIEND_EMAIL",
+    "reward_first_answer": "You earn <strong>{{credits}} credits</strong> when your friend verifies their email and gets their first answer.",
+    "reward_first_payment": "You earn <strong>{{credits}} credits</strong> on your friend's first full-price Professional subscription payment, usable after a hold.",
+    "reward_second_payment": "You earn <strong>{{credits}} credits</strong> on your friend's second full-price Professional subscription payment, usable after a hold."
   },
   "activateVoice": "Activate this voice",
   "liveVoice": "Live voice",

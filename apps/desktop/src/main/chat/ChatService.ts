@@ -237,6 +237,7 @@ import type { AccessStore } from './tools/AccessStore';
 import { forgetSessionWrites } from './tools/sessionScripts';
 import {
   QUESTION_CANCELLED,
+  partAllowed,
   type ApprovalGate,
   type ApprovalSettledBy,
   type ApprovalSettlement,
@@ -259,11 +260,13 @@ import type { PermissionScopeKey, PermissionService } from './permissions/Permis
 import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
 import { summarizeToolInput, type ApprovalLog } from './permissions/ApprovalLog';
 import { resolveSubject } from './permissions/resolveSubject';
-import type { CompiledRule, PermissionRuleSet } from './permissions/rules';
+import type { CompiledRule, PermissionRuleSet, PermissionSubject } from './permissions/rules';
 import {
   capOutput,
   outputCapFor,
+  type ApprovalAlways,
   type ApprovalOption,
+  type ApprovalPart,
   type ApprovalPrompt,
   type BrowserContext,
   type BrowserProvider,
@@ -532,7 +535,7 @@ export interface ChatServiceDeps {
    * only by the approval card's "Always allow"; no tool can reach it.
    */
   permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'> &
-    Partial<Pick<PermissionService, 'dispose'>>;
+    Partial<Pick<PermissionService, 'dispose' | 'projectRoot' | 'rememberProjectAllows'>>;
   capabilities?: Pick<CapabilityLedger, 'grant' | 'revokeMatching'>;
   /** Where each approval decision is appended, across sessions. Absent in tests that do not read it. */
   approvalLog?: Pick<ApprovalLog, 'append'>;
@@ -3542,6 +3545,7 @@ export class ChatService {
       const toolsFor = (granted: readonly string[]) =>
         modelOption?.supportsTools === false ? [] : offeredTools(granted);
       let tools = toolsFor(roots);
+      this.deps.approvals?.setParent(session.id, session.origin?.parentSessionId);
       // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
       // text it had already read is still in front of it: it starts out as tainted as the turn
       // it carries on.
@@ -6841,6 +6845,22 @@ export class ChatService {
       };
     }
 
+    // A script with no reason to ask that holds for all of it is decided part by part, and asks only
+    // about the parts that no rule, "Allow in this chat" or the mode already covers.
+    // Unlike `tainted`, in every mode: an allowance can cover a sending part here, and 'ask' has no card to fall back on.
+    const taintedParts = (): boolean => sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
+    const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule || taintedParts());
+    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode) : null;
+    if (parts && parts.uncovered.length === 0 && parts.directories.length === 0) {
+      return {
+        input: applyOption(call.input, runnable[0]),
+        approval: approvalRecord('allowed', parts.decidedBy),
+        mode,
+        patterns,
+      };
+    }
+    const asked: AskedCard = parts ? narrowToParts(prompt, subject, parts) : { prompt, subject };
+
     // Consulted AFTER tool.approval() ran, so a call that is refused outright - a path outside
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
@@ -6864,13 +6884,18 @@ export class ChatService {
     let coveredBy: ChatApprovalDecidedBy | undefined;
 
     const choice = prompt.choice ? { options: prompt.choice.options.map(toWireOption) } : undefined;
-    const alwaysScope = prompt.always
-      ? describeAlways(prompt.always, context.workingDirectory)
+    const alwaysScope = asked.prompt.always
+      ? describeAlways(asked.prompt.always, context.workingDirectory)
       : prompt.alwaysCovers
         ? { shown: prompt.alwaysCovers, full: prompt.alwaysCovers }
         : undefined;
     // An ask rule outranks any allow, so a rule saved from its card would never apply.
-    const everywhere = this.deps.permissions && !askedByRule ? everySessionRules(subject, prompt) : [];
+    const everywhere = this.deps.permissions && !askedByRule ? everySessionRules(asked.subject, asked.prompt) : [];
+    const projectRoot =
+      permissionScope.project && everywhere.length > 0
+        ? ((await this.deps.permissions?.projectRoot?.(permissionScope.project).catch(() => null)) ?? null)
+        : null;
+    const forProject = projectRoot ? projectRules(everywhere) : [];
     const answer = await gate.request(
       sessionId,
       prompt.key,
@@ -6885,7 +6910,8 @@ export class ChatService {
             ...call,
             status: 'awaiting-approval',
             approvalId,
-            approvalDetail: prompt.detail,
+            approvalDetail: asked.prompt.detail,
+            ...(asked.parts ? { approvalParts: asked.parts } : {}),
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
             ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
@@ -6898,6 +6924,9 @@ export class ChatService {
               : {}),
             ...(choice ? { approvalChoice: choice } : {}),
             ...(everywhere.length > 0 ? { approvalRules: everywhere } : {}),
+            ...(projectRoot && forProject.length > 0
+              ? { approvalProjectRules: forProject, approvalProject: projectRoot }
+              : {}),
           },
         });
       },
@@ -6924,14 +6953,25 @@ export class ChatService {
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
             }
             const covering = standingAnswer();
-            if (covering) coveredBy = { kind: 'chat-allowance' };
-            return covering;
+            if (covering) {
+              coveredBy = { kind: 'chat-allowance' };
+              return covering;
+            }
+            // A parallel call may have tainted the reply since this card opened.
+            const fresher =
+              byPart && !taintedParts() ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode) : null;
+            if (fresher && fresher.uncovered.length === 0 && fresher.directories.length === 0) {
+              coveredBy = fresher.decidedBy;
+              return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
+            }
+            return null;
           } catch (error) {
             this.deps.logger.warn(`PERMISSIONS: could not recheck ${call.name}: ${String(error)}`);
             return null;
           }
         },
-        ...(prompt.always ? { always: prompt.always } : {}),
+        ...(asked.prompt.always ? { always: asked.prompt.always } : {}),
+        ...(asked.parts ? { partial: true } : {}),
         // Only the options that RUN the call may become standing. The card offers no "always"
         // beside a redirect, and this is the second lock on that door: a redirect is an
         // instruction about one call, never a policy for every later one.
@@ -6941,6 +6981,7 @@ export class ChatService {
 
     // Whether "always" actually reached every session; a failed save leaves it this chat's only.
     let savedEverywhere = false;
+    let savedForProject = false;
     // The rules saved are the ones main derived and showed; the renderer only says yes to them.
     if (answer.decision === 'always' && answer.everywhere && everywhere.length > 0) {
       const saved = await this.deps.permissions?.rememberAllows(everywhere).then(
@@ -6956,6 +6997,20 @@ export class ChatService {
       );
       savedEverywhere = saved === true;
       await gate.settleCovered(saved ? undefined : sessionId);
+    } else if (answer.decision === 'always' && answer.project && projectRoot && forProject.length > 0) {
+      const saved = await this.deps.permissions?.rememberProjectAllows?.(projectRoot, forProject).then(
+        () => true,
+        error => {
+          this.deps.logger.warn(`PERMISSIONS: could not save ${forProject.join(', ')}: ${String(error)}`);
+          context.report?.notice({
+            kind: 'permissions-save-failed',
+            text: `The rule could not be saved for this project: ${String(error)}. This conversation's approval still applies. Retry in Settings > Permissions.`,
+          });
+          return false;
+        }
+      );
+      savedForProject = saved === true;
+      await gate.settleCovered(savedForProject ? undefined : sessionId);
     } else if (answer.decision === 'always') {
       await gate.settleCovered(sessionId);
     }
@@ -6986,7 +7041,12 @@ export class ChatService {
 
     const picked = findOption(prompt, answer.optionId);
     const card = shownCard(answer, requestedAt, askedBecause);
-    const decidedBy = cardDecider(answer.settledBy, { ...answer, everywhere: savedEverywhere }, picked, coveredBy);
+    const decidedBy = cardDecider(
+      answer.settledBy,
+      { ...answer, everywhere: savedEverywhere, project: savedForProject === true },
+      picked,
+      coveredBy
+    );
 
     // Keyed on the OPTION rather than on the decision, so an answer naming this option can only
     // ever redirect - never run the tool because it arrived with some other decision on it.
@@ -8618,9 +8678,110 @@ function cardDecider(
   if (picked?.redirect) return { kind: 'user', answer: 'redirect', ...choice };
   if (answer.decision === 'deny' || answer.decision === 'redirect') return { kind: 'user', answer: 'deny' };
   if (answer.decision === 'always') {
-    return { kind: 'user', answer: 'always', ...choice, ...(answer.everywhere ? { everywhere: true as const } : {}) };
+    return {
+      kind: 'user',
+      answer: 'always',
+      ...choice,
+      ...(answer.everywhere ? { everywhere: true as const } : {}),
+      ...(answer.project ? { project: true as const } : {}),
+    };
   }
   return { kind: 'user', answer: 'once', ...choice };
+}
+
+interface PartDecision {
+  /** The parts no rule, chat allowance or mode covers. */
+  uncovered: ApprovalPart[];
+  /** Folders outside the shared ones that neither a rule nor "Allow in this chat" covers. */
+  directories: string[];
+  /** What covered the call, once nothing is left uncovered. */
+  decidedBy: ChatApprovalDecidedBy;
+}
+
+/** Whether the conversation's mode runs this part unasked. */
+function modeCovers(mode: ChatApprovalMode, part: ApprovalPart): boolean {
+  if (mode === 'full') return part.ask?.mode !== 'full';
+  return mode === 'auto' && part.ask === undefined;
+}
+
+/**
+ * Each part of a `byPart` shell prompt, decided on its own: by an allow rule, an "Allow in this chat" given here
+ * or in a session that spawned this one, or the mode. Null for any other prompt, which is decided whole.
+ */
+function decideParts(
+  prompt: ApprovalPrompt,
+  subject: PermissionSubject,
+  rules: PermissionRuleSet | undefined,
+  gate: ApprovalGate,
+  sessionId: string,
+  mode: ChatApprovalMode
+): PartDecision | null {
+  const always = prompt.always;
+  if (!prompt.byPart || !always || always.commands.length === 0 || always.ungranted?.length) return null;
+  const byRule = rules?.size ? rules.shellParts(subject) : null;
+  const allowed = gate.allowedPatterns(sessionId, always.namespace);
+  let rule: CompiledRule | null = null;
+  let allowance = false;
+  const uncovered: ApprovalPart[] = [];
+  always.commands.forEach((part, index) => {
+    const covering = byRule?.[index] ?? null;
+    if (covering) rule ??= covering;
+    else if (partAllowed(allowed, part)) allowance = true;
+    else if (!modeCovers(mode, part)) uncovered.push(part);
+  });
+  // A Read or Edit rule clears a folder only for a call that rules allow whole, as PermissionRuleSet.allowing does.
+  const allByRule = always.commands.every((_, index) => byRule?.[index]);
+  const outside = allByRule
+    ? always.directories.filter(directory => !rules?.coversFolder(directory))
+    : always.directories;
+  const directories = gate.uncoveredDirectories(sessionId, outside);
+  const decidedBy: ChatApprovalDecidedBy = allowance
+    ? { kind: 'chat-allowance' }
+    : rule
+      ? ruleDecider(rule)
+      : { kind: 'mode', mode };
+  return { uncovered, directories, decidedBy };
+}
+
+interface AskedCard {
+  prompt: ApprovalPrompt;
+  subject: PermissionSubject;
+  /** See ChatToolCall.approvalParts. */
+  parts?: { text: string; reason?: string }[];
+}
+
+const shownPart = (part: ApprovalPart): { text: string; reason?: string } => ({
+  text: part.words ?? part.text,
+  ...(part.ask ? { reason: part.ask.reason } : {}),
+});
+
+/** The card for only the undecided parts: its "always" answers, and any rule saved from it, cover just those. */
+function narrowToParts(prompt: ApprovalPrompt, subject: PermissionSubject, parts: PartDecision): AskedCard {
+  const always = prompt.always as ApprovalAlways;
+  const kept = new Set(parts.uncovered);
+  const commands = subject.shell?.commands.filter((_, index) => kept.has(always.commands[index] as ApprovalPart));
+  const { askInFull: _full, ...rest } = prompt;
+  return {
+    prompt: {
+      ...rest,
+      ...(parts.uncovered.some(part => part.ask?.mode === 'full') ? { askInFull: true as const } : {}),
+      always: { ...always, commands: parts.uncovered, directories: parts.directories },
+    },
+    subject: subject.shell
+      ? { ...subject, shell: { ...subject.shell, commands: commands ?? [], directories: parts.directories } }
+      : subject,
+    ...(parts.uncovered.length > 0 && (always.commands.length > 1 || parts.uncovered.some(part => part.ask))
+      ? { parts: parts.uncovered.map(shownPart) }
+      : {}),
+  };
+}
+
+/**
+ * The rules "Allow in this project" saves: only when every rule is a prefix, so a one-off command with a
+ * SHA or an id in it is never saved where it would never match again.
+ */
+function projectRules(rules: readonly string[]): string[] {
+  return rules.every(rule => /^Bash\(.+:\*\)$/s.test(rule)) ? [...rules] : [];
 }
 
 /** Why a question-style card was closed unanswered; a racing click or recheck counts as the close. */

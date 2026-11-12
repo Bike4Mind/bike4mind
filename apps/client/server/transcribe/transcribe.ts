@@ -166,7 +166,7 @@ export async function transcribeUpload({
       throw new TranscribeRequestError('size_out_of_range', 'File size out of range');
     }
 
-    const operationsModel = await OperationsModelService.getOperationsModel();
+    const operationsModel = await OperationsModelService.getOperationsModel({ endUserId: userId });
     signal.throwIfAborted();
     const speechModelInfo = operationsModel.speechModelInfo;
     if (!speechModelInfo) {

@@ -265,7 +265,7 @@ describe('Organizations tab params', () => {
   const organizationsSearch = {
     tab: 'organizations',
     orgsPage: 2,
-    orgsLimit: 20,
+    orgsLimit: 50,
     orgsSort: 'createdAt',
     orgsOrder: 'desc',
     orgsPersonal: false,

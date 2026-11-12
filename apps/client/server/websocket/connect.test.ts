@@ -87,6 +87,28 @@ describe('websocket connect - token gates', () => {
     mockIpBlockRefusal.mockResolvedValue(null);
   });
 
+  it('marks the user online without stamping lastActiveAt: connecting is not an action', async () => {
+    const user: Record<string, unknown> = { id: 'user-1', tokenVersion: 3, save: vi.fn() };
+    mockFindById.mockResolvedValue(user);
+
+    await connect();
+
+    expect(user.isOnline).toBe(true);
+    expect(user).not.toHaveProperty('lastActiveAt');
+    expect(user.save).toHaveBeenCalled();
+  });
+
+  it('checks an API key without counting the connect as a use of it', async () => {
+    mockVerifyToken.mockImplementation(() => {
+      throw new Error('not a jwt');
+    });
+    mockVerifyApiKey.mockResolvedValue({ userId: 'user-1', scopes: ['ai:chat'], keyId: 'key-1' });
+
+    await connect('b4m_live_key');
+
+    expect(mockVerifyApiKey).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ recordUse: false }));
+  });
+
   it("records a CLI JWT's sid and tokenVersion, bounded by the gateway cap rather than the token exp", async () => {
     const exp = Math.floor(new Date('2030-01-01T00:30:00Z').getTime() / 1000);
     mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', sid: 'sid-9', exp });

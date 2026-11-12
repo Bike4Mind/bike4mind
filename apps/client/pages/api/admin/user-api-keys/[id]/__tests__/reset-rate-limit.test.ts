@@ -90,7 +90,10 @@ const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
+  recordAdminActionFromRequest,
+}));
 
 import '@pages/api/admin/user-api-keys/[id]/reset-rate-limit';
 
@@ -101,8 +104,12 @@ const storedKey = {
   rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
 };
 
-function post(query: Record<string, unknown>, user?: Record<string, unknown>) {
-  const { req, res } = createMocks({ method: 'POST', query });
+function post(
+  query: Record<string, unknown>,
+  user?: Record<string, unknown>,
+  body: unknown = { reason: 'Support request' }
+) {
+  const { req, res } = createMocks({ method: 'POST', query, body });
   if (user) (req as any).user = user;
   (req as any).ability = {};
   (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -160,6 +167,18 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
     expect(resetApiKeyRateLimit).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['missing', {}],
+    ['too short', { reason: 'no' }],
+    ['blank', { reason: '   ' }],
+  ])('rejects a %s reason without reading or resetting a key', async (_label, body) => {
+    const { req, res } = post({ id: 'key-1' }, admin, body);
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({ statusCode: 400 });
+    expect(findById).not.toHaveBeenCalled();
+    expect(resetApiKeyRateLimit).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
   it('resets the resolved key id and writes the audit event on success', async () => {
     const { req, res } = post({ id: 'key-1' }, admin);
     await mockRefs.postHandler!(req, res);
@@ -204,6 +223,7 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
       expect.objectContaining({
         action: 'user.api_key.rate_limit_reset',
         target: { kind: 'apiKey', id: 'key-1', displayName: 'wedged key' },
+        reason: 'Support request',
         details: expect.objectContaining({ ownerUserId: 'owner-1' }),
       })
     );

@@ -14,6 +14,7 @@ import {
   ActionDialog,
   ADMIN_REASON_PRESETS,
   ChangePreview,
+  ErrorState,
   SegmentedControl,
   undoAdminReason,
   useUndoToast,
@@ -78,6 +79,13 @@ export const AddToOrganizationDialog: React.FC<DialogProps & { memberOrgIds: rea
       onConfirm={handleConfirm}
       data-testid="org-add-dialog"
     >
+      {results.isError && (
+        <ErrorState
+          message="Organizations could not be loaded."
+          onRetry={() => void results.refetch()}
+          retrying={results.isFetching}
+        />
+      )}
       <FormControl required>
         <FormLabel>Organization</FormLabel>
         <Autocomplete<MembershipOrg>

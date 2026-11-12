@@ -47,9 +47,9 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
 }> = [
   {
     id: 'signup',
-    title: 'Signup and starter credits',
-    description: 'Who can sign up on their own, and what a referred user starts with.',
-    keys: ['allowOpenRegistration', 'ReferralCreditsAmount'],
+    title: 'Signup',
+    description: 'Who can sign up on their own.',
+    keys: ['allowOpenRegistration'],
   },
   {
     id: 'credits',
@@ -138,7 +138,6 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
   const amount = value === undefined || value === null || value === '' ? Number.NaN : Number(value);
   const floor = `floor ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)} per credit`;
   switch (key) {
-    case 'ReferralCreditsAmount':
     case 'ReferralFirstAnswerCredits':
     case 'ReferralFirstPaymentCredits':
     case 'ReferralSecondPaymentCredits':

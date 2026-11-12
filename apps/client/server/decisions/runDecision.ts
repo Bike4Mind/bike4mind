@@ -178,7 +178,9 @@ export async function runDecision({
     logger,
     accounting: userDecisionAccounting(caller),
     resolveInput: (input, caps) => resolveDecisionInput(fileRequest, input, caps),
-    safetyIdentifier: body.safety_identifier ?? toProviderEndUserId(userId),
+    // Always the caller's own hash, never a body value: support resolves a provider safety notice
+    // to an account through this identifier, so it must map back to a B4M user.
+    safetyIdentifier: toProviderEndUserId(userId),
   });
   return response;
 }

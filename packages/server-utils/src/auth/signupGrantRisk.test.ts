@@ -35,6 +35,8 @@ describe('grant risk observations', () => {
   it('collects independent email facts even without network metadata', async () => {
     expect(await createSignupGrantRiskCollector()(user('A.li.ce+tag@gmail.com'))).toEqual({
       canonicalEmailCollision: false,
+      plusAddressTag: true,
+      randomPlusAddressTag: false,
       disposableDomain: false,
       blockedDomain: false,
       challengeVerified: null,
@@ -56,6 +58,18 @@ describe('grant risk observations', () => {
       challengeVerified: true,
     });
     expect(mocks.sources).toHaveBeenCalledWith(['sub.example.test', 'example.test']);
+  });
+
+  it('observes a generated plus tag on a personal mailbox without blocking it', async () => {
+    expect(await createSignupGrantRiskCollector()(user('someone+lxuby5k7np@hotmail.com'))).toMatchObject({
+      plusAddressTag: true,
+      randomPlusAddressTag: true,
+      canonicalEmailCollision: false,
+    });
+    expect(await createSignupGrantRiskCollector()(user('person@sub.example.test'))).toMatchObject({
+      plusAddressTag: false,
+      randomPlusAddressTag: false,
+    });
   });
 
   it('also recognizes the bundled disposable list', async () => {

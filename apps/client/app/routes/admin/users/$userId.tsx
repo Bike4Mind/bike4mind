@@ -3,6 +3,7 @@ import { useCallback } from 'react';
 import { UserProfilePage } from '@client/app/components/admin/Users/Profile/UserProfilePage';
 import {
   DEFAULT_USER_PROFILE_TAB,
+  userProfileTabSearch,
   type UserProfileTab,
 } from '@client/app/components/admin/Users/Profile/userProfileSearch';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
@@ -16,7 +17,10 @@ const AdminUserProfile = () => {
   // Replace, so flipping tabs does not stack history entries for Back to walk through.
   const setTab = useCallback(
     (next: UserProfileTab) =>
-      navigate({ search: { tab: next === DEFAULT_USER_PROFILE_TAB ? undefined : next }, replace: true }),
+      navigate({
+        search: previous => userProfileTabSearch(previous, next),
+        replace: true,
+      }),
     [navigate]
   );
 

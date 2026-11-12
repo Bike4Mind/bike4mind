@@ -24,7 +24,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const feedbackDoc = { id: '507f1f77bcf86cd7994390fb', userId: 'owner1', contentStored: false };
+const feedbackDoc = { id: '507f1f77bcf86cd7994390fb', userId: 'owner1', contentStored: false, status: 'New' };
 const model = vi.hoisted(() => ({
   findById: vi.fn(),
   findOneAndUpdate: vi.fn(),
@@ -45,7 +45,7 @@ function mocks(can: (action: string, subject: unknown) => boolean) {
   const { req, res } = createMocks({
     method: 'PUT',
     query: { id: '507f1f77bcf86cd7994390fb' },
-    body: { userId: 'someone', content: 'edited', username: 'x', status: 'open' },
+    body: { userId: 'someone', content: 'edited', username: 'x' },
   });
   (req as any).user = { id: 'attacker', isAdmin: false };
   (req as any).ability = { can: vi.fn(can) };
@@ -85,6 +85,26 @@ describe('PUT /api/feedback/[id] - instance-level authorization', () => {
     await mockRefs.putHandler!(req, res);
     expect(model.findOneAndUpdate).toHaveBeenCalledTimes(1);
     expect(res._getStatusCode()).toBe(200);
+  });
+
+  it.each(['handledBy', 'handledAt'])('refuses %s, which only the admin status route sets', async field => {
+    const { req, res } = mocks(() => true);
+    req.body = { ...req.body, [field]: 'admin1' };
+    await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ statusCode: 400 });
+    expect(model.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a status change but ignores the stored status echoed back', async () => {
+    const changed = mocks(() => true);
+    changed.req.body = { ...changed.req.body, status: 'Closed' };
+    await expect(mockRefs.putHandler!(changed.req, changed.res)).rejects.toMatchObject({ statusCode: 400 });
+    expect(model.findOneAndUpdate).not.toHaveBeenCalled();
+
+    const echoed = mocks(() => true);
+    echoed.req.body = { ...echoed.req.body, status: feedbackDoc.status };
+    await mockRefs.putHandler!(echoed.req, echoed.res);
+    expect(echoed.res._getStatusCode()).toBe(200);
+    expect(model.findOneAndUpdate.mock.calls[0][1].$set).not.toHaveProperty('status');
   });
 
   it('records the read of the returned report before loading its text', async () => {

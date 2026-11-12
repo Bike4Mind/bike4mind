@@ -4,6 +4,7 @@ import { KeepCommandRequestAction } from '@bike4mind/common';
 import { verifyJwtToken, checkRateLimit } from '@server/cli/auth';
 import { withWebSocketContext, sendToClient, sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
+import { recordUserActivity } from '@server/users/recordUserActivity';
 
 /**
  * WebSocket handler: Web HUD -> Keep (CLI) command relay
@@ -64,6 +65,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   }
 
   logger.info(`[KEEP_CMD_REQ] User ${userId} requesting ${commandType} via Keep relay`);
+  recordUserActivity(userId, logger);
 
   // Relay to all user connections - CLI will handle keep_command, web ignores it
   await sendToClient(userId, endpoint, {

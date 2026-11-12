@@ -325,7 +325,7 @@ describe('ModelLogsTab', () => {
               messageHistoryLength: 4,
               completedStepCount: 3,
               failedStepCount: 1,
-              artifacts: [{ type: 'html', preview: '<p>hi' }],
+              artifacts: [{ type: 'html' }],
             },
           ],
           total: 1,
@@ -339,7 +339,7 @@ describe('ModelLogsTab', () => {
     expect(screen.getByText('10 in / 20 out')).toBeTruthy();
     expect(screen.getByText('Files: 2 | History: 4')).toBeTruthy();
     expect(screen.getByText('3 completed / 1 failed')).toBeTruthy();
-    expect(screen.getByText('html: <p>hi...')).toBeTruthy();
+    expect(screen.getByText('html')).toBeTruthy();
   });
 
   it('shows the loading state, not the empty state, before the first page arrives', () => {

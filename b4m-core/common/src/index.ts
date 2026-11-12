@@ -1,6 +1,8 @@
 export * from './errors';
 export * from './adminUserNotes';
 export * from './signupGrant';
+export * from './signupGrantGuard';
+export * from './signupRiskPolicy';
 export * from './apiErrorCodes';
 export * from './accountSuspensionCategories';
 export * from './accountSuspension';
@@ -122,6 +124,8 @@ export * from './schemas/bulkAbuse';
 export * from './schemas/signupRiskReview';
 export * from './schemas/riskEvidence';
 export * from './schemas/accountCampaign';
+export * from './schemas/completionSequence';
+export * from './schemas/completionSynchrony';
 export * from './schemas/shadowDetection';
 export * from './schemas/campaignWatch';
 export * from './schemas/abuseAssessment';

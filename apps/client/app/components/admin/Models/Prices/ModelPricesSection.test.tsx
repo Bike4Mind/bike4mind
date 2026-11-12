@@ -110,13 +110,13 @@ describe('ModelPricesSection', () => {
     renderSection();
     expect(await screen.findByTestId('model-pricing-row-gpt-y-per_token')).toBeInTheDocument();
     expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
-    expect(screen.getByTestId('model-pricing-filter-input')).toHaveValue('gpt-y');
+    expect(screen.getByTestId('admin-filter-search-input')).toHaveValue('gpt-y');
   });
 
   it('filters as typed and writes the filter to the URL once typing pauses, clearing the param when emptied', async () => {
     renderSection();
     await screen.findByTestId('model-pricing-row-gpt-x-per_token');
-    const input = screen.getByTestId('model-pricing-filter-input');
+    const input = screen.getByTestId('admin-filter-search-input');
     await userEvent.type(input, 'gpt-x');
     expect(input).toHaveValue('gpt-x');
     expect(screen.queryByTestId('model-pricing-row-gpt-y-per_token')).not.toBeInTheDocument();
@@ -138,7 +138,7 @@ describe('ModelPricesSection', () => {
     act(() => {
       fakeAdminRouter.navigate({ to: '/admin', search: previous => ({ ...previous, model: 'gpt-y' }) });
     });
-    expect(screen.getByTestId('model-pricing-filter-input')).toHaveValue('gpt-y');
+    expect(screen.getByTestId('admin-filter-search-input')).toHaveValue('gpt-y');
     expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
   });
 
