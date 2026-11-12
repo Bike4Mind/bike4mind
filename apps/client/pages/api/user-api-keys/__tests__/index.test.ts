@@ -893,3 +893,23 @@ describe('POST /api/user-api-keys - paid-only access switch', () => {
     );
   });
 });
+
+describe('/api/user-api-keys - org service account', () => {
+  // An org-owned key authenticates as its org's service account, which holds all of the org's keys.
+  it('refuses to list or mint keys for it', async () => {
+    listUserApiKeys.mockClear();
+    createUserApiKey.mockClear();
+    const serviceAccount = { id: 'sa1', isAdmin: false, isSystem: true, serviceAccountOrganizationId: 'org-1' };
+
+    const listing = createMocks({ method: 'GET', query: {} });
+    Object.assign(listing.req, { user: serviceAccount });
+    await expect(mockRefs.getHandler!(listing.req, listing.res)).rejects.toMatchObject({ statusCode: 403 });
+
+    const { req, res } = post({ name: 'k', scopes: ['ai:chat'] });
+    Object.assign(req, { user: serviceAccount });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+
+    expect(listUserApiKeys).not.toHaveBeenCalled();
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+});

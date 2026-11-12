@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
+import { ApiKeyScope, CONFINED_API_KEY_SCOPES, isBuiltInApiKeyScope } from '@bike4mind/common';
 import {
   USER_API_KEY_SCOPES,
   GENERIC_MODAL_API_KEY_SCOPES,
@@ -11,6 +11,8 @@ import {
   isApiKeyScopeOffered,
   type ApiKeyScopeAccess,
   genericApiKeyScopesFor,
+  ORG_API_KEY_SCOPES,
+  isOrgApiKeyScope,
 } from './apiKeyScopes';
 
 describe('apiKeyScopes catalog', () => {
@@ -308,5 +310,28 @@ describe('isApiKeyScopeOffered', () => {
     expect(isApiKeyScopeOffered(ApiKeyScope.PERSONAS_MINT, { ...NO_ACCESS, bypass: true })).toBe(true);
     expect(isApiKeyScopeOffered(ApiKeyScope.PERSONAS_MINT, NO_ACCESS)).toBe(false);
     expect(isApiKeyScopeOffered(ApiKeyScope.PERSONAS_MINT, { ...ALL_ACCESS, bypass: false })).toBe(false);
+  });
+});
+
+describe('ORG_API_KEY_SCOPES', () => {
+  it('offers only ungated built-in generic scopes', () => {
+    expect(ORG_API_KEY_SCOPES.length).toBeGreaterThan(0);
+    for (const scope of ORG_API_KEY_SCOPES) {
+      expect(GENERIC_MODAL_API_KEY_SCOPES).toContain(scope);
+      expect(isBuiltInApiKeyScope(scope.value)).toBe(true);
+      expect(scope.requiredEntitlement).toBeUndefined();
+    }
+  });
+
+  it('refuses every product scope', () => {
+    for (const scope of Object.keys(GATED_API_KEY_SCOPES)) {
+      expect(isOrgApiKeyScope(scope)).toBe(false);
+    }
+  });
+
+  it('refuses every contributed scope', () => {
+    for (const scope of USER_API_KEY_SCOPES.filter(s => !isBuiltInApiKeyScope(s.value))) {
+      expect(isOrgApiKeyScope(scope.value)).toBe(false);
+    }
   });
 });

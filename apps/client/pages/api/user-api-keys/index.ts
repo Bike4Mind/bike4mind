@@ -2,6 +2,7 @@ import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { agentRepository, organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
 import {
   embedKeyOwnerHasEntitlement,
@@ -97,6 +98,7 @@ function redactForNonMinter(json: IUserApiKey, isMinter: boolean): IUserApiKey {
 const handler = baseApi()
   .get(async (req, res) => {
     const userId = req.user?.id;
+    assertNotOrgServiceAccount(req.user);
 
     // Opt-in so the documented public API keeps its active-only default; the
     // management UIs pass it to render revoked keys as `Revoked` rows.
@@ -148,6 +150,7 @@ const handler = baseApi()
   })
   .post(async (req: Request<{}, unknown, CreateApiKeyRequest>, res) => {
     const userId = req.user?.id;
+    assertNotOrgServiceAccount(req.user);
     const { name, scopes, expiresAt, rateLimit, organizationId, agentId, allowedOrigins, branding, spendCap } =
       req.body;
 

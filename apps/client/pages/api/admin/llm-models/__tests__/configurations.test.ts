@@ -22,7 +22,10 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
   return { baseApi: () => chain };
 });
-vi.mock('@bike4mind/database/infra', () => ({ AdminSettings: { findOne: (...args: unknown[]) => h.find(...args) } }));
+vi.mock('@bike4mind/database/infra', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/database/infra')>()),
+  AdminSettings: { findOne: (...args: unknown[]) => h.find(...args) },
+}));
 vi.mock('@bike4mind/server-utils/modelDiscovery/modelAccessRevision', () => ({
   readModelAccessRevision: () => h.revision(),
 }));

@@ -135,6 +135,8 @@ const orgMembershipSentence = (entry: AuditEntry): string | null => {
       return `Added to ${org}`;
     case 'org.member.removed':
       return `Removed from ${org}`;
+    case 'org.member.content_reassigned':
+      return `Transferred content in ${org}`;
     case 'org.member.role_changed': {
       const after = entry.changes?.find(change => change.field === 'role')?.after;
       if (after === 'manager') return `Made a manager of ${org}`;

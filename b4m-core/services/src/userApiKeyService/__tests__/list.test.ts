@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiKeyScope, IUserApiKeyDocument, IUserApiKeyRepository } from '@bike4mind/common';
-import { listAgentEmbedKeys } from '../list';
+import { listAgentEmbedKeys, listOrganizationApiKeys } from '../list';
 
 function key(overrides: Partial<IUserApiKeyDocument>): IUserApiKeyDocument {
   return {
@@ -40,5 +40,17 @@ describe('listAgentEmbedKeys', () => {
   it('returns empty for an agent with no keys', async () => {
     const { adapters: a } = adapters([]);
     await expect(listAgentEmbedKeys('agent-1', a)).resolves.toEqual([]);
+  });
+});
+
+describe('listOrganizationApiKeys', () => {
+  it('leaves out org-owned keys, which only the org key routes list', async () => {
+    const findByOrganizationId = vi
+      .fn()
+      .mockResolvedValue([key({ id: 'member-minted' }), key({ id: 'org-owned', orgOwned: { createdByUserId: 'u1' } })]);
+    const result = await listOrganizationApiKeys('org-1', {
+      db: { userApiKeys: { findByOrganizationId } as unknown as IUserApiKeyRepository },
+    });
+    expect(result.map(k => k.id)).toEqual(['member-minted']);
   });
 });
