@@ -16,6 +16,8 @@ import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIn
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
+import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
+import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
@@ -26,7 +28,7 @@ import {
   pickDisplayedSubscription,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
-import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import { creditBalanceParams, formatCreditAmount } from '@client/app/utils/formatCredits';
 import {
   Avatar,
   Box,
@@ -54,6 +56,7 @@ import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import {
   canManageOrgConnectors,
   canManageOrgIntegrations,
@@ -151,7 +154,7 @@ const OrganizationPage: FC = () => {
     canManageConnectors,
   });
 
-  useDocumentTitle(organization?.name, ' | Team');
+  useDocumentTitle(organization?.name, t('organization.document_title_suffix'));
 
   return isLoading || !organization ? (
     <Box display="flex" justifyContent="center" alignItems="center" height="100%" width="100%">
@@ -220,62 +223,68 @@ const OrganizationPage: FC = () => {
           >
             <Tab value={OrganizationTabs.Overview} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <BusinessOutlinedIcon sx={{ fontSize: 16 }} />
-              Overview
+              {t('organization.tabs.overview')}
             </Tab>
             <Tab value={OrganizationTabs.Members} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <GroupOutlinedIcon sx={{ fontSize: 16 }} />
-              Members
+              {t('organization.tabs.members')}
             </Tab>
             {canManageGroups && (
               <Tab value={OrganizationTabs.Groups} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <GroupWorkOutlinedIcon sx={{ fontSize: 16 }} />
-                Groups
+                {t('organization.tabs.groups')}
               </Tab>
             )}
             {canViewUsage && (
               <Tab value={OrganizationTabs.Usage} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <InsightsOutlinedIcon sx={{ fontSize: 16 }} />
-                Usage
+                {t('organization.tabs.usage')}
               </Tab>
             )}
             {canViewAnalysis && (
               <Tab value={OrganizationTabs.Analysis} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <RateReviewOutlinedIcon sx={{ fontSize: 16 }} />
-                Analysis
+                {t('organization.tabs.analysis')}
               </Tab>
             )}
             {canViewBilling && (
               <Tab value={OrganizationTabs.Billing} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <CreditCardOutlinedIcon sx={{ fontSize: 16 }} />
-                Billing
+                {t('organization.tabs.billing')}
               </Tab>
             )}
             {canManageIntegrations && (
               <>
                 <Tab value={OrganizationTabs.Integrations} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <ExtensionOutlinedIcon sx={{ fontSize: 16 }} />
-                  Integrations
+                  {t('organization.tabs.integrations')}
                 </Tab>
                 <Tab value={OrganizationTabs.GitHub} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <VpnKeyOutlinedIcon sx={{ fontSize: 16 }} />
-                  GitHub API
+                  {t('organization.tabs.github_api')}
                 </Tab>
                 <Tab value={OrganizationTabs.Webhooks} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <GitHubIcon sx={{ fontSize: 16 }} />
-                  Webhooks
+                  {t('organization.tabs.webhooks')}
                 </Tab>
               </>
             )}
             {canManageConnectors && (
               <Tab value={OrganizationTabs.Connectors} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <HubOutlinedIcon sx={{ fontSize: 16 }} />
-                Connectors
+                {t('organization.tabs.connectors')}
+              </Tab>
+            )}
+            {canManageConnectors && (
+              <Tab value={OrganizationTabs.ApiKeys} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <KeyOutlinedIcon sx={{ fontSize: 16 }} />
+                API Keys
               </Tab>
             )}
             {canManageOrg && (
               <Tab value={OrganizationTabs.Settings} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
-                Settings
+                {t('organization.tabs.settings')}
               </Tab>
             )}
           </TabList>
@@ -286,14 +295,14 @@ const OrganizationPage: FC = () => {
             </TabPanel>
             <TabPanel value={OrganizationTabs.Members}>
               <Typography level="title-lg" startDecorator={<GroupOutlinedIcon />} sx={{ mb: 3 }}>
-                Members ({currentSeats} / {maxSeats})
+                {t('organization.headings.members_seats', { current: currentSeats, max: maxSeats })}
               </Typography>
               {currentUser && <OrganizationMembers organization={organization} />}
             </TabPanel>
             {canManageGroups && (
               <TabPanel value={OrganizationTabs.Groups}>
                 <Typography level="title-lg" startDecorator={<GroupWorkOutlinedIcon />} sx={{ mb: 3 }}>
-                  Groups
+                  {t('organization.headings.groups')}
                 </Typography>
                 <OrganizationGroups organization={organization} canSetAdmins={canSetAdmins} />
               </TabPanel>
@@ -301,7 +310,7 @@ const OrganizationPage: FC = () => {
             {canViewUsage && (
               <TabPanel value={OrganizationTabs.Usage}>
                 <Typography level="title-lg" startDecorator={<InsightsOutlinedIcon />} sx={{ mb: 3 }}>
-                  Usage & Spend
+                  {t('organization.headings.usage')}
                 </Typography>
                 <OrganizationUsageSection organization={organization} />
               </TabPanel>
@@ -309,7 +318,7 @@ const OrganizationPage: FC = () => {
             {canViewAnalysis && (
               <TabPanel value={OrganizationTabs.Analysis}>
                 <Typography level="title-lg" startDecorator={<RateReviewOutlinedIcon />} sx={{ mb: 3 }}>
-                  Feedback Analysis
+                  {t('organization.headings.analysis')}
                 </Typography>
                 <OrganizationAnalysisSection organization={organization} />
               </TabPanel>
@@ -317,7 +326,7 @@ const OrganizationPage: FC = () => {
             {canViewBilling && (
               <TabPanel value={OrganizationTabs.Billing}>
                 <Typography level="title-lg" startDecorator={<CreditCardOutlinedIcon />} sx={{ mb: 3 }}>
-                  Billing & Subscription
+                  {t('organization.headings.billing')}
                 </Typography>
                 <OrganizationBillingSection organization={organization} />
               </TabPanel>
@@ -326,7 +335,7 @@ const OrganizationPage: FC = () => {
               <>
                 <TabPanel value={OrganizationTabs.Integrations}>
                   <Typography level="title-lg" startDecorator={<ExtensionOutlinedIcon />} sx={{ mb: 3 }}>
-                    Integrations
+                    {t('organization.headings.integrations')}
                   </Typography>
                   <OrgSlackIntegration organization={organization} />
                 </TabPanel>
@@ -335,7 +344,7 @@ const OrganizationPage: FC = () => {
                 </TabPanel>
                 <TabPanel value={OrganizationTabs.Webhooks}>
                   <Typography level="title-lg" startDecorator={<GitHubIcon />} sx={{ mb: 3 }}>
-                    GitHub Webhooks
+                    {t('organization.headings.webhooks')}
                   </Typography>
                   <OrgWebhookConfig organization={organization} />
                 </TabPanel>
@@ -344,15 +353,27 @@ const OrganizationPage: FC = () => {
             {canManageConnectors && (
               <TabPanel value={OrganizationTabs.Connectors}>
                 <Typography level="title-lg" startDecorator={<HubOutlinedIcon />} sx={{ mb: 3 }}>
-                  Custom Connectors
+                  {t('organization.headings.connectors')}
                 </Typography>
                 <OrgCustomMcpPolicySection key={organization.id} organization={organization} />
+              </TabPanel>
+            )}
+            {canManageConnectors && (
+              <TabPanel value={OrganizationTabs.ApiKeys}>
+                <Typography level="title-lg" startDecorator={<KeyOutlinedIcon />} sx={{ mb: 3 }}>
+                  API Keys
+                </Typography>
+                <OrgApiKeysSection key={organization.id} organizationId={organization.id} />
+                <Typography level="title-md" sx={{ mt: 4, mb: 2 }}>
+                  Member API keys
+                </Typography>
+                <OrgMemberApiKeysSection key={`members-${organization.id}`} organizationId={organization.id} />
               </TabPanel>
             )}
             {canManageOrg && (
               <TabPanel value={OrganizationTabs.Settings}>
                 <Typography level="title-lg" startDecorator={<SettingsOutlinedIcon />} sx={{ mb: 3 }}>
-                  Team Settings
+                  {t('organization.headings.settings')}
                 </Typography>
                 <OrganizationSettingsSection organization={organization} />
               </TabPanel>
@@ -368,6 +389,7 @@ const OrganizationHeader: FC<{
   organization: WithId<IOrganizationDocument>;
   onSettingsClick: () => void;
 }> = ({ organization, onSettingsClick }) => {
+  const { t } = useTranslation();
   const { name, description } = organization;
   const initial = name.charAt(0).toUpperCase();
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
@@ -403,7 +425,7 @@ const OrganizationHeader: FC<{
                 size="sm"
                 onClick={onSettingsClick}
               >
-                Team Settings
+                {t('organization.headings.settings')}
               </Button>
             )}
           </Stack>
@@ -412,14 +434,14 @@ const OrganizationHeader: FC<{
           </Typography>
           <Stack direction="row" spacing={2} mt={1}>
             <Chip size="sm" variant="soft" startDecorator={<GroupOutlinedIcon sx={{ fontSize: 14 }} />}>
-              {currentSeats} Members
+              {t('organization.x_members', { count: currentSeats })}
             </Chip>
             <Chip
               size="sm"
               variant="soft"
               startDecorator={<CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />}
             >
-              {formatCreditAmount(organization.currentCredits)} Credits
+              {t('organization.x_credits', creditBalanceParams(organization.currentCredits))}
             </Chip>
             <Chip
               size="sm"
@@ -427,7 +449,11 @@ const OrganizationHeader: FC<{
               color={paymentIssue ? 'danger' : hasActiveSubscription ? 'success' : 'neutral'}
               startDecorator={<VpnKeyOutlinedIcon sx={{ fontSize: 14 }} />}
             >
-              {paymentIssue ? 'Payment Issue' : hasActiveSubscription ? 'Team Plan' : 'No Active Plan'}
+              {paymentIssue
+                ? t('organization.payment_issue')
+                : hasActiveSubscription
+                  ? t('organization.team_plan')
+                  : t('organization.no_active_plan')}
             </Chip>
           </Stack>
         </Stack>
@@ -437,7 +463,7 @@ const OrganizationHeader: FC<{
 };
 
 const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> = ({ organization }) => {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { currentSeats, maxSeats, pendingSeats, availableSeats } = useOrganizationSeats(organization.id);
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
 
@@ -446,14 +472,14 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
   const activeSubscription = subscription && !subscription.canceledAt && !paymentIssue ? subscription : undefined;
   // Format next billing date
   const formatDate = (date: Date | string | undefined) => {
-    if (!date) return 'N/A';
+    if (!date) return t('organization.overview.not_available');
     return new Date(date).toLocaleDateString(i18n.language, { month: 'short', day: 'numeric', year: 'numeric' });
   };
 
   return (
     <Stack spacing={3}>
       <Typography level="title-lg" startDecorator={<BusinessOutlinedIcon />}>
-        Team Overview
+        {t('organization.headings.overview')}
       </Typography>
 
       {/* First row - Key metrics */}
@@ -461,7 +487,7 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
         <Card variant="outlined" sx={{ flex: 1, minWidth: 200, p: 3 }}>
           <Stack spacing={1}>
             <Typography level="body-xs" color="neutral">
-              Total Members
+              {t('organization.overview.total_members')}
             </Typography>
             <Typography level="h2">{currentSeats}</Typography>
           </Stack>
@@ -473,7 +499,7 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
               color="neutral"
               startDecorator={<CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />}
             >
-              Available Credits
+              {t('organization.overview.available_credits')}
             </Typography>
             <Typography level="h2">{formatCreditAmount(organization.currentCredits)}</Typography>
           </Stack>
@@ -486,33 +512,41 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
         <Card variant="outlined" sx={{ flex: 1, minWidth: 280, p: 3 }} data-testid="subscription-status-card">
           <Stack spacing={2}>
             <Typography level="title-md" startDecorator={<VpnKeyOutlinedIcon sx={{ fontSize: 20 }} />}>
-              Subscription Status
+              {t('organization.overview.subscription_status')}
             </Typography>
             <Stack spacing={1}>
               <Stack direction="row" justifyContent="space-between" alignItems="center">
                 <Typography level="body-sm" color="neutral">
-                  Plan
+                  {t('organization.overview.plan')}
                 </Typography>
                 <Chip
                   size="sm"
                   variant="soft"
                   color={paymentIssue ? 'danger' : activeSubscription ? 'success' : 'neutral'}
                 >
-                  {paymentIssue ? 'Payment Issue' : activeSubscription ? 'Team Plan' : 'No Active Plan'}
+                  {paymentIssue
+                    ? t('organization.payment_issue')
+                    : activeSubscription
+                      ? t('organization.team_plan')
+                      : t('organization.no_active_plan')}
                 </Chip>
               </Stack>
               {activeSubscription && (
                 <>
                   <Stack direction="row" justifyContent="space-between" alignItems="center">
                     <Typography level="body-sm" color="neutral">
-                      Status
+                      {t('organization.overview.status')}
                     </Typography>
-                    <Typography level="body-sm">{activeSubscription.canceledAt ? 'Canceling' : 'Active'}</Typography>
+                    <Typography level="body-sm">
+                      {activeSubscription.canceledAt
+                        ? t('organization.overview.canceling')
+                        : t('organization.overview.active')}
+                    </Typography>
                   </Stack>
                   <Stack direction="row" justifyContent="space-between" alignItems="center">
                     <Typography level="body-sm" color="neutral">
                       <EventAvailableOutlinedIcon sx={{ fontSize: 14, mr: 0.5, verticalAlign: 'text-bottom' }} />
-                      Next Billing
+                      {t('organization.overview.next_billing')}
                     </Typography>
                     <Typography level="body-sm">{formatDate(activeSubscription.periodEndsAt)}</Typography>
                   </Stack>
@@ -527,7 +561,7 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
           <Stack spacing={2}>
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Typography level="title-md" startDecorator={<GroupOutlinedIcon sx={{ fontSize: 20 }} />}>
-                Seats Utilization
+                {t('organization.overview.seats_utilization')}
               </Typography>
               <Typography level="body-sm" color="neutral">
                 {currentSeats} / {maxSeats}
@@ -538,19 +572,19 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
               value={maxSeats > 0 ? (currentSeats / maxSeats) * 100 : 0}
               color={currentSeats >= maxSeats ? 'danger' : currentSeats > maxSeats * 0.8 ? 'warning' : 'primary'}
               sx={{ '--LinearProgress-thickness': '8px' }}
-              aria-label={`Seats utilization: ${currentSeats} of ${maxSeats} seats used`}
+              aria-label={t('organization.overview.seats_utilization_label', { current: currentSeats, max: maxSeats })}
             />
             <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
               <Chip size="sm" variant="soft" color="primary">
-                {currentSeats - pendingSeats} Active
+                {t('organization.overview.x_active', { count: currentSeats - pendingSeats })}
               </Chip>
               {pendingSeats > 0 && (
                 <Chip size="sm" variant="soft" color="warning">
-                  {pendingSeats} Pending
+                  {t('organization.overview.x_pending', { count: pendingSeats })}
                 </Chip>
               )}
               <Chip size="sm" variant="soft" color="neutral">
-                {availableSeats} Available
+                {t('organization.overview.x_available', { count: availableSeats })}
               </Chip>
             </Stack>
           </Stack>

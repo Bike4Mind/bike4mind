@@ -311,6 +311,30 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
     );
   }
 
+  /** Keep collaborator grants and flags while replacing the scoped owner's access in one write. */
+  async reassignMemberContent(
+    scope: { organizationId: string; userId: string; deletedAt: null },
+    recipientId: string
+  ): Promise<{ modifiedCount: number }> {
+    const { organizationId, userId } = scope;
+    if (!organizationId || !userId || !recipientId || userId === recipientId) {
+      throw new Error('Artifact reassignment requires an organization and two distinct users');
+    }
+    const query = this.model.updateMany(
+      { organizationId, userId, deletedAt: null },
+      {
+        $set: { userId: recipientId },
+        $pull: {
+          'permissions.canRead': userId,
+          'permissions.canWrite': userId,
+          'permissions.canDelete': userId,
+        },
+      }
+    );
+    if (this._txn) query.session(this._txn);
+    return query.exec();
+  }
+
   /**
    * One newest-first page of `conditions`, bounded before `beforeId` when given. Shared by the public
    * list and search so their cursor handling, projection and hasMore rule cannot drift apart.
