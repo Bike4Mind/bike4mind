@@ -421,6 +421,21 @@ describe('move-to-server-utils', () => {
       expect(run(root, args)).toEqual({ changed: [], warnings: [] });
     });
 
+    it('accepts a relative import of a non-source asset git-moved alongside its importer', () => {
+      write('packages/server-utils/src/memory/factCipher.ts', "import fields from './fields.json';\n");
+      write('packages/server-utils/src/memory/fields.json', '{}\n');
+
+      expect(run(root, ['apps/client/server/memory/factCipher.ts']).warnings).toEqual([]);
+      expect(read('packages/server-utils/src/memory/factCipher.ts')).toBe("import fields from './fields.json';\n");
+    });
+
+    it('throws when a moved file imports a non-source asset left behind in apps/', () => {
+      write('packages/server-utils/src/memory/factCipher.ts', "import fields from './fields.json';\n");
+      write('apps/client/server/memory/fields.json', '{}\n');
+
+      expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/stays in apps\/client/);
+    });
+
     it('writes nothing when a moved file still imports a file left in apps/', () => {
       write('packages/server-utils/src/memory/factCipher.ts', "import { h } from './helper';\n");
       write('apps/client/server/memory/helper.ts', 'export const h = 1;\n');

@@ -304,8 +304,11 @@ export function run(root: string, oldPaths: string[]): { changed: string[]; warn
     }
   });
 
+  // A non-source asset (e.g. a .json the moved code imports) keeps its extension in the specifier,
+  // so it is only an in-package file when that exact path is one; git mv it alongside its importer.
   const isPackageFile = (target: string) =>
-    ['.ts', '/index.ts'].some(ext => existsSync(path.join(root, `${target}${ext}`)));
+    ['.ts', '/index.ts'].some(ext => existsSync(path.join(root, `${target}${ext}`))) ||
+    (!SOURCE_EXT.test(target) && path.extname(target) !== '' && existsSync(path.join(root, target)));
   // Two passes: findRewrites throws on a left-behind import, and that must happen before any write.
   const pending: { absFile: string; file: string; next: string }[] = [];
   const warnings: string[] = [];
