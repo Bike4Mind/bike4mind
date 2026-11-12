@@ -100,7 +100,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.seats.ceiling_raised': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.conversion.initiated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.revoked': { category: 'org', severity: 'notice', write: 'strict' },
-  'org.group_types.updated': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.group_types.updated': { category: 'org', severity: 'info', write: 'strict' },
   'org.admins.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.owner.transferred': { category: 'org', severity: 'notice', write: 'strict' },
   'org.group_member.assigned': { category: 'org', severity: 'info', write: 'bestEffort' },

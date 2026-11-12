@@ -53,11 +53,22 @@ describe('Organizations tab URL precedence', () => {
     expect(fakeAdminRouter.navigate).toHaveBeenLastCalledWith(expect.objectContaining({ replace: true }));
   });
 
+  it('normalizes an old persisted page size to an available choice', () => {
+    act(() => {
+      useOrganizationsTab.setState({ params: { ...STORED, limit: 20 } });
+      fakeAdminRouter.reset({ tab: 'organizations' });
+    });
+    const { result } = renderOrganizationsTab();
+    expect(result.current[0]).toMatchObject({ limit: 25, page: 1, search: 'Acme' });
+    expect(useOrganizationsTab.getState().params.limit).toBe(25);
+    expect(fakeAdminRouter.search.orgsLimit).toBeUndefined();
+  });
+
   it('lets a URL view win and copies it into the store for the next bare visit', () => {
     act(() => fakeAdminRouter.reset({ tab: 'organizations', orgsPage: 2, orgsPersonal: false }));
     const { result } = renderOrganizationsTab();
 
-    const expectedView = { page: 2, limit: 10, sortBy: 'name', sortDirection: 'asc', personal: false };
+    const expectedView = { page: 2, limit: 25, sortBy: 'name', sortDirection: 'asc', personal: false };
     // Missing view params are defaults, not the stored values: a shared link means what it says.
     expect(result.current[0]).toMatchObject(expectedView);
     expect(useOrganizationsTab.getState().params).toMatchObject({ ...expectedView, search: 'Acme' });
@@ -68,7 +79,7 @@ describe('Organizations tab URL precedence', () => {
     act(() => fakeAdminRouter.reset({ tab: 'organizations', orgsSort: 'credits', orgsLimit: 7 }));
     const { result } = renderOrganizationsTab();
 
-    const defaultView = { page: 1, limit: 10, sortBy: 'name', sortDirection: 'asc', personal: undefined };
+    const defaultView = { page: 1, limit: 25, sortBy: 'name', sortDirection: 'asc', personal: undefined };
     expect(result.current[0]).toMatchObject(defaultView);
     expect(useOrganizationsTab.getState().params).toMatchObject({ ...defaultView, search: 'Acme' });
     expect(fakeAdminRouter.search).toEqual({ tab: 'organizations', orgsPage: 1 });
