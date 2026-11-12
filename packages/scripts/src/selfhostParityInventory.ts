@@ -129,6 +129,8 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'aws.lambda.Permission', reason: 'IAM grant for an inventoried trigger.' },
   { shape: 'aws.sqs.QueuePolicy', reason: 'IAM grant for an inventoried queue.' },
   { shape: 'aws.sns.TopicPolicy', reason: 'IAM grant for an inventoried topic.' },
+  { shape: 'aws.iam.Policy', reason: 'IAM grant for a covered web surface, no compute.' },
+  { shape: 'aws.iam.RolePolicyAttachment', reason: 'Attaches an aws.iam.Policy to a role, no compute.' },
   { shape: 'aws.lambda.Invocation', reason: 'Deploy-time one-shot invoke; the invoked Function is inventoried.' },
   { shape: 'aws.ses.ReceiptRuleSet', reason: 'Container for the inventoried aws.ses.ReceiptRule.' },
   { shape: 'aws.ses.ActiveReceiptRuleSet', reason: 'Activation of the inventoried receipt rule set.' },

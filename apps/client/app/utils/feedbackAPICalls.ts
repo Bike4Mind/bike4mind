@@ -6,6 +6,7 @@ import type {
   FeedbackListResponse,
   IExtendedFeedbackDocument,
 } from '@client/app/components/admin/Feedback/types';
+import type { FeedbackTrends } from '@client/app/components/admin/Feedback/feedbackTrends';
 
 /**
  * Hard ceiling on rows a CSV export will page through. The export has to cover every row matching
@@ -14,6 +15,11 @@ import type {
  * partial file.
  */
 export const FEEDBACK_EXPORT_MAX_ROWS = 5000;
+
+export const getFeedbackTrendsFromServer = async (): Promise<FeedbackTrends> => {
+  const response = await api.get<FeedbackTrends>('/api/admin/feedback-trends');
+  return response.data;
+};
 
 export const getFeedbackFromServer = async (params: FeedbackListParams): Promise<FeedbackListResponse> => {
   const response = await api.get<FeedbackListResponse>('/api/feedback', { params });

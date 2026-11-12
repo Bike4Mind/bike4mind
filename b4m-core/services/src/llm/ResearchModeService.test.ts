@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { getLlmByModel } from '@bike4mind/llm-adapters';
-import { ChatModels, estimateStreamedOutputTokens, type ModelInfo } from '@bike4mind/common';
+import { ChatModels, estimateStreamedOutputTokens, ModelBackend, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionOptions } from '@bike4mind/llm-adapters';
 import { ResearchModeService, researchConfigTimeoutMs } from './ResearchModeService';
 import { researchModeUsages } from './ChatCompletionProcess';
@@ -170,6 +170,80 @@ function useBackend(complete: ReturnType<typeof vi.fn>) {
 function waitForAbort(signal: AbortSignal) {
   return new Promise<void>(resolve => signal.addEventListener('abort', () => resolve()));
 }
+
+describe('ResearchModeService reasoning effort', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each(['none', 'high'] as const)(
+    'saved chat effort %s takes precedence in each research configuration',
+    async reasoningEffort => {
+      const complete = vi.fn().mockResolvedValue(undefined);
+      mockedGetLlmByModel.mockReturnValue({ complete } as never);
+      const models = [
+        {
+          id: ChatModels.CLAUDE_5_5_HAIKU,
+          backend: ModelBackend.Anthropic,
+          can_think: true,
+          thinkingStyle: 'adaptive',
+        },
+        {
+          id: ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
+          backend: ModelBackend.Bedrock,
+          can_think: true,
+          thinkingStyle: 'adaptive',
+        },
+        { id: ChatModels.GPT5, backend: ModelBackend.OpenAI },
+      ] as ModelInfo[];
+      const service = new ResearchModeService({}, models, logger);
+      const mode = {
+        enabled: true,
+        configurations: models.map(model => ({ id: model.id, model: model.id, enabled: true, parameters: {} })),
+      };
+      await service.processResearchMode(
+        mode,
+        [],
+        {
+          reasoningEffort,
+          thinking: { enabled: reasoningEffort === 'none', budget_tokens: 8000 },
+        } as ICompletionOptions,
+        onStream
+      );
+      const sent = Object.fromEntries(complete.mock.calls.map(call => [call[0], call[2]]));
+      for (const model of models.slice(0, 2)) {
+        expect(sent[model.id].reasoningEffort).toBe(reasoningEffort);
+        expect(sent[model.id].thinking.enabled).toBe(false);
+      }
+      expect(sent[ChatModels.GPT5].reasoningEffort).toBe(reasoningEffort === 'none' ? 'low' : 'high');
+      expect(sent[ChatModels.GPT5].thinking.enabled).toBe(reasoningEffort === 'none');
+    }
+  );
+
+  it("narrows the user's reasoning effort to what each configuration's model takes", async () => {
+    const complete = vi.fn().mockResolvedValue(undefined);
+    mockedGetLlmByModel.mockReturnValue({ complete } as never);
+    const models = [
+      { id: ChatModels.GPT5, name: 'GPT-5', backend: ModelBackend.OpenAI },
+      { id: ChatModels.GPT5_2, name: 'GPT-5.2', backend: ModelBackend.OpenAI },
+      { id: ChatModels.CLAUDE_4_5_HAIKU, name: 'Haiku', backend: ModelBackend.Anthropic, can_think: true },
+    ] as ModelInfo[];
+    const service = new ResearchModeService({}, models, logger);
+    const mode = {
+      enabled: true,
+      configurations: models.map(m => ({ id: m.id, enabled: true, model: m.id, parameters: {} })),
+    };
+
+    await service.processResearchMode(mode, [], { reasoningEffort: 'xhigh' } as ICompletionOptions, onStream);
+
+    const sent = Object.fromEntries(complete.mock.calls.map(call => [call[0], call[2].reasoningEffort]));
+    expect(sent).toEqual({
+      [ChatModels.GPT5]: 'high',
+      [ChatModels.GPT5_2]: 'xhigh',
+      [ChatModels.CLAUDE_4_5_HAIKU]: undefined,
+    });
+  });
+});
 
 describe('researchConfigTimeoutMs', () => {
   it('falls back to the base for a missing or non-positive budget', () => {

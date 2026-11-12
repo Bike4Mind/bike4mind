@@ -1,6 +1,6 @@
 import { buildDataLakeAccessContext, type AccessContext, type AccessContextOptions } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
-import { getRequestEntitlements, type EntitlementRequest } from '../entitlements/index';
+import { getCompleteRequestEntitlements, getRequestEntitlements, type EntitlementRequest } from '../entitlements/index';
 import { getRequestMembershipOrgIds } from './requestMembership';
 
 /**
@@ -40,13 +40,22 @@ export async function toMemberAccessContext(req: EntitlementRequest): Promise<Ac
   return buildAccessContext(req, { asMember: true });
 }
 
-function buildAccessContext(req: EntitlementRequest, options?: AccessContextOptions): Promise<AccessContext> {
+/** Complete member reach for audit classification; browsing keeps its existing fallback policy. */
+export async function toCompleteMemberAccessContext(req: EntitlementRequest): Promise<AccessContext> {
+  return buildAccessContext(req, { asMember: true }, true);
+}
+
+function buildAccessContext(
+  req: EntitlementRequest,
+  options?: AccessContextOptions,
+  requireComplete = false
+): Promise<AccessContext> {
   const user = req.user!;
   return buildDataLakeAccessContext(
     user,
     {
       membershipOrgIds: () => getRequestMembershipOrgIds(req),
-      entitlementKeys: () => getRequestEntitlements(req),
+      entitlementKeys: () => (requireComplete ? getCompleteRequestEntitlements(req) : getRequestEntitlements(req)),
       administeredOrgIds: () => organizationRepository.findIdsWithAdminRights(user.id),
     },
     options

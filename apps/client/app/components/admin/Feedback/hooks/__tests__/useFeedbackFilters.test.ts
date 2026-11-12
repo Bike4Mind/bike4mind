@@ -182,6 +182,32 @@ describe('useFeedbackFilters', () => {
     });
   });
 
+  describe('received', () => {
+    it('sends the picked window and omits it again when cleared', () => {
+      const { result } = setup();
+
+      act(() => {
+        result.current.setReceived('24h');
+      });
+      expect(result.current.filterParams.received).toBe('24h');
+
+      act(() => {
+        result.current.setReceived(undefined);
+      });
+      expect(result.current.filterParams).not.toHaveProperty('received');
+    });
+
+    it('resets the page to 1 in one URL write', () => {
+      act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackPage: 4 }));
+      const { result } = setup();
+
+      act(() => result.current.setReceived('7d'));
+
+      expect(fakeAdminRouter.search).not.toHaveProperty('feedbackPage');
+      expect(fakeAdminRouter.navigate).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('flips the sort direction without touching the other filters', () => {
     const { result } = setup();
 

@@ -43,6 +43,15 @@ export function oauthClientDisplayName(clientId: string): string {
  */
 export const NATIVE_OAUTH_CLIENT_ID = 'b4m-ios-app';
 
+/**
+ * The native app's development client: same app, a private-use scheme redirect
+ * (`com.bike4mind.app://auth-callback`, RFC 8252) instead of the claimed https link, so unsigned
+ * development builds can sign in. Any app can claim a custom scheme, and first-party clients skip
+ * consent, so this client exists on non-production stages only. Seeded by
+ * packages/scripts/migrate/migrations/20260921236951_ensure-native-dev-oauth-client.ts.
+ */
+export const NATIVE_DEV_OAUTH_CLIENT_ID = 'b4m-ios-app-dev';
+
 const MAX_SOURCE_SLUG_LENGTH = 64;
 const OAUTH_CLIENT_ID_SHAPE = /^[A-Za-z0-9._:-]{1,128}$/;
 

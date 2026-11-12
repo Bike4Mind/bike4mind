@@ -40,19 +40,21 @@ const QUEUE_ONE = {
 const h = vi.hoisted(() => ({
   replay: vi.fn(),
   user: null as null | { isAdmin?: boolean; adminPermissions?: string[] },
+  queueLogsUrl: null as string | null,
+  messages: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: h.user }) }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({
-    data: state.queues.map(q => ({ messageRetentionSeconds: state.retentionSeconds, ...q })),
+    data: state.queues.map(q => ({ messageRetentionSeconds: state.retentionSeconds, logsUrl: h.queueLogsUrl, ...q })),
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
   }),
   useDlqMessages: () => ({
-    data: state.messages,
+    data: h.messages.length ? h.messages : state.messages,
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -104,6 +106,8 @@ beforeEach(() => {
   state.queues = [QUEUE_ONE];
   state.retentionSeconds = undefined;
   h.user = null;
+  h.queueLogsUrl = null;
+  h.messages = [];
 });
 
 describe('DlqReplayTab failure metadata', () => {
@@ -239,6 +243,51 @@ describe('DlqReplayTab messages table', () => {
     const titleAttr = tooltipWrapper?.getAttribute('title') ?? tooltipWrapper?.getAttribute('aria-label') ?? '';
     expect(titleAttr).toContain('including views in this browser');
     expect(titleAttr).toContain('not a count of handler failures');
+  });
+});
+
+describe('DlqReplayTab consumer log links', () => {
+  const queueUrl = 'https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#queue';
+  const rowUrl = 'https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#m1';
+
+  const expectNewTabLink = (el: HTMLElement, href: string) => {
+    expect(el).toHaveAttribute('href', href);
+    expect(el).toHaveAttribute('target', '_blank');
+    expect(el).toHaveAttribute('rel', 'noopener noreferrer');
+  };
+
+  it('links the queue, each row and the drawer to their own logs window', async () => {
+    h.queueLogsUrl = queueUrl;
+    h.messages = [
+      { messageId: 'm1', body: '{}', sentTimestamp: String(1_700_000_000_000), logsUrl: rowUrl },
+      { messageId: 'm2', body: '{}', sentTimestamp: String(1_700_000_000_000), logsUrl: null },
+    ];
+    await renderWithQueueSelected();
+
+    expectNewTabLink(screen.getByTestId('dlq-queue-logs'), queueUrl);
+    expectNewTabLink(screen.getByTestId('dlq-logs-m1'), rowUrl);
+    expect(screen.queryByTestId('dlq-logs-m2')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('dlq-view-m1'));
+    expectNewTabLink(await screen.findByTestId('dlq-drawer-logs'), rowUrl);
+  });
+
+  it('hides every log link when the API returns none', async () => {
+    await renderWithQueueSelected();
+
+    expect(screen.queryByTestId('dlq-queue-logs')).toBeNull();
+    expect(screen.queryByTestId('dlq-logs-m1')).toBeNull();
+    fireEvent.click(screen.getByTestId('dlq-view-m1'));
+    expect(screen.queryByTestId('dlq-drawer-logs')).toBeNull();
+  });
+
+  it('does not open the message drawer when the row log link is clicked', async () => {
+    h.messages = [{ messageId: 'm1', body: '{}', sentTimestamp: String(1_700_000_000_000), logsUrl: rowUrl }];
+    await renderWithQueueSelected();
+
+    fireEvent.click(screen.getByTestId('dlq-logs-m1'));
+
+    expect(screen.queryByTestId('dlq-drawer-close')).toBeNull();
   });
 });
 
