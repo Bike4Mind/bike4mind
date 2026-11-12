@@ -1,5 +1,5 @@
 import { organizationRepository } from '@bike4mind/database';
-import { BadRequestError, ConflictError, HTTPError } from '@bike4mind/common';
+import { BadRequestError, ConflictError, HTTPError, orgMemberHasPermission } from '@bike4mind/common';
 import {
   SubscriptionOwnerType,
   SubscriptionSource,
@@ -54,8 +54,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
     let customerId: string | null;
     if (row.ownerType === SubscriptionOwnerType.Organization) {
       const organization = await organizationRepository.findById(row.ownerId);
-      // Owner only, matching the billing portal and the payment-failed email recipient.
-      if (!organization || organization.userId !== user.id) throw new BadRequestError(NOT_FOUND_MESSAGE);
+      // The caller's own manageBilling, with no platform-admin arm, matching the billing portal.
+      if (!organization || !orgMemberHasPermission(organization, user.id, 'manageBilling')) {
+        throw new BadRequestError(NOT_FOUND_MESSAGE);
+      }
       customerId = organization.stripeCustomerId ?? null;
     } else {
       if (row.ownerId !== user.id) throw new BadRequestError(NOT_FOUND_MESSAGE);

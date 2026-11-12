@@ -1,4 +1,4 @@
-import { IOrganizationDocument } from '@bike4mind/common';
+import { IOrganizationDocument, orgMemberHasPermission } from '@bike4mind/common';
 import { useStripePortal, useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import {
   useGetSubscriptionsByOwner,
@@ -306,12 +306,13 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
   // but it must not read as healthy - Stripe is dunning it and entitlements deny access.
   const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
   const { currentUser } = useUser();
-  // Only the owner may pay, as with the portal; admin grants have no Stripe invoice.
+  // Same gate as pay-invoice.ts and the portal (manageBilling, no platform-admin arm); admin grants
+  // have no Stripe invoice.
   const payableSubscriptionId =
     subscription &&
     paymentIssue &&
     !!currentUser &&
-    currentUser.id === organization.userId &&
+    orgMemberHasPermission(organization, currentUser.id, 'manageBilling') &&
     resolveSubscriptionSource(subscription) === SubscriptionSource.Stripe
       ? subscription.subscriptionId
       : undefined;

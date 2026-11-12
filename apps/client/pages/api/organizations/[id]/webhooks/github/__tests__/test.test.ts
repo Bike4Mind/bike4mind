@@ -89,6 +89,12 @@ describe('POST /api/organizations/[id]/webhooks/github/test', () => {
     expect(globalFetch).not.toHaveBeenCalled();
   });
 
+  it('gates on the owner-only manageIntegrations permission', async () => {
+    await sendTestPing();
+
+    expect(h.verifyOrgPermission).toHaveBeenCalledWith({ id: 'user-1' }, 'org-1', 'manageIntegrations');
+  });
+
   it('rejects the request when the pinned fetch refuses the dialed address', async () => {
     h.fetchMock.mockRejectedValue(new h.SsrfError('Blocked connection to a private address for x'));
 
