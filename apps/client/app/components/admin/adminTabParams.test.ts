@@ -57,6 +57,21 @@ describe('adminSearchForTab', () => {
   });
 });
 
+// The alarm's DLQ replay button links here; without the registration validateSearch drops the queue.
+describe('Dead letters tab params', () => {
+  it('keeps dlqQueue through validateSearch', () => {
+    expect(parseAdminSearch({ tab: 'dlq-replay', dlqQueue: 'fab-file-chunk' })).toMatchObject({
+      tab: 'dlq-replay',
+      dlqQueue: 'fab-file-chunk',
+    });
+  });
+
+  it('keeps dlqQueue on the Dead letters tab and drops it on another tab', () => {
+    expect(adminSearchForTab({ dlqQueue: 'fab-file-chunk' }, 'dlq-replay').dlqQueue).toBe('fab-file-chunk');
+    expect(adminSearchForTab({ dlqQueue: 'fab-file-chunk' }, 'users').dlqQueue).toBeUndefined();
+  });
+});
+
 describe('Users tab params', () => {
   const usersSearch = {
     tab: 'users',
@@ -384,6 +399,11 @@ describe('useAdminListUrlState keys', () => {
     PENDING_SEARCH_KEYS,
     STRIPE_DISPUTE_SEARCH_KEYS,
     MODEL_METRICS_SEARCH_KEYS,
+    ECONOMY_SEARCH_KEYS: {
+      query: 'economyQuery',
+      view: 'creditView',
+      filters: { from: 'economyFrom', to: 'economyTo', owner: 'economyOwner', flow: 'economyFlow' },
+    },
   };
   // Left out of the registry on purpose, so validateSearch strips them: free-text searches that can
   // hold personal data, saved-view names that are not shareable yet, and query/view keys a tab never writes.
@@ -404,6 +424,7 @@ describe('useAdminListUrlState keys', () => {
     'disputeView',
     'metricsQuery',
     'metricsView',
+    'economyQuery',
   ]);
   const registered = new Set<string>(Object.values(ADMIN_TAB_PARAMS).flat());
 

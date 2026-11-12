@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Stack, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import { MarginDashboard } from './components/MarginDashboard';
 import { ModelPricingCatalog } from './components/ModelPricingCatalog';
@@ -12,12 +12,23 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useCreditAnalysisStore, type CreditAnalysisTab } from './store';
 import { AdminPageHeader } from '../shared';
 import { ADMIN_REGION_GAP, adminTabStrip } from '../shared/adminStyles';
+import { useNavigate, useSearch } from '@tanstack/react-router';
+import { CreditEconomy } from './components/CreditEconomy';
 
 export const CreditAnalyticsTab: React.FC = () => {
   // Held in the store rather than locally so another admin tab can land the
   // operator on a specific inner tab (Model Lifecycle -> Model Pricing).
   const activeTab = useCreditAnalysisStore(state => state.activeTab);
   const setActiveTab = useCreditAnalysisStore(state => state.setActiveTab);
+  const search = useSearch({ strict: false });
+  const navigate = useNavigate();
+  const pricingModelId = useCreditAnalysisStore(state => state.pricingModelId);
+  const selectedTab = pricingModelId ? 'pricing' : search.creditView === 'economy' ? 'economy' : activeTab;
+  useEffect(() => {
+    if (pricingModelId && search.creditView === 'economy') {
+      void navigate({ to: '/admin', replace: true, search: previous => ({ ...previous, creditView: undefined }) });
+    }
+  }, [pricingModelId, search.creditView, navigate]);
 
   return (
     <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }}>
@@ -27,11 +38,21 @@ export const CreditAnalyticsTab: React.FC = () => {
         actions={<ContextHelpButton helpId="admin/credit-analytics" tooltipText="Credit analytics help" />}
       />
       <Tabs
-        value={activeTab}
-        onChange={(_, value) => setActiveTab(value as CreditAnalysisTab)}
+        value={selectedTab}
+        onChange={(_, value) => {
+          setActiveTab(value as CreditAnalysisTab);
+          void navigate({
+            to: '/admin',
+            replace: true,
+            search: previous => ({ ...previous, creditView: value === 'economy' ? 'economy' : undefined }),
+          });
+        }}
         sx={{ minWidth: 0, gap: ADMIN_REGION_GAP }}
       >
         <TabList sx={adminTabStrip}>
+          <Tab value="economy" data-testid="credit-analysis-economy-tab">
+            Economy
+          </Tab>
           <Tab value="users" data-testid="credit-analysis-users-tab">
             User credits
           </Tab>
@@ -55,6 +76,9 @@ export const CreditAnalyticsTab: React.FC = () => {
           </Tab>
         </TabList>
 
+        <TabPanel value="economy" sx={{ p: 0 }}>
+          <CreditEconomy />
+        </TabPanel>
         <TabPanel value="users" sx={{ p: 0 }}>
           <UserCreditsManager />
         </TabPanel>

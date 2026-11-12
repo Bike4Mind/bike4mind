@@ -61,6 +61,7 @@ vi.mock('@bike4mind/services', () => ({
   userService: { adminDeleteUser: (...a: unknown[]) => mockAdminDeleteUser(...a) },
 }));
 vi.mock('@bike4mind/database', () => ({
+  FeedbackNoteModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
   erasureRecordRepository: { record: mockRecordErasure },
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   userRepository: {
