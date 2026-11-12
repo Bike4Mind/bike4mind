@@ -107,13 +107,10 @@ public struct ChatQuestFrame: Hashable, Sendable {
 }
 
 extension ChatQuestFrame {
-  /// The joined non-empty `replies` slots, else a non-empty `reply`. `nil` when neither has text, so an
-  /// optimized frame never blanks text an earlier frame showed.
+  /// The visible text of the `replies` slots (see `ReplyVisibility`), else a non-empty `reply`. `nil` when
+  /// neither has text, so an optimized frame never blanks text an earlier frame showed.
   static func replyText(reply: JSONValue?, replies: JSONValue?) -> String? {
-    let joined = (replies?.arrayValue ?? []).compactMap(\.stringValue).filter { !$0.isEmpty }.joined()
-    if !joined.isEmpty { return joined }
-    guard let reply = reply?.stringValue, !reply.isEmpty else { return nil }
-    return reply
+    ReplyVisibility.text(replies: (replies?.arrayValue ?? []).compactMap(\.stringValue), reply: reply?.stringValue)
   }
 }
 

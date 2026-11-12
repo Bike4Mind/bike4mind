@@ -161,8 +161,10 @@ private struct ChatScreen: View {
         }
       )
       .onChange(of: model.messages.last) { _, last in
-        guard let last else { return }
-        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
+        // From iOS 18 the bottom anchor also holds through size changes. An animated scrollTo racing a
+        // reply's height change can leave the lazy stack blank until the next scroll, so it is not animated.
+        guard #unavailable(iOS 18.0), let last else { return }
+        proxy.scrollTo(last.id, anchor: .bottom)
       }
       .accessibilityIdentifier("transcript-scroll")
     }
