@@ -46,6 +46,9 @@ import type { DataColumn } from './shared/DataTable';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { AdminPermissionAction } from './shared/MissingPermission';
 import { formatDuration, formatExpiresIn, getDlqExpiry } from './dlqExpiry';
+import { requiresDlqReplayReason } from '@bike4mind/common';
+import { DlqRecommendation } from './DlqRecommendation';
+import { DlqReplaySummary } from './DlqReplaySummary';
 
 const REPLAY_CHIP: Record<DlqReplaySafety, { tone: AdminStatusTone; label: string }> = {
   safe: { tone: 'good', label: 'Safe to replay' },
@@ -307,13 +310,14 @@ const DlqReplayTab: React.FC = () => {
     setConfirmOpen(true);
   };
 
-  const confirmReplay = async () => {
+  const confirmReplay = async (reason: string) => {
     if (!selectedQueue || !hasReplayDestination) return;
     setConfirmOpen(false);
     try {
       const result = await replayMutation.mutateAsync({
         queueLabel: selectedQueue,
         batchSize: 100,
+        reason: reason || undefined,
       });
       if (result.failed > 0 && result.replayed === 0) {
         toast.error(`Replay failed: all ${result.failed} messages failed.`);
@@ -333,15 +337,15 @@ const DlqReplayTab: React.FC = () => {
     }
   };
 
-  const confirmSingleReplay = async () => {
+  const confirmSingleReplay = async (reason: string) => {
     if (!selectedQueue || !singleReplayConfirm || !hasReplayDestination) return;
     const { messageId, receiptHandle, body } = singleReplayConfirm;
     setSingleReplayConfirm(null);
     try {
       const result = await replayMutation.mutateAsync(
         receiptHandle
-          ? { queueLabel: selectedQueue, messages: [{ messageId, receiptHandle, body }] }
-          : { queueLabel: selectedQueue, messageIds: [messageId] }
+          ? { queueLabel: selectedQueue, reason: reason || undefined, messages: [{ messageId, receiptHandle, body }] }
+          : { queueLabel: selectedQueue, reason: reason || undefined, messageIds: [messageId] }
       );
       const messageResult = result.results?.find(r => r.messageId === messageId);
       if (result.notFound > 0) {
@@ -411,9 +415,12 @@ const DlqReplayTab: React.FC = () => {
     </Stack>
   );
   const failure = (msg: DlqMessage) => (
-    <Typography level="body-xs" sx={{ overflowWrap: 'anywhere' }} data-testid={`dlq-reason-${msg.messageId}`}>
-      {msg.failure?.errorMessage ?? 'Unknown'}
-    </Typography>
+    <Stack gap={0.5}>
+      <Typography level="body-xs" sx={{ overflowWrap: 'anywhere' }} data-testid={`dlq-reason-${msg.messageId}`}>
+        {msg.failure?.errorMessage ?? 'Unknown'}
+      </Typography>
+      <DlqRecommendation message={msg} />
+    </Stack>
   );
   const category = (msg: DlqMessage) => (
     <StatusChip
@@ -827,39 +834,32 @@ const DlqReplayTab: React.FC = () => {
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
         title="Replay messages"
-        description={
-          <>
-            Replay up to 100 messages from <strong>{selectedQueueInfo?.displayName}</strong> to its source queue for
-            reprocessing. Messages with 3 or more previous replay attempts (including failures) are skipped.
-          </>
-        }
-        reasonPresets={[]}
-        reasonAudited={false}
+        reasonPresets={['Reviewed failure and replay side effects']}
+        reasonRequired={requiresDlqReplayReason(selectedQueueInfo?.replay)}
         confirmLabel="Replay messages"
-        blockedReason={!hasReplayDestination ? 'No replay destination is available for this queue.' : null}
         pending={replayMutation.isPending}
         onConfirm={confirmReplay}
+        blockedReason={!hasReplayDestination ? 'No replay destination is available.' : null}
         data-testid="dlq-replay-dialog"
         testIds={{ confirm: 'dlq-replay-confirm' }}
-      />
+      >
+        <DlqReplaySummary queue={selectedQueueInfo} count={100} batch />
+      </ActionDialog>
       <ActionDialog
         open={!!singleReplayConfirm}
         onClose={() => setSingleReplayConfirm(null)}
         title="Replay message"
-        description={
-          <>
-            Replay message <strong>{singleReplayConfirm?.messageId}</strong> to the source queue for reprocessing.
-          </>
-        }
-        reasonPresets={[]}
-        reasonAudited={false}
+        reasonPresets={['Reviewed failure and replay side effects']}
+        reasonRequired={requiresDlqReplayReason(selectedQueueInfo?.replay)}
         confirmLabel="Replay message"
-        blockedReason={!hasReplayDestination ? 'No replay destination is available for this queue.' : null}
         pending={replayMutation.isPending}
         onConfirm={confirmSingleReplay}
+        blockedReason={!hasReplayDestination ? 'No replay destination is available.' : null}
         data-testid="dlq-single-replay-dialog"
         testIds={{ confirm: 'dlq-single-replay-confirm' }}
-      />
+      >
+        <DlqReplaySummary queue={selectedQueueInfo} count={1} />
+      </ActionDialog>
     </Stack>
   );
 };

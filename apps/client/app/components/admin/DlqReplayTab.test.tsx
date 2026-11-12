@@ -128,6 +128,7 @@ describe('DlqReplayTab toolkit presentation', () => {
     expect(within(row).getAllByRole('cell')).toHaveLength(1);
     expect(row).toHaveTextContent('m1');
     expect(row).toHaveTextContent('worker timed out');
+    expect(within(row).getByTestId('dlq-recommendation-m1')).toHaveTextContent('Recorded transient failure: timeout.');
     await userEvent.click(screen.getByTestId('dlq-view-m1'));
     expect(screen.getByTestId('dlq-failure-reason')).toHaveTextContent('worker timed out');
   });
@@ -153,7 +154,7 @@ describe('DlqReplayTab toolkit presentation', () => {
     await renderWithQueueSelected();
     await userEvent.click(screen.getByTestId(openId));
     expect(screen.getByTestId(confirmId)).toBeDisabled();
-    expect(screen.getByTestId(`${dialogId}-reason-input-helper`)).toHaveTextContent('Not stored yet');
+    expect(screen.getByTestId(`${dialogId}-reason-input-helper`)).toHaveTextContent('Recorded in the audit log');
     fireEvent.change(screen.getByTestId(`${dialogId}-reason-input`), { target: { value: 'Reviewed the failure' } });
     expect(screen.getByTestId(confirmId)).toBeEnabled();
     await userEvent.click(screen.getByTestId(`${dialogId}-cancel-btn`));
@@ -162,6 +163,14 @@ describe('DlqReplayTab toolkit presentation', () => {
 });
 
 describe('DlqReplayTab failure metadata', () => {
+  it('shows an advisory recommendation and its basis on each row', async () => {
+    state.messages[0].failure = { errorMessage: 'worker timed out', category: 'timeout' };
+    await renderWithQueueSelected();
+    expect(screen.getByTestId('dlq-recommendation-m1')).toHaveTextContent('Replay');
+    expect(screen.getByTestId('dlq-recommendation-m1')).toHaveTextContent('Recorded transient failure: timeout.');
+    expect(screen.getByTestId('dlq-recommendation-m1')).toHaveTextContent('Advisory only');
+  });
+
   it('shows recorded reason and category in the row and drawer', async () => {
     state.messages[0].failure = { errorMessage: 'worker timed out', category: 'timeout' };
     await renderWithQueueSelected();
@@ -262,6 +271,38 @@ describe('DlqReplayTab history table', () => {
 });
 
 describe('DlqReplayTab replay permission', () => {
+  it.each(['side-effects', 'unsafe', undefined])(
+    'shows consequences and requires a reason for %s in single and batch replay',
+    async replay => {
+      h.user = { isAdmin: true };
+      state.queues = [
+        { ...QUEUE_ONE, replay, description: 'Delivers notifications.', replayNote: 'A replay can deliver again.' },
+      ];
+      h.replay.mockResolvedValue({ replayed: 1, failed: 0, skipped: 0, notFound: 0, results: [] });
+      await renderWithQueueSelected();
+      for (const [opener, confirm, dialog] of [
+        ['dlq-replay-single-m1', 'dlq-single-replay-confirm', 'dlq-single-replay-dialog'],
+        ['dlq-replay-all', 'dlq-replay-confirm', 'dlq-replay-dialog'],
+      ]) {
+        await userEvent.click(screen.getByTestId(opener));
+        expect(screen.getByTestId('dlq-replay-summary')).toHaveTextContent('Queue One');
+        expect(screen.getByTestId('dlq-replay-summary')).toHaveTextContent('A replay can deliver again.');
+        expect(screen.getByTestId(confirm)).toBeDisabled();
+        fireEvent.change(screen.getByTestId(`${dialog}-reason-input`), { target: { value: 'Reviewed side effects' } });
+        await userEvent.click(screen.getByTestId(confirm));
+        expect(h.replay).toHaveBeenLastCalledWith(expect.objectContaining({ reason: 'Reviewed side effects' }));
+      }
+    }
+  );
+
+  it('allows a safe replay without a reason', async () => {
+    h.user = { isAdmin: true };
+    state.queues = [{ ...QUEUE_ONE, replay: 'safe' }];
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-replay-all'));
+    expect(screen.getByTestId('dlq-replay-confirm')).toBeEnabled();
+  });
+
   it('disables both replay buttons for a support:read viewer', async () => {
     h.user = { isAdmin: false, adminPermissions: ['support:read'] };
     await renderWithQueueSelected();
