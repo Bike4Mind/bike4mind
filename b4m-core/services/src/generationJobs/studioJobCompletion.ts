@@ -52,9 +52,10 @@ const loadGroup = async (
 
 /**
  * Emits `studio.job.completed` once per finished Studio group, from the terminal handling of each of its jobs.
- * Each job's terminal state is committed before this runs, so the last of a group to finish always sees the whole
- * group terminal; when two finish together and both see it, the claim on the group's anchor (lowest id) lets
- * exactly one publish. A group the user cancelled outright is not announced: they already know.
+ * Each job's terminal state is committed before this runs, so once the whole group is stored, the last of it to finish
+ * sees every member terminal; when two finish together and both see it, the claim on the group's anchor (lowest id)
+ * lets exactly one publish. At most once: a publish that fails after the claim is not retried. A group the user
+ * cancelled outright is not announced: they already know.
  */
 export async function emitStudioJobCompletion(
   job: IGenerationJobDocument,

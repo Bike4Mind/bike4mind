@@ -508,7 +508,13 @@ const announceStudioCompletion = async (job: IGenerationJobDocument): Promise<vo
   await emitStudioJobCompletion(job, {
     repository: generationJobRepository,
     publish: async event => {
-      await StudioEvents.JobCompleted.publish(event);
+      try {
+        await StudioEvents.JobCompleted.publish(event);
+      } catch (error) {
+        // The group is already claimed, so this notification is lost; the log is the only trace of it.
+        logger.error('studio job completion publish failed', { jobId: job.id, groupId: event.groupId, error });
+        throw error;
+      }
     },
     now: () => new Date(),
   });

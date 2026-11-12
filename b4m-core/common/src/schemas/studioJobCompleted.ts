@@ -31,7 +31,10 @@ export const StudioJobCompletionSchema = z.object({
   cancelledCount: count,
   /** Short label for the batch (the prompt today), plain text and never empty. */
   title: z.string().min(1).max(STUDIO_COMPLETION_TITLE_MAX_CHARS),
-  /** App-relative path that opens the takes, e.g. `/studio/image?group=<groupId>`; native clients map it. */
+  /**
+   * App-relative path to the medium's Studio page, e.g. `/studio/image?group=<groupId>`; native clients map it.
+   * `group` names the batch for a surface that can single it out (the web gallery does not yet).
+   */
   link: z.string().startsWith('/studio/'),
   completedAt: z.iso.datetime(),
 });
@@ -42,6 +45,6 @@ export const StudioJobCompletedEventSchema = StudioJobCompletionSchema.extend({
 });
 export type StudioJobCompletedEvent = z.infer<typeof StudioJobCompletedEventSchema>;
 
-/** The link target for a group: the medium's Studio page, narrowed to the group. */
+/** The link target for a group: the medium's Studio page, carrying the group's id. */
 export const studioCompletionLink = (medium: StudioCompletionMedium, groupId: string): string =>
   `/studio/${medium}?group=${encodeURIComponent(groupId)}`;

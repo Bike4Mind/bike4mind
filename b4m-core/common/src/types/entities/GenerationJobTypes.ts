@@ -129,8 +129,9 @@ export type ImageJobPayload = {
   /** Shared by the jobs one "make N" request created, so a surface can show them as one batch. */
   groupId?: string;
   /**
-   * How many jobs the request created. The batch is persisted one job at a time, so an early finisher can see a
-   * partial group; completion waits until this many are stored and terminal. Absent on jobs made before it existed.
+   * How many jobs the request asked for. The batch is persisted one job at a time, so an early finisher can see a
+   * partial group; completion waits until this many are stored and terminal. A batch that aborts mid-persist never
+   * reaches it and is not announced. Absent on jobs made before it existed.
    */
   groupSize?: number;
   output?: ImageJobOutput;
