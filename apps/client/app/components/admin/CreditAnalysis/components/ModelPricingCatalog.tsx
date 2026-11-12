@@ -125,11 +125,11 @@ export const UNIT_FIELD_SUFFIX: Record<string, string> = {
 // other is a 1e6 mispricing that takes effect the instant the row is appended.
 const TOKENS_PER_MILLION = 1_000_000;
 
-// per_token rates are USD per single token and read best scaled to 1M; other
-// units are already human-scale and must NOT be inflated.
 const formatUsd = (value: number) =>
   `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
 
+// per_token rates are USD per single token and read best scaled to 1M; other
+// units are already human-scale and must NOT be inflated.
 const formatRate = (unit: string, value: number | undefined) => {
   if (value === undefined) return '-';
   const scaled = unit === 'per_token' ? value * TOKENS_PER_MILLION : value;
