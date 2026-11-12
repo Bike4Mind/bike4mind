@@ -4,6 +4,7 @@ import ListItemDecorator from '@mui/joy/ListItemDecorator';
 import Menu from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
+import { useLayoutEffect, useRef } from 'react';
 import { AGENT_STATE_LABEL, type AgentState, type AgentView } from '../roster';
 import { poseFor, type SlotPoint, type TavernZone } from './scene';
 import { characterSprite, type CharacterId } from './tavernArt';
@@ -55,9 +56,22 @@ export function OverflowStack({
   const holdsSelection = stacked.some(({ agent }) => agent.id === selectedId);
   const count = stacked.length;
   const needsYou = urgent ? `, ${needing} ${needing === 1 ? 'needs' : 'need'} you` : '';
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // The stack goes once its last agent takes a seat, open menu and all; keep focus in the scene, not on body.
+  useLayoutEffect(
+    () => () => {
+      const focused = document.activeElement;
+      const scene = buttonRef.current?.parentElement;
+      if (!focused || !scene) return;
+      if (buttonRef.current?.contains(focused) || menuRef.current?.contains(focused)) scene.focus();
+    },
+    []
+  );
   return (
     <Dropdown>
       <MenuButton
+        ref={buttonRef}
         data-testid={`orchestrator-tavern-overflow-${zone}`}
         data-urgent={urgent || undefined}
         aria-label={`${count} more ${ZONE_PLACE[zone]}${needsYou}; list them`}
@@ -141,6 +155,7 @@ export function OverflowStack({
         </Box>
       </MenuButton>
       <Menu
+        ref={menuRef}
         size="sm"
         placement="bottom"
         data-testid={`orchestrator-tavern-overflow-${zone}-list`}

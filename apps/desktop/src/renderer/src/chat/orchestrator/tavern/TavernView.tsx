@@ -713,6 +713,8 @@ export function TavernView({
         data-testid="orchestrator-tavern"
         role="group"
         aria-label="Tavern"
+        // Focusable only by script: where focus lands when an overflow stack it was in goes away.
+        tabIndex={-1}
         aria-describedby={summaryId}
         sx={{
           position: 'relative',

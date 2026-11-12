@@ -272,6 +272,16 @@ describe('TavernView', () => {
       for (const agent of agents) expect(listed.has(agent.id) || drawn.has(agent.id)).toBe(true);
     });
 
+    it('keeps focus in the scene when the last stacked agent takes a seat with the list open', async () => {
+      await renderTavern(working(7));
+      stack('workbench').focus();
+      await key(stack('workbench'), 'ArrowDown');
+      expect(document.activeElement).toBe(listItems()[0]);
+      await renderTavern([agentFixture('w0', 'done'), ...working(7).slice(1)]);
+      expect(query('orchestrator-tavern-overflow-workbench')).toBeNull();
+      expect(document.activeElement).toBe(el('orchestrator-tavern'));
+    });
+
     it('marks a stack urgent when it holds a needs-you agent', async () => {
       await renderTavern(needing(21));
       expect(el('orchestrator-tavern-overflow-bar-count').textContent).toBe('!+1');
