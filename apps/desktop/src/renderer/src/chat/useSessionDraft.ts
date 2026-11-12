@@ -66,6 +66,16 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
       placement.current = place;
       current.current = next;
       setSession(next);
+      void window.b4m.chat
+        .modelForNewSession()
+        .then(model => {
+          const draft = current.current;
+          if (typeof model !== 'string' || !model || draft?.id !== next.id || draft.model || sending.current) return;
+          const updated = { ...draft, model };
+          current.current = updated;
+          setSession(updated);
+        })
+        .catch(() => undefined);
       return next.id;
     },
     [discard]
@@ -105,16 +115,24 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
   const share = useCallback(
     async (path?: string) => {
       const before = current.current;
-      const directory = path ?? (await window.b4m.chat.pickProjectDirectory());
+      let directory: string | null;
+      try {
+        directory = path ?? (await window.b4m.chat.pickProjectDirectory());
+      } catch (cause) {
+        if (before && current.current?.id === before.id)
+          setError(cause instanceof Error ? cause.message : String(cause));
+        return;
+      }
       if (!before || !directory || current.current?.id !== before.id) return;
-      if (before.project)
+      const latest = current.current;
+      if (latest.project)
         await patch({
           project: {
-            ...before.project,
-            contextDirectories: [...new Set([...before.project.contextDirectories, directory])],
+            ...latest.project,
+            contextDirectories: [...new Set([...latest.project.contextDirectories, directory])],
           },
         });
-      else await patch({ grantedDirectories: [...new Set([...(before.grantedDirectories ?? []), directory])] });
+      else await patch({ grantedDirectories: [...new Set([...(latest.grantedDirectories ?? []), directory])] });
     },
     [patch]
   );
@@ -172,11 +190,15 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
         accepted = true;
         if (created.sidebarSections) place?.placed(created.sidebarSections);
         else if (created.placementFailed) place?.failed();
-        await onListChanged();
-        if (current.current?.id === draft.id) {
-          current.current = null;
-          setSession(null);
-          onCreated(id);
+        try {
+          await onListChanged();
+        } finally {
+          // Once accepted, a failed sidebar refresh must not leave a resendable draft.
+          if (current.current?.id === draft.id) {
+            current.current = null;
+            setSession(null);
+            onCreated(id);
+          }
         }
         await window.b4m.chat.discardDraftAttachments(draft.id);
         return true;

@@ -215,6 +215,7 @@ export const IPC_CHANNELS = {
   chatExportLocalData: 'chat:export-local-data',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
+  chatDraftModel: 'chat:draft-model',
   chatCreateCodeSession: 'chat:create-code-session',
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
@@ -863,6 +864,7 @@ export interface DesktopApi {
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(request?: CreateSessionRequest): Promise<CreatedSession>;
+    modelForNewSession(): Promise<string | undefined>;
     /**
      * Start a Code session, creating or adopting its worktree first when one is asked for.
      * A request with no `directory` creates an UNBOUND session, which the chip row then binds.

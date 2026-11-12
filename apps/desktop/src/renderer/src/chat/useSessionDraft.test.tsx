@@ -19,6 +19,7 @@ const addContextDirectory = vi.fn();
 const copyDraftAttachments = vi.fn();
 const discardDraftAttachments = vi.fn();
 const deleteSession = vi.fn();
+const modelForNewSession = vi.fn();
 const controller = () => draft.wrap({} as ConversationController);
 function Harness() {
   draft = useSessionDraft(opened, reload);
@@ -35,11 +36,13 @@ beforeEach(async () => {
   copyDraftAttachments.mockResolvedValue(undefined);
   discardDraftAttachments.mockResolvedValue(undefined);
   deleteSession.mockResolvedValue(undefined);
+  modelForNewSession.mockResolvedValue('default-model');
   const saved = async () => ({ id: 'created' });
   Object.assign(window, {
     b4m: {
       chat: {
         createSession,
+        modelForNewSession,
         createCodeSession,
         sendMessage,
         setSessionModel,
@@ -66,6 +69,35 @@ afterEach(() => {
 });
 
 describe('renderer-only session drafts', () => {
+  it('uses the remembered starting model without overriding a deliberate draft choice', async () => {
+    let resolve!: (model: string) => void;
+    modelForNewSession.mockReturnValueOnce(
+      new Promise<string>(done => {
+        resolve = done;
+      })
+    );
+    await act(async () => {
+      draft.start('chat');
+    });
+    await act(async () => controller().setModel('chosen'));
+    await act(async () => resolve('remembered'));
+    expect(draft.session?.model).toBe('chosen');
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('retires an accepted draft even if refreshing the sidebar fails', async () => {
+    reload.mockRejectedValueOnce(new Error('refresh failed'));
+    await act(async () => {
+      draft.start('chat');
+    });
+    await act(async () => {
+      expect(await controller().send('Hello')).toBe(true);
+    });
+    expect(draft.session).toBeNull();
+    expect(opened).toHaveBeenCalledWith('created');
+    expect(deleteSession).not.toHaveBeenCalled();
+  });
+
   it('reuses New without creating or listing a session, and discards on navigation', async () => {
     let first = '';
     await act(async () => {

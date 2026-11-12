@@ -807,6 +807,7 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
     service.listModels(force === 'local' ? 'local' : force === true)
   );
+  ipcMain.handle(IPC_CHANNELS.chatDraftModel, () => service.modelForNewSession());
   registerModelServersIpc(ipcMain, modelServers, async () => {
     const probed = await localHardware.probed();
     return probed && machineView(probed);

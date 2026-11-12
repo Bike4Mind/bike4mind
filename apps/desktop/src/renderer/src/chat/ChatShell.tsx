@@ -394,7 +394,7 @@ export function ChatShell({
       : null;
   const creationTools = useCreationTools(
     `${auth?.status ?? 'none'}:${auth?.environment.url ?? ''}:${auth?.user?.id ?? 'device-local'}`,
-    draftActive ? null : blankChatId,
+    blankChatId,
     conversation.session?.model
   );
   // Cleared once the composer takes it, or a composer remounted by another screen would take it again.
