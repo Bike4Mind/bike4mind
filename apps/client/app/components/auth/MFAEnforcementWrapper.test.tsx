@@ -37,12 +37,15 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (s: unknown) => unknown) => selector({ currentUser: { id: 'u1', mfa: null } }),
 }));
 
-// Not impersonating; getState is only touched on the verify path (not exercised here).
+// Not impersonating; getState is touched on the verify path and by the sign-out's funnel report.
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: Object.assign((selector: (s: unknown) => unknown) => selector({ impersonating: false }), {
-    getState: () => ({ forceLogoutTokens: vi.fn() }),
+    getState: () => ({ forceLogoutTokens: vi.fn(), accessToken: 'session-tok' }),
   }),
 }));
+
+const { reportMfaEnrollmentAbandoned } = vi.hoisted(() => ({ reportMfaEnrollmentAbandoned: vi.fn() }));
+vi.mock('@client/app/utils/mfaEnrollmentFunnel', () => ({ reportMfaEnrollmentAbandoned }));
 
 const { logoutMutate } = vi.hoisted(() => ({ logoutMutate: vi.fn() }));
 vi.mock('@client/app/hooks/data/user', () => ({
@@ -193,6 +196,7 @@ describe('MFAEnforcementWrapper - a session stuck at the verification prompt', (
 
     fireEvent.click(signOut);
     expect(logoutMutate).toHaveBeenCalledTimes(1);
+    expect(reportMfaEnrollmentAbandoned).toHaveBeenCalledExactlyOnceWith('session-tok');
   });
 
   it('tells the user when the sign-out fails, instead of leaving them on the screen silently', async () => {
