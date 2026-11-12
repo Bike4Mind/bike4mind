@@ -237,17 +237,15 @@ export const handler = withEventContext(async (event, logger) => {
   session.summaryModelId = modelId as ChatModelName;
   session.summaryTrigger = trigger;
 
-  const summaryContent = summaryText;
-
-  logger.info(`Summary: ${summaryContent}`);
+  logger.info(`Summary: ${summaryText}`);
 
   // Create a FabFile for the summary so we can chunk and vectorize it to be
   // used for RAG prompting
   const fabFileData = {
     userId: session.userId,
     fileName: `[Automatic summary] ${session.name || 'Notebook'}.txt`,
-    fileContent: summaryContent,
-    fileSize: Buffer.byteLength(summaryContent),
+    fileContent: summaryText,
+    fileSize: Buffer.byteLength(summaryText),
     mimeType: SupportedFabFileMimeTypes.TXT_PLAIN,
     isPublic: false,
     type: KnowledgeType.FILE,
@@ -418,7 +416,7 @@ export const handler = withEventContext(async (event, logger) => {
           throw new Error(`Failed to generate file path for notebook ${session.id} summary`);
         }
 
-        await getFilesStorage().upload(summaryContent, newFabFile.filePath, { ContentType: newFabFile.mimeType });
+        await getFilesStorage().upload(summaryText, newFabFile.filePath, { ContentType: newFabFile.mimeType });
       }
     });
   } catch (error) {
