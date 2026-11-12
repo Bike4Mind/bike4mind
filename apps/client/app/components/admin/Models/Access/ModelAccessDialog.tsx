@@ -44,7 +44,7 @@ type Props = {
 export function ModelAccessDialog({ target, change, title, confirmLabel, onClose, onDone, children }: Props) {
   const invalidate = useInvalidateModelAccess();
   const showUndo = useUndoToast();
-  const { openModel } = useModelsNavigation();
+  const { modelHref } = useModelsNavigation();
   const [adminOnlyConfirmed, setAdminOnlyConfirmed] = useState(false);
   const [serverAskedAdminOnly, setServerAskedAdminOnly] = useState(false);
 
@@ -104,7 +104,7 @@ export function ModelAccessDialog({ target, change, title, confirmLabel, onClose
           });
           await invalidate();
         },
-        onViewAudit: () => void openModel(target.id, 'admin'),
+        auditHref: modelHref(target.id, 'admin'),
       });
     }
     onDone?.(result);

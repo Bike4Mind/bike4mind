@@ -1,4 +1,4 @@
-import { Fragment, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Alert,
   Box,
@@ -53,6 +53,7 @@ import {
   useAdminListUrlState,
   useUndoToast,
   useUndoToastIsCurrent,
+  useUndoToastOffersUndo,
   type AdminSelection,
   type DataColumn,
   type DataTableSort,
@@ -180,25 +181,29 @@ const leftoverSentence = ({ label, ids, expired, uncertain }: UndoLeftover, resu
   return `${subject} was not undone${expired ? ': its undo had expired.' : resumable ? ' yet.' : '.'}`;
 };
 
-/** What an undo left behind, each model linked to its page: the ones it left as they are, then each unreverted write. */
-function UndoLeftovers({
-  failed,
-  unconfirmed,
-  leftovers,
-  resumable,
-  onOpen,
-}: {
+type UndoLeftoversProps = {
   failed: FailedEntry[];
   unconfirmed: FailedEntry[];
   leftovers: UndoLeftover[];
   resumable: boolean;
+  /** Set while the undo toast offers Undo: leaving this page would drop it and the writes it can still revert. */
+  newTab: boolean;
+  modelHref: (id: string) => string;
   onOpen: (id: string) => void;
-}) {
-  const modelLink = (id: string, testId: string) => (
-    <Link component="button" type="button" level="body-xs" onClick={() => onOpen(id)} data-testid={testId}>
-      {id}
-    </Link>
-  );
+};
+
+/** What an undo left behind, each model linked to its page: the ones it left as they are, then each unreverted write. */
+function UndoLeftovers({ failed, unconfirmed, leftovers, resumable, newTab, modelHref, onOpen }: UndoLeftoversProps) {
+  const modelLink = (id: string, testId: string) =>
+    newTab ? (
+      <Link href={modelHref(id)} target="_blank" rel="noopener noreferrer" level="body-xs" data-testid={testId}>
+        {id}
+      </Link>
+    ) : (
+      <Link component="button" type="button" level="body-xs" onClick={() => onOpen(id)} data-testid={testId}>
+        {id}
+      </Link>
+    );
   const canResume = resumable && leftovers.some(leftover => !leftover.expired);
   return (
     <>
@@ -250,6 +255,30 @@ function UndoLeftovers({
   );
 }
 
+const createFlagStore = (initial: boolean) => {
+  let value = initial;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => value,
+    set: (next: boolean) => {
+      if (next === value) return;
+      value = next;
+      listeners.forEach(listener => listener());
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+  };
+};
+type FlagStore = ReturnType<typeof createFlagStore>;
+
+/** UndoLeftovers in an undo's notice, which the toaster renders outside this page's providers. */
+function NoticeLeftovers({ newTabStore, ...props }: Omit<UndoLeftoversProps, 'newTab'> & { newTabStore: FlagStore }) {
+  const newTab = useSyncExternalStore(newTabStore.subscribe, newTabStore.get);
+  return <UndoLeftovers {...props} newTab={newTab} />;
+}
+
 const toggleEdit = (row: AdminModelRow): AccessEdit => {
   const on = effectiveAccess(row.access.entry).enabled;
   const verb = on ? 'Turn off' : 'Turn on';
@@ -263,10 +292,13 @@ export function ModelListSection() {
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const urlQuery = readAdminListState(search, MODELS_LIST_SEARCH_KEYS).query.trim().slice(0, SEARCH_MAX);
   const { filters } = state;
-  const { openModel, openPrices } = useModelsNavigation();
+  const { openModel, openPrices, modelHref } = useModelsNavigation();
   const invalidate = useInvalidateModelAccess();
   const showUndo = useUndoToast();
   const isUndoToastCurrent = useUndoToastIsCurrent();
+  const undoOffered = useUndoToastOffersUndo();
+  const [undoOfferedStore] = useState(() => createFlagStore(undoOffered));
+  useEffect(() => undoOfferedStore.set(undoOffered), [undoOffered, undoOfferedStore]);
   const writeBlock = useModelWriteBlock();
 
   const providers = splitList(filters.providers);
@@ -428,11 +460,13 @@ export function ModelListSection() {
             <Typography level="body-sm" sx={{ fontWeight: 600 }}>
               {summary}
             </Typography>
-            <UndoLeftovers
+            <NoticeLeftovers
               failed={notReverted}
               unconfirmed={unconfirmed}
               leftovers={leftovers}
               resumable={resumable}
+              newTabStore={undoOfferedStore}
+              modelHref={modelHref}
               onOpen={id => void openModel(id)}
             />
           </Stack>
@@ -752,6 +786,8 @@ export function ModelListSection() {
                 unconfirmed={outcome.unconfirmed}
                 leftovers={outcome.leftovers}
                 resumable={outcome.resumable}
+                newTab={undoOffered}
+                modelHref={modelHref}
                 onOpen={id => void openModel(id)}
               />
             )}

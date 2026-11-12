@@ -80,7 +80,7 @@ Each opens a dialog that previews the change on the server before anything is wr
 - Any model the change would leave visible only to admins, listed separately with a confirmation you must check
 - A required reason, recorded in each model's admin log
 
-If another admin changes the selected models after the preview, the dialog shows a fresh preview instead of applying the old one. After the change is applied, a summary reports what changed. Models that could not be changed are listed with **Retry failed**. A toast offers **Undo**, which reverts the whole batch, including any models changed by **Retry failed**. If some models changed again before you undo, Undo reverts the others and lists the ones it skipped, each linked to its model page with the reason. Change those back from each model's page.
+If another admin changes the selected models after the preview, the dialog shows a fresh preview instead of applying the old one. After the change is applied, a summary reports what changed. Models that could not be changed are listed with **Retry failed**. A toast offers **Undo**, which reverts the whole batch, including any models changed by **Retry failed**. If some models changed again before you undo, Undo reverts the others and lists the ones it skipped, each linked to its model page with the reason. While the toast still offers **Undo**, those links open in a new tab, so leaving for a model does not lose the Undo. Change those back from each model's page.
 
 ## Model detail
 
@@ -98,7 +98,7 @@ The page has three tabs:
 
 Turning a model on or off, and editing its tags, entitlements, rank, or fallback, opens a dialog that shows the value before and after the change and asks for a reason. A user can pick a model that is turned on when they hold any one of its tags or entitlements. The tag picker suggests every tag users hold, plus tags already set on other models. If the change would leave the model visible only to admins, you must confirm that first.
 
-Changes apply right away and are recorded in the Admin log. A toast offers **Undo**. If another admin changed the model after you opened it, the change is refused and you are asked to reload. Open model pickers drop or add the model within about 15 seconds.
+Changes apply right away and are recorded in the Admin log. A toast offers **Undo**, and **View audit entry** opens the model's Admin log in a new tab. If another admin changed the model after you opened it, the change is refused and you are asked to reload. Open model pickers drop or add the model within about 15 seconds.
 
 The fallback model is used when a request to this model fails at the provider. **Automatic** means no fallback is set and the platform's built-in fallback order applies. The picker offers listed and limited models of the same type. A saved fallback outside those still shows, with its status, so you can see it and replace it.
 

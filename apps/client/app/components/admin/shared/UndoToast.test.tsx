@@ -9,6 +9,7 @@ import {
   type UndoToastOptions,
   useUndoToast,
   useUndoToastIsCurrent,
+  useUndoToastOffersUndo,
 } from './UndoToast';
 
 const theme = extendTheme({ ...getThemeConfig() });
@@ -79,6 +80,42 @@ describe('UndoToast', () => {
     fireEvent.click(screen.getByTestId('audited-btn'));
     fireEvent.click(screen.getByTestId('undo-toast-audit-btn'));
     expect(onViewAudit).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens an audit entry given by URL in a new tab, leaving the toast and its Undo here', () => {
+    render(<Trigger options={{ message: 'Audited', onUndo: vi.fn(), auditHref: '/admin/audit/entry-1' }} />, {
+      wrapper: TestWrapper,
+    });
+    fireEvent.click(screen.getByTestId('trigger-btn'));
+
+    const audit = screen.getByTestId('undo-toast-audit-btn');
+    expect(audit.tagName).toBe('A');
+    expect(audit).toHaveAttribute('href', '/admin/audit/entry-1');
+    expect(audit).toHaveAttribute('target', '_blank');
+    expect(audit).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('says whether the toast on screen offers Undo', () => {
+    const { result } = renderHook(() => ({ show: useUndoToast(), offersUndo: useUndoToastOffersUndo() }), {
+      wrapper: TestWrapper,
+    });
+    expect(result.current.offersUndo).toBe(false);
+
+    act(() => void result.current.show({ message: 'Changed', onUndo: vi.fn() }));
+    expect(result.current.offersUndo).toBe(true);
+    act(() => void result.current.show({ message: 'Undo: 1 model reverted.' }));
+    expect(result.current.offersUndo).toBe(false);
+  });
+
+  it('stops offering Undo once the toast is dismissed', async () => {
+    const { result } = renderHook(() => ({ show: useUndoToast(), offersUndo: useUndoToastOffersUndo() }), {
+      wrapper: TestWrapper,
+    });
+    act(() => void result.current.show({ message: 'Changed', onUndo: vi.fn() }));
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(result.current.offersUndo).toBe(false));
+    expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
   });
 
   it('shows one toast at a time: a new write replaces the previous offer', () => {

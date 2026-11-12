@@ -12,7 +12,11 @@ export type UndoToastOptions = {
   onUndo?: () => void | Promise<void>;
   /** Opens the audit entry for the write being offered for undo. */
   onViewAudit?: () => void;
+  /** The audit entry's URL, opened in a new tab so leaving for it cannot drop this toast's Undo. Used over onViewAudit. */
+  auditHref?: string;
 };
+
+const AUDIT_BUTTON_SX = { color: 'inherit', flexShrink: 0, whiteSpace: 'nowrap' } as const;
 
 /** Shows the toast, replacing any other, and returns its id. */
 type ShowUndoToast = (options: UndoToastOptions) => number;
@@ -20,6 +24,8 @@ type ShowUndoToast = (options: UndoToastOptions) => number;
 type IsUndoToastCurrent = (id: number | null) => boolean;
 
 const UndoToastContext = createContext<{ show: ShowUndoToast; isCurrent: IsUndoToastCurrent } | null>(null);
+// Apart from the stable show/isCurrent, so a toast coming and going re-renders only the readers of this.
+const UndoOfferedContext = createContext(false);
 
 /** Bottom-center recovery toast for admin writes. One at a time: showing a new one replaces the last. */
 export const UndoToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -68,7 +74,7 @@ export const UndoToastProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   return (
     <UndoToastContext.Provider value={api}>
-      {children}
+      <UndoOfferedContext.Provider value={!!toast?.onUndo}>{children}</UndoOfferedContext.Provider>
       {toast && (
         <Snackbar
           key={toast.id}
@@ -95,17 +101,33 @@ export const UndoToastProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             )}
           </Stack>
           <Stack direction="row" gap={1} sx={{ ml: 'auto', flexShrink: 0 }}>
-            {toast.onViewAudit && (
+            {toast.auditHref ? (
               <Button
+                component="a"
+                href={toast.auditHref}
+                target="_blank"
+                rel="noopener noreferrer"
                 size="sm"
                 variant="plain"
                 color="neutral"
-                onClick={toast.onViewAudit}
-                sx={{ color: 'inherit', flexShrink: 0, whiteSpace: 'nowrap' }}
+                sx={AUDIT_BUTTON_SX}
                 data-testid="undo-toast-audit-btn"
               >
                 View audit entry
               </Button>
+            ) : (
+              toast.onViewAudit && (
+                <Button
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  onClick={toast.onViewAudit}
+                  sx={AUDIT_BUTTON_SX}
+                  data-testid="undo-toast-audit-btn"
+                >
+                  View audit entry
+                </Button>
+              )
             )}
             {toast.onUndo && (
               <Button
@@ -140,3 +162,6 @@ export const useUndoToastIsCurrent = (): IsUndoToastCurrent => {
   if (!api) throw new Error('useUndoToastIsCurrent must be used within an UndoToastProvider');
   return api.isCurrent;
 };
+
+/** Whether the toast on screen offers Undo: leaving the page now would drop it and the writes it can still revert. */
+export const useUndoToastOffersUndo = (): boolean => useContext(UndoOfferedContext);

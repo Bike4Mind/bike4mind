@@ -389,6 +389,24 @@ describe('ModelListSection single-model access', () => {
     expect(screen.getByTestId('model-access-reload-btn')).toBeInTheDocument();
   });
 
+  it("opens the change's audit entry in a new tab, so the toast keeps its Undo", async () => {
+    serveList(() => listResponse([listedRow]));
+    patch.mockResolvedValue({ data: { entry: null, changed: true, revision: 'r2' } });
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    fireEvent.click(within(await screen.findByTestId('models-row-example-text-1')).getByTestId('models-row-menu-btn'));
+    fireEvent.click(await screen.findByTestId('models-row-toggle-item'));
+    pickReason('model-access-dialog');
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+
+    const audit = await screen.findByTestId('undo-toast-audit-btn');
+    expect(audit.tagName).toBe('A');
+    expect(audit).toHaveAttribute('href', '/admin/models/example-text-1?tab=admin');
+    expect(audit).toHaveAttribute('target', '_blank');
+    expect(audit).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(screen.getByTestId('undo-toast-undo-btn')).toBeInTheDocument();
+  });
+
   it('keeps a blocked fix action in a row from opening the model', async () => {
     user.current = { isAdmin: false, adminPermissions: ['settings:manage'] };
     const offRow = modelRow({
@@ -760,6 +778,30 @@ describe('ModelListSection bulk access', () => {
     expect(report).not.toHaveTextContent('may not have been undone');
   });
 
+  it('opens the models a stopped undo left in a new tab while the toast can resume it, here once it closes', async () => {
+    serveList(twoRows);
+    serveBulk(async token => {
+      if (token === 'undo-1') return undoneOne('example-text-1');
+      throw apiFailure(422, { error: 'Access store unavailable' });
+    });
+    const { router } = await applyThenRetry();
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await screen.findByTestId('undo-toast-error');
+
+    const link = within(screen.getByTestId('models-bulk-failed')).getByTestId('models-bulk-not-undone-link');
+    expect(link.tagName).toBe('A');
+    expect(link).toHaveAttribute('href', '/admin/models/example-text-2');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument());
+    const inTab = screen.getByTestId('models-bulk-not-undone-link');
+    expect(inTab).not.toHaveAttribute('href');
+    fireEvent.click(inTab);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/admin/models/example-text-2'));
+  });
+
   const stampMoved = (id: string): { data: ModelAccessBulkResult } => ({
     data: {
       batchId: `undo-${id}`,
@@ -1094,6 +1136,15 @@ describe('ModelListSection bulk access', () => {
     expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Updated 1 of 2. 1 failed');
     expect(screen.queryByTestId('undo-toast-error')).not.toBeInTheDocument();
 
+    // The newer retry's toast still offers Undo, so leaving for a model must not drop it.
+    const link = shown.getByTestId('models-bulk-not-undone-link');
+    expect(link.tagName).toBe('A');
+    expect(link).toHaveAttribute('href', '/admin/models/example-text-2');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(shown.getByTestId('models-bulk-not-undone-link')).not.toHaveAttribute('href'));
     fireEvent.click(shown.getByTestId('models-bulk-not-undone-link'));
     await waitFor(() => expect(router.state.location.pathname).toBe('/admin/models/example-text-2'));
   });
