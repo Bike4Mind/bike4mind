@@ -153,8 +153,9 @@ baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN], grandfatherL
 
 A legacy key (see `LEGACY_API_KEY_WINDOW` and `isLegacyApiKey` in
 `packages/server-utils/src/middlewares/apiKeyScopeGate.ts`) that misses the scopes is still
-admitted, and every such pass logs `API key scope check missed but legacy key grandfathered -
-allowing` with its `keyId`. That log is the list of owners who still need to create a scoped
+admitted, and the pass logs `API key scope check missed but legacy key grandfathered -
+allowing` with its `keyId`, at most once per key and route per hour in each server process.
+That log is the list of owners who still need to create a scoped
 key. A key created after the cutoff, a confined key, and a key missing an `alsoRequiredScopes`
 entry are refused as usual. A method narrowed in the handler passes the same option:
 `assertApiKeyScope(req, [scope], message, { grandfatherLegacyKeys: true })`.
