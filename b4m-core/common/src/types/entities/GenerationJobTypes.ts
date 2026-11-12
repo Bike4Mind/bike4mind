@@ -124,8 +124,14 @@ export type ImageJobOutput = Omit<VideoJobOutput, 'durationSeconds'>;
  * and stored in the submit step. An async provider (BFL) queues a task instead: the handle is kept while the job
  * polls, and the provider's delivery URL (never its bytes) until the store step downloads it.
  */
+/** Image job work beyond a plain render. `cutout`: remove the background of its edit_source (a product shot). */
+export const IMAGE_JOB_PURPOSES = ['cutout'] as const;
+export type ImageJobPurpose = (typeof IMAGE_JOB_PURPOSES)[number];
+
 export type ImageJobPayload = {
   request: StoredImageRequest;
+  /** Absent for a plain render. Server-set: a client cannot ask for it on the image-jobs route. */
+  purpose?: ImageJobPurpose;
   providerId: ImageProviderId;
   providerHandle?: GenerationProviderJobHandle<ImageProviderId>;
   providerOutput?: ProviderOutput;

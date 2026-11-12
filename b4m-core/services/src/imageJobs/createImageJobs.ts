@@ -238,7 +238,7 @@ async function persistBatch(
           ...(input.apiKeyId !== undefined && { apiKeyId: input.apiKeyId }),
           source: input.source,
           state: 'pending',
-          payload: { request, providerId, groupId },
+          payload: { request, providerId, groupId, ...(input.purpose !== undefined && { purpose: input.purpose }) },
           pollCount: 0,
           attempts: 0,
           cancelRequested: false,

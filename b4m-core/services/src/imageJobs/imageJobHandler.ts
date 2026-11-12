@@ -27,6 +27,7 @@ import type { CreditLedgerEntry } from '../creditService/creditHold';
 import { isUsableApiKey } from '../generationJobs/apiKey';
 import { releaseJobHold, settleJobHold } from '../generationJobs/settlement';
 import type { GenerationJobHandler, GenerationJobStepContext, StepResult } from '../generationJobs/types';
+import { finishCutout, prepareCutoutInputs, type PreparedCutout } from './cutout';
 import { estimateImageJobUsd } from './imageJobCost';
 import type { ImageJob, ImageJobDeps } from './types';
 
@@ -37,7 +38,7 @@ const FALLBACK_SAVE_BUDGET_MS = 10_000;
 
 type ImageStepResult = StepResult<'image'>;
 type UnsuccessfulResult = Exclude<ProviderTerminalResult, { status: 'succeeded' }>;
-type PreparedSubmit = { provider: ImageProvider; inputs: ImageInputs; ctx: ProviderContext };
+type PreparedSubmit = { provider: ImageProvider; inputs: ImageInputs; ctx: ProviderContext; cutout?: PreparedCutout };
 
 const fail = (code: GenerationJobErrorCode, message: string, rawProviderError?: unknown): ImageStepResult => ({
   next: 'failed',
@@ -114,7 +115,10 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     }
     const inputs = await loadInputs(job);
     if ('next' in inputs) return inputs;
-    return { provider, inputs, ctx };
+    if (job.payload.purpose !== 'cutout') return { provider, inputs, ctx };
+    const cutout = await prepareCutoutInputs(request, inputs);
+    if ('error' in cutout) return fail('provider_error', `cutout source could not be prepared: ${cutout.error}`);
+    return { provider, inputs: cutout.inputs, ctx, cutout };
   };
 
   const saveOutput = async (
@@ -167,7 +171,9 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     provider: ImageProvider,
     ctx: ProviderContext,
     providerOutput: ProviderOutput,
-    context: GenerationJobStepContext
+    context: GenerationJobStepContext,
+    // Only a sync job carries one: the cutout model (CUTOUT_MODEL) is a sync provider.
+    cutout?: PreparedCutout
   ): Promise<ImageStepResult> => {
     let bytes: Buffer;
     try {
@@ -182,7 +188,13 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     // A delivery URL carries no type, so the bytes say what they are; anything that is not an image is refused.
     const declared = providerOutput.contentType ?? sniffImageFormat(bytes)?.mimeType;
     if (!declared) return fail('provider_error', 'The provider returned something that is not an image');
-    const contentType = normalizeContentType(declared);
+    let contentType = normalizeContentType(declared);
+    if (cutout) {
+      // Before the scan, so what is moderated is exactly what is stored.
+      const finished = await finishCutout(cutout, bytes);
+      if ('error' in finished) return fail('provider_error', `cutout matte did not line up: ${finished.error}`);
+      ({ bytes, contentType } = finished);
+    }
     // A throw here (the scan could not run) fails closed: orphaned_submit on the sync path, a retried store
     // step on the async one (up to MAX_STEP_ATTEMPTS, then the job fails). Either way the image is not kept.
     const verdict = await deps.moderate({ job, bytes, mimeType: contentType });
@@ -217,13 +229,13 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
 
   const submitSync = async (
     job: ImageJob,
-    { provider, inputs, ctx }: PreparedSubmit & { provider: SyncImageProvider },
+    { provider, inputs, ctx, cutout }: PreparedSubmit & { provider: SyncImageProvider },
     context: GenerationJobStepContext
   ): Promise<ImageStepResult> => {
     // Not caught: a throw is an unknown outcome (the image may exist and be billed). See SyncGenerationProvider.
     const result = await provider.generate(job.payload.request, inputs, ctx);
     if (result.status !== 'succeeded') return unsuccessfulStep(job, result);
-    return storeOutput(job, provider, ctx, result.output, context);
+    return storeOutput(job, provider, ctx, result.output, context, cutout);
   };
 
   const submitAsync = async (

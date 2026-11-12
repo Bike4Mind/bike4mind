@@ -114,7 +114,7 @@ const jobDoc = (id: string) => ({
   },
 });
 
-const PUBLIC_JOB_KEYS = ['createdAt', 'error', 'groupId', 'id', 'output', 'request', 'state'];
+const PUBLIC_JOB_KEYS = ['createdAt', 'error', 'groupId', 'id', 'output', 'purpose', 'request', 'state'];
 
 describe('/api/studio/image-jobs', () => {
   beforeEach(() => {
@@ -157,6 +157,7 @@ describe('/api/studio/image-jobs', () => {
       expect(job).toEqual({
         id: 'j1',
         groupId: 'group-1',
+        purpose: null,
         state: 'succeeded',
         request: REQUEST,
         error: { code: 'provider_error', message: 'The provider failed to generate the image.' },
