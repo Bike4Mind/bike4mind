@@ -35,12 +35,16 @@ vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   organizationRepository: {},
+  withTransaction: (fn: () => unknown) => fn(),
   mongoose: {},
   Ability: class {},
   User: {},
   UserActivityCounter: {},
   CounterLog: {},
 }));
+
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
+vi.mock('@server/utils/apiKeyRotationNotifier', () => ({ notifyApiKeyOrgRevoke: vi.fn() }));
 
 import '@pages/api/user-api-keys/[id]/revoke';
 

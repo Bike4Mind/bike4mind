@@ -1,4 +1,9 @@
-import { IOrganizationRepository, IRealtimeConnectionRepository, IUserApiKeyRepository } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  IOrganizationRepository,
+  IRealtimeConnectionRepository,
+  IUserApiKeyRepository,
+} from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { resolveOwnedApiKey } from './resolveOwnedApiKey';
@@ -22,8 +27,18 @@ interface RevokeUserApiKeyAdapters {
 }
 
 export interface RevokeUserApiKeyResult {
+  id: string;
   /** The revoked key's name, so callers can log a real name instead of a placeholder. */
   name: string;
+  keyPrefix: string;
+  /** The account holding the key; differs from the caller when an org admin revoked it. */
+  holderUserId: string;
+  /** Set when the key is billed to an org. */
+  organizationId?: string;
+  /** The key is held by the org's service account rather than a member. */
+  orgOwned: boolean;
+  /** False when the key was already disabled, so nothing changed. */
+  didRevoke: boolean;
 }
 
 /**
@@ -45,10 +60,18 @@ export const revokeUserApiKey = async (
     throw new NotFoundError('API key not found');
   }
 
-  await db.userApiKeys.revokeIfNotDisabled(apiKey.id, userId, params.reason);
+  const didRevoke = await db.userApiKeys.revokeIfNotDisabled(apiKey.id, userId, params.reason);
   if (db.realtimeConnections) {
     await endRealtimeConnections({ apiKeyId: apiKey.id }, { db: { realtimeConnections: db.realtimeConnections } });
   }
 
-  return { name: apiKey.name };
+  return {
+    id: apiKey.id,
+    name: apiKey.name,
+    keyPrefix: apiKey.keyPrefix,
+    holderUserId: apiKey.userId,
+    organizationId: apiKey.billingOwnerType === CreditHolderType.Organization ? apiKey.organizationId : undefined,
+    orgOwned: Boolean(apiKey.orgOwned),
+    didRevoke,
+  };
 };

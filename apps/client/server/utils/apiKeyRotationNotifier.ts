@@ -17,3 +17,16 @@ export async function notifyApiKeyRotationReown(
     { db: { users: userRepository }, mailer, logger }
   );
 }
+
+/** Tell a member an org owner or manager revoked their org-billed key. Call after the revoke commits; never throws. */
+export async function notifyApiKeyOrgRevoke(
+  holderUserId: string,
+  keyName: string,
+  organizationName: string,
+  logger?: { warn(msg: string, meta: unknown): void }
+): Promise<void> {
+  await userApiKeyService.notifyApiKeyRevokedByOrg(
+    { holderUserId, keyName, organizationName },
+    { db: { users: userRepository }, mailer, logger }
+  );
+}
