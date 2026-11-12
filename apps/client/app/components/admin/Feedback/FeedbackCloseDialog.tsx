@@ -5,9 +5,11 @@ import { ActionDialog } from '../shared';
 import type { UseFeedbackOperationsReturn } from './types';
 
 export default function FeedbackCloseDialog({
+  feedbackId,
   onClose,
   onConfirm,
 }: {
+  feedbackId: string;
   onClose: () => void;
   onConfirm: UseFeedbackOperationsReturn['confirmClose'];
 }) {
@@ -27,7 +29,9 @@ export default function FeedbackCloseDialog({
           ? 'Choose a resolution.'
           : resolution === 'duplicate' && !/^[a-f\d]{24}$/i.test(duplicateId.trim())
             ? 'Enter a valid original report id.'
-            : null
+            : resolution === 'duplicate' && duplicateId.trim().toLowerCase() === feedbackId.toLowerCase()
+              ? 'Choose another report as the original.'
+              : null
       }
       onConfirm={reason =>
         onConfirm({

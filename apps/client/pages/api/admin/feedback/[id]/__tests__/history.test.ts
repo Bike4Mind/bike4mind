@@ -80,7 +80,9 @@ describe('private feedback history', () => {
     await expect(call('POST', { note })).rejects.toMatchObject({ statusCode: 400 });
     expect(mocks.audit).not.toHaveBeenCalled();
   });
-  it('stores the note privately and only its IDs in the strict audit entry', async () => {
+  it('stores the note privately at the original deadline and only its IDs in the strict audit entry', async () => {
+    const expiresAt = new Date(Date.now() + 42_000);
+    mocks.lock.mockResolvedValue({ feedbackId: id, userId: 'reporter', expiresAt });
     const res = await call('POST', { note: '  Investigating the reproduction  ' });
     expect(res._getStatusCode()).toBe(201);
     expect(mocks.audit).toHaveBeenCalledWith(
@@ -96,7 +98,7 @@ describe('private feedback history', () => {
           feedbackId: id,
           userId: 'reporter',
           body: 'Investigating the reproduction',
-          expiresAt: expect.any(Date),
+          expiresAt,
         }),
       ],
       expect.anything()

@@ -412,13 +412,13 @@ const handler = baseApi()
         : Promise.resolve(false),
     ]);
 
+    const autoClosed = isFeedbackTriageNoise({ type, hasContent: hasFeedbackComment(content), tags });
     const newFeedback = new FeedbackModel({
       _id: feedbackId,
       userId: req.isAuthenticated() ? req.user.id : userId,
       tags,
-      status: isFeedbackTriageNoise({ type, hasContent: hasFeedbackComment(content), tags })
-        ? FeedbackStatus.Closed
-        : FeedbackStatus.New,
+      status: autoClosed ? FeedbackStatus.Closed : FeedbackStatus.New,
+      ...(autoClosed && type === FeedbackType.THUMBS_UP ? { resolution: 'no_action_needed' } : {}),
       username: req.isAuthenticated() ? req.user.username : username,
       userEmail: req.isAuthenticated() ? req.user.email : userEmail,
       organization: organization,

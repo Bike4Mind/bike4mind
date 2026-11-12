@@ -667,7 +667,9 @@ const FeedbackTab: React.FC = () => {
         onClose={closeFeedback}
         onStatusChange={handleStatusChange}
       />
-      {feedbackToClose && <FeedbackCloseDialog onClose={cancelClose} onConfirm={confirmClose} />}
+      {feedbackToClose && (
+        <FeedbackCloseDialog feedbackId={feedbackToClose.id} onClose={cancelClose} onConfirm={confirmClose} />
+      )}
     </Stack>
   );
 };

@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { Request, Response } from 'express';
 import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
+import { feedbackContentExpiresAt } from '@bike4mind/common';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import { FeedbackModel, FeedbackNoteModel, User, adminAuditLogRepository, withTransaction } from '@bike4mind/database';
 import type { RecordAdminActionFromRequestInput } from '@bike4mind/server-utils/utils/adminAudit';
@@ -84,9 +85,9 @@ beforeEach(() => {
   });
 });
 const reporterId = String(new mongoose.Types.ObjectId());
-const createReport = async () => {
+const createReport = async (id?: string) => {
   await User.updateOne({ _id: reporterId }, { $set: { username: 'reporter' } }, { upsert: true });
-  return FeedbackModel.create({ userId: reporterId, username: 'reporter', status: 'New', type: 'Bug' });
+  return FeedbackModel.create({ _id: id, userId: reporterId, username: 'reporter', status: 'New', type: 'Bug' });
 };
 const postNote = async (id: string) => {
   const { req, res } = createMocks({ method: 'POST', query: { id }, body: { note: 'Private note' } });
@@ -124,6 +125,30 @@ describe('feedback status and deletion transactions', () => {
     const read = createMocks({ method: 'GET', query: { id: report.id } });
     await mocks.get!(read.req as unknown as Request, read.res as unknown as Response);
     expect(read.res._getJSONData().items[0]).toMatchObject({ author: 'Admin', note: 'Private reproduction details' });
+  });
+
+  it('joins uppercase status changes to history and permits uppercase Undo requests', async () => {
+    const report = await createReport('507f1f77bcf86cd7994390fb');
+    const closed = await call('PATCH', report.id.toUpperCase(), {
+      status: 'Closed',
+      resolution: 'fixed',
+      reason: 'Fixed after investigation',
+    });
+    const audit = await adminAuditLogRepository.findById(closed.auditEntryId);
+    expect(audit?.details?.feedbackId).toBe(report.id);
+    expect(audit?.reason).toBe('Fixed after investigation');
+    for (const id of [report.id, report.id.toUpperCase()]) {
+      const { req, res } = createMocks({ method: 'GET', query: { id } });
+      await mocks.get!(req as unknown as Request, res as unknown as Response);
+      expect(res._getJSONData().items).toEqual([
+        expect.objectContaining({ id: closed.auditEntryId, reason: 'Fixed after investigation' }),
+      ]);
+    }
+    await call('PATCH', report.id.toUpperCase(), { status: 'New', undoOf: closed.auditEntryId });
+    expect((await FeedbackModel.findById(report.id))?.status).toBe('New');
+    const history = await adminAuditLogRepository.listForFeedback(report.id, { limit: 25 });
+    expect(history.entries).toHaveLength(2);
+    expect(history.entries.every(entry => entry.details?.feedbackId === report.id)).toBe(true);
   });
 
   it('restores the closed resolution when undoing a reopen', async () => {
@@ -184,11 +209,17 @@ describe('feedback status and deletion transactions', () => {
     await expect(postNote(report.id)).rejects.toThrow('audit unavailable');
     expect(await FeedbackNoteModel.countDocuments()).toBe(0);
   });
-  it('joins canonical note IDs but hides expired bodies before the TTL monitor runs', async () => {
+  it('joins canonical note IDs at the original deadline but hides expired bodies before the TTL monitor runs', async () => {
     const report = await createReport();
+    const createdAt = new Date(Date.now() - 30 * 86_400_000);
+    await FeedbackModel.collection.updateOne({ _id: report._id }, { $set: { createdAt } });
     await postNote(report.id.toUpperCase());
     const note = await FeedbackNoteModel.findOne().lean();
-    expect(note).toMatchObject({ feedbackId: report.id, userId: reporterId });
+    expect(note).toMatchObject({
+      feedbackId: report.id,
+      userId: reporterId,
+      expiresAt: feedbackContentExpiresAt(createdAt),
+    });
     await FeedbackNoteModel.collection.updateOne({ _id: note!._id }, { $set: { expiresAt: new Date(0) } });
     const { req, res } = createMocks({ method: 'GET', query: { id: report.id.toUpperCase() } });
     await mocks.get!(req as unknown as Request, res as unknown as Response);

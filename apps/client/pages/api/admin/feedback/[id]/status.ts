@@ -21,8 +21,9 @@ import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server
  */
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:moderate' } }).patch(
   async (req: Request, res) => {
-    const id = String(req.query.id ?? '');
-    if (!isValidObjectId(id)) throw new NotFoundError('Feedback not found');
+    const requestedId = String(req.query.id ?? '');
+    if (!isValidObjectId(requestedId)) throw new NotFoundError('Feedback not found');
+    const id = requestedId.toLowerCase();
 
     const parsed = UpdateFeedbackStatusRequestSchema.safeParse(req.body ?? {});
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'Invalid status');

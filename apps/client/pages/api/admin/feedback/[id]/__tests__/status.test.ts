@@ -121,6 +121,21 @@ describe('PATCH /api/admin/feedback/[id]/status', () => {
     expect(mocks.updateOne.mock.calls[0][1].$set.resolution).toBe('wont_fix');
   });
 
+  it('refuses an Undo that would restore Closed without a recorded resolution', async () => {
+    stored('New');
+    mocks.findAuditEntry.mockResolvedValue({
+      action: 'feedback.status_changed',
+      details: { feedbackId: FEEDBACK_ID },
+      changes: [{ field: 'status', before: 'Closed', after: 'New' }],
+    });
+    await expect(call({ status: 'Closed', resolution: undefined, undoOf: 'audit1' })).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Choose a resolution before closing',
+    });
+    expect(mocks.audit).not.toHaveBeenCalled();
+    expect(mocks.updateOne).not.toHaveBeenCalled();
+  });
+
   it('refuses to undo a reopen of a duplicate whose original report no longer exists', async () => {
     stored('New');
     mocks.findAuditEntry.mockResolvedValue({
@@ -155,7 +170,7 @@ describe('PATCH /api/admin/feedback/[id]/status', () => {
   });
 
   it('records the acting admin on the report and in the Admin log with before and after', async () => {
-    const res = await call({ status: 'Closed', expectedStatus: 'New' });
+    const res = await call({ status: 'Closed', expectedStatus: 'New', reason: 'Resolved after review' });
 
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.updateOne).toHaveBeenCalledWith(
@@ -176,6 +191,7 @@ describe('PATCH /api/admin/feedback/[id]/status', () => {
       expect.objectContaining({
         action: 'feedback.status_changed',
         target: { kind: 'user', id: 'reporter1', displayName: 'reporter1@example.com' },
+        reason: 'Resolved after review',
         changes: [
           { field: 'status', before: 'New', after: 'Closed' },
           { field: 'resolution', before: null, after: 'fixed' },
