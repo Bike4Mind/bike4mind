@@ -37,6 +37,7 @@ import {
 import { TavernLight, type TavernMood } from './TavernLight';
 import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type CharacterId, type InnkeeperPose } from './tavernArt';
 import { useScenePause } from './useScenePause';
+import { VISUALLY_HIDDEN } from '../../../visuallyHidden';
 
 const BUBBLE_MAX = 28;
 const NAME_MAX = 26;
@@ -54,14 +55,6 @@ const LIFTED_Z = 102;
 type CssVars = CSSProperties & Record<`--${string}`, string | number>;
 const HIDDEN_LABEL: NameLabel = { lane: 0, maxWidth: 0, shown: false };
 const NO_PARENT: ParentView = {};
-const VISUALLY_HIDDEN = {
-  position: 'absolute',
-  width: '1px',
-  height: '1px',
-  overflow: 'hidden',
-  clip: 'rect(0 0 0 0)',
-  whiteSpace: 'nowrap',
-} as const;
 // Not a session id shape, so it never collides with an agent in the label layout.
 const INNKEEPER_KEY = ' innkeeper';
 const INNKEEPER_NAME = 'Innkeeper';
