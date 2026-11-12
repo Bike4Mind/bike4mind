@@ -228,6 +228,7 @@ describe('permanent personal-content purge', () => {
       'UserUsagePatternSignals',
       'AdminUserNote',
       'AdminUserNoteRevision',
+      'FeedbackNote',
     ]) {
       await collection(modelName).insertOne({ userId: ownerId, body: 'private account note' });
     }
@@ -262,6 +263,7 @@ describe('permanent personal-content purge', () => {
       'UserUsagePatternSignals',
       'AdminUserNote',
       'AdminUserNoteRevision',
+      'FeedbackNote',
     ]) {
       expect(await collection(modelName).countDocuments({ userId: ownerId })).toBe(0);
     }

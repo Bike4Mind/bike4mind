@@ -12,6 +12,7 @@ import {
   dataLakeRepository,
   groupRepository,
   organizationRepository,
+  userApiKeyRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
@@ -62,7 +63,7 @@ const handler = adminApi({
           'Cannot remove the organization owner; transfer organization ownership first, then remove them.'
         );
       }
-      const updated = await organizationService.revokeAccess(
+      const { organization: updated, revokedOrgBilledApiKeyIds } = await organizationService.revokeAccess(
         req.user,
         { id: organizationId, userId },
         {
@@ -72,6 +73,7 @@ const handler = adminApi({
             groups: groupRepository,
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            userApiKeys: userApiKeyRepository,
             ...lakeConfigAuditDb,
           },
           logger: req.logger,
@@ -83,7 +85,7 @@ const handler = adminApi({
         organizationId,
         summary: `removed from organization ${organization.name}`,
         reason,
-        details: { organizationName: organization.name, role },
+        details: { organizationName: organization.name, role, revokedOrgBilledKeys: revokedOrgBilledApiKeyIds.length },
       });
       return updated;
     });

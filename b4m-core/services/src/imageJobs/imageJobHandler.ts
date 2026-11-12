@@ -11,11 +11,17 @@ import {
 } from '@bike4mind/common';
 import {
   ProviderOutputTooLargeError,
+  ProviderOutputUnavailableError,
+  ProviderSubmitError,
+  sniffImageFormat,
+  type AsyncImageProvider,
   type ImageInputs,
   type ImageProvider,
   type ProviderContext,
+  type ProviderOutput,
   type ProviderTerminalResult,
   type ResolvedImageInput,
+  type SyncImageProvider,
 } from '@bike4mind/utils/imageProviders';
 import type { CreditLedgerEntry } from '../creditService/creditHold';
 import { isUsableApiKey } from '../generationJobs/apiKey';
@@ -30,7 +36,7 @@ const MAX_RAW_PROVIDER_BYTES = 16 * 1024;
 const FALLBACK_SAVE_BUDGET_MS = 10_000;
 
 type ImageStepResult = StepResult<'image'>;
-type SucceededResult = Extract<ProviderTerminalResult, { status: 'succeeded' }>;
+type UnsuccessfulResult = Exclude<ProviderTerminalResult, { status: 'succeeded' }>;
 type PreparedSubmit = { provider: ImageProvider; inputs: ImageInputs; ctx: ProviderContext };
 
 const fail = (code: GenerationJobErrorCode, message: string, rawProviderError?: unknown): ImageStepResult => ({
@@ -60,12 +66,29 @@ const lineageOf = (job: ImageJob): GeneratedAssetLineageEntry[] =>
   imageJobInputs(job.payload.request).map(input => ({ fileId: input.fileId, role: input.role, jobId: job.id }));
 
 /**
- * The image kind on the generic GenerationJobEngine: one job renders one image. The provider returns it from one
- * blocking call, so submit generates, moderates, stores and succeeds in a single step, and an unknown provider
- * outcome throws (the engine fails it as orphaned_submit) rather than rendering twice. The job renders exactly the
- * model it was created with: there is no fallback model, so the hold, the render and the charge name the same one.
+ * The image kind on the generic GenerationJobEngine: one job renders one image. The submit mode follows the job's
+ * provider. A sync provider returns the image from one blocking call, so submit generates, moderates, stores and
+ * succeeds in a single step. An async provider (BFL) queues a task in submit; poll follows it, and store downloads,
+ * moderates and saves the result. Either way an unknown provider outcome throws (the engine fails it as
+ * orphaned_submit) rather than rendering twice. The job renders exactly the model it was created with: there is no
+ * fallback model, so the hold, the render and the charge name the same one.
  */
 export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<'image'> {
+  const providerFor = (job: ImageJob): ImageProvider => {
+    const provider = deps.providers.get(job.payload.providerId);
+    if (!provider) throw new Error(`image provider '${job.payload.providerId}' is not registered`);
+    return provider;
+  };
+
+  const contextFor = async (job: ImageJob, { signal }: GenerationJobStepContext): Promise<ProviderContext | null> => {
+    const apiKey = await deps.resolveApiKey(job.payload.providerId, job.requestedBy);
+    if (!isUsableApiKey(apiKey)) return null;
+    return { apiKey, logger: deps.logger, now: () => deps.now(), signal };
+  };
+
+  const noApiKey = (job: ImageJob): ImageStepResult =>
+    fail('provider_error', `No API key configured for ${job.payload.providerId}`);
+
   const loadInputs = async (job: ImageJob): Promise<ImageInputs | ImageStepResult> => {
     const images: ResolvedImageInput[] = [];
     for (const input of imageJobInputs(job.payload.request)) {
@@ -78,13 +101,12 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
 
   const prepareSubmit = async (
     job: ImageJob,
-    { signal }: GenerationJobStepContext
+    context: GenerationJobStepContext
   ): Promise<PreparedSubmit | ImageStepResult> => {
-    const { providerId, request } = job.payload;
-    const provider = deps.providers.get(providerId);
-    if (!provider) throw new Error(`image provider '${providerId}' is not registered`);
-    const apiKey = await deps.resolveApiKey(providerId, job.requestedBy);
-    if (!isUsableApiKey(apiKey)) return fail('provider_error', `No API key configured for ${providerId}`);
+    const { request } = job.payload;
+    const provider = providerFor(job);
+    const ctx = await contextFor(job, context);
+    if (!ctx) return noApiKey(job);
     // Defensive: the catalog may have changed since the job was created, and a now-invalid request is not retryable.
     const validation = validateImageRequest({ ...request, count: 1 }, getImageModelCatalogEntry(request.model));
     if (!validation.ok) {
@@ -92,7 +114,7 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     }
     const inputs = await loadInputs(job);
     if ('next' in inputs) return inputs;
-    return { provider, inputs, ctx: { apiKey, logger: deps.logger, now: () => deps.now(), signal } };
+    return { provider, inputs, ctx };
   };
 
   const saveOutput = async (
@@ -132,27 +154,37 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
       const { s3Key } = await deps.saveToGeneratedBucket({ key, bytes, contentType, signal: fallbackSignal });
       return { location: 'generated', s3Key, ...common };
     } catch (error) {
-      // Rendered and billed but cannot be kept: the throw fails the job as orphaned_submit.
+      // Rendered and billed but cannot be kept: the throw fails a sync submit as orphaned_submit; an async store
+      // step is retried up to MAX_STEP_ATTEMPTS (not bounded by the deadline), then the job fails and the hold is released.
       deps.logger.error('image_job_output_unsaved', { jobId: job.id, bytes: bytes.byteLength, error });
       throw error;
     }
   };
 
-  const store = async (
+  /** Downloads, moderates and saves the provider's image: the end of submit (sync) or the store step (async). */
+  const storeOutput = async (
     job: ImageJob,
-    { provider, ctx }: PreparedSubmit,
-    result: SucceededResult,
+    provider: ImageProvider,
+    ctx: ProviderContext,
+    providerOutput: ProviderOutput,
     context: GenerationJobStepContext
   ): Promise<ImageStepResult> => {
     let bytes: Buffer;
     try {
-      bytes = await provider.fetchOutput(result.output, ctx);
+      bytes = await provider.fetchOutput(providerOutput, ctx);
     } catch (error) {
       if (error instanceof ProviderOutputTooLargeError) return fail('output_too_large', error.message);
+      if (error instanceof ProviderOutputUnavailableError) {
+        return fail('provider_error', 'The provider no longer has the image', { status: error.status });
+      }
       throw error;
     }
-    const contentType = normalizeContentType(result.output.contentType ?? 'image/png');
-    // A throw here (the scan could not run) fails closed as orphaned_submit: the image is not kept.
+    // A delivery URL carries no type, so the bytes say what they are; anything that is not an image is refused.
+    const declared = providerOutput.contentType ?? sniffImageFormat(bytes)?.mimeType;
+    if (!declared) return fail('provider_error', 'The provider returned something that is not an image');
+    const contentType = normalizeContentType(declared);
+    // A throw here (the scan could not run) fails closed: orphaned_submit on the sync path, a retried store
+    // step on the async one (up to MAX_STEP_ATTEMPTS, then the job fails). Either way the image is not kept.
     const verdict = await deps.moderate({ job, bytes, mimeType: contentType });
     if (verdict.blocked) {
       return {
@@ -162,8 +194,52 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
       };
     }
     const output = await saveOutput(job, { bytes, contentType }, context);
-    const payload: ImageJobPayload = { ...job.payload, output };
+    // The provider handle and delivery URL only drive the steps; the terminal payload keeps the stored output.
+    const { providerHandle: _handle, providerOutput: _output, ...rest } = job.payload;
+    const payload: ImageJobPayload = { ...rest, output };
     return { next: 'succeeded', payload };
+  };
+
+  const unsuccessfulStep = (job: ImageJob, result: UnsuccessfulResult): ImageStepResult => {
+    if (result.status === 'blocked') {
+      return {
+        next: 'blocked',
+        error: { code: 'content_blocked', message: 'The provider declined this request under its content policy' },
+        rawProviderError: boundRawPayload(result.raw),
+        ...(result.billed && { payload: { ...job.payload, billedBlock: true } }),
+      };
+    }
+    // Retryable only when the provider definitively generated nothing (a 429).
+    return result.retryable
+      ? { next: 'retry', reason: result.message }
+      : fail('provider_error', result.message, boundRawPayload(result.raw));
+  };
+
+  const submitSync = async (
+    job: ImageJob,
+    { provider, inputs, ctx }: PreparedSubmit & { provider: SyncImageProvider },
+    context: GenerationJobStepContext
+  ): Promise<ImageStepResult> => {
+    // Not caught: a throw is an unknown outcome (the image may exist and be billed). See SyncGenerationProvider.
+    const result = await provider.generate(job.payload.request, inputs, ctx);
+    if (result.status !== 'succeeded') return unsuccessfulStep(job, result);
+    return storeOutput(job, provider, ctx, result.output, context);
+  };
+
+  const submitAsync = async (
+    job: ImageJob,
+    { provider, inputs, ctx }: PreparedSubmit & { provider: AsyncImageProvider }
+  ): Promise<ImageStepResult> => {
+    try {
+      const providerHandle = await provider.submit(job.payload.request, inputs, ctx);
+      return { next: 'running', payload: { ...job.payload, providerHandle } };
+    } catch (error) {
+      // Only a definitive rejection created nothing; anything else rethrows as an unknown outcome (orphaned_submit).
+      if (!(error instanceof ProviderSubmitError) || !error.definitive) throw error;
+      if (!error.retryable) return fail('provider_error', error.message, boundRawPayload(error.raw));
+      deps.logger.warn('image provider rejected the submit; retrying', { jobId: job.id, message: error.message });
+      return { next: 'retry', reason: error.message };
+    }
   };
 
   // A pricing failure (a catalog change since create) must not fail terminal handling: NaN keeps the full hold.
@@ -203,12 +279,15 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
 
   const unreachable = (job: ImageJob, step: string): ImageStepResult => {
     deps.logger.error('image_job_unexpected_step', { jobId: job.id, state: job.state, step });
-    return fail('provider_error', `image jobs finish in submit; ${step} is never reached`);
+    return fail('provider_error', `a sync image job finishes in submit; ${step} is never reached`);
   };
 
   return {
     kind: 'image',
-    submitMode: 'sync',
+    // The provider id is fixed at create, so a job's mode never changes under it.
+    // An unregistered provider (e.g. removed mid-flight) keeps an in-flight async job on the poll path.
+    submitMode: job =>
+      deps.providers.get(job.payload.providerId)?.mode ?? (job.payload.providerHandle ? 'async' : 'sync'),
 
     async submit(job, context) {
       let prepared: PreparedSubmit | ImageStepResult;
@@ -223,36 +302,53 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
         return { next: 'retry', reason: messageOf(error) };
       }
       if ('next' in prepared) return prepared;
-      // Not caught: a throw is an unknown outcome (the image may exist and be billed). See SyncGenerationProvider.
-      const result = await prepared.provider.generate(job.payload.request, prepared.inputs, prepared.ctx);
+      const { provider } = prepared;
+      return provider.mode === 'sync'
+        ? submitSync(job, { ...prepared, provider }, context)
+        : submitAsync(job, { ...prepared, provider });
+    },
+
+    async poll(job, context) {
+      const provider = providerFor(job);
+      if (provider.mode !== 'async') return unreachable(job, 'poll');
+      const handle = job.payload.providerHandle;
+      if (!handle) return fail('provider_error', 'running without a provider handle');
+      const ctx = await contextFor(job, context);
+      if (!ctx) return noApiKey(job);
+      const result = await provider.poll(handle, ctx);
       switch (result.status) {
+        case 'running':
+          return { next: 'poll_again' };
         case 'succeeded':
-          return store(job, prepared, result, context);
-        case 'blocked':
-          return {
-            next: 'blocked',
-            error: { code: 'content_blocked', message: 'The provider declined this request under its content policy' },
-            rawProviderError: boundRawPayload(result.raw),
-            ...(result.billed && { payload: { ...job.payload, billedBlock: true } }),
-          };
-        case 'failed':
-          // Retryable only when the provider definitively generated nothing (a 429).
-          return result.retryable
-            ? { next: 'retry', reason: result.message }
-            : fail('provider_error', result.message, boundRawPayload(result.raw));
+          // The payload is persisted between steps, so it may carry a delivery URL but never the image bytes.
+          if (result.output.kind !== 'url') {
+            return fail('provider_error', 'An async image provider must deliver its image by URL');
+          }
+          return { next: 'storing', payload: { ...job.payload, providerOutput: result.output } };
+        default:
+          return unsuccessfulStep(job, result);
       }
     },
 
-    async poll(job) {
-      return unreachable(job, 'poll');
+    async store(job, context) {
+      const provider = providerFor(job);
+      if (provider.mode !== 'async') return unreachable(job, 'store');
+      const { providerOutput } = job.payload;
+      if (!providerOutput) return fail('provider_error', 'storing without provider output');
+      const ctx = await contextFor(job, context);
+      if (!ctx) return noApiKey(job);
+      // A crash after saving and before the terminal commit re-runs this step; saveToFiles dedups per job.
+      return storeOutput(job, provider, ctx, providerOutput, context);
     },
 
-    async store(job) {
-      return unreachable(job, 'store');
+    // A sync job can only be cancelled before its provider call starts, so only an async task can be stopped.
+    async cancelAtProvider(job, context) {
+      const provider = deps.providers.get(job.payload.providerId);
+      const handle = job.payload.providerHandle;
+      if (provider?.mode !== 'async' || !provider.cancel || !handle) return;
+      const ctx = await contextFor(job, context);
+      if (ctx) await provider.cancel(handle, ctx);
     },
-
-    // A sync job can only be cancelled before its provider call starts, so there is never a provider job to stop.
-    async cancelAtProvider() {},
 
     // Reads only the committed job, so the sweep's recovery of an unhandled terminal job settles or releases alike.
     async onTerminal(job) {

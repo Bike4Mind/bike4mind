@@ -20,7 +20,7 @@ import {
 import { respond } from '@server/utils/respond';
 import { Request } from 'express';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { userRepository } from '@bike4mind/database/auth';
+import { userApiKeyRepository, userRepository } from '@bike4mind/database/auth';
 import { groupRepository } from '@bike4mind/database/social';
 
 // No `force` here, deliberately. The service still accepts a seat-ceiling override for the
@@ -120,6 +120,7 @@ const handler = baseApi()
             groups: groupRepository,
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            userApiKeys: userApiKeyRepository,
             ...lakeConfigAuditDb,
           },
           // See the sibling removal route: a key-driven departure must be attributed to the KEY,
