@@ -1,17 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { findByIdMock } = vi.hoisted(() => ({ findByIdMock: vi.fn() }));
+const { findByIdMock, findMock, distinctMock } = vi.hoisted(() => ({
+  findByIdMock: vi.fn(),
+  findMock: vi.fn(),
+  distinctMock: vi.fn(),
+}));
 
 vi.mock('@bike4mind/database', () => ({
   User: {
     findById: (id: string) => ({ select: () => ({ lean: () => Promise.resolve(findByIdMock(id)) }) }),
+    find: (query: unknown) => ({ select: () => ({ lean: () => Promise.resolve(findMock(query)) }) }),
   },
+  PublishedArtifact: { distinct: (field: string, query: unknown) => Promise.resolve(distinctMock(field, query)) },
 }));
 
-import { loadLiveOwner } from './loadLiveOwner';
+import { excludeNonLiveOwners, loadLiveOwner } from './loadLiveOwner';
 
 beforeEach(() => {
   findByIdMock.mockReset();
+  findMock.mockReset();
+  distinctMock.mockReset();
 });
 
 describe('loadLiveOwner', () => {
@@ -43,5 +51,51 @@ describe('loadLiveOwner', () => {
       throw new Error('db down');
     });
     await expect(loadLiveOwner('u1')).rejects.toThrow('db down');
+  });
+});
+
+describe('excludeNonLiveOwners', () => {
+  const LIVE = '650000000000000000000001';
+  const SUSPENDED = '650000000000000000000002';
+  const GONE = '650000000000000000000003';
+  const FILTER = { deletedAt: null };
+
+  it('excludes owners the live-owner query does not return, the caller aside', async () => {
+    distinctMock.mockReturnValue([LIVE, SUSPENDED, GONE]);
+    findMock.mockReturnValue([{ _id: LIVE }]);
+
+    expect(await excludeNonLiveOwners(FILTER, 'caller')).toEqual({ ownerId: { $nin: [SUSPENDED, GONE] } });
+    expect(distinctMock).toHaveBeenCalledWith('ownerId', { $and: [FILTER, { ownerId: { $ne: 'caller' } }] });
+    expect(findMock).toHaveBeenCalledWith({
+      _id: { $in: [LIVE, SUSPENDED, GONE] },
+      isBanned: { $ne: true },
+      'moderation.status': { $ne: 'suspended' },
+    });
+  });
+
+  it('returns null when every owner is live', async () => {
+    distinctMock.mockReturnValue([LIVE]);
+    findMock.mockReturnValue([{ _id: LIVE }]);
+    expect(await excludeNonLiveOwners(FILTER, 'caller')).toBeNull();
+  });
+
+  it('skips the user lookup when no other owner has a row', async () => {
+    distinctMock.mockReturnValue([]);
+    expect(await excludeNonLiveOwners(FILTER, 'caller')).toBeNull();
+    expect(findMock).not.toHaveBeenCalled();
+  });
+
+  it('excludes a malformed owner id without passing it to the user query', async () => {
+    distinctMock.mockReturnValue([LIVE, 'not-an-id']);
+    findMock.mockReturnValue([{ _id: LIVE }]);
+
+    expect(await excludeNonLiveOwners(FILTER, 'caller')).toEqual({ ownerId: { $nin: ['not-an-id'] } });
+    expect(findMock.mock.calls[0][0]._id).toEqual({ $in: [LIVE] });
+  });
+
+  it('keeps a live owner whose stored id differs only in casing', async () => {
+    distinctMock.mockReturnValue(['ABCDEF000000000000000001']);
+    findMock.mockReturnValue([{ _id: 'abcdef000000000000000001' }]);
+    expect(await excludeNonLiveOwners(FILTER, 'caller')).toBeNull();
   });
 });
