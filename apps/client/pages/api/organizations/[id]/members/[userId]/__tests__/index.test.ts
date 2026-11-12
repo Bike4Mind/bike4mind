@@ -293,6 +293,23 @@ describe('DELETE /api/organizations/[id]/members/[userId] - content transfer', (
     expect(res._getJSONData().reassigned).toEqual(reassignedCounts);
   });
 
+  it('records no content_reassigned audit when nothing moved', async () => {
+    reassignMemberContent.mockImplementationOnce(async () => {
+      txState.staged.push('reassign');
+      return { files: 0, artifacts: 0, projects: 0, notebooks: 0, agents: 0 };
+    });
+    const { req, res } = request({ body: { reassignTo: 'member3' } });
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ action: 'org.member.content_reassigned' })
+    );
+    expect(res._getJSONData().reassigned).toMatchObject({ files: 0 });
+  });
+
   it('rolls back the removal when the transfer fails', async () => {
     reassignMemberContent.mockImplementationOnce(async () => {
       txState.staged.push('reassign');

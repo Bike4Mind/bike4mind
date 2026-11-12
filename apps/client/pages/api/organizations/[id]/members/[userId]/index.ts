@@ -100,7 +100,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES }).delete(async
         revokedOrgBilledKeys: result.revokedOrgBilledApiKeyIds.length,
       },
     });
-    if (reassignTo && reassigned) {
+    if (reassignTo && reassigned && Object.values(reassigned).some(count => count > 0)) {
       await recordAdminActionFromRequest(req, {
         action: 'org.member.content_reassigned',
         actorScope: 'organization',
