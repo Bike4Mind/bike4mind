@@ -14,6 +14,7 @@ import {
   hideDeletedAuthorAnnotations,
   integrationRequestRepository,
   memoryPrincipalKeyRepository,
+  abuseEvalSetRepository,
   shadowDetectionRepository,
   campaignWatchRepository,
   withTransaction,
@@ -581,5 +582,6 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
   await authEventRepository.deleteAllForUser(userId);
   await shadowDetectionRepository.removeUser(userId);
   await campaignWatchRepository.removeUser(userId);
+  await abuseEvalSetRepository.removeUser(userId);
   logger.info(`[AccountDeletion] Purged personal content for user ${userId}`);
 }

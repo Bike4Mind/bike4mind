@@ -1,19 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import {
-  Alert,
-  Box,
-  Button,
-  Chip,
-  CircularProgress,
-  IconButton,
-  Option,
-  Select,
-  Sheet,
-  Stack,
-  Table,
-  ToggleButtonGroup,
-  Typography,
-} from '@mui/joy';
+import { Alert, Box, Button, Chip, Option, Select, Sheet, Stack, Typography } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import {
   API_KEY_COMPLETION_SOURCES,
@@ -27,7 +13,8 @@ import {
   type UsageOwnerType,
 } from '@bike4mind/common';
 import { BreakdownTable } from '@client/app/components/common/BreakdownTable';
-import { formatCredits, formatUsd, modelKey, modelLabel, numberCell } from '../utils/format';
+import { AdminPageHeader, DataTable, FilterBar, LoadingState, ErrorState, EmptyState } from '../../shared';
+import { formatCredits, formatUsd, modelKey, modelLabel } from '../utils/format';
 import { zeroFillDailySeries } from '../utils/dailySeries';
 import { useEndpointUsage } from '../hooks/useEndpointUsage';
 import { usePlatformUsage } from '../hooks/usePlatformUsage';
@@ -74,7 +61,10 @@ const ConsumerOwner: React.FC<{ consumer: NamedPlatformConsumerUsage }> = ({ con
   );
 };
 
-const ConsumerTable: React.FC<{ consumers: NamedPlatformConsumerUsage[] }> = ({ consumers }) => (
+const ConsumerTable: React.FC<{ consumers: NamedPlatformConsumerUsage[]; onRetry: () => void }> = ({
+  consumers,
+  onRetry,
+}) => (
   <Box>
     <Typography level="title-sm" sx={{ mb: 1 }}>
       By API key consumer
@@ -83,95 +73,71 @@ const ConsumerTable: React.FC<{ consumers: NamedPlatformConsumerUsage[] }> = ({ 
       Programmatic spend per API key, attributed to the key&apos;s billing owner. Only API completions carry a key, so
       web/agent/system usage never appears here.
     </Typography>
-    <Sheet sx={{ maxHeight: 360, overflow: 'auto' }}>
-      <Table stickyHeader hoverRow size="sm" data-testid="platform-usage-consumer-table">
-        <thead>
-          <tr>
-            <th>API key</th>
-            <th>Owner</th>
-            <th style={{ textAlign: 'right' }}>Requests</th>
-            <th style={{ textAlign: 'right' }}>Input tokens</th>
-            <th style={{ textAlign: 'right' }}>Output tokens</th>
-            <th style={{ textAlign: 'right' }}>COGS</th>
-            <th style={{ textAlign: 'right' }}>Credits</th>
-          </tr>
-        </thead>
-        <tbody>
-          {consumers.map(c => (
-            <tr key={c.apiKeyId}>
-              <td title={c.apiKeyId}>
-                <Typography level="body-sm">{c.keyName ?? 'Unknown key'}</Typography>
-                {c.keyPrefix && (
-                  <Typography level="body-xs" color="neutral" fontFamily="code">
-                    {c.keyPrefix}
-                  </Typography>
-                )}
-              </td>
-              <td>
-                <ConsumerOwner consumer={c} />
-              </td>
-              <td style={{ textAlign: 'right', ...numberCell }}>{c.requests.toLocaleString()}</td>
-              <td style={{ textAlign: 'right', ...numberCell }}>{c.inputTokens.toLocaleString()}</td>
-              <td style={{ textAlign: 'right', ...numberCell }}>{c.outputTokens.toLocaleString()}</td>
-              <td style={{ textAlign: 'right', ...numberCell }}>{formatUsd(c.cogsUsd)}</td>
-              <td style={{ textAlign: 'right', ...numberCell }}>{formatCredits(c.creditsCharged)}</td>
-            </tr>
-          ))}
-          {consumers.length === 0 && (
-            <tr>
-              <td colSpan={7}>
-                <Typography level="body-sm" color="neutral">
-                  No API-key consumers in this window.
+    <DataTable
+      label="By API key consumer"
+      testId="platform-usage-consumer-table"
+      rows={consumers}
+      getRowId={row => row.apiKeyId}
+      pagination={false}
+      maxHeight="360px"
+      onRetry={onRetry}
+      empty={<EmptyState title="No API-key consumers in this window" action={null} />}
+      columns={[
+        {
+          id: 'key',
+          label: 'API key',
+          render: row => (
+            <span title={row.apiKeyId}>
+              {row.keyName ?? 'Unknown key'}
+              {row.keyPrefix && (
+                <Typography level="body-xs" color="neutral">
+                  {row.keyPrefix}
                 </Typography>
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </Table>
-    </Sheet>
+              )}
+            </span>
+          ),
+        },
+        { id: 'owner', label: 'Owner', render: row => <ConsumerOwner consumer={row} /> },
+        { id: 'requests', label: 'Requests', numeric: true, render: row => row.requests.toLocaleString() },
+        { id: 'input', label: 'Input tokens', numeric: true, render: row => row.inputTokens.toLocaleString() },
+        { id: 'output', label: 'Output tokens', numeric: true, render: row => row.outputTokens.toLocaleString() },
+        { id: 'cogs', label: 'COGS', numeric: true, render: row => formatUsd(row.cogsUsd) },
+        { id: 'credits', label: 'Credits', numeric: true, render: row => formatCredits(row.creditsCharged) },
+      ]}
+    />
   </Box>
 );
 
-const EndpointTable: React.FC<{ endpoints: IPlatformEndpointUsage['byEndpoint'] }> = ({ endpoints }) => (
-  <Sheet sx={{ maxHeight: 360, overflow: 'auto' }}>
-    <Table stickyHeader hoverRow size="sm" data-testid="platform-usage-endpoint-table">
-      <thead>
-        <tr>
-          <th>Endpoint</th>
-          <th style={{ width: 80 }}>Method</th>
-          <th style={{ textAlign: 'right' }}>Requests</th>
-          <th style={{ textAlign: 'right' }}>Error rate</th>
-          <th style={{ textAlign: 'right' }}>Avg latency</th>
-          <th style={{ textAlign: 'right' }}>p95 latency</th>
-        </tr>
-      </thead>
-      <tbody>
-        {endpoints.map(e => (
-          <tr key={`${e.method} ${e.endpoint}`}>
-            <td>
-              <Typography level="body-sm" fontFamily="code">
-                {e.endpoint}
-              </Typography>
-            </td>
-            <td>{e.method}</td>
-            <td style={{ textAlign: 'right', ...numberCell }}>{e.requests.toLocaleString()}</td>
-            <td style={{ textAlign: 'right', ...numberCell }}>{formatPercent(e.errorRate)}</td>
-            <td style={{ textAlign: 'right', ...numberCell }}>{formatMs(e.avgResponseTimeMs)}</td>
-            <td style={{ textAlign: 'right', ...numberCell }}>{formatMs(e.p95ResponseTimeMs)}</td>
-          </tr>
-        ))}
-        {endpoints.length === 0 && (
-          <tr>
-            <td colSpan={6}>
-              <Typography level="body-sm" color="neutral">
-                No API-key requests in this window.
-              </Typography>
-            </td>
-          </tr>
-        )}
-      </tbody>
-    </Table>
-  </Sheet>
+const EndpointTable: React.FC<{ endpoints: IPlatformEndpointUsage['byEndpoint']; onRetry: () => void }> = ({
+  endpoints,
+  onRetry,
+}) => (
+  <DataTable
+    label="Endpoint traffic"
+    testId="platform-usage-endpoint-table"
+    rows={endpoints}
+    getRowId={row => `${row.method} ${row.endpoint}`}
+    pagination={false}
+    maxHeight="360px"
+    onRetry={onRetry}
+    empty={<EmptyState title="No API-key requests in this window" action={null} />}
+    columns={[
+      {
+        id: 'endpoint',
+        label: 'Endpoint',
+        render: row => (
+          <Typography level="body-sm" fontFamily="code">
+            {row.endpoint}
+          </Typography>
+        ),
+      },
+      { id: 'method', label: 'Method', render: row => row.method },
+      { id: 'requests', label: 'Requests', numeric: true, render: row => row.requests.toLocaleString() },
+      { id: 'error', label: 'Error rate', numeric: true, render: row => formatPercent(row.errorRate) },
+      { id: 'avg', label: 'Avg latency', numeric: true, render: row => formatMs(row.avgResponseTimeMs) },
+      { id: 'p95', label: 'p95 latency', numeric: true, render: row => formatMs(row.p95ResponseTimeMs) },
+    ]}
+  />
 );
 
 /**
@@ -187,7 +153,8 @@ const EndpointSection: React.FC<{
   data: IPlatformEndpointUsageResponse | undefined;
   isLoading: boolean;
   error: unknown;
-}> = ({ source, onSourceChange, data, isLoading, error }) => {
+  onRetry: () => void;
+}> = ({ source, onSourceChange, data, isLoading, error, onRetry }) => {
   const chartData = useMemo(
     () => (data ? zeroFillDailySeries(data.endpoints.overTime, data.windowDays, d => d.requests) : []),
     [data]
@@ -228,13 +195,12 @@ const EndpointSection: React.FC<{
       </Typography>
 
       {error ? (
-        <Alert color="danger" data-testid="platform-usage-endpoint-error">
-          {(error as Error)?.message || 'Failed to load endpoint traffic'}
-        </Alert>
+        <ErrorState
+          message={error instanceof Error ? error.message : 'Failed to load endpoint traffic'}
+          onRetry={onRetry}
+        />
       ) : isLoading || !data ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }} data-testid="platform-usage-endpoint-loading">
-          <CircularProgress />
-        </Box>
+        <LoadingState label="Loading endpoint traffic" testId="platform-usage-endpoint-loading" />
       ) : (
         <Stack spacing={2}>
           <Box>
@@ -249,7 +215,7 @@ const EndpointSection: React.FC<{
               testid="platform-usage-endpoint-chart"
             />
           </Box>
-          <EndpointTable endpoints={data.endpoints.byEndpoint} />
+          <EndpointTable endpoints={data.endpoints.byEndpoint} onRetry={onRetry} />
         </Stack>
       )}
     </Sheet>
@@ -291,83 +257,65 @@ export const PlatformUsageDashboard: React.FC = () => {
   );
 
   return (
-    <Box sx={{ p: { xs: 1, sm: 2 } }} data-testid="platform-usage-dashboard">
-      <Stack
-        direction={{ xs: 'column', sm: 'row' }}
-        spacing={1}
-        alignItems={{ xs: 'stretch', sm: 'center' }}
-        sx={{ mb: 1 }}
-      >
-        <Select<SourceFilter>
-          size="sm"
-          value={source}
-          onChange={(_, value) => value && setSource(value)}
-          sx={{ minWidth: 150 }}
-          data-testid="platform-usage-source-select"
-        >
-          <Option value={ALL}>All sources</Option>
-          {COMPLETION_SOURCES.map(s => (
-            <Option key={s} value={s}>
-              {s}
-            </Option>
-          ))}
-        </Select>
-        <Select<OwnerTypeFilter>
-          size="sm"
-          value={ownerType}
-          onChange={(_, value) => value && setOwnerType(value)}
-          sx={{ minWidth: 150 }}
-          data-testid="platform-usage-owner-type-select"
-        >
-          {OWNER_TYPE_OPTIONS.map(o => (
-            <Option key={o.value} value={o.value}>
-              {o.label}
-            </Option>
-          ))}
-        </Select>
-        <Box sx={{ flex: 1 }} />
-        <Stack direction="row" spacing={1} alignItems="center">
-          <ToggleButtonGroup
-            size="sm"
-            value={String(days)}
-            onChange={(_, value) => value && setDays(Number(value) as DayRange)}
-            data-testid="platform-usage-range-toggle"
-          >
-            {DAY_RANGES.map(r => (
-              <Button key={r} value={String(r)}>
-                {r}d
-              </Button>
-            ))}
-          </ToggleButtonGroup>
-          <IconButton
-            size="sm"
+    <Stack gap={2} data-testid="platform-usage-dashboard">
+      <AdminPageHeader
+        level="section"
+        title="API usage"
+        description="Usage across every owner on the platform. Source and owner filters apply to credit sections, not endpoint traffic."
+        actions={
+          <Button
+            variant="plain"
+            startDecorator={<RefreshIcon />}
             onClick={() => {
-              refetch();
-              refetchEndpoints();
+              void refetch();
+              void refetchEndpoints();
             }}
             disabled={isFetching || endpointsFetching}
             data-testid="platform-usage-refresh-btn"
           >
-            <RefreshIcon />
-          </IconButton>
-        </Stack>
-      </Stack>
+            Refresh usage
+          </Button>
+        }
+      />
+      <FilterBar
+        search={false}
+        state={{ query: '', view: '', filters: { source, ownerType, days: String(days) } }}
+        filters={[
+          {
+            id: 'source',
+            label: 'Source',
+            options: [
+              { value: ALL, label: 'All sources' },
+              ...COMPLETION_SOURCES.map(value => ({ value, label: value })),
+            ],
+          },
+          { id: 'ownerType', label: 'Owner', options: OWNER_TYPE_OPTIONS },
+          {
+            id: 'days',
+            label: 'Window',
+            options: DAY_RANGES.map(value => ({ value: String(value), label: `${value} days` })),
+          },
+        ]}
+        onChange={patch => {
+          if (!patch.filters) return;
+          setSource((patch.filters.source || ALL) as SourceFilter);
+          setOwnerType((patch.filters.ownerType || ALL) as OwnerTypeFilter);
+          setDays(Number(patch.filters.days || 30) as DayRange);
+        }}
+      />
 
       <Alert color="neutral" size="sm" sx={{ mb: 2 }}>
         Usage across every owner on the platform. Credits and COGS come from usage events recorded since deploy; the
         source and owner-type filters apply to every credit section.
       </Alert>
 
-      {error && (
-        <Alert color="danger" sx={{ mb: 2 }} data-testid="platform-usage-error">
-          {(error as Error)?.message || 'Failed to load platform usage'}
-        </Alert>
-      )}
-
-      {isLoading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }} data-testid="platform-usage-loading">
-          <CircularProgress />
-        </Box>
+      {error ? (
+        <ErrorState
+          message={error instanceof Error ? error.message : 'Failed to load platform usage'}
+          onRetry={() => void refetch()}
+        />
+      ) : isLoading || !data ? (
+        <LoadingState label="Loading platform usage" testId="platform-usage-loading" />
       ) : (
         data && (
           <Stack spacing={3}>
@@ -402,7 +350,7 @@ export const PlatformUsageDashboard: React.FC = () => {
               )}
             </Box>
 
-            <ConsumerTable consumers={data.byConsumer} />
+            <ConsumerTable consumers={data.byConsumer} onRetry={() => void refetch()} />
 
             <BreakdownTable
               title="By feature"
@@ -440,8 +388,9 @@ export const PlatformUsageDashboard: React.FC = () => {
           data={endpointData}
           isLoading={endpointsLoading}
           error={endpointsError}
+          onRetry={() => void refetchEndpoints()}
         />
       </Box>
-    </Box>
+    </Stack>
   );
 };

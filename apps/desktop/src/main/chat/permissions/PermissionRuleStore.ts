@@ -100,6 +100,17 @@ export class PermissionRuleStore {
     });
   }
 
+  /** The card's "Allow in this project": project-level allows, added once each. */
+  async addProjectAllows(directory: string, rules: readonly string[]): Promise<StoredPermissions> {
+    const key = resolve(directory);
+    return this.update(current => {
+      const lists = current.projects[key] ?? emptyLists();
+      const allow = [...lists.allow];
+      for (const rule of rules) if (!allow.includes(rule)) allow.push(rule);
+      return { ...current, projects: { ...current.projects, [key]: { ...lists, allow } } };
+    });
+  }
+
   // Serialised: two writes sharing one temp file must not interleave.
   private writing: Promise<unknown> = Promise.resolve();
 

@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { AbuseAssessmentRow } from '@client/app/hooks/data/shadowDetections';
-import { ShadowDetectionAssessmentPanel } from './ShadowDetectionAssessmentPanel';
+import type { AbuseAssessmentAccountProfile } from '@bike4mind/common';
+import { ShadowDetectionAssessmentPanel, describeAccountProfile } from './ShadowDetectionAssessmentPanel';
 
 const hooks = vi.hoisted(() => ({
   useAbuseAssessments: vi.fn(),
@@ -35,6 +36,7 @@ const makeItem = (overrides: Partial<AbuseAssessmentRow> = {}): AbuseAssessmentR
       { value: 'insufficient_evidence', probability: 0.1 },
     ],
     confidence: 0.7,
+    reasons: [],
     model: 'jev',
     modelVersion: 'v1',
     policyVersion: 1,
@@ -50,6 +52,26 @@ const makeItem = (overrides: Partial<AbuseAssessmentRow> = {}): AbuseAssessmentR
     ...overrides,
   }) as unknown as AbuseAssessmentRow;
 
+const makeProfile = (overrides: Partial<AbuseAssessmentAccountProfile> = {}): AbuseAssessmentAccountProfile => ({
+  signupMethod: 'otc',
+  signupNetwork: { asnKnown: true, hosting: false, datacenter: false, anonymousIp: null, ja4Present: true },
+  email: { plusAddressed: true, randomLookingPlusTag: true, generatedLocalPart: false, consumerMailDomain: true },
+  minutesToTwoFactor: 4,
+  minutesToFirstSpend: 1200,
+  spend: { totalCredits: 1500, byModel: [{ model: null, creditShare: 0.5, events: 3, creditsPerEvent: 250 }] },
+  linkedAccounts: {
+    windowHours: 72,
+    total: 5,
+    blocked: 1,
+    sharedSignupIp: 4,
+    sharedJa4: 2,
+    sharedMailbox: 0,
+    sharedMailDomain: 0,
+    truncated: true,
+  },
+  ...overrides,
+});
+
 const mutateAsync = vi.fn();
 
 describe('ShadowDetectionAssessmentPanel', () => {
@@ -58,6 +80,96 @@ describe('ShadowDetectionAssessmentPanel', () => {
     hooks.currentUser = { adminPermissions: ['support:read', 'users:moderate'] };
     hooks.useAbuseAssessments.mockReturnValue({ data: [makeItem()], isPending: false, error: null });
     hooks.useRequestAbuseAssessment.mockReturnValue({ mutateAsync, isPending: false, error: null });
+  });
+
+  it('explains ordered completion evidence, limited coverage and review-only handling', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [
+        makeItem({
+          featureSummary: {
+            accounts: [],
+            completionSequence: {
+              status: 'observed',
+              reviewOnly: true,
+              source: 'completion_usage_ledger',
+              windowHours: 24,
+              eventsScanned: 40,
+              scanTruncated: true,
+              rounds: 2,
+              memberRefs: ['acct_1', 'acct_2', 'acct_3'],
+              minRequestsPerRound: 3,
+              maxRequestsPerRound: 6,
+              maxRoundSpanSeconds: 20,
+              minGapSeconds: 60,
+              maxGapSeconds: 60,
+            },
+          },
+        }),
+      ],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    const explanation = screen.getByTestId('assessment-completion-sequence').textContent;
+    expect(explanation).toContain('3 summarized accounts');
+    expect(explanation).toContain('2 rounds');
+    expect(explanation).toContain('not proof of abuse');
+    expect(explanation).toContain('cannot trigger automated containment');
+    expect(explanation).toContain('settlement order is not request start order');
+    expect(explanation).toContain('reached a cap');
+  });
+
+  it('explains synchronized request-start evidence and incomplete coverage', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [
+        makeItem({
+          featureSummary: {
+            accounts: [],
+            completionSynchrony: {
+              status: 'observed',
+              reviewOnly: true,
+              source: 'api_key_request_starts',
+              windowHours: 24,
+              eventsScanned: 9,
+              legacyRows: 1,
+              scanTruncated: false,
+              memberRefs: ['acct_1', 'acct_2', 'acct_3'],
+              bursts: 4,
+              synchronizedModelSwitches: 2,
+              distinctRequestedModels: 2,
+              maxStartSkewMilliseconds: 400,
+              completedRequests: 6,
+              dailyCapRejectedRequests: 3,
+              otherRejectedRequests: 0,
+              interruptedOrUnknownRequests: 0,
+            },
+          },
+        }),
+      ],
+      isPending: false,
+      error: null,
+    });
+    const { unmount } = renderPanel();
+    const observed = screen.getByTestId('assessment-completion-synchrony').textContent;
+    expect(observed).toContain('3 accounts shared 4 request-start bursts and 2 requested-model switches');
+    expect(observed).toContain('3 matched requests were stopped by daily free-tier caps');
+    expect(observed).toContain('Coverage is incomplete');
+    unmount();
+
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [
+        makeItem({
+          featureSummary: {
+            accounts: [],
+            completionSynchrony: { status: 'incomplete', reviewOnly: true, reason: 'members_omitted' },
+          },
+        }),
+      ],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    expect(screen.getByTestId('assessment-completion-synchrony').textContent).toContain('could not be fully included');
   });
 
   it('renders the latest result and its probabilities', () => {
@@ -89,6 +201,44 @@ describe('ShadowDetectionAssessmentPanel', () => {
     expect(word.textContent).toContain('High');
     expect(word).toHaveAttribute('data-confidence', 'high');
     expect(screen.queryByTestId('shadow-detection-assessment-suggestion-meta')).toBeNull();
+  });
+
+  it('lists the model reasons in fixed wording beside the label', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [
+        makeItem({
+          reasons: [
+            { key: 'anonymizedNetwork', probability: 0.91 },
+            { key: 'rushedOnboarding', probability: 0.8 },
+          ],
+        }),
+      ],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    const reasons = screen.getAllByTestId('abuse-assessment-reason').map(node => node.textContent);
+    expect(reasons).toEqual([
+      'Signed up through a VPN, proxy or hosting network (91%)',
+      'Two-factor or spending started within minutes of signup (80%)',
+    ]);
+  });
+
+  it('shows no reasons block for an assessment without reasons', () => {
+    renderPanel();
+    expect(screen.queryByTestId('abuse-assessment-reasons')).toBeNull();
+  });
+
+  it('renders older assessments without profile or reason fields', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [makeItem({ reasons: undefined, featureSummary: { accounts: [{ ref: 'acct_1' }] } })],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    expect(screen.getByTestId('shadow-detection-assessment-latest')).toBeTruthy();
+    expect(screen.queryByTestId('abuse-assessment-reasons')).toBeNull();
+    expect(screen.queryByTestId('shadow-detection-assessment-profiles')).toBeNull();
   });
 
   it('renders unknown with its failure in plain words', () => {
@@ -144,5 +294,56 @@ describe('ShadowDetectionAssessmentPanel', () => {
     expect((await screen.findByTestId('shadow-detection-assessment-outcome')).textContent).toContain(
       'off in admin settings'
     );
+  });
+
+  it('shows each account profile above the raw evidence', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [
+        makeItem({ evidenceVersion: 2, featureSummary: { accounts: [{ ref: 'acct_1', profile: makeProfile() }] } }),
+      ],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    const text = screen.getByTestId('shadow-detection-assessment-profiles').textContent;
+    expect(text).toContain('acct_1');
+    expect(text).toContain('Linked within 72h: 5+');
+  });
+
+  it('renders no profiles for a v1 summary or a profile that does not parse', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [makeItem({ featureSummary: { accounts: [{ ref: 'acct_1' }, { ref: 'acct_2', profile: { x: 1 } }] } })],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    expect(screen.queryByTestId('shadow-detection-assessment-profiles')).toBeNull();
+  });
+});
+
+describe('describeAccountProfile', () => {
+  it('words the signup, email, timing, spend and link facts', () => {
+    expect(describeAccountProfile(makeProfile())).toEqual([
+      'Signup: email code; hosting/VPN network no, anonymous IP unknown, JA4 present',
+      'Email: plus-addressed, random-looking tag, webmail domain',
+      'Two-factor: 4 min after signup',
+      'First spend: 1,200 min after signup',
+      'Spend: 1,500 credits - no model 50% (250/call)',
+      'Linked within 72h: 5+ (1 blocked; signup IP 4, JA4 2, mailbox 0, mail domain 0)',
+    ]);
+  });
+
+  it('omits facts the profile does not have', () => {
+    const lines = describeAccountProfile(
+      makeProfile({
+        signupMethod: 'oauth',
+        email: null,
+        minutesToTwoFactor: null,
+        minutesToFirstSpend: null,
+        spend: null,
+        linkedAccounts: null,
+      })
+    );
+    expect(lines).toEqual(['Signup: oauth; hosting/VPN network no, anonymous IP unknown, JA4 present']);
   });
 });

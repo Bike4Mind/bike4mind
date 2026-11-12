@@ -78,7 +78,7 @@ describe('OrganizationProfileModal', () => {
     useGetOrganizationMock.mockReturnValue({ data: undefined, isFetching: true, error: null });
     renderModal();
 
-    expect(screen.getByTestId('admin-organization-profile-loading')).toBeTruthy();
+    expect(screen.getByTestId('admin-loading-state')).toHaveTextContent('Loading organization');
   });
 
   it('closes on a settled 404 and says so', () => {
@@ -106,8 +106,8 @@ describe('OrganizationProfileModal', () => {
 
     expect(fakeAdminRouter.search).toMatchObject({ orgId: ORG_ID });
     expect(toastErrorMock).not.toHaveBeenCalled();
-    expect(screen.getByTestId('admin-organization-profile-error')).toBeTruthy();
-    expect(screen.getByRole('alert').textContent).toBe('This organization could not be loaded.');
+    expect(screen.getByTestId('admin-error-state')).toBeTruthy();
+    expect(screen.getByRole('alert')).toHaveTextContent('This organization could not be loaded.');
   });
 
   it('shows the load error, not cached data, when a reopened organization fails to refetch', () => {
@@ -120,8 +120,8 @@ describe('OrganizationProfileModal', () => {
     });
     renderModal();
 
-    expect(screen.getByTestId('admin-organization-profile-error')).toBeTruthy();
-    expect(screen.getByTestId('admin-organization-profile-retry-btn')).toBeTruthy();
+    expect(screen.getByTestId('admin-error-state')).toBeTruthy();
+    expect(screen.getByTestId('admin-error-retry-btn')).toBeTruthy();
     expect(screen.queryByTestId('org-profile-close-btn')).toBeNull();
   });
 
@@ -131,7 +131,7 @@ describe('OrganizationProfileModal', () => {
     useGetOrganizationMock.mockReturnValue({ data: undefined, isFetching: false, error: httpError(500), refetch });
     renderModal();
 
-    fireEvent.click(screen.getByTestId('admin-organization-profile-retry-btn'));
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
 
     expect(refetch).toHaveBeenCalledTimes(1);
   });
@@ -185,7 +185,7 @@ describe('OrganizationProfileModal', () => {
       </CssVarsProvider>
     );
 
-    expect(screen.getByTestId('admin-organization-profile-loading')).toBeTruthy();
+    expect(screen.getByTestId('admin-loading-state')).toBeTruthy();
     expect(screen.queryByTestId('org-profile-close-btn')).toBeNull();
 
     useGetOrganizationMock.mockReturnValue({

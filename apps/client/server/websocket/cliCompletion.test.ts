@@ -57,6 +57,9 @@ import { checkApiKeyRateLimitOrThrow, checkRateLimit, verifyApiKey, verifyJwtTok
 import { ForbiddenError, TooManyRequestsError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
+const mockRecordUserActivity = vi.hoisted(() => vi.fn());
+vi.mock('@server/users/recordUserActivity', () => ({ recordUserActivity: mockRecordUserActivity }));
+
 import { func } from './cliCompletion';
 
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
@@ -84,6 +87,14 @@ describe('cliCompletion websocket handler', () => {
     await run();
 
     expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', source: 'cli' }));
+  });
+
+  it('stamps the user active: a completion is an action', async () => {
+    mockRecordUserActivity.mockClear();
+
+    await run();
+
+    expect(mockRecordUserActivity).toHaveBeenCalledWith('u1', expect.anything());
   });
 
   it('resolves thinking visibility for the caller', async () => {

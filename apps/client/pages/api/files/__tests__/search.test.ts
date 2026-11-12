@@ -35,6 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { __repo: 'users' },
   projectRepository: { __repo: 'projects' },
   adminSettingsRepository: { __repo: 'adminSettings' },
+  favoriteRepository: { __repo: 'favorites' },
 }));
 
 vi.mock('@bike4mind/services', () => ({
