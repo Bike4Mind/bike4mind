@@ -74,15 +74,15 @@ export function scrubPlainTranscript(turns: readonly TutorialTurn[]): TutorialTu
 }
 
 function calledToolWithPrefix(quests: readonly CapturedQuest[], prefixes: readonly string[]): boolean {
-  return quests.some(quest =>
-    (quest.structuredReplies ?? []).some(reply =>
-      (Array.isArray(reply.content) ? reply.content : []).some(
-        (block: { type?: unknown; name?: unknown }) =>
-          block?.type === 'tool_use' &&
-          typeof block.name === 'string' &&
-          prefixes.some(prefix => (block.name as string).startsWith(prefix))
+  const hasPrefix = (name: unknown) => typeof name === 'string' && prefixes.some(prefix => name.startsWith(prefix));
+  return quests.some(
+    quest =>
+      (quest.promptMeta?.functionCalls ?? []).some(call => hasPrefix(call?.name)) ||
+      (quest.structuredReplies ?? []).some(reply =>
+        (Array.isArray(reply.content) ? reply.content : []).some(
+          (block: { type?: unknown; name?: unknown }) => block?.type === 'tool_use' && hasPrefix(block.name)
+        )
       )
-    )
   );
 }
 

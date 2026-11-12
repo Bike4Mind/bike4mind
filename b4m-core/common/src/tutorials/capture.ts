@@ -20,6 +20,7 @@ export interface CapturedQuest {
   toolResults?: TutorialTurn['toolResults'];
   fabFileIds?: string[];
   structuredReplies?: { content?: unknown }[];
+  promptMeta?: { functionCalls?: readonly { name?: unknown }[] };
 }
 
 export const THINK = /<think>[\s\S]*?<\/think>/g;

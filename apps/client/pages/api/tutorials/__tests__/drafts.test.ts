@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   session: null as Record<string, unknown> | null,
   quests: [] as Record<string, unknown>[],
   changes: [] as Record<string, unknown>[],
+  beforeWrite: null as (() => void) | null,
 }));
 
 vi.mock('@server/middlewares/adminApi', async () => {
@@ -33,12 +34,16 @@ vi.mock('@server/tutorials/models', async importOriginal => {
       state.rows.push({ ...doc });
     },
     deleteOne: async (filter: Record<string, unknown>) => {
+      state.beforeWrite?.();
+      const before = state.rows.length;
       state.rows = state.rows.filter(r => !matches(r, filter));
+      return { deletedCount: before - state.rows.length };
     },
     findOneAndUpdate: async (
       filter: Record<string, unknown>,
       update: { $set?: Record<string, unknown>; $unset?: Record<string, unknown>; $inc?: Record<string, number> }
     ) => {
+      state.beforeWrite?.();
       const row = state.rows.find(r => matches(r, filter));
       if (!row) return null;
       Object.assign(row, update.$set);
@@ -109,6 +114,7 @@ const act = (action: string, patch: Record<string, unknown> = {}) =>
 beforeEach(() => {
   state.rows = [];
   state.changes = [];
+  state.beforeWrite = null;
   state.session = { name: 'My chat', users: [], groups: [], isGlobalWrite: false };
   state.quests = QUESTS;
 });
@@ -225,6 +231,36 @@ describe('/api/tutorials/drafts', () => {
       expect(status).toBe(409);
       expect(json).toMatchObject({ code: 'STALE' });
     });
+
+    it('answers STALE from the guarded write when the seq moves after the pre-read', async () => {
+      const seq = rowOf().contentSeq;
+      state.beforeWrite = () => {
+        rowOf().contentSeq = seq + 1;
+      };
+      const { status, json } = await act('save', { contentSeq: seq, pitch: 'x' });
+      expect(status).toBe(409);
+      expect(json).toMatchObject({ code: 'STALE' });
+      expect(rowOf().pitch).not.toBe('x');
+    });
+
+    it('a save that changes nothing leaves the seq, approval and enabled flag alone', async () => {
+      await act('sheet', { name: 'a.csv', csv: 'a,b\n1,2\n' });
+      await act('save', { pitch: 'A short pitch.' });
+      await act('approve');
+      await act('enable', { enabled: true });
+      const before = JSON.parse(JSON.stringify(rowOf()));
+      const audits = state.changes.length;
+      const { status } = await act('save', { pitch: 'A short pitch.', title: rowOf().title });
+      expect(status).toBe(200);
+      expect(rowOf()).toEqual(before);
+      expect(state.changes).toHaveLength(audits);
+    });
+
+    it('audits only the fields that changed', async () => {
+      await act('save', { pitch: 'New pitch.', title: rowOf().title });
+      const last = state.changes[state.changes.length - 1];
+      expect(JSON.parse(last.after as string)).toEqual({ fields: ['pitch'] });
+    });
   });
 
   describe('approve and enable', () => {
@@ -245,10 +281,36 @@ describe('/api/tutorials/drafts', () => {
       expect(json).toMatchObject({ code: 'NOT_APPROVED' });
     });
 
-    it('deletes a draft', async () => {
+    it('deletes a draft and keeps its content in the audit row', async () => {
       await call('POST', capture());
       await act('delete');
       expect(state.rows).toHaveLength(0);
+      const last = state.changes[state.changes.length - 1];
+      expect(last.field).toBe('draft:delete');
+      expect(JSON.parse(last.before as string)).toMatchObject({
+        title: 'My draft',
+        content: { moduleId: 'my-draft', title: 'My draft' },
+      });
+    });
+
+    it('refuses a delete carrying a stale contentSeq with 409 STALE and keeps the row', async () => {
+      await call('POST', capture());
+      const { status, json } = await act('delete', { contentSeq: rowOf().contentSeq - 1 });
+      expect(status).toBe(409);
+      expect(json).toMatchObject({ code: 'STALE' });
+      expect(state.rows).toHaveLength(1);
+    });
+
+    it('answers STALE when the seq moves between the pre-read and the guarded delete', async () => {
+      await call('POST', capture());
+      const seq = rowOf().contentSeq;
+      state.beforeWrite = () => {
+        rowOf().contentSeq = seq + 1;
+      };
+      const { status, json } = await act('delete', { contentSeq: seq });
+      expect(status).toBe(409);
+      expect(json).toMatchObject({ code: 'STALE' });
+      expect(state.rows).toHaveLength(1);
     });
   });
 
