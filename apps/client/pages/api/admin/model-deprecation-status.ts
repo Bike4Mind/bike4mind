@@ -20,6 +20,7 @@ import { modelReferenceReport } from '@bike4mind/server-utils/modelDiscovery/mod
 import { bumpModelListRevision } from '@bike4mind/server-utils/modelDiscovery/modelListRevision';
 import { ApiKeyScope, LIFECYCLE_STATUSES, toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { requireFullAdmin } from '@server/admin/models/requireFullAdmin';
 
 /**
  * Deprecation queue and lifecycle report (spec sec 5.10 / 7).
@@ -151,6 +152,7 @@ const handler = adminApi({
     });
   })
   .post(async (req, res) => {
+    requireFullAdmin(req);
     const parsed = ResolveBody.safeParse(req.body);
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'invalid request');
     const { modelId, action } = parsed.data;
