@@ -1,16 +1,16 @@
 import { isAxiosError } from 'axios';
 
-export type ShareAcceptFailureKind = 'revoked' | 'expired' | 'domain' | 'full' | 'member' | 'used' | 'already-member';
+export type ShareAcceptScreenKind = 'revoked' | 'expired' | 'domain' | 'full' | 'member' | 'used' | 'already-member';
 
-export interface ShareAcceptFailure {
-  kind: ShareAcceptFailureKind;
+export interface ShareAcceptScreen {
+  kind: ShareAcceptScreenKind;
   title: string;
   body: string;
 }
 
 // Keyed on the messages sharingService.acceptInvite throws (b4m-core/services/src/sharingService/accept.ts);
 // any other failure keeps the hook's toast and the page's go-home behaviour.
-export function describeAcceptFailure(error: unknown): ShareAcceptFailure | null {
+export function describeAcceptFailure(error: unknown): ShareAcceptScreen | null {
   if (!isAxiosError(error)) return null;
   const data: unknown = error.response?.data;
   const envelope = data && typeof data === 'object' ? (data as { error?: unknown; message?: unknown }) : {};
@@ -46,7 +46,7 @@ export function describeAcceptFailure(error: unknown): ShareAcceptFailure | null
 }
 
 // A named org invite accepted by someone already in the org succeeds without changing their role.
-export function describeAcceptOutcome(result: unknown): ShareAcceptFailure | null {
+export function describeAcceptOutcome(result: unknown): ShareAcceptScreen | null {
   if (!result || typeof result !== 'object') return null;
   if ((result as { acceptOutcome?: unknown }).acceptOutcome !== 'already-member') return null;
   return {

@@ -3,7 +3,7 @@ import { fetchInvite } from '@client/app/utils/invitesAPICalls';
 import {
   describeAcceptFailure,
   describeAcceptOutcome,
-  type ShareAcceptFailure,
+  type ShareAcceptScreen,
 } from '@client/app/utils/shareAcceptErrors';
 import CheckIcon from '@mui/icons-material/Check';
 import HandymanOutlinedIcon from '@mui/icons-material/HandymanOutlined';
@@ -77,7 +77,7 @@ const StatusModal = ({
 
 const SharePage = () => {
   const [loading, setLoading] = React.useState<boolean>(false);
-  const [acceptFailure, setAcceptFailure] = React.useState<(ShareAcceptFailure & { documentId?: string }) | null>(null);
+  const [acceptScreen, setAcceptScreen] = React.useState<(ShareAcceptScreen & { documentId?: string }) | null>(null);
   const navigate = useNavigate();
   const { id } = useParams({ strict: false });
   const { currentUser } = useUser();
@@ -172,13 +172,13 @@ const SharePage = () => {
       };
       const [outcome] = await Promise.allSettled([respond()]);
       const single = action === 'accept' && validInvites.length === 1;
-      const failure = !single
+      const screen = !single
         ? null
         : outcome.status === 'rejected'
           ? describeAcceptFailure(outcome.reason)
           : describeAcceptOutcome(outcome.value);
-      if (failure) {
-        setAcceptFailure({ ...failure, documentId: validInvites[0].invite?.documentId });
+      if (screen) {
+        setAcceptScreen({ ...screen, documentId: validInvites[0].invite?.documentId });
         return;
       }
       goHome();
@@ -188,8 +188,8 @@ const SharePage = () => {
   };
 
   if (query.isLoading) return null;
-  if (acceptFailure) {
-    const { kind, title, body, documentId } = acceptFailure;
+  if (acceptScreen) {
+    const { kind, title, body, documentId } = acceptScreen;
     const openOrganization = (kind === 'member' || kind === 'already-member') && documentId;
     return (
       <StatusModal
