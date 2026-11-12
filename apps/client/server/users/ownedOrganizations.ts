@@ -29,11 +29,14 @@ type OwnedOrganizations = {
   solo: OwnedOrganization[];
 };
 
-// The owner is not a `users[]` row, so any row or manager entry that is not the owner is another person.
+// The owner is not a `users[]` row, so any row or role-list entry that is not the owner is another person.
 // Deliberately counts rows that do not confer membership: refusing is safe, deleting someone's org is not.
-const hasOtherMembers = (org: Pick<IOrganizationDocument, 'users' | 'adminUserIds'>, ownerId: string): boolean =>
+const hasOtherMembers = (
+  org: Pick<IOrganizationDocument, 'users' | 'adminUserIds' | 'billingManagerUserIds'>,
+  ownerId: string
+): boolean =>
   (org.users ?? []).some(row => String(row.userId) !== ownerId) ||
-  (org.adminUserIds ?? []).some(id => String(id) !== ownerId);
+  [...(org.adminUserIds ?? []), ...(org.billingManagerUserIds ?? [])].some(id => String(id) !== ownerId);
 
 /** The organizations the user is billing owner of, split by whether anyone else belongs to them. */
 export async function classifyOwnedOrganizations(userId: string): Promise<OwnedOrganizations> {

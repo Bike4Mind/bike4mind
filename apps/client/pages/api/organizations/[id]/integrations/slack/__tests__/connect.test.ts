@@ -67,6 +67,7 @@ import '../connect';
 const ORG = '650000000000000000000abc';
 const OWNER = '650000000000000000000111';
 const STRANGER = '650000000000000000000333';
+const MANAGER = '650000000000000000000444';
 
 // `id` is the Mongoose virtual: always the canonical lowercase spelling, whatever casing the
 // request used to reach the document.
@@ -85,6 +86,7 @@ function makeReq(user: { id: string; isAdmin: boolean }, orgId: string | null = 
 const owner = { id: OWNER, isAdmin: false };
 const stranger = { id: STRANGER, isAdmin: false };
 const admin = { id: STRANGER, isAdmin: true };
+const manager = { id: MANAGER, isAdmin: false };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -144,6 +146,21 @@ describe('POST /api/organizations/[id]/integrations/slack/connect', () => {
     });
 
     // The gate must precede the lookup, or a non-owner learns whether the org has Slack wired up.
+    expect(mockFindByOrganizationId).not.toHaveBeenCalled();
+    expect(mockIssueStateNonce).not.toHaveBeenCalled();
+    expect(mockGenerateStateToken).not.toHaveBeenCalled();
+  });
+
+  it('refuses a team manager (manageIntegrations is owner-only)', async () => {
+    mockOrgFindById.mockResolvedValue({ ...org, adminUserIds: [MANAGER], users: [{ userId: MANAGER }] });
+    const { req, res } = makeReq(manager);
+
+    await expect(routeHandlers.POST(req, res)).rejects.toMatchObject({
+      constructor: NotFoundError,
+      statusCode: HttpStatus.NotFound,
+      message: 'Organization not found',
+    });
+
     expect(mockFindByOrganizationId).not.toHaveBeenCalled();
     expect(mockIssueStateNonce).not.toHaveBeenCalled();
     expect(mockGenerateStateToken).not.toHaveBeenCalled();

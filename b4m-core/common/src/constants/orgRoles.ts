@@ -11,8 +11,8 @@
  * - Billing manager: `billingManagerUserIds`.
  * - Member: anyone else with a `users[]` row.
  * A role-list entry counts only while the user still holds a `users[]` row, so a removal that misses
- * a list leaves no authority behind. The role write seam keeps the lists disjoint; resolution takes
- * the first match in the order above regardless.
+ * a list leaves no authority behind. Resolution takes the first match in the order above, so a user
+ * on both lists reads as Manager.
  */
 
 /** Every org-administration capability. Add one only together with the routes it gates. */

@@ -73,7 +73,8 @@ export const canManageOrgApiKeys = permissionGate('manageKeys');
  * - Subscribe        pages/api/organizations/subscriptions/subscribe.ts
  * - Change seats     pages/api/organizations/subscriptions/update-seats.ts
  * - Billing portal   pages/api/stripe/portal.ts
- * Must stay in sync with those three.
+ * - Pay invoice      pages/api/subscriptions/pay-invoice.ts
+ * Must stay in sync with those four.
  *
  * A platform admin who holds no role is deliberately excluded, though the first two routes would
  * admit them: portal.ts has no admin bypass, so an admin would still get a Billing Portal button

@@ -4,6 +4,7 @@ import {
   ApiKeyScope,
   CreditHolderType,
   hasAdminPermission,
+  orgMemberHasPermission,
   type IUsageDashboardResponse,
   type NamedApiKeyUsage,
   type UsageOwnerType,
@@ -63,7 +64,7 @@ const handler = baseApi().get(async (req, res) => {
       ownerId,
       'viewUsage'
     );
-    viaDelegate = !req.user.isAdmin && org.userId !== req.user.id;
+    viaDelegate = !req.user.isAdmin && !orgMemberHasPermission(org, req.user.id, 'viewUsage');
   } else if (req.user.id !== ownerId && !req.user.isAdmin) {
     if (!canReadSupport) throw new ForbiddenError('You can only view your own usage');
     viaDelegate = true;

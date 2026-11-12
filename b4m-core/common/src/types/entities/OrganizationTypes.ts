@@ -33,7 +33,7 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   adminUserIds: string[];
   /**
    * User ids holding the Billing manager role (constants/orgRoles.ts): billing and usage, no roster
-   * control. Disjoint from `adminUserIds`; like it, an entry counts only with a `users[]` row.
+   * control. Like `adminUserIds`, an entry counts only with a `users[]` row; Manager wins on overlap.
    */
   billingManagerUserIds?: string[];
   description: string;

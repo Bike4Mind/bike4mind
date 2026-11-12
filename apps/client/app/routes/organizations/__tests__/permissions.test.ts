@@ -138,7 +138,7 @@ describe('Organization Permissions', () => {
   describe('canViewOrgAnalysis', () => {
     // The predicate $id.tsx runs, imported rather than re-declared: a copy here would pass whether
     // or not the page still agreed with it. Must match the feedback-report routes' server gate
-    // (orgAccess.ts, verifyOrgPermission (manager tier)) - admin, org owner, or any manager.
+    // (orgAccess.ts, verifyOrgPermission 'manageContent') - admin, org owner, or any manager.
     const org = {
       userId: 'owner123',
       adminUserIds: ['orgManager789'],
@@ -159,7 +159,7 @@ describe('Organization Permissions', () => {
 
     it('denies a plain member with manage permissions but no owner/manager role', () => {
       // A member can hold share/update (canManageOrg true) yet not be owner/manager;
-      // verifyOrgPermission (manager tier) would 404 them, so the tab must stay hidden.
+      // verifyOrgPermission 'manageContent' would 404 them, so the tab must stay hidden.
       expect(canViewOrgAnalysis({ id: 'member456' }, { userId: 'owner123' })).toBe(false);
     });
 
@@ -170,7 +170,7 @@ describe('Organization Permissions', () => {
   });
 
   // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs share the
-  // verifyOrgPermission (owner tier) tier: owner or platform admin, never a manager.
+  // verifyOrgPermission with an owner-only permission: owner or platform admin, never a manager.
   describe.each([
     ['canViewOrgUsage', canViewOrgUsage],
     ['canManageOrgIntegrations', canManageOrgIntegrations],
@@ -381,7 +381,7 @@ describe('resolveAccessibleTab', () => {
   });
 
   // Same shape for the Integrations, GitHub API and Webhooks tabs: every route behind them is
-  // verifyOrgPermission (owner tier).
+  // verifyOrgPermission 'manageIntegrations', which a manager does not hold.
   it('bounces Integrations, GitHub API and Webhooks for a caller who may manage the org but is not its owner', () => {
     const managing = { ...all, canManageIntegrations: false };
     expect(resolveAccessibleTab(OrganizationTabs.Integrations, managing)).toBe(OrganizationTabs.Overview);
@@ -434,7 +434,7 @@ describe('resolveAccessibleTab', () => {
 });
 
 describe('canManageOrgConnectors', () => {
-  // The Connectors tab fronts organizations/[id]/custom-mcp/*, which verifyOrgPermission (manager tier) gates to the
+  // The Connectors tab fronts organizations/[id]/custom-mcp/*, which verifyOrgPermission 'managePolicies' gates to the
   // owner, a current manager or a platform admin.
   const org = {
     userId: 'owner1',

@@ -13,9 +13,9 @@ import { orgMemberHasPermission } from '../constants/orgRoles';
  * What it does (kept deliberately minimal to avoid regressing in-org features):
  * - `stripeCustomerId` is dropped for EVERY caller -- no client consumer reads it;
  *   server-side billing uses the repository directly.
- * - `billingContact` is kept only for the org OWNER or a site admin.
- * - Per-member credit fields in `userDetails` are kept for owners, current managers and site
- *   admins; other viewers keep only their own row's credit fields.
+ * - `billingContact` is kept only for a viewer whose role holds `manageBilling` or a site admin.
+ * - Per-member credit fields in `userDetails` are kept for viewers `canViewOrgMemberCredits` admits
+ *   (managePolicies or viewUsage, or a site admin); other viewers keep only their own row's.
  * - Everything else (name/description/seats/systemPrompt/userDetails identity/currentCredits/
  *   model config/logo) is preserved: the single-org GET is access-gated to members
  *   and roster administrators, and the list routes scope non-admins to their own

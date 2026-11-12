@@ -87,9 +87,9 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     // Group-type keys this org may have (platform-admin writes only). Default empty = fail-closed.
     allowedGroupTypes: { type: [String], default: [] },
     // Org managers appointed by the billing owner / platform admin (not a Permission verb). Each also
-    // holds a users[] row, which the authority checks require (isOrgOwnerOrCurrentAdmin).
+    // holds a users[] row, which the authority checks require (hasOrgPermission, orgRoles.ts).
     adminUserIds: { type: [String], default: [] },
-    // Billing managers (orgRoles.ts). Disjoint from adminUserIds; same users[]-row requirement.
+    // Billing managers (orgRoles.ts). Same users[]-row requirement; adminUserIds wins on overlap.
     billingManagerUserIds: { type: [String], default: [] },
     // `users[]` (the shareable ACL, from IShareableDocument) is AUTHORITATIVE for org membership -
     // every membership check reads it. `userDetails[]` below is a per-member credit side-table
