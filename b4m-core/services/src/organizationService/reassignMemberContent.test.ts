@@ -120,6 +120,14 @@ describe('reassignMemberContent', () => {
     ]);
   });
 
+  it('turns a concurrent project-name clash into a 409', async () => {
+    adapters.db.projects.updateMany.mockRejectedValueOnce(
+      Object.assign(new Error('E11000 duplicate key error'), { code: 11000 })
+    );
+
+    await expect(run()).rejects.toMatchObject({ name: 'ConflictError', message: expect.stringContaining('clashed') });
+  });
+
   it('refuses the departing member, a non-member or an empty target before writing', async () => {
     await expect(run('member1')).rejects.toThrow('member being removed');
     await expect(run('no-permission-row')).rejects.toThrow('current member');

@@ -122,7 +122,14 @@ async function moveProjects(
     }
     taken.add(name);
     const data = name === project.name ? { userId: reassignTo } : { userId: reassignTo, name };
-    moved += modifiedCount(await projects.updateMany({ ...filter, _id: project.id }, data));
+    try {
+      moved += modifiedCount(await projects.updateMany({ ...filter, _id: project.id }, data));
+    } catch (error) {
+      if ((error as { code?: number } | null)?.code === 11000) {
+        throw new ConflictError('A project name clashed while transferring; try again.');
+      }
+      throw error;
+    }
   }
   return moved;
 }
