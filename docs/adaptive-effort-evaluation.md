@@ -3,38 +3,10 @@
 Tracks [the adaptive effort evaluation](https://github.com/Bike4Mind/bike4mind/issues/5224).
 No production default is changed. No paid calls are made by this tooling.
 
-## Current decision and exact live-run blockers
-
-Keep the current behavior. No latency or quality win has been established.
-This is a blocked evaluation, not evidence that medium preserves quality.
-
-The issue's baseline assumption has changed: `thinkingParams.ts` lists `opus-5-5`
-in `MEDIUM_DEFAULT_EFFORT_FAMILIES`. `resolveAnthropicEffort` resolves its unstated
-effort to medium; `effortForComplexity` still leaves complex effort undefined.
-An omitted-effort arm may therefore already be medium. Confirm the deployed
-revision and actual wire behavior before spending on 60 indistinguishable calls.
-Do not silently substitute high for the current-default arm.
-
-Missing decisions/access, in order:
-
-1. Confirm whether to compare omission against explicit medium despite identical
-   effective effort, or authorize a separately named historical/high baseline.
-   The latter is a different experiment, not the issue's current-default arm.
-2. Approve a bounded paid run: 60 full-chat completions (30 per arm), plus any
-   separately costed classification/grading calls. No retries without approval.
-3. Supply an authenticated full-stack target with pinned model/provider, revision,
-   settings, read-only sandbox fixtures for tool tasks and request-scoped traces.
-   This tool intentionally does not invoke the API or provision the sandbox.
-4. Supply an independent blinded reviewer and freeze the tool-task fixture answer
-   keys before execution. Generic tool prompts are a candidate corpus, not a
-   substitute for a versioned sandbox or correctness oracle.
-5. Capture production classifier verdicts and provider effort for each completion.
-   Existing latency artifacts lack these fields and request correlation;
-   [correlation work](https://github.com/Bike4Mind/bike4mind/issues/7331) is separate.
-   Never infer identity from timestamps or ordering.
-
-No credentials were inspected, no model endpoint was called and no spending
-approval was requested as part of the offline implementation.
+The omitted-effort arm may already resolve to medium: `thinkingParams.ts` lists
+`opus-5-5` in `MEDIUM_DEFAULT_EFFORT_FAMILIES`. Confirm the deployed revision and
+actual wire behavior before a live run; equal effective arms are reported as
+`blocked-non-distinct-arms`. Do not silently substitute high for the default arm.
 
 ## Reproduce offline
 
@@ -75,6 +47,7 @@ before starting either arm; do not drop observations after seeing outcomes.
    4 complete and correct. Record correctness separately. Audit tool calls,
    results and claimed execution against the frozen answer key; no keyword-only
    grading. Keep the blinded packet and mapping as separate private artifacts.
+   Keep raw prompts/responses, tool traces and auth outside the public repository.
 5. Analyze the complete 30 pairs. Report both arm medians, paired median deltas,
    quality means, correctness and tool correctness counts. Inspect each paired
    regression. Thirty pairs are exploratory, not proof of non-inferiority; obtain
@@ -103,19 +76,10 @@ exactly one observation per `(promptId, arm)`. Each row requires:
 | `toolCorrect`, `toolEvidence`      | Boolean and private audit reference, mandatory for tool tasks        |
 
 Evidence references are operator attestations, not cryptographic verification of
-provider behavior or reviewer independence. Review the linked evidence before
+provider behavior or reviewer independence. `blindReviewId` is only checked for
+presence; the analyzer does not verify how outputs were blinded or paired. Review the linked evidence before
 accepting a study. Unknown provenance is a blocker, never a guessed value.
 The analyzer rejects missing/duplicate rows, missing traces, non-complex queries,
 retries, restarts, mismatched settings/model, invalid timing and missing grades.
 Equal effective arms return `blocked-non-distinct-arms`. Quality/tool regressions
 return `keep-default-quality-regression`; otherwise manual review is required.
-
-## Results available now
-
-Only synthetic fixture results exist, in the focused tests: 30 pairs with 1000ms
-default and 800ms treatment give a paired median total delta of -200ms. Identical
-effective effort is blocked; a tool correctness regression keeps the default.
-These numbers validate arithmetic and gates only and are **not model results**.
-Actual per-arm latency and quality remain unmeasured pending the blockers above.
-Keep raw prompts/responses, tool traces and auth outside the public repository;
-publish only sanitized aggregate findings and the decision on the issue.
