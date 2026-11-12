@@ -83,7 +83,7 @@ function toVisibleNode(file: IFabFileDocument, depth: number): VisibleLineageNod
     generator: metadata?.generator ?? null,
     modelId: metadata?.modelId ?? null,
     prompt: metadata?.prompt ?? null,
-    url: file.fileUrl || file.presignedUrl || null,
+    url: file.fileUrl || null,
     createdAt: toIsoString(file.createdAt),
     request: metadata?.request ?? null,
   };
