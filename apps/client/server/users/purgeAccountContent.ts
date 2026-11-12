@@ -18,6 +18,7 @@ import {
   shadowDetectionRepository,
   campaignWatchRepository,
   withTransaction,
+  deleteFeedbackAiForUser,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
@@ -485,6 +486,7 @@ async function purgePersonalMemory(
  */
 export async function purgeAccountContent(userId: string, { logger, assertLease }: PurgeOptions): Promise<void> {
   await assertLease();
+  await deleteFeedbackAiForUser(userId, { assertLease });
   const personalOrganizationIds = await findPersonalOrganizationIds(userId);
   await purgeUserPublishedArtifacts(userId, { deletedBy: userId, logger });
   await withdrawAuthorListings(userId);

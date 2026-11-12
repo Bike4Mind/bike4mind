@@ -30,6 +30,9 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     setValueImmediately: clearSearchTerm,
   } = useDebounceValue('');
   const [view, updateView] = useFeedbackView();
+  const { area, severity } = view;
+  const setArea: UseFeedbackFiltersReturn['setArea'] = value => updateView({ area: value, page: 1 });
+  const setSeverity: UseFeedbackFiltersReturn['setSeverity'] = value => updateView({ severity: value, page: 1 });
   const resolution = view.resolution;
   const setResolution = useCallback<UseFeedbackFiltersReturn['setResolution']>(
     next =>
@@ -93,6 +96,8 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
         types: DEFAULT_FEEDBACK_VIEW.types,
         organizations: DEFAULT_FEEDBACK_VIEW.organizations,
         received: DEFAULT_FEEDBACK_VIEW.received,
+        area: undefined,
+        severity: undefined,
         resolution: undefined,
         ...next,
         page: 1,
@@ -107,6 +112,8 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
   );
 
   const filters: FeedbackFilters = {
+    area,
+    severity,
     searchTerm,
     statusFilters,
     selectedOrganizations,
@@ -120,6 +127,8 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
   const filterParams = useMemo<FeedbackListFilterParams>(() => {
     const statuses = Object.values(FeedbackStatus).filter(status => statusFilters[status]);
     return {
+      ...(area ? { area } : {}),
+      ...(severity ? { severity } : {}),
       // Omitted rather than sent empty: an empty array would be serialized as no filter anyway,
       // and `status` absent is the server's "any status".
       ...(statuses.length > 0 ? { status: statuses } : {}),
@@ -132,9 +141,22 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
       ...(debouncedSearchTerm.trim() ? { search: debouncedSearchTerm.trim() } : {}),
       sort: sortAscending ? 'asc' : 'desc',
     };
-  }, [statusFilters, selectedOrganizations, subject, resolution, types, received, debouncedSearchTerm, sortAscending]);
+  }, [
+    area,
+    severity,
+    resolution,
+    statusFilters,
+    selectedOrganizations,
+    subject,
+    types,
+    received,
+    debouncedSearchTerm,
+    sortAscending,
+  ]);
 
   return {
+    setArea,
+    setSeverity,
     filters,
     setSearchTerm,
     setStatusFilters,
