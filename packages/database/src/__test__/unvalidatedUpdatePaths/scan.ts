@@ -4,7 +4,7 @@ import mongoose from 'mongoose';
 import ts from 'typescript';
 
 /**
- * Mechanical half of the unvalidated-update inventory (see ./inventory.ts and the test beside it).
+ * Mechanical half of the unvalidated-update inventory (see ./report.ts and the test beside it).
  *
  * Mongoose runs schema validators on create/save only. An update reaches them only when the call
  * passes `runValidators` (or the model gates the path in a pre-update hook), so a constrained path
