@@ -293,7 +293,7 @@ describe('POST /api/user-api-keys/[id]/revoke', () => {
     expect(revokeUserApiKey).not.toHaveBeenCalled();
   });
 
-  it('records nothing and notifies nobody when the key was already revoked', async () => {
+  it('records nothing, logs no event and notifies nobody when the key was already revoked', async () => {
     revokeUserApiKey.mockResolvedValueOnce({
       ...selfRevoke,
       holderUserId: 'member-1',
@@ -304,6 +304,7 @@ describe('POST /api/user-api-keys/[id]/revoke', () => {
     await mockRefs.revokeHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+    expect(logEventSafe).not.toHaveBeenCalled();
     expect(notifyApiKeyOrgRevoke).not.toHaveBeenCalled();
   });
 

@@ -25,7 +25,17 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const revokeUserApiKey = vi.hoisted(() => vi.fn().mockResolvedValue({ name: 'CLI key' }));
+const revokeUserApiKey = vi.hoisted(() =>
+  vi
+    .fn()
+    .mockResolvedValue({
+      id: 'key-1',
+      name: 'CLI key',
+      keyPrefix: 'b4m_live_x',
+      holderUserId: 'user-1',
+      didRevoke: true,
+    })
+);
 const incrementUserCounter = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/services', () => ({
   userApiKeyService: { revokeUserApiKey },

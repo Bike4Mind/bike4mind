@@ -57,20 +57,23 @@ const handler = baseApi().post(
     });
     const { name } = revoked;
 
+    // Teardown runs on a repeat revoke too: it is idempotent and covers a revoke that committed before tearing down.
     await endKeyRealtimeConnections(revoked.id, req.logger);
-    await logEventSafe(
-      {
-        userId,
-        type: UserApiKeyEvents.REVOKED,
-        metadata: {
-          keyId,
-          name,
-          reason,
+    if (revoked.didRevoke) {
+      await logEventSafe(
+        {
+          userId,
+          type: UserApiKeyEvents.REVOKED,
+          metadata: {
+            keyId,
+            name,
+            reason,
+          },
         },
-      },
-      { ability: req.ability },
-      req.logger
-    );
+        { ability: req.ability },
+        req.logger
+      );
+    }
 
     if (orgName) await notifyApiKeyOrgRevoke(revoked.holderUserId, name, orgName, req.logger);
 
