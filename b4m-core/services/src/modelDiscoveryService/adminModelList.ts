@@ -433,6 +433,7 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
     const draft = resolved.get(id)?.record ?? {};
     const bucket = rowsByModel.get(id) ?? [];
     const entry = entries.get(id);
+    const entryEnabled = entry?.enabled === true;
     const reasons: AdminModelReason[] = [];
 
     const catalogLifecycle = isRecord(draft.lifecycle) ? draft.lifecycle : {};
@@ -453,7 +454,7 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
 
     // updatedAt is not on LLMModelConfig: entries carry it once the access write stamps it.
     const entrySavedAt = entry ? toDate((entry as { updatedAt?: unknown }).updatedAt) : undefined;
-    if (entry && entry.enabled === false) {
+    if (entry && !entryEnabled) {
       const activatedAt = input.discoveryMilestones.get(id)?.activatedAt;
       reasons.push(
         entrySavedAt && activatedAt && entrySavedAt.getTime() < activatedAt.getTime()
@@ -559,7 +560,7 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
     const access: AdminModelAccess = {
       entry: entry
         ? {
-            enabled: entry.enabled !== false,
+            enabled: entryEnabled,
             allowedUserTags,
             allowedEntitlements,
             ...(entry.fallbackModel ? { fallbackModel: entry.fallbackModel } : {}),
@@ -572,8 +573,7 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
         allowedEntitlements.some(
           key => normalizeEntitlementKey(key) === normalizeEntitlementKey(input.baseEntitlementKey)
         ),
-      adminsOnly:
-        !!entry && entry.enabled !== false && allowedUserTags.length === 0 && allowedEntitlements.length === 0,
+      adminsOnly: !!entry && entryEnabled && allowedUserTags.length === 0 && allowedEntitlements.length === 0,
       freeTierLocked:
         input.freeTierAllowedModels !== undefined &&
         !isFreeTierModel(id, input.freeTierAllowedModels, { type: display.type as ModelInfo['type'] }),
