@@ -12,6 +12,12 @@ export const LINEAGE_MAX_DEPTH = 8;
 export const LINEAGE_MAX_NODES = 32;
 /** Direct children returned, newest first. */
 export const LINEAGE_MAX_CHILDREN = 24;
+/**
+ * Child ids scanned per page, and the pages scanned at most. The id query is not access-scoped, so a popular source
+ * can have many newer children the caller cannot read; scanning a few pages keeps theirs from being crowded out.
+ */
+const CHILD_SCAN_PAGE_SIZE = 48;
+const CHILD_SCAN_MAX_PAGES = 4;
 
 type LineageNodeBase = {
   fileId: string;
@@ -57,7 +63,7 @@ export type FileLineageDeps = {
   /** The files among `ids` the caller may read, signed; unreadable or missing ids are absent. */
   readAccessible: (ids: string[]) => Promise<IFabFileDocument[]>;
   /** Ids of live generated files whose `derivedFrom` names `fileId`, newest first. */
-  findChildIds: (fileId: string, limit: number) => Promise<string[]>;
+  findChildIds: (fileId: string, page: { limit: number; skip: number }) => Promise<string[]>;
 };
 
 const toIsoString = (value: unknown): string => {
@@ -83,7 +89,19 @@ function toVisibleNode(file: IFabFileDocument, depth: number): VisibleLineageNod
   };
 }
 
-const lineageOf = (file: IFabFileDocument): GeneratedAssetLineageEntry[] => file.derivedFrom ?? [];
+/**
+ * A file's lineage entries with ids lowercased (the file ids they are matched against are) and any entry naming
+ * the file itself dropped, so a malformed self-reference cannot become a self-edge.
+ */
+const lineageOf = (file: IFabFileDocument): GeneratedAssetLineageEntry[] =>
+  (file.derivedFrom ?? [])
+    .map(entry => ({ ...entry, fileId: entry.fileId.toLowerCase() }))
+    .filter(entry => entry.fileId !== file.id);
+
+const edgeKey = (edge: LineageEdge) => `${edge.parentId}:${edge.childId}:${edge.role}`;
+
+/** Drops repeats: a file may list the same parent in the same role twice. */
+const uniqueEdges = (edges: LineageEdge[]) => [...new Map(edges.map(edge => [edgeKey(edge), edge])).values()];
 
 /**
  * The ancestry of `root` (already access-checked by the caller) walked breadth-first through `derivedFrom`,
@@ -129,14 +147,23 @@ export async function buildFileLineage(root: IFabFileDocument, deps: FileLineage
     }
   }
 
-  return { fileId: root.id, ancestors, children: children.nodes, edges, truncated };
+  return { fileId: root.id, ancestors, children: children.nodes, edges: uniqueEdges(edges), truncated };
 }
 
+/** Up to LINEAGE_MAX_CHILDREN readable children, newest first, scanning a bounded number of id pages. */
 async function readChildren(rootId: string, deps: FileLineageDeps) {
-  const childIds = await deps.findChildIds(rootId, LINEAGE_MAX_CHILDREN);
-  if (childIds.length === 0) return { files: [], nodes: [] };
-  const readableById = new Map((await deps.readAccessible(childIds)).map(file => [file.id, file]));
-  // Keep the newest-first order of the id query; the access read does not preserve it.
-  const files = childIds.flatMap(id => readableById.get(id) ?? []);
-  return { files, nodes: files.map(file => toVisibleNode(file, -1)) };
+  const files: IFabFileDocument[] = [];
+  for (let page = 0; page < CHILD_SCAN_MAX_PAGES && files.length < LINEAGE_MAX_CHILDREN; page++) {
+    const childIds = (
+      await deps.findChildIds(rootId, { limit: CHILD_SCAN_PAGE_SIZE, skip: page * CHILD_SCAN_PAGE_SIZE })
+    ).filter(id => id !== rootId);
+    if (childIds.length > 0) {
+      const readableById = new Map((await deps.readAccessible(childIds)).map(file => [file.id, file]));
+      // Keep the newest-first order of the id query; the access read does not preserve it.
+      files.push(...childIds.flatMap(id => readableById.get(id) ?? []));
+    }
+    if (childIds.length < CHILD_SCAN_PAGE_SIZE) break;
+  }
+  const kept = files.slice(0, LINEAGE_MAX_CHILDREN);
+  return { files: kept, nodes: kept.map(file => toVisibleNode(file, -1)) };
 }

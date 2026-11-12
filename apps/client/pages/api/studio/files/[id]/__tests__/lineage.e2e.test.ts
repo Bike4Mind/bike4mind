@@ -25,8 +25,9 @@ const mockRefs = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
     use: () => chain,
-    get: (handler: (req: unknown, res: unknown) => Promise<unknown>) => {
-      mockRefs.getHandler = handler;
+    // The rate limiter comes first; the route handler is the last argument.
+    get: (...handlers: Array<(req: unknown, res: unknown) => Promise<unknown>>) => {
+      mockRefs.getHandler = handlers.at(-1)!;
       return chain;
     },
   };
@@ -146,7 +147,7 @@ describe('GET /api/studio/files/:id/lineage (real Mongo)', () => {
     expect(body.truncated).toBe(true);
   });
 
-  it('lists readable direct children newest first and drops deleted and unreadable ones', async () => {
+  it('lists readable direct children newest first and drops deleted, archived and unreadable ones', async () => {
     const source = await createGenerated('source');
     const older = await createGenerated('older-child', { derivedFrom: [{ fileId: source, role: 'first_frame' }] });
     const newer = await createGenerated('newer-child', { derivedFrom: [{ fileId: source, role: 'variation_of' }] });
@@ -156,6 +157,8 @@ describe('GET /api/studio/files/:id/lineage (real Mongo)', () => {
     });
     const deleted = await createGenerated('deleted-child', { derivedFrom: [{ fileId: source, role: 'reference' }] });
     await FabFile.updateOne({ _id: deleted }, { $set: { deletedAt: new Date() } });
+    const archived = await createGenerated('archived-child', { derivedFrom: [{ fileId: source, role: 'reference' }] });
+    await FabFile.updateOne({ _id: archived }, { $set: { archivedAt: new Date() } });
 
     const { body } = await getLineage(source);
 

@@ -21,7 +21,7 @@ const depsFor = (files: IFabFileDocument[], { hidden = [] as string[], children 
   const readAccessible = vi.fn(async (ids: string[]) =>
     ids.filter(id => !hidden.includes(id)).flatMap(id => byId.get(id) ?? [])
   );
-  const findChildIds = vi.fn(async () => children);
+  const findChildIds = vi.fn(async (_id: string, _page: { limit: number; skip: number }) => children);
   return { readAccessible, findChildIds } satisfies FileLineageDeps;
 };
 
@@ -123,5 +123,42 @@ describe('buildFileLineage', () => {
       { parentId: root, childId: newer, role: 'variation_of' },
       { parentId: root, childId: older, role: 'reference' },
     ]);
+  });
+
+  it('scans past a page of unreadable newer children to find the readable ones', async () => {
+    const root = makeFile(hexId(0));
+    const unreadable = Array.from({ length: 60 }, (_, n) =>
+      makeFile(hexId(n + 1), [{ fileId: root.id, role: 'reference' }])
+    );
+    const mine = makeFile(hexId(100), [{ fileId: root.id, role: 'variation_of' }]);
+    const ordered = [...unreadable, mine].map(file => file.id);
+    const deps = depsFor([root, ...unreadable, mine], { hidden: unreadable.map(file => file.id) });
+    deps.findChildIds.mockImplementation(async (_id: string, { limit, skip }: { limit: number; skip: number }) =>
+      ordered.slice(skip, skip + limit)
+    );
+
+    const lineage = await buildFileLineage(root, deps);
+
+    expect(lineage.children.map(node => node.fileId)).toEqual([mine.id]);
+    expect(deps.findChildIds).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a self-reference and repeated entries', async () => {
+    const [root, parent] = [0, 1].map(hexId);
+    const files = [
+      makeFile(root, [
+        { fileId: root, role: 'reference' },
+        { fileId: parent.toUpperCase(), role: 'style' },
+        { fileId: parent, role: 'style' },
+      ]),
+      makeFile(parent),
+    ];
+
+    const lineage = await buildFileLineage(files[0], depsFor(files, { children: [root] }));
+
+    expect(lineage.ancestors.map(node => node.fileId)).toEqual([root, parent]);
+    expect(lineage.ancestors[1].redacted).toBe(false);
+    expect(lineage.edges).toEqual([{ parentId: parent, childId: root, role: 'style' }]);
+    expect(lineage.children).toEqual([]);
   });
 });
