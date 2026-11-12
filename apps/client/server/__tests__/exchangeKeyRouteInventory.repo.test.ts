@@ -18,8 +18,9 @@ import {
  * routes that declare its scopes, and of those only the ones listed here.
  *
  * Every baseApi door that resolves to ai:generate or me:read must be in the pinned registry list or
- * DOOR_ONLY_ROUTES, and no door may resolve to an empty scope set, so the generator cannot drop a route
- * silently. Adding a door for either scope fails this test until it is listed.
+ * DOOR_ONLY_ROUTES. The unresolvable-door check covers only inline-literal `baseApi({...})` doors;
+ * options passed as a variable or with type arguments are covered by the registry only.
+ * Adding a door for either scope fails this test until it is listed.
  * verifyApiKey stack: it refuses exchange keys unless the caller passes `allowExchangeKeys`, and
  * only the completion routes do.
  */
@@ -76,6 +77,8 @@ const ALLOWED_CONTRACTS = new Set([
 // Every endpoint the generated registry lists under ai:generate or me:read. The callback-secret route is
 // here because it names the scope at the door and refuses an exchange key in its handler.
 const ALLOWED_ENDPOINTS = [
+  'GET /api/generated-content/:ref',
+  'GET /api/models',
   'GET /api/quests/:id/files',
   'GET /api/v1/agent-executions/:id',
   'GET /api/v1/client-config',
@@ -96,6 +99,8 @@ const ALLOWED_ENDPOINTS = [
   'GET|POST /api/v1/music-generations',
   'GET|POST /api/v1/video-generations',
   'POST /api/ai/music',
+  'POST /api/ai/transcribe',
+  'POST /api/ai/transcribe/init',
   'POST /api/ai/sound-effects',
   'POST /api/ai/tts',
   'POST /api/ai/v1/completions',
@@ -147,16 +152,6 @@ const EXCHANGE_KEY_OPT_IN_OCCURRENCES: Record<string, number> = {
   'client/server/chatCompletion/external/wsRoute.ts': 1,
   'client/server/cli/auth.ts': 2,
   'client/server/cli/resolveContractAuth.ts': 3,
-};
-
-// Every file that names `admitExchangeKeys`: the option's plumbing plus the routes that set it.
-const ADMIT_EXCHANGE_KEYS_OCCURRENCES: Record<string, number> = {
-  'client/server/middlewares/apiKeyAuth.ts': 5,
-  'client/server/middlewares/baseApi.ts': 3,
-  'client/pages/api/ai/transcribe/index.ts': 1,
-  'client/pages/api/ai/transcribe/init.ts': 1,
-  'client/pages/api/generated-content/[ref].ts': 1,
-  'client/pages/api/models.ts': 1,
 };
 
 function sourceFiles(dir: string): string[] {
@@ -249,18 +244,17 @@ describe('keys minted for a connected app reach only their scoped routes', () =>
     expect(found).toEqual(EXCHANGE_KEY_OPT_IN_OCCURRENCES);
   });
 
-  it('references admitExchangeKeys only from the pinned files', () => {
-    const found: Record<string, number> = {};
+  it('has no admitExchangeKeys option anywhere in source', () => {
+    const found: string[] = [];
     const scan = (dir: string, prefix: string) => {
       for (const file of sourceFiles(dir)) {
-        const count = readFileSync(file, 'utf8').split('admitExchangeKeys').length - 1;
-        if (count > 0) found[`${prefix}/${posixRel(dir, file)}`] = count;
+        if (readFileSync(file, 'utf8').includes('admitExchangeKeys')) found.push(`${prefix}/${posixRel(dir, file)}`);
       }
     };
     scan(CLIENT_SERVER_DIR, 'client/server');
     scan(API_DIR, 'client/pages/api');
     scan(WORKERS_SRC_DIR, 'workers/src');
     scan(SERVER_UTILS_SRC_DIR, 'server-utils/src');
-    expect(found).toEqual(ADMIT_EXCHANGE_KEYS_OCCURRENCES);
+    expect(found).toEqual([]);
   });
 });

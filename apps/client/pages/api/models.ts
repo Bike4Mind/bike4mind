@@ -6,10 +6,14 @@
  * v1 additionally drops disabled ones. Only this route serves `lockedModels` (see ModelInfo.access).
  */
 
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getCallerModelList } from '@server/utils/callerModelList';
 
-const handler = baseApi({ admitExchangeKeys: true }).get(async (req, res) => {
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ],
+  grandfatherLegacyKeys: true,
+}).get(async (req, res) => {
   const payload = await getCallerModelList(req.user ?? null, req.logger);
   return res.status(200).json(payload);
 });

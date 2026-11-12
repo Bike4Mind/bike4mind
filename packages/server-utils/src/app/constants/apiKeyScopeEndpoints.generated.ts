@@ -89,10 +89,14 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
   [ApiKeyScope.AI_GENERATE]: [
     'POST /api/ai/music',
     'POST /api/ai/sound-effects',
+    'POST /api/ai/transcribe',
+    'POST /api/ai/transcribe/init',
     'POST /api/ai/tts',
     'POST /api/ai/v1/completions',
     'POST /api/chat',
     'POST /api/files/generate-presigned-url',
+    'GET /api/generated-content/:ref',
+    'GET /api/models',
     'GET /api/quests/:id/files',
     'POST /api/tools/weather',
     'POST /api/tools/web-fetch',
@@ -207,6 +211,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/v1/agents/:id/generate-system-prompt',
   ],
   [ApiKeyScope.ME_READ]: [
+    'GET /api/models',
     'GET /api/v1/client-config',
     'GET /api/v1/credits',
     'GET /api/v1/credits/transactions',

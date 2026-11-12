@@ -725,14 +725,26 @@ describe('apiKeyAuth with an exchange key', () => {
     expect((await run(undefined, makeReq())).passed).toBe(true);
   });
 
-  it('admits it on a scope-less route that sets admitExchangeKeys', async () => {
-    validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
-    expect((await run(undefined, makeReq(), undefined, { admitExchangeKeys: true })).passed).toBe(true);
-  });
+  describe('on a grandfathering route that declares ai:generate', () => {
+    const grandfathering = { grandfatherLegacyKeys: true };
 
-  it('does not let admitExchangeKeys change an ordinary key', async () => {
-    validateUserApiKeyMock.mockResolvedValue(keyWith({}));
-    expect((await run(undefined, makeReq(), undefined, { admitExchangeKeys: true })).passed).toBe(true);
-    expect((await run(undefined, makeReq())).passed).toBe(true);
+    it('admits an exchange key holding ai:generate', async () => {
+      validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+      expect((await run([ApiKeyScope.AI_GENERATE], makeReq(), undefined, grandfathering)).passed).toBe(true);
+    });
+
+    it('refuses an exchange key holding only me:read', async () => {
+      validateUserApiKeyMock.mockResolvedValue(
+        keyWith({ oauthExchangeClientId: 'client-1', scopes: [ApiKeyScope.ME_READ] })
+      );
+      const { passed, error } = await run([ApiKeyScope.AI_GENERATE], makeReq(), undefined, grandfathering);
+      expect(passed).toBe(false);
+      expect(error).toBeInstanceOf(ForbiddenError);
+    });
+
+    it('admits a legacy ordinary key that lacks ai:generate', async () => {
+      validateUserApiKeyMock.mockResolvedValue(keyWith({ scopes: [ApiKeyScope.AI_CHAT] }));
+      expect((await run([ApiKeyScope.AI_GENERATE], makeReq(), undefined, grandfathering)).passed).toBe(true);
+    });
   });
 });

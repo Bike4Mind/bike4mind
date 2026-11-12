@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
-import { GENERATED_CONTENT_KEY_RE } from '@bike4mind/common';
+import { ApiKeyScope, GENERATED_CONTENT_KEY_RE } from '@bike4mind/common';
 import { z } from 'zod';
 
 const refSchema = z
@@ -18,7 +18,11 @@ const PRESIGNED_URL_EXPIRY_SECONDS = 3600;
 // Fetching produced content is the final read of the async generation pipeline
 // (submit + poll + fetch); exempt these reads from the daily quota so one
 // generation costs a single daily slot. Only safe methods are exempted.
-const handler = baseApi({ exemptReadsFromDailyRateLimit: true, admitExchangeKeys: true }).get(
+const handler = baseApi({
+  exemptReadsFromDailyRateLimit: true,
+  requiredScopes: [ApiKeyScope.AI_GENERATE],
+  grandfatherLegacyKeys: true,
+}).get(
   asyncHandler<unknown, unknown, unknown, { ref?: string; format?: string }>(async (req, res) => {
     // Validate ref format - catch ZodError so we return 400 (not 422)
     let ref: string;
