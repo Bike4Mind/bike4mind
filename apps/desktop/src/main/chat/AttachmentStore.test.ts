@@ -27,6 +27,24 @@ afterEach(async () => {
 });
 
 describe('AttachmentStore.add', () => {
+  it('copies staged draft bytes to the materialized session without consuming a retry', async () => {
+    const draftId = 'draft-one';
+    const [attachment] = (
+      await store.add(draftId, [{ source: 'bytes', name: 'notes.txt', data: new TextEncoder().encode('draft notes') }])
+    ).attachments;
+    await store.copyDraft(draftId, SESSION, [attachment.id]);
+    expect((await store.read(SESSION, attachment.id))?.toString()).toBe('draft notes');
+    expect((await store.read(draftId, attachment.id))?.toString()).toBe('draft notes');
+    await store.deleteSession(draftId);
+    expect(await store.read(draftId, attachment.id)).toBeNull();
+    expect((await store.read(SESSION, attachment.id))?.toString()).toBe('draft notes');
+  });
+
+  it('refuses transfers from persisted sessions or invalid attachment ids', async () => {
+    await expect(store.copyDraft('persisted', SESSION, [])).rejects.toThrow('Invalid draft');
+    await expect(store.copyDraft('draft-one', SESSION, ['../escape'])).rejects.toThrow('invalid attachment id');
+  });
+
   it('stores a text file from disk and describes it', async () => {
     const path = join(scratch, 'notes.txt');
     await writeFile(path, 'hello\nworld\n', 'utf8');

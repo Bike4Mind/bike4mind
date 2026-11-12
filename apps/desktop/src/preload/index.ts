@@ -277,6 +277,9 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatReadAttachment, sessionId, attachmentId, mediaType),
     discardAttachment: (sessionId: string, attachmentId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatDiscardAttachment, sessionId, attachmentId),
+    copyDraftAttachments: (draftId, sessionId, attachmentIds) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatCopyDraftAttachments, draftId, sessionId, attachmentIds),
+    discardDraftAttachments: draftId => ipcRenderer.invoke(IPC_CHANNELS.chatDiscardDraftAttachments, draftId),
     imageAction: (image: ChatImageRef, action: ChatImageAction) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatImageAction, image, action),
     attachImage: (sessionId: string, image: ChatImageRef) =>

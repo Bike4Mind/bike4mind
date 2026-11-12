@@ -1,4 +1,4 @@
-import { open, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, open, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
 import type { AddAttachmentsResult, ChatAttachmentInput } from '@shared/chat';
@@ -190,6 +190,15 @@ export class AttachmentStore {
 
   async deleteSession(sessionId: string): Promise<void> {
     await rm(this.sessionDirectory(sessionId), { recursive: true, force: true });
+  }
+
+  async copyDraft(draftId: string, sessionId: string, attachmentIds: string[]): Promise<void> {
+    if (!draftId.startsWith('draft-') || sessionId.startsWith('draft-')) throw new Error('Invalid draft transfer.');
+    const target = this.sessionDirectory(sessionId);
+    if (attachmentIds.length > MAX_ATTACHMENTS_PER_TURN) throw new Error('Too many attachments.');
+    if (attachmentIds.length === 0) return;
+    await mkdir(target, { recursive: true });
+    for (const id of attachmentIds) await copyFile(this.filePath(draftId, id), this.filePath(sessionId, id));
   }
 
   /**
