@@ -190,10 +190,14 @@ export const organizationSeatsFullMessage = (name: string, seats: number): strin
  */
 export const canReadOrganizationAudit = (
   user: { id: string } | null | undefined,
-  org: (OrgRoleSubject & { users?: ReadonlyArray<{ userId: string; permissions?: readonly string[] | null }> | null }) | null | undefined
+  org:
+    | (Omit<OrgRoleSubject, 'users'> & {
+        users?: ReadonlyArray<{ userId: string; permissions?: readonly string[] | null }> | null;
+      })
+    | null
+    | undefined
 ): boolean =>
   !!user &&
   !!org &&
   orgMemberHasPermission(org, user.id, 'viewAudit') &&
-  (org.userId === user.id ||
-    (org.users ?? []).some(row => row.userId === user.id && orgAclRowConfersMembership(row)));
+  (org.userId === user.id || (org.users ?? []).some(row => row.userId === user.id && orgAclRowConfersMembership(row)));
