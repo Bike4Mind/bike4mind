@@ -31,6 +31,7 @@ import { resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRoute
 import { refuseIfSuspendedOwner } from '@server/auth/suspendedApiKeyRefusal';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveUntrustedKeyLimits } from '@bike4mind/server-utils/utils/apiKeyTrust';
+import { assertOrgServiceAccountRequest } from '@bike4mind/server-utils/auth/orgServiceAccount';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 
@@ -181,6 +182,11 @@ export const apiKeyAuth = (
       }
       // The same gate the JWT/CLI/WebSocket surfaces use, so the two cannot drift.
       assertAccountStateUsable(user);
+      await assertOrgServiceAccountRequest(user, validation, {
+        method: req.method,
+        path: endpointPath,
+        resourceId: req.query?.id,
+      });
 
       // Must run before withholdAdminRole: admins bypass the paid-only switch.
       if (
@@ -218,6 +224,7 @@ export const apiKeyAuth = (
 
       req.apiKeyInfo = {
         keyId: validation.keyId!,
+        serviceAccount: validation.serviceAccount,
         scopes: validation.scopes!,
         rateLimit,
         ownerUntrusted,

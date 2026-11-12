@@ -15,6 +15,7 @@ declare global {
 
     interface ApiKeyInfo {
       keyId: string;
+      serviceAccount?: boolean;
       scopes: ApiKeyScopeValue[];
       rateLimit: IUserApiKeyRateLimit;
       /** Owner trust before API key scopes can withhold the admin role. */

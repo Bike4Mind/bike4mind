@@ -8,7 +8,7 @@ export const API_KEY_DEPARTED_HOLDER_MESSAGE =
 
 type ApiKeyOrgMembershipInput = {
   billingOrg: IOrganizationDocument | null;
-  billingUser: Pick<IUserDocument, 'id' | 'isAdmin'>;
+  billingUser: Pick<IUserDocument, 'id' | 'isAdmin' | 'isSystem' | 'orgServiceAccount'>;
   isApiKeyCaller: boolean;
 };
 
@@ -21,6 +21,7 @@ export function isApiKeyOrgMembershipStale({
   return (
     !!billingOrg &&
     isApiKeyCaller &&
+    !(billingUser.isSystem && billingUser.orgServiceAccount?.organizationId === billingOrg.id.toString()) &&
     !persistedIsAdmin(billingUser) &&
     !organizationService.isCurrentOrgMember(billingOrg, billingUser.id)
   );

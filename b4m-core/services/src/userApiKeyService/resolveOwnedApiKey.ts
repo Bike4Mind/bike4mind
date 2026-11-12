@@ -1,6 +1,7 @@
 import { IOrganizationRepository, IUserApiKeyDocument, IUserApiKeyRepository } from '@bike4mind/common';
 
 interface ResolveOwnedApiKeyAdapters {
+  serviceAccountManagement?: boolean;
   db: {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
@@ -29,8 +30,9 @@ export const resolveOwnedApiKey = async (
 
   const { db } = adapters;
   const minted = await db.userApiKeys.findByUserIdAndId(userId, keyId);
-  if (minted) return minted;
+  if (minted && !minted.serviceAccount) return minted;
 
   const administeredOrgIds = await db.organizations.findIdsAdministeredBy(userId);
-  return db.userApiKeys.findByOrganizationIdsAndId(administeredOrgIds, keyId);
+  const orgKey = await db.userApiKeys.findByOrganizationIdsAndId(administeredOrgIds, keyId);
+  return orgKey?.serviceAccount && !adapters.serviceAccountManagement ? null : orgKey;
 };
