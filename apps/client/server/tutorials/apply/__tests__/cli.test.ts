@@ -54,8 +54,9 @@ describe('runApplyCli in the core layout', () => {
 
   it('returns 1 and writes nothing for a bundle another owner exported', async () => {
     expect(await runApplyCli(layout, [write('foreign.json', moduleBundle('other-pkg'))])).toBe(1);
-    expect(out.error.mock.calls.flat().join('\n')).toContain('other-pkg');
+    expect(out.error.mock.calls.flat().join('\n')).toContain('belongs to other-pkg');
     expect(filesIn(modules)).toEqual([]);
+    out.error.mockClear();
     const override = {
       format: OVERRIDE_BUNDLE_FORMAT,
       owner: 'other-pkg',
@@ -67,6 +68,7 @@ describe('runApplyCli in the core layout', () => {
       changes: [],
     };
     expect(await runApplyCli(layout, [write('foreign-override.json', override)])).toBe(1);
+    expect(out.error.mock.calls.flat().join('\n')).toContain('belongs to other-pkg');
     expect(filesIn(modules)).toEqual([]);
   });
 

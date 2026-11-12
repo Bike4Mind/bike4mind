@@ -5,17 +5,13 @@ import { CORE_TUTORIAL_CONTENT } from '../content';
 import { coreDraftCore } from '../coreDraftProfile';
 import editableFields from '../editableFields.json';
 import type { FieldMap } from '../overrides';
-import { identifiersOf, type ModuleFiles, type TutorialRepoLayout } from './layout';
+import { escapeNonAscii, identifiersOf, type ModuleFiles, type TutorialRepoLayout } from './layout';
 
 export const CORE_OWNER = 'core';
 export const CORE_MODULES_DIR = 'apps/client/server/tutorials/modules';
 
 /** JSON with every non-ASCII character escaped, so a captured sheet or reply keeps its text and the file stays ASCII. */
-const json = (value: unknown, indent?: number) =>
-  JSON.stringify(value, null, indent).replace(
-    /[\u007f-\uffff]/g,
-    c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`
-  );
+const json = (value: unknown, indent?: number) => escapeNonAscii(JSON.stringify(value, null, indent));
 // Identifier keys unquoted, as the AST readers of steps.ts (editable fields, override apply) only match those.
 const literal = (value: unknown) => json(value, 2).replace(/^(\s*)"([A-Za-z_$][\w$]*)":/gm, '$1$2:');
 const inline = (value: object | undefined) =>

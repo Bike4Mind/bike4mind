@@ -12,7 +12,7 @@ import {
 } from '@bike4mind/common';
 import { currentRepoValue, lockedReason, unitState } from '../overrides';
 import type { TutorialTurn } from '../types';
-import { identifiersOf, type TutorialRepoLayout } from './layout';
+import { escapeNonAscii, identifiersOf, type TutorialRepoLayout } from './layout';
 import { checkBundleOwner } from './owner';
 
 export { unitKey };
@@ -85,9 +85,9 @@ const isLiteral = (node: ts.Node | undefined): node is Literal =>
 
 function quote(value: string, quoteChar: string): string {
   const escaped = value.replace(/\\/g, '\\\\');
-  if (quoteChar === '`') return `\`${escaped.replace(/`/g, '\\`').replace(/\$\{/g, '\\${')}\``;
+  if (quoteChar === '`') return `\`${escapeNonAscii(escaped.replace(/`/g, '\\`').replace(/\$\{/g, '\\${'))}\``;
   const q = quoteChar === '"' ? '"' : "'";
-  return `${q}${escaped.split(q).join(`\\${q}`).replace(/\n/g, '\\n').replace(/\r/g, '\\r')}${q}`;
+  return `${q}${escapeNonAscii(escaped.split(q).join(`\\${q}`).replace(/\n/g, '\\n').replace(/\r/g, '\\r'))}${q}`;
 }
 
 const propOf = (obj: ts.ObjectLiteralExpression, name: string) =>
@@ -178,6 +178,7 @@ function versionEdit(
     }
   });
   const introId = `${identifiersOf(moduleId).camel}Module`;
+  if (locate === 'index' && array?.elements.some(ts.isSpreadElement)) return `set version to ${version + 1} in ${path}`;
   const entry =
     locate === 'index'
       ? array?.elements[index]
@@ -290,7 +291,6 @@ export function applyBundle(bundle: OverrideBundle, repo: RepoModule, layout: Tu
       continue;
     }
     if (STRUCTURAL_KINDS.has(unit.kind)) structural = true;
-    if (/[^\x20-\x7e\n]/.test(JSON.stringify(unit.value))) result.warnings.push(`${key} holds non-ASCII text`);
     const planned = unitEdits(unit, repo, steps, transcript);
     if (typeof planned === 'string') {
       result.manual.push({ key, edit: describeManual(unit, planned) });

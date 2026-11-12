@@ -49,3 +49,7 @@ export function identifiersOf(moduleId: string): { upper: string; camel: string 
     camel: words.map((w, i) => (i === 0 ? w : w[0].toUpperCase() + w.slice(1))).join(''),
   };
 }
+
+/** Escapes every character from U+007F up as \uXXXX, so written source stays ASCII and keeps its text. */
+export const escapeNonAscii = (text: string): string =>
+  text.replace(/[\u007f-\uffff]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);

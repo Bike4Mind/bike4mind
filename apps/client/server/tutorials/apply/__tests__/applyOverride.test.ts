@@ -351,6 +351,46 @@ describe('the PR checklist', () => {
   });
 });
 
+describe('written text stays ASCII', () => {
+  it.each([
+    ['single-quoted', 'Ask a follow-up.', "body: 'Ask a follow-up.'"],
+    ['double-quoted', 'A shop lead, describing it.', 'body: "A shop lead, describing it."'],
+  ])('escapes an em-dash and U+202E in a %s literal', (_name, repoValue, line) => {
+    const source = STEPS_SOURCE.includes(line) ? STEPS_SOURCE : null;
+    expect(source).not.toBeNull();
+    const stepId = line.includes('"') ? 'opening' : 'score-alone';
+    const value = `Say it \u2014 plainly \u202e`;
+    const result = applyBundle(bundleOf([{ kind: 'copy', stepId, field: 'body', value, repoValue }]), REPO, layout);
+    expect(result.stepsSource).toContain('\\u2014');
+    expect(result.stepsSource).toContain('\\u202e');
+    expect(/[^ -~\n]/.test(result.stepsSource ?? '')).toBe(false);
+  });
+});
+
+describe('a version located by index over a spread', () => {
+  it('prints the bump as manual instead of bumping a shifted element', () => {
+    const source = `export const ENTRIES: readonly Entry[] = [
+  ...EARLIER,
+  { id: other.id, version: 3, steps: OTHER },
+  { id: fixture-mod.id, version: 8, steps: STEPS },
+];
+`;
+    const result = applyBundle(
+      bundleOf([
+        {
+          kind: 'order',
+          value: ['score-alone', 'opening', 'read', 'hand-over-sheet'],
+          repoValue: ['opening', 'score-alone', 'read', 'hand-over-sheet'],
+        },
+      ]),
+      { ...REPO, versionSource: source },
+      layout
+    );
+    expect(result.versionSource).toBeNull();
+    expect(result.manual.find(m => m.key === 'version')?.edit).toContain('set version to 9');
+  });
+});
+
 describe('a version located by its intro identifier', () => {
   const byIntro = fixtureLayout({
     version: { path: 'content.ts', arrayName: 'CORE_TUTORIAL_CONTENT', locate: 'introId' },
