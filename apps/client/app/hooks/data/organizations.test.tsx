@@ -234,7 +234,7 @@ describe('useDeleteOrganization', () => {
     await new Promise(resolve => setTimeout(resolve, 50));
 
     expect(get).toHaveBeenCalledTimes(1);
-    expect(toast.success).toHaveBeenCalledWith('Organization deleted successfully');
+    expect(toast.success).toHaveBeenCalledWith('Team deleted successfully');
   });
 
   it('does not refetch the deleted org detail either while its page is still mounted', async () => {
