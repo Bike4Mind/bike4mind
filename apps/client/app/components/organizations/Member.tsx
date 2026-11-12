@@ -27,6 +27,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import OrganizationUserCard from './UserCard';
 import MemberCreditBudgetCard from './MemberCreditBudgetCard';
+import OrganizationMfaPolicy from './OrganizationMfaPolicy';
 import { getMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
 import { useOrganizationInvites, useOrganizationSeats } from '@client/app/hooks/data/organizations';
 
@@ -384,6 +385,10 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
       )}
 
       <MemberCreditBudgetCard organization={organization} canManage={canManageCreditBudgets} />
+      <OrganizationMfaPolicy
+        key={`${organization.id}:${organization.mfaPolicy?.required}:${organization.mfaPolicy?.graceEndsAt}`}
+        organization={organization}
+      />
 
       {/* Search and Actions Section */}
       <Stack className="organization-members-search-container" spacing={1} mx={{ xs: 0, sm: '20px' }}>

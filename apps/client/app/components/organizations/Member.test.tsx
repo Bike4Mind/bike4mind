@@ -6,6 +6,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument, Permission } from '@bike4mind/common';
 import OrganizationMembers from './Member';
+vi.mock('./OrganizationMfaPolicy', () => ({ default: () => null }));
 
 const mocks = vi.hoisted(() => ({
   share: vi.fn(),
