@@ -126,11 +126,21 @@ export interface ILLMEvent<T = unknown> {
   publish(detail: T): Promise<void>;
 }
 
+export interface QuickAskRequestedDetail {
+  slackUserId: string;
+  b4mUserId: string;
+  question: string;
+  workspaceId: string;
+}
+
 export interface IEventBus {
   LLMEvents: {
     CompletionStart: ILLMEvent;
     CompletionCompleted: ILLMEvent;
     [key: string]: ILLMEvent;
+  };
+  SlackEvents: {
+    QuickAskRequested: ILLMEvent<QuickAskRequestedDetail>;
   };
 }
 

@@ -36,6 +36,7 @@ export type {
   IChatCompletionDefaults,
   ILLMEvent,
   IEventBus,
+  QuickAskRequestedDetail,
   IMcpEnv,
   EnvVariable,
   IMcpHandler,
@@ -145,6 +146,7 @@ export {
   handleGlobalShortcut,
   handleCreateNotebookSubmission,
   handleQuickAskSubmission,
+  processQuickAskInDM,
   SHORTCUT_CALLBACK_IDS,
 } from './handlers/globalShortcutHandlers';
 export type {

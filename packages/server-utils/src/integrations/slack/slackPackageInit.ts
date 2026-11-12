@@ -19,7 +19,7 @@ import defineAbilitiesFor from '../../auth/ability';
 import { isAvailable } from '../../services/integrationCircuitBreaker';
 import { recordRateLimitEvent } from '../../utils/cloudwatch';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '../../utils/chatCompletionDefaults';
-import { LLMEvents } from '../../utils/eventBus';
+import { LLMEvents, SlackEvents } from '../../utils/eventBus';
 import { buildMcpEnvVariables } from '../../utils/mcpEnv';
 
 import { invokeMcpHandler } from '../../utils/invokeMcpHandler';
@@ -63,6 +63,7 @@ const slackEventPublisher = {
     ...LLMEvents,
     CompletionStart: LLMEvents.SlackCompletionStart,
   },
+  SlackEvents,
 };
 
 let initialized = false;

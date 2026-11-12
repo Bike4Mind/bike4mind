@@ -651,11 +651,9 @@ export async function handleCreateNotebookSubmission(
       name: finalName,
     });
 
-    // DM the user with the notebook link (async, don't wait)
+    // Awaited: Lambda freezes un-awaited work once the response is sent. Errors are caught inside.
     if (botToken && slackUser?.id) {
-      sendNotebookCreatedDM(slackUser.id, session.id, finalName, botToken).catch(error => {
-        logger.error('[Slack Shortcut] Failed to send notebook DM', { error, userId });
-      });
+      await sendNotebookCreatedDM(slackUser.id, session.id, finalName, botToken);
     }
 
     // Modal closes automatically on success (empty response)
@@ -748,7 +746,8 @@ async function sendNotebookCreatedDM(
 
 /**
  * Handle Quick Ask modal submission
- * Opens a DM with the user, posts the question, and processes it like a normal DM conversation
+ * Validates and publishes a quick ask request; the DM and completion run in a worker
+ * (see processQuickAskInDM) because background work does not survive the API response.
  */
 export async function handleQuickAskSubmission(
   payload: ViewSubmissionPayload,
@@ -799,11 +798,31 @@ export async function handleQuickAskSubmission(
     };
   }
 
-  // Close the modal immediately and process in the background
-  // We need to respond within 3 seconds, so we kick off async processing
-  processQuickAskInDM(user.id, userId, question, botToken, workspaceId).catch(error => {
-    logger.error('[Slack Shortcut] Background quick ask processing failed', { error, userId });
-  });
+  if (!workspaceId) {
+    return {
+      response_action: 'errors',
+      errors: {
+        question_block: 'Unable to identify workspace. Please try again.',
+      },
+    };
+  }
+
+  try {
+    await getSlackDeps().eventBus.SlackEvents.QuickAskRequested.publish({
+      slackUserId: user.id,
+      b4mUserId: userId,
+      question,
+      workspaceId,
+    });
+  } catch (error) {
+    logger.error('[Slack Shortcut] Failed to publish quick ask request', { error, userId });
+    return {
+      response_action: 'errors',
+      errors: {
+        question_block: 'Failed to submit your question. Please try again.',
+      },
+    };
+  }
 
   // Modal closes automatically on success
   return {};
@@ -813,7 +832,7 @@ export async function handleQuickAskSubmission(
  * Process quick ask by opening a DM and sending the question there
  * Uses async notification so Quest Processor can update the message with AI response
  */
-async function processQuickAskInDM(
+export async function processQuickAskInDM(
   slackUserId: string,
   b4mUserId: string,
   question: string,

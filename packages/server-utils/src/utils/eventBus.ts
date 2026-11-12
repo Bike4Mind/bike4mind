@@ -235,6 +235,18 @@ export const LLMEvents = {
   ),
 };
 
+export const SlackEvents = {
+  QuickAskRequested: event(
+    'slack.quickAsk.requested',
+    z.object({
+      slackUserId: z.string(),
+      b4mUserId: z.string(),
+      question: z.string(),
+      workspaceId: z.string(),
+    })
+  ),
+};
+
 export const SpiderEvents = {
   Start: event(
     'spider.start',

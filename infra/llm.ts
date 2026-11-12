@@ -1,8 +1,10 @@
+import { fabFileBucket, generatedImagesBucket } from './buckets';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { completionEventsDeadLetter, eventBus } from './eventBus';
 import { slackQuestProcessor } from './functions';
 import { allSecrets } from './secrets';
 import { lambdaVpc } from './vpc';
+import { websocketApi } from './websocket';
 
 // Web-originated completions ('completion.started') are no longer handled by a Lambda.
 // They are processed by the always-on ChatCompletion (see infra/chatCompletion.ts),
@@ -44,4 +46,33 @@ const createMementoSubscription = eventBus.subscribe(
   }
 );
 
-completionEventsDeadLetter.allowRules([slackCompletionStartSubscription, createMementoSubscription]);
+const slackQuickAskSubscription = eventBus.subscribe(
+  'slack-quick-ask',
+  {
+    handler: 'apps/workers/src/events/slackQuickAsk.handler',
+    runtime: 'nodejs24.x',
+    // initializeSlackPackage() reads the file/image buckets and websocket endpoint at cold start.
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, websocketApi, eventBus],
+    vpc: lambdaVpc,
+    timeout: '1 minute',
+    // A retry would re-post the question and create a second quest; unhandled errors go to the DLQ.
+    retries: 0,
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [completionEventsDeadLetter.sendPermission],
+    transform: completionEventsDeadLetter.functionTarget,
+  },
+  {
+    pattern: {
+      detailType: ['slack.quickAsk.requested'],
+    },
+    transform: completionEventsDeadLetter.ruleTarget,
+  }
+);
+
+completionEventsDeadLetter.allowRules([
+  slackCompletionStartSubscription,
+  createMementoSubscription,
+  slackQuickAskSubscription,
+]);
