@@ -33,6 +33,20 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
   const { area, severity } = view;
   const setArea: UseFeedbackFiltersReturn['setArea'] = value => updateView({ area: value, page: 1 });
   const setSeverity: UseFeedbackFiltersReturn['setSeverity'] = value => updateView({ severity: value, page: 1 });
+  const resolution = view.resolution;
+  const setResolution = useCallback<UseFeedbackFiltersReturn['setResolution']>(
+    next =>
+      updateView({
+        resolution: next,
+        statusFilters: next
+          ? (Object.fromEntries(
+              Object.values(FeedbackStatus).map(status => [status, status === FeedbackStatus.Closed])
+            ) as Record<FeedbackStatus, boolean>)
+          : DEFAULT_FEEDBACK_VIEW.statusFilters,
+        page: 1,
+      }),
+    [updateView]
+  );
   const { statusFilters, organizations: selectedOrganizations, subject, types, received, sortAscending, page } = view;
 
   const setSearchTerm = useCallback(
@@ -46,10 +60,13 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
 
   const setStatusFilters = useCallback<UseFeedbackFiltersReturn['setStatusFilters']>(
     update =>
-      updateView(current => ({
-        statusFilters: typeof update === 'function' ? update(current.statusFilters) : update,
-        page: 1,
-      })),
+      updateView(current => {
+        const statusFilters = typeof update === 'function' ? update(current.statusFilters) : update;
+        const onlyClosed = Object.values(FeedbackStatus).every(
+          status => statusFilters[status] === (status === FeedbackStatus.Closed)
+        );
+        return { statusFilters, resolution: onlyClosed ? current.resolution : undefined, page: 1 };
+      }),
     [updateView]
   );
 
@@ -81,6 +98,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
         received: DEFAULT_FEEDBACK_VIEW.received,
         area: undefined,
         severity: undefined,
+        resolution: undefined,
         ...next,
         page: 1,
       });
@@ -100,6 +118,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     statusFilters,
     selectedOrganizations,
     subject,
+    resolution,
     types,
     received,
     sortAscending,
@@ -116,6 +135,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
       ...(selectedOrganizations.length > 0 ? { organization: selectedOrganizations } : {}),
       // Single-valued, unlike status/organization: the endpoint takes one subject or none.
       ...(subject ? { subject } : {}),
+      ...(resolution ? { resolution } : {}),
       ...(types.length > 0 ? { type: types } : {}),
       ...(received ? { received } : {}),
       ...(debouncedSearchTerm.trim() ? { search: debouncedSearchTerm.trim() } : {}),
@@ -124,6 +144,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
   }, [
     area,
     severity,
+    resolution,
     statusFilters,
     selectedOrganizations,
     subject,
@@ -141,6 +162,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     setStatusFilters,
     setSelectedOrganizations,
     setSubject,
+    setResolution,
     setTypes,
     setReceived,
     showOnly,

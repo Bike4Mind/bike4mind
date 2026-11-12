@@ -195,9 +195,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           </TabPanel>
           <TabPanel value={AdminTab.WorldTime}>{activeTab === AdminTab.WorldTime && <WorldTimeTab />}</TabPanel>
           <TabPanel value={AdminTab.Feedback}>{activeTab === AdminTab.Feedback && <FeedbackTab />}</TabPanel>
-          <TabPanel value={AdminTab.Analytics} {...selfFramed}>
-            {activeTab === AdminTab.Analytics && <AnalyticsTab />}
-          </TabPanel>
+          <TabPanel value={AdminTab.Analytics}>{activeTab === AdminTab.Analytics && <AnalyticsTab />}</TabPanel>
           <TabPanel value={AdminTab.RegistrationInvites}>
             {activeTab === AdminTab.RegistrationInvites && <InviteCenter />}
           </TabPanel>

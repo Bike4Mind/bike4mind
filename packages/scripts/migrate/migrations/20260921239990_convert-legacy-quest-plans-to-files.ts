@@ -1,5 +1,5 @@
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { convertLegacyQuestPlans, DEFAULT_RUN_MS, type ArchiveStorage } from '../legacyQuestPlanConversion';
+import { filesArchiveStorage } from '../legacyQuestPlanArchiveStorage';
+import { convertLegacyQuestPlans, DEFAULT_RUN_MS } from '../legacyQuestPlanConversion';
 import { type MigrationFile } from './index';
 
 /**
@@ -13,18 +13,7 @@ const migration: MigrationFile = {
   name: 'convert legacy quest plans and graphs to markdown files',
 
   up: async ctx => {
-    const files = getFilesStorage();
-    const storage: ArchiveStorage = {
-      upload: (path, content, options) =>
-        files.upload(content ?? '', path, {
-          ContentType: options?.ContentType || 'text/markdown',
-          ContentLength: options?.ContentLength ?? Buffer.byteLength(content ?? '', 'utf8'),
-        }),
-      generateSignedUrl: (path, expiresIn, type) => files.getSignedUrl(path, type ?? 'get', { expiresIn }),
-      overwrite: async (path, content, options) => {
-        await files.upload(content, path, options);
-      },
-    };
+    const storage = filesArchiveStorage();
     const now = new Date();
     const deadline = new Date((ctx?.startedAt ?? now).getTime() + DEFAULT_RUN_MS);
     const { plans, graphs, stoppedEarly } = await convertLegacyQuestPlans({ storage, logger: console, now, deadline });

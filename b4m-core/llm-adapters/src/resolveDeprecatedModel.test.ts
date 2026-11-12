@@ -57,6 +57,7 @@ describe('resolveDeprecatedModelId', () => {
     expect(resolveDeprecatedModelId('claude-3-5-sonnet-20241022')).toBe('claude-sonnet-4-6');
     expect(resolveDeprecatedModelId('claude-3-7-sonnet-20250219')).toBe('claude-sonnet-4-6');
     expect(resolveDeprecatedModelId('claude-sonnet-4-20250514')).toBe('claude-sonnet-4-6');
+    expect(resolveDeprecatedModelId('claude-sonnet-4-5-20250929')).toBe('claude-sonnet-5-5');
     expect(resolveDeprecatedModelId('claude-opus-4-20250514')).toBe('claude-opus-4-8');
     expect(resolveDeprecatedModelId('claude-opus-4-1-20250805')).toBe('claude-opus-4-8');
     expect(resolveDeprecatedModelId('claude-3-opus-20240229')).toBe('claude-opus-4-8');
@@ -92,10 +93,10 @@ describe('resolveDeprecatedModelId', () => {
     expect(resolveDeprecatedModelId('grok-vision-beta')).toBe('grok-4.5');
   });
 
-  it('should keep budget-tier xAI pins on a budget model rather than raising cost', () => {
-    // grok-4.5 ($2/$6) would be a cost increase over Grok 3 Mini Fast ($0.60/$4).
-    expect(resolveDeprecatedModelId('grok-3-mini-fast')).toBe('grok-3-mini');
-    // grok-3-mini is current and has no cheaper equivalent, so it must pass through
+  it('maps Grok 3 Mini Fast to grok-4.5 and leaves the Grok 3 Mini budget pin alone', () => {
+    // grok-3-mini is deprecated in the catalog, so a redirect to it would be a dead target.
+    expect(resolveDeprecatedModelId('grok-3-mini-fast')).toBe('grok-4.5');
+    // grok-3-mini has no cheaper equivalent, so it must pass through
     // untouched -- mapping it up would raise input cost 6.7x and output 12x.
     expect(resolveDeprecatedModelId('grok-3-mini')).toBe('grok-3-mini');
   });
@@ -188,6 +189,8 @@ const KNOWN_COST_RAISES: ReadonlySet<string> = new Set<string>([
   'gemini-2.5-pro -> gemini-3.5-flash',
   'gemini-2.5-flash-lite -> gemini-3.1-flash-lite',
   'kimi-k2.5 -> kimi-k2.6',
+  // Grok 3 Mini, the cheaper target, is deprecated in the catalog; Grok 4.5 is the only current one.
+  'grok-3-mini-fast -> grok-4.5',
   // Cheaper below 100K prompt tokens; above that Haiku 5.5's long-context tier costs more.
   'anthropic.claude-3-haiku-20240307-v1:0 -> global.anthropic.claude-haiku-5-5',
 ]);
@@ -363,9 +366,9 @@ describe('Bedrock Claude retirements', () => {
     expect(resolved.disabled).toBeFalsy();
   });
 
-  it('maps Bedrock Sonnet 4.5, Legacy on Bedrock, to the live Sonnet 4.6 profile', async () => {
+  it('maps Bedrock Sonnet 4.5, Legacy on Bedrock, to the live Sonnet 5.5 profile', async () => {
     const models = await bedrockModels();
-    const successor = models.find(m => m.id === 'global.anthropic.claude-sonnet-4-6') as ModelInfo;
+    const successor = models.find(m => m.id === 'global.anthropic.claude-sonnet-5-5') as ModelInfo;
 
     expect(resolveDeprecatedModelId('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(successor.id);
     expect(isModelDeprecated(successor, now)).toBe(false);

@@ -57,19 +57,19 @@ const renderAs = (user: Partial<IUserDocument> | null, organization: IOrganizati
  * a member who can reach the tab is not shown a Delete button whose call would 403.
  */
 describe('OrganizationSettingsSection - Danger Zone visibility', () => {
-  it('shows Delete Organization to the billing owner', () => {
+  it('shows Delete Team to the billing owner', () => {
     renderAs({ id: OWNER_ID, isAdmin: false });
 
     expect(screen.getByTestId('organization-settings-delete-btn')).toBeTruthy();
   });
 
-  it('shows Delete Organization to a platform admin', () => {
+  it('shows Delete Team to a platform admin', () => {
     renderAs({ id: 'platform1', isAdmin: true });
 
     expect(screen.getByTestId('organization-settings-delete-btn')).toBeTruthy();
   });
 
-  it('hides Delete Organization from a member who can otherwise manage the org', () => {
+  it('hides Delete Team from a member who can otherwise manage the org', () => {
     renderAs({ id: 'member1', isAdmin: false });
 
     expect(screen.queryByTestId('organization-settings-delete-btn')).toBeNull();
@@ -77,7 +77,7 @@ describe('OrganizationSettingsSection - Danger Zone visibility', () => {
     expect(screen.getByText('Team System Prompt')).toBeTruthy();
   });
 
-  it('hides Delete Organization when there is no resolved user', () => {
+  it('hides Delete Team when there is no resolved user', () => {
     renderAs(null);
 
     expect(screen.queryByTestId('organization-settings-delete-btn')).toBeNull();

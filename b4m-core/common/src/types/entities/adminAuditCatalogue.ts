@@ -112,7 +112,12 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
   'org.member.added': { category: 'org', severity: 'notice', write: 'strict' },
   'org.member.removed': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.content_reassigned': { category: 'org', severity: 'notice', write: 'strict' },
   'org.member.role_changed': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.api_key.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.rotated': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.member_revoked': { category: 'access', severity: 'notice', write: 'strict' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },
@@ -265,6 +270,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'ops.sre.tracking_rerun': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.sre.tracking_retried': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.dlq.replayed': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.dlq.discarded': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.agent_executions.cleaned_up': { category: 'support', severity: 'notice', write: 'bestEffort' },
   // Handler coverage: billing and model config
   'settings.model_price.repriced': { category: 'settings', severity: 'notice', write: 'strict' },
@@ -356,6 +362,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'feedback.viewed': { category: 'support', severity: 'info', write: 'strict' },
   'feedback.status_changed': { category: 'support', severity: 'info', write: 'strict' },
   'feedback.ai_labels_changed': { category: 'support', severity: 'info', write: 'strict' },
+  'feedback.note_added': { category: 'support', severity: 'info', write: 'strict' },
   'feedback.deleted': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },

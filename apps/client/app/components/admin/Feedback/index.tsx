@@ -20,7 +20,15 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import Papa from 'papaparse';
 import { toast } from 'sonner';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
-import { FEEDBACK_ID_PARAM, FEEDBACK_SUBJECTS, FEEDBACK_AI_AREAS, FEEDBACK_AI_SEVERITIES } from '@bike4mind/common';
+import {
+  FEEDBACK_ID_PARAM,
+  FEEDBACK_SUBJECTS,
+  FEEDBACK_AI_AREAS,
+  FEEDBACK_AI_SEVERITIES,
+  FEEDBACK_RESOLUTIONS,
+  FEEDBACK_RESOLUTION_LABELS,
+} from '@bike4mind/common';
+import FeedbackCloseDialog from './FeedbackCloseDialog';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { CSV_FORMULA_PREFIX } from '@client/app/utils/csv';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
@@ -268,6 +276,7 @@ const FeedbackTab: React.FC = () => {
     setStatusFilters,
     setSelectedOrganizations,
     setSubject,
+    setResolution,
     setTypes,
     setReceived,
     showOnly,
@@ -284,6 +293,9 @@ const FeedbackTab: React.FC = () => {
     isError,
     refreshFeedback,
     handleStatusChange,
+    feedbackToClose,
+    cancelClose,
+    confirmClose,
     handleDeleteFeedbackClick,
     confirmDeleteFeedback,
     feedbackToDelete,
@@ -369,6 +381,7 @@ const FeedbackTab: React.FC = () => {
       ID: feedbackItem._id,
       CreatedAt: feedbackItem.createdAt,
       Status: feedbackItem.status,
+      Resolution: feedbackItem.resolution ? FEEDBACK_RESOLUTION_LABELS[feedbackItem.resolution] : '',
       Type: FEEDBACK_TYPE_LABELS[feedbackTypeOf(feedbackItem.type)],
       Subject: feedbackItem.subject ? FEEDBACK_SUBJECT_LABELS[feedbackItem.subject] : '',
       UserId: feedbackItem.userId,
@@ -421,6 +434,7 @@ const FeedbackTab: React.FC = () => {
     filters.searchTerm.trim() !== '' ||
     statusNarrowed ||
     filters.subject !== undefined ||
+    filters.resolution !== undefined ||
     filters.types.length > 0 ||
     filters.received !== undefined ||
     filters.selectedOrganizations.length > 0;
@@ -439,24 +453,31 @@ const FeedbackTab: React.FC = () => {
       label: 'Status',
       width: '8.5rem',
       render: row => (
-        <Select
-          size="sm"
-          value={row.status}
-          onChange={(_, value) => void handleStatusChange(row, value)}
-          slotProps={{
-            button: {
-              'aria-label': `Status of the report from ${reporterName(row)}`,
-              'data-testid': `feedback-row-status-select-${row._id}`,
-            },
-          }}
-          sx={{ width: '100%', minWidth: 0 }}
-        >
-          {FEEDBACK_STATUS_ORDER.map(status => (
-            <Option key={status} value={status}>
-              {FEEDBACK_STATUS_LABELS[status]}
-            </Option>
-          ))}
-        </Select>
+        <Stack gap={0.5}>
+          <Select
+            size="sm"
+            value={row.status}
+            onChange={(_, value) => void handleStatusChange(row, value)}
+            slotProps={{
+              button: {
+                'aria-label': `Status of the report from ${reporterName(row)}`,
+                'data-testid': `feedback-row-status-select-${row._id}`,
+              },
+            }}
+            sx={{ width: '100%', minWidth: 0 }}
+          >
+            {FEEDBACK_STATUS_ORDER.map(status => (
+              <Option key={status} value={status}>
+                {FEEDBACK_STATUS_LABELS[status]}
+              </Option>
+            ))}
+          </Select>
+          {row.resolution && (
+            <Typography level="body-xs" data-testid={`feedback-row-resolution-${row._id}`}>
+              {FEEDBACK_RESOLUTION_LABELS[row.resolution]}
+            </Typography>
+          )}
+        </Stack>
       ),
     },
   ];
@@ -541,6 +562,13 @@ const FeedbackTab: React.FC = () => {
           value={filters.severity}
           options={FEEDBACK_AI_SEVERITIES.map(value => ({ value, label: value }))}
           onChange={value => setSeverity(FEEDBACK_AI_SEVERITIES.find(severity => severity === value))}
+        />
+        <FilterChip
+          id="feedback-resolution"
+          label="Resolution"
+          value={filters.resolution}
+          options={FEEDBACK_RESOLUTIONS.map(value => ({ value, label: FEEDBACK_RESOLUTION_LABELS[value] }))}
+          onChange={value => setResolution(FEEDBACK_RESOLUTIONS.find(resolution => resolution === value))}
         />
         <FilterChip
           id="feedback-received"
@@ -659,6 +687,9 @@ const FeedbackTab: React.FC = () => {
         onClose={closeFeedback}
         onStatusChange={handleStatusChange}
       />
+      {feedbackToClose && (
+        <FeedbackCloseDialog feedbackId={feedbackToClose.id} onClose={cancelClose} onConfirm={confirmClose} />
+      )}
     </Stack>
   );
 };

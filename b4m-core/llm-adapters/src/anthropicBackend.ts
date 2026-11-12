@@ -587,6 +587,10 @@ export class AnthropicBackend implements ICompletionBackend {
         rank: 2,
         trainingCutoff: '2025-07-01',
         releaseDate: '2025-09-30',
+        // Anthropic retires the dated snapshot claude-sonnet-4-5-20250929 on 2026-11-30. The
+        // picker hides it from that date; resolveDeprecatedModelId upgrades any session/agent
+        // still pinned to it to Sonnet 5.5.
+        deprecationDate: '2026-11-30',
         description:
           "Anthropic's most intelligent model in the Claude 4 family. Delivers exceptional performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency. Ideal for production workloads requiring both power and reliability.",
       },
