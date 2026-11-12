@@ -210,6 +210,23 @@ const ROWS: [string, string, string][] = [
   ['git log --oneline "$(cat msg.txt)"', '', 'rrrr'],
   ['git log --$X', '', 'rrrr'],
   ['git branch -D "$(cat msg.txt)"', '', 'rrrr'],
+  ['git filter-branch --tree-filter true HEAD', '', 'aaaa'],
+  ['git filter-repo --path src', '', 'aaaa'],
+  ['git instaweb --httpd=./x.sh', '', 'aaaa'],
+  ["git remote-ext x 'sh -c true'", '', 'aaaa'],
+  ['git fetch-pack --upload-pack=./x.sh . main', '', 'aaaa'],
+  ['git send-pack --receive-pack=./x.sh . main', '', 'aaaa'],
+  ['git daemon --access-hook=./x.sh', '', 'aaaa'],
+  ['git difftool -x ./x.sh HEAD~1', '', 'aaaa'],
+  ['git difftool -t ../x HEAD~1', '', 'aaaa'],
+  ['git mergetool -t ../x', '', 'aaaa'],
+  ['git submodule add foo::x sm', '', 'aaaa'],
+  ['find . -name x -exec git filter-branch -f \\;', '', 'aaaa'],
+  ['find . -name x -exec git difftool -t ../x \\;', '', 'aaaa'],
+  ['echo HEAD | xargs git filter-branch', '', 'aaaa'],
+  ['echo x | xargs git daemon --access-hook=./x.sh', '', 'aaaa'],
+  ['timeout 5 git instaweb', '', 'aaaa'],
+  ['git -C src mergetool --tool=../x', '', 'aaaa'],
 ];
 
 describe('shell approval of common agent git commands', () => {

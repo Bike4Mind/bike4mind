@@ -5158,12 +5158,8 @@ const GIT_COMMAND_OPTIONS: Readonly<
   clone: { long: ['upload-pack'], short: 'u', valued: 'bcjo' },
   fetch: { long: ['upload-pack'], short: '', valued: '' },
   pull: { long: ['upload-pack'], short: '', valued: '' },
-  'fetch-pack': { long: ['upload-pack', 'exec'], short: '', valued: '' },
   archive: { long: ['exec'], short: '', valued: '' },
-  daemon: { long: ['access-hook'], short: '', valued: '' },
   push: { long: ['receive-pack', 'exec'], short: '', valued: '' },
-  'send-pack': { long: ['receive-pack', 'exec'], short: '', valued: '' },
-  difftool: { long: ['extcmd'], short: 'x', valued: 't' },
   grep: { long: ['open-files-in-pager'], short: 'O', valued: 'ABCefm' },
   rebase: { long: ['exec'], short: 'x', valued: 'sX' },
   'send-email': {
@@ -5173,32 +5169,6 @@ const GIT_COMMAND_OPTIONS: Readonly<
     exact: ['to', 'cc'],
   },
 };
-
-/**
- * Subcommands that run command lines their options or config give whenever they run: history filters, a web server,
- * a remote helper that runs its argument.
- */
-const GIT_COMMAND_RUNNERS = new Set(['filter-branch', 'filter-repo', 'instaweb', 'remote-ext']);
-
-/**
- * Whether difftool or mergetool is given a tool name that git reads as a path to a tool script (`-t ../x`), or a word
- * bash fills in that may give one. `raw` are the shell words after the subcommand.
- */
-function gitToolPath(sub: string, raw: readonly string[]): boolean {
-  if (sub !== 'difftool' && sub !== 'mergetool') return false;
-  for (let at = 0; at < raw.length; at++) {
-    const word = raw[at] as string;
-    if (isDynamic(word)) return true;
-    const arg = wordValue(word);
-    if (arg === '--') return false;
-    const option = /^(?:-[A-Za-z]*?t|--tool(?!-help)[^=]*)(=?)([^]*)$/.exec(arg);
-    if (!option) continue;
-    let value = option[2] ?? '';
-    if (!option[1] && !value) value = wordValue(raw[++at] ?? '');
-    if (TOOL_PATH.test(value)) return true;
-  }
-  return false;
-}
 
 /**
  * Commands every git since 2.23 (which the app's own `git switch` needs) runs as a builtin or from its exec path, none
@@ -5769,7 +5739,7 @@ function aliasWord(word: string): string | null {
 
 /**
  * Whether a git call runs a command line its words give with no file to check: a subcommand option such as
- * `--upload-pack`, a subcommand that runs one, or an `ext::` remote. `raw` are the shell words after `git`.
+ * `--upload-pack`, or an `ext::` remote. `raw` are the shell words after `git`.
  */
 function gitRunsGivenCommand(raw: readonly string[]): boolean {
   if (raw.some(word => /(^|=)ext::/i.test(wordValue(word)))) return true;
@@ -5777,8 +5747,6 @@ function gitRunsGivenCommand(raw: readonly string[]): boolean {
   if (at === null) return false;
   if (at === 'open') return true;
   const sub = wordValue(raw[at] ?? '');
-  if (GIT_COMMAND_RUNNERS.has(sub)) return true;
-  if (gitToolPath(sub, raw.slice(at + 1))) return true;
   const options = own(GIT_COMMAND_OPTIONS, sub);
   if (options === undefined) return false;
   const { long, short, valued, exact = [] } = options;
@@ -7574,10 +7542,7 @@ export async function scanShell(
     /** `<name>::<address>` operands make git run a git-remote-<name> program from PATH, which the scan checks like git-merge-<name>. */
     const checkRemoteHelpers = async (node: Node, sub: string, rest: readonly string[], cwd: string): Promise<void> => {
       const verb = wordValue(rest[0] ?? '');
-      const reads =
-        REMOTE_HELPER_COMMANDS.has(sub) ||
-        (sub === 'remote' && (verb === 'add' || verb === 'set-url')) ||
-        (sub === 'submodule' && verb === 'add');
+      const reads = REMOTE_HELPER_COMMANDS.has(sub) || (sub === 'remote' && (verb === 'add' || verb === 'set-url'));
       if (!reads) return;
       const names = rest.flatMap(word => {
         const name = /^([A-Za-z0-9][\w.+-]*)::/.exec(wordValue(word))?.[1];
