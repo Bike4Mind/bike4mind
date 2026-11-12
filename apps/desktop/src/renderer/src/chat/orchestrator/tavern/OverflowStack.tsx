@@ -5,19 +5,9 @@ import Menu from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import { useLayoutEffect, useRef } from 'react';
-import { AGENT_STATE_LABEL, type AgentState, type AgentView } from '../roster';
-import { poseFor, type SlotPoint, type TavernZone } from './scene';
+import { AGENT_STATE_LABEL, type AgentView } from '../roster';
+import { STATE_LAMP, poseFor, type SlotPoint, type TavernZone } from './scene';
 import { characterSprite, type CharacterId } from './tavernArt';
-
-/** The lamp on each nameplate and token: the agent's state at a glance, without the bubble. */
-export const STATE_LAMP: Record<AgentState, string> = {
-  'needs-you': '#f5c542',
-  working: '#ff9d3c',
-  done: '#7ed07a',
-  failed: '#e5534b',
-  stopped: '#a89a88',
-  idle: '#a89a88',
-};
 
 const ZONE_PLACE: Record<TavernZone, string> = {
   workbench: 'at the workbenches',

@@ -18,11 +18,12 @@ import type { AgentPersona } from '@shared/agentPersona';
 import { INNKEEPER_GREETING, OrderSlip, ReplyBubble } from './InnkeeperDesk';
 import { useAgentAnnouncements } from './announcements';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
-import { OverflowStack, STATE_LAMP, type StackedAgent } from './OverflowStack';
+import { OverflowStack, type StackedAgent } from './OverflowStack';
 import {
   DOOR_POINT,
   INNKEEPER_POINT,
   LABEL_SPAN,
+  STATE_LAMP,
   assignCharacters,
   nameLabelLayout,
   hiddenByCounter,

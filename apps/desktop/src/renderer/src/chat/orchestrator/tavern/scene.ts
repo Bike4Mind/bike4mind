@@ -58,6 +58,16 @@ const POSE: Record<AgentState, Pose> = {
   idle: 'idle',
 };
 
+/** The lamp on each nameplate and token: the agent's state at a glance, without the bubble. */
+export const STATE_LAMP: Record<AgentState, string> = {
+  'needs-you': '#f5c542',
+  working: '#ff9d3c',
+  done: '#7ed07a',
+  failed: '#e5534b',
+  stopped: '#a89a88',
+  idle: '#a89a88',
+};
+
 export function zoneFor(state: AgentState): TavernZone {
   return ZONE[state];
 }
