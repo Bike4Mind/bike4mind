@@ -100,7 +100,7 @@ For agent execution, set `agentExecutor.enabled: true`, supply the matching sour
 
 ### Pod roll reconnect check
 
-`apps/client/e2e/selfhost-pod-roll.spec.ts` drives one chat in a browser, replaces the app pod and then the WebSocket gateway pod, and requires the same page, never reloaded, to be back on a working realtime socket and to get a streamed reply after each. It then reads the chat back from the API and loads it cold. It makes four model calls, so the release needs a working model provider for the default chat model. It is not part of the default E2E suite or CI: it interrupts the release it runs against, so run it only against an evaluation release.
+`apps/client/e2e/selfhost-pod-roll.spec.ts` drives one chat in a browser, replaces the app pod and then the WebSocket gateway pod, and requires the same page, never reloaded, to be back on a working realtime socket and to get a streamed reply after each. It then reads the chat back from the API and loads it cold. It sends three chat prompts, so the release needs a working model provider for the default chat model. It is not part of the default E2E suite or CI: it interrupts the release it runs against, so run it only against an evaluation release.
 
 Settings (environment, or `apps/client/.env.e2e`):
 

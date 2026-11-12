@@ -14,7 +14,7 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   forbidOnly: !!process.env.CI,
-  // Four model replies, two pod rolls and two reconnect waits; each step has its own bound.
+  // Three chat turns, two pod rolls and two reconnect waits; each step has its own bound.
   timeout: 30 * 60_000,
   outputDir: 'test-results',
   reporter: [['list']],
