@@ -2,6 +2,7 @@ import { IOrganizationDocument } from '@bike4mind/common';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { removedMembersMessage, useRemoveMemberFromOrganization } from '@client/app/hooks/data/organizations';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
+import { getErrorMessage } from '@client/app/utils/error';
 import SearchIcon from '@mui/icons-material/Search';
 import SortIcon from '@mui/icons-material/Sort';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
@@ -19,7 +20,7 @@ import {
   Typography,
 } from '@mui/joy';
 import debounce from 'lodash/debounce';
-import { FC, useMemo, useState } from 'react';
+import { FC, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import OrganizationUserCard, { OrganizationRosterRow } from './UserCard';
@@ -97,6 +98,7 @@ const MemberRoster: FC<MemberRosterProps> = ({
       }, 300),
     []
   );
+  useEffect(() => () => debouncedSearch.cancel(), [debouncedSearch]);
 
   const visible = useMemo(
     () => sortMembers(filterMembers(members, { search, role, status }), sortKey, sortDirection),
@@ -170,8 +172,8 @@ const MemberRoster: FC<MemberRosterProps> = ({
         for (const member of targets) {
           try {
             kept.push(await removeMember({ organizationId: organization.id, userId: member.id, quiet: true }));
-          } catch {
-            failed.push(member.name);
+          } catch (error) {
+            failed.push(`${member.name} (${getErrorMessage(error)})`);
           }
         }
         setSelectedIds(new Set());

@@ -341,7 +341,7 @@ describe('MemberRoster bulk selection', () => {
     expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);
     expect(mocks.toastSuccess).toHaveBeenCalledWith('removed 1');
     expect(mocks.toastError).toHaveBeenCalledTimes(1);
-    expect(mocks.toastError).toHaveBeenCalledWith('Could not remove Ada Adams');
+    expect(mocks.toastError).toHaveBeenCalledWith('Could not remove Ada Adams (nope)');
     await waitFor(() => expect(screen.queryByTestId('organization-members-bulk-bar')).toBeNull());
   });
 
@@ -362,7 +362,7 @@ describe('MemberRoster bulk selection', () => {
     fireEvent.click(screen.getByTestId('organization-members-remove-selected-btn'));
     await lastConfirm().onOk();
     expect(mocks.toastSuccess).not.toHaveBeenCalled();
-    expect(mocks.toastError).toHaveBeenCalledWith('Could not remove Ada Adams, Bob Brown');
+    expect(mocks.toastError).toHaveBeenCalledWith('Could not remove Ada Adams (nope), Bob Brown (nope)');
   });
 
   it('lists the first ten names and counts the rest', () => {
