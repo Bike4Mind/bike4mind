@@ -3,9 +3,11 @@ import { AdminSettings, withTransaction } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import {
+  DEFAULT_OPERATIONS_SPEECH_MODEL,
   DEFAULT_OPERATIONS_TEXT_MODEL,
   OperationsModelService,
 } from '@bike4mind/server-utils/services/operationsModelService';
+import { DEFAULT_OPERATIONS_IMAGE_MODEL } from '@bike4mind/server-utils/utils/modelResolvers';
 import { z } from 'zod';
 import { ApiKeyScope, SpeechToTextModels } from '@bike4mind/common';
 
@@ -27,8 +29,8 @@ const handler = adminApi({
         // Return default config
         return res.json({
           modelId: DEFAULT_OPERATIONS_TEXT_MODEL,
-          imageModelId: 'flux-pro',
-          speechModelId: 'whisper-1',
+          imageModelId: DEFAULT_OPERATIONS_IMAGE_MODEL,
+          speechModelId: DEFAULT_OPERATIONS_SPEECH_MODEL,
         });
       }
 
