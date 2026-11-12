@@ -5,10 +5,17 @@ import type { StudioImageJob } from '@client/app/hooks/data/studioImageJobs';
 const h = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   jobs: [] as StudioImageJob[],
+  listFor: undefined as StudioImageJob[] | undefined,
+  list: undefined as unknown,
 }));
 vi.mock('@client/app/hooks/data/studioImageJobs', () => ({
   useCreateStudioImageCutout: () => ({ mutateAsync: h.mutateAsync }),
-  useStudioImageJobs: () => ({ data: { pages: [{ data: h.jobs, next_cursor: null }] } }),
+  // Stable per h.jobs, as React Query's data is per fetch, so the hook sees a new list only when the jobs change.
+  useStudioImageJobs: () => {
+    if (h.listFor !== h.jobs) h.list = { pages: [{ data: h.jobs, next_cursor: null }] };
+    h.listFor = h.jobs;
+    return { data: h.list };
+  },
   describeStudioImageCutoutError: () => 'Remove background works on PNG or JPEG images',
 }));
 
@@ -43,6 +50,20 @@ describe('useReferenceCutouts', () => {
     h.jobs = [cutoutJob({ state: 'succeeded', output: { fileId: 'cutout-1', contentType: 'image/png', bytes: 1 } })];
     rerender();
     await waitFor(() => expect(result.current.cutoutOf('file-1')).toEqual({ status: 'ready', fileId: 'cutout-1' }));
+  });
+
+  it('keeps a ready cutout once its job drops out of the loaded gallery pages', async () => {
+    h.mutateAsync.mockResolvedValue(cutoutJob({}));
+    const { result, rerender } = renderHook(() => useReferenceCutouts());
+    await act(async () => result.current.toggleCutout('file-1', true));
+
+    h.jobs = [cutoutJob({ state: 'succeeded', output: { fileId: 'cutout-1', contentType: 'image/png', bytes: 1 } })];
+    rerender();
+    await waitFor(() => expect(result.current.cutoutOf('file-1')).toEqual({ status: 'ready', fileId: 'cutout-1' }));
+
+    h.jobs = [];
+    rerender();
+    expect(result.current.cutoutOf('file-1')).toEqual({ status: 'ready', fileId: 'cutout-1' });
   });
 
   it('shows a refused create as failed', async () => {

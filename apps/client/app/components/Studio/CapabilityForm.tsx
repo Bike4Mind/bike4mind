@@ -164,11 +164,18 @@ const AspectControl = ({ field, testId }: { field: AspectField; testId: string }
   </FormControl>
 );
 
+// A labelled group, not a FormControl: Joy wires a FormControl's label and error state into every input inside it,
+// so a chip's Remove background switch would take the label's click and the field's danger color.
 const ReferencesControl = ({ field, testId }: { field: ReferencesField; testId: string }) => (
-  <FormControl disabled={field.disabled} error={field.invalidReason !== undefined}>
-    <FormLabel>
+  <Stack role="group" aria-labelledby={`${testId}-label`} gap={0.75}>
+    <Typography
+      id={`${testId}-label`}
+      level="title-sm"
+      color={field.invalidReason !== undefined ? 'danger' : undefined}
+      sx={{ opacity: field.disabled ? 0.6 : 1 }}
+    >
       {field.label} ({field.files.length}/{field.max})
-    </FormLabel>
+    </Typography>
     <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
       {field.files.map(file => (
         <ReferenceChip
@@ -192,7 +199,7 @@ const ReferencesControl = ({ field, testId }: { field: ReferencesField; testId: 
         </Button>
       )}
     </Stack>
-  </FormControl>
+  </Stack>
 );
 
 // Diameter of a chip's swatch dot, in px.

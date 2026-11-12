@@ -5,6 +5,7 @@ import {
   CutoutMatteMismatchError,
   CutoutSourceError,
   cutoutCanvasSizeFor,
+  cutoutFitsPixelBudget,
   padForMatte,
   readImageDimensions,
 } from './imageCutout';
@@ -35,6 +36,14 @@ describe('cutoutCanvasSizeFor', () => {
     expect(cutoutCanvasSizeFor({ width: 3000, height: 2000 })).toBe('1536x1024');
     expect(cutoutCanvasSizeFor({ width: 1200, height: 1800 })).toBe('1024x1536');
     expect(cutoutCanvasSizeFor({ width: 1000, height: 1050 })).toBe('1024x1024');
+  });
+});
+
+describe('cutoutFitsPixelBudget', () => {
+  it('budgets the padded canvas, not the source', () => {
+    expect(cutoutFitsPixelBudget({ width: 6000, height: 4000 }, '1536x1024')).toBe(true);
+    // 60MP of source, padded out to 30000x20000.
+    expect(cutoutFitsPixelBudget({ width: 30_000, height: 2_000 }, '1536x1024')).toBe(false);
   });
 });
 

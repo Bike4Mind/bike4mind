@@ -5,11 +5,11 @@ import {
   CUTOUT_SOURCE_MIME_TYPES,
   CutoutMatteMismatchError,
   cutoutCanvasSizeFor,
+  cutoutFitsPixelBudget,
   padForMatte,
   readImageDimensions,
   type CutoutCanvasSize,
 } from '@bike4mind/utils/imageCutout';
-import { MAX_IMAGE_PIXELS } from '@bike4mind/utils/imageResize';
 import type { ImageInputs } from '@bike4mind/utils/imageProviders';
 import { createImageJobs } from './createImageJobs';
 import type { CreateImageJobsDeps, CreateImageJobsInput, CreateImageJobsResult } from './types';
@@ -62,13 +62,14 @@ export async function createCutoutJob(
     return unsupportedSource('Remove background works on PNG or JPEG images');
   }
   const dimensions = readImageDimensions(file.bytes);
-  if (!dimensions || dimensions.width * dimensions.height > MAX_IMAGE_PIXELS) {
+  const size = dimensions && cutoutCanvasSizeFor(dimensions);
+  if (!dimensions || !size || !cutoutFitsPixelBudget(dimensions, size)) {
     return unsupportedSource('This image is too large or could not be read');
   }
   return createImageJobs(
     {
       ...rest,
-      request: buildCutoutRequest(fileId, cutoutCanvasSizeFor(dimensions)),
+      request: buildCutoutRequest(fileId, size),
       count: 1,
       purpose: 'cutout',
     },

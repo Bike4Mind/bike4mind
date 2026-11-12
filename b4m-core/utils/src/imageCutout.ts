@@ -41,13 +41,20 @@ const parseCanvas = (size: CutoutCanvasSize): Dimensions => {
   return { width, height };
 };
 
-/** Header-only read (no decode); null when the header is unreadable. */
+// EXIF orientations 5-8 turn the image a quarter turn, so it displays (and jimp decodes it) with the sides swapped.
+const QUARTER_TURN_ORIENTATIONS: ReadonlySet<number> = new Set([5, 6, 7, 8]);
+
+/**
+ * Header-only read (no decode) of the image as displayed, so as jimp decodes it: the EXIF orientation is applied.
+ * Null when the header is unreadable.
+ */
 export function readImageDimensions(bytes: Buffer): Dimensions | null {
   try {
-    const { width, height } = imageSize(bytes);
-    return typeof width === 'number' && typeof height === 'number' && width > 0 && height > 0
-      ? { width, height }
-      : null;
+    const { width, height, orientation } = imageSize(bytes);
+    if (typeof width !== 'number' || typeof height !== 'number' || width <= 0 || height <= 0) return null;
+    return orientation !== undefined && QUARTER_TURN_ORIENTATIONS.has(orientation)
+      ? { width: height, height: width }
+      : { width, height };
   } catch {
     return null;
   }
@@ -77,11 +84,20 @@ const layoutFor = (source: Dimensions, size: CutoutCanvasSize): Layout => {
   };
 };
 
-const sourceDimensions = (bytes: Buffer): Dimensions => {
+/**
+ * Whether the padded canvas for `source` stays within the decode budget. The canvas, not the source, is what is
+ * allocated (twice: the padded source and the resized matte), and a long, thin source pads out to many times its size.
+ */
+export const cutoutFitsPixelBudget = (source: Dimensions, size: CutoutCanvasSize): boolean => {
+  const { canvas } = layoutFor(source, size);
+  return canvas.width * canvas.height <= MAX_IMAGE_PIXELS;
+};
+
+const sourceDimensions = (bytes: Buffer, size: CutoutCanvasSize): Dimensions => {
   const dimensions = readImageDimensions(bytes);
   if (!dimensions) throw new CutoutSourceError('The source image header could not be read');
-  if (dimensions.width * dimensions.height > MAX_IMAGE_PIXELS) {
-    throw new CutoutSourceError(`The source image is over the ${MAX_IMAGE_PIXELS}-pixel processing limit`);
+  if (!cutoutFitsPixelBudget(dimensions, size)) {
+    throw new CutoutSourceError(`The padded source is over the ${MAX_IMAGE_PIXELS}-pixel processing limit`);
   }
   return dimensions;
 };
@@ -90,7 +106,7 @@ const loadJimp = async () => (await import('jimp')).Jimp;
 
 /** The source centred on a white canvas of `size`'s aspect, scaled to `size`: what the matte model is sent. */
 export async function padForMatte(source: Buffer, size: CutoutCanvasSize): Promise<Buffer> {
-  const layout = layoutFor(sourceDimensions(source), size);
+  const layout = layoutFor(sourceDimensions(source, size), size);
   const Jimp = await loadJimp();
   const image = await Jimp.read(source);
   const canvas = new Jimp({ width: layout.canvas.width, height: layout.canvas.height, color: 0xffffffff });
@@ -105,7 +121,7 @@ export async function padForMatte(source: Buffer, size: CutoutCanvasSize): Promi
  * padForMatte(source, size). Throws CutoutMatteMismatchError when the matte is not that canvas's shape.
  */
 export async function applyCutoutMatte(source: Buffer, matte: Buffer, size: CutoutCanvasSize): Promise<Buffer> {
-  const dimensions = sourceDimensions(source);
+  const dimensions = sourceDimensions(source, size);
   const matteDimensions = readImageDimensions(matte);
   const target = parseCanvas(size);
   if (!matteDimensions) throw new CutoutMatteMismatchError('The matte image header could not be read');

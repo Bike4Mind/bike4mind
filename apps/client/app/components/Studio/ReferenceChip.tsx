@@ -99,7 +99,9 @@ const ReferenceChip = ({ file, disabled, testId, onRemove, onToggleCutout }: Ref
         disabled={disabled}
         onChange={event => onToggleCutout(file.fileId, event.target.checked)}
         endDecorator={<Typography level="body-xs">Remove background</Typography>}
-        slotProps={{ input: { 'data-testid': `${cutoutTestId}-switch`, 'aria-label': 'Remove background' } }}
+        slotProps={{
+          input: { 'data-testid': `${cutoutTestId}-switch`, 'aria-label': `Remove background from ${file.fileName}` },
+        }}
       />
       {file.cutout && <CutoutStatus cutout={file.cutout} fileName={file.fileName} testId={cutoutTestId} />}
     </Sheet>

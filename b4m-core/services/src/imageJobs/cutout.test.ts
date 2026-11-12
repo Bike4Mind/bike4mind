@@ -48,6 +48,17 @@ const makeSource = () => rgba(SOURCE_WIDTH, SOURCE_HEIGHT, (x, y) => [x * 2, y *
 // The matte model's answer: its own (wrong-coloured) product on the left half, transparent on the right.
 const makeMatte = (width: number, height: number) => rgba(width, height, x => [9, 9, 9, x < width / 2 ? 255 : 0]);
 
+// Just the PNG signature and IHDR chunk: enough for a header read, so a huge image costs nothing to "load".
+const pngHeader = (width: number, height: number) => {
+  const ihdr = Buffer.alloc(25);
+  ihdr.writeUInt32BE(13, 0);
+  ihdr.write('IHDR', 4, 'ascii');
+  ihdr.writeUInt32BE(width, 8);
+  ihdr.writeUInt32BE(height, 12);
+  ihdr.set([8, 6, 0, 0, 0], 16);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), ihdr]);
+};
+
 const decode = async (bytes: Buffer) => sharp(bytes).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
 
 const inline = (bytes: Buffer): ProviderTerminalResult => ({
@@ -55,11 +66,11 @@ const inline = (bytes: Buffer): ProviderTerminalResult => ({
   output: { kind: 'inline', base64: bytes.toString('base64'), contentType: 'image/png' },
 });
 
-const setup = async (generate: Generate, mimeType = 'image/jpeg') => {
+const setup = async (generate: Generate, mimeType = 'image/jpeg', sourceBytes?: Buffer) => {
   let clock = new Date('2026-11-12T00:00:00Z');
   const repository = createInMemoryGenerationJobRepository({ now: () => clock });
   const queue: string[] = [];
-  const source = await makeSource();
+  const source = sourceBytes ?? (await makeSource());
   const provider: ImageProvider = {
     mode: 'sync',
     id: 'openai',
@@ -157,6 +168,14 @@ describe('createCutoutJob', () => {
     const result = await t.create();
 
     expect(result).toMatchObject({ ok: false, status: 422, code: 'unsupported_input_image' });
+    expect(holdCredits).not.toHaveBeenCalled();
+  });
+
+  it('refuses a source whose padded canvas is over the decode budget before any hold', async () => {
+    // 60MP of source, but padded to a 3:2 canvas it is 30000x20000.
+    const t = await setup(vi.fn<Generate>(), 'image/png', pngHeader(30_000, 2_000));
+
+    expect(await t.create()).toMatchObject({ ok: false, status: 422, code: 'unsupported_input_image' });
     expect(holdCredits).not.toHaveBeenCalled();
   });
 
