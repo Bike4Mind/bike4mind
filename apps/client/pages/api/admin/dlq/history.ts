@@ -7,7 +7,7 @@ import { z } from 'zod';
 
 const QuerySchema = z.object({
   queue: z.string().optional(),
-  status: z.enum(['success', 'failed', 'skipped']).optional(),
+  status: z.enum(['success', 'failed', 'skipped', 'discarded', 'pending']).optional(),
   startDate: z
     .string()
     .optional()

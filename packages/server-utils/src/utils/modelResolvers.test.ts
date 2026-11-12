@@ -5,12 +5,17 @@ import { getDefaultImageModel } from './modelResolvers';
 const model = (id: string, type: string, backend: ModelBackend): ModelInfo => ({ id, type, backend }) as ModelInfo;
 
 const FLUX_PRO = model('flux-pro-1.1', 'image', ModelBackend.BFL);
+const FLUX_3_KLEIN = model('flux-3-image-klein', 'image', ModelBackend.BFL);
 const GPT_IMAGE_2 = model('gpt-image-2', 'image', ModelBackend.OpenAI);
 const OTHER_IMAGE = model('local-image/sd15', 'image', ModelBackend.LocalImage);
 const TEXT = model('gpt-4o-mini', 'text', ModelBackend.OpenAI);
 
 describe('getDefaultImageModel', () => {
-  it('prefers flux-pro-1.1 when present', () => {
+  it('prefers FLUX 3 Image Klein when present', () => {
+    expect(getDefaultImageModel([GPT_IMAGE_2, FLUX_PRO, OTHER_IMAGE, FLUX_3_KLEIN])).toBe(FLUX_3_KLEIN);
+  });
+
+  it('falls back to flux-pro-1.1 when FLUX 3 Image Klein is absent', () => {
     expect(getDefaultImageModel([GPT_IMAGE_2, FLUX_PRO, OTHER_IMAGE])).toBe(FLUX_PRO);
   });
 

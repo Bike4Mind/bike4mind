@@ -265,6 +265,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'ops.sre.tracking_rerun': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.sre.tracking_retried': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.dlq.replayed': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.dlq.discarded': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.agent_executions.cleaned_up': { category: 'support', severity: 'notice', write: 'bestEffort' },
   // Handler coverage: billing and model config
   'settings.model_price.repriced': { category: 'settings', severity: 'notice', write: 'strict' },
