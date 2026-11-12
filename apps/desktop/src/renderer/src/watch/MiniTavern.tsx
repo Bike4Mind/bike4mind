@@ -174,6 +174,7 @@ export function MiniTavern({ api = miniApi() }: { api?: MiniTavernApi }) {
           {oldest && (
             <Box sx={{ position: 'absolute', left: 8, right: 8, bottom: 8 }}>
               <NeedsYouCard
+                key={oldest.approvalId}
                 pending={oldest}
                 more={behind.length}
                 onRespond={async (approvalId, decision) => (await api?.respond(approvalId, decision)) ?? false}

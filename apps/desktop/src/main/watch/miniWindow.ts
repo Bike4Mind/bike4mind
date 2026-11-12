@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { BrowserWindow, app, screen, shell, type Rectangle, type WebContents } from 'electron';
+import { BrowserWindow, screen, shell, type Rectangle, type WebContents } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { isExternallyOpenable } from '@shared/externalLinks';
 import type { WatchBounds, WatchSnapshot } from '@shared/watch';
@@ -47,6 +47,11 @@ export interface MiniWindowController {
 
 export type MiniWindowDeps = {
   preferences: WatchPreferencesStore;
+  /**
+   * The app is past its quit confirmation and closing everything. A close then is not the user
+   * closing the mini window, so it reopens next launch. A quit the user cancels never gets here.
+   */
+  isQuitting(): boolean;
   /** electron-vite's dev server; absent in a packaged build, which loads the renderer off disk. */
   rendererDevUrl?: string;
 };
@@ -55,20 +60,17 @@ export type MiniWindowDeps = {
  * The always-on-top mini Tavern: a small frameless window that floats over other apps, on every
  * Space and over full-screen apps, and remembers where it was and whether it was open.
  */
-export function createMiniWindowController({ preferences, rendererDevUrl }: MiniWindowDeps): MiniWindowController {
+export function createMiniWindowController({
+  preferences,
+  isQuitting,
+  rendererDevUrl,
+}: MiniWindowDeps): MiniWindowController {
   let window: BrowserWindow | null = null;
-  let quitting = false;
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   const listeners = new Set<(open: boolean) => void>();
   const announce = (open: boolean) => {
     for (const listener of listeners) listener(open);
   };
-
-  // Quitting closes this window too, but it should come back next launch, so that close is not
-  // recorded as the user closing it.
-  app.on('before-quit', () => {
-    quitting = true;
-  });
 
   const saveBounds = () => {
     if (saveTimer !== undefined) clearTimeout(saveTimer);
@@ -130,7 +132,7 @@ export function createMiniWindowController({ preferences, rendererDevUrl }: Mini
     });
     created.on('closed', () => {
       if (window === created) window = null;
-      if (!quitting) void preferences.update({ miniOpen: false });
+      if (!isQuitting()) void preferences.update({ miniOpen: false });
       announce(false);
     });
     created.once('ready-to-show', () => created.showInactive());

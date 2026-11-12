@@ -209,6 +209,8 @@ void app.whenReady().then(async () => {
       window.focus();
     },
     appIcon,
+    // quitState is declared below; this only runs on later window and quit events.
+    isQuitting: () => quitState === 'cleaning-up' || quitState === 'ready',
     ...(rendererDevUrl ? { rendererDevUrl } : {}),
   });
   closeMiniTavern = () => watch.closeMini();

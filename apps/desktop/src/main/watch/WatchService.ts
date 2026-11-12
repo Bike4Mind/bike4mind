@@ -39,6 +39,9 @@ export class WatchService {
   private readonly needsYouSince = new Map<string, number>();
   private readonly unacknowledgedDone = new Set<string>();
   private readonly busyRoots = new Set<string>();
+  // Sessions seen busy since the last rebuild, so a turn that starts and ends before the queued
+  // rebuild runs still counts as having worked.
+  private readonly busySinceRebuild = new Set<string>();
   private current: WatchSnapshot = EMPTY_WATCH_SNAPSHOT;
   private currentKey = JSON.stringify(EMPTY_WATCH_SNAPSHOT);
   private readonly listeners = new Set<(snapshot: WatchSnapshot) => void>();
@@ -73,6 +76,17 @@ export class WatchService {
   }
 
   observeStream(event: ChatStreamEvent): void {
+    // A session that is already waiting reports no new status when a second call parks or one is
+    // answered in the app, so its pending list is re-read from the tool events instead.
+    if (
+      (event.type === 'tool-start' || event.type === 'tool-end') &&
+      this.statuses.get(event.sessionId) === 'needs-action'
+    ) {
+      this.enqueue(async () => {
+        await this.readPending(event.sessionId);
+        this.rebuild();
+      });
+    }
     const next = foldActivity(this.activity, event);
     if (next === this.activity) return;
     this.activity = next;
@@ -88,6 +102,7 @@ export class WatchService {
     this.pending.clear();
     this.unacknowledgedDone.clear();
     this.busyRoots.clear();
+    this.busySinceRebuild.clear();
     this.enqueue(async () => {
       await this.reloadSessions();
       await Promise.all(
@@ -113,6 +128,10 @@ export class WatchService {
     const item = this.current.pending.find(candidate => candidate.approvalId === approvalId);
     if (!item?.quick) return false;
     await this.sources.resolveApproval(approvalId, { decision });
+    this.enqueue(async () => {
+      await this.readPending(item.sessionId);
+      this.rebuild();
+    });
     return true;
   }
 
@@ -143,6 +162,7 @@ export class WatchService {
   private applyStatus(event: ChatSessionStatusEvent): void {
     const previous = this.statuses.get(event.sessionId);
     this.statuses.set(event.sessionId, event.status);
+    if (event.status === 'processing' || event.status === 'needs-action') this.busySinceRebuild.add(event.sessionId);
     if (event.status === 'needs-action' && previous !== 'needs-action')
       this.needsYouSince.set(event.sessionId, this.now());
     if (event.status !== 'needs-action') {
@@ -183,17 +203,19 @@ export class WatchService {
     // Done is a transition: a root that was busy and now is not finished since the user last looked.
     const probe = buildWatchSnapshot({ ...input, unacknowledgedDone: new Set() });
     for (const orchestration of probe.orchestrations) {
-      const busy = orchestration.sessions.some(session => {
+      const busyNow = orchestration.sessions.some(session => {
         const status = this.statuses.get(session.id);
         return status === 'processing' || status === 'needs-action';
       });
-      if (busy) {
+      const workedSinceLast = orchestration.sessions.some(session => this.busySinceRebuild.has(session.id));
+      if (busyNow) {
         this.busyRoots.add(orchestration.rootId);
         this.unacknowledgedDone.delete(orchestration.rootId);
-      } else if (this.busyRoots.delete(orchestration.rootId)) {
+      } else if (this.busyRoots.delete(orchestration.rootId) || workedSinceLast) {
         this.unacknowledgedDone.add(orchestration.rootId);
       }
     }
+    this.busySinceRebuild.clear();
     const next = buildWatchSnapshot({ ...input, unacknowledgedDone: this.unacknowledgedDone });
     const key = JSON.stringify(next);
     if (key === this.currentKey) return;

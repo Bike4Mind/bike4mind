@@ -138,6 +138,19 @@ describe('MiniTavern', () => {
     expect(el('mini-tavern-title').textContent).toBe('Room a');
   });
 
+  it('keeps a pin on a room that had already finished when picked', async () => {
+    const snapshot: WatchSnapshot = {
+      ...EMPTY_WATCH_SNAPSHOT,
+      orchestrations: [room('a', { lastActiveAt: 10 }), room('b', { lastActiveAt: 5, celebrate: true })],
+    };
+    const { api, push } = fakeApi(snapshot);
+    await themed.render(<MiniTavern api={api} />);
+    await click('mini-tavern-next-btn');
+    expect(el('mini-tavern-title').textContent).toBe('Room b');
+    await push({ ...snapshot });
+    expect(el('mini-tavern-title').textContent).toBe('Room b');
+  });
+
   it('collapses to a strip of state dots when tiny', async () => {
     setWindowSize(240, 56);
     const { api } = fakeApi({ ...EMPTY_WATCH_SNAPSHOT, orchestrations: [room('a'), room('b')] });

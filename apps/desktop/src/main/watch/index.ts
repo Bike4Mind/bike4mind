@@ -56,6 +56,8 @@ export type WatchDeps = {
   /** Bring up the app window with no particular session. */
   showApp(): void;
   appIcon: string;
+  /** Past the quit confirmation (main/index.ts quitState); a cancelled quit is not quitting. */
+  isQuitting(): boolean;
   rendererDevUrl?: string;
 };
 
@@ -77,6 +79,7 @@ export function registerWatch(deps: WatchDeps): Watch {
   const service = new WatchService({ ...deps.sources, warn: message => console.warn(message) });
   const mini = createMiniWindowController({
     preferences,
+    isQuitting: deps.isQuitting,
     ...(deps.rendererDevUrl ? { rendererDevUrl: deps.rendererDevUrl } : {}),
   });
   let tray: TrayController | null = null;
@@ -98,7 +101,7 @@ export function registerWatch(deps: WatchDeps): Watch {
   };
 
   function syncTray(): void {
-    if (!preferences.current().showInMenuBar || !everOrchestrated) {
+    if (!preferences.current().showInMenuBar || !everOrchestrated || deps.isQuitting()) {
       tray?.destroy();
       tray = null;
       return;
@@ -128,9 +131,11 @@ export function registerWatch(deps: WatchDeps): Watch {
   app.on('browser-window-focus', (_event, window) => {
     if (appWindows().includes(window)) service.acknowledge();
   });
+  // Every quit pass, including one the user then cancels; syncTray brings it back if so.
   app.on('before-quit', () => {
     tray?.destroy();
     tray = null;
+    if (!deps.isQuitting()) setImmediate(syncTray);
   });
 
   registerWatchIpc({

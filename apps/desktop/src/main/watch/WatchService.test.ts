@@ -116,6 +116,35 @@ describe('WatchService', () => {
     await expect(service.respond('approval-1', 'once')).resolves.toBe(false);
   });
 
+  it('re-reads a waiting session when another call parks, and after an answer', async () => {
+    const { service, messages, status } = setup();
+    messages.set('a', [waitingMessage('approval-1')]);
+    await status('a', 'needs-action');
+
+    messages.set('a', [waitingMessage('approval-1'), waitingMessage('approval-2')]);
+    service.observeStream({
+      type: 'tool-start',
+      sessionId: 'a',
+      call: { id: 'c-approval-2', name: 'bash', input: { command: 'ls' }, status: 'awaiting-approval' },
+    } as never);
+    await service.settled();
+    expect(service.snapshot().pending.map(item => item.approvalId)).toEqual(['approval-1', 'approval-2']);
+
+    messages.set('a', [waitingMessage('approval-2')]);
+    await service.respond('approval-1', 'once');
+    await service.settled();
+    expect(service.snapshot().pending.map(item => item.approvalId)).toEqual(['approval-2']);
+  });
+
+  it('counts a turn that started and ended before the rebuild ran', async () => {
+    const { service } = setup();
+    await service.settled();
+    service.observeStatus({ sessionId: 'a', status: 'processing' });
+    service.observeStatus({ sessionId: 'a', status: 'done' });
+    await service.settled();
+    expect(service.snapshot().overall).toBe('done');
+  });
+
   it('is done after work finishes, until the user looks', async () => {
     const { service, status } = setup();
     await status('a', 'processing');

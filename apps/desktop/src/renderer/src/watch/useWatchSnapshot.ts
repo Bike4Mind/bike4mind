@@ -18,9 +18,12 @@ export function useWatchSnapshot(api: MiniTavernApi | undefined): WatchSnapshot 
       setSnapshot(next);
     });
     // A push that lands first is newer than this pull's answer, which is then dropped.
-    void api.getSnapshot().then(first => {
-      if (live) setSnapshot(first);
-    });
+    api
+      .getSnapshot()
+      .then(first => {
+        if (live) setSnapshot(first);
+      })
+      .catch((error: unknown) => console.error('[mini-tavern] snapshot read failed', error));
     return unsubscribe;
   }, [api]);
   return snapshot;

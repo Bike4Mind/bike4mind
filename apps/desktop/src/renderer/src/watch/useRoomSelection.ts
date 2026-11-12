@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { pickRoom, type RoomChoice, type WatchSnapshot } from '@shared/watch';
 
 export interface RoomSelection extends RoomChoice {
@@ -23,9 +23,13 @@ export function useRoomSelection(snapshot: WatchSnapshot): RoomSelection {
   const finishedPinned = snapshot.orchestrations.some(
     orchestration => orchestration.rootId === pinned && orchestration.celebrate
   );
+  // Only a run that finishes while pinned drops the pin; picking a room that already finished keeps it.
+  const seen = useRef<{ rootId: string | null; finished: boolean }>({ rootId: null, finished: false });
   useEffect(() => {
-    if (finishedPinned) setPinned(null);
-  }, [finishedPinned]);
+    const before = seen.current;
+    seen.current = { rootId: pinned, finished: finishedPinned };
+    if (pinned !== null && before.rootId === pinned && !before.finished && finishedPinned) setPinned(null);
+  }, [pinned, finishedPinned]);
 
   const step = (delta: 1 | -1) => {
     if (roots.length === 0) return;
