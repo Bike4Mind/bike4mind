@@ -151,13 +151,13 @@ describe('POST /api/files/generate-presigned-url - callers that keep today behav
     const persisted = h.createFabFile.mock.calls[0][0];
     expect(persisted.tags).toEqual([{ name: 'a', strength: 1 }]);
     expect(persisted.sourceMetadata).toBeUndefined();
-    // Length-bound like every presign, but neither type-bound nor create-only.
-    expect(Object.keys(signedInput()).sort()).toEqual(['Bucket', 'ContentLength', 'Key']);
+    // Every new upload is create-only; ordinary uploads remain unbound to a content type.
+    expect(Object.keys(signedInput()).sort()).toEqual(['Bucket', 'ContentLength', 'IfNoneMatch', 'Key']);
   });
 
   it('lets a JWT caller (no apiKeyInfo) upload a non-png, unmarked', async () => {
     await run({ fileName: 'r.txt', mimeType: 'text/plain', fileSize: 10 });
     expect(h.createFabFile.mock.calls[0][0].sourceMetadata).toBeUndefined();
-    expect(Object.keys(signedInput()).sort()).toEqual(['Bucket', 'ContentLength', 'Key']);
+    expect(Object.keys(signedInput()).sort()).toEqual(['Bucket', 'ContentLength', 'IfNoneMatch', 'Key']);
   });
 });
