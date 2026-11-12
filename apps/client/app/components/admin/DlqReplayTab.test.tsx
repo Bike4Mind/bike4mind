@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -9,6 +10,7 @@ const state = vi.hoisted(() => ({
   retentionSeconds: undefined as number | undefined,
   messages: [] as Array<{
     messageId: string;
+    receiptHandle?: string;
     body: string;
     sentTimestamp: string;
     approximateReceiveCount: string;
@@ -20,8 +22,10 @@ const state = vi.hoisted(() => ({
     queueLabel: string;
     messageId: string;
     sourceQueue: string;
-    status: 'success' | 'failed' | 'skipped';
+    status: 'success' | 'failed' | 'skipped' | 'discarded' | 'pending';
+    operation?: 'replay' | 'discard';
     errorMessage?: string;
+    reason?: string;
     replayedBy: string;
     replayedByName: string;
     createdAt: string;
@@ -37,29 +41,69 @@ const QUEUE_ONE = {
   approximateNotVisibleCount: 0,
 };
 
-const h = vi.hoisted(() => ({ user: null as null | { isAdmin?: boolean; adminPermissions?: string[] } }));
+const q = vi.hoisted(() => ({ isError: false, refetch: vi.fn() }));
+
+// A minimal URL store: navigate writes the search, useSearch re-renders on change.
+const router = vi.hoisted(() => {
+  let search: Record<string, unknown> = {};
+  const listeners = new Set<() => void>();
+  const set = (next: Record<string, unknown>) => {
+    search = next;
+    listeners.forEach(listener => listener());
+  };
+  return {
+    get: () => search,
+    set,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    navigate: vi.fn(
+      (opts: { search: Record<string, unknown> | ((prev: Record<string, unknown>) => Record<string, unknown>) }) =>
+        set(typeof opts.search === 'function' ? opts.search(search) : opts.search)
+    ),
+  };
+});
+
+vi.mock('@tanstack/react-router', async () => {
+  const { useSyncExternalStore } = await import('react');
+  return {
+    useSearch: () => useSyncExternalStore(router.subscribe, router.get),
+    useNavigate: () => router.navigate,
+  };
+});
+
+const h = vi.hoisted(() => ({
+  discard: vi.fn(),
+  replay: vi.fn(),
+  user: null as null | { isAdmin?: boolean; adminPermissions?: string[] },
+  queueLogsUrl: null as string | null,
+  messages: [] as Array<Record<string, unknown>>,
+}));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: h.user }) }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({
-    data: state.queues.map(q => ({ messageRetentionSeconds: state.retentionSeconds, ...q })),
+    data: state.queues.map(q => ({ messageRetentionSeconds: state.retentionSeconds, logsUrl: h.queueLogsUrl, ...q })),
+    dataUpdatedAt: Date.UTC(2026, 10, 11, 9, 30),
     isLoading: false,
-    isError: false,
-    refetch: vi.fn(),
+    isError: q.isError,
+    refetch: q.refetch,
   }),
   useDlqMessages: () => ({
-    data: state.messages,
+    data: h.messages.length ? h.messages : state.messages,
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
   }),
   useDlqReplay: () => ({
-    mutateAsync: vi.fn(),
+    mutateAsync: h.replay,
     isPending: false,
     data: null,
     reset: vi.fn(),
   }),
+  useDlqDiscard: () => ({ mutateAsync: h.discard, isPending: false }),
   useDlqHistory: () => ({
     data: state.history,
     isLoading: false,
@@ -85,20 +129,168 @@ const selectQueue = async (name: RegExp) => {
 };
 
 const renderWithQueueSelected = async (name = /Queue One/) => {
-  render(
+  const view = render(
     <CssVarsProvider theme={theme}>
       <DlqReplayTab />
     </CssVarsProvider>
   );
   await selectQueue(name);
+  return view;
 };
 
 beforeEach(() => {
-  state.messages = [{ messageId: 'm1', body: '{}', sentTimestamp: '1700000000000', approximateReceiveCount: '1' }];
+  vi.clearAllMocks();
+  state.messages = [
+    {
+      messageId: 'm1',
+      receiptHandle: 'receipt-1',
+      body: '{}',
+      sentTimestamp: '1700000000000',
+      approximateReceiveCount: '1',
+    },
+  ];
   state.history = [];
   state.queues = [QUEUE_ONE];
   state.retentionSeconds = undefined;
   h.user = null;
+  h.discard.mockReset();
+  h.replay.mockReset();
+  h.queueLogsUrl = null;
+  h.messages = [];
+  q.isError = false;
+  q.refetch.mockClear();
+  router.set({});
+  router.navigate.mockClear();
+});
+
+const renderPlain = () =>
+  render(
+    <CssVarsProvider theme={theme}>
+      <DlqReplayTab />
+    </CssVarsProvider>
+  );
+
+describe('DlqReplayTab all-clear state', () => {
+  it('replaces the counts with an all-clear card when every queue is empty', () => {
+    state.queues = [
+      { ...QUEUE_ONE, approximateMessageCount: 0 },
+      { ...QUEUE_ONE, label: 'q2', approximateMessageCount: 0 },
+    ];
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-all-clear')).toHaveTextContent('No dead letters');
+    expect(screen.getByTestId('dlq-all-clear')).toHaveTextContent(
+      `Last checked ${new Date(Date.UTC(2026, 10, 11, 9, 30)).toLocaleTimeString()}`
+    );
+    expect(screen.queryByTestId('dlq-stats-total')).toBeNull();
+  });
+
+  it.each([
+    ['a queue has messages', { approximateMessageCount: 2 }],
+    ['a message is in flight', { approximateMessageCount: 0, approximateNotVisibleCount: 1 }],
+    ['a queue count failed to load', { approximateMessageCount: -1, approximateNotVisibleCount: -1 }],
+  ])('keeps the counts when %s, even beside an empty queue', (_label, counts) => {
+    state.queues = [
+      { ...QUEUE_ONE, label: 'q0', approximateMessageCount: 0 },
+      { ...QUEUE_ONE, ...counts },
+    ];
+    renderPlain();
+
+    expect(screen.queryByTestId('dlq-all-clear')).toBeNull();
+    expect(screen.getByTestId('dlq-stats-total')).toBeInTheDocument();
+  });
+});
+
+describe('DlqReplayTab queues this stage does not create', () => {
+  const NOT_DEPLOYED = {
+    ...QUEUE_ONE,
+    label: 'nightly-job',
+    displayName: 'Nightly Job',
+    deployed: false,
+    approximateMessageCount: -1,
+    approximateNotVisibleCount: -1,
+  };
+
+  it('shows the all-clear when every queue the stage creates is empty', () => {
+    state.queues = [{ ...QUEUE_ONE, approximateMessageCount: 0 }, NOT_DEPLOYED];
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-all-clear')).toBeInTheDocument();
+  });
+
+  it('leaves them out of the queue total', () => {
+    state.queues = [QUEUE_ONE, NOT_DEPLOYED];
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-stats-total')).toHaveTextContent('1');
+  });
+
+  it('lists them in the picker as disabled, marked not on this stage', async () => {
+    state.queues = [QUEUE_ONE, NOT_DEPLOYED];
+    renderPlain();
+    await userEvent.click(screen.getByRole('combobox'));
+
+    const option = await screen.findByTestId('dlq-queue-option-nightly-job');
+    expect(option).toHaveAttribute('aria-disabled', 'true');
+    expect(option).toHaveTextContent('Not on this stage');
+    expect(option).not.toHaveTextContent('Count unavailable');
+  });
+
+  it('explains a deep link to one instead of selecting it', () => {
+    state.queues = [QUEUE_ONE, NOT_DEPLOYED];
+    router.set({ dlqQueue: 'nightly-job' });
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-unknown-queue')).toHaveTextContent('Nightly Job queue is not created on this stage');
+    expect(screen.queryByTestId('dlq-messages-table')).toBeNull();
+  });
+});
+
+describe('DlqReplayTab all-clear refresh', () => {
+  it('refetches the queues from Check again', async () => {
+    state.queues = [{ ...QUEUE_ONE, approximateMessageCount: 0 }];
+    renderPlain();
+
+    await userEvent.click(screen.getByTestId('dlq-all-clear-refresh'));
+    expect(q.refetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DlqReplayTab all-clear after a failed refetch', () => {
+  it('shows the load error, not the all-clear card, when the last good read was empty', () => {
+    state.queues = [{ ...QUEUE_ONE, approximateMessageCount: 0 }];
+    q.isError = true;
+    renderPlain();
+
+    expect(screen.queryByTestId('dlq-all-clear')).toBeNull();
+    expect(screen.getByText('The dead-letter queues failed to load.')).toBeInTheDocument();
+  });
+});
+
+describe('DlqReplayTab queue deep link', () => {
+  it('opens on the queue named in the URL', () => {
+    router.set({ dlqQueue: 'q1' });
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-replay-all')).toBeInTheDocument();
+    expect(screen.getByTestId('dlq-messages-table')).toBeInTheDocument();
+    expect(screen.queryByTestId('dlq-unknown-queue')).toBeNull();
+  });
+
+  it('explains a queue the page does not list instead of selecting it', () => {
+    router.set({ dlqQueue: 'alarm-only' });
+    renderPlain();
+
+    expect(screen.getByTestId('dlq-unknown-queue')).toHaveTextContent('alarm-only');
+    expect(screen.queryByTestId('dlq-messages-table')).toBeNull();
+  });
+
+  it('writes a picked queue to the URL', async () => {
+    await renderWithQueueSelected();
+
+    expect(router.navigate).toHaveBeenCalledWith(expect.objectContaining({ replace: true }));
+    expect(router.get()).toMatchObject({ dlqQueue: 'q1' });
+  });
 });
 
 describe('DlqReplayTab failure metadata', () => {
@@ -199,6 +391,57 @@ describe('DlqReplayTab history table', () => {
     expect(headerTexts).not.toContain('Body');
     expect(headerTexts).not.toContain('Message Body');
   });
+
+  it('distinguishes unconfirmed and failed discards and preserves operational errors beside the reason', () => {
+    const base = {
+      queueLabel: 'q1',
+      sourceQueue: 'Queue One',
+      messageId: 'm1',
+      replayedBy: 'admin-1',
+      replayedByName: 'admin',
+      createdAt: '2026-11-03T10:00:00.000Z',
+    };
+    state.history = [
+      { ...base, id: 'pending-1', status: 'pending', operation: 'discard', reason: 'Job obsolete' },
+      {
+        ...base,
+        id: 'failed-1',
+        status: 'failed',
+        operation: 'discard',
+        reason: 'Job obsolete',
+        errorMessage: 'expired receipt',
+      },
+      { ...base, id: 'legacy-1', status: 'failed', errorMessage: 'replay failed' },
+    ];
+    renderTab();
+    expect(
+      within(screen.getByTestId('dlq-history-row-pending-1')).getByText('Discard outcome unconfirmed')
+    ).toBeTruthy();
+    const failed = within(screen.getByTestId('dlq-history-row-failed-1'));
+    expect(failed.getByText('Discard request failed')).toBeTruthy();
+    expect(failed.getByText(/expired receipt/)).toHaveTextContent('Job obsolete');
+    expect(within(screen.getByTestId('dlq-history-row-legacy-1')).getByText('Failed')).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: 'Recorded at' })).toBeTruthy();
+  });
+
+  it('shows discarded history with its reason', () => {
+    state.history = [
+      {
+        id: 'discard-1',
+        queueLabel: 'q1',
+        messageId: 'm1',
+        sourceQueue: 'Queue One',
+        status: 'discarded',
+        reason: 'Job obsolete',
+        replayedBy: 'admin-1',
+        replayedByName: 'admin',
+        createdAt: '2026-11-03T10:00:00.000Z',
+      },
+    ];
+    renderTab();
+    expect(within(screen.getByTestId('dlq-history-row-discard-1')).getByText('discarded')).toBeTruthy();
+    expect(screen.getByText('Job obsolete')).toBeTruthy();
+  });
 });
 
 describe('DlqReplayTab replay permission', () => {
@@ -208,6 +451,7 @@ describe('DlqReplayTab replay permission', () => {
 
     expect(screen.getByTestId('dlq-replay-all')).toBeDisabled();
     expect(screen.getByTestId('dlq-replay-single-m1')).toBeDisabled();
+    expect(screen.getByTestId('dlq-discard-single-m1')).toBeDisabled();
   });
 
   it('enables both replay buttons for a settings:manage delegate', async () => {
@@ -216,6 +460,196 @@ describe('DlqReplayTab replay permission', () => {
 
     expect(screen.getByTestId('dlq-replay-all')).toBeEnabled();
     expect(screen.getByTestId('dlq-replay-single-m1')).toBeEnabled();
+    expect(screen.getByTestId('dlq-discard-single-m1')).toBeEnabled();
+  });
+
+  it('closes after an acknowledged deletion but warns when history is unconfirmed', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    h.discard.mockResolvedValue({
+      discarded: 1,
+      failed: 0,
+      results: [{ messageId: 'm1', status: 'discarded', historyPending: true }],
+    });
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-discard-single-m1'));
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-reason-input-preset-1'));
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-confirm-btn'));
+    await waitFor(() => expect(screen.queryByTestId('dlq-discard-dialog-confirm-btn')).not.toBeInTheDocument());
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('History outcome is unconfirmed'));
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps the dialog open after a failed deletion request', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    h.discard.mockResolvedValue({
+      discarded: 0,
+      failed: 1,
+      results: [{ messageId: 'm1', status: 'failed', reason: 'expired receipt', historyPending: true }],
+    });
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-discard-single-m1'));
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-reason-input-preset-1'));
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-confirm-btn'));
+    expect(screen.getByTestId('dlq-discard-dialog-confirm-btn')).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('History outcome is unconfirmed'));
+  });
+
+  it('requires a reason and submits the selected message for discard', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    h.discard.mockResolvedValue({ discarded: 1, failed: 0, results: [{ messageId: 'm1', status: 'discarded' }] });
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-discard-single-m1'));
+    expect(screen.getByText(/cannot be undone from this page/i)).toBeTruthy();
+    const confirm = screen.getByTestId('dlq-discard-dialog-confirm-btn');
+    expect(confirm).toBeDisabled();
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-reason-input-preset-1'));
+    expect(confirm).toBeEnabled();
+    await userEvent.click(confirm);
+    expect(h.discard).toHaveBeenCalledWith({
+      queueLabel: 'q1',
+      reason: 'Job obsolete',
+      messages: [{ messageId: 'm1', receiptHandle: 'receipt-1', body: '{}' }],
+    });
+  });
+
+  it.each([
+    [
+      'a failed result',
+      () =>
+        h.discard.mockResolvedValue({
+          discarded: 0,
+          failed: 1,
+          results: [{ messageId: 'm1', status: 'failed', reason: 'expired receipt' }],
+        }),
+      'Discard failed: expired receipt',
+    ],
+    ['a rejected request', () => h.discard.mockRejectedValue(new Error('boom')), 'Discard failed: boom'],
+  ])('reports %s and keeps the dialog open', async (_name, arrange, message) => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    arrange();
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-discard-single-m1'));
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-reason-input-preset-1'));
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-confirm-btn'));
+    expect(toast.error).toHaveBeenCalledWith(message);
+    expect(screen.getByTestId('dlq-discard-dialog-confirm-btn')).toBeTruthy();
+  });
+});
+
+describe('DlqReplayTab messages table', () => {
+  it('labels the SQS receive count accurately after selecting a queue', async () => {
+    await renderWithQueueSelected();
+    const table = screen.getByTestId('dlq-messages-table');
+    expect(within(table).getByText('Receives')).toBeInTheDocument();
+    expect(within(table).queryByText('Attempts')).toBeNull();
+  });
+
+  it('explains that browser views contribute to the receive count', async () => {
+    await renderWithQueueSelected();
+    const receivesHeader = within(screen.getByTestId('dlq-messages-table')).getByText('Receives');
+    const tooltipWrapper = receivesHeader.closest('[aria-label], [title]') ?? receivesHeader.parentElement;
+    const titleAttr = tooltipWrapper?.getAttribute('title') ?? tooltipWrapper?.getAttribute('aria-label') ?? '';
+    expect(titleAttr).toContain('including views in this browser');
+    expect(titleAttr).toContain('not a count of handler failures');
+  });
+});
+
+describe('DlqReplayTab consumer log links', () => {
+  const queueUrl = 'https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#queue';
+  const rowUrl = 'https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#m1';
+
+  const expectNewTabLink = (el: HTMLElement, href: string) => {
+    expect(el).toHaveAttribute('href', href);
+    expect(el).toHaveAttribute('target', '_blank');
+    expect(el).toHaveAttribute('rel', 'noopener noreferrer');
+  };
+
+  it('links the queue, each row and the drawer to their own logs window', async () => {
+    h.queueLogsUrl = queueUrl;
+    h.messages = [
+      { messageId: 'm1', body: '{}', sentTimestamp: String(1_700_000_000_000), logsUrl: rowUrl },
+      { messageId: 'm2', body: '{}', sentTimestamp: String(1_700_000_000_000), logsUrl: null },
+    ];
+    await renderWithQueueSelected();
+
+    expectNewTabLink(screen.getByTestId('dlq-queue-logs'), queueUrl);
+    expectNewTabLink(screen.getByTestId('dlq-logs-m1'), rowUrl);
+    expect(screen.queryByTestId('dlq-logs-m2')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('dlq-view-m1'));
+    expectNewTabLink(await screen.findByTestId('dlq-drawer-logs'), rowUrl);
+  });
+
+  it('hides every log link when the API returns none', async () => {
+    await renderWithQueueSelected();
+
+    expect(screen.queryByTestId('dlq-queue-logs')).toBeNull();
+    expect(screen.queryByTestId('dlq-logs-m1')).toBeNull();
+    fireEvent.click(screen.getByTestId('dlq-view-m1'));
+    expect(screen.queryByTestId('dlq-drawer-logs')).toBeNull();
+  });
+
+  it('does not open the message drawer when the row log link is clicked', async () => {
+    h.messages = [{ messageId: 'm1', body: '{}', sentTimestamp: String(1_700_000_000_000), logsUrl: rowUrl }];
+    await renderWithQueueSelected();
+
+    fireEvent.click(screen.getByTestId('dlq-logs-m1'));
+
+    expect(screen.queryByTestId('dlq-drawer-close')).toBeNull();
+  });
+});
+
+describe('DlqReplayTab replay destination', () => {
+  it('keeps inspection and message details available when no replay destination exists', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    state.queues = [{ ...QUEUE_ONE, hasReplayDestination: false }];
+    await renderWithQueueSelected();
+    expect(screen.getByTestId('dlq-replay-all')).toBeDisabled();
+    expect(screen.getByTestId('dlq-replay-single-m1')).toBeDisabled();
+    expect(screen.getByTestId('dlq-replay-unavailable')).toHaveTextContent(
+      'No replay destination is available for this queue. You can still inspect its messages.'
+    );
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+    expect(screen.getByTestId('dlq-drawer-expiry')).toBeInTheDocument();
+    expect(h.replay).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['dlq-replay-all', 'dlq-replay-confirm'],
+    ['dlq-replay-single-m1', 'dlq-single-replay-confirm'],
+  ])('disables an open confirmation when the destination becomes unavailable: %s', async (openId, confirmId) => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    state.queues = [{ ...QUEUE_ONE, hasReplayDestination: true }];
+    const view = await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId(openId));
+    state.queues = [{ ...QUEUE_ONE, hasReplayDestination: false }];
+    view.rerender(
+      <CssVarsProvider theme={theme}>
+        <DlqReplayTab />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId(confirmId)).toBeDisabled();
+    fireEvent.click(screen.getByTestId(confirmId));
+    expect(h.replay).not.toHaveBeenCalled();
+  });
+
+  it('keeps manual replay enabled alongside an unsafe advisory hint', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    state.queues = [
+      {
+        ...QUEUE_ONE,
+        hasReplayDestination: true,
+        description: 'Delivers notifications.',
+        replay: 'unsafe',
+        replayNote: 'A replay can deliver again.',
+        owner: 'Notifications',
+      },
+    ];
+    await renderWithQueueSelected();
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveTextContent('Unsafe to replay');
+    expect(screen.getByTestId('dlq-replay-all')).toBeEnabled();
+    expect(screen.getByTestId('dlq-replay-single-m1')).toBeEnabled();
+    expect(screen.queryByTestId('dlq-replay-unavailable')).not.toBeInTheDocument();
   });
 });
 
@@ -299,6 +733,22 @@ describe('DlqReplayTab age and expiry', () => {
 
     expect(screen.getByTestId('dlq-age-m1')).toHaveTextContent('10h 30m');
     expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('13d 13h');
+  });
+
+  it('keeps age, expiry and receive values under their matching headers', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.messages[0].sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    const table = screen.getByTestId('dlq-messages-table');
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map(header => header.textContent);
+    const cells = within(screen.getByTestId('dlq-message-row-m1')).getAllByRole('cell');
+    expect(cells[headers.indexOf('Age')]).toHaveTextContent('10h 30m');
+    expect(cells[headers.indexOf('Expires in')]).toHaveTextContent('3d 13h');
+    expect(cells[headers.indexOf('Receives')]).toHaveTextContent(/^1$/);
   });
 
   it('shows a different expiry for a shorter retention', async () => {

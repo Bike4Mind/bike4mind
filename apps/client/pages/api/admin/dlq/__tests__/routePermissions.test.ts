@@ -38,15 +38,16 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/observability', () => ({
   Logger: Object.assign(vi.fn(), { info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
 
 // Each import triggers adminApi() at module level, pushing to `captured` in import order.
 import '../messages';
 import '../queues';
 import '../history';
 import '../replay';
+import '../discard';
 
-const [messagesPerms, queuesPerms, historyPerms, replayPerms] = h.captured;
+const [messagesPerms, queuesPerms, historyPerms, replayPerms, discardPerms] = h.captured;
 
 describe('DLQ route permission declarations', () => {
   it('messages GET requires support:read (view), not settings:manage', () => {
@@ -64,6 +65,10 @@ describe('DLQ route permission declarations', () => {
 
   it('replay POST requires settings:manage (action)', () => {
     expect(replayPerms).toMatchObject({ POST: 'settings:manage' });
+  });
+
+  it('discard POST requires settings:manage (action)', () => {
+    expect(discardPerms).toMatchObject({ POST: 'settings:manage' });
   });
 
   it('no view route requires settings:manage', () => {

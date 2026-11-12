@@ -40,6 +40,9 @@ const HOP_MINT_RATE_LIMIT = {
 const handler = baseApi({
   maxBodySize: 4 * 1024,
   requiredScopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE],
+  // Machine ingest: a use of the key, never an action by its owner.
+  recordsActivity: false,
+  recordsKeyUse: true,
   allowedMethods: ['POST'],
 })
   .use(rateLimit(HOP_MINT_RATE_LIMIT))

@@ -25,6 +25,7 @@ import { registerTerminals } from './terminal';
 import { registerUsage } from './usage';
 import { registerAttention } from './attention';
 import { appWindows } from './windows';
+import { registerWindowTheme } from './windowTheme';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
@@ -110,6 +111,7 @@ function createWindow(): void {
 }
 
 ipcMain.handle(IPC_CHANNELS.getAppInfo, buildAppInfo);
+registerWindowTheme();
 
 registerDevLog();
 

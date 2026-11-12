@@ -129,7 +129,6 @@ describe('invites migrated to grant packages', () => {
   });
 
   it('enrolls a storage-only invite in the staged signup grant', async () => {
-    await AdminSettings.create({ settingName: 'ReferralCreditsAmount', settingValue: '40' });
     await RegistrationInvite.create({
       code: 'LEGACY-STORAGE',
       userId: 'synthetic-admin',

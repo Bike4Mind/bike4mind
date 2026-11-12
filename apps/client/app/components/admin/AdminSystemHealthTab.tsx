@@ -1104,7 +1104,7 @@ const AdminSystemHealthTab = () => {
                           data-testid={`integration-health-${integration.integration}-status`}
                         >
                           {integration.status === 'no_data'
-                            ? 'No data'
+                            ? 'Not checked'
                             : integration.status.charAt(0).toUpperCase() + integration.status.slice(1)}
                         </Chip>
                       </Stack>

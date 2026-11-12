@@ -11,7 +11,6 @@ import { authorizeSupportCase, recordSupportAccess, type SupportActorContext } f
 
 export const MODEL_LOGS_MAX_LIMIT = 100;
 const MODEL_LOGS_DEFAULT_LIMIT = 25;
-const ARTIFACT_PREVIEW_CHARS = 100;
 
 const querySchema = z.object({
   startDate: dateParam.optional(),
@@ -54,10 +53,7 @@ const LIST_PROJECTION = {
   artifacts: {
     $map: {
       input: { $cond: [{ $isArray: '$promptMeta.artifacts' }, '$promptMeta.artifacts', []] },
-      in: {
-        type: '$$this.type',
-        preview: { $substrCP: [{ $ifNull: ['$$this.content', ''] }, 0, ARTIFACT_PREVIEW_CHARS] },
-      },
+      in: { type: '$$this.type' },
     },
   },
 };
@@ -73,7 +69,7 @@ type ModelLogSummaryRow = {
   messageHistoryLength?: number;
   completedStepCount: number;
   failedStepCount: number;
-  artifacts: { type: string; preview: string }[];
+  artifacts: { type: string }[];
 };
 
 const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
@@ -83,8 +79,7 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
 
       // A text search matches prompt text across every user, so it is a support read: a case is
       // required and the search is recorded before results are served. Browsing by date and model
-      // stays case-free; note it still returns a short artifact preview (LIST_PROJECTION), which is
-      // not yet treated as a support read.
+      // stays case-free.
       const searchCtx: SupportActorContext | undefined = search ? authorizeSupportCase(req, supportCase) : undefined;
 
       // aggregate/countDocuments skip the softDeletePlugin's find hook, so filter tombstones here.

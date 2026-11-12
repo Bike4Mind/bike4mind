@@ -95,7 +95,7 @@ export type SignupCandidate = {
   signupMeta?: { ip?: string | null; isDatacenter?: boolean | null; wafBotSignal?: boolean | null } | null;
   /** Earliest API key the account created, if any. */
   firstApiKeyAt?: Date | null;
-  /** Latest use of any of the account's API keys; REST traffic never touches lastActiveAt. */
+  /** Latest use of any of the account's API keys. Key calls now stamp lastActiveAt too; older ones are only here. */
   lastApiUseAt?: Date | null;
 };
 

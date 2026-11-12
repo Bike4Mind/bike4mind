@@ -99,6 +99,50 @@ describe('FeedbackDetailDrawer', () => {
     expect(link).toHaveAttribute('target', '_blank');
   });
 
+  describe('emailing the reporter', () => {
+    it('offers a mail draft to the reporter with the report quoted', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord());
+
+      renderDrawer();
+
+      const email = await screen.findByTestId('feedback-detail-email-reporter-btn');
+      expect(email).toHaveTextContent('Email reporter');
+      expect(email.tagName).toBe('A');
+      expect(email).not.toHaveAttribute('target');
+      const href = email.getAttribute('href') ?? '';
+      expect(href).toMatch(/^mailto:reporter%40example\.com\?subject=/);
+      expect(decodeURIComponent(href.split('&body=')[1])).toBe('> The answer cited the wrong file.\r\n> Second line.');
+    });
+
+    it('keeps the profile link beside it', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord());
+
+      renderDrawer();
+
+      expect(await screen.findByTestId('feedback-detail-email-reporter-btn')).toBeInTheDocument();
+      expect(screen.getByTestId('feedback-detail-reporter-profile-btn')).toBeInTheDocument();
+    });
+
+    it('still offers the email when the reporter has no user id', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord({ userId: '' }));
+
+      renderDrawer();
+
+      expect(await screen.findByTestId('feedback-detail-email-reporter-btn')).toBeInTheDocument();
+      expect(screen.queryByTestId('feedback-detail-reporter-profile-btn')).not.toBeInTheDocument();
+    });
+
+    it('hides the action for a report with no email', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord({ userEmail: '' }));
+
+      renderDrawer();
+
+      expect(await screen.findByTestId('feedback-detail-reporter')).toBeInTheDocument();
+      expect(screen.queryByTestId('feedback-detail-email-reporter-btn')).not.toBeInTheDocument();
+      expect(screen.getByTestId('feedback-detail-reporter-profile-btn')).toBeInTheDocument();
+    });
+  });
+
   it('opens the help article a help report was written on', async () => {
     mocks.getFeedbackByIdFromServer.mockResolvedValue(
       makeRecord({

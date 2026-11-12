@@ -1,5 +1,5 @@
-export type { DlqDescriptor, DlqResolvers, CreateDlqRegistryOptions } from './types.js';
-export { createDlqRegistry } from './dlqRegistry.js';
+export type { DlqDescriptor, InspectableDlqDescriptor, DlqResolvers, CreateDlqRegistryOptions } from './types.js';
+export { createDlqRegistry, createInspectableDlqRegistry } from './dlqRegistry.js';
 export { isMonitoredStage, PRODUCTION_STAGES } from './stageGating.js';
 export type {
   QueueEncryption,

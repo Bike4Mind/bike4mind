@@ -5,15 +5,27 @@ const h = vi.hoisted(() => ({
   get: undefined as undefined | ((req: unknown, res: unknown) => Promise<unknown>),
   getMetadata: vi.fn(),
   getSignedUrl: vi.fn(),
+  uses: [] as unknown[],
+  baseApiOptions: undefined as unknown,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    get: (fn: typeof h.get) => {
-      h.get = fn;
-    },
-  }),
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
+    const chain = {
+      use: (middleware: unknown) => {
+        h.uses.push(middleware);
+        return chain;
+      },
+      get: (fn: typeof h.get) => {
+        h.get = fn;
+        return chain;
+      },
+    };
+    return chain;
+  },
 }));
+vi.mock('@server/auth/stepUp', () => ({ stepUpGate: () => 'stepUpGate' }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getMetadata: h.getMetadata, getSignedUrl: h.getSignedUrl }),
 }));
@@ -40,6 +52,10 @@ beforeEach(() => {
 });
 
 describe('GET /api/users/me/data-export/[jobId]', () => {
+  it('requires a browser session and fresh identity verification', () => {
+    expect(h.baseApiOptions).toEqual({ auth: 'jwtOnly' });
+    expect(h.uses).toEqual(['stepUpGate']);
+  });
   it("signs a short-lived attachment link to the caller's own export", async () => {
     const res = await run();
 

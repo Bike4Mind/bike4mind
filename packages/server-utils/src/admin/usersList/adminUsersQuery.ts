@@ -21,6 +21,8 @@ export function organizationNamesOf(filter: AdminUsersFilter): string[] | null {
 }
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
+// toProviderEndUserId output: what an LLM provider names in a safety notice about one of our users.
+const PROVIDER_END_USER_ID = /^[0-9a-f]{64}$/i;
 
 function searchCondition(search: string, toObjectId: (id: string) => unknown): Condition {
   const pattern = escapeRegex(search);
@@ -30,6 +32,7 @@ function searchCondition(search: string, toObjectId: (id: string) => unknown): C
       { username: { $regex: pattern, $options: 'i' } },
       { email: { $regex: pattern, $options: 'i' } },
       ...(OBJECT_ID.test(search) ? [{ _id: toObjectId(search) }] : []),
+      ...(PROVIDER_END_USER_ID.test(search) ? [{ providerEndUserId: search.toLowerCase() }] : []),
     ],
   };
 }

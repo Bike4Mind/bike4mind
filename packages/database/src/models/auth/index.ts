@@ -16,6 +16,7 @@ export * from './IdentityProviderModel';
 export * from './networkMetaFields';
 export * from './signupFingerprintClusters';
 export * from './campaignScanAccounts';
+export * from './deviceLinkAccounts';
 export * from './SignupTraceModel';
 export * from './OAuthAuthorizationCodeModel';
 export * from './OAuthClientModel';
@@ -45,3 +46,8 @@ export * from './SignupProtectionModel';
 export * from './SignupGrantBudgetModel';
 export * from './SignupGrantReleaseBatchModel';
 export * from './signupGrantPending';
+export * from './completionSequenceEvents';
+
+export * from './completionSynchronyEvents';
+
+export * from './completionCohortExposure';

@@ -8,6 +8,7 @@ import {
 import { adminAiSuggestionRepository, type AdminAiSuggestionDecision } from '@bike4mind/database';
 import { systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/utils';
+import { getAdminAiClassReadiness } from './readiness';
 
 /**
  * Audit glue for admin AI suggestions. An admin accepting a suggestion goes through the existing
@@ -48,8 +49,17 @@ export function readAiSuggestionId(body: unknown): string | undefined {
  * Closes a pending suggestion with the admin's (or system's) decision. Null when it was already
  * decided or does not exist, so a second accept never applies twice.
  */
-export const recordAiDecision = (
+export const recordAiDecision = async (
   id: string,
   to: Exclude<AdminAiSuggestionStatus, 'pending'>,
   decision: AdminAiSuggestionDecision = {}
-): Promise<AdminAiSuggestionItem | null> => adminAiSuggestionRepository.transition(id, ['pending'], to, decision);
+): Promise<AdminAiSuggestionItem | null> => {
+  const item = await adminAiSuggestionRepository.transition(id, ['pending'], to, decision);
+  if (item?.actionClass)
+    await getAdminAiClassReadiness({
+      feature: item.feature,
+      actionClass: item.actionClass,
+      policyVersion: item.policyVersion,
+    });
+  return item;
+};

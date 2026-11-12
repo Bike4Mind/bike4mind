@@ -93,12 +93,18 @@ export async function getUserEntitlements(
    * and `entitlements` in one response are derived from one read, and therefore
    * are derived from one snapshot read, not two reads that could race apart.
    */
-  preloadedActiveSubscriptions?: readonly { priceId: string }[]
+  preloadedActiveSubscriptions?: readonly { priceId: string }[],
+  options?: { requireComplete?: boolean }
 ): Promise<EntitlementKey[]> {
   // Both reads are independent - run them together to avoid serializing two round-trips.
   const [activeSubscriptions, partnerKeys] = await Promise.all([
-    preloadedActiveSubscriptions ?? getActiveSubscriptionsForUser(user.id),
-    partnerEntitlementsForEmail(user.email, user.emailVerified),
+    preloadedActiveSubscriptions ??
+      (options?.requireComplete
+        ? getActiveSubscriptionsForUser(user.id, { strict: true })
+        : getActiveSubscriptionsForUser(user.id)),
+    options?.requireComplete
+      ? partnerEntitlementsForEmail(user.email, user.emailVerified, { strict: true })
+      : partnerEntitlementsForEmail(user.email, user.emailVerified),
   ]);
   // DB-backed partner rules (issue #293) union with the pure registry grants
   // (subscription + tag + env-domain). Additive so an env-configured domain
@@ -175,6 +181,28 @@ export async function getRequestEntitlements(req: EntitlementRequest): Promise<E
   // The early return above covers the settled case; `??=` covers two callers that both passed
   // it before either assigned - the first write wins, so both resolve to the same list.
   return (req.entitlements ??= await getUserEntitlements(req.user, active));
+}
+
+const completeEntitlementsByRequest = new WeakMap<EntitlementRequest, Promise<EntitlementKey[]>>();
+
+/** Audit-only resolution: never reuse a memo that may contain ordinary under-granting fallbacks. */
+export async function getCompleteRequestEntitlements(req: EntitlementRequest): Promise<EntitlementKey[]> {
+  if (!req.user) return [];
+  const cached = completeEntitlementsByRequest.get(req);
+  if (cached) return cached;
+  const user = req.user;
+  const resolve = async (): Promise<EntitlementKey[]> => {
+    try {
+      const active = await getRequestActiveSubscriptions(req, { strict: true });
+      return await getUserEntitlements(user, active, { requireComplete: true });
+    } catch (error) {
+      completeEntitlementsByRequest.delete(req);
+      throw error;
+    }
+  };
+  const pending = resolve();
+  completeEntitlementsByRequest.set(req, pending);
+  return pending;
 }
 
 /**

@@ -7,3 +7,4 @@ export * from './ShadowDetectionModel';
 export * from './CampaignWatchModel';
 export * from './AbuseAssessmentModel';
 export * from './AutoContainmentDecisionModel';
+export * from './AbuseEvalSetModel';

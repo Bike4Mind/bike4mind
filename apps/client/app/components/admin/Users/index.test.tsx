@@ -26,13 +26,20 @@ vi.mock('./Views/RecentActivityView', () => ({ default: () => <div data-testid="
 vi.mock('../Signups/SignupActivityPanel', () => ({
   SignupActivityPanel: ({
     onSelectWindow,
+    onRangeChange,
   }: {
     onSelectWindow: (window: { createdFrom: string; createdTo: string }) => void;
+    onRangeChange: (range: '30d') => void;
   }) => (
-    <button
-      data-testid="signup-panel-select-btn"
-      onClick={() => onSelectWindow({ createdFrom: '2026-03-10T11:00:00.000Z', createdTo: '2026-03-10T12:00:00.000Z' })}
-    />
+    <>
+      <button
+        data-testid="signup-panel-select-btn"
+        onClick={() =>
+          onSelectWindow({ createdFrom: '2026-03-10T11:00:00.000Z', createdTo: '2026-03-10T12:00:00.000Z' })
+        }
+      />
+      <button data-testid="signup-panel-range-btn" onClick={() => onRangeChange('30d')} />
+    </>
   ),
 }));
 
@@ -56,6 +63,8 @@ const row = (id: string, name: string) => ({
 });
 
 const respond = (url: string) => {
+  if (url === '/api/admin/signup-timeseries') return { until: '2026-10-27T12:00:00.000Z' };
+  if (url === '/api/admin/users/signup-verdicts') return { verdicts: {} };
   if (url === '/api/admin/users/summary') {
     return { total: 2, activeThisWeek: 1, views: { newThisWeek: 0, highRisk: 0, suspended: 1 } };
   }
@@ -171,7 +180,24 @@ describe('UsersTab', () => {
   it('opens the profile page when a row is activated', async () => {
     renderTab();
     fireEvent.click(await screen.findByTestId('admin-users-name-u2'));
-    expect(openProfile).toHaveBeenCalledWith('u2');
+    expect(openProfile).toHaveBeenCalledWith('u2', {
+      signupRange: '7d',
+      signupAsOf: '2026-10-27T12:00:00.000Z',
+      signupTzOffset: -new Date().getTimezoneOffset(),
+    });
+  });
+
+  it('carries a nondefault classification window and evaluation time into the profile', async () => {
+    renderTab();
+    await screen.findByTestId('admin-users-name-u2');
+    fireEvent.click(screen.getByTestId('signup-panel-range-btn'));
+    await waitFor(() => expect(screen.queryByTestId('admin-users-verdict-loading-u2')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('admin-users-name-u2'));
+    expect(openProfile).toHaveBeenLastCalledWith('u2', {
+      signupRange: '30d',
+      signupAsOf: '2026-10-27T12:00:00.000Z',
+      signupTzOffset: -new Date().getTimezoneOffset(),
+    });
   });
 
   it('applies a built-in view through the URL and asks the server for it', async () => {

@@ -53,7 +53,6 @@ type ResolvedReferral = NonNullable<Awaited<ReturnType<typeof userService.resolv
 type PreparedOAuthReferral = {
   resolved: ResolvedReferral;
   claim: NonNullable<Awaited<ReturnType<typeof userService.claimRegistrationInvite>>>;
-  grantCredits: number;
 };
 
 /**
@@ -73,8 +72,6 @@ async function prepareOAuthReferral(code: string, verifiedEmail: string): Promis
       Logger.globalInstance.info('[oauth signup] invite code ignored: not a referral invite');
       return null;
     }
-    // Resolve credits before claiming: a failed read must leave the code available.
-    const grantCredits = await userService.referralInviteCredits(resolved.invite, adminSettingsRepository);
     // No transaction: a crash before the account is created strands the claim (code used, no usedbyId).
     // An admin reopens a stranded claim by setting the invite back to open (/api/reg-invites/update).
     const claim = await userService.claimRegistrationInvite(resolved, registrationInviteRepository);
@@ -82,7 +79,7 @@ async function prepareOAuthReferral(code: string, verifiedEmail: string): Promis
       console.warn('[oauth signup] invite already redeemed; signing up uninvited');
       return null;
     }
-    return { resolved, claim, grantCredits };
+    return { resolved, claim };
   } catch (e) {
     // BadRequestError messages are fixed strings with no user data.
     const reason = e instanceof BadRequestError ? e.message : 'preparation failed';
@@ -332,7 +329,6 @@ const authenticateUser = async (
         ? {
             inviteId: referral.resolved.invite.id,
             inviterId: referral.resolved.invite.userId ?? null,
-            grantCredits: referral.grantCredits,
           }
         : undefined;
       try {

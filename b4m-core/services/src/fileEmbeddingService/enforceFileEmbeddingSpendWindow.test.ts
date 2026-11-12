@@ -41,7 +41,7 @@ function makeFixedWindowCache(clock: { now: number }) {
     }),
     findByKey: vi.fn(async (key: string) => {
       const window = windows.get(key);
-      return window ? { key, result: { count: window.count }, expiresAt: new Date(window.expiresAt) } : null;
+      return window ? { key, result: { count: window.count }, expiresAt: new Date(window.expiresAt) } : undefined;
     }),
     tryAddWithinLimitFixedWindow: vi.fn(async (key: string, amount: number, limit: number, ttlMs: number) => {
       const live = windows.get(key);
@@ -346,6 +346,29 @@ describe('resetFileEmbeddingSpendWindow', () => {
 
     await expect(reserve('u1', 1000)).resolves.toBeDefined();
     await denial(reserve('u2', 501));
+  });
+
+  it('resets a user whose spend window was never written', async () => {
+    const { cache, db } = setup();
+    cache.windows.set(fileEmbeddingWindowCacheKeys('u1').tokens, { count: 400, expiresAt: T0 + 1000 });
+
+    await expect(resetFileEmbeddingSpendWindow('u1', db)).resolves.toEqual({ tokens: 400, microUsd: 0 });
+
+    expect(cache.windows.has(fileEmbeddingWindowCacheKeys('u1').tokens)).toBe(false);
+  });
+
+  it('resets a user who never indexed', async () => {
+    const { db } = setup();
+
+    await expect(resetFileEmbeddingSpendWindow('u1', db)).resolves.toEqual({ tokens: 0, microUsd: 0 });
+  });
+
+  it('resets twice in a row, reporting empty windows the second time', async () => {
+    const { db, reserve } = setup({ fileEmbeddingUserTokensPerWindow: '1000' });
+    await reserve('u1', 1000, 300);
+
+    await expect(resetFileEmbeddingSpendWindow('u1', db)).resolves.toEqual({ tokens: 1000, microUsd: 300 });
+    await expect(resetFileEmbeddingSpendWindow('u1', db)).resolves.toEqual({ tokens: 0, microUsd: 0 });
   });
 
   it('makes a release of a hold from before the reset a no-op', async () => {

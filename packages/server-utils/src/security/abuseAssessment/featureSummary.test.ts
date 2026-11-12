@@ -1,9 +1,13 @@
 import {
+  ABUSE_ASSESSMENT_EVIDENCE_VERSION,
   ABUSE_ASSESSMENT_MAX_ACCOUNTS,
   ABUSE_ASSESSMENT_MAX_SIGNALS,
   RISK_EVIDENCE_VERSION,
   abuseAssessmentFeatureSummarySchema,
   type AccountCampaignGroup,
+  type AbuseAssessmentAccountProfile,
+  type AbuseAssessmentAccount,
+  type AbuseAssessmentFeatureSummary,
   type RiskEvidenceSummary,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
@@ -87,9 +91,31 @@ const evidence = (overrides: { logins?: number; creditsSpent?: number } = {}): R
   },
 });
 
+const profile: AbuseAssessmentAccountProfile = {
+  signupMethod: 'otc',
+  signupNetwork: { asnKnown: true, hosting: true, datacenter: false, anonymousIp: true, ja4Present: false },
+  email: { plusAddressed: true, randomLookingPlusTag: true, generatedLocalPart: false, consumerMailDomain: true },
+  minutesToTwoFactor: 4,
+  minutesToFirstSpend: 12,
+  spend: {
+    totalCredits: 1000,
+    byModel: [{ model: 'claude-opus-4-5', creditShare: 1, events: 11, creditsPerEvent: 90.9 }],
+  },
+  linkedAccounts: {
+    windowHours: 72,
+    total: 2,
+    blocked: 1,
+    sharedSignupIp: 1,
+    sharedJa4: 0,
+    sharedMailbox: 1,
+    sharedMailDomain: 0,
+    truncated: false,
+  },
+};
+
 const accounts = (summary: RiskEvidenceSummary | null = evidence()) => [
-  { id: '65f0000000000000000000a1', createdAt: new Date('2026-11-01T10:00:00Z'), summary },
-  { id: '65f0000000000000000000a2', createdAt: null, summary: null },
+  { id: '65f0000000000000000000a1', createdAt: new Date('2026-11-01T10:00:00Z'), summary, profile },
+  { id: '65f0000000000000000000a2', createdAt: null, summary: null, profile: null },
 ];
 
 const campaign = (): AccountCampaignGroup => {
@@ -130,6 +156,31 @@ const campaign = (): AccountCampaignGroup => {
     totals: { direct: 1, transitive: 1, links: 1 },
   };
 };
+
+describe('published assessment compatibility', () => {
+  it('accepts an older typed account and v1 summary without the additive profile field', () => {
+    const account: AbuseAssessmentAccount = {
+      ref: 'acct_1',
+      accountAgeHours: 1,
+      evidenceAgeHours: null,
+      evidence: null,
+    };
+    const summary: AbuseAssessmentFeatureSummary = {
+      evidenceVersion: RISK_EVIDENCE_VERSION,
+      detection: {
+        detector: 'signupNetworkBurst',
+        detectorPolicyVersion: 1,
+        windowMinutes: 60,
+        hostingNetwork: null,
+        signals: [],
+      },
+      accounts: [account],
+      accountsOmitted: 0,
+      group: null,
+    };
+    expect(abuseAssessmentFeatureSummarySchema.safeParse(summary).success).toBe(true);
+  });
+});
 
 describe('buildFeatureSummary', () => {
   it('projects campaign relationships and rarity without raw identifiers or labels', () => {
@@ -217,7 +268,67 @@ describe('buildFeatureSummary', () => {
       accountAgeHours: null,
       evidenceAgeHours: null,
       evidence: null,
+      profile: null,
     });
+  });
+
+  it('is evidence v2 and carries each account profile beside its stored evidence', () => {
+    const summary = buildFeatureSummary({ detection: detection(), accounts: accounts(), group: null });
+    expect(summary.evidenceVersion).toBe(ABUSE_ASSESSMENT_EVIDENCE_VERSION);
+    expect(ABUSE_ASSESSMENT_EVIDENCE_VERSION).toBe(2);
+    expect(summary.accounts[0].profile).toEqual(profile);
+  });
+
+  it('rejects free text smuggled in as a profile model id', () => {
+    expect(() =>
+      buildFeatureSummary({
+        detection: detection(),
+        accounts: [
+          {
+            ...accounts()[0],
+            profile: {
+              ...profile,
+              spend: {
+                totalCredits: 1,
+                byModel: [{ model: INJECTION, creditShare: 1, events: 1, creditsPerEvent: 1 }],
+              },
+            },
+          },
+        ],
+        group: null,
+      })
+    ).toThrow();
+  });
+
+  it('fits a full set of accounts, each with evidence and a full profile, without omitting any', () => {
+    const full = {
+      ...profile,
+      spend: {
+        ...profile.spend!,
+        byModel: Array.from({ length: 5 }, (_, i) => ({
+          model: `model-${i}`,
+          creditShare: 0.2,
+          events: 10,
+          creditsPerEvent: 12.5,
+        })),
+      },
+    };
+    const userIds = Array.from({ length: ABUSE_ASSESSMENT_MAX_ACCOUNTS }, (_, index) =>
+      (0x65f0000000000000000000a0n + BigInt(index)).toString(16)
+    );
+    const summary = buildFeatureSummary({
+      detection: detection({ userIds }),
+      accounts: userIds.map(id => ({
+        id,
+        createdAt: new Date('2026-11-01T10:00:00Z'),
+        summary: evidence(),
+        profile: full,
+      })),
+      group: null,
+    });
+    expect(summary.accountsOmitted).toBe(0);
+    expect(summary.accounts).toHaveLength(ABUSE_ASSESSMENT_MAX_ACCOUNTS);
+    expect(JSON.stringify(summary).length).toBeLessThan(24_000);
   });
 
   it('caps the accounts and counts the rest as omitted', () => {
@@ -294,6 +405,25 @@ describe('evidenceHash', () => {
     expect(hashFor({ logins: 2 })).not.toBe(hashFor({ logins: 3 }));
   });
 
+  it('invalidates cached evidence when account profiles change without dropping request evidence', () => {
+    const withProfile = (minutesToTwoFactor: number) =>
+      buildFeatureSummary({
+        detection: detection(),
+        accounts: accounts().map(account => ({
+          ...account,
+          profile: account.profile ? { ...account.profile, minutesToTwoFactor } : null,
+          requests: { status: 'failed' as const },
+        })),
+        group: null,
+      });
+    const before = withProfile(4);
+    const after = withProfile(30);
+    expect(after.accounts[0].requests).toEqual({ status: 'failed' });
+    expect(after.accounts[0].profile?.minutesToTwoFactor).toBe(30);
+    expect(evidenceHash(before)).not.toBe(evidenceHash(after));
+    expect(abuseAssessmentFeatureSummarySchema.safeParse(after).success).toBe(true);
+  });
+
   it('keys the cache on detection, evidence and model', () => {
     const hash = hashFor({});
     expect(assessmentCacheKey('a', hash, 'jev-latest')).not.toBe(assessmentCacheKey('a', hash, 'gpt-6-luna'));
@@ -307,5 +437,134 @@ describe('rolloutBucket', () => {
     expect(bucket).toBe(rolloutBucket('65f000000000000000000001'));
     expect(bucket).toBeGreaterThanOrEqual(0);
     expect(bucket).toBeLessThan(100);
+  });
+});
+
+const sequenceEvidence = {
+  source: 'completion_usage_ledger' as const,
+  windowHours: 24 as const,
+  eventsScanned: 40,
+  scanTruncated: true,
+  rounds: 2,
+  minRequestsPerRound: 3,
+  maxRequestsPerRound: 6,
+  maxRoundSpanSeconds: 20,
+  minGapSeconds: 120,
+  maxGapSeconds: 120,
+  firstObservedAt: detectedAt,
+  lastObservedAt: new Date(detectedAt.getTime() + 180_000),
+};
+const sequenceDetection = (overrides: Partial<ShadowDetectionItem> = {}) =>
+  detection({
+    detector: 'completionSequence',
+    wouldAction: 'none',
+    network: null,
+    userIds: [...detection().userIds, '65f0000000000000000000a3'],
+    completionSequence: sequenceEvidence,
+    ...overrides,
+  });
+
+describe('completion sequence projection', () => {
+  it('preserves coverage and ordered pseudonymous members without identities or timestamps', () => {
+    const source = sequenceDetection();
+    const summary = buildFeatureSummary({ detection: source, accounts: [], group: null });
+    expect(summary.completionSequence).toMatchObject({
+      status: 'observed',
+      reviewOnly: true,
+      scanTruncated: true,
+      rounds: 2,
+      memberRefs: ['acct_1', 'acct_2', 'acct_3'],
+    });
+    for (const secret of [...source.userIds, detectedAt.toISOString(), 'firstObservedAt', INJECTION]) {
+      expect(JSON.stringify(summary)).not.toContain(secret);
+    }
+    expect(abuseAssessmentFeatureSummarySchema.safeParse(summary).success).toBe(true);
+  });
+
+  it('treats a missing source as unknown and legacy detectors remain compatible', () => {
+    expect(
+      buildFeatureSummary({
+        detection: sequenceDetection({ completionSequence: undefined }),
+        accounts: [],
+        group: null,
+      }).completionSequence
+    ).toEqual({ status: 'incomplete', reviewOnly: true, reason: 'source_missing' });
+    expect(
+      buildFeatureSummary({ detection: detection(), accounts: [], group: null }).completionSequence
+    ).toBeUndefined();
+  });
+
+  it('never describes a full order after members are omitted', () => {
+    const source = sequenceDetection({ userIds: Array.from({ length: 11 }, (_, i) => `synthetic-${i}`) });
+    expect(buildFeatureSummary({ detection: source, accounts: [], group: null }).completionSequence).toEqual({
+      status: 'incomplete',
+      reviewOnly: true,
+      reason: 'members_omitted',
+    });
+  });
+
+  it('invalidates cached model evidence when more rounds appear', () => {
+    const summary = (rounds: number) =>
+      buildFeatureSummary({
+        detection: sequenceDetection({ completionSequence: { ...sequenceEvidence, rounds } }),
+        accounts: [],
+        group: null,
+      });
+    expect(evidenceHash(summary(2))).not.toBe(evidenceHash(summary(3)));
+  });
+});
+
+const synchronyEvidence = {
+  scannedAt: detectedAt,
+  source: 'api_key_request_starts' as const,
+  windowHours: 24 as const,
+  eventsScanned: 9,
+  legacyRows: 2,
+  scanTruncated: false,
+  bursts: 3,
+  synchronizedModelSwitches: 1,
+  distinctRequestedModels: 2,
+  maxStartSkewMilliseconds: 400,
+  completedRequests: 6,
+  dailyCapRejectedRequests: 3,
+  otherRejectedRequests: 0,
+  interruptedOrUnknownRequests: 0,
+  firstObservedAt: detectedAt,
+  lastObservedAt: detectedAt,
+};
+describe('synchrony provider projection', () => {
+  const source = () =>
+    sequenceDetection({
+      detector: 'completionSynchrony',
+      completionSequence: undefined,
+      completionSynchrony: synchronyEvidence,
+    });
+  it('sends only pseudonymous members, counts and coverage', () => {
+    const item = source();
+    const summary = buildFeatureSummary({ detection: item, accounts: [], group: null });
+    expect(summary.completionSynchrony).toMatchObject({
+      status: 'observed',
+      reviewOnly: true,
+      memberRefs: ['acct_1', 'acct_2', 'acct_3'],
+      bursts: 3,
+      synchronizedModelSwitches: 1,
+      dailyCapRejectedRequests: 3,
+      legacyRows: 2,
+    });
+    for (const secret of [...item.userIds, detectedAt.toISOString(), 'firstObservedAt', INJECTION])
+      expect(JSON.stringify(summary)).not.toContain(secret);
+  });
+  it('keeps missing evidence and omitted membership incomplete', () => {
+    expect(
+      buildFeatureSummary({ detection: { ...source(), completionSynchrony: undefined }, accounts: [], group: null })
+        .completionSynchrony
+    ).toMatchObject({ status: 'incomplete', reason: 'source_missing' });
+    expect(
+      buildFeatureSummary({
+        detection: { ...source(), userIds: Array.from({ length: 11 }, (_, i) => `account-${i}`) },
+        accounts: [],
+        group: null,
+      }).completionSynchrony
+    ).toMatchObject({ status: 'incomplete', reason: 'members_omitted' });
   });
 });

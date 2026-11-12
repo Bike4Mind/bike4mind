@@ -34,7 +34,7 @@ import {
   grantedLakeReachFor,
   supersededOwnLakeIdsFor,
   manageGrantedLakeIdsFor,
-  resolveEnforceReadGrants,
+  resolveEnforceReadGrantsResult,
   type LakeAccessLogger,
 } from './resolveLakeReadAccess';
 
@@ -175,6 +175,8 @@ interface ListDataLakesAdapters {
  * to its actual support.
  */
 interface ListDataLakesOptions extends ListDataLakesAdapters {
+  /** Audit classification must distinguish a failed lookup from a real absence of member access. */
+  requireCompleteAccess?: boolean;
   /**
    * Optional pre-resolved grant-id set: skips this function's own `grantedLakeReachFor` call when
    * the caller already ran the identical query. Only safe to pass when the caller never threads
@@ -503,8 +505,11 @@ const toFallbackConfig = (
  */
 export const listDataLakes = async (
   ctx: AccessContext,
-  { db, logger, grantedLakeIds: precomputedGrantedLakeIds }: ListDataLakesOptions
+  { db, logger, grantedLakeIds: precomputedGrantedLakeIds, requireCompleteAccess = false }: ListDataLakesOptions
 ): Promise<ManageableDataLakeConfig[]> => {
+  if (requireCompleteAccess && (!db.settings || !db.dataLakeAccessGrants)) {
+    throw new Error('Complete lake access requires settings and grant adapters');
+  }
   // The precomputed set is only valid under includeReaders=false (see the field's doc comment) -
   // a caller that also threads `settings` could get includeReaders=true below, silently
   // mismatching what the precomputed set was actually resolved with. Guarded rather than
@@ -516,7 +521,11 @@ export const listDataLakes = async (
         'is only valid when includeReaders is forced false (no settings adapter)'
     );
   }
-  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const enforcement = await resolveEnforceReadGrantsResult(db.settings, logger);
+  if (requireCompleteAccess && !enforcement.readSucceeded) {
+    throw new Error('Complete lake access requires a successful read-grant settings lookup');
+  }
+  const includeReaders = enforcement.enforced;
   // The precomputed set carries the USER half only. That loses nothing: the guard above forces
   // includeReaders=false whenever it is supplied, and the org arm is resolved only under
   // includeReaders - so the recomputing branch would return an empty org half here too.
@@ -540,8 +549,10 @@ export const listDataLakes = async (
       orgGrantedLakes,
       supersededOwnLakeIds,
     });
-  } catch {
-    // DB may not have the collection yet - fall through to hardcoded
+  } catch (error) {
+    if (requireCompleteAccess) throw error;
+    // A fresh install may not have the collection yet; ordinary browsing retains its static fallback.
+    logger?.warn?.('Dynamic lake access lookup failed; using the static registry', error);
   }
 
   const grantsByLake = await grantsByLakeIdFor(dynamicLakes, db.dataLakeAccessGrants);

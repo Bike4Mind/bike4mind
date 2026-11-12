@@ -11,7 +11,7 @@ export const signupTimeseriesQueryKey = (range: SignupTimeseriesRange) =>
   ['users', 'signup-timeseries', range] as const;
 
 /** Signups bucketed at the viewer's local hour or midnight, split by the suspected-signup classifier. */
-export function useSignupTimeseries(range: SignupTimeseriesRange) {
+export function useSignupTimeseries(range: SignupTimeseriesRange, enabled = true) {
   return useQuery({
     queryKey: signupTimeseriesQueryKey(range),
     queryFn: async () =>
@@ -22,6 +22,7 @@ export function useSignupTimeseries(range: SignupTimeseriesRange) {
         })
       ).data,
     staleTime: 60000,
+    enabled,
   });
 }
 
@@ -29,15 +30,20 @@ export function useSignupTimeseries(range: SignupTimeseriesRange) {
  * The chart's verdict for each listed account. `asOf` is the loaded chart's `until`, so the verdicts
  * classify the same cohort at the same instant and refresh only when the chart does.
  */
-export function useSignupVerdicts(range: SignupTimeseriesRange, asOf: string | undefined, userIds: readonly string[]) {
+export function useSignupVerdicts(
+  range: SignupTimeseriesRange,
+  asOf: string | undefined,
+  userIds: readonly string[],
+  tzOffset = -new Date().getTimezoneOffset()
+) {
   return useQuery({
     // Not under ['users']: a user mutation refreshes the chart, whose new `until` re-keys this query, so
     // invalidating it as well would only classify the range once more for a result thrown away.
-    queryKey: ['signup-verdicts', range, asOf, userIds] as const,
+    queryKey: ['signup-verdicts', range, asOf, userIds, tzOffset] as const,
     queryFn: async () =>
       (
         await api.get<SignupVerdicts>('/api/admin/users/signup-verdicts', {
-          params: { range, asOf, tzOffset: -new Date().getTimezoneOffset(), ids: userIds.join(',') },
+          params: { range, asOf, tzOffset, ids: userIds.join(',') },
         })
       ).data,
     enabled: !!asOf && userIds.length > 0,
