@@ -15,6 +15,8 @@ vi.mock('./components/UsageDashboard', () => ({ UsageDashboard: stub('stub-org-u
 vi.mock('./components/PlatformUsageDashboard', () => ({ PlatformUsageDashboard: stub('stub-api-usage') }));
 vi.mock('./components/TransactionLedger', () => ({ TransactionLedger: stub('stub-ledger') }));
 vi.mock('./components/CreditAdjustmentsLog', () => ({ CreditAdjustmentsLog: stub('stub-adjustments') }));
+vi.mock('./components/CreditEconomy', () => ({ CreditEconomy: stub('stub-economy') }));
+vi.mock('@tanstack/react-router', () => ({ useSearch: () => ({}), useNavigate: () => vi.fn() }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });

@@ -49,6 +49,12 @@ const NOT_COVERED =
   "\\b(?:(?:don|doesn|isn)['\\u2019]?t (?:know|cover|have|exist|see)|do(?:es)? not (?:know|cover|have|exist|see)|not (?:aware|sure|familiar)|no (?:such|entry|tab|feature|information)|(?:couldn|didn)['\\u2019]?t find|could not find|did not find)";
 
 export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
+  {
+    id: 'where-credit-economy',
+    category: 'where-is',
+    question: 'Where can I see platform credit issuance, consumption and accounting coverage?',
+    expectViewIds: ['admin.credit_analytics'],
+  },
   // where-is: the answer is a navigate_view hand-off to the right admin tab.
   {
     id: 'where-advisories',
