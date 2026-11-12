@@ -1,6 +1,7 @@
 // List, capture, save, sheet, approve, enable and delete over one owner's draft rows. Every content write moves
 // the sequence and revision, drops the approval and switches the draft off, so learners only ever run content an
 // admin approved in the preview.
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import {
   CoreTutorialVisibilitySchema,
@@ -61,7 +62,7 @@ export const DraftPostSchema = z.discriminatedUnion('action', [
   }),
   z.object({ action: z.literal('approve'), moduleId, contentSeq, reason }),
   z.object({ action: z.literal('enable'), moduleId, contentSeq, reason, enabled: z.boolean() }),
-  z.object({ action: z.literal('delete'), moduleId, reason }),
+  z.object({ action: z.literal('delete'), moduleId, contentSeq, reason }),
 ]);
 export type DraftPostBody = z.infer<typeof DraftPostSchema>;
 
@@ -271,23 +272,38 @@ export function draftStore<TCanvas extends { turn: number }>({
     const row = await models.Draft.findOne({ moduleId: body.moduleId }, { _id: 0, __v: 0 }).lean<TutorialDraftRow>();
     if (!row) return fail(404, 'No such draft');
 
+    if (body.action !== 'delete' && body.contentSeq !== row.contentSeq) return CONFLICT;
+
     if (body.action === 'delete') {
-      await withTransaction(async session => {
-        await models.Draft.deleteOne({ moduleId: body.moduleId }, { session });
-        const before = { contentSeq: row.contentSeq, enabled: row.enabled };
+      const deleted = await withTransaction(async session => {
+        const result = await models.Draft.deleteOne(
+          { moduleId: body.moduleId, contentSeq: body.contentSeq },
+          { session }
+        );
+        if (!result.deletedCount) return false;
+        const before = {
+          contentSeq: row.contentSeq,
+          enabled: row.enabled,
+          title: row.title,
+          content: contentOf(row),
+        };
         await audit(session, body.moduleId, 'delete', before, undefined, actorId, body.reason);
+        return true;
       });
-      return null;
+      return deleted ? null : CONFLICT;
     }
-    if (body.contentSeq !== row.contentSeq) return CONFLICT;
 
     if (body.action === 'save') {
       const unknown = refuseUnknownEntitlement(body.visibility);
       if (unknown) return unknown;
-      const next = savedContent(contentOf(row), body);
+      const current = contentOf(row);
+      const next = savedContent(current, body);
       const { moduleId: _id, ...set } = next;
-      const touched = Object.keys(body).filter(k => !['action', 'moduleId', 'contentSeq', 'reason'].includes(k));
-      return writeContent(body, set, 'content', { fields: touched }, actorId);
+      const changed = Object.keys(set).filter(
+        k => !isDeepStrictEqual(set[k as keyof typeof set], current[k as keyof typeof current])
+      );
+      if (changed.length === 0) return null;
+      return writeContent(body, set, 'content', { fields: changed }, actorId);
     }
     if (body.action === 'sheet') {
       const sheet = { name: body.name.trim(), csv: body.csv };

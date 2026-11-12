@@ -87,6 +87,22 @@ describe('captureSession under the core hooks', () => {
     expect(await capture(deps(SESSION, quests))).toMatchObject({ ok: false, status: 409, code: 'SURFACE' });
   });
 
+  it('refuses a session moved to main whose model recorded a foreign tool in promptMeta only', async () => {
+    const quests = [
+      done('q1', 'first', { promptMeta: { functionCalls: [{ name: 'other_schedule' }] } }),
+      done('q2', 'second'),
+    ];
+    expect(await capture(deps(SESSION, quests))).toMatchObject({ ok: false, status: 409, code: 'SURFACE' });
+  });
+
+  it('accepts a session whose recorded function calls carry no foreign prefix', async () => {
+    const quests = [
+      done('q1', 'first', { promptMeta: { functionCalls: [{ name: 'web_search' }, {}] } }),
+      done('q2', 'second'),
+    ];
+    expect(await capture(deps(SESSION, quests))).toMatchObject({ ok: true });
+  });
+
   it('accepts a session whose tools carry no foreign prefix', async () => {
     const quests = [
       done('q1', 'first', { structuredReplies: [{ content: [{ type: 'tool_use', name: 'web_search' }, 'text'] }] }),
