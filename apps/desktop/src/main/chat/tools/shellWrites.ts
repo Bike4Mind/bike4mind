@@ -1158,6 +1158,27 @@ export async function gitRemoteSettings(directory: string): Promise<GitRemoteSet
   return { remotes: [...configured], helpers, rewrites, outside: true, groups, defaults };
 }
 
+/** The settings in the config file at `path`, its includes not followed; none when it is absent, null when unread. */
+export async function gitConfigFile(path: string): Promise<{ key: string; value: string | null }[] | null> {
+  const info = await stat(path).catch((error: NodeJS.ErrnoException) =>
+    error.code === 'ENOENT' || error.code === 'ENOTDIR' ? undefined : null
+  );
+  if (info === undefined) return [];
+  if (info === null || !info.isFile()) return null;
+  const result = await gitRun(dirname(path), ['config', '--file', basename(path), '-z', '--list']);
+  if (result?.code !== 0) return null;
+  // `-z` prints `key\nvalue\0` per entry, and the key alone for one set with no value.
+  return result.stdout
+    .split('\0')
+    .filter(Boolean)
+    .map(entry => {
+      const newline = entry.indexOf('\n');
+      return newline === -1
+        ? { key: entry, value: null }
+        : { key: entry.slice(0, newline), value: entry.slice(newline + 1) };
+    });
+}
+
 /** What `git rev-parse --show-toplevel` prints in `directory` (a Linux path in a WSL folder), or null when git fails. */
 export async function gitToplevel(directory: string): Promise<string | null> {
   const printed = (await gitQuery(directory, ['rev-parse', '--show-toplevel']))?.replace(/\r?\n$/, '');

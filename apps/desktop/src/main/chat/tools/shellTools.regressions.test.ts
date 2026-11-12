@@ -998,28 +998,30 @@ describe('shell approval in a project with a large node_modules', () => {
     'env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=./x.sh git log',
     `GIT_CONFIG_PARAMETERS="'man.man.path=./x.sh'" git help clean`,
     `env GIT_CONFIG_PARAMETERS="'core.pager=./x.sh'" git log`,
-    'GIT_EDITOR=./x.sh git status',
-    'GIT_PAGER=./x.sh git log',
+    'GIT_EDITOR=./x.sh git tag -a v1',
+    'GIT_PAGER=./x.sh git log > /dev/tty',
     'GIT_TRACE=$PWD/.claude/settings.json git status',
     'env GIT_TRACE2_EVENT=/tmp/t git status',
     'GIT_TRACE2_EVENT=af_unix:./s git status',
-    'GIT_PAGER+=x git log',
-    'export GIT_PAGER; git log',
-    'declare -x GIT_PAGER=./x.sh; git log',
-    'typeset GIT_PAGER=./x.sh; git log',
-    'local GIT_PAGER=./x.sh; git log',
-    'readonly GIT_PAGER=./x.sh; git log',
-    'read -r GIT_PAGER <<< ./x.sh; git log',
-    'readarray GIT_PAGER <<< ./x.sh; git log',
-    'mapfile GIT_PAGER < f; git log',
-    'printf -v GIT_PAGER %s ./x.sh; git log',
-    'getopts a GIT_PAGER; git log',
-    'for GIT_PAGER in ./x.sh; do git log; done',
-    'select GIT_PAGER in ./x.sh; do git log; done',
-    'let GIT_PAGER=1; git log',
-    ': ${GIT_PAGER:=./x.sh}; git log',
-    ': ${GIT_PAGER=./x.sh}; git log',
-    'true && export GIT_PAGER=./x.sh && git log',
+    'GIT_PAGER+=x git log > /dev/tty',
+    'export GIT_PAGER; git log > /dev/tty',
+    'declare -x GIT_PAGER=./x.sh; git log > /dev/tty',
+    'typeset GIT_PAGER=./x.sh; git log > /dev/tty',
+    'local GIT_PAGER=./x.sh; git log > /dev/tty',
+    'readonly GIT_PAGER=./x.sh; git log > /dev/tty',
+    'read -r GIT_PAGER <<< ./x.sh; git log > /dev/tty',
+    'readarray GIT_PAGER <<< ./x.sh; git log > /dev/tty',
+    'mapfile GIT_PAGER < f; git log > /dev/tty',
+    'printf -v GIT_PAGER %s ./x.sh; git log > /dev/tty',
+    'getopts a GIT_PAGER; git log > /dev/tty',
+    'for GIT_PAGER in ./x.sh; do git log > /dev/tty; done',
+    'select GIT_PAGER in ./x.sh; do git log > /dev/tty; done',
+    'let GIT_PAGER=1; git log > /dev/tty',
+    ': ${GIT_PAGER:=./x.sh}; git log > /dev/tty',
+    ': ${GIT_PAGER=./x.sh}; git log > /dev/tty',
+    'true && export GIT_PAGER=./x.sh && git log > /dev/tty',
+    'GIT_PAGER=./x.sh unbuffer git log',
+    'export GIT_PAGER=./x.sh; script -qc true /dev/null; git log',
     'v=PAGER; export GIT_$v=./x.sh; git log',
     'v=GIT_PAGER; export $v=./x.sh; git log',
     'v=GIT_PAGER; printf -v "$v" %s ./x.sh; git log',
@@ -1103,7 +1105,7 @@ describe('shell approval in a project with a large node_modules', () => {
     "export GIT_EXEC_PATH=./bin; sh -ec 'git help clean'",
     "export GIT_PAGER=./x.sh; eval 'git log'",
     "export GIT_PAGER=./x.sh; builtin eval 'git log'",
-    'GIT_PAGER=less git log',
+    'GIT_PAGER=less git log > /dev/tty',
     'GIT_EDITOR=vi git commit --allow-empty',
     'GIT_SSH_COMMAND=cat git fetch',
     'GIT_EXEC_PATH= git mergetool',
@@ -1155,8 +1157,40 @@ describe('shell approval in a project with a large node_modules', () => {
     expect(await judge(command)).toMatchObject({ auto: true, full: true });
   });
 
-  it('asks in every mode for a -c key that names a program, whatever its value', async () => {
-    expect(await judge('git -c core.pager=cat log -1')).toMatchObject(asks);
+  it.each(['git -c core.pager=less log -1', 'git -c core.editor=true commit --amend'])(
+    'asks in every mode for %s, whose -c key names a program with a value the table does not list',
+    async command => {
+      expect(await judge(command)).toMatchObject(asks);
+    }
+  );
+
+  it.each([
+    'GIT_EDITOR=./x.sh git status',
+    'GIT_PAGER=./x.sh git log',
+    'GIT_PAGER+=x git log',
+    'export GIT_PAGER; git log',
+    'declare -x GIT_PAGER=./x.sh; git log',
+    'typeset GIT_PAGER=./x.sh; git log',
+    'local GIT_PAGER=./x.sh; git log',
+    'readonly GIT_PAGER=./x.sh; git log',
+    'read -r GIT_PAGER <<< ./x.sh; git log',
+    'readarray GIT_PAGER <<< ./x.sh; git log',
+    'mapfile GIT_PAGER < f; git log',
+    'printf -v GIT_PAGER %s ./x.sh; git log',
+    'getopts a GIT_PAGER; git log',
+    'for GIT_PAGER in ./x.sh; do git log; done',
+    'select GIT_PAGER in ./x.sh; do git log; done',
+    'let GIT_PAGER=1; git log',
+    ': ${GIT_PAGER:=./x.sh}; git log',
+    ': ${GIT_PAGER=./x.sh}; git log',
+    'true && export GIT_PAGER=./x.sh && git log',
+    'GIT_PAGER=less git log',
+    'export GIT_EDITOR=./x.sh; git commit -m x',
+    'git status; export GIT_EXEC_PATH=./bin',
+    'git -c core.pager=cat log -1',
+    'git -c core.hooksPath=/dev/null -c core.fsmonitor=false commit -m x',
+  ])('runs %s unasked, as git starts no program the script names there', async command => {
+    expect(await judge(command)).toMatchObject({ auto: true, full: true });
   });
 
   it('asks in every mode for a rebase continued with an editor that runs nothing', async () => {
@@ -1274,9 +1308,9 @@ describe('shell approval in a project with a large node_modules', () => {
   });
 
   const lowercased = [
-    'export git_pager=./x.sh; git log',
+    'export git_pager=./x.sh; git log > /dev/tty',
     'Git_Exec_Path=./bin git status',
-    'env git_editor=./x.sh git log',
+    'env git_editor=./x.sh git commit --allow-empty',
   ];
 
   it.each(lowercased)('asks in every mode for %s on Windows, which reads variable names in any case', async command => {

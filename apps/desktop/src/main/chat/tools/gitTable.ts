@@ -191,7 +191,8 @@ const ANY_VALUE_SECTIONS = /^(color|advice)\./;
 
 const BOOLEAN = /^(true|false|yes|no|on|off|1|0|)$/i;
 const FALSE = /^(false|no|off|0|)$/i;
-const editorValue = (value: string): boolean => value === 'true' || value === ':';
+// git skips an editor of `:`; any other name, `true` included, it looks up on PATH.
+const editorValue = (value: string): boolean => value === ':';
 const LIMITED_SETTINGS: Readonly<Record<string, (value: string) => boolean>> = {
   'commit.gpgsign': value => FALSE.test(value),
   'tag.gpgsign': value => FALSE.test(value),
@@ -208,7 +209,7 @@ const LIMITED_SETTINGS: Readonly<Record<string, (value: string) => boolean>> = {
 };
 
 /** Whether `-c key=value` or a `git config` write of it starts no program; a null value is one the shell fills. */
-function listedSetting(key: string, value: string | null): boolean {
+export function listedSetting(key: string, value: string | null): boolean {
   const name = key.toLowerCase();
   if (ANY_VALUE_SETTINGS.has(name) || ANY_VALUE_SECTIONS.test(name)) return true;
   if (value === null) return false;

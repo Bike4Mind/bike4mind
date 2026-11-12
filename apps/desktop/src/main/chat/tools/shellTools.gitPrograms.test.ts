@@ -441,6 +441,47 @@ const ROWS: [string, string, string][] = [
   ['export PATH="$PWD/ptools:$PATH" && git help commit', '', 'aaaa'],
   ['export PATH="$PWD/ptools:$PATH" && git log -1', '', 'arrr'],
   ['export PATH="$PWD/ptools:$PATH" && git help -a', '', 'arrr'],
+  ['HOME=hm git status', '', 'aaaa'],
+  ['HOME=hm2 git status', '', 'arrr'],
+  ['XDG_CONFIG_HOME=xdg git log -1', '', 'aaaa'],
+  ['XDG_CONFIG_HOME=xdg2 git log -1', '', 'arrr'],
+  ['export HOME=hm; git status', '', 'aaaa'],
+  ['git status; export HOME=hm', '', 'arrr'],
+  ['echo x > hm4/.gitconfig && HOME=hm4 git status', '', 'aaaa'],
+  ['HOME="$(mktemp -d)" git status', '', 'aaaa'],
+  ['HOME=hm2 git log --format=%G? -1', '', 'aaaa'],
+  ['git status; export EDITOR=nano', '', 'arrr'],
+  ['export GIT_EDITOR=nano; git commit -m x', '', 'arrr'],
+  ['export GIT_EDITOR=nano; git commit --allow-empty', '', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log', '', 'arrr'],
+  ['GIT_PAGER=./x.sh unbuffer git log', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git commit -- -mx', '', 'aaaa'],
+  ['export GIT_EDITOR=./x.sh; git commit -- -mx', '', 'aaaa'],
+  ['EDITOR=./x.sh git commit -- -mx', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git commit -a --trailer -mx', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git tag -a --trailer -mx v9', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git commit -a -m [+-]*', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git commit -a -m *', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git branch -*', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git add -*', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git commit -a -m x', '', 'arrr'],
+  ['GIT_PAGER=./x.sh git log > /dev/ttys003', '', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log > /dev/ttyS0', '', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log > /dev/tty1', '', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log > o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log > ./o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log >> o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log >| o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log &> o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log 1> o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log >&2', '', 'aaaa'],
+  ['export GIT_PAGER=./x.sh; exec > o; git log', 'ttr', 'aaaa'],
+  ['{ GIT_PAGER=./x.sh git log; } > o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log > /dev/null', '', 'arrr'],
+  ['GIT_PAGER=./x.sh git log | head', '', 'arrr'],
+  ['HOME+=/proj/hm git status', '', 'aaaa'],
+  ['export HOME+=/proj/hm; git status', '', 'aaaa'],
+  ['XDG_CONFIG_HOME+=/proj/xdg git status', '', 'aaaa'],
 ];
 
 describe('shell approval of git programs, sourced files and fresh folders', () => {
@@ -565,6 +606,12 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
       for (const args of settings) git(dir, ...args);
     }
     for (const name of ['ssh', 'gpg', 'man']) file(join(proj, 'ptools', name), '#!/bin/sh\nexit 0\n', 0o755);
+    repository(join(proj, 'ttr'), { 'x.ts': 'x' });
+    symlinkSync('/dev/tty', join(proj, 'ttr', 'o'));
+    file(join(proj, 'hm', '.gitconfig'), '[core]\n\tfsmonitor = ./x.sh\n');
+    file(join(proj, 'hm2', '.gitconfig'), '[user]\n\tname = x\n[color]\n\tui = never\n');
+    file(join(proj, 'xdg', 'git', 'config'), '[core]\n\tpager = ./x.sh\n');
+    file(join(proj, 'xdg2', 'git', 'config'), '[core]\n\tpager = cat\n');
     roots = permissionProtectedLocations(userData, home, join(base, 'managed'), { warn: () => {} }).paths();
     const compiled: CompiledRule[] = [];
     for (const program of [
