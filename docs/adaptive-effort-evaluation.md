@@ -26,6 +26,10 @@ Prompts are candidates until classified **complex by the production path** with
 the real settings. If any fail that criterion, revise and freeze the corpus
 before starting either arm; do not drop observations after seeing outcomes.
 
+Send only each entry's `prompt` to the model. Its separate `rubric` is for the
+reviewer, never model input. Removing rubrics from prompts changes `corpusHash`;
+observations from the previous answer-key-containing corpus cannot be reused.
+
 ## Live protocol after approval
 
 1. Freeze the corpus hash, stack revision, exact model/provider, fixture revision,
@@ -77,7 +81,8 @@ exactly one observation per `(promptId, arm)`. Each row requires:
 
 Evidence references are operator attestations, not cryptographic verification of
 provider behavior or reviewer independence. `blindReviewId` is only checked for
-presence; the analyzer does not verify how outputs were blinded or paired. Review the linked evidence before
+presence; the analyzer does not verify how outputs were blinded or paired.
+Review the linked evidence before
 accepting a study. Unknown provenance is a blocker, never a guessed value.
 The analyzer rejects missing/duplicate rows, missing traces, non-complex queries,
 retries, restarts, mismatched settings/model, invalid timing and missing grades.

@@ -135,7 +135,7 @@ export const prompts = Object.entries(tasks).flatMap(([category, entries]) =>
   entries.map(([task, rubric], index) => ({
     id: `${category}-${index + 1}`,
     category,
-    prompt: `Analyze this multi-step task carefully, explain your reasoning and tradeoffs, and verify your conclusion. ${task} ${rubric}`,
+    prompt: `Analyze this multi-step task carefully, explain your reasoning and tradeoffs, and verify your conclusion. ${task}`,
     rubric,
   }))
 );

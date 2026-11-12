@@ -53,6 +53,15 @@ describe('adaptive effort offline evaluation', () => {
     }
   });
 
+  it('keeps grading rubrics out of every model-facing prompt', () => {
+    const plan = makePlan();
+    for (const { prompt, rubric } of plan.prompts) {
+      expect(rubric.length).toBeGreaterThan(0);
+      expect(prompt).not.toContain(rubric);
+    }
+    expect(plan.corpusHash).not.toBe('e26609b08e9334ae9d4d54b0988f9ab88fd6b74c49144e7141795db7ffac848f');
+  });
+
   it('computes paired deltas without claiming a quality study proves a default', () => {
     const result = analyze(observations());
     expect(result.pairedMedianTotalDeltaMs).toBe(-200);
