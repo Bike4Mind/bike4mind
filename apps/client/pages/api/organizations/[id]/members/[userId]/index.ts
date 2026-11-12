@@ -61,7 +61,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES }).delete(async
         userId: req.query.userId as string,
       },
     },
-    { ability: req.ability }
+    { ability: req.ability, organizationAuditActorUserId: req.user.impersonatedBy ?? req.user.id }
   );
 
   // Count only: the removing admin cannot see these lakes, so no name or id may reach them.

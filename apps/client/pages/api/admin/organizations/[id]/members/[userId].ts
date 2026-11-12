@@ -92,7 +92,7 @@ const handler = adminApi({
     const personalLakeSharesKept = await reportAndNotifyKeptPersonalLakeShares(userId, organization, req.logger);
     await logEventSafe(
       { userId: req.user.id, type: OrganizationEvents.REMOVE_ORG_MEMBER, metadata: { organizationId, userId } },
-      { ability: req.ability },
+      { ability: req.ability, organizationAuditActorUserId: req.user.impersonatedBy ?? req.user.id },
       req.logger,
       organizationId
     );

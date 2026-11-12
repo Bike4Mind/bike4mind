@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { CreditPurchaseEvents, FirstRunEvents, MfaEnrollmentEvents } from '@bike4mind/common';
+import { CreditPurchaseEvents, FirstRunEvents, MfaEnrollmentEvents, OrganizationEvents } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -59,6 +59,7 @@ describe('POST /api/analytics/log-event', () => {
     FirstRunEvents.FIRST_ANSWER_CREDITS,
     FirstRunEvents.POLICIES_SHOWN,
     ...Object.values(MfaEnrollmentEvents),
+    ...Object.values(OrganizationEvents),
   ])('refuses the server-only %s event', async type => {
     const { run } = call({ type, metadata: { paymentIntentId: 'pi_forged', amount: 999, credits: 500 } });
 
