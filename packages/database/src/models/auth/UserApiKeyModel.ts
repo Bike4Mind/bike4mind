@@ -244,6 +244,33 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
   }
 
   /**
+   * Disables the member's live keys billed to this org when their membership ends. Personal
+   * (User-billed) keys and legacy rows with no billingOwnerType are left alone. No batch id: a
+   * removal is not undoable, so these must not be restorable through `reactivateByIds`.
+   * Returns the ids it flipped.
+   */
+  async revokeLiveOrgBilledByUserId(
+    userId: string,
+    organizationId: string,
+    { revokedBy, revokedReason }: { revokedBy: string; revokedReason: string }
+  ): Promise<string[]> {
+    const filter = {
+      userId,
+      organizationId,
+      billingOwnerType: CreditHolderType.Organization,
+      status: { $ne: ApiKeyStatus.DISABLED },
+    };
+    const live = await this.model.find(filter).select('_id').lean<{ _id: unknown }[]>();
+    if (live.length === 0) return [];
+    const ids = live.map(key => key._id);
+    await this.model.updateMany(
+      { ...filter, _id: { $in: ids } },
+      { $set: { status: ApiKeyStatus.DISABLED, revokedAt: new Date(), revokedBy, revokedReason } }
+    );
+    return ids.map(String);
+  }
+
+  /**
    * Undo of `revokeLiveByUserId`: restores each key's prior status, but only for keys of this user still
    * DISABLED by that same batch, so a key revoked again since (by anyone) stays revoked.
    */

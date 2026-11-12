@@ -5,7 +5,8 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { withTransaction, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { userRepository } from '@bike4mind/database/auth';
+import { userApiKeyRepository, userRepository } from '@bike4mind/database/auth';
+import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
 import { groupRepository } from '@bike4mind/database/social';
 import { OrganizationEvents, toSafeOrganization } from '@bike4mind/common';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
@@ -20,9 +21,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES }).delete(async
   // Transaction: removing the member from the org, pulling the org's group ids from their
   // user doc, lapsing their data-lake grants on this org's lakes, and dropping them from
   // adminUserIds must all commit together (org-groups #1172). A member left holding live grants
-  // because the org write committed is the exact split this transaction exists to prevent.
-  const organization = await withTransaction(() =>
-    organizationService.revokeAccess(
+  // because the org write committed is the exact split this transaction exists to prevent. The
+  // audit row is strict and rides the same transaction, so a removal never commits unrecorded.
+  const { organization, revokedOrgBilledApiKeyIds } = await withTransaction(async () => {
+    const result = await organizationService.revokeAccess(
       req.user,
       { ...(req.query as any) },
       {
@@ -32,6 +34,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES }).delete(async
           groups: groupRepository,
           dataLakes: dataLakeRepository,
           dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          userApiKeys: userApiKeyRepository,
           ...lakeConfigAuditDb,
         },
         // Resolved here rather than in the service: whether this removal came from a browser
@@ -41,8 +44,21 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES }).delete(async
         auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
         logger: req.logger,
       }
-    )
-  );
+    );
+    const removedUserId = req.query.userId as string;
+    await recordAdminActionFromRequest(req, {
+      action: 'org.member.removed',
+      actorScope: 'organization',
+      target: await userAuditTarget(removedUserId),
+      organizationId: result.organization.id,
+      summary: `removed from organization ${result.organization.name}`,
+      details: {
+        organizationName: result.organization.name,
+        revokedOrgBilledKeys: result.revokedOrgBilledApiKeyIds.length,
+      },
+    });
+    return result;
+  });
 
   // After the commit, so a retried transaction cannot mail twice. Shares on personal lakes are not
   // the org's to revoke; their owners are told instead.
@@ -68,6 +84,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES }).delete(async
   return res.json({
     ...toSafeOrganization(organization, { userId: req.user.id, isAdmin: req.user.isAdmin }),
     personalLakeSharesKept,
+    revokedOrgBilledKeys: revokedOrgBilledApiKeyIds.length,
   });
 });
 

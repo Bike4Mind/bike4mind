@@ -39,8 +39,21 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const revokeAccess = vi.hoisted(() =>
-  vi.fn(async () => ({ id: 'org1', userId: 'owner1', name: 'Acme', stripeCustomerId: 'cus_SECRET', users: [] }))
+  vi.fn(async () => ({
+    organization: { id: 'org1', userId: 'owner1', name: 'Acme', stripeCustomerId: 'cus_SECRET', users: [] },
+    revokedOrgBilledApiKeyIds: ['key-1', 'key-2'],
+  }))
 );
+const recordAdminActionFromRequest = vi.hoisted(() =>
+  vi.fn(async () => {
+    if (txState.committed) throw new Error('audit written outside the transaction');
+    return {};
+  })
+);
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest,
+  userAuditTarget: async (id: string) => ({ kind: 'user', id, displayName: 'Member Two' }),
+}));
 const reportAndNotifyKeptPersonalLakeShares = vi.hoisted(() => vi.fn().mockResolvedValue(2));
 vi.mock('@server/utils/keptPersonalLakeSharesNotifier', () => ({ reportAndNotifyKeptPersonalLakeShares }));
 vi.mock('@bike4mind/services', () => ({ organizationService: { revokeAccess } }));
@@ -66,7 +79,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
-vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
+vi.mock('@bike4mind/database/auth', () => ({ userRepository: {}, userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository: {} }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
@@ -124,6 +137,38 @@ describe('DELETE /api/organizations/[id]/members/[userId]', () => {
       expect.anything(),
       expect.anything(),
       expect.objectContaining({ auditPrincipal: undefined })
+    );
+  });
+
+  it('records the removal as an org-scoped audit row inside the transaction', async () => {
+    recordAdminActionFromRequest.mockClear();
+    const { req, res } = request();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.member.removed',
+        actorScope: 'organization',
+        target: expect.objectContaining({ kind: 'user', id: 'member2' }),
+        organizationId: 'org1',
+        details: { organizationName: 'Acme', revokedOrgBilledKeys: 2 },
+      })
+    );
+    expect(res._getJSONData().revokedOrgBilledKeys).toBe(2);
+  });
+
+  it('passes the API-key repository so the purge can revoke org-billed keys', async () => {
+    const { req, res } = request();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(revokeAccess).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ userApiKeys: expect.anything() }) })
     );
   });
 
