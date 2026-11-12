@@ -364,8 +364,8 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
 
       {/* Description */}
       <Typography level="body-sm" sx={{ mb: 3, color: 'text.secondary' }}>
-        Configure your organization&apos;s GitHub API connection for features like PR summaries, code context retrieval,
-        and repository integration. Team members with access to this organization will benefit from this connection.
+        Configure your team&apos;s GitHub API connection for features like PR summaries, code context retrieval, and
+        repository integration. Every member of this team will benefit from this connection.
       </Typography>
 
       {/* Not Connected State */}
@@ -1149,7 +1149,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
           <DialogContent>
             <Typography level="body-md">Are you sure you want to disconnect the GitHub connection?</Typography>
             <Typography level="body-sm" sx={{ mt: 1, color: 'text.secondary' }}>
-              GitHub features (PR summaries, code context, etc.) will no longer work for this organization until a new
+              GitHub features (PR summaries, code context, etc.) will no longer work for this team until a new
               connection is configured.
             </Typography>
           </DialogContent>
