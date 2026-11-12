@@ -6,6 +6,9 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import DlqReplayTab from './DlqReplayTab';
 
 const state = vi.hoisted(() => ({
+  compact: false,
+  messagesLoading: false,
+  messagesError: false,
   retentionSeconds: undefined as number | undefined,
   messages: [] as Array<{
     messageId: string;
@@ -45,6 +48,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: h.user }) }));
+vi.mock('@mui/system/useMediaQuery', () => ({ default: () => state.compact }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({
@@ -55,8 +59,8 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   }),
   useDlqMessages: () => ({
     data: h.messages.length ? h.messages : state.messages,
-    isLoading: false,
-    isError: false,
+    isLoading: state.messagesLoading,
+    isError: state.messagesError,
     refetch: vi.fn(),
   }),
   useDlqReplay: () => ({
@@ -85,7 +89,7 @@ function renderTab() {
 }
 
 const selectQueue = async (name: RegExp) => {
-  await userEvent.click(screen.getByRole('combobox'));
+  await userEvent.click(within(screen.getByTestId('dlq-queue-selector')).getByRole('combobox'));
   await userEvent.click(await screen.findByRole('option', { name }));
 };
 
@@ -100,6 +104,9 @@ const renderWithQueueSelected = async (name = /Queue One/) => {
 };
 
 beforeEach(() => {
+  state.compact = false;
+  state.messagesLoading = false;
+  state.messagesError = false;
   state.messages = [{ messageId: 'm1', body: '{}', sentTimestamp: '1700000000000', approximateReceiveCount: '1' }];
   h.replay.mockReset();
   state.history = [];
@@ -108,6 +115,50 @@ beforeEach(() => {
   h.user = null;
   h.queueLogsUrl = null;
   h.messages = [];
+});
+
+describe('DlqReplayTab toolkit presentation', () => {
+  it('puts the message and failure on a single compact column with visible actions', async () => {
+    state.compact = true;
+    state.messages[0].failure = { errorMessage: 'worker timed out', category: 'timeout' };
+    await renderWithQueueSelected();
+    const table = screen.getByTestId('dlq-messages-table');
+    expect(within(table).getAllByRole('columnheader')).toHaveLength(1);
+    const row = screen.getByTestId('dlq-message-row-m1');
+    expect(within(row).getAllByRole('cell')).toHaveLength(1);
+    expect(row).toHaveTextContent('m1');
+    expect(row).toHaveTextContent('worker timed out');
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+    expect(screen.getByTestId('dlq-failure-reason')).toHaveTextContent('worker timed out');
+  });
+
+  it('shows an empty state rather than a blank table', async () => {
+    state.messages = [];
+    await renderWithQueueSelected();
+    expect(screen.getByText('No messages in this queue')).toBeInTheDocument();
+  });
+
+  it('replaces stale rows with the shared error state', async () => {
+    state.messagesError = true;
+    await renderWithQueueSelected();
+    expect(screen.getByText('Messages failed to load.')).toBeInTheDocument();
+    expect(screen.queryByTestId('dlq-message-row-m1')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['dlq-replay-all', 'dlq-replay-dialog', 'dlq-replay-confirm'],
+    ['dlq-replay-single-m1', 'dlq-single-replay-dialog', 'dlq-single-replay-confirm'],
+  ])('uses a reason picker in the %s confirmation', async (openId, dialogId, confirmId) => {
+    h.user = { isAdmin: true };
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId(openId));
+    expect(screen.getByTestId(confirmId)).toBeDisabled();
+    expect(screen.getByTestId(`${dialogId}-reason-input-helper`)).toHaveTextContent('Not stored yet');
+    fireEvent.change(screen.getByTestId(`${dialogId}-reason-input`), { target: { value: 'Reviewed the failure' } });
+    expect(screen.getByTestId(confirmId)).toBeEnabled();
+    await userEvent.click(screen.getByTestId(`${dialogId}-cancel-btn`));
+    expect(h.replay).not.toHaveBeenCalled();
+  });
 });
 
 describe('DlqReplayTab failure metadata', () => {
