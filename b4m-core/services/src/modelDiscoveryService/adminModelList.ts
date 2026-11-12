@@ -723,31 +723,27 @@ const STATUS_ORDER = new Map<AdminModelStatus, number>(
   ])
 );
 
-function compareRows(sort: AdminModelSort): (a: AdminModelRow, b: AdminModelRow) => number {
+function compareRows(sort: AdminModelSort, sign: 1 | -1): (a: AdminModelRow, b: AdminModelRow) => number {
+  // sign flips only comparisons of two present values: a missing value sorts last in either direction.
+  const nullsLast = (a: number | null, b: number | null) =>
+    a === b ? 0 : a === null ? 1 : b === null ? -1 : sign * (a - b);
   // A model the picker does not offer has no rank and sorts after every ranked one.
-  const byRank = (a: AdminModelRow, b: AdminModelRow) =>
-    a.rank === b.rank ? 0 : a.rank === null ? 1 : b.rank === null ? -1 : a.rank - b.rank;
-  const byName = (a: AdminModelRow, b: AdminModelRow) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
-  const bySunset = (a: AdminModelRow, b: AdminModelRow) =>
-    a.sunsetDays === b.sunsetDays
-      ? 0
-      : a.sunsetDays === null
-        ? 1
-        : b.sunsetDays === null
-          ? -1
-          : a.sunsetDays - b.sunsetDays;
+  const byRank = (a: AdminModelRow, b: AdminModelRow) => nullsLast(a.rank, b.rank);
+  const byName = (a: AdminModelRow, b: AdminModelRow) =>
+    sign * (a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  const bySunset = (a: AdminModelRow, b: AdminModelRow) => nullsLast(a.sunsetDays, b.sunsetDays);
   switch (sort) {
     case 'name':
       return byName;
     case 'rank':
       return (a, b) => byRank(a, b) || byName(a, b);
     case 'type':
-      return (a, b) => a.type.localeCompare(b.type) || byRank(a, b) || byName(a, b);
+      return (a, b) => sign * a.type.localeCompare(b.type) || byRank(a, b) || byName(a, b);
     case 'provider':
-      return (a, b) => a.backend.localeCompare(b.backend) || byRank(a, b) || byName(a, b);
+      return (a, b) => sign * a.backend.localeCompare(b.backend) || byRank(a, b) || byName(a, b);
     case 'status':
       return (a, b) =>
-        (STATUS_ORDER.get(a.status) ?? 0) - (STATUS_ORDER.get(b.status) ?? 0) || byRank(a, b) || byName(a, b);
+        sign * ((STATUS_ORDER.get(a.status) ?? 0) - (STATUS_ORDER.get(b.status) ?? 0)) || byRank(a, b) || byName(a, b);
     case 'sunset':
       return (a, b) => bySunset(a, b) || byRank(a, b) || byName(a, b);
   }
@@ -784,8 +780,7 @@ export function adminModelListPage(rows: readonly AdminModelRow[], query: AdminM
 
   const viewMatched = facetMatched.filter(row => matchesView(row, filter.view));
   const matched = viewMatched.filter(shown);
-  const compare = compareRows(query.sort ?? 'status');
-  const sorted = [...matched].sort(query.dir === 'desc' ? (a, b) => compare(b, a) : compare);
+  const sorted = [...matched].sort(compareRows(query.sort ?? 'status', query.dir === 'desc' ? -1 : 1));
 
   const pageSize = Math.min(Math.max(1, query.pageSize ?? ADMIN_MODEL_PAGE_SIZE_DEFAULT), ADMIN_MODEL_PAGE_SIZE_MAX);
   const page = Math.max(1, query.page ?? 1);

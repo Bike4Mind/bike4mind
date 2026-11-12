@@ -66,7 +66,7 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: user.id });
 
   const questContent = replayableQuests
     .map(quest => {

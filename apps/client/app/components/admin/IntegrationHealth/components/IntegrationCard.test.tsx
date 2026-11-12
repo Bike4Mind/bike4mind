@@ -1,17 +1,21 @@
+import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import AppTheme from '@client/app/utils/themes/AppTheme';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
 import { IntegrationCard } from './IntegrationCard';
 import type { IntegrationDashboardEntry } from '../types';
 
 vi.mock('./IntegrationDetailPanel', () => ({ IntegrationDetailPanel: () => null }));
 
+const appTheme = extendTheme({ ...getThemeConfig() });
+
 const entry = (overrides: Partial<IntegrationDashboardEntry> = {}): IntegrationDashboardEntry => ({
   name: 'slack',
-  status: 'healthy',
-  latencyMs: 120,
-  lastCheckedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
-  successRate: 0.98,
+  status: 'no_data',
+  latencyMs: 0,
+  lastCheckedAt: null,
+  successRate: 0,
   consecutiveFailures: 0,
   error: null,
   circuitBreaker: { available: true, reason: null, mode: 'auto', autoTripped: false },
@@ -20,38 +24,39 @@ const entry = (overrides: Partial<IntegrationDashboardEntry> = {}): IntegrationD
   ...overrides,
 });
 
-const renderCard = (value: IntegrationDashboardEntry) =>
-  render(
-    <AppTheme>
+function renderCard(e: IntegrationDashboardEntry) {
+  return render(
+    <CssVarsProvider theme={appTheme}>
       <IntegrationCard
-        entry={value}
+        entry={e}
         isExpanded={false}
         onToggle={vi.fn()}
         inMemoryBreakers={{}}
         onOverride={vi.fn()}
         isUpdatingOverride={false}
       />
-    </AppTheme>
+    </CssVarsProvider>
   );
+}
 
 describe('IntegrationCard', () => {
-  it('shows a never-checked integration as No data, checked never', () => {
-    renderCard(entry({ status: 'no_data', lastCheckedAt: null, latencyMs: 0, successRate: 0 }));
-
-    const card = screen.getByTestId('integration-card-slack');
-    expect(card).toHaveTextContent('No data');
-    expect(card).not.toHaveTextContent('Down');
-    expect(card).not.toHaveTextContent('0ms');
-    expect(screen.getByTestId('integration-card-slack-checked')).toHaveTextContent('checked never');
-  });
-
-  it('shows latency, success rate and check age for a checked integration', () => {
+  it('shows a never-checked integration as not checked, with no latency or success numbers', () => {
     renderCard(entry());
 
-    const card = screen.getByTestId('integration-card-slack');
-    expect(card).toHaveTextContent('Healthy');
-    expect(card).toHaveTextContent('120ms');
-    expect(card).toHaveTextContent('98% success');
-    expect(screen.getByTestId('integration-card-slack-checked')).toHaveTextContent('checked 5m ago');
+    expect(screen.getByTestId('integration-last-checked-slack')).toHaveTextContent('Never checked');
+    const status = screen.getByTestId('integration-status-slack');
+    expect(status).toHaveTextContent('Not checked');
+    expect(status).toHaveAttribute('data-tone', 'neutral');
+    expect(screen.queryByText(/% success/)).not.toBeInTheDocument();
+  });
+
+  it('shows a checked integration that is down with the soft bad tone and a relative time', () => {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    renderCard(entry({ status: 'unhealthy', lastCheckedAt: fiveMinutesAgo, consecutiveFailures: 3 }));
+
+    expect(screen.getByTestId('integration-last-checked-slack')).toHaveTextContent('Checked 5m ago');
+    const status = screen.getByTestId('integration-status-slack');
+    expect(status).toHaveTextContent('Down');
+    expect(status).toHaveAttribute('data-tone', 'bad');
   });
 });

@@ -100,7 +100,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.seats.ceiling_raised': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.conversion.initiated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.revoked': { category: 'org', severity: 'notice', write: 'strict' },
-  'org.group_types.updated': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.group_types.updated': { category: 'org', severity: 'info', write: 'strict' },
   'org.admins.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.owner.transferred': { category: 'org', severity: 'notice', write: 'strict' },
   'org.group_member.assigned': { category: 'org', severity: 'info', write: 'bestEffort' },
@@ -347,9 +347,15 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // bestEffort: the AbuseAssessment record is the source of truth; an advisory assessment never acts.
   'security.detection.assessed': { category: 'access', severity: 'info', write: 'bestEffort' },
   'security.detection.replayed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // bestEffort: the AbuseEvalSet record is the source of truth; evaluation sets are grading data and never act.
+  'abuse.eval_set.created': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'abuse.eval_set.verdict_recorded': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'abuse.eval_set.run': { category: 'access', severity: 'info', write: 'bestEffort' },
   'moderation.incident.viewed': { category: 'support', severity: 'notice', write: 'strict' },
   // An admin read of other users' feedback text. No support case (triage reads it routinely), but strict.
   'feedback.viewed': { category: 'support', severity: 'info', write: 'strict' },
+  'feedback.status_changed': { category: 'support', severity: 'info', write: 'strict' },
+  'feedback.deleted': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },

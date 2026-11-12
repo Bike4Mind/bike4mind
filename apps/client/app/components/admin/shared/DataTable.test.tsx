@@ -55,6 +55,17 @@ describe('DataTable', () => {
     expect(onPageSizeChange).toHaveBeenCalledWith(50);
   });
 
+  it('drops its own border when it is the body of a card', () => {
+    const { unmount } = renderTable();
+    const framed = getComputedStyle(screen.getByTestId('admin-data-table-frame'));
+    expect(framed.borderWidth).toBe('1px');
+    unmount();
+    renderTable({ framed: false });
+    const frame = screen.getByTestId('admin-data-table-frame');
+    expect(frame).toHaveAttribute('data-framed', 'false');
+    expect(getComputedStyle(frame).borderWidth).toBe('0px');
+  });
+
   it('offers a way back from an empty server page past the end', () => {
     const onPageChange = vi.fn();
     renderTable({

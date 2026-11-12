@@ -17,8 +17,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@client/app/utils/feedbackAPICalls', () => ({
   getFeedbackFromServer: mocks.getFeedbackFromServer,
   deleteFeedbackFromServer: mocks.deleteFeedbackFromServer,
-  updateFeedbackOnServer: vi.fn(),
+  updateFeedbackStatusOnServer: vi.fn(),
   getAllFeedbackForExport: vi.fn(),
+  getFeedbackTrendsFromServer: vi.fn(() => new Promise(() => undefined)),
   FEEDBACK_EXPORT_MAX_ROWS: 5000,
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
@@ -26,6 +27,7 @@ vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAd
 
 import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
 import FeedbackTab from './index';
+import { UndoToastProvider } from '../shared/UndoToast';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -52,7 +54,9 @@ const renderFeedbackTab = () => {
   return render(
     <QueryClientProvider client={queryClient}>
       <CssVarsProvider theme={appTheme}>
-        <FeedbackTab />
+        <UndoToastProvider>
+          <FeedbackTab />
+        </UndoToastProvider>
       </CssVarsProvider>
     </QueryClientProvider>
   );
@@ -68,8 +72,8 @@ describe('FeedbackTab page clamp after the last page empties', () => {
   it('waits out the same-key refetch, then clamps once to the new last page', async () => {
     let resolveRefetch: (value: unknown) => void = () => undefined;
     let listCalls = 0;
-    mocks.getFeedbackFromServer.mockImplementation((params: { includeOrganizations?: boolean }) => {
-      if (params.includeOrganizations) return Promise.resolve({ items: [], total: 0, organizations: [] });
+    mocks.getFeedbackFromServer.mockImplementation((params: { facetsOnly?: boolean }) => {
+      if (params.facetsOnly) return Promise.resolve({ items: [], total: 0, organizations: [] });
       listCalls += 1;
       if (listCalls === 1) return Promise.resolve({ items: [makeFeedbackItem()], total: 51 });
       return new Promise(resolve => (resolveRefetch = resolve));
@@ -83,6 +87,7 @@ describe('FeedbackTab page clamp after the last page empties', () => {
     await userEvent.click(screen.getByTestId('feedback-delete-dialog-confirm-btn'));
 
     await waitFor(() => expect(listCalls).toBe(2));
+    expect(mocks.deleteFeedbackFromServer).toHaveBeenCalledWith('fb-1', 'Spam or abuse');
     expect(fakeAdminRouter.search).toMatchObject({ feedbackPage: 3 });
     expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
 

@@ -7,6 +7,8 @@ import { useShallow } from 'zustand/react/shallow';
 import { ADMIN_ORGANIZATIONS_TAB_SLUG } from './adminTabParams';
 import {
   DEFAULT_ORGANIZATIONS_PARAMS,
+  ORGS_PAGE_LIMIT_OPTIONS,
+  ORGS_BILLING_RANGE_PARAM,
   ORGS_ORG_ID_PARAM,
   isSameOrganizationsView,
   organizationsViewFromSearch,
@@ -37,9 +39,14 @@ const VIEW_KEYS = ['page', 'limit', 'sortBy', 'sortDirection', 'personal'] as co
 
 const touchesView = (patch: Partial<OrganizationsTabParams>) => VIEW_KEYS.some(key => key in patch);
 
+const normalizePageSize = (params: OrganizationsTabParams): OrganizationsTabParams =>
+  ORGS_PAGE_LIMIT_OPTIONS.includes(params.limit)
+    ? params
+    : { ...params, limit: DEFAULT_ORGANIZATIONS_PARAMS.limit, page: 1 };
+
 const writeStoredViewToUrl = (previous: SearchRecord): SearchRecord => ({
   ...previous,
-  ...organizationsViewToSearch(useOrganizationsTab.getState().params),
+  ...organizationsViewToSearch(normalizePageSize(useOrganizationsTab.getState().params)),
 });
 
 /**
@@ -56,7 +63,15 @@ export const useOrganizationsParams = (): readonly [
   const navigate = useNavigate();
   const urlView = useMemo(() => organizationsViewFromSearch(search), [search]);
 
-  const params = useMemo(() => (urlView ? { ...storedParams, ...urlView } : storedParams), [storedParams, urlView]);
+  const params = useMemo(
+    () => normalizePageSize(urlView ? { ...storedParams, ...urlView } : storedParams),
+    [storedParams, urlView]
+  );
+  useEffect(() => {
+    if (!ORGS_PAGE_LIMIT_OPTIONS.includes(storedParams.limit)) {
+      setStoredParams({ limit: DEFAULT_ORGANIZATIONS_PARAMS.limit, page: 1 });
+    }
+  }, [storedParams.limit, setStoredParams]);
 
   const setParams = useCallback(
     (patch: Partial<OrganizationsTabParams>) => {
@@ -110,7 +125,12 @@ export const useOpenOrganizationId = () => {
     (id: string | null) =>
       navigate({
         to: ADMIN_PATH,
-        search: (previous: SearchRecord) => ({ ...previous, [ORGS_ORG_ID_PARAM]: id ?? undefined }),
+        // The billing window belongs to the open organization, so switching or closing drops it.
+        search: (previous: SearchRecord) => ({
+          ...previous,
+          [ORGS_ORG_ID_PARAM]: id ?? undefined,
+          [ORGS_BILLING_RANGE_PARAM]: undefined,
+        }),
         // No history entry, like the Users tab's `userId`: Back leaves /admin rather than closing.
         replace: true,
       }),

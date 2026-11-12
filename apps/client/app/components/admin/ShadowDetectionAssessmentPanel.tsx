@@ -1,7 +1,12 @@
 import React, { useState } from 'react';
+import { AbuseAssessmentReasons } from './AbuseAssessmentReasons';
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
 import {
+  abuseAssessmentAccountProfileSchema,
   hasAdminPermission,
+  assessmentCompletionSequenceSchema,
+  assessmentCompletionSynchronySchema,
+  type AbuseAssessmentAccountProfile,
   type AbuseAssessmentFailureCode,
   type AbuseAssessmentResult,
   type AbuseAssessmentSkipReason,
@@ -55,9 +60,136 @@ const percent = (value: number): string => `${Math.round(value * 100)}%`;
 
 const formatDate = (iso: string): string => formatUtc(new Date(iso));
 
+const yesNo = (value: boolean | null): string => (value === null ? 'unknown' : value ? 'yes' : 'no');
+const count = (value: number): string => value.toLocaleString('en-US');
+
+/** One line per fact of a v2 account profile, in the words the admin user page uses. */
+export function describeAccountProfile(profile: AbuseAssessmentAccountProfile): string[] {
+  const { signupNetwork: network, email, spend, linkedAccounts: linked } = profile;
+  const lines = [
+    `Signup: ${profile.signupMethod === 'otc' ? 'email code' : profile.signupMethod}; hosting/VPN network ` +
+      `${yesNo(network.hosting)}, anonymous IP ${yesNo(network.anonymousIp)}, JA4 ${network.ja4Present ? 'present' : 'absent'}`,
+  ];
+  if (email) {
+    const traits = [
+      email.plusAddressed && (email.randomLookingPlusTag ? 'plus-addressed, random-looking tag' : 'plus-addressed'),
+      email.generatedLocalPart && 'generated-looking name',
+      email.consumerMailDomain ? 'webmail domain' : 'own domain',
+    ].filter((trait): trait is string => typeof trait === 'string');
+    lines.push(`Email: ${traits.join(', ')}`);
+  }
+  if (profile.minutesToTwoFactor !== null)
+    lines.push(`Two-factor: ${count(profile.minutesToTwoFactor)} min after signup`);
+  if (profile.minutesToFirstSpend !== null)
+    lines.push(`First spend: ${count(profile.minutesToFirstSpend)} min after signup`);
+  if (spend) {
+    const models = spend.byModel
+      .map(entry => `${entry.model ?? 'no model'} ${percent(entry.creditShare)} (${count(entry.creditsPerEvent)}/call)`)
+      .join(', ');
+    lines.push(`Spend: ${count(spend.totalCredits)} credits${models ? ` - ${models}` : ''}`);
+  }
+  if (linked) {
+    lines.push(
+      `Linked within ${linked.windowHours}h: ${count(linked.total)}${linked.truncated ? '+' : ''} ` +
+        `(${count(linked.blocked)} blocked; signup IP ${linked.sharedSignupIp}, JA4 ${linked.sharedJa4}, ` +
+        `mailbox ${linked.sharedMailbox}, mail domain ${linked.sharedMailDomain})`
+    );
+  }
+  return lines;
+}
+
+/** Stored summaries are returned as recorded, so v1 rows (no profile) simply render nothing here. */
+function profilesOf(featureSummary: Record<string, unknown>): { ref: string; lines: string[] }[] {
+  const accounts = Array.isArray(featureSummary.accounts) ? featureSummary.accounts : [];
+  return accounts.flatMap((account: unknown) => {
+    if (!account || typeof account !== 'object') return [];
+    const { ref, profile } = account as { ref?: unknown; profile?: unknown };
+    const parsed = abuseAssessmentAccountProfileSchema.safeParse(profile);
+    return typeof ref === 'string' && parsed.success ? [{ ref, lines: describeAccountProfile(parsed.data) }] : [];
+  });
+}
+
+const AccountProfiles: React.FC<{ featureSummary: Record<string, unknown> }> = ({ featureSummary }) => {
+  const profiles = profilesOf(featureSummary);
+  if (profiles.length === 0) return null;
+  return (
+    <Stack gap={0.5} sx={{ mt: 0.5 }} data-testid="shadow-detection-assessment-profiles">
+      {profiles.map(({ ref, lines }) => (
+        <Box key={ref}>
+          <Typography level="body-xs" fontWeight="lg">
+            {ref}
+          </Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+            {lines.map(line => (
+              <Typography key={line} component="li" level="body-xs">
+                {line}
+              </Typography>
+            ))}
+          </Box>
+        </Box>
+      ))}
+    </Stack>
+  );
+};
+
 const ResultChip: React.FC<{ item: AbuseAssessmentRow; testId?: string }> = ({ item, testId }) => (
   <StatusChip tone={RESULT_DISPLAY[item.result].tone} label={RESULT_DISPLAY[item.result].label} data-testid={testId} />
 );
+
+const SequenceEvidence: React.FC<{ summary: Record<string, unknown> }> = ({ summary }) => {
+  const parsed = assessmentCompletionSequenceSchema.safeParse(summary.completionSequence);
+  if (!parsed.success) return null;
+  const evidence = parsed.data;
+  return (
+    <Alert color="neutral" data-testid="assessment-completion-sequence">
+      <Stack gap={0.5}>
+        <Typography level="title-sm">Coordinated API activity - review only</Typography>
+        <Typography level="body-sm">
+          {evidence.status === 'observed'
+            ? `${evidence.memberRefs.length} summarized accounts repeated the same settlement order across ${evidence.rounds} rounds, with ${evidence.minRequestsPerRound}-${evidence.maxRequestsPerRound} recorded requests per round.`
+            : 'Sequence evidence is incomplete: some participants or source evidence could not be included.'}
+        </Typography>
+        <Typography level="body-sm">
+          This is coordination evidence, not proof of abuse or the same operator. Legitimate schedulers and team
+          automation can look the same. These detections cannot trigger automated containment.
+        </Typography>
+        <Typography level="body-xs">
+          Only retained successful API-completion settlements are covered; settlement order is not request start order.
+        </Typography>
+        {evidence.status === 'observed' && evidence.scanTruncated && (
+          <Typography level="body-sm">The source scan reached a cap; this observation is incomplete.</Typography>
+        )}
+      </Stack>
+    </Alert>
+  );
+};
+
+const SynchronyEvidence: React.FC<{ summary: Record<string, unknown> }> = ({ summary }) => {
+  const parsed = assessmentCompletionSynchronySchema.safeParse(summary.completionSynchrony);
+  if (!parsed.success) return null;
+  const value = parsed.data;
+  return (
+    <Alert color="neutral" data-testid="assessment-completion-synchrony">
+      <Stack gap={0.5}>
+        <Typography level="title-sm">Synchronized API calls - review only</Typography>
+        <Typography level="body-sm">
+          {value.status === 'observed'
+            ? `${value.memberRefs.length} accounts shared ${value.bursts} request-start bursts and ${value.synchronizedModelSwitches} requested-model switches. ${value.dailyCapRejectedRequests} matched requests were stopped by daily free-tier caps.`
+            : 'Participants or request-start evidence could not be fully included.'}
+        </Typography>
+        <Typography level="body-sm">
+          Timing and model choices support coordination, not proof of one operator, the same prompts or misuse. These
+          observations cannot trigger automated containment.
+        </Typography>
+        {value.status === 'observed' && (value.scanTruncated || value.legacyRows > 0) && (
+          <Typography level="body-xs">
+            Coverage is incomplete because the scan was capped or older rows lack request-start metadata.
+          </Typography>
+        )}
+      </Stack>
+    </Alert>
+  );
+};
 
 // The verdict an admin would record to agree with the model; `unknown` proposes nothing.
 const RESULT_VERDICT: Partial<Record<AbuseAssessmentResult, { verdict: ShadowDetectionVerdict; label: string }>> = {
@@ -74,7 +206,7 @@ export const assessmentToSuggestion = (
   if (!proposal) return null;
   return {
     verdict: proposal.verdict,
-    // Assessments carry no reasons; the probabilities and evidence below stand in for them. The word reads
+    // The model's reasons render below the suggestion (AbuseAssessmentReasons), not in it. The word reads
     // the proposed result's own probability, as the row chip does, not `confidence` (a spread measure).
     // No createdAt: the model line below already dates the assessment.
     suggestion: {
@@ -122,6 +254,7 @@ const LatestAssessment: React.FC<{ item: AbuseAssessmentRow } & DecisionProps> =
           )}
         </Stack>
       )}
+      <AbuseAssessmentReasons reasons={item.reasons ?? []} />
       {item.result === 'unknown' && (
         <Typography level="body-sm" data-testid="shadow-detection-assessment-failure">
           {item.failure ? FAILURE_MESSAGES[item.failure] : 'No usable answer came back.'}
@@ -136,6 +269,8 @@ const LatestAssessment: React.FC<{ item: AbuseAssessmentRow } & DecisionProps> =
           ))}
         </Box>
       )}
+      <SequenceEvidence summary={item.featureSummary} />
+      <SynchronyEvidence summary={item.featureSummary} />
       <Typography level="body-xs" sx={muted}>
         {item.model}
         {item.modelVersion ? ` (${item.modelVersion})` : ''} / policy v{item.policyVersion} / evidence v
@@ -146,6 +281,7 @@ const LatestAssessment: React.FC<{ item: AbuseAssessmentRow } & DecisionProps> =
         <Box component="summary" sx={{ cursor: 'pointer', typography: 'body-sm' }}>
           What the model saw
         </Box>
+        <AccountProfiles featureSummary={item.featureSummary} />
         <Box
           component="pre"
           sx={{ m: 0, mt: 0.5, p: 1, fontSize: 'xs', overflow: 'auto', maxHeight: '20rem', bgcolor: 'admin.canvas' }}

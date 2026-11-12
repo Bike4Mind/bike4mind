@@ -24,7 +24,7 @@ import type {
   IDataLakeSpendResponse,
   IFabFileDocument,
   DataLakePrincipalType,
-  LakeAccessView,
+  LakeAccessViewWithAdminBypass,
   LakeOwnershipCandidateList,
   LakeOwnershipOfferSummary,
   LakePendingOwnershipOffer,
@@ -289,7 +289,7 @@ export function useLakeAccessView(dataLakeId: string | null, enabled = true) {
     retry: false,
     queryFn: async () => {
       const response = await api.get<{
-        data: LakeAccessView;
+        data: LakeAccessViewWithAdminBypass;
         meta?: { canTransferOwnership?: boolean; readerGrantsEnforced?: boolean };
       }>(`/api/data-lakes/${dataLakeId}/access`);
       // The capability is kept OUT of the view object it sits beside: the view is the artifact the CSV

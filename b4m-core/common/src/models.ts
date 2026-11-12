@@ -386,6 +386,15 @@ export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * OpenAI models whose `reasoning_effort` also takes 'xhigh'; the o-series and GPT-5/5.1 reject it.
+ * Read by both the chat effort selector and the server clamp (chatReasoningEffortsFor).
+ */
+export const OPENAI_XHIGH_REASONING_EFFORT_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.GPT5_2,
+  ChatModels.GPT5_2_CHAT_LATEST,
+]);
+
+/**
  * Claude models that accept Anthropic's `output_config: { effort }` control, whose
  * levels are 'low' | 'medium' | 'high' | 'xhigh' | 'max'.
  *

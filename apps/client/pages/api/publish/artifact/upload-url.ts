@@ -190,10 +190,10 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     })
     .catch(refundAndRethrow);
 
-  // Hosted -> presigned S3 PUT; self-host -> same-origin proxy URL (draftUploadUrl.ts).
+  // Hosted -> presigned S3 PUT; self-host -> same-origin proxy URL plus a token header (draftUploadUrl.ts).
   const uploadUrls: UploadUrlResponse['uploadUrls'] = await Promise.all(
     body.files.map(async file => {
-      const url = await mintDraftUploadUrl({
+      const target = await mintDraftUploadUrl({
         storage,
         key: `${draftPrefix}${file.path}`,
         draftId,
@@ -202,7 +202,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
         size: file.size,
         expiresIn: PRESIGNED_URL_EXPIRY_SECONDS,
       });
-      return { path: file.path, url, expiresAt };
+      return { path: file.path, ...target, expiresAt };
     })
   ).catch(refundAndRethrow);
 

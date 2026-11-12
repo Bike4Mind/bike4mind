@@ -130,6 +130,32 @@ class AuthEventRepository extends BaseRepository<IAuthEventDocument> {
     return { ipSignups, asnSignups, prefixSignups };
   }
 
+  /**
+   * The other accounts that signed up from `ip` in [since, until), newest first, with the edge
+   * fingerprint of that signup. Served by {type, ip, createdAt}.
+   */
+  async findRecentSignupsOnIp(input: {
+    ip: string;
+    excludeUserId: string;
+    since: Date;
+    until: Date;
+    limit: number;
+  }): Promise<{ userId: string; ja4: string | null; createdAt: Date }[]> {
+    const rows = await this.model
+      .find({
+        type: 'signup',
+        ip: input.ip,
+        userId: { $ne: input.excludeUserId },
+        createdAt: { $gte: input.since, $lt: input.until },
+      })
+      .select({ userId: 1, ja4: 1, createdAt: 1, _id: 0 })
+      .sort({ createdAt: -1 })
+      .limit(input.limit)
+      .maxTimeMS(2000)
+      .lean<{ userId: string; ja4?: string | null; createdAt: Date }[]>();
+    return rows.map(row => ({ userId: String(row.userId), ja4: row.ja4 ?? null, createdAt: row.createdAt }));
+  }
+
   /** The account's signup rows since `since`, for the deletion-time SignupTrace. */
   async findSignupsSince(userId: string, since: Date): Promise<Pick<IAuthEventDocument, 'ip' | 'asn' | 'createdAt'>[]> {
     return this.model
