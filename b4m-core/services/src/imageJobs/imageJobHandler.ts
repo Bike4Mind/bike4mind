@@ -285,7 +285,9 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
   return {
     kind: 'image',
     // The provider id is fixed at create, so a job's mode never changes under it.
-    submitMode: job => deps.providers.get(job.payload.providerId)?.mode ?? 'sync',
+    // An unregistered provider (e.g. removed mid-flight) keeps an in-flight async job on the poll path.
+    submitMode: job =>
+      deps.providers.get(job.payload.providerId)?.mode ?? (job.payload.providerHandle ? 'async' : 'sync'),
 
     async submit(job, context) {
       let prepared: PreparedSubmit | ImageStepResult;

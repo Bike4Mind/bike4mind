@@ -415,6 +415,15 @@ describe('image job handler with an async (submit then poll) provider', () => {
     } satisfies AsyncImageProvider;
   };
 
+  it('falls back to the payload for the submit mode of an unregistered provider', () => {
+    const t = setupAsync([]);
+    const handler = createImageJobHandler({ ...t.deps, providers: createImageProviderRegistry([]) });
+    const job = (payload: Record<string, unknown>) =>
+      ({ payload: { providerId: 'bfl', ...payload } }) as unknown as ImageJob;
+    expect(handler.submitMode?.(job({ providerHandle: handle }))).toBe('async');
+    expect(handler.submitMode?.(job({}))).toBe('sync');
+  });
+
   const setupAsync = (polls: ProviderPollResult[]) => {
     const bfl = makeAsyncProvider(polls);
     const t = setup(
