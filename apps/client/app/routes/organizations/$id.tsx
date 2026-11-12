@@ -1,9 +1,9 @@
 import {
   IOrganizationDocument,
   WithId,
-  isOrgOwnerOrCurrentAdmin,
-  isOrgOwnerOrPlatformAdmin,
   canAdministerOrganization,
+  hasOrgPermission,
+  isOrgOwnerOrPlatformAdmin,
 } from '@bike4mind/common';
 import { AdminPageHeader, SegmentedControl } from '@client/app/components/admin/shared';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
@@ -69,8 +69,10 @@ import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import LocalLibraryOutlinedIcon from '@mui/icons-material/LocalLibraryOutlined';
 import {
+  canManageOrgApiKeys,
   canManageOrgConnectors,
   canManageOrgDomains,
+  canManageOrgGroups,
   canManageOrgIntegrations,
   canManageOrgSettings,
   canViewOrgAnalysis,
@@ -139,8 +141,7 @@ const RAIL_GROUPS: ReadonlyArray<{ key: 'team' | 'insights' | 'integrations' | '
         testId: 'org-tab-domains',
       },
       { tab: OrganizationTabs.Billing, icon: <CreditCardOutlinedIcon />, visible: a => a.canViewBilling },
-      // Same gate as Connectors: owner, current manager or platform admin.
-      { tab: OrganizationTabs.ApiKeys, icon: <KeyOutlinedIcon />, visible: a => a.canManageConnectors },
+      { tab: OrganizationTabs.ApiKeys, icon: <KeyOutlinedIcon />, visible: a => a.canManageApiKeys },
       {
         tab: OrganizationTabs.Audit,
         icon: <HistoryOutlinedIcon />,
@@ -199,24 +200,18 @@ const OrganizationPage: FC = () => {
     });
   };
 
-  // Every gate is computed here once and passed down; children never re-derive them. The
-  // GitHub/Slack/Webhooks integrations are owner-only; Usage, Analysis and Connectors also admit
-  // current managers - see orgTabAccess.ts for each rule and the server gate it mirrors.
+  // Every gate is computed here once and passed down; children never re-derive them. Each tab and
+  // section asks the org permission its routes check - see orgTabAccess.ts for each rule.
   const access = useMemo<OrgTabAccess>(
     () => ({
       canManageOrg: canManageOrgSettings(currentUser, organization),
       canViewUsage: canViewOrgUsage(currentUser, organization),
       canViewAnalysis: canViewOrgAnalysis(currentUser, organization),
       canManageIntegrations: canManageOrgIntegrations(currentUser, organization),
-      // Who may manage group instances + membership: the same isOrgOwnerOrCurrentAdmin rule
-      // assertCanManageOrgGroups enforces. Personal orgs never have groups.
-      canManageGroups:
-        !!currentUser &&
-        !!organization &&
-        !organization.personal &&
-        isOrgOwnerOrCurrentAdmin(currentUser, organization),
+      canManageGroups: canManageOrgGroups(currentUser, organization),
       canViewBilling: canViewOrgBilling(currentUser, organization),
       canManageConnectors: canManageOrgConnectors(currentUser, organization),
+      canManageApiKeys: canManageOrgApiKeys(currentUser, organization),
       canManageDomains: canManageOrgDomains(currentUser, organization),
       canViewAudit: canViewOrgAudit(currentUser, organization),
     }),
@@ -425,7 +420,7 @@ const OrganizationPage: FC = () => {
                 <OrganizationLibrarySection
                   key={organization.id}
                   organizationId={organization.id}
-                  canManage={!!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization)}
+                  canManage={!!currentUser && hasOrgPermission(currentUser, organization, 'manageContent')}
                 />
               )}
             </TabPanel>
@@ -486,7 +481,7 @@ const OrganizationPage: FC = () => {
                 <OrgDomainsTab key={organization.id} organizationId={organization.id} />
               </TabPanel>
             )}
-            {access.canManageConnectors && (
+            {access.canManageApiKeys && (
               <TabPanel value={OrganizationTabs.ApiKeys}>
                 {header(OrganizationTabs.ApiKeys)}
                 <OrgApiKeysSection key={organization.id} organizationId={organization.id} />

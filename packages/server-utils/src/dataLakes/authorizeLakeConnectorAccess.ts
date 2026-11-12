@@ -1,5 +1,5 @@
 import { lakeConnectionOwnerForLake, type LakeConnectionOwner } from '@bike4mind/common';
-import { verifyOrgAccess, verifyOrgAdminRead } from '../utils/orgAccess';
+import { verifyOrgPermission, verifyOrgAdminRead } from '../utils/orgAccess';
 import { NotFoundError } from '../utils/errors';
 
 type LakeConnectorAccessUser = { id: string; isAdmin: boolean };
@@ -19,7 +19,7 @@ function assertPersonalLakeCreator(owner: { userId: string }, user: LakeConnecto
  * An org lake needs an org owner/manager (or platform admin): its connection keeps syncing for the org
  * and other managers can operate it. A personal lake needs its creator and nobody else - not even a
  * platform admin - because the ingest writes its membership as that user (a Drive connection also
- * syncs on their own Google grant). A refusal is a 404 like verifyOrgAccess's, so a lake id cannot be
+ * syncs on their own Google grant). A refusal is a 404 like verifyOrgPermission's, so a lake id cannot be
  * probed.
  *
  * Shared by every connector's connect and manage doors (drive-sync, drive-connection, github-connect,
@@ -31,7 +31,7 @@ export async function authorizeLakeConnectorAccess(
 ): Promise<LakeConnectionOwner> {
   const owner = lakeConnectionOwnerForLake(lake);
   if (owner.kind === 'organization') {
-    await verifyOrgAccess(user, owner.organizationId);
+    await verifyOrgPermission(user, owner.organizationId, 'manageContent');
   } else {
     assertPersonalLakeCreator(owner, user);
   }
