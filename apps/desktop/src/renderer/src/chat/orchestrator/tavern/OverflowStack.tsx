@@ -50,15 +50,17 @@ export function OverflowStack({
   selectedId: string | null;
   onSelect(id: string): void;
 }) {
-  const urgent = stacked.some(({ agent }) => agent.state === 'needs-you');
+  const needing = stacked.filter(({ agent }) => agent.state === 'needs-you').length;
+  const urgent = needing > 0;
   const holdsSelection = stacked.some(({ agent }) => agent.id === selectedId);
   const count = stacked.length;
+  const needsYou = urgent ? `, ${needing} ${needing === 1 ? 'needs' : 'need'} you` : '';
   return (
     <Dropdown>
       <MenuButton
         data-testid={`orchestrator-tavern-overflow-${zone}`}
         data-urgent={urgent || undefined}
-        aria-label={`${count} more ${ZONE_PLACE[zone]}; list them`}
+        aria-label={`${count} more ${ZONE_PLACE[zone]}${needsYou}; list them`}
         variant="plain"
         style={{ left: `${point.x}%`, top: `${point.y}%` }}
         sx={{

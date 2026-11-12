@@ -276,6 +276,7 @@ describe('TavernView', () => {
       await renderTavern(needing(21));
       expect(el('orchestrator-tavern-overflow-bar-count').textContent).toBe('!+1');
       expect(stack('bar').dataset.urgent).toBe('true');
+      expect(stack('bar').getAttribute('aria-label')).toBe('1 more at the bar, 1 needs you; list them');
     });
   });
 
