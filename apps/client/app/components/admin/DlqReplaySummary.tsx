@@ -1,21 +1,27 @@
 import { Stack, Typography } from '@mui/joy';
 import { DLQ_MAX_REPLAY_ATTEMPTS, requiresDlqReplayReason } from '@bike4mind/common';
+import { CopyValue } from './shared';
 import type { DlqQueueInfo } from '@client/app/hooks/data/dlqManagement';
 
 export const DlqReplaySummary = ({
   queue,
   count,
   batch = false,
+  messageId,
 }: {
   queue: DlqQueueInfo | null;
   count: number;
   batch?: boolean;
+  messageId?: string;
 }) => (
   <Stack gap={1} data-testid="dlq-replay-summary">
     <Typography level="body-sm">
       Feature: {queue?.displayName ?? 'Unknown'}. Count: {batch ? 'up to ' : ''}
       {count}.
     </Typography>
+    {messageId && (
+      <CopyValue value={messageId} label="message ID" mono truncate data-testid="dlq-replay-copy-message-id" />
+    )}
     <Typography level="body-sm">
       Messages are sent to the source queue for reprocessing and removed from the dead-letter queue after a successful
       send.
