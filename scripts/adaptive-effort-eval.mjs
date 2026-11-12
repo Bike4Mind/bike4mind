@@ -144,6 +144,7 @@ const digest = value => createHash('sha256').update(JSON.stringify(value)).diges
 const requireValue = (condition, message) => {
   if (!condition) throw new Error(message);
 };
+const nonEmpty = value => typeof value === 'string' && value.trim();
 
 export function makePlan() {
   return {
@@ -186,20 +187,17 @@ export function analyze(input) {
     const key = `${row.promptId}:${row.arm}`;
     requireValue(!ids.has(key), `Duplicate attempt: ${key}`);
     ids.add(key);
-    requireValue(
-      typeof row.requestId === 'string' && row.requestId.trim() && !requests.has(row.requestId),
-      `Missing/duplicate correlation: ${key}`
-    );
+    requireValue(nonEmpty(row.requestId) && !requests.has(row.requestId), `Missing/duplicate correlation: ${key}`);
     requests.add(row.requestId);
     requireValue(
-      row.complexity === 'complex' && row.classifierEvidence?.trim(),
+      row.complexity === 'complex' && nonEmpty(row.classifierEvidence),
       `Unverified production complexity: ${key}`
     );
     requireValue(
       row.status === 'completed' && row.attempt === 0 && row.restarts === 0,
       `Incomplete/retried/restarted: ${key}`
     );
-    requireValue(row.model === plan.model && row.wireEvidence?.trim(), `Missing model/wire evidence: ${key}`);
+    requireValue(row.model === plan.model && nonEmpty(row.wireEvidence), `Missing model/wire evidence: ${key}`);
     requireValue(
       ['low', 'medium', 'high', 'xhigh', 'max'].includes(row.effectiveEffort),
       `Unknown effective effort: ${key}`
@@ -208,7 +206,7 @@ export function analyze(input) {
     requireValue(row.arm !== 'medium' || row.effectiveEffort === 'medium', `Treatment did not reach wire: ${key}`);
     requireValue(/^[a-f0-9]{64}$/.test(row.environmentHash), `Missing environment fingerprint: ${key}`);
     environmentHashes.add(row.environmentHash);
-    requireValue(typeof row.response === 'string' && row.response.trim(), `Missing answer: ${key}`);
+    requireValue(nonEmpty(row.response), `Missing answer: ${key}`);
     requireValue(
       Number.isFinite(row.firstTokenMs) &&
         row.firstTokenMs > 0 &&
@@ -217,12 +215,15 @@ export function analyze(input) {
       `Invalid latency: ${key}`
     );
     requireValue(
-      Number.isInteger(row.quality) && row.quality >= 0 && row.quality <= 4 && row.blindReviewId?.trim(),
+      Number.isInteger(row.quality) && row.quality >= 0 && row.quality <= 4 && nonEmpty(row.blindReviewId),
       `Missing blinded grade: ${key}`
     );
-    requireValue(typeof row.correct === 'boolean' && row.gradeEvidence?.trim(), `Missing correctness evidence: ${key}`);
+    requireValue(
+      typeof row.correct === 'boolean' && nonEmpty(row.gradeEvidence),
+      `Missing correctness evidence: ${key}`
+    );
     if (prompt.category === 'tools') {
-      requireValue(typeof row.toolCorrect === 'boolean' && row.toolEvidence?.trim(), `Missing tool audit: ${key}`);
+      requireValue(typeof row.toolCorrect === 'boolean' && nonEmpty(row.toolEvidence), `Missing tool audit: ${key}`);
     }
   }
   requireValue(environmentHashes.size === 1, 'Model, stack, fixtures or settings differ between observations');
