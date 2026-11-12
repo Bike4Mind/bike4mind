@@ -1,3 +1,4 @@
+import type { NewSessionDefaults } from './sessionDefaults';
 import type { RolePolicy, TaskAction } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
@@ -215,6 +216,7 @@ export const IPC_CHANNELS = {
   chatExportLocalData: 'chat:export-local-data',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
+  chatDraftDefaults: 'chat:draft-defaults',
   chatCreateCodeSession: 'chat:create-code-session',
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
@@ -259,6 +261,8 @@ export const IPC_CHANNELS = {
   chatAddAttachments: 'chat:add-attachments',
   chatReadAttachment: 'chat:read-attachment',
   chatDiscardAttachment: 'chat:discard-attachment',
+  chatCopyDraftAttachments: 'chat:copy-draft-attachments',
+  chatDiscardDraftAttachments: 'chat:discard-draft-attachments',
   chatImageAction: 'chat:image-action',
   chatAttachImage: 'chat:attach-image',
   chatListArtifacts: 'chat:list-artifacts',
@@ -861,6 +865,7 @@ export interface DesktopApi {
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(request?: CreateSessionRequest): Promise<CreatedSession>;
+    defaultsForNewSession(): Promise<NewSessionDefaults>;
     /**
      * Start a Code session, creating or adopting its worktree first when one is asked for.
      * A request with no `directory` creates an UNBOUND session, which the chip row then binds.
@@ -987,6 +992,8 @@ export interface DesktopApi {
     readAttachment(sessionId: string, attachmentId: string, mediaType: string): Promise<string | null>;
     /** Throw away an attachment the user removed before sending. Unknown ids are ignored. */
     discardAttachment(sessionId: string, attachmentId: string): Promise<void>;
+    copyDraftAttachments(draftId: string, sessionId: string, attachmentIds: string[]): Promise<void>;
+    discardDraftAttachments(draftId: string): Promise<void>;
     /** One image context menu item, run in main against a ref main resolves itself. Never rejects. */
     imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
     /** Add a thread image to this session's draft, through the same intake as a paste. */
