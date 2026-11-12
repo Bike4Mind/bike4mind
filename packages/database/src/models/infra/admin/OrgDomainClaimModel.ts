@@ -56,13 +56,19 @@ export class OrgDomainClaimRepository
     // autoIndex builds lazily; the partial unique index must exist before two verifies can race.
     await this.model.init();
     try {
-      // The pipeline keeps the first verifiedAt on a re-verify, so the call is idempotent.
-      const doc = await this.model.findOneAndUpdate(
-        { _id: id, organizationId },
-        [{ $set: { status: 'verified', verifiedAt: { $ifNull: ['$verifiedAt', '$$NOW'] } } }],
+      // Ordinary conditional updates work on DocumentDB 5 and preserve the first verification time.
+      const first = await this.model.findOneAndUpdate(
+        { _id: id, organizationId, verifiedAt: null },
+        { $set: { status: 'verified', verifiedAt: new Date() } },
         { new: true }
       );
-      return doc?.toJSON() ?? null;
+      if (first) return first.toJSON();
+      const existing = await this.model.findOneAndUpdate(
+        { _id: id, organizationId, verifiedAt: { $ne: null } },
+        { $set: { status: 'verified' } },
+        { new: true }
+      );
+      return existing?.toJSON() ?? null;
     } catch (err) {
       if (isDuplicateKeyError(err)) return 'conflict';
       throw err;

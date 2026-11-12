@@ -129,4 +129,33 @@ describe('OrgDomainsTab', () => {
     renderTab();
     expect(await screen.findByTestId('org-domains-empty')).toBeInTheDocument();
   });
+  it.each(['success', 'failure'] as const)(
+    'locks the submitted domain while adding, then handles %s',
+    async outcome => {
+      let resolve: (() => void) | undefined;
+      let reject: ((error: Error) => void) | undefined;
+      api.add.mockImplementationOnce(
+        () =>
+          new Promise<void>((onResolve, onReject) => {
+            resolve = onResolve;
+            reject = onReject;
+          })
+      );
+      renderTab();
+      const input = await screen.findByTestId('org-domains-add-input');
+      fireEvent.change(input, { target: { value: 'submitted.example.test' } });
+      fireEvent.click(screen.getByTestId('org-domains-add-btn'));
+      await waitFor(() => expect(input).toBeDisabled());
+      expect(api.add).toHaveBeenCalledExactlyOnceWith('org1', 'submitted.example.test');
+      if (outcome === 'success') {
+        resolve?.();
+        await waitFor(() => expect(input).toHaveValue(''));
+      } else {
+        reject?.(new Error('add unavailable'));
+        await waitFor(() => expect(input).not.toBeDisabled());
+        expect(input).toHaveValue('submitted.example.test');
+      }
+      await waitFor(() => expect(input).not.toBeDisabled());
+    }
+  );
 });

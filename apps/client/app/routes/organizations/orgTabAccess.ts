@@ -7,6 +7,7 @@ import {
   type AdministrableOrg,
 } from '@bike4mind/common';
 import { hasOrgUpdateAccess } from '@client/app/utils/orgAccessGate';
+import { orgAclRowConfersMembership } from '@bike4mind/common';
 
 export enum OrganizationTabs {
   Overview = 'overview',
@@ -22,6 +23,7 @@ export enum OrganizationTabs {
   Domains = 'domains',
   ApiKeys = 'api-keys',
   Settings = 'settings',
+  Audit = 'audit',
 }
 
 /**
@@ -34,6 +36,19 @@ export enum OrganizationTabs {
  * actually runs; a copy of the logic declared in the test passes whatever the page does.
  */
 export const canViewOrgAnalysis = hasOrgUpdateAccess;
+
+export const canViewOrgAudit = (
+  user: { id: string } | null | undefined,
+  org:
+    | (Omit<AdministrableOrg, 'users'> & { users?: { userId: string; permissions?: readonly string[] | null }[] })
+    | null
+    | undefined
+): boolean =>
+  !!user &&
+  !!org &&
+  (org.userId === user.id ||
+    ((org.adminUserIds ?? []).includes(user.id) &&
+      (org.users ?? []).some(row => row.userId === user.id && orgAclRowConfersMembership(row))));
 
 /** `isOrgOwnerOrPlatformAdmin`, failing closed while the user or org is still loading. */
 const ownerTierGate = (
@@ -111,6 +126,7 @@ export interface OrgTabAccess {
   canViewBilling: boolean;
   canManageConnectors: boolean;
   canManageDomains: boolean;
+  canViewAudit?: boolean;
 }
 
 /**
@@ -120,6 +136,7 @@ export interface OrgTabAccess {
  * is a redirect rather than only a conditional render.
  */
 export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabAccess): OrganizationTabs => {
+  if (!access.canViewAudit && selected === OrganizationTabs.Audit) return OrganizationTabs.Overview;
   if (!access.canManageOrg && selected === OrganizationTabs.Settings) return OrganizationTabs.Overview;
   const integrationPinned =
     selected === OrganizationTabs.Integrations ||

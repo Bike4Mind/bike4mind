@@ -116,6 +116,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
   'org.member.added': { category: 'org', severity: 'notice', write: 'strict' },
   'org.member.removed': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.content_reassigned': { category: 'org', severity: 'notice', write: 'strict' },
   'org.member.role_changed': { category: 'org', severity: 'notice', write: 'strict' },
   'org.api_key.created': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.rotated': { category: 'access', severity: 'notice', write: 'strict' },

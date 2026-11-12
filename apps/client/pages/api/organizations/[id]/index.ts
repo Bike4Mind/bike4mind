@@ -8,6 +8,7 @@ import {
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   userRepository,
+  orgDomainClaimRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
@@ -146,8 +147,8 @@ const handler = baseApi()
     // must commit together, or a partial failure leaves dangling group or lake access or an org that
     // never actually deletes.
     // Repositories join the session automatically via transactionAsyncLocalStorage.
-    await withTransaction(() =>
-      organizationService.deleteOrganization(
+    await withTransaction(async () => {
+      await organizationService.deleteOrganization(
         req.user!,
         { id },
         {
@@ -174,8 +175,9 @@ const handler = baseApi()
             },
           },
         }
-      )
-    );
+      );
+      await orgDomainClaimRepository.deleteByOrganization(id);
+    });
 
     await clearDeletedOrganizationReferences(id, req.logger);
 

@@ -121,4 +121,39 @@ describe('OrgDomainClaimModel', () => {
     expect(await orgDomainClaimRepository.deleteByOrganization(ORG_A)).toBe(2);
     expect(await orgDomainClaimRepository.countByOrganization(ORG_B)).toBe(1);
   });
+  it('uses ordinary updates and preserves the first date across concurrent re-verification', async () => {
+    const claim = await createClaim(ORG_A);
+    const updates = vi.spyOn(OrgDomainClaim, 'findOneAndUpdate');
+    try {
+      const first = await orgDomainClaimRepository.markVerified(String(claim.id), ORG_A);
+      if (!first || first === 'conflict') throw new Error('Expected initial verification');
+      const results = await Promise.all(
+        Array.from({ length: 3 }, () => orgDomainClaimRepository.markVerified(String(claim.id), ORG_A))
+      );
+      for (const result of results) expect(result).toMatchObject({ status: 'verified', verifiedAt: first.verifiedAt });
+      // DocumentDB 5 supports update documents, not this feature's former aggregation-update stage.
+      expect(updates).toHaveBeenCalled();
+      for (const [filter, update] of updates.mock.calls) {
+        expect(filter).toMatchObject({ _id: String(claim.id), organizationId: ORG_A });
+        expect(Array.isArray(update)).toBe(false);
+      }
+    } finally {
+      updates.mockRestore();
+    }
+  });
+
+  it('preserves a historical date on a pending row and initializes an absent date', async () => {
+    const claim = await createClaim(ORG_A);
+    const first = new Date('2026-01-01T00:00:00Z');
+    await OrgDomainClaim.updateOne({ _id: claim.id }, { $set: { verifiedAt: first } });
+    expect(await orgDomainClaimRepository.markVerified(String(claim.id), ORG_A)).toMatchObject({
+      verifiedAt: first,
+      status: 'verified',
+    });
+    await OrgDomainClaim.updateOne({ _id: claim.id }, { $unset: { verifiedAt: 1 } });
+    expect(await orgDomainClaimRepository.markVerified(String(claim.id), ORG_A)).toMatchObject({
+      verifiedAt: expect.any(Date),
+      status: 'verified',
+    });
+  });
 });

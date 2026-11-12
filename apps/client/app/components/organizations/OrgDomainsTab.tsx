@@ -185,6 +185,7 @@ const OrgDomainsTab: React.FC<{ organizationId: string }> = ({ organizationId })
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
+    if (add.isPending) return;
     const value = domain.trim();
     if (value) add.mutate(value);
   };
@@ -202,6 +203,7 @@ const OrgDomainsTab: React.FC<{ organizationId: string }> = ({ organizationId })
             size="sm"
             placeholder="example.com"
             value={domain}
+            disabled={add.isPending}
             onChange={e => setDomain(e.target.value)}
             slotProps={{ input: { 'data-testid': 'org-domains-add-input' } }}
             sx={{ flex: 1, maxWidth: 360 }}
