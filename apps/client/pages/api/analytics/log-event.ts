@@ -1,11 +1,11 @@
-import { CreditPurchaseEvents, FirstRunEvents, MfaEnrollmentEvents } from '@bike4mind/common';
+import { CreditPurchaseEvents, FirstRunEvents, MfaEnrollmentEvents, OrganizationEvents } from '@bike4mind/common';
 import { AnalyticsEventPayloads } from '@bike4mind/server-utils/types/analytics/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 
-// Server-authoritative payment, first-answer and MFA enrollment funnel records must not be writable by clients.
+// Server-authoritative payment, first-answer, MFA and organization records cannot be written by clients.
 const SERVER_ONLY_EVENTS: ReadonlySet<string> = new Set([
   CreditPurchaseEvents.CHECKOUT_STARTED,
   CreditPurchaseEvents.CREDITS_GRANTED,
@@ -13,6 +13,7 @@ const SERVER_ONLY_EVENTS: ReadonlySet<string> = new Set([
   FirstRunEvents.FIRST_ANSWER_CREDITS,
   FirstRunEvents.POLICIES_SHOWN,
   ...Object.values(MfaEnrollmentEvents),
+  ...Object.values(OrganizationEvents),
 ]);
 
 // Every tracked UI action posts here unbatched, so it would dominate the shared default write budget.

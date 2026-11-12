@@ -4,6 +4,7 @@ vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
   assertOutboundActionAllowed: async () => undefined,
 }));
 import { createMocks } from 'node-mocks-http';
+import { OrganizationEvents } from '@bike4mind/common';
 
 const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: any, res: any) => unknown),
@@ -55,7 +56,8 @@ vi.mock('@bike4mind/common', async importOriginal => {
   };
 });
 vi.mock('@server/utils/respond', () => ({ respond: (_res: any, _schema: any, data: any) => data }));
-vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
+const logEvent = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent }));
 const { ForbiddenError } = vi.hoisted(() => ({ ForbiddenError: class ForbiddenError extends Error {} }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class extends Error {},
@@ -74,7 +76,25 @@ function makeReq(body: unknown, { isAdmin = true }: { isAdmin?: boolean } = {}) 
 }
 
 describe('POST /api/organizations/[id]/members -- Zod validation', () => {
-  beforeEach(() => addMember.mockClear());
+  beforeEach(() => {
+    addMember.mockClear();
+    logEvent.mockClear();
+  });
+
+  it('records the resolved member ID and trusted actor while retaining the analytics subject', async () => {
+    const { req, res } = makeReq({ email: 'new@example.com' });
+    Object.assign(req, { user: { id: 'u1', isAdmin: true, impersonatedBy: 'real-admin' } });
+    if (!mockRefs.postHandler) throw new Error('POST handler missing');
+    await mockRefs.postHandler(req, res);
+    expect(logEvent).toHaveBeenCalledExactlyOnceWith(
+      {
+        userId: 'u1',
+        type: OrganizationEvents.ADD_ORG_MEMBER,
+        metadata: { organizationId: 'org-123', userId: 'new-u', memberEmail: 'new@example.com', memberLevel: 'member' },
+      },
+      { ability: null, organizationAuditActorUserId: 'real-admin' }
+    );
+  });
 
   it('accepts a real client payload with email (invite by email)', async () => {
     const { req, res } = makeReq({ email: 'new@example.com' });

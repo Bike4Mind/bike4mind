@@ -50,6 +50,12 @@ const NOT_COVERED =
 
 export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
   {
+    id: 'where-credit-economy',
+    category: 'where-is',
+    question: 'Where can I see platform credit issuance, consumption and accounting coverage?',
+    expectViewIds: ['admin.credit_analytics'],
+  },
+  {
     id: 'where-ai-operations',
     category: 'where-is',
     question: 'Where can I check admin AI spend and agreement or turn all admin AI off?',
