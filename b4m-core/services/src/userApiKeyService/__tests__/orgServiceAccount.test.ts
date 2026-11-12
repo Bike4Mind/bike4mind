@@ -23,6 +23,24 @@ describe('getOrCreateOrgServiceAccount', () => {
     expect(update).toHaveBeenCalledWith({ id: 'org1', serviceAccountUserId: 'sa1' });
   });
 
+  it('uses a non-derivable username so a human cannot squat it', async () => {
+    const usernames: string[] = [];
+    const findOrCreateByEmail = vi.fn(async (_email: string, defaults: Partial<IUserDocument>) => {
+      usernames.push(defaults.username as string);
+      return asUser({ id: 'sa1', ...defaults });
+    });
+    const adapters = {
+      db: { users: { findByEmail: vi.fn(), findOrCreateByEmail }, organizations: { update: vi.fn() } },
+    };
+    await getOrCreateOrgServiceAccount({ id: 'org1' }, adapters);
+    await getOrCreateOrgServiceAccount({ id: 'org1' }, adapters);
+
+    expect(usernames[0]).not.toBe('org-org1-service-account');
+    expect(usernames[1]).not.toBe('org-org1-service-account');
+    expect(usernames[0]).not.toBe(usernames[1]);
+    expect(usernames[0].length).toBeLessThanOrEqual(64);
+  });
+
   it('leaves the org alone when it already records this service account', async () => {
     const findOrCreateByEmail = vi.fn(async (_email: string, defaults: Partial<IUserDocument>) =>
       asUser({ id: 'sa1', ...defaults })
