@@ -213,11 +213,22 @@ export function useDeleteOrganization() {
       return orgId;
     },
     onSuccess: async orgId => {
-      // The settings page stays mounted until the caller navigates away. Refetching any org-scoped query
-      // (detail, invites) hits a now-missing org, 401s, and is read as an expired session. removeQueries
-      // is avoided for the same reason: a mounted observer refetches the query it just lost, so the
-      // deleted org's cache entries are left to garbage-collect after the page unmounts.
+      // Org-scoped queries (detail, invites, members) 401 or 404 once the org is gone, and a 401 is read as an
+      // expired session. Two things can still fire them: the settings page, which stays mounted until the caller
+      // navigates, and the Teams list, whose cards mount per cached org. So the org leaves every cached list
+      // synchronously, before the caller navigates, and its own queries are neither refetched nor removed
+      // (removing a mounted query makes it refetch); they garbage-collect after the page unmounts.
       await queryClient.cancelQueries({ queryKey: ['organizations', orgId] });
+      updateAllQueryData(
+        queryClient,
+        'organizations',
+        'delete',
+        { id: orgId },
+        {
+          keysAllowedToCreate: [],
+          synchronous: true,
+        }
+      );
       void queryClient.invalidateQueries({
         queryKey: ['organizations'],
         predicate: query => query.queryKey[1] !== orgId,
