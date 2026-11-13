@@ -1,5 +1,5 @@
 import { getDataLakeTags } from '@bike4mind/common';
-import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
+import { holdsDataLakeReadScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import type { ScopedRequest } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 
 /**

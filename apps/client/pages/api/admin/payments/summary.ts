@@ -6,7 +6,7 @@ import {
 import { adminPaymentsSummary } from '@server/admin/payments/adminPayments';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 /**
  * GET /api/admin/payments/summary?<filters>

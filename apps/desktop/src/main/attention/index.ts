@@ -11,6 +11,8 @@ import { NeedsYouMonitor, type NeedsYouMonitorDeps } from './needsYouMonitor';
 const CLAIM_WINDOW_MS = 2000;
 
 export type Attention = {
+  /** Raise the app window on a session, as clicking its notice does; reopens it if every window is closed. */
+  openSession(open: AttentionOpenEvent): void;
   /** Starts main's own needs-you watch, for when no window is open to run the renderer's. */
   watchNeedsYou(sources: Pick<NeedsYouMonitorDeps, 'listSessions' | 'sessionMessages'>): NeedsYouMonitor;
 };
@@ -57,6 +59,21 @@ export function registerAttention({ openWindow }: { openWindow(): void }): Atten
     return taken;
   });
 
+  // Raises the app window on a session's stage, or reopens it there; shared by a notice click,
+  // the menu-bar item and the mini Tavern (main/watch), which all mean the same thing by it.
+  const openSession = (open: AttentionOpenEvent) => {
+    const window = appWindows()[0];
+    if (!window) {
+      pendingOpen = open;
+      openWindow();
+      return;
+    }
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+    window.webContents.send(IPC_CHANNELS.attentionOpen, open);
+  };
+
   const showNotice = (payload: unknown) => {
     const notice = parseAttentionNotice(payload);
     if (!notice || !Notification.isSupported()) return;
@@ -69,16 +86,7 @@ export function registerAttention({ openWindow }: { openWindow(): void }): Atten
     const open: AttentionOpenEvent = { sessionId: notice.sessionId, rootId: notice.rootId };
     shown.on('click', () => {
       live.delete(notice.sessionId);
-      const window = appWindows()[0];
-      if (!window) {
-        pendingOpen = open;
-        openWindow();
-        return;
-      }
-      if (window.isMinimized()) window.restore();
-      window.show();
-      window.focus();
-      window.webContents.send(IPC_CHANNELS.attentionOpen, open);
+      openSession(open);
     });
     shown.on('close', () => {
       if (live.get(notice.sessionId) === shown) live.delete(notice.sessionId);
@@ -111,6 +119,7 @@ export function registerAttention({ openWindow }: { openWindow(): void }): Atten
   });
 
   return {
+    openSession,
     watchNeedsYou: sources => {
       if (monitor) return monitor;
       monitor = new NeedsYouMonitor({

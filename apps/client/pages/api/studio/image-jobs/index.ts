@@ -15,7 +15,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
-import { getCreateImageJobsDeps } from '@server/generationJobs/wiring';
+import { getCreateImageJobsDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
 
