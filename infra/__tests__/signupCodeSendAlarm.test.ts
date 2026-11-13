@@ -159,6 +159,29 @@ describe('signup code send alarm wiring', () => {
     );
   });
 
+  it('counts signup network cap checks that failed open', async () => {
+    await loadAlarms();
+    expect(callFor(resources.filter, 'signupLimitFailOpenFilter')).toMatchObject({
+      name: 'test-app-production-signup-limit-fail-open',
+      pattern: '{ $.message = "signup-limit-failed-open" }',
+      metricTransformation: {
+        name: 'SignupLimitFailOpen',
+        namespace: 'test-app/production/Signup',
+        value: '1',
+        unit: 'Count',
+      },
+    });
+    const pattern = callFor(resources.filter, 'signupLimitFailOpenFilter')?.pattern;
+    if (typeof pattern !== 'string') throw new Error('Missing metric filter pattern');
+    const prefix = '2026-10-23T00:00:00.000Z request-id WARN ';
+    const line = JSON.stringify({ message: 'signup-limit-failed-open', error: 'timeout' });
+    expect(matchesMessageFilterPattern(pattern, prefix + line)).toBe(true);
+    const oldLine = JSON.stringify({
+      message: '[signup-limits] Limit check failed; allowing signup {"message":"timeout"}',
+    });
+    expect(matchesMessageFilterPattern(pattern, prefix + oldLine)).toBe(false);
+  });
+
   it('alarms on the hourly sum and routes ALARM and OK to Slack and email', async () => {
     await loadAlarms();
     expect(resources.alarm).toHaveBeenCalledWith('signupCodeSendRate', {
