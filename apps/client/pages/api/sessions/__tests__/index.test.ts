@@ -1,8 +1,7 @@
 // @vitest-environment node
 /**
- * /api/sessions - the notebook list (GET) and delete-every-notebook (DELETE) share one baseApi()
- * door, so the API-key scope is asserted per verb in the handler rather than by a route-level
- * requiredScopes: DELETE needs notebooks:write, GET stays open to read keys.
+ * /api/sessions - the notebook list (GET) and delete-every-notebook (DELETE) share one baseApi door
+ * that admits either notebook scope; DELETE then narrows to notebooks:write in the handler.
  */
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { EventEmitter } from 'events';
@@ -136,11 +135,12 @@ describe('/api/sessions API-key scopes', () => {
     vi.unstubAllEnvs();
   });
 
+  // DELETE required notebooks:write before the door existed, so it never grandfathers legacy keys.
   it.each([
     ['a notebooks:read key', [ApiKeyScope.READ_NOTEBOOKS]],
     ['an unscoped key', []],
-  ])('refuses DELETE for %s without deleting anything', async (_label, scopes) => {
-    keyWithScopes(scopes);
+  ] as const)('refuses DELETE for %s without deleting anything', async (_label, scopes) => {
+    keyWithScopes([...scopes]);
     const { req, res } = fire('DELETE');
     await handler(req, res);
 
@@ -175,5 +175,38 @@ describe('/api/sessions API-key scopes', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockSearchOwnSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it('admits an admin:* key with no notebook scope', async () => {
+    keyWithScopes([ApiKeyScope.ADMIN]);
+    const { req, res } = fire('GET');
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSearchOwnSessions).toHaveBeenCalledTimes(1);
+  });
+
+  // Every key is legacy until the legacy window's cutoff is set, so keys that miss the scopes still
+  // get through the door; the refusal they get after the window ends is pinned in apiKeyScopeGate.test.ts.
+  it.each([
+    ['an unscoped key', []],
+    ['a non-notebook key', [ApiKeyScope.ME_READ]],
+  ] as const)('admits GET for %s while it is legacy', async (_label, scopes) => {
+    keyWithScopes([...scopes]);
+    const { req, res } = fire('GET');
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it.each(['GET', 'DELETE'] as const)('refuses %s at the door for a confined key', async method => {
+    keyWithScopes([ApiKeyScope.EMBED_CHAT]);
+    const { req, res } = fire(method);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(JSON.stringify(res._getData())).toContain('Insufficient API key permissions');
+    expect(mockSearchOwnSessions).not.toHaveBeenCalled();
+    expect(mockDeleteMany).not.toHaveBeenCalled();
   });
 });

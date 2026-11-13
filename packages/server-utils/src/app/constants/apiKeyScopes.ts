@@ -255,14 +255,6 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   },
 ];
 
-/**
- * Routes every non-confined key may call whatever its scopes, because the route declares no scope at
- * all. Not exhaustive: these are the ones a scope's own list would otherwise be expected to name (the
- * notebook list a `notebooks:read` key relies on). Shown once in the Scopes tab, never under a scope;
- * apiKeyScopeEndpoints.test.ts pins that each still has no scope door.
- */
-export const OPEN_TO_ANY_KEY_ENDPOINTS: readonly string[] = ['GET /api/sessions'];
-
 const ENDPOINT_ENTRY = /^([A-Z|]+) (\/api\/\S+)/;
 
 /** `GET /x/:id` and `GET|PUT /x/:fileId` alike, one key per method, param names ignored. */

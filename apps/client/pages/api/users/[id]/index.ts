@@ -1,6 +1,7 @@
 import { Project, Session, User, organizationRepository, readAccessArms } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
+  ApiKeyScope,
   IUserDocument,
   redactUserSecretsForSelf,
   publicUserProfileResponseSchema,
@@ -8,6 +9,7 @@ import {
   selfUserProfileResponseSchema,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
+import { holdsApiKeyScope, isLegacyApiKey } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { withSafeOrganization } from '@bike4mind/server-utils/utils/toSafeOrganizationSubdocument';
 import { Request } from 'express';
 
@@ -39,8 +41,29 @@ async function sharesWorkspace(viewer: IUserDocument, subject: IUserDocument): P
   return Boolean(project || notebook);
 }
 
-const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN], grandfatherLegacyKeys: true }).get<
+  Request<{}, unknown, unknown, { id: string }>
+>(async (req, res) => {
   const userId = req.query.id;
+
+  // Connected-app keys hold me:read but reach only the routes pinned in exchangeKeyRouteInventory.
+  if (req.apiKeyInfo?.oauthExchangeClientId) {
+    return res.status(403).json({ error: 'Keys minted for a connected app cannot call this route' });
+  }
+
+  // Admin authority needs an admin owner AND, for a key caller, the key's own admin:* scope: an
+  // admin's least-privilege me:read key reads like anyone else's. JWT callers carry no key, so
+  // holdsApiKeyScope passes and the owner's role alone decides. Legacy keys predate scopes and
+  // keep the reads they had until the legacy window ends, as at the route gate.
+  const isAdmin =
+    req.user.isAdmin === true && holdsApiKeyScope(req, [ApiKeyScope.ADMIN], { grandfatherLegacyKeys: true });
+
+  // me:read covers only the key owner's own account, so a key reads other users' profiles only
+  // with admin authority. 404, not 403, for the enumeration reason below. Legacy keys keep the
+  // public-profile reads they had until the legacy window ends.
+  if (req.apiKeyInfo && !isLegacyApiKey(req.apiKeyInfo.createdAt) && req.user.id !== userId && !isAdmin) {
+    return res.status(404).json({ error: 'User not found' });
+  }
 
   const user = await User.findById(userId).populate('organizationId').select('-password -counters');
   // Return 404 for missing users regardless of requester privilege.
@@ -49,7 +72,6 @@ const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(asy
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   const isSelf = req.user.id === userId;
-  const isAdmin = req.user.isAdmin;
 
   if (isSelf || isAdmin) {
     // Self/admin-gated profile view. securityQuestions belong to the subject, so a self view

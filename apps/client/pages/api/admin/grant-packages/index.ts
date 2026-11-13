@@ -6,13 +6,14 @@ import {
   registrationInviteRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { ApiKeyScope, createGrantPackageSchema, requiresGrantReason } from '@bike4mind/common';
+import { ApiKeyScope, createGrantPackageSchema, isGrantPackageExpired, requiresGrantReason } from '@bike4mind/common';
 import {
   loadCreditGrantPolicy,
   parseAdminActionReason,
   recordAdminActionFromRequest,
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { assertCapsConsistent, splitReason, toBadRequest } from '@server/credits/grantPackageAdmin';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 const listQuerySchema = z.object({
@@ -81,6 +82,8 @@ const handler = adminApi({
         toBadRequest(error);
       }
       assertCapsConsistent(data);
+      // Editing a package may expire it immediately; creating one already expired is a mistake.
+      if (isGrantPackageExpired(data)) throw new BadRequestError('expiresAt: must be in the future');
       const reasonRequired = requiresGrantReason(data, await loadCreditGrantPolicy());
       const reason = reasonRequired ? parseAdminActionReason(rawReason) : undefined;
 
@@ -98,6 +101,7 @@ const handler = adminApi({
             totalCap: pkg.totalCap,
             dailyCap: pkg.dailyCap,
             active: pkg.active,
+            expiresAt: pkg.expiresAt ?? null,
             reasonRequired,
           },
         });
