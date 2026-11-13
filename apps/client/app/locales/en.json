@@ -147,6 +147,7 @@
     "tabs": {
       "overview": "Overview",
       "members": "Members",
+      "library": "Library",
       "groups": "Groups",
       "usage": "Usage",
       "analysis": "Analysis",
@@ -165,6 +166,7 @@
     "descriptions": {
       "overview": "Plan, credits and seat usage for this team.",
       "members": "{{current}} of {{max}} seats used. Invite people and manage their roles.",
+      "library": "Shared definitions the team owns. They stay available when their author leaves.",
       "groups": "Appoint managers and organize members into groups.",
       "usage": "Credit spend across the team.",
       "analysis": "Feedback members left on AI responses, summarized.",

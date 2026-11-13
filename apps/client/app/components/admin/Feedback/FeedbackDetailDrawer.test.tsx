@@ -268,6 +268,23 @@ describe('FeedbackDetailDrawer', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('supports j/k and i/c/e on the fetched report without a list row', async () => {
+    const record = makeRecord();
+    mocks.getFeedbackByIdFromServer.mockResolvedValue(record);
+    const onNext = vi.fn();
+    const onPrevious = vi.fn();
+    const { onStatusChange } = renderDrawer({ onNext, onPrevious });
+    const email = await screen.findByTestId('feedback-detail-email-reporter-btn');
+    const emailClick = vi.spyOn(email, 'click').mockImplementation(() => {});
+    expect(screen.getByTestId('feedback-detail-close-btn')).toHaveFocus();
+    await userEvent.keyboard('jkice');
+    expect(onNext).toHaveBeenCalledOnce();
+    expect(onPrevious).toHaveBeenCalledOnce();
+    expect(onStatusChange).toHaveBeenCalledWith(record, FeedbackStatus.InProgress);
+    expect(onStatusChange).toHaveBeenCalledWith(record, FeedbackStatus.Closed);
+    expect(emailClick).toHaveBeenCalledOnce();
+  });
+
   it('changes the status from the drawer', async () => {
     const record = makeRecord();
     mocks.getFeedbackByIdFromServer.mockResolvedValue(record);

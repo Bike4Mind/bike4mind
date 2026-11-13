@@ -6,6 +6,7 @@ import { BasePage } from './BasePage';
 export type TeamTab =
   | 'Overview'
   | 'Members'
+  | 'Library'
   | 'Groups'
   | 'Usage'
   | 'Analysis'
@@ -18,6 +19,7 @@ export type TeamTab =
 export const ALL_TEAM_TABS: TeamTab[] = [
   'Overview',
   'Members',
+  'Library',
   'Groups',
   'Usage',
   'Analysis',

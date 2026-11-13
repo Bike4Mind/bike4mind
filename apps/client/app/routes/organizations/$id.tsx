@@ -2,6 +2,7 @@ import { IOrganizationDocument, WithId, isOrgOwnerOrCurrentAdmin, isOrgOwnerOrPl
 import { AdminPageHeader, SegmentedControl } from '@client/app/components/admin/shared';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
+import OrganizationLibrarySection from '@client/app/components/organizations/OrganizationLibrarySection';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
 import OrganizationBillingSection from '@client/app/components/organizations/OrganizationBillingSection';
 import OrganizationSettingsSection from '@client/app/components/organizations/OrganizationSettingsSection';
@@ -56,6 +57,7 @@ import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
+import LocalLibraryOutlinedIcon from '@mui/icons-material/LocalLibraryOutlined';
 import {
   canManageOrgConnectors,
   canManageOrgIntegrations,
@@ -90,6 +92,12 @@ const RAIL_GROUPS: ReadonlyArray<{ key: 'team' | 'insights' | 'integrations' | '
     tabs: [
       { tab: OrganizationTabs.Overview, icon: <BusinessOutlinedIcon />, visible: () => true },
       { tab: OrganizationTabs.Members, icon: <GroupOutlinedIcon />, visible: () => true },
+      {
+        tab: OrganizationTabs.Library,
+        icon: <LocalLibraryOutlinedIcon />,
+        visible: () => true,
+        testId: 'organization-library-tab',
+      },
       { tab: OrganizationTabs.Groups, icon: <GroupWorkOutlinedIcon />, visible: a => a.canManageGroups },
     ],
   },
@@ -390,6 +398,16 @@ const OrganizationPage: FC = () => {
               )}
               <OrganizationOverviewSection organization={organization} />
             </TabPanel>
+            {selectedTab === OrganizationTabs.Library && (
+              <TabPanel value={OrganizationTabs.Library}>
+                {header(OrganizationTabs.Library)}
+                <OrganizationLibrarySection
+                  key={organization.id}
+                  organizationId={organization.id}
+                  canManage={!!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization)}
+                />
+              </TabPanel>
+            )}
             <TabPanel value={OrganizationTabs.Members}>
               {header(OrganizationTabs.Members, {
                 count: currentSeats,

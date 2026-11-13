@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import {
   Alert,
   Box,
@@ -39,6 +39,7 @@ import ClientContextChips from './ClientContextChips';
 import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER, FEEDBACK_SUBJECT_LABELS } from './constants';
 import { summarizePromptMeta } from './promptMetaSummary';
 import FeedbackAiPanel from './FeedbackAiPanel';
+import { useFeedbackKeyboard } from './hooks/useFeedbackKeyboard';
 import FeedbackSimilarReports from './FeedbackSimilarReports';
 
 const STATUS_TONES: Record<FeedbackStatus, AdminStatusTone> = {
@@ -98,6 +99,24 @@ const FeedbackDetailDrawer = ({
 
   const record = recordQuery.data ?? undefined;
   const missing = recordQuery.isError || (recordQuery.isSuccess && !recordQuery.data);
+  const keyboardRef = useRef<HTMLDivElement>(null);
+  useFeedbackKeyboard({
+    rootRef: keyboardRef,
+    enabled: Boolean(feedbackId) && !helpPanelOpen,
+    drawer: true,
+    onPrevious,
+    onNext,
+    onAction: key => {
+      if (!record || missing) return;
+      if (key === 'e') {
+        keyboardRef.current
+          ?.querySelector<HTMLAnchorElement>('[data-testid="feedback-detail-email-reporter-btn"]')
+          ?.click();
+      } else {
+        void onStatusChange(record, key === 'i' ? FeedbackStatus.InProgress : FeedbackStatus.Closed);
+      }
+    },
+  });
 
   return (
     <Drawer
@@ -124,7 +143,7 @@ const FeedbackDetailDrawer = ({
       }}
       data-testid="feedback-detail-drawer"
     >
-      <Stack sx={{ height: '100%', minHeight: 0, ...adminFocusScope }}>
+      <Stack ref={keyboardRef} sx={{ height: '100%', minHeight: 0, ...adminFocusScope }}>
         <Stack
           direction="row"
           alignItems="center"
@@ -185,6 +204,7 @@ const FeedbackDetailDrawer = ({
           )}
           <Tooltip title="Close">
             <IconButton
+              autoFocus
               size="sm"
               variant="plain"
               aria-label="Close"

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Button,
   Chip,
@@ -27,6 +27,7 @@ import {
   FEEDBACK_AI_SEVERITIES,
   FEEDBACK_RESOLUTIONS,
   FEEDBACK_RESOLUTION_LABELS,
+  FeedbackStatus,
 } from '@bike4mind/common';
 import FeedbackCloseDialog from './FeedbackCloseDialog';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
@@ -43,6 +44,7 @@ import {
   FilterChip,
   StatusChip,
   UpdatingBar,
+  ViewTabs,
   type DataColumn,
 } from '../shared';
 import { ADMIN_REGION_GAP, adminFocus, adminFocusScope } from '../shared/adminStyles';
@@ -54,10 +56,11 @@ import { useFeedbackPagination } from './hooks/useFeedbackPagination';
 import { getFeedbackDisplayContent, type IExtendedFeedbackDocument } from './types';
 import FeedbackDetailDrawer from './FeedbackDetailDrawer';
 import { useFeedbackDetailNavigation } from './hooks/useFeedbackDetailNavigation';
+import { useFeedbackKeyboard } from './hooks/useFeedbackKeyboard';
 import { copyFeedbackRecordLink, feedbackConversationPath, feedbackReporterMailto } from './feedbackLinks';
 import HelpContextChip from './HelpContextChip';
 import FeedbackTrendStrip from './FeedbackTrendStrip';
-import { FEEDBACK_RECEIVED_LABELS, FEEDBACK_RECEIVED_WINDOWS } from './feedbackTrends';
+import { FEEDBACK_OPEN_STATUSES, FEEDBACK_RECEIVED_LABELS, FEEDBACK_RECEIVED_WINDOWS } from './feedbackTrends';
 import {
   FEEDBACK_STATUS_LABELS,
   FEEDBACK_STATUS_ORDER,
@@ -68,7 +71,14 @@ import {
   feedbackTypeOf,
   toSubjectFilter,
 } from './constants';
-import { checkedStatuses, toStatusFilters } from './feedbackTabSearch';
+import {
+  checkedStatuses,
+  FEEDBACK_COMMENT_FILTERS,
+  hasCreatedRange,
+  toStatusFilters,
+  type FeedbackCommentFilter,
+} from './feedbackTabSearch';
+import { FeedbackCreatedRangeDialog, formatCreatedRange } from './FeedbackCreatedRangeDialog';
 import { useFeedbackSelection } from './hooks/useFeedbackSelection';
 import FeedbackBulkActions from './FeedbackBulkActions';
 
@@ -90,6 +100,20 @@ const RECEIVED_FILTER_OPTIONS = FEEDBACK_RECEIVED_WINDOWS.map(range => ({
   value: range,
   label: FEEDBACK_RECEIVED_LABELS[range],
 }));
+const CUSTOM_RANGE = 'custom';
+const COMMENT_FILTER_LABELS: Record<FeedbackCommentFilter, string> = { with: 'Has comment', without: 'No comment' };
+const COMMENT_FILTER_OPTIONS = FEEDBACK_COMMENT_FILTERS.map(comment => ({
+  value: comment,
+  label: COMMENT_FILTER_LABELS[comment],
+}));
+
+// Built-in status views above the list. New is the default; a view lights when the status filter
+// matches it exactly, and picking one leaves every other filter alone.
+const STATUS_VIEWS = [
+  { id: 'new', label: 'New', statuses: [FeedbackStatus.New] },
+  { id: 'open', label: 'Open', statuses: [...FEEDBACK_OPEN_STATUSES] },
+  { id: 'all', label: 'All', statuses: [...FEEDBACK_STATUS_ORDER] },
+] as const;
 
 // Tags the producers add that only restate the type chip; the rest (help, slash command,
 // marketing...) still say where a report came from.
@@ -281,6 +305,8 @@ const FeedbackTab: React.FC = () => {
     setResolution,
     setTypes,
     setReceived,
+    setCreatedRange,
+    setComment,
     showOnly,
     toggleSortDirection,
     filterParams,
@@ -347,6 +373,20 @@ const FeedbackTab: React.FC = () => {
   // the row that opened the drawer. Ids are compared rather than put in a selector: a deep-linked
   // id is arbitrary text.
   const tableRegionRef = useRef<HTMLDivElement>(null);
+  useFeedbackKeyboard({
+    rootRef: tableRegionRef,
+    enabled: !openFeedbackId && !loading,
+    onAction: (key, rowId) => {
+      const row = currentFeedback.find(row => row._id === rowId);
+      if (!row) return;
+      if (key === 'e') {
+        const mailto = feedbackReporterMailto(row);
+        if (mailto) window.location.assign(mailto);
+      } else {
+        void handleStatusChange(row, key === 'i' ? FeedbackStatus.InProgress : FeedbackStatus.Closed);
+      }
+    },
+  });
   const selectionScope = JSON.stringify({ filterParams, currentPage, itemsPerPage });
   const selection = useFeedbackSelection({
     pageIds: currentFeedback.map(row => row._id),
@@ -436,6 +476,29 @@ const FeedbackTab: React.FC = () => {
     label: name,
   }));
 
+  const activeStatusView = STATUS_VIEWS.find(
+    view =>
+      view.statuses.length === selectedStatuses.length &&
+      view.statuses.every(status => selectedStatuses.includes(status))
+  )?.id;
+
+  const createdRange = { createdFrom: filters.createdFrom, createdTo: filters.createdTo };
+  const customRangeSet = hasCreatedRange(createdRange);
+  const receivedOptions = [
+    ...RECEIVED_FILTER_OPTIONS,
+    // The menu entry keeps saying what it does (reopen the picker); the chip shows the range itself.
+    {
+      value: CUSTOM_RANGE,
+      label: 'Custom range\u2026',
+      chipLabel: customRangeSet ? formatCreatedRange(createdRange) : undefined,
+    },
+  ];
+  const [rangeDialogOpen, setRangeDialogOpen] = useState(false);
+  const setReceivedFilter = (value: string | undefined) => {
+    if (value === CUSTOM_RANGE) return setRangeDialogOpen(true);
+    setReceived(FEEDBACK_RECEIVED_WINDOWS.find(range => range === value));
+  };
+
   const hasFilters =
     filters.area !== undefined ||
     filters.severity !== undefined ||
@@ -445,6 +508,8 @@ const FeedbackTab: React.FC = () => {
     filters.resolution !== undefined ||
     filters.types.length > 0 ||
     filters.received !== undefined ||
+    customRangeSet ||
+    filters.comment !== undefined ||
     filters.selectedOrganizations.length > 0;
   const clearFilters = () => showOnly({ statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
 
@@ -527,6 +592,17 @@ const FeedbackTab: React.FC = () => {
 
       <FeedbackTrendStrip showOnly={showOnly} />
 
+      <ViewTabs
+        views={STATUS_VIEWS}
+        activeId={activeStatusView}
+        onSelect={id => {
+          const view = STATUS_VIEWS.find(candidate => candidate.id === id);
+          if (view) setStatusFilters(toStatusFilters(view.statuses));
+        }}
+        aria-label="Status views"
+        data-testid="feedback-status-views"
+      />
+
       <Stack
         direction="row"
         flexWrap="wrap"
@@ -581,9 +657,16 @@ const FeedbackTab: React.FC = () => {
         <FilterChip
           id="feedback-received"
           label="Received"
-          value={filters.received}
-          options={RECEIVED_FILTER_OPTIONS}
-          onChange={value => setReceived(FEEDBACK_RECEIVED_WINDOWS.find(range => range === value))}
+          value={customRangeSet ? CUSTOM_RANGE : filters.received}
+          options={receivedOptions}
+          onChange={setReceivedFilter}
+        />
+        <FilterChip
+          id="feedback-comment"
+          label="Comment"
+          value={filters.comment}
+          options={COMMENT_FILTER_OPTIONS}
+          onChange={value => setComment(FEEDBACK_COMMENT_FILTERS.find(comment => comment === value))}
         />
         {/* Single-select, because GET /api/feedback takes one subject or none. */}
         <FilterChip
@@ -610,7 +693,7 @@ const FeedbackTab: React.FC = () => {
         tabIndex={-1}
         data-testid="feedback-table-region"
         gap={1}
-        sx={{ minWidth: 0, outline: 'none' }}
+        sx={{ minWidth: 0, ...adminFocus }}
       >
         <UpdatingBar active={loading && !firstLoad} testId="feedback-updating-bar" />
         <DataTable
@@ -668,6 +751,13 @@ const FeedbackTab: React.FC = () => {
         />
       </Stack>
 
+      {rangeDialogOpen && (
+        <FeedbackCreatedRangeDialog
+          initial={createdRange}
+          onApply={setCreatedRange}
+          onClose={() => setRangeDialogOpen(false)}
+        />
+      )}
       <FeedbackBulkActions
         key={`${selectionScope}:${JSON.stringify(selection.selection)}`}
         selection={selection.selection}

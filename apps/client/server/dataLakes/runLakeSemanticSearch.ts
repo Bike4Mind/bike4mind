@@ -32,6 +32,7 @@ import {
   ModelBackend,
   isSupportedEmbeddingModel,
   insufficientCreditsError,
+  readableGroupIds,
   usdToCredits,
   type IOrganizationDocument,
   type IUserDocument,
@@ -418,7 +419,7 @@ export async function runLakeSemanticSearch(
   const search = await dataLakeService.semanticDataLakeSearch(
     {
       userId: req.user.id,
-      userGroups: req.user.groups ?? [],
+      userGroups: readableGroupIds(req.user),
       query,
       tags,
       topK,

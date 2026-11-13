@@ -68,6 +68,7 @@ vi.mock('@client/app/components/organizations/OrgCustomMcpPolicySection', () => 
 vi.mock('@client/app/components/organizations/OrgApiKeysSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgMemberApiKeysSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationAuditSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrganizationLibrarySection', () => ({ default: () => null }));
 
 // A real i18next over en.json, so assertions pin the wording, plurals and interpolation users get.
 const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
@@ -493,6 +494,7 @@ describe('organization detail page - grouped rail and tab headers', () => {
     expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
       'Overview',
       'Members',
+      'Library',
       'Groups',
       'Usage',
       'Analysis',
@@ -510,6 +512,7 @@ describe('organization detail page - grouped rail and tab headers', () => {
   it.each([
     'overview',
     'members',
+    'library',
     'groups',
     'usage',
     'analysis',
