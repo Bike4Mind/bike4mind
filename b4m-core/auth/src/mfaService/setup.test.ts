@@ -142,11 +142,19 @@ describe('setupMFA for a passkey-only user', () => {
     mfa: { totpEnabled: false, passkeyEnabled: true, backupCodes: ['h'], setupAt: new Date() },
   } as unknown as IUserDocument;
 
-  it('keeps passkeyEnabled: true in the mfa write so the passkey factor survives the unconfirmed app', async () => {
+  it('writes only the app fields, leaving the live backup codes and lockout state alone', async () => {
     const update = vi.fn(async (u: unknown) => u as IUserDocument);
-    await setupMFA({ user: passkeyOnly, appName: 'Test App' }, { update });
-    const data = update.mock.calls[0][0] as unknown as { mfa: Record<string, unknown> };
-    expect(data.mfa).toMatchObject({ totpEnabled: false, passkeyEnabled: true });
+    const result = await setupMFA({ user: passkeyOnly, appName: 'Test App' }, { update });
+    const data = update.mock.calls[0][0] as unknown as Record<string, unknown>;
+    expect(data).not.toHaveProperty('mfa');
+    expect(data).not.toHaveProperty(['mfa.backupCodes']);
+    expect(data).not.toHaveProperty(['mfa.failedAttempts']);
+    expect(data).not.toHaveProperty(['mfa.passkeyEnabled']);
+    expect(data).toMatchObject({
+      'mfa.totpSecret': result.secret,
+      'mfa.totpEnabled': false,
+      'mfa.pendingBackupCodes': result.backupCodes.join(','),
+    });
   });
 
   it('writes passkeyEnabled: false for a user with no passkey', async () => {
@@ -264,6 +272,12 @@ describe('verifyMFASetup', () => {
     // The enable is conditional on the secret that was verified, so a concurrent setup that
     // replaced it cannot be switched on behind the user's back.
     expect(repo.atomicEnableMfa).toHaveBeenCalledWith('user-1', SECRET);
+  });
+
+  it("swaps a passkey-only user's backup codes for the ones this setup showed, in the enable write", async () => {
+    const repo = makeRepo();
+    await verifyMFASetup(makePendingUser({ passkeyEnabled: true }), currentToken(), repo);
+    expect(repo.atomicEnableMfa).toHaveBeenCalledWith('user-1', SECRET, PLAIN_CODES.map(hashBackupCode));
   });
 
   it('refuses to enable when a concurrent setup replaced the secret', async () => {

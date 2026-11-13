@@ -53,7 +53,7 @@ async function verifySetupAs(user: Record<string, unknown>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.findByIdWithMfaSecrets.mockResolvedValue({ id: 'u1', mfa: { totpEnabled: true } });
+  mocks.findByIdWithMfaSecrets.mockResolvedValue({ id: 'u1', mfa: { totpEnabled: false } });
   mocks.verifyMFASetup.mockResolvedValue({ success: true, user: { id: 'u1' }, backupCodes: ['aaaa-bbbb'] });
   mocks.revokeUserSessions.mockResolvedValue(4);
   mocks.issueBrowserSession.mockResolvedValue({ accessToken: 'full-access' });
@@ -73,6 +73,33 @@ describe('POST /api/auth/mfa/verify-setup - emergency sign-in', () => {
     expect(mocks.verifyMFASetup).not.toHaveBeenCalled();
     expect(mocks.recordForcedEnrollmentStep).not.toHaveBeenCalled();
     expect(mocks.issueBrowserSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/auth/mfa/verify-setup - account that already has a passkey', () => {
+  const passkeyOnly = { id: 'u1', mfa: { totpEnabled: false, passkeyEnabled: true, totpSecret: 'PENDING' } };
+
+  it('refuses a pending token: it has proved only the password, not the passkey', async () => {
+    mocks.findByIdWithMfaSecrets.mockResolvedValue(passkeyOnly);
+
+    const res = await verifySetupAs({
+      id: 'u1',
+      mfaPending: true,
+      mfaSignIn: { strategy: 'local', createdVia: 'password' },
+    });
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mocks.verifyMFASetup).not.toHaveBeenCalled();
+    expect(mocks.issueBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it('lets a full session add the app', async () => {
+    mocks.findByIdWithMfaSecrets.mockResolvedValue(passkeyOnly);
+
+    const res = await verifySetupAs({ id: 'u1' });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.verifyMFASetup).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -114,7 +141,7 @@ describe('POST /api/auth/mfa/verify-setup - sign-in audit', () => {
     // Judged on the user as read before enrolling, not on the enrolled result.
     expect(mocks.recordForcedEnrollmentStep).toHaveBeenCalledWith(
       expect.anything(),
-      { id: 'u1', mfa: { totpEnabled: true } },
+      { id: 'u1', mfa: { totpEnabled: false } },
       'mfa_enrollment_completed'
     );
     expect(mocks.logSecondFactorSignIn).not.toHaveBeenCalled();

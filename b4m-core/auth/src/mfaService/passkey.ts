@@ -34,6 +34,7 @@ const SUPPORTED_ALGORITHM_IDS = [COSEALG.EdDSA, COSEALG.ES256, COSEALG.RS256];
 
 export type PasskeyErrorCode =
   | 'mfa_not_enabled'
+  | 'mfa_already_enabled'
   | 'limit_reached'
   | 'no_passkeys'
   | 'challenge_expired'
@@ -120,7 +121,15 @@ export async function finishPasskeyRegistration(
     rp,
     response,
     name,
-  }: { user: IUserDocument; rp: PasskeyRelyingParty; response: RegistrationResponseJSON; name?: string },
+    pendingSignIn = false,
+  }: {
+    user: IUserDocument;
+    rp: PasskeyRelyingParty;
+    response: RegistrationResponseJSON;
+    name?: string;
+    /** The caller holds only a pre-second-factor (mfaPending) token. */
+    pendingSignIn?: boolean;
+  },
   {
     credentials,
     challenges,
@@ -179,6 +188,15 @@ export async function finishPasskeyRegistration(
     const backupCodes = generateBackupCodes();
     if (await users.atomicEnablePasskeyMfa(user.id, backupCodes.map(hashBackupCode))) {
       return { credential: created, firstFactor: true, backupCodes };
+    }
+    // The caller was allowed in because the account had no factor. Now it has one, and a
+    // pre-second-factor token has not presented it, so this passkey must not join it.
+    if (pendingSignIn) {
+      await credentials.remove(created.id, user.id);
+      throw new PasskeyError(
+        'Two-step verification is already on. Sign in again to add a passkey.',
+        'mfa_already_enabled'
+      );
     }
   }
   if (!user.mfa?.passkeyEnabled) {

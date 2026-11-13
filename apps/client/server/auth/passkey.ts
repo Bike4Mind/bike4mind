@@ -13,6 +13,7 @@ export const getPasskeyRelyingParty = () =>
 const STATUS_BY_CODE: Record<mfaService.PasskeyErrorCode, number> = {
   mfa_not_enabled: 400,
   limit_reached: 409,
+  mfa_already_enabled: 409,
   no_passkeys: 404,
   challenge_expired: 400,
   unknown_credential: 400,

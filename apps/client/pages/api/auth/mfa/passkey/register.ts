@@ -38,7 +38,13 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     let result: mfaService.FinishPasskeyRegistrationResult;
     try {
       result = await mfaService.finishPasskeyRegistration(
-        { user, rp: getPasskeyRelyingParty(), response: response as mfaService.RegistrationResponseJSON, name },
+        {
+          user,
+          rp: getPasskeyRelyingParty(),
+          response: response as mfaService.RegistrationResponseJSON,
+          name,
+          pendingSignIn: !!req.user.mfaPending,
+        },
         { ...passkeyDeps, users: userRepository }
       );
     } catch (error) {

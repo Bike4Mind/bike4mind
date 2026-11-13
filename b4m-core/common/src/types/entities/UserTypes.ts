@@ -199,7 +199,8 @@ export interface IPasskeyCredentialRepository {
   recordUse(id: string, counter: number): Promise<void>;
   /** Returns true when a credential was actually removed (false = unknown id or not this user's). */
   remove(id: string, userId: string): Promise<boolean>;
-  removeAllForUser(userId: string): Promise<number>;
+  /** `createdBefore` limits the purge to credentials older than that instant. */
+  removeAllForUser(userId: string, options?: { createdBefore?: Date }): Promise<number>;
 }
 
 /**
@@ -1111,7 +1112,7 @@ export interface IUserRepository
    * Returns null when a concurrent setup replaced the secret, so a code verified against a
    * superseded secret never enables a secret the user's authenticator does not hold.
    */
-  atomicEnableMfa: (userId: string, totpSecret: string) => Promise<IUserDocument | null>;
+  atomicEnableMfa: (userId: string, totpSecret: string, hashedBackupCodes?: string[]) => Promise<IUserDocument | null>;
   /**
    * Make a passkey the user's first factor: set `mfa.passkeyEnabled` and store `hashedBackupCodes`,
    * discarding any unconfirmed app setup. Only while the user has no factor yet; returns null when

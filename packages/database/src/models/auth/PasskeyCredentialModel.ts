@@ -1,5 +1,7 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 import type { IPasskeyCredential, IPasskeyCredentialRepository } from '@bike4mind/common';
+import { withTransaction } from '@bike4mind/db-core';
+import { User } from './UserModel';
 
 export interface IPasskeyCredentialDocument extends Omit<IPasskeyCredential, 'id'>, Document {
   id: string;
@@ -72,23 +74,28 @@ export class PasskeyCredentialRepository implements IPasskeyCredentialRepository
   }
 
   /**
-   * Remove one passkey unless it is the user's last. The delete and the count are separate
-   * operations, so two concurrent removals could each count the other's passkey as remaining and
-   * both proceed. Counting after the delete and restoring the credential when none remain closes
-   * that: whichever racer counts last sees the true remainder, and two that both see none both
-   * restore, which errs toward keeping the factor.
+   * Remove one passkey unless it is the user's last. Two removals delete different credentials, so
+   * on their own they never write a common document and could both commit, leaving none. Both
+   * first write the owning user document, which makes concurrent removals conflict: withTransaction
+   * retries the loser, whose count then sees the winner's delete. Nothing is deleted and restored.
    */
   async removeUnlessLast(id: string, userId: string): Promise<'removed' | 'not_found' | 'last'> {
-    if (!mongoose.isValidObjectId(id)) return 'not_found';
-    const removed = await PasskeyCredentialModel.findOneAndDelete({ _id: id, userId }).lean();
-    if (!removed) return 'not_found';
-    if ((await PasskeyCredentialModel.countDocuments({ userId })) > 0) return 'removed';
-    await PasskeyCredentialModel.collection.insertOne(removed);
-    return 'last';
+    if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(userId)) return 'not_found';
+    return withTransaction(async session => {
+      await User.updateOne({ _id: userId }, { $set: { updatedAt: new Date() } }, { session });
+      const owned = await PasskeyCredentialModel.exists({ _id: id, userId }).session(session);
+      if (!owned) return 'not_found';
+      if ((await PasskeyCredentialModel.countDocuments({ userId }).session(session)) <= 1) return 'last';
+      await PasskeyCredentialModel.deleteOne({ _id: id, userId }, { session });
+      return 'removed';
+    });
   }
 
-  async removeAllForUser(userId: string): Promise<number> {
-    const result = await PasskeyCredentialModel.deleteMany({ userId });
+  async removeAllForUser(userId: string, options?: { createdBefore?: Date }): Promise<number> {
+    const createdBefore = options?.createdBefore;
+    const result = await PasskeyCredentialModel.deleteMany(
+      createdBefore ? { userId, createdAt: { $lt: createdBefore } } : { userId }
+    );
     return result.deletedCount ?? 0;
   }
 }

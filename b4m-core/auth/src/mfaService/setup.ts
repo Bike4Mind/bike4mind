@@ -61,22 +61,35 @@ export async function setupMFA(
   const stepReset = reused ? {} : { totpLastStep: null };
 
   // Store hashed codes for verification; the plaintext copy lives only until enable clears it.
-  const updatedUser = await userRepository.update({
-    id: user.id,
-    mfa: {
-      totpSecret: setup.secret,
-      totpEnabled: false,
-      // A passkey-only user adding an app keeps their passkey factor while the app is unconfirmed.
-      passkeyEnabled: user.mfa?.passkeyEnabled ?? false,
-      backupCodes: hashedBackupCodes,
-      pendingBackupCodes: backupCodes.join(','),
-      // Kept on reuse so repeat calls cannot stretch the reuse window indefinitely.
-      setupAt: reused ? reused.setupAt : new Date(),
-      lastUsedAt: undefined,
-    },
-    ...stepReset,
-    updatedAt: new Date(),
-  });
+  // Kept on reuse so repeat calls cannot stretch the reuse window indefinitely.
+  const setupAt = reused ? reused.setupAt : new Date();
+  const updatedUser = user.mfa?.passkeyEnabled
+    ? // A passkey-only user adding an app already has a factor. Field-level writes leave its backup
+      // codes, attempt counter and lockout live until the app is confirmed; verifyMFASetup swaps
+      // the new codes in at enable, so an abandoned setup costs the user nothing.
+      await userRepository.update({
+        id: user.id,
+        'mfa.totpSecret': setup.secret,
+        'mfa.totpEnabled': false,
+        'mfa.pendingBackupCodes': backupCodes.join(','),
+        'mfa.setupAt': setupAt,
+        ...stepReset,
+        updatedAt: new Date(),
+      })
+    : await userRepository.update({
+        id: user.id,
+        mfa: {
+          totpSecret: setup.secret,
+          totpEnabled: false,
+          passkeyEnabled: false,
+          backupCodes: hashedBackupCodes,
+          pendingBackupCodes: backupCodes.join(','),
+          setupAt,
+          lastUsedAt: undefined,
+        },
+        ...stepReset,
+        updatedAt: new Date(),
+      });
 
   if (!updatedUser) {
     throw new Error('Failed to save MFA setup data.');
@@ -118,7 +131,12 @@ export async function verifyMFASetup(
     // attempt/lockout state touches only those fields, leaving the secrets untouched. It is
     // conditional on the verified secret so a setup that replaced it in the meantime is not
     // enabled behind the user's back.
-    const updatedUser = await userRepository.atomicEnableMfa(user.id, totpSecret);
+    // A passkey-only user's backup codes stay the passkey's until now (see setupMFA): swap in the
+    // codes this setup showed, in the same conditional write that enables the app.
+    const pendingCodes = user.mfa?.passkeyEnabled ? user.mfa.pendingBackupCodes?.split(',').filter(Boolean) : undefined;
+    const updatedUser = pendingCodes?.length
+      ? await userRepository.atomicEnableMfa(user.id, totpSecret, pendingCodes.map(hashBackupCode))
+      : await userRepository.atomicEnableMfa(user.id, totpSecret);
 
     if (!updatedUser) {
       throw new MfaAttemptRejectedError('MFA setup changed. Please restart enrollment.', attemptState);

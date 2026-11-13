@@ -291,10 +291,10 @@ describe('passkey registration ceremony', () => {
 });
 
 describe('passkey registration and the MFA factor', () => {
-  const register = async (user: IUserDocument) => {
+  const register = async (user: IUserDocument, pendingSignIn = false) => {
     const options = await startPasskeyRegistration({ user, rp: RP }, deps);
     return finishPasskeyRegistration(
-      { user, rp: RP, response: new SoftAuthenticator().register(options.challenge) },
+      { user, rp: RP, response: new SoftAuthenticator().register(options.challenge), pendingSignIn },
       registrationDeps()
     );
   };
@@ -317,6 +317,15 @@ describe('passkey registration and the MFA factor', () => {
     const result = await register(makeUser('user-1', { totpEnabled: false, passkeyEnabled: false }));
     expect(result.firstFactor).toBe(true);
     expect(users.atomicEnablePasskeyMfa).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops the passkey and refuses when a pending sign-in loses the first-factor race', async () => {
+    users.atomicEnablePasskeyMfa.mockResolvedValue(null);
+    const error = await register(makeUser('user-1', null), true).catch((e: unknown) => e);
+
+    expect(error).toMatchObject({ name: 'PasskeyError', code: 'mfa_already_enabled' });
+    expect(await deps.credentials.countByUser('user-1')).toBe(0);
+    expect(users.update).not.toHaveBeenCalled();
   });
 
   it('flags the passkey without issuing codes when a concurrent enrollment won the first-factor race', async () => {

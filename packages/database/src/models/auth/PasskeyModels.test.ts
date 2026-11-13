@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { PasskeyChallengeModel, passkeyChallengeRepository, PASSKEY_CHALLENGE_TTL_MS } from './PasskeyChallengeModel';
-import { passkeyCredentialRepository } from './PasskeyCredentialModel';
+import { PasskeyCredentialModel, passkeyCredentialRepository } from './PasskeyCredentialModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 setupMongoTest();
@@ -72,42 +72,17 @@ describe('passkeyCredentialRepository', () => {
     expect(await passkeyCredentialRepository.countByUser('user-b')).toBe(1);
   });
 
+  it('limits removeAllForUser to credentials older than createdBefore', async () => {
+    const old = await makePasskey('user-c');
+    await PasskeyCredentialModel.updateOne({ _id: old.id }, { $set: { createdAt: new Date(Date.now() - 60_000) } });
+    const cutoff = new Date(Date.now() - 30_000);
+    await makePasskey('user-c');
+    expect(await passkeyCredentialRepository.removeAllForUser('user-c', { createdBefore: cutoff })).toBe(1);
+    expect(await passkeyCredentialRepository.findByCredentialId('user-c', old.credentialId)).toBeNull();
+    expect(await passkeyCredentialRepository.countByUser('user-c')).toBe(1);
+  });
+
   it('returns false for a malformed id instead of throwing a cast error', async () => {
     expect(await passkeyCredentialRepository.remove('not-an-id', 'user-a')).toBe(false);
-  });
-});
-
-describe('passkeyCredentialRepository.removeUnlessLast', () => {
-  it('removes a passkey while another remains', async () => {
-    const first = await makePasskey('user-r1');
-    await makePasskey('user-r1');
-    expect(await passkeyCredentialRepository.removeUnlessLast(first.id, 'user-r1')).toBe('removed');
-    expect(await passkeyCredentialRepository.countByUser('user-r1')).toBe(1);
-  });
-
-  it('restores the last passkey, unchanged, instead of removing it', async () => {
-    const only = await makePasskey('user-r2', 'cred-only');
-    expect(await passkeyCredentialRepository.removeUnlessLast(only.id, 'user-r2')).toBe('last');
-    const restored = await passkeyCredentialRepository.findByCredentialId('user-r2', 'cred-only');
-    expect(restored?.id).toBe(only.id);
-    expect(restored?.publicKey).toBe('pub');
-  });
-
-  it('never leaves zero passkeys when the last two are removed concurrently', async () => {
-    const a = await makePasskey('user-r3');
-    const b = await makePasskey('user-r3');
-    const outcomes = await Promise.all([
-      passkeyCredentialRepository.removeUnlessLast(a.id, 'user-r3'),
-      passkeyCredentialRepository.removeUnlessLast(b.id, 'user-r3'),
-    ]);
-    expect(outcomes).toContain('last');
-    expect(await passkeyCredentialRepository.countByUser('user-r3')).toBeGreaterThanOrEqual(1);
-  });
-
-  it("answers not_found for another user's passkey or a malformed id, touching nothing", async () => {
-    const passkey = await makePasskey('user-r4');
-    expect(await passkeyCredentialRepository.removeUnlessLast(passkey.id, 'user-other')).toBe('not_found');
-    expect(await passkeyCredentialRepository.removeUnlessLast('not-an-id', 'user-r4')).toBe('not_found');
-    expect(await passkeyCredentialRepository.countByUser('user-r4')).toBe(1);
   });
 });

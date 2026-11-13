@@ -4,6 +4,7 @@ import { mfaService } from '@bike4mind/services';
 import { userRepository, passkeyCredentialRepository } from '@bike4mind/database';
 import { readSignInOrigin } from '@server/auth/signInSecondFactor';
 import { completeMfaEnrollment } from '@server/auth/completeMfaEnrollment';
+import { APP_ENROLLMENT_REFUSAL, refuseAppEnrollmentBeforeSecondFactor } from '@server/auth/appEnrollment';
 import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import * as z from 'zod';
@@ -44,6 +45,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
         return res.status(404).json({ error: 'User not found in database' });
       }
 
+      if (refuseAppEnrollmentBeforeSecondFactor(req.user, freshUser)) {
+        return res.status(403).json({ error: APP_ENROLLMENT_REFUSAL });
+      }
+
       // Server-side lockout check (can't be bypassed by refresh/cancel)
       if (mfaService.isUserLockedOut(freshUser)) {
         const remainingMinutes = mfaService.getLockoutTimeRemaining(freshUser);
@@ -56,9 +61,14 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
       // With no factor configured, any passkey still on file is an orphan of an earlier MFA that a
       // failed cleanup left behind. Purge them so a fresh enrollment never revives them. A
-      // passkey-only user adding an app keeps theirs.
+      // passkey-only user adding an app keeps theirs. Orphans predate this app setup, so the purge
+      // stops at setupAt: a first-factor passkey registered while the user types the code survives.
       if (!mfaService.userHasMFAConfigured(freshUser)) {
-        await passkeyCredentialRepository.removeAllForUser(freshUser.id);
+        const setupAt = freshUser.mfa?.setupAt;
+        await passkeyCredentialRepository.removeAllForUser(
+          freshUser.id,
+          setupAt ? { createdBefore: new Date(setupAt) } : undefined
+        );
       }
 
       let setupBody: unknown;

@@ -761,7 +761,11 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
    * filter. Decrypt-compare first, then condition the write on the exact stored value: a concurrent
    * re-setup writes fresh ciphertext, so the compare-and-set still refuses.
    */
-  async atomicEnableMfa(userId: string, totpSecret: string): Promise<IUserDocument | null> {
+  async atomicEnableMfa(
+    userId: string,
+    totpSecret: string,
+    hashedBackupCodes?: string[]
+  ): Promise<IUserDocument | null> {
     const current = await this.model
       .findOne({ _id: userId })
       .select('+mfa.totpSecret')
@@ -776,6 +780,8 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           'mfa.totpEnabled': true,
           'mfa.failedAttempts': 0,
           'mfa.lastUsedAt': new Date(),
+          // Passed when the setup kept an existing factor's codes live (see setupMFA).
+          ...(hashedBackupCodes ? { 'mfa.backupCodes': hashedBackupCodes } : {}),
           updatedAt: new Date(),
         },
         $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1, 'mfa.pendingBackupCodes': 1 },
