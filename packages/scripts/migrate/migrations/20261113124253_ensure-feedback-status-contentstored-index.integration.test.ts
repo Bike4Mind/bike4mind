@@ -6,7 +6,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/
 // Mirrors the sibling ensure-*-index tests' guard against SST config evaluation.
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260921241040_ensure-feedback-status-contentstored-index';
+import migration from './20261113124253_ensure-feedback-status-contentstored-index';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
