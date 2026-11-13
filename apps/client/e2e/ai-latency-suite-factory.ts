@@ -206,7 +206,7 @@ export function createAiLatencySuite({
         throw err;
       }
       const settleEndMs = Date.now();
-      // After the timed windows; reads fallback/routing from the quest and cannot fail the cell.
+      // After the timed windows; reads fallback from the quest and cannot fail the cell.
       // Bounded by the test's remaining time, like the artifact settle; skipped when none is left.
       const provenanceTimeoutMs = Math.min(10_000, test.info().timeout - (Date.now() - testStartMs) - 15_000);
       const provenance = await chatPage.readQuestProvenance(recorder, provenanceTimeoutMs);
