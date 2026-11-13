@@ -25,8 +25,8 @@ function ProjectPicker({ organizationId, groupId }: { organizationId: string; gr
   const mutation = useMutation({
     mutationFn: ({ projectId, enabled }: { projectId: string; enabled: boolean }) =>
       shareGroupProject(organizationId, groupId, projectId, enabled),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['projects'] });
       toast.success('Project sharing updated');
     },
     onError: error => toast.error(getErrorMessage(error)),
