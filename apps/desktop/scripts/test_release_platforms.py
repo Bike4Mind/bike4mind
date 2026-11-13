@@ -51,7 +51,10 @@ class ReleasePlatformsTest(unittest.TestCase):
     def test_missing_zip_or_blockmap_fails(self):
         for name in ('Bike4Mind-0.1.1-arm64.zip', 'Bike4Mind-0.1.1-arm64.zip.blockmap'):
             self.assertNotEqual(self.validate(missing=name), 0)
+            self.assertNotEqual(self.validate(missing=name, mode='selfsigned'), 0)
             self.assertEqual(self.validate(missing=name, mode='adhoc'), 0)
+        self.assertEqual(self.validate(mode='selfsigned'), 0)
+        self.assertNotEqual(self.validate(mode='unknown'), 0)
 
     def test_unexpected_intel_installer_fails(self):
         self.assertNotEqual(self.validate(extra='Bike4Mind-0.1.1-x64.dmg'), 0)

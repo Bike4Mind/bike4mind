@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
-import * as dataLakeScopes from '@server/dataLakes/dataLakeScopes';
+import * as dataLakeScopes from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import {
   CLIENT_DIR,
   HAND_HELPERS,
@@ -35,7 +35,7 @@ import { DERIVED_API_KEY_SCOPE_ENDPOINTS } from '@bike4mind/server-utils/app/con
 
 // Only the gate lists are needed; keep dataLakeScopes from loading the services graph.
 vi.mock('@bike4mind/services', () => ({}));
-vi.mock('@server/auth/turnAuth', () => ({}));
+vi.mock('@bike4mind/server-utils/auth/turnAuth', () => ({}));
 
 /**
  * Every endpoint a scope lists must be gated by a check that admits it and nothing that makes the
@@ -208,7 +208,7 @@ describe('the gate rule itself', () => {
   });
 
   it('counts neither an import, a non-throwing probe, nor a scope array that enforces nothing', () => {
-    const imported = "import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';\n";
+    const imported = "import { DATA_LAKE_SHARE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';\n";
     expect(gatesIn(stripComments(imported), HELPERS)).toEqual([]);
     expect(HELPERS.has('holdsDataLakeReadScope')).toBe(false);
     const payload =

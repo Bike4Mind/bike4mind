@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { AnalyticsDaily, AnalyticsUserDay, UsageEvent, User, UserApiKey } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { rollupDay, shiftDay } from './analyticsRollup';
+import { rollupDay, shiftDay } from '@bike4mind/server-utils/analytics/analyticsRollup';
 import { getAnalyticsCohorts } from './analyticsCohorts';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

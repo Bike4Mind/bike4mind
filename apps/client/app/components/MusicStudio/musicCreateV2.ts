@@ -3,15 +3,7 @@
  * is reported here with its why-not reason (musicFailureReason, the same text the server refuses with) and the value
  * the user can move to in one click. The model cards read the same problems to grey out the models that do not fit.
  */
-import {
-  MUSIC_MODEL_STRENGTHS,
-  MUSIC_PROVIDER_IDS,
-  MUSIC_PROVIDER_LABELS,
-  MusicModelIdSchema,
-  musicFailureReason,
-  type MusicProviderId,
-  type PublicMusicModel,
-} from '@bike4mind/common';
+import { musicFailureReason, type PublicMusicModel } from '@bike4mind/common';
 import type { FieldProblem } from '@client/app/components/Studio/capabilityFields';
 import type { StudioModelCard } from '@client/app/components/Studio/StudioModelCards';
 import { clampDuration, estimateCredits, initialFormFor, type MusicFormState } from './musicForm';
@@ -67,14 +59,6 @@ export function musicFieldProblems(model: PublicMusicModel, form: MusicFormState
   return problems;
 }
 
-const isMusicProvider = (provider: string): provider is MusicProviderId =>
-  (MUSIC_PROVIDER_IDS as readonly string[]).includes(provider);
-
-const strengthOf = (modelId: string): string => {
-  const parsed = MusicModelIdSchema.safeParse(modelId);
-  return parsed.success ? MUSIC_MODEL_STRENGTHS[parsed.data] : '';
-};
-
 const capabilitiesOf = (model: PublicMusicModel): string[] => [
   ...(model.vocals === 'never' ? [] : ['Vocals']),
   'Instrumental',
@@ -88,8 +72,8 @@ export const musicModelCards = (models: readonly PublicMusicModel[], form: Music
     return {
       id: model.id,
       name: model.display_name,
-      provider: isMusicProvider(model.provider) ? MUSIC_PROVIDER_LABELS[model.provider] : model.provider,
-      strength: strengthOf(model.id),
+      provider: model.provider_label ?? model.provider,
+      strength: model.blurb ?? '',
       creditsPerOutput: estimateCredits(initialFormFor(model)),
       outputNoun: 'song',
       modes: capabilitiesOf(model),

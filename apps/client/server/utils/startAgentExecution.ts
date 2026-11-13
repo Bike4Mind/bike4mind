@@ -25,8 +25,8 @@ import {
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
-import type { ApiKeyInfo } from '@server/cli/auth';
+import { credentialExecutionFields, type ApiKeyCredential } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import type { ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { apiKeyBillingOrgId, resolveApiKeyBillingOrg } from '@server/billing/apiKeyBillingOrg';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
@@ -37,7 +37,7 @@ import {
 } from '@server/utils/dispatchAgentExecution';
 import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
-import { pinFilesToSessionKnowledge } from '@server/managers/sessionCrud';
+import { pinFilesToSessionKnowledge } from '@bike4mind/server-utils/managers/sessionCrud';
 import { admitApiKeyCompletion } from '@server/utils/untrustedCompletionQuota';
 import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
 

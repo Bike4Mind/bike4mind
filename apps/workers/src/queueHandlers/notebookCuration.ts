@@ -20,7 +20,10 @@ import { z } from 'zod';
 import { Resource } from 'sst';
 import { createHash } from 'crypto';
 import { createNotebookCommit } from './notebookCurationCommit';
-import { createCompletionMeter, createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import {
+  createCompletionMeter,
+  createRequestCompletionMeter,
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 export const CurateNotebookPayload = z.object({
   sessionId: z.string(),
