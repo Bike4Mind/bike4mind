@@ -1,7 +1,7 @@
 import { test, type APIRequestContext, type APIResponse } from '@playwright/test';
 import { Resource } from 'sst';
 import crypto from 'crypto';
-import type { DataLakeOrigin } from '@bike4mind/common';
+import type { AdminPermissionId, DataLakeOrigin } from '@bike4mind/common';
 import { getE2ETestId, getTestRunId } from './test-users';
 import { wafBypassHeaders } from './waf-bypass';
 
@@ -98,6 +98,8 @@ export async function apiCreateTestUser(
     name: string;
     password: string;
     isAdmin?: boolean;
+    // Delegated admin grants without isAdmin; the server rejects unknown or repeated ids.
+    adminPermissions?: AdminPermissionId[];
     tags?: string[];
     // Pass false to skip the server's PREDEFINED_USER_TAGS, so the user gets only `tags`.
     includePredefinedTags?: boolean;
@@ -157,7 +159,7 @@ export async function apiCreateThrowawayUser(
   // the free-tier rate limit and daily caps.
   options: Pick<
     Parameters<typeof apiCreateTestUser>[1],
-    'initialCredits' | 'includePredefinedTags' | 'emailVerified' | 'apiKeyTrustApproved'
+    'initialCredits' | 'includePredefinedTags' | 'emailVerified' | 'apiKeyTrustApproved' | 'adminPermissions'
   > = {}
 ) {
   const e2eId = getE2ETestId();

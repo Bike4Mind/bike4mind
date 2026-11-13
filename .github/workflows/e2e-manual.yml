@@ -27,6 +27,7 @@ on:
           - Referrals
           - Launch Readiness
           - Admin
+          - Admin Permissions
           - Notebook
           - Prompts
           - Notebook Files
@@ -80,8 +81,8 @@ jobs:
           GATE_RUN: ${{ inputs.gate_run }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          # Map the dropdown to Playwright args (whole projects; Auth/Existing User Login/Signup/MFA/Free Tier Limits
-          # add a spec-file filter). Scheduled runs have no test_project -> full suite.
+          # Map the dropdown to Playwright args (whole projects; Auth/Existing User Login/Signup/MFA/Free Tier Limits/
+          # Admin Permissions add a spec-file filter). Scheduled runs have no test_project -> full suite.
           case "$TEST_PROJECT" in
             ""|"All tests")     ARGS="" ;;
             "Auth")             ARGS="--project=unauthenticated e2e/auth.spec.ts" ;;
@@ -91,6 +92,7 @@ jobs:
             "Referrals")        ARGS="--project=referrals" ;;
             "Launch Readiness") ARGS="--project=launch-readiness" ;;
             "Admin")            ARGS="--project=admin" ;;
+            "Admin Permissions") ARGS="--project=admin e2e/admin-permissions.spec.ts" ;;
             "Notebook")         ARGS="--project=notebook" ;;
             "Prompts")          ARGS="--project=prompts" ;;
             "Notebook Files")   ARGS="--project=notebook-files" ;;

@@ -258,6 +258,7 @@ export default defineConfig({
         /(?:^|\/)admin\.spec\.ts$/,
         /(?:^|\/)admin-settings-secrets\.spec\.ts$/,
         /(?:^|\/)admin-approvals\.spec\.ts$/,
+        /(?:^|\/)admin-permissions\.spec\.ts$/,
         /(?:^|\/)admin-tutorials\.spec\.ts$/,
       ],
     },
