@@ -23,7 +23,7 @@ import {
   sessionScriptRun,
   shellCommandRan,
 } from './sessionScripts';
-import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
+import { commandEnv, launchCommand, spawnFailure, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree } from './commandTree';
 import { protectionFor, secretPaths, type SandboxedCommand } from './sandbox';
 import { folderReaches, shellReachesProtected } from '../permissions/rules';
@@ -246,7 +246,7 @@ function runCommand(
     };
     const onError = (error: Error) => {
       finish();
-      reject(error);
+      reject(spawnFailure(error, cwd, launch));
     };
     const onClose = (closeCode: number | null, closeSignal: NodeJS.Signals | null) => {
       finish();
@@ -471,7 +471,11 @@ async function partAsk(entry: ShellScan['commands'][number]): Promise<ApprovalPa
     kinds.push('gitUnlisted');
   }
   if (kinds.length === 0) return undefined;
-  return { mode: entry.unread || entry.gitUnlisted ? 'full' : 'auto', reason: reasons.join(' '), kinds };
+  return {
+    mode: (entry.unread && !entry.refsMovedOnly) || entry.gitUnlisted ? 'full' : 'auto',
+    reason: reasons.join(' '),
+    kinds,
+  };
 }
 
 /**
@@ -555,7 +559,11 @@ export async function shellApproval(
     scan.unreadScript === true ||
     writesWhileUnresolved;
   const scriptAsksInFull =
-    (touchesProtected && !scan.readOnly) || scan.unreadScript === true || secret || writesWhileUnresolved;
+    (touchesProtected && !scan.readOnly) ||
+    scan.unreadScript === true ||
+    secret ||
+    writesWhileUnresolved ||
+    unreachable.length > 0;
   // A part that sets the environment changes what every later part runs, so none is decided alone.
   const byPart = !scriptAsks && !scriptAsksInFull && !scan.setsEnvironment;
   const reasons = [
@@ -608,6 +616,10 @@ export async function shellApproval(
   const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
   const asks = scriptAsks || parts.some(ask => ask !== undefined);
   const asksInFull = scriptAsksInFull || parts.some(ask => ask?.mode === 'full');
+  const unchecked =
+    scan.unread === true ||
+    scan.unreadScript === true ||
+    scan.commands.some(entry => entry.unread || entry.gitUnlisted);
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
@@ -618,6 +630,7 @@ export async function shellApproval(
     ...(asks ? { askInAuto: true as const } : {}),
     // The file tools refuse these writes, and reads of secrets, in every mode, so 'full' stops for them too.
     ...(asksInFull ? { askInFull: true as const } : {}),
+    ...(unchecked ? { unchecked: true as const } : {}),
     ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
     ...(scan.contained ? { contained: true as const } : {}),
     ...(byPart ? { byPart: true as const } : {}),
@@ -672,6 +685,7 @@ function unreadApproval(
       askInAuto: true,
       askInFull: true,
       reasons: ['Could not read this command, so where it acts cannot be checked.'],
+      unchecked: true,
     };
   const reason =
     'Could not read this command, so it may reach a WSL distro this project has no folder in. It asks each time.';
@@ -681,6 +695,7 @@ function unreadApproval(
     key,
     askInAuto: true,
     askInFull: true,
+    unchecked: true,
     always: {
       namespace: tool,
       commands: [{ text: command, pattern: command, coverable: false, words: command }],

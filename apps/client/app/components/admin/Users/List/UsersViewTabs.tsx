@@ -1,5 +1,6 @@
 import React, { useId, useRef, useState } from 'react';
 import {
+  Box,
   Button,
   Checkbox,
   DialogContent,
@@ -292,27 +293,29 @@ export function UsersViewTabs({
 
   return (
     <>
-      <ViewTabs
-        aria-label="Saved views"
-        data-testid="admin-users-views"
-        activeId={activeUsersTabId(params, savedViews) ?? ''}
-        views={tabs}
-        onSelect={onSelect}
-        trailing={
-          <Button
-            ref={saveButtonRef}
-            size="sm"
-            variant="plain"
-            color="neutral"
-            startDecorator={<AddIcon sx={{ fontSize: 16 }} />}
-            onClick={() => setSaving(true)}
-            data-testid="users-save-view-btn"
-            sx={{ ...adminFocus, flexShrink: 0, minHeight: 34, color: 'admin.inkMuted', fontWeight: 500 }}
-          >
-            Save view
-          </Button>
-        }
-      />
+      <Stack direction="row" alignItems="center" flexWrap="wrap" columnGap={0.5} rowGap={1}>
+        <Box sx={{ minWidth: 0, flex: '0 1 auto', maxWidth: '100%' }}>
+          <ViewTabs
+            aria-label="Saved views"
+            data-testid="admin-users-views"
+            activeId={activeUsersTabId(params, savedViews) ?? ''}
+            views={tabs}
+            onSelect={onSelect}
+          />
+        </Box>
+        <Button
+          ref={saveButtonRef}
+          size="sm"
+          variant="plain"
+          color="neutral"
+          startDecorator={<AddIcon sx={{ fontSize: 16 }} />}
+          onClick={() => setSaving(true)}
+          data-testid="users-save-view-btn"
+          sx={{ ...adminFocus, flexShrink: 0, minHeight: 34, color: 'admin.inkMuted', fontWeight: 500 }}
+        >
+          Save view
+        </Button>
+      </Stack>
       {saving && (
         <SavedViewNameDialog
           title="Save view"

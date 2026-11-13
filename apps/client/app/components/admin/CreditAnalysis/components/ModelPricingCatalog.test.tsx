@@ -851,7 +851,7 @@ describe('ModelPricingCatalog', () => {
   it('lets the table scroll sideways on a phone instead of squeezing its columns', async () => {
     renderCatalog();
     const table = await screen.findByTestId('model-pricing-table');
-    expect(getComputedStyle(table).minWidth).toBe('64rem');
+    expect(getComputedStyle(table).minWidth).toBe('68.5rem');
   });
 
   it('shows only the model a controlled filter names, and reports edits to the host', async () => {

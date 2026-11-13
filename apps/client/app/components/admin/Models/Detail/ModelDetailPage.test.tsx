@@ -532,13 +532,23 @@ describe('links from a model page into full-admin tabs', () => {
   });
 
   it('disables them, with the reason, for a delegate whose permissions do not open those tabs', async () => {
-    user.current = { isAdmin: false, adminPermissions: ['support:read', 'settings:manage'] };
+    user.current = { isAdmin: false, adminPermissions: ['support:read'] };
     const fix = await open();
 
     expect(fix).toBeDisabled();
     expect(screen.getByTestId('model-detail-usage-link')).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByTestId('model-detail-logs-link')).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getAllByTestId('models-tab-blocked-action')).toHaveLength(3);
+  });
+
+  it('keeps Open key settings working for a settings manager, since General settings opens to them', async () => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read', 'settings:manage'] };
+    const fix = await open();
+
+    expect(fix).not.toBeDisabled();
+    expect(screen.getByTestId('model-detail-usage-link')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('model-detail-logs-link')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getAllByTestId('models-tab-blocked-action')).toHaveLength(2);
   });
 });
 

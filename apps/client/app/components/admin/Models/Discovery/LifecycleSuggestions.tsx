@@ -120,6 +120,7 @@ function suggestionColumns(index: ModelIndex, rates: Record<string, PerMTokRate>
       id: 'suggested',
       label: 'Suggested',
       width: '13rem',
+      wrap: true,
       render: item => (
         <Stack>
           <Typography level="body-sm">{lifecycleWord(item.suggestion?.status)}</Typography>
@@ -151,6 +152,7 @@ function suggestionColumns(index: ModelIndex, rates: Record<string, PerMTokRate>
       id: 'source',
       label: 'Source',
       width: '10rem',
+      wrap: true,
       render: item => (
         <Stack>
           <Typography level="body-sm">{item.suggestion?.source ?? 'unknown'}</Typography>

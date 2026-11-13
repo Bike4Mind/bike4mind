@@ -118,7 +118,7 @@ export function buildAccountProfile(input: {
       ja4Present: !!account.signupJa4,
     },
     email,
-    minutesToTwoFactor: account.totpEnabled ? minutesBetween(account.createdAt, account.mfaSetupAt) : null,
+    minutesToTwoFactor: account.mfaEnabled ? minutesBetween(account.createdAt, account.mfaSetupAt) : null,
     minutesToFirstSpend: signedUpInSpendWindow ? minutesBetween(account.createdAt, spend?.firstSpendAt ?? null) : null,
     spend: spendOf(spend),
     linkedAccounts: links ? linkedAccountsOf(account, links) : null,

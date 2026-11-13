@@ -6,7 +6,6 @@ export default {
     [22, '68e1a4506bbca636'],
   ],
   'AdminModalTabNew.tsx': [[2, '1fd68f8a7bbdebfd']],
-  'AdminSystemHealthTab.tsx': [[1, 'c76590d0c3aaf0ac']],
   'AdminWhatsNewModalsTab.tsx': [[1, '27481ac346d5dfed']],
   'CreateSlackAppModal.tsx': [[2, '77f0833039f8ec69']],
   'EventMetrics/components/CurationBreakdownTab.tsx': [[2, 'e2ae0a0feb2b939a']],

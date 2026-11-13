@@ -114,7 +114,12 @@ const priceRowColumns: DataColumn<RunPriceRow & { index: number }>[] = [
 const lifecycleColumns: DataColumn<RunLifecycleTransition & { index: number }>[] = [
   { id: 'model', label: 'Model', render: row => <Mono>{row.modelId}</Mono> },
   { id: 'change', label: 'Change', render: row => `${row.from ?? 'none'} -> ${row.to}` },
-  { id: 'signal', label: 'Signal', render: row => <Coded code={row.signal} text={signalCopy(row.signal)} /> },
+  {
+    id: 'signal',
+    label: 'Signal',
+    wrap: true,
+    render: row => <Coded code={row.signal} text={signalCopy(row.signal)} />,
+  },
   { id: 'deprecation', label: 'Deprecation', render: row => row.deprecationDate ?? '-' },
   { id: 'retirement', label: 'Retirement', render: row => row.retirementDate ?? '-' },
   { id: 'successor', label: 'Successor', render: row => (row.replacedBy ? <Mono>{row.replacedBy}</Mono> : '-') },
@@ -131,6 +136,7 @@ const catalogColumns: DataColumn<RunCatalogDiffEntry>[] = [
     id: 'blocked',
     label: 'Blocked by',
     width: '16rem',
+    wrap: true,
     render: row =>
       row.blockedBy.length > 0 ? (
         <Stack gap={0.5}>
@@ -249,6 +255,7 @@ export function RunDetails({ run }: { run: DiscoveryRun }) {
               id: 'kind',
               label: 'Kind',
               width: '14rem',
+              wrap: true,
               render: flag => <Coded code={flag.kind} text={flagCopy(flag.kind, flag.detail)} />,
             },
             { id: 'proposed', label: 'Proposed per 1M', render: flag => inOut(flag.proposed) },
@@ -340,6 +347,7 @@ export function RunDetails({ run }: { run: DiscoveryRun }) {
             {
               id: 'reason',
               label: 'Reason',
+              wrap: true,
               render: skip => <Coded code={skip.reason} text={priceSkipCopy(skip.reason)} />,
             },
           ]}

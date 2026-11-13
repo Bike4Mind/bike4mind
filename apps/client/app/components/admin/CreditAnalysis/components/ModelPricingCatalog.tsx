@@ -482,7 +482,7 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
           error={error && rows.length === 0 ? error : undefined}
           onRetry={() => void fetchRows()}
           pagination={false}
-          minWidth="64rem"
+          minWidth="68.5rem"
           maxHeight="calc(100vh - 240px)"
           empty={
             filter.trim() ? (
@@ -563,6 +563,8 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
               },
             },
           ]}
+          // Reprice, History and Revert: three icon buttons.
+          actionsWidth="8rem"
           rowActions={row => (
             <>
               {canWritePrice(row.modelId) && (

@@ -66,7 +66,6 @@ const ApprovalsTab = dynamic(() => import('./Approvals'), { ssr: false });
 // their pages lands; each leaves this list in the change that drops its own outer padding, and no new
 // tab joins it (DESIGN_GUIDE section 3, "Page frame").
 const SELF_FRAMED_ATTR = 'data-admin-self-framed';
-const selfFramed = { [SELF_FRAMED_ATTR]: '' };
 
 const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false });
 const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
@@ -178,9 +177,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.AiOperations}>
             {activeTab === AdminTab.AiOperations && <AiOperationsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.Users} {...selfFramed}>
-            {activeTab === AdminTab.Users && <UsersTab />}
-          </TabPanel>
+          <TabPanel value={AdminTab.Users}>{activeTab === AdminTab.Users && <UsersTab />}</TabPanel>
           <TabPanel value={AdminTab.EmailVerification}>
             {activeTab === AdminTab.EmailVerification && <EmailVerificationTab />}
           </TabPanel>
@@ -305,7 +302,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.SecurityDashboard && <SecurityDashboard />}
           </TabPanel>
           <TabPanel value={AdminTab.Team}>{activeTab === AdminTab.Team && <Team />}</TabPanel>
-          <TabPanel value={AdminTab.SystemHealth} {...selfFramed}>
+          <TabPanel value={AdminTab.SystemHealth}>
             {activeTab === AdminTab.SystemHealth && <AdminSystemHealthTab />}
           </TabPanel>
           <TabPanel value={AdminTab.SlackWorkspaces}>

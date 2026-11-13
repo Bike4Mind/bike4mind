@@ -131,6 +131,12 @@ export type ImageJobPayload = {
   providerOutput?: ProviderOutput;
   /** Shared by the jobs one "make N" request created, so a surface can show them as one batch. */
   groupId?: string;
+  /**
+   * How many jobs the request asked for. The batch is persisted one job at a time, so an early finisher can see a
+   * partial group; completion waits until this many are stored and terminal. A batch that aborts mid-persist never
+   * reaches it and is not announced. Absent on jobs made before it existed.
+   */
+  groupSize?: number;
   output?: ImageJobOutput;
   /** As VideoJobPayload.billedBlock. */
   billedBlock?: boolean;
@@ -176,6 +182,8 @@ type GenerationJobFields = {
   rawProviderError?: unknown;
   terminalHandlingClaimedAt?: Date | null;
   terminalHandledAt?: Date | null;
+  /** Set once on a group's anchor job (its lowest id) when the group's completion event is claimed. */
+  groupCompletionNotifiedAt?: Date | null;
   questId?: string;
   delivery?: GenerationJobDelivery;
   createdAt?: Date;
@@ -283,6 +291,10 @@ export interface IGenerationJobRepository extends IBaseRepository<IGenerationJob
   /** Written by a kind's onTerminal right after credits move; the job's lease is not involved. */
   recordSettlement(id: string, settledCredits: number): Promise<void>;
   markTerminalHandled(id: string, at: Date): Promise<void>;
+  /** The image jobs one "make N" request created, for that requester; at most IMAGE_JOB_BATCH_MAX. */
+  findByGroup(requestedBy: string, groupId: string): Promise<IGenerationJobDocument[]>;
+  /** True for exactly one caller per job: the claim that a group's completion event is emitted once. */
+  claimGroupCompletionNotice(id: string, at: Date): Promise<boolean>;
   /** Separate limits so an in-flight backlog can never starve terminal handling (credit release). */
   findStalled(overdueBefore: Date, limits: StalledJobLimits): Promise<IGenerationJobDocument[]>;
   /** Newest first, by id. Visibility is the requester, not the credit owner: org members never see each other's jobs. */

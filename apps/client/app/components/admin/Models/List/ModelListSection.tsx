@@ -540,6 +540,7 @@ export function ModelListSection() {
       label: 'Model',
       sortable: true,
       width: '22rem',
+      wrap: true,
       render: row => (
         <Stack sx={{ minWidth: 0 }}>
           <Typography level="body-sm" sx={{ fontWeight: 600, color: 'admin.ink', overflowWrap: 'anywhere' }}>
@@ -555,6 +556,7 @@ export function ModelListSection() {
       label: 'Status',
       sortable: true,
       width: '20rem',
+      wrap: true,
       render: row => {
         const [first, ...rest] = row.reasons;
         return (
@@ -587,6 +589,7 @@ export function ModelListSection() {
       label: 'Retires',
       sortable: true,
       width: '8rem',
+      wrap: true,
       render: row =>
         row.sunsetDate === null || row.sunsetDays === null ? (
           EMPTY_CELL
