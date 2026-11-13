@@ -5,9 +5,9 @@ const SystemPromptHistorySchema = new Schema<IAdminSystemPromptHistory, Model<IA
   {
     promptId: { type: String, required: true },
     version: { type: Number, required: true },
-    content: { type: String, required: true },
+    content: { type: String, required: true, maxlength: 50000 },
     name: { type: String, required: true },
-    description: { type: String, required: true },
+    description: { type: String, required: true, maxlength: 2000 },
     category: { type: String, required: true },
     tags: [{ type: String }],
     variables: [{ type: String }],
@@ -122,7 +122,7 @@ export class SystemPromptHistoryRepository {
           ...(updates.changeReason !== undefined && { changeReason: updates.changeReason }),
         },
       },
-      { new: true }
+      { new: true, runValidators: true }
     );
     return result?.toJSON() as IAdminSystemPromptHistory | null;
   }
