@@ -297,6 +297,15 @@ describe('processExecution billing wiring', () => {
   });
 });
 
+describe('processExecution thinking wiring', () => {
+  const source = readFileSync(resolve(__dirname, 'agentExecutor.ts'), 'utf8');
+
+  it('gates thinking on the model the run actually uses, not the requested one', () => {
+    expect(source).toContain('runReasoningShortfall(execution, runModelInfo, isNewExecution)');
+    expect(source).toContain('...buildReActAgentRuntimeConfig(execution, runModelInfo),');
+  });
+});
+
 describe('aggregationGraceReasonOf', () => {
   it.each([
     [false, true, false, true, undefined],

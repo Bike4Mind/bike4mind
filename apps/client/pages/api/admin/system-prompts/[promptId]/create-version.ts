@@ -1,7 +1,11 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { systemPromptRepository } from '@bike4mind/database';
+import {
+  SYSTEM_PROMPT_MAX_CONTENT_LENGTH,
+  SYSTEM_PROMPT_MAX_DESCRIPTION_LENGTH,
+  systemPromptRepository,
+} from '@bike4mind/database';
 
 const handler = adminApi({
   adminPermissions: { POST: 'settings:manage' },
@@ -44,6 +48,20 @@ const handler = adminApi({
       return res.status(400).json({
         error: 'Invalid content',
         message: 'content is required',
+      });
+    }
+
+    if (content.length > SYSTEM_PROMPT_MAX_CONTENT_LENGTH) {
+      return res.status(400).json({
+        error: 'Invalid content',
+        message: `content must be at most ${SYSTEM_PROMPT_MAX_CONTENT_LENGTH} characters`,
+      });
+    }
+
+    if (typeof description === 'string' && description.length > SYSTEM_PROMPT_MAX_DESCRIPTION_LENGTH) {
+      return res.status(400).json({
+        error: 'Invalid description',
+        message: `description must be at most ${SYSTEM_PROMPT_MAX_DESCRIPTION_LENGTH} characters`,
       });
     }
 

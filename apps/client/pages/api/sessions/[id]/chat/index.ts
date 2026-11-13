@@ -1,11 +1,12 @@
 import { addMessageToSession, getMessagesFromSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import qs from 'qs';
 import { secureParameters } from '@bike4mind/utils';
-import { chatMessageResponseSchema, queryBool } from '@bike4mind/common';
+import { ApiKeyScope, chatMessageResponseSchema, queryBool } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 
 const searchSchema = z.object({
@@ -25,7 +26,12 @@ const chatMessagePageResponseSchema = z.object({
   hasMore: z.boolean(),
 });
 
-const handler = baseApi()
+// Door admits either notebook scope or admin:*; POST narrows to notebooks:write (or admin:*) below.
+// Both admit legacy keys until the legacy window ends: the route was open to every key before.
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+})
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const { id: sessionId } = req.query;
@@ -37,6 +43,12 @@ const handler = baseApi()
   )
   .post(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
+      assertApiKeyScope(
+        req,
+        [ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
+        'This API key is read-only for notebooks; notebooks:write is required',
+        { grandfatherLegacyKeys: true }
+      );
       const { id: sessionId } = req.query ?? {};
       // TODO: zod parse req.body from IChatHistoryItem
       const message = z

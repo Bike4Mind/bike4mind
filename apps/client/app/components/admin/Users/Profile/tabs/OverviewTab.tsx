@@ -82,9 +82,11 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
       </Fact>
       <Fact label="Signup">{signupParts.length > 0 ? signupParts.join(' \u00b7 ') : null}</Fact>
       <Fact label="Two-factor" data-testid="user-profile-fact-mfa">
-        {user.mfa?.totpEnabled ? (
+        {user.mfa?.totpEnabled || user.mfa?.passkeyEnabled ? (
           <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
-            Authenticator app
+            {[user.mfa.totpEnabled && 'Authenticator app', user.mfa.passkeyEnabled && 'Passkey']
+              .filter(Boolean)
+              .join(' + ')}
             <RowAction onClick={() => onAction('mfaReset')} data-testid="user-profile-mfa-reset-btn">
               Reset
             </RowAction>

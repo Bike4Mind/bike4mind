@@ -20,6 +20,7 @@ import {
   type OwnerLink,
 } from '../subscriptionDetailModel';
 import { StripeSection, invoiceStatusTone, type StripeData } from '../stripeSections';
+import { SubscriptionCharts } from '../SubscriptionCharts';
 
 type OverviewTabProps = {
   detail: AdminSubscriptionDetail;
@@ -325,19 +326,22 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   onOpenLedger,
   stripe,
 }) => (
-  <Box
-    sx={{
-      display: 'grid',
-      gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' },
-      gap: 2,
-      alignItems: 'start',
-    }}
-    data-testid="subscription-detail-overview"
-  >
-    <PlanAndBillingCard detail={detail} />
-    {!isCompSubscription(detail.subscription) && <PaymentCard stripe={stripe} />}
-    <CreditsCard detail={detail} onOpenLedger={onOpenLedger} />
-    <OwnerCard detail={detail} onOpenOwner={onOpenOwner} onOpenSubscription={onOpenSubscription} />
-    <SeatsCard detail={detail} />
-  </Box>
+  <Stack gap={2}>
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' },
+        gap: 2,
+        alignItems: 'start',
+      }}
+      data-testid="subscription-detail-overview"
+    >
+      <PlanAndBillingCard detail={detail} />
+      {!isCompSubscription(detail.subscription) && <PaymentCard stripe={stripe} />}
+      <CreditsCard detail={detail} onOpenLedger={onOpenLedger} />
+      <OwnerCard detail={detail} onOpenOwner={onOpenOwner} onOpenSubscription={onOpenSubscription} />
+      <SeatsCard detail={detail} />
+    </Box>
+    <SubscriptionCharts detail={detail} stripe={stripe} />
+  </Stack>
 );

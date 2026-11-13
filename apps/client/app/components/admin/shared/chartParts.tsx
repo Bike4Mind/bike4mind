@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, Stack, Typography } from '@mui/joy';
+import { ResponsiveContainer } from 'recharts';
 
 // recharts paints SVG attributes, so colors come from the admin CSS variables rather than sx tokens, the
 // same as the profile SpendChart. Series colors are checked for 3:1 on `surface` in contrast.test.ts.
@@ -10,8 +11,11 @@ export const INK_MUTED = 'var(--joy-palette-admin-inkMuted)';
 export const GOOD = 'var(--joy-palette-admin-status-good-foreground)';
 export const BAD = 'var(--joy-palette-admin-status-bad-foreground)';
 export const WARN = 'var(--joy-palette-admin-status-warn-foreground)';
+export const INFO = 'var(--joy-palette-admin-status-info-foreground)';
+export const NEUTRAL = 'var(--joy-palette-admin-status-neutral-foreground)';
 /** DESIGN_GUIDE "Data visualization": comparisons are inkMuted at 40%. */
 export const COMPARISON_OPACITY = 0.4;
+export const SURFACE = 'var(--joy-palette-admin-surface)';
 export const AXIS_TICK = { fontSize: 12, fill: INK_MUTED };
 
 export const xAxisProps = {
@@ -94,5 +98,37 @@ export const ChartLegend: React.FC<{ testId: string; items: readonly ChartLegend
         </Typography>
       </Stack>
     ))}
+  </Stack>
+);
+
+type TooltipProps<Row> = { active?: boolean; payload?: Array<{ payload: Row }> };
+
+/** Builds a recharts tooltip from a row; recharts clones `content`, so it must be an element. */
+export function tooltipFor<Row>(testId: string, render: (row: Row) => { title: string; lines: ChartTooltipLine[] }) {
+  const ChartTooltip = ({ active, payload }: TooltipProps<Row>) => {
+    const row = payload?.[0]?.payload;
+    if (!active || !row) return null;
+    const { title, lines } = render(row);
+    return <ChartTooltipBox testId={testId} title={title} lines={lines} />;
+  };
+  return <ChartTooltip />;
+}
+
+export const CHART_HEIGHT = 200;
+
+/** A fixed-height responsive plot with its legend below. `testId` lands on the plot box. */
+export const ChartFrame: React.FC<{
+  testId: string;
+  legend: readonly ChartLegendItem[];
+  height?: number;
+  children: React.ReactElement;
+}> = ({ testId, legend, height = CHART_HEIGHT, children }) => (
+  <Stack gap={1}>
+    <Box data-testid={testId} sx={{ height, minWidth: 0 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        {children}
+      </ResponsiveContainer>
+    </Box>
+    <ChartLegend testId={testId} items={legend} />
   </Stack>
 );

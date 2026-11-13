@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
 import { OverviewTab } from './OverviewTab';
+
+// The charts read their own history query; SubscriptionCharts.test.tsx covers them.
+vi.mock('../SubscriptionCharts', () => ({ SubscriptionCharts: () => <div data-testid="stub-subscription-charts" /> }));
 import {
   OWNER_ID,
   STRIPE_ROW,
@@ -105,6 +108,7 @@ describe('OverviewTab Payment card', () => {
               attempts: 0,
               hostedInvoiceUrl: null,
               creditsGranted: null,
+              amountRefunded: 0,
             },
             {
               id: 'in_1',
@@ -118,6 +122,7 @@ describe('OverviewTab Payment card', () => {
               attempts: 1,
               hostedInvoiceUrl: null,
               creditsGranted: null,
+              amountRefunded: 0,
             },
           ],
           upcoming: { amount: 2500, currency: 'usd', at: '2026-12-01T00:00:00.000Z' },

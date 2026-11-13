@@ -1,0 +1,1068 @@
+{
+  "light": {
+    "mode": "light",
+    "primary": {
+      "50": [
+        237,
+        245,
+        253,
+        1
+      ],
+      "100": [
+        227,
+        239,
+        251,
+        1
+      ],
+      "200": [
+        199,
+        223,
+        247,
+        1
+      ],
+      "300": [
+        151,
+        195,
+        240,
+        1
+      ],
+      "400": [
+        67,
+        147,
+        228,
+        1
+      ],
+      "500": [
+        11,
+        107,
+        203,
+        1
+      ],
+      "600": [
+        24,
+        94,
+        165,
+        1
+      ],
+      "700": [
+        18,
+        70,
+        123,
+        1
+      ],
+      "800": [
+        10,
+        39,
+        68,
+        1
+      ],
+      "900": [
+        5,
+        20,
+        35,
+        1
+      ],
+      "plainColor": "var(--joy-palette-primary-500, #0B6BCB)",
+      "plainHoverBg": "var(--joy-palette-primary-100, #E3EFFB)",
+      "plainActiveBg": "var(--joy-palette-primary-200, #C7DFF7)",
+      "plainDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "outlinedColor": "var(--joy-palette-primary-500, #0B6BCB)",
+      "outlinedBorder": "var(--joy-palette-primary-300, #97C3F0)",
+      "outlinedHoverBg": "var(--joy-palette-primary-100, #E3EFFB)",
+      "outlinedActiveBg": "var(--joy-palette-primary-200, #C7DFF7)",
+      "outlinedDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "outlinedDisabledBorder": "var(--joy-palette-neutral-200, #DDE7EE)",
+      "softColor": "var(--joy-palette-primary-700, #12467B)",
+      "softBg": "var(--joy-palette-primary-100, #E3EFFB)",
+      "softHoverBg": "var(--joy-palette-primary-200, #C7DFF7)",
+      "softActiveColor": "var(--joy-palette-primary-800, #0A2744)",
+      "softActiveBg": "var(--joy-palette-primary-300, #97C3F0)",
+      "softDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "softDisabledBg": "var(--joy-palette-neutral-50, #FBFCFE)",
+      "solidColor": "var(--joy-palette-common-white, #FFF)",
+      "solidBg": "var(--joy-palette-primary-500, #0B6BCB)",
+      "solidHoverBg": "var(--joy-palette-primary-600, #185EA5)",
+      "solidActiveBg": "var(--joy-palette-primary-700, #12467B)",
+      "solidDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "solidDisabledBg": "var(--joy-palette-neutral-100, #F0F4F8)",
+      "mainChannel": "11 107 203",
+      "lightChannel": "199 223 247",
+      "darkChannel": "18 70 123"
+    },
+    "neutral": {
+      "50": [
+        251,
+        252,
+        254,
+        1
+      ],
+      "100": [
+        240,
+        244,
+        248,
+        1
+      ],
+      "200": [
+        221,
+        231,
+        238,
+        1
+      ],
+      "300": [
+        205,
+        215,
+        225,
+        1
+      ],
+      "400": [
+        159,
+        166,
+        173,
+        1
+      ],
+      "500": [
+        99,
+        107,
+        116,
+        1
+      ],
+      "600": [
+        85,
+        94,
+        104,
+        1
+      ],
+      "700": [
+        50,
+        56,
+        62,
+        1
+      ],
+      "800": [
+        23,
+        26,
+        28,
+        1
+      ],
+      "900": [
+        11,
+        13,
+        14,
+        1
+      ],
+      "plainColor": "var(--joy-palette-neutral-700, #32383E)",
+      "plainHoverBg": "var(--joy-palette-neutral-100, #F0F4F8)",
+      "plainActiveBg": "var(--joy-palette-neutral-200, #DDE7EE)",
+      "plainDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "outlinedColor": "var(--joy-palette-neutral-700, #32383E)",
+      "outlinedBorder": "var(--joy-palette-neutral-300, #CDD7E1)",
+      "outlinedHoverBg": "var(--joy-palette-neutral-100, #F0F4F8)",
+      "outlinedActiveBg": "var(--joy-palette-neutral-200, #DDE7EE)",
+      "outlinedDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "outlinedDisabledBorder": "var(--joy-palette-neutral-200, #DDE7EE)",
+      "softColor": "var(--joy-palette-neutral-700, #32383E)",
+      "softBg": "var(--joy-palette-neutral-100, #F0F4F8)",
+      "softHoverBg": "var(--joy-palette-neutral-200, #DDE7EE)",
+      "softActiveColor": "var(--joy-palette-neutral-800, #171A1C)",
+      "softActiveBg": "var(--joy-palette-neutral-300, #CDD7E1)",
+      "softDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "softDisabledBg": "var(--joy-palette-neutral-50, #FBFCFE)",
+      "solidColor": "var(--joy-palette-common-white, #FFF)",
+      "solidBg": "var(--joy-palette-neutral-500, #636B74)",
+      "solidHoverBg": "var(--joy-palette-neutral-600, #555E68)",
+      "solidActiveBg": "var(--joy-palette-neutral-700, #32383E)",
+      "solidDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "solidDisabledBg": "var(--joy-palette-neutral-100, #F0F4F8)",
+      "plainHoverColor": "var(--joy-palette-neutral-900, #0B0D0E)",
+      "mainChannel": "99 107 116",
+      "lightChannel": "221 231 238",
+      "darkChannel": "50 56 62"
+    },
+    "danger": {
+      "50": [
+        254,
+        246,
+        246,
+        1
+      ],
+      "100": [
+        252,
+        228,
+        228,
+        1
+      ],
+      "200": [
+        247,
+        197,
+        197,
+        1
+      ],
+      "300": [
+        240,
+        152,
+        152,
+        1
+      ],
+      "400": [
+        228,
+        116,
+        116,
+        1
+      ],
+      "500": [
+        196,
+        28,
+        28,
+        1
+      ],
+      "600": [
+        165,
+        24,
+        24,
+        1
+      ],
+      "700": [
+        125,
+        18,
+        18,
+        1
+      ],
+      "800": [
+        67,
+        10,
+        10,
+        1
+      ],
+      "900": [
+        36,
+        5,
+        5,
+        1
+      ],
+      "plainColor": "var(--joy-palette-danger-500, #C41C1C)",
+      "plainHoverBg": "var(--joy-palette-danger-100, #FCE4E4)",
+      "plainActiveBg": "var(--joy-palette-danger-200, #F7C5C5)",
+      "plainDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "outlinedColor": "var(--joy-palette-danger-500, #C41C1C)",
+      "outlinedBorder": "var(--joy-palette-danger-300, #F09898)",
+      "outlinedHoverBg": "var(--joy-palette-danger-100, #FCE4E4)",
+      "outlinedActiveBg": "var(--joy-palette-danger-200, #F7C5C5)",
+      "outlinedDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "outlinedDisabledBorder": "var(--joy-palette-neutral-200, #DDE7EE)",
+      "softColor": "var(--joy-palette-danger-700, #7D1212)",
+      "softBg": "var(--joy-palette-danger-100, #FCE4E4)",
+      "softHoverBg": "var(--joy-palette-danger-200, #F7C5C5)",
+      "softActiveColor": "var(--joy-palette-danger-800, #430A0A)",
+      "softActiveBg": "var(--joy-palette-danger-300, #F09898)",
+      "softDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "softDisabledBg": "var(--joy-palette-neutral-50, #FBFCFE)",
+      "solidColor": "var(--joy-palette-common-white, #FFF)",
+      "solidBg": "var(--joy-palette-danger-500, #C41C1C)",
+      "solidHoverBg": "var(--joy-palette-danger-600, #A51818)",
+      "solidActiveBg": "var(--joy-palette-danger-700, #7D1212)",
+      "solidDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "solidDisabledBg": "var(--joy-palette-neutral-100, #F0F4F8)",
+      "mainChannel": "196 28 28",
+      "lightChannel": "247 197 197",
+      "darkChannel": "125 18 18"
+    },
+    "success": {
+      "50": [
+        246,
+        254,
+        246,
+        1
+      ],
+      "100": [
+        227,
+        251,
+        227,
+        1
+      ],
+      "200": [
+        199,
+        247,
+        199,
+        1
+      ],
+      "300": [
+        161,
+        232,
+        161,
+        1
+      ],
+      "400": [
+        81,
+        188,
+        81,
+        1
+      ],
+      "500": [
+        31,
+        122,
+        31,
+        1
+      ],
+      "600": [
+        19,
+        108,
+        19,
+        1
+      ],
+      "700": [
+        10,
+        71,
+        10,
+        1
+      ],
+      "800": [
+        4,
+        47,
+        4,
+        1
+      ],
+      "900": [
+        2,
+        29,
+        2,
+        1
+      ],
+      "plainColor": "var(--joy-palette-success-500, #1F7A1F)",
+      "plainHoverBg": "var(--joy-palette-success-100, #E3FBE3)",
+      "plainActiveBg": "var(--joy-palette-success-200, #C7F7C7)",
+      "plainDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "outlinedColor": "var(--joy-palette-success-500, #1F7A1F)",
+      "outlinedBorder": "var(--joy-palette-success-300, #A1E8A1)",
+      "outlinedHoverBg": "var(--joy-palette-success-100, #E3FBE3)",
+      "outlinedActiveBg": "var(--joy-palette-success-200, #C7F7C7)",
+      "outlinedDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "outlinedDisabledBorder": "var(--joy-palette-neutral-200, #DDE7EE)",
+      "softColor": "var(--joy-palette-success-700, #0A470A)",
+      "softBg": "var(--joy-palette-success-100, #E3FBE3)",
+      "softHoverBg": "var(--joy-palette-success-200, #C7F7C7)",
+      "softActiveColor": "var(--joy-palette-success-800, #042F04)",
+      "softActiveBg": "var(--joy-palette-success-300, #A1E8A1)",
+      "softDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "softDisabledBg": "var(--joy-palette-neutral-50, #FBFCFE)",
+      "solidColor": "var(--joy-palette-common-white, #FFF)",
+      "solidBg": "var(--joy-palette-success-500, #1F7A1F)",
+      "solidHoverBg": "var(--joy-palette-success-600, #136C13)",
+      "solidActiveBg": "var(--joy-palette-success-700, #0A470A)",
+      "solidDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "solidDisabledBg": "var(--joy-palette-neutral-100, #F0F4F8)",
+      "mainChannel": "31 122 31",
+      "lightChannel": "199 247 199",
+      "darkChannel": "10 71 10"
+    },
+    "warning": {
+      "50": [
+        254,
+        250,
+        246,
+        1
+      ],
+      "100": [
+        253,
+        240,
+        225,
+        1
+      ],
+      "200": [
+        252,
+        225,
+        194,
+        1
+      ],
+      "300": [
+        243,
+        200,
+        150,
+        1
+      ],
+      "400": [
+        234,
+        154,
+        62,
+        1
+      ],
+      "500": [
+        154,
+        91,
+        19,
+        1
+      ],
+      "600": [
+        114,
+        67,
+        13,
+        1
+      ],
+      "700": [
+        73,
+        43,
+        8,
+        1
+      ],
+      "800": [
+        46,
+        27,
+        5,
+        1
+      ],
+      "900": [
+        29,
+        16,
+        2,
+        1
+      ],
+      "plainColor": "var(--joy-palette-warning-500, #9A5B13)",
+      "plainHoverBg": "var(--joy-palette-warning-100, #FDF0E1)",
+      "plainActiveBg": "var(--joy-palette-warning-200, #FCE1C2)",
+      "plainDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "outlinedColor": "var(--joy-palette-warning-500, #9A5B13)",
+      "outlinedBorder": "var(--joy-palette-warning-300, #F3C896)",
+      "outlinedHoverBg": "var(--joy-palette-warning-100, #FDF0E1)",
+      "outlinedActiveBg": "var(--joy-palette-warning-200, #FCE1C2)",
+      "outlinedDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "outlinedDisabledBorder": "var(--joy-palette-neutral-200, #DDE7EE)",
+      "softColor": "var(--joy-palette-warning-700, #492B08)",
+      "softBg": "var(--joy-palette-warning-100, #FDF0E1)",
+      "softHoverBg": "var(--joy-palette-warning-200, #FCE1C2)",
+      "softActiveColor": "var(--joy-palette-warning-800, #2E1B05)",
+      "softActiveBg": "var(--joy-palette-warning-300, #F3C896)",
+      "softDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "softDisabledBg": "var(--joy-palette-neutral-50, #FBFCFE)",
+      "solidColor": "var(--joy-palette-common-white, #FFF)",
+      "solidBg": "var(--joy-palette-warning-500, #9A5B13)",
+      "solidHoverBg": "var(--joy-palette-warning-600, #72430D)",
+      "solidActiveBg": "var(--joy-palette-warning-700, #492B08)",
+      "solidDisabledColor": "var(--joy-palette-neutral-400, #9FA6AD)",
+      "solidDisabledBg": "var(--joy-palette-neutral-100, #F0F4F8)",
+      "mainChannel": "154 91 19",
+      "lightChannel": "252 225 194",
+      "darkChannel": "73 43 8"
+    },
+    "common": {
+      "white": "#FFF",
+      "black": "#000"
+    },
+    "text": {
+      "primary": "var(--joy-palette-neutral-800, #171A1C)",
+      "secondary": "var(--joy-palette-neutral-700, #32383E)",
+      "tertiary": "var(--joy-palette-neutral-600, #555E68)",
+      "icon": "var(--joy-palette-neutral-500, #636B74)"
+    },
+    "background": {
+      "body": "var(--joy-palette-common-white, #FFF)",
+      "surface": [
+        251,
+        252,
+        254,
+        1
+      ],
+      "popup": "var(--joy-palette-common-white, #FFF)",
+      "level1": "var(--joy-palette-neutral-100, #F0F4F8)",
+      "level2": "var(--joy-palette-neutral-200, #DDE7EE)",
+      "level3": "var(--joy-palette-neutral-300, #CDD7E1)",
+      "tooltip": "var(--joy-palette-neutral-500, #636B74)",
+      "backdrop": "rgba(var(--joy-palette-neutral-darkChannel, 11 13 14) / 0.25)"
+    },
+    "divider": "rgba(var(--joy-palette-neutral-mainChannel, 99 107 116) / 0.2)",
+    "focusVisible": "var(--joy-palette-primary-500, #0B6BCB)"
+  },
+  "dark": {
+    "mode": "dark",
+    "primary": {
+      "50": [
+        237,
+        245,
+        253,
+        1
+      ],
+      "100": [
+        227,
+        239,
+        251,
+        1
+      ],
+      "200": [
+        199,
+        223,
+        247,
+        1
+      ],
+      "300": [
+        151,
+        195,
+        240,
+        1
+      ],
+      "400": [
+        67,
+        147,
+        228,
+        1
+      ],
+      "500": [
+        11,
+        107,
+        203,
+        1
+      ],
+      "600": [
+        24,
+        94,
+        165,
+        1
+      ],
+      "700": [
+        18,
+        70,
+        123,
+        1
+      ],
+      "800": [
+        10,
+        39,
+        68,
+        1
+      ],
+      "900": [
+        5,
+        20,
+        35,
+        1
+      ],
+      "plainColor": "var(--joy-palette-primary-300, #97C3F0)",
+      "plainHoverBg": "var(--joy-palette-primary-800, #0A2744)",
+      "plainActiveBg": "var(--joy-palette-primary-700, #12467B)",
+      "plainDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "outlinedColor": "var(--joy-palette-primary-200, #C7DFF7)",
+      "outlinedBorder": "var(--joy-palette-primary-700, #12467B)",
+      "outlinedHoverBg": "var(--joy-palette-primary-800, #0A2744)",
+      "outlinedActiveBg": "var(--joy-palette-primary-700, #12467B)",
+      "outlinedDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "outlinedDisabledBorder": "var(--joy-palette-neutral-800, #171A1C)",
+      "softColor": [
+        209,
+        228,
+        244,
+        1
+      ],
+      "softBg": [
+        23,
+        37,
+        53,
+        1
+      ],
+      "softHoverBg": [
+        28,
+        53,
+        80,
+        1
+      ],
+      "softActiveColor": "var(--joy-palette-primary-100, #E3EFFB)",
+      "softActiveBg": [
+        27,
+        75,
+        122,
+        1
+      ],
+      "softDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "softDisabledBg": "var(--joy-palette-neutral-800, #171A1C)",
+      "solidColor": "var(--joy-palette-common-white, #FFF)",
+      "solidBg": "var(--joy-palette-primary-500, #0B6BCB)",
+      "solidHoverBg": [
+        9,
+        89,
+        170,
+        1
+      ],
+      "solidActiveBg": "var(--joy-palette-primary-700, #12467B)",
+      "solidDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "solidDisabledBg": "var(--joy-palette-neutral-800, #171A1C)",
+      "mainChannel": "67 147 228",
+      "lightChannel": "199 223 247",
+      "darkChannel": "18 70 123"
+    },
+    "neutral": {
+      "50": [
+        251,
+        252,
+        254,
+        1
+      ],
+      "100": [
+        240,
+        244,
+        248,
+        1
+      ],
+      "200": [
+        221,
+        231,
+        238,
+        1
+      ],
+      "300": [
+        205,
+        215,
+        225,
+        1
+      ],
+      "400": [
+        159,
+        166,
+        173,
+        1
+      ],
+      "500": [
+        99,
+        107,
+        116,
+        1
+      ],
+      "600": [
+        85,
+        94,
+        104,
+        1
+      ],
+      "700": [
+        44,
+        49,
+        53,
+        1
+      ],
+      "800": [
+        24,
+        30,
+        35,
+        1
+      ],
+      "900": [
+        19,
+        24,
+        28,
+        1
+      ],
+      "plainColor": "var(--joy-palette-neutral-300, #CDD7E1)",
+      "plainHoverBg": [
+        209,
+        228,
+        244,
+        0.06
+      ],
+      "plainActiveBg": "var(--joy-palette-neutral-700, #32383E)",
+      "plainDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "outlinedColor": "var(--joy-palette-neutral-200, #DDE7EE)",
+      "outlinedBorder": "var(--joy-palette-neutral-700, #32383E)",
+      "outlinedHoverBg": [
+        209,
+        228,
+        244,
+        0.06
+      ],
+      "outlinedActiveBg": "var(--joy-palette-neutral-700, #32383E)",
+      "outlinedDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "outlinedDisabledBorder": "var(--joy-palette-neutral-800, #171A1C)",
+      "softColor": "var(--joy-palette-neutral-200, #DDE7EE)",
+      "softBg": [
+        209,
+        228,
+        244,
+        0.08
+      ],
+      "softHoverBg": "var(--joy-palette-neutral-700, #32383E)",
+      "softActiveColor": "var(--joy-palette-neutral-100, #F0F4F8)",
+      "softActiveBg": "var(--joy-palette-neutral-600, #555E68)",
+      "softDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "softDisabledBg": "var(--joy-palette-neutral-800, #171A1C)",
+      "solidColor": "var(--joy-palette-common-white, #FFF)",
+      "solidBg": "var(--joy-palette-neutral-500, #636B74)",
+      "solidHoverBg": "var(--joy-palette-neutral-600, #555E68)",
+      "solidActiveBg": "var(--joy-palette-neutral-700, #32383E)",
+      "solidDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "solidDisabledBg": "var(--joy-palette-neutral-800, #171A1C)",
+      "plainHoverColor": "var(--joy-palette-neutral-300, #CDD7E1)",
+      "mainChannel": "159 166 173",
+      "lightChannel": "221 231 238",
+      "darkChannel": "44 49 53"
+    },
+    "danger": {
+      "50": [
+        254,
+        246,
+        246,
+        1
+      ],
+      "100": [
+        252,
+        228,
+        228,
+        1
+      ],
+      "200": [
+        247,
+        197,
+        197,
+        1
+      ],
+      "300": [
+        240,
+        152,
+        152,
+        1
+      ],
+      "400": [
+        228,
+        116,
+        116,
+        1
+      ],
+      "500": [
+        196,
+        28,
+        28,
+        1
+      ],
+      "600": [
+        165,
+        24,
+        24,
+        1
+      ],
+      "700": [
+        125,
+        18,
+        18,
+        1
+      ],
+      "800": [
+        67,
+        10,
+        10,
+        1
+      ],
+      "900": [
+        36,
+        5,
+        5,
+        1
+      ],
+      "plainColor": "var(--joy-palette-danger-300, #F09898)",
+      "plainHoverBg": "var(--joy-palette-danger-800, #430A0A)",
+      "plainActiveBg": "var(--joy-palette-danger-700, #7D1212)",
+      "plainDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "outlinedColor": "var(--joy-palette-danger-200, #F7C5C5)",
+      "outlinedBorder": "var(--joy-palette-danger-700, #7D1212)",
+      "outlinedHoverBg": "var(--joy-palette-danger-800, #430A0A)",
+      "outlinedActiveBg": "var(--joy-palette-danger-700, #7D1212)",
+      "outlinedDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "outlinedDisabledBorder": "var(--joy-palette-neutral-800, #171A1C)",
+      "softColor": "var(--joy-palette-danger-200, #F7C5C5)",
+      "softBg": "var(--joy-palette-danger-800, #430A0A)",
+      "softHoverBg": "var(--joy-palette-danger-700, #7D1212)",
+      "softActiveColor": "var(--joy-palette-danger-100, #FCE4E4)",
+      "softActiveBg": "var(--joy-palette-danger-600, #A51818)",
+      "softDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "softDisabledBg": "var(--joy-palette-neutral-800, #171A1C)",
+      "solidColor": "var(--joy-palette-common-white, #FFF)",
+      "solidBg": "var(--joy-palette-danger-500, #C41C1C)",
+      "solidHoverBg": "var(--joy-palette-danger-600, #A51818)",
+      "solidActiveBg": "var(--joy-palette-danger-700, #7D1212)",
+      "solidDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "solidDisabledBg": "var(--joy-palette-neutral-800, #171A1C)",
+      "mainChannel": "228 116 116",
+      "lightChannel": "247 197 197",
+      "darkChannel": "125 18 18"
+    },
+    "success": {
+      "50": [
+        246,
+        254,
+        246,
+        1
+      ],
+      "100": [
+        227,
+        251,
+        227,
+        1
+      ],
+      "200": [
+        199,
+        247,
+        199,
+        1
+      ],
+      "300": [
+        161,
+        232,
+        161,
+        1
+      ],
+      "400": [
+        81,
+        188,
+        81,
+        1
+      ],
+      "500": [
+        31,
+        122,
+        31,
+        1
+      ],
+      "600": [
+        19,
+        108,
+        19,
+        1
+      ],
+      "700": [
+        10,
+        71,
+        10,
+        1
+      ],
+      "800": [
+        4,
+        47,
+        4,
+        1
+      ],
+      "900": [
+        2,
+        29,
+        2,
+        1
+      ],
+      "plainColor": "var(--joy-palette-success-300, #A1E8A1)",
+      "plainHoverBg": "var(--joy-palette-success-800, #042F04)",
+      "plainActiveBg": "var(--joy-palette-success-700, #0A470A)",
+      "plainDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "outlinedColor": "var(--joy-palette-success-200, #C7F7C7)",
+      "outlinedBorder": "var(--joy-palette-success-700, #0A470A)",
+      "outlinedHoverBg": "var(--joy-palette-success-800, #042F04)",
+      "outlinedActiveBg": "var(--joy-palette-success-700, #0A470A)",
+      "outlinedDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "outlinedDisabledBorder": "var(--joy-palette-neutral-800, #171A1C)",
+      "softColor": "var(--joy-palette-success-200, #C7F7C7)",
+      "softBg": "var(--joy-palette-success-800, #042F04)",
+      "softHoverBg": "var(--joy-palette-success-700, #0A470A)",
+      "softActiveColor": "var(--joy-palette-success-100, #E3FBE3)",
+      "softActiveBg": "var(--joy-palette-success-600, #136C13)",
+      "softDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "softDisabledBg": "var(--joy-palette-neutral-800, #171A1C)",
+      "solidColor": "var(--joy-palette-common-white, #FFF)",
+      "solidBg": "var(--joy-palette-success-500, #1F7A1F)",
+      "solidHoverBg": "var(--joy-palette-success-600, #136C13)",
+      "solidActiveBg": "var(--joy-palette-success-700, #0A470A)",
+      "solidDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "solidDisabledBg": "var(--joy-palette-neutral-800, #171A1C)",
+      "mainChannel": "81 188 81",
+      "lightChannel": "199 247 199",
+      "darkChannel": "10 71 10"
+    },
+    "warning": {
+      "50": [
+        254,
+        250,
+        246,
+        1
+      ],
+      "100": [
+        253,
+        240,
+        225,
+        1
+      ],
+      "200": [
+        252,
+        225,
+        194,
+        1
+      ],
+      "300": [
+        243,
+        200,
+        150,
+        1
+      ],
+      "400": [
+        234,
+        154,
+        62,
+        1
+      ],
+      "500": [
+        154,
+        91,
+        19,
+        1
+      ],
+      "600": [
+        114,
+        67,
+        13,
+        1
+      ],
+      "700": [
+        73,
+        43,
+        8,
+        1
+      ],
+      "800": [
+        46,
+        27,
+        5,
+        1
+      ],
+      "900": [
+        29,
+        16,
+        2,
+        1
+      ],
+      "plainColor": "var(--joy-palette-warning-300, #F3C896)",
+      "plainHoverBg": "var(--joy-palette-warning-800, #2E1B05)",
+      "plainActiveBg": "var(--joy-palette-warning-700, #492B08)",
+      "plainDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "outlinedColor": "var(--joy-palette-warning-200, #FCE1C2)",
+      "outlinedBorder": "var(--joy-palette-warning-700, #492B08)",
+      "outlinedHoverBg": "var(--joy-palette-warning-800, #2E1B05)",
+      "outlinedActiveBg": "var(--joy-palette-warning-700, #492B08)",
+      "outlinedDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "outlinedDisabledBorder": "var(--joy-palette-neutral-800, #171A1C)",
+      "softColor": "var(--joy-palette-warning-200, #FCE1C2)",
+      "softBg": "var(--joy-palette-warning-800, #2E1B05)",
+      "softHoverBg": "var(--joy-palette-warning-700, #492B08)",
+      "softActiveColor": "var(--joy-palette-warning-100, #FDF0E1)",
+      "softActiveBg": "var(--joy-palette-warning-600, #72430D)",
+      "softDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "softDisabledBg": "var(--joy-palette-neutral-800, #171A1C)",
+      "solidColor": "var(--joy-palette-common-white, #FFF)",
+      "solidBg": "var(--joy-palette-warning-500, #9A5B13)",
+      "solidHoverBg": "var(--joy-palette-warning-600, #72430D)",
+      "solidActiveBg": "var(--joy-palette-warning-700, #492B08)",
+      "solidDisabledColor": "var(--joy-palette-neutral-500, #636B74)",
+      "solidDisabledBg": "var(--joy-palette-neutral-800, #171A1C)",
+      "mainChannel": "234 154 62",
+      "lightChannel": "252 225 194",
+      "darkChannel": "73 43 8"
+    },
+    "common": {
+      "white": "#FFF",
+      "black": "#000"
+    },
+    "text": {
+      "primary": [
+        209,
+        228,
+        244,
+        1
+      ],
+      "secondary": [
+        209,
+        228,
+        244,
+        0.8
+      ],
+      "tertiary": [
+        209,
+        228,
+        244,
+        0.7
+      ],
+      "icon": "var(--joy-palette-neutral-400, #9FA6AD)"
+    },
+    "background": {
+      "body": [
+        14,
+        18,
+        20,
+        1
+      ],
+      "surface": [
+        19,
+        24,
+        28,
+        1
+      ],
+      "popup": [
+        24,
+        30,
+        35,
+        1
+      ],
+      "level1": [
+        24,
+        30,
+        35,
+        1
+      ],
+      "level2": [
+        44,
+        49,
+        53,
+        1
+      ],
+      "level3": "var(--joy-palette-neutral-600, #555E68)",
+      "tooltip": "var(--joy-palette-neutral-600, #555E68)",
+      "backdrop": "rgba(var(--joy-palette-neutral-darkChannel, 251 252 254) / 0.25)"
+    },
+    "divider": [
+      44,
+      49,
+      53,
+      1
+    ],
+    "focusVisible": "var(--joy-palette-primary-500, #0B6BCB)"
+  },
+  "fontFamily": {
+    "body": "\"Inter\", var(--joy-fontFamily-fallback, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\")",
+    "display": "\"Inter\", var(--joy-fontFamily-fallback, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\")",
+    "code": "Source Code Pro,ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace",
+    "fallback": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\""
+  },
+  "fontSize": {
+    "xs": "0.75rem",
+    "sm": "0.875rem",
+    "md": "1rem",
+    "lg": "1.125rem",
+    "xl": "1.25rem",
+    "xl2": "1.5rem",
+    "xl3": "1.875rem",
+    "xl4": "2.25rem"
+  },
+  "fontWeight": {
+    "sm": 300,
+    "md": 500,
+    "lg": 600,
+    "xl": 700
+  },
+  "lineHeight": {
+    "xs": "1.33334",
+    "sm": "1.42858",
+    "md": "1.5",
+    "lg": "1.55556",
+    "xl": "1.66667"
+  },
+  "radius": {
+    "xs": "2px",
+    "sm": "6px",
+    "md": "8px",
+    "lg": "12px",
+    "xl": "16px"
+  },
+  "shadow": {
+    "xs": "var(--joy-shadowRing, 0 0 #000), 0px 1px 2px 0px rgba(var(--joy-shadowChannel, 21 21 21) / var(--joy-shadowOpacity, 0.08))",
+    "sm": "var(--joy-shadowRing, 0 0 #000), 0px 1px 2px 0px rgba(var(--joy-shadowChannel, 21 21 21) / var(--joy-shadowOpacity, 0.08)), 0px 2px 4px 0px rgba(var(--joy-shadowChannel, 21 21 21) / var(--joy-shadowOpacity, 0.08))",
+    "md": "var(--joy-shadowRing, 0 0 #000), 0px 2px 8px -2px rgba(var(--joy-shadowChannel, 21 21 21) / var(--joy-shadowOpacity, 0.08)), 0px 6px 12px -2px rgba(var(--joy-shadowChannel, 21 21 21) / var(--joy-shadowOpacity, 0.08))",
+    "lg": "var(--joy-shadowRing, 0 0 #000), 0px 2px 8px -2px rgba(var(--joy-shadowChannel, 21 21 21) / var(--joy-shadowOpacity, 0.08)), 0px 12px 16px -4px rgba(var(--joy-shadowChannel, 21 21 21) / var(--joy-shadowOpacity, 0.08))",
+    "xl": "var(--joy-shadowRing, 0 0 #000), 0px 2px 8px -2px rgba(var(--joy-shadowChannel, 21 21 21) / var(--joy-shadowOpacity, 0.08)), 0px 20px 24px -4px rgba(var(--joy-shadowChannel, 21 21 21) / var(--joy-shadowOpacity, 0.08))"
+  },
+  "spacing": "8px"
+}

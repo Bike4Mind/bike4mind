@@ -8,23 +8,13 @@ import {
 } from '@shared/pullRequest';
 import { SET_SESSION_PULL_REQUEST_TOOL_NAME } from '../chat/tools/pullRequestTool';
 
-/**
- * Auto-fix turns allowed per PR before it gives up.
- *
- * Five: a fix often uncovers the next failure, so the first few turns are spent converging. Each
- * is a full agent turn spending the user's credits with nobody watching, and a problem that five
- * attempts have not moved is one that needs a person, not a sixth guess. Re-checking the box is
- * that person deciding otherwise, and refills it.
- */
-export const MAX_AUTO_FIX_ATTEMPTS = 5;
-
 const LEGACY_MAX_AUTO_FIX_ATTEMPTS = 3;
 
 /**
- * The attempts this PR's box was ticked for. Kept per binding so changing the limit never restarts
- * a PR that already gave up - raising it does not grant more, and lowering it does not cut the turn
- * budget short: only re-ticking the box grants the new budget. A binding ticked before the budget
- * was stored had the legacy one.
+ * The attempts this PR's box was ticked for, from the Settings value at that moment. Kept per
+ * binding so lowering the setting never cuts a running PR short; re-ticking the box grants the
+ * current value, and raising the setting raises PRs already on (see PrMonitor.setAutoFixAttempts).
+ * A binding ticked before the budget was stored had the legacy one.
  */
 export function autoFixBudget(binding: PrBinding): number {
   return binding.autoFixMax ?? LEGACY_MAX_AUTO_FIX_ATTEMPTS;

@@ -8,6 +8,7 @@ const OWNER = 'b'.repeat(24);
 const mocks = vi.hoisted(() => ({
   subscription: vi.fn(),
   ledger: vi.fn(),
+  refunds: vi.fn(),
   configured: vi.fn(),
   retrieve: vi.fn(),
   list: vi.fn(),
@@ -16,6 +17,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<object>()),
+  BillingEventModel: {
+    find: (query: unknown) => ({
+      select: () => ({ maxTimeMS: () => ({ lean: () => mocks.refunds(query) }) }),
+    }),
+  },
   CreditTransaction: {
     find: (query: unknown) => ({
       select: () => ({ maxTimeMS: () => ({ lean: () => mocks.ledger(query) }) }),
@@ -92,6 +98,7 @@ describe('getAdminSubscriptionStripe', () => {
     mocks.list.mockReturnValue(pages([invoice('in_1'), invoice('in_2')]));
     mocks.createPreview.mockResolvedValue({ amount_due: 2500, currency: 'usd' });
     mocks.ledger.mockResolvedValue([]);
+    mocks.refunds.mockResolvedValue([]);
   });
   afterEach(() => vi.useRealTimers());
 
@@ -134,6 +141,22 @@ describe('getAdminSubscriptionStripe', () => {
     expect(mocks.ledger).toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: OWNER, ownerType: 'User', type: 'subscription' })
     );
+  });
+
+  it("joins refunds by payment intent from the owner's stored refund events, keeping the largest cumulative amount", async () => {
+    mocks.list.mockReturnValue(pages([invoice('in_1'), invoice('in_2', { payments: { data: [] } })]));
+    mocks.refunds.mockResolvedValue([
+      { amount: 300, data: { paymentIntentId: 'pi_in_1' } },
+      { amount: 1000, data: { paymentIntentId: 'pi_in_1' } },
+    ]);
+    const result = await getAdminSubscriptionStripe(ID);
+    expect(result).toMatchObject({ invoices: [{ amountRefunded: 1000 }, { amountRefunded: 0 }] });
+    expect(mocks.refunds).toHaveBeenCalledWith({
+      ownerType: 'user',
+      ownerId: OWNER,
+      type: 'charge.refunded',
+      'data.paymentIntentId': { $in: ['pi_in_1'] },
+    });
   });
 
   it('counts only paid invoices toward lifetime paid, per currency, largest first', async () => {

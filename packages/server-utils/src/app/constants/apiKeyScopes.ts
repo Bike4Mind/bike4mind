@@ -255,14 +255,6 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   },
 ];
 
-/**
- * Routes every non-confined key may call whatever its scopes, because the route declares no scope at
- * all. Not exhaustive: these are the ones a scope's own list would otherwise be expected to name (the
- * notebook list a `notebooks:read` key relies on). Shown once in the Scopes tab, never under a scope;
- * apiKeyScopeEndpoints.test.ts pins that each still has no scope door.
- */
-export const OPEN_TO_ANY_KEY_ENDPOINTS: readonly string[] = ['GET /api/sessions'];
-
 const ENDPOINT_ENTRY = /^([A-Z|]+) (\/api\/\S+)/;
 
 /** `GET /x/:id` and `GET|PUT /x/:fileId` alike, one key per method, param names ignored. */
@@ -483,21 +475,23 @@ export const isApiKeyScopeOffered = (scope: ApiKeyScopeValue, access: ApiKeyScop
 };
 
 /**
- * The scopes an org-owned key may carry (pages/api/organizations/[id]/api-keys, OrgApiKeysSection's
- * picker): the generic built-in scopes with no product or entitlement gate. Such a key is held by the
- * org's service account, which has no subscription or entitlements, so a gated or contributed scope
- * would be refused at use however it was minted. `api-keys:manage` is left out for the same reason:
- * every `/api/user-api-keys/*` route refuses an org service account (assertNotOrgServiceAccount).
+ * Whether an org-owned key may carry `scope`: any generic-modal scope, with product and entitlement
+ * gates judged against the ORG (resolveApiKeyScopeAccessForOrganization), never a member. The key's
+ * principal is the org's service account, whose request-time entitlements are the org plan's
+ * (getRequestActiveSubscriptions), so a scope offered here is one its routes later admit.
+ * `api-keys:manage` is never offered: every `/api/user-api-keys/*` route refuses an org service
+ * account (assertNotOrgServiceAccount). Validated by pages/api/organizations/[id]/api-keys on create
+ * and edit; the picker lists `orgApiKeyScopesFor` over the same access.
  */
-export const ORG_API_KEY_SCOPES: readonly ApiKeyScopeOption[] = GENERIC_MODAL_API_KEY_SCOPES.filter(
-  s =>
-    isBuiltInApiKeyScope(s.value) &&
-    !GATED_API_KEY_SCOPES[s.value] &&
-    !s.requiredEntitlement &&
-    s.value !== ApiKeyScope.API_KEYS_MANAGE
-);
+export const isOrgApiKeyScopeOffered = (scope: string, access: ApiKeyScopeAccess): boolean => {
+  if (scope === ApiKeyScope.API_KEYS_MANAGE) return false;
+  const option = GENERIC_MODAL_API_KEY_SCOPES.find(s => s.value === scope);
+  return !!option && isApiKeyScopeOffered(option.value, access);
+};
 
-export const isOrgApiKeyScope = (value: string): boolean => ORG_API_KEY_SCOPES.some(s => s.value === value);
+/** The scopes an org key's picker lists: the same set isOrgApiKeyScopeOffered admits. */
+export const orgApiKeyScopesFor = (access: ApiKeyScopeAccess): ApiKeyScopeOption[] =>
+  genericApiKeyScopesFor(access).filter(option => isOrgApiKeyScopeOffered(option.value, access));
 
 // One list per access combination, so callers get a stable reference (NewKeyModal re-seeds its
 // selection when the identity changes).
