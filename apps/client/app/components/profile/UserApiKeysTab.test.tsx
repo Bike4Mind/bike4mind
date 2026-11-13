@@ -213,15 +213,6 @@ describe('UserApiKeysTab - legacy keys', () => {
     expect(screen.queryByTestId('api-key-legacy-badge-key-1')).not.toBeInTheDocument();
     expect(screen.queryByTestId('api-keys-legacy-alert')).not.toBeInTheDocument();
   });
-
-  it('does not badge a revoked legacy key', () => {
-    h.keys = [{ ...revokedKey, legacy: true, legacyEndsAt: endsAt }];
-    renderTab();
-    fireEvent.click(screen.getByText('Show revoked (1)'));
-
-    expect(screen.queryByTestId('api-key-legacy-badge-key-2')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('api-keys-legacy-alert')).not.toBeInTheDocument();
-  });
 });
 
 describe('keyTestPath', () => {

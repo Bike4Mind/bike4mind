@@ -1,6 +1,7 @@
 import {
   ApiKeyScope,
   ApiKeyScopeValue,
+  ApiKeyStatus,
   CONFINED_API_KEY_SCOPES,
   isExchangeKeyMetadata,
   type IUserApiKeyMetadata,
@@ -116,11 +117,13 @@ export type ApiKeyLegacyStatus = {
 
 /**
  * A key's legacy status as owners and admins see it. Mirrors the gate: a confined or
- * exchange key is never grandfathered (see {@link decideScopeGate}), so it is never
- * reported as legacy whatever its creation date.
+ * exchange key is never grandfathered (see {@link decideScopeGate}), and a revoked or
+ * expired key never reaches it, so neither is reported as legacy whatever its creation date.
  */
 export function getApiKeyLegacyStatus(
   key: {
+    status: ApiKeyStatus;
+    expiresAt?: Date | null;
     createdAt?: Date;
     scopes?: readonly ApiKeyScopeValue[];
     metadata?: IUserApiKeyMetadata;
@@ -128,8 +131,12 @@ export function getApiKeyLegacyStatus(
   now: Date = new Date(),
   window: Readonly<LegacyApiKeyWindow> = LEGACY_API_KEY_WINDOW
 ): ApiKeyLegacyStatus {
+  const usable = key.status === ApiKeyStatus.ACTIVE && !(key.expiresAt && new Date(key.expiresAt) <= now);
   const legacy =
-    !isExchangeKeyMetadata(key.metadata) && !isConfinedKey(key.scopes) && isLegacyApiKey(key.createdAt, now, window);
+    usable &&
+    !isExchangeKeyMetadata(key.metadata) &&
+    !isConfinedKey(key.scopes) &&
+    isLegacyApiKey(key.createdAt, now, window);
   return { legacy, legacyEndsAt: legacy ? window.endsAt : null };
 }
 

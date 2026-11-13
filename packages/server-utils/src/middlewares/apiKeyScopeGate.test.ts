@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
 import {
   assertApiKeyScope,
   decideScopeGate,
@@ -290,19 +290,22 @@ describe('isLegacyApiKey', () => {
 });
 
 describe('getApiKeyLegacyStatus', () => {
+  const ACTIVE = { status: ApiKeyStatus.ACTIVE };
   const window = { cutoff: new Date('2027-01-01T00:00:00Z'), endsAt: new Date('2027-04-01T00:00:00Z') };
   const before = new Date('2026-12-31T00:00:00Z');
   const midWindow = new Date('2027-02-01T00:00:00Z');
 
   it('reports a key created before the cutoff as legacy, with the end date', () => {
-    expect(getApiKeyLegacyStatus({ createdAt: before, scopes: [ApiKeyScope.AI_GENERATE] }, midWindow, window)).toEqual({
+    expect(
+      getApiKeyLegacyStatus({ ...ACTIVE, createdAt: before, scopes: [ApiKeyScope.AI_GENERATE] }, midWindow, window)
+    ).toEqual({
       legacy: true,
       legacyEndsAt: window.endsAt,
     });
   });
 
   it('reports a key created at or after the cutoff as not legacy, with no date', () => {
-    expect(getApiKeyLegacyStatus({ createdAt: window.cutoff }, midWindow, window)).toEqual({
+    expect(getApiKeyLegacyStatus({ ...ACTIVE, createdAt: window.cutoff }, midWindow, window)).toEqual({
       legacy: false,
       legacyEndsAt: null,
     });
@@ -310,16 +313,28 @@ describe('getApiKeyLegacyStatus', () => {
 
   it('never reports a confined or exchange key as legacy, as the gate never grandfathers one', () => {
     expect(
-      getApiKeyLegacyStatus({ createdAt: before, scopes: [ApiKeyScope.EMBED_CHAT] }, midWindow, window).legacy
+      getApiKeyLegacyStatus({ ...ACTIVE, createdAt: before, scopes: [ApiKeyScope.EMBED_CHAT] }, midWindow, window)
+        .legacy
     ).toBe(false);
     expect(
-      getApiKeyLegacyStatus({ createdAt: before, metadata: { createdFrom: 'oauth-exchange' } }, midWindow, window)
-        .legacy
+      getApiKeyLegacyStatus(
+        { ...ACTIVE, createdAt: before, metadata: { createdFrom: 'oauth-exchange' } },
+        midWindow,
+        window
+      ).legacy
     ).toBe(false);
   });
 
+  it('never reports a revoked or expired key as legacy, as neither reaches the gate', () => {
+    expect(getApiKeyLegacyStatus({ status: ApiKeyStatus.DISABLED, createdAt: before }, midWindow, window).legacy).toBe(
+      false
+    );
+    const expired = { ...ACTIVE, createdAt: before, expiresAt: new Date('2027-01-15T00:00:00Z') };
+    expect(getApiKeyLegacyStatus(expired, midWindow, window).legacy).toBe(false);
+  });
+
   it('reports legacy with no end date while the window is unset', () => {
-    expect(getApiKeyLegacyStatus({ createdAt: before })).toEqual({ legacy: true, legacyEndsAt: null });
+    expect(getApiKeyLegacyStatus({ ...ACTIVE, createdAt: before })).toEqual({ legacy: true, legacyEndsAt: null });
   });
 });
 

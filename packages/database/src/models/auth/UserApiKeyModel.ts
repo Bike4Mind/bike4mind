@@ -80,7 +80,7 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     const now = new Date();
     const filter = {
       status: ApiKeyStatus.ACTIVE,
-      // Repeated because aggregate skips the soft-delete filter.
+      // Explicit because countDocuments and aggregate skip the soft-delete filter.
       deletedAt: null,
       lastUsedAt: { $gte: usedSince },
       ...(createdBefore ? { createdAt: { $lt: createdBefore } } : {}),

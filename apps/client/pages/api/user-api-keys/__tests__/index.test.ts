@@ -69,6 +69,11 @@ vi.mock('@bike4mind/services', () => ({
   userApiKeyService: { createUserApiKey, listUserApiKeys, listOrganizationApiKeys },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
+const legacyWindow = vi.hoisted(() => ({ cutoff: null as Date | null, endsAt: null as Date | null }));
+vi.mock('@bike4mind/server-utils/middlewares/apiKeyScopeGate', async importOriginal => ({
+  ...(await importOriginal<object>()),
+  LEGACY_API_KEY_WINDOW: legacyWindow,
+}));
 // findIdsAdministeredBy stays (GET org-list + POST org-billing auth use it);
 // findById is added because the owner-scoped gate + GET now resolve owners.
 const userRepository = vi.hoisted(() => ({ findById: vi.fn().mockResolvedValue({ id: 'owner' }) }));
@@ -477,32 +482,45 @@ describe('GET /api/user-api-keys - revoked-key visibility', () => {
 });
 
 describe('GET /api/user-api-keys - legacy status', () => {
+  const pre = { userId: 'u1', status: 'active', createdAt: new Date('2026-06-01T00:00:00Z') };
+
   beforeEach(() => {
     findIdsAdministeredBy.mockResolvedValue([]);
+    legacyWindow.cutoff = null;
+    legacyWindow.endsAt = null;
   });
 
-  it('attaches the legacy flag and end date from the shared rule, never for a confined key', async () => {
-    listUserApiKeys.mockResolvedValueOnce([
-      { id: 'k-ordinary', userId: 'u1', scopes: [ApiKeyScope.AI_GENERATE], createdAt: new Date('2026-01-01') },
-      { id: 'k-embed', userId: 'u1', scopes: [ApiKeyScope.EMBED_CHAT], createdAt: new Date('2026-01-01') },
-    ]);
+  async function listKeys(keys: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {
+    listUserApiKeys.mockResolvedValueOnce(keys);
     const { req, res } = createMocks({ method: 'GET' });
     const json = vi.fn();
     Object.assign(req, { user: { id: 'u1' } });
     Object.assign(res, { json });
-
     await mockRefs.getHandler!(req, res);
+    return json.mock.calls[0][0];
+  }
 
-    // The shipped window has no dates: every ordinary key is legacy, with no end date to show.
-    const payload: Array<{ id: string }> = json.mock.calls[0][0];
-    expect(payload.find(k => k.id === 'k-ordinary')).toMatchObject({
-      legacy: true,
-      legacyEndsAt: null,
-    });
-    expect(payload.find(k => k.id === 'k-embed')).toMatchObject({
-      legacy: false,
-      legacyEndsAt: null,
-    });
+  it('flags a key created before the cutoff with the end date, and not a newer one', async () => {
+    legacyWindow.cutoff = new Date('2027-01-01T00:00:00Z');
+    legacyWindow.endsAt = new Date('2099-01-01T00:00:00Z');
+
+    const [older, newer] = await listKeys([
+      { ...pre, id: 'k-older', scopes: [ApiKeyScope.AI_GENERATE] },
+      { ...pre, id: 'k-newer', scopes: [ApiKeyScope.AI_GENERATE], createdAt: new Date('2027-02-01T00:00:00Z') },
+    ]);
+
+    expect(older).toMatchObject({ legacy: true, legacyEndsAt: legacyWindow.endsAt });
+    expect(newer).toMatchObject({ legacy: false, legacyEndsAt: null });
+  });
+
+  it('flags every ordinary key with no date while the window is unset, never a confined key', async () => {
+    const [ordinary, embed] = await listKeys([
+      { ...pre, id: 'k-ordinary', scopes: [ApiKeyScope.AI_GENERATE] },
+      { ...pre, id: 'k-embed', scopes: [ApiKeyScope.EMBED_CHAT] },
+    ]);
+
+    expect(ordinary).toMatchObject({ legacy: true, legacyEndsAt: null });
+    expect(embed).toMatchObject({ legacy: false, legacyEndsAt: null });
   });
 });
 

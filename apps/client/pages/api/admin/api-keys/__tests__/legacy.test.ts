@@ -47,6 +47,7 @@ vi.mock('@bike4mind/server-utils/middlewares/apiKeyScopeGate', async importOrigi
 
 const findLegacyCandidatesPage = vi.hoisted(() => vi.fn());
 const findUsers = vi.hoisted(() => vi.fn());
+const warn = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { findLegacyCandidatesPage } }));
 vi.mock('@bike4mind/database', () => ({ userRepository: { find: findUsers } }));
 
@@ -61,6 +62,7 @@ const legacyKey = {
   name: 'Build bot',
   keyPrefix: 'b4m_live_abc',
   userId: OWNER,
+  status: 'active',
   scopes: [ApiKeyScope.AI_GENERATE],
   metadata: { createdFrom: 'dashboard' },
   createdAt: new Date('2026-06-01T00:00:00Z'),
@@ -69,7 +71,7 @@ const legacyKey = {
 
 const invoke = async (query: Record<string, unknown> = {}, user: unknown = { isAdmin: true }) => {
   const { req, res } = createMocks({ method: 'GET' });
-  Object.assign(req, { query, user });
+  Object.assign(req, { query, user, logger: { warn } });
   await mockRefs.getHandler!(req, res);
   return res;
 };
@@ -148,6 +150,7 @@ describe('GET /api/admin/api-keys/legacy', () => {
 
     expect(res._getJSONData().rows).toEqual([]);
     expect(findUsers).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/legacy rule rejects/), { dropped: 1 });
   });
 
   it('lists nothing once legacy access has ended, without querying', async () => {
@@ -159,8 +162,9 @@ describe('GET /api/admin/api-keys/legacy', () => {
     expect(res._getJSONData()).toMatchObject({ rows: [], total: 0, ownerCount: 0 });
   });
 
-  it('caps the page size so one request stays bounded', async () => {
+  it('caps the page size and the page so one request stays bounded', async () => {
     await expect(invoke({ limit: '1000' })).rejects.toThrow();
+    await expect(invoke({ page: '1001' })).rejects.toThrow();
     expect(findLegacyCandidatesPage).not.toHaveBeenCalled();
   });
 });

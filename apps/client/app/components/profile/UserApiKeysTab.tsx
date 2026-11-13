@@ -2031,8 +2031,7 @@ export default function UserApiKeysTab() {
 
   // The server decides legacy status. The badge waits for an end date: while none is announced
   // every older key is legacy, and a dateless badge on all of them would only alarm.
-  const legacyEndsAt = (key: IUserApiKeyListItem) =>
-    key.legacy && key.legacyEndsAt && getStatusText(key) === 'Active' ? key.legacyEndsAt : null;
+  const legacyEndsAt = (key: IUserApiKeyListItem) => (key.legacy ? key.legacyEndsAt : null);
 
   const keys = data ?? [];
   const revokedCount = keys.filter(isRevoked).length;
@@ -2112,11 +2111,11 @@ export default function UserApiKeysTab() {
             <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-keys-legacy-alert">
               <Typography level="body-sm">
                 {legacyKeyEndDates.length === 1
-                  ? 'One of your keys uses'
-                  : `${legacyKeyEndDates.length} of your keys use`}{' '}
-                legacy access, which ends on {dayjs(legacyKeyEndDates[0]).format('MMM D, YYYY')}. After that a key
-                reaches only what its scopes allow. Create a new key with the scopes your integration needs and switch
-                to it; rotating a legacy key keeps it legacy.
+                  ? 'One key in this list uses'
+                  : `${legacyKeyEndDates.length} keys in this list use`}{' '}
+                legacy access, which ends on {dayjs(legacyKeyEndDates[0]).format('MMM D, YYYY')}. After that, endpoints
+                that now require scopes refuse a key that does not hold them. Create a new key with the scopes your
+                integration needs and switch to it; rotating a legacy key keeps it legacy.
               </Typography>
             </Alert>
           )}
@@ -2179,7 +2178,7 @@ export default function UserApiKeysTab() {
                           <Typography fontWeight="lg">{key.name}</Typography>
                           {legacyEndsAt(key) && (
                             <Tooltip
-                              title="This key was created before scopes were enforced. Create a new key with the scopes it needs before this date; rotating keeps the key legacy."
+                              title="This key was created before scopes were enforced. Before this date, create a new key with the scopes it needs; rotating keeps the key legacy."
                               variant="soft"
                               size="sm"
                               sx={{ maxWidth: 320 }}

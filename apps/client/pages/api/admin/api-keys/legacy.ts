@@ -14,7 +14,8 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const QuerySchema = z.object({
-  page: z.coerce.number().int().min(1).optional().default(1),
+  // Bounds the skip as well as the page size.
+  page: z.coerce.number().int().min(1).max(1000).optional().default(1),
   limit: z.coerce.number().int().min(1).max(100).optional().default(25),
   days: z.coerce.number().int().min(1).max(365).optional().default(30),
 });
@@ -45,6 +46,12 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
       : { keys: [], total: 0, ownerCount: 0 };
 
     const legacyKeys = keys.filter(key => getApiKeyLegacyStatus(key, now, window).legacy);
+    if (legacyKeys.length < keys.length) {
+      // The query and the rule disagree, so total and ownerCount overstate this page.
+      req.logger?.warn('Legacy key candidate query matched keys the legacy rule rejects', {
+        dropped: keys.length - legacyKeys.length,
+      });
+    }
     const owners = await findOwners(legacyKeys.map(key => key.userId));
 
     const rows: IAdminLegacyApiKeyRow[] = legacyKeys.map(key => {
