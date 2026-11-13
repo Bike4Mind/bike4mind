@@ -82,7 +82,6 @@ export default function HeldSignupGrantsTab() {
   });
   const [confirmRelease, setConfirmRelease] = useState(false);
   const [confirmRevoke, setConfirmRevoke] = useState(false);
-  const [confirmRelease, setConfirmRelease] = useState(false);
   const rows = query.data?.data ?? [];
   const busy = release.isPending || revoke.isPending;
   const selectedIds = selection.mode === 'explicit' ? selection.ids : [];
