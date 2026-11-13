@@ -141,8 +141,9 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, plug
           <Typography level="body-xs">
             Only add this to your own <code>~/.claude/settings.json</code>, never to a project&apos;s{' '}
             <code>.claude/settings.json</code>: that file is usually committed, which would share your key. To keep the
-            key out of files, Claude Code v2.1.238+ can run a <code>headersHelper</code> command that prints the{' '}
-            <code>Authorization</code> header instead of storing <code>headers</code>.
+            key out of files, Claude Code v2.1.238+ can run a <code>headersHelper</code> command instead of storing{' '}
+            <code>headers</code>. The command must print a JSON object of headers, such as{' '}
+            <code>{'{"Authorization": "Bearer <key>"}'}</code>, not a raw header line.
           </Typography>
         </Alert>
         <Typography level="body-xs" textColor="text.tertiary" data-testid="skill-claude-code-marketplace-update">

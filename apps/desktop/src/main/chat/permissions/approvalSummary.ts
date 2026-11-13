@@ -104,7 +104,7 @@ function deciderLabel(entry: ApprovalLogEntry): string {
   const decidedBy = entry.approval.decidedBy;
   switch (decidedBy.kind) {
     case 'user':
-      return `user: ${decidedBy.answer}${decidedBy.everywhere ? ' (everywhere)' : ''}`;
+      return `user: ${decidedBy.answer}${decidedBy.everywhere ? ' (everywhere)' : decidedBy.project ? ' (project)' : ''}`;
     case 'mode':
       return `mode: ${decidedBy.mode}`;
     case 'rule':

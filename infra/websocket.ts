@@ -1,8 +1,11 @@
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, STAGE_LOG_RETENTION } from './constants';
 import { allSecrets } from './secrets';
 import { lambdaVpc } from './vpc';
 
-const websocketApi = new sst.aws.ApiGatewayWebSocket('websocket', {});
+// Access logs carry client IPs; use the stage default instead of SST's flat 1 month.
+const websocketApi = new sst.aws.ApiGatewayWebSocket('websocket', {
+  accessLog: { retention: STAGE_LOG_RETENTION },
+});
 
 // Memory is set per route so a change shows in review. The cold-start Mongoose + AWS SDK
 // init sets the floor: lifecycle handlers at 256 MB hit OOM and init timeouts on previews.

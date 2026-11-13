@@ -6,7 +6,7 @@ import { OperationsModelService } from '@bike4mind/server-utils/services/operati
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { HTTPError } from '@bike4mind/common';
 import { meterCompletionBackend } from '@bike4mind/services';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 const BARKEEP_SYSTEM_PROMPT = `You are Grimbold, the jovial bartender of The Gilded Flagon tavern.
 You speak in a warm, slightly rough medieval voice — think gruff but kind.
@@ -40,7 +40,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     }
 
     try {
-      const operations = await OperationsModelService.getOperationsModel();
+      const operations = await OperationsModelService.getOperationsModel({ endUserId: req.user.id });
       const { modelId } = operations;
       const llm = meterCompletionBackend(
         operations.llm,

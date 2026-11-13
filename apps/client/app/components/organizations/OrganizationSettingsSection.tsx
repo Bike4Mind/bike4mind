@@ -87,8 +87,8 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
     setConfirmationModal({
       open: true,
       type: 'danger',
-      title: 'Delete Organization',
-      description: 'Are you sure you want to delete this organization? This action cannot be undone.',
+      title: 'Delete Team',
+      description: 'Are you sure you want to delete this team? This action cannot be undone.',
       okLabel: 'Delete',
       onOk: async () => {
         await deleteOrganization.mutateAsync(organization.id);
@@ -106,7 +106,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
         </Typography>
         <Stack spacing={2} sx={{ p: 2 }}>
           <FormControl>
-            <FormLabel>Organization-wide AI Context</FormLabel>
+            <FormLabel>Team-wide AI Context</FormLabel>
             <Textarea
               value={systemPrompt}
               onChange={e => handleSystemPromptChange(e.target.value)}
@@ -188,7 +188,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
                 className="organization-settings-delete-button"
                 data-testid="organization-settings-delete-btn"
               >
-                Delete Organization
+                Delete Team
               </Button>
             </Box>
           </Stack>

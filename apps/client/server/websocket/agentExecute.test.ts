@@ -68,7 +68,7 @@ vi.mock('@bike4mind/server-utils/utils/publishMementoCompletion', () => ({
 vi.mock('@server/websocket/reconnectBudget', () => ({
   decideInlineBudgets: vi.fn().mockReturnValue({ includeStepsInline: true, includeChildrenInline: true }),
 }));
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyJwtToken: vi.fn(),
   checkRateLimit: vi.fn(),
   verifyApiKey: vi.fn(),
@@ -104,12 +104,20 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
 }));
 
 import { ApiKeyScope, PROMPT_TEXT_MAX, TooManyRequestsError } from '@bike4mind/common';
-import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
+import {
+  verifyApiKey,
+  verifyJwtToken,
+  checkApiKeyRateLimitOrThrow,
+  checkRateLimit,
+} from '@bike4mind/server-utils/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { endAgentRunLiveActivity } from '@server/utils/liveActivityPush';
 import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+const mockRecordUserActivity = vi.hoisted(() => vi.fn());
+vi.mock('@server/users/recordUserActivity', () => ({ recordUserActivity: mockRecordUserActivity }));
+
 import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
@@ -683,6 +691,17 @@ describe('start command credential threading', () => {
     expect(input.apiKeyInfo).toBe(key);
   });
 
+  it('stamps the user active and counts the key as used when a run starts', async () => {
+    mockRecordUserActivity.mockClear();
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({ keyId: 'key-1', userId: 'user-1', scopes: [] } as never);
+
+    const invoke = func as unknown as (...arguments_: unknown[]) => Promise<unknown>;
+    await invoke(startEvent('b4m_live_x'), {}, noopLogger);
+
+    expect(verifyApiKey).toHaveBeenCalledWith(expect.anything(), { recordUse: true });
+    expect(mockRecordUserActivity).toHaveBeenCalledWith('user-1', noopLogger);
+  });
+
   it('relays quota error metadata to the websocket caller', async () => {
     mockApiGwSend.mockClear();
     vi.mocked(verifyApiKey).mockResolvedValueOnce({
@@ -851,6 +870,16 @@ describe('reconnect command', () => {
     await invoke(reconnectEvent({ sessionId: 'session-1', requestId: 'request-123' }), {}, noopLogger);
 
     expect(sentPayloads()[0]).toMatchObject({ requestId: 'request-123', found });
+  });
+
+  it('neither stamps the user active nor counts the key as used: reattaching is not an action', async () => {
+    mockFindActiveBySessionId.mockResolvedValueOnce(null);
+
+    const invoke = func as unknown as (...arguments_: unknown[]) => Promise<unknown>;
+    await invoke(reconnectEvent({ sessionId: 'session-1' }), {}, noopLogger);
+
+    expect(verifyApiKey).toHaveBeenCalledWith(expect.anything(), { recordUse: false });
+    expect(mockRecordUserActivity).not.toHaveBeenCalled();
   });
 
   it('echoes the execution sessionId on a found run, so the client never has to correlate', async () => {

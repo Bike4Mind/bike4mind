@@ -34,7 +34,7 @@ import {
   verifyApiKey,
   checkApiKeyRateLimitOrThrow,
   type ApiKeyInfo,
-} from '@server/cli/auth';
+} from '@bike4mind/server-utils/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
@@ -77,6 +77,8 @@ import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitE
 const WS_COMPLETIONS_ENDPOINT = '/api/ai/v1/ws-completions';
 
 const WsCompletionRequestSchema = CompletionRequestSchema.extend({
+  // Run attribution is only verified and forwarded on the SSE route; refuse it here rather than drop it silently.
+  run: z.never().optional(),
   requestId: z.uuid(),
   connectionId: z.string().optional(),
 });
@@ -128,10 +130,10 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
 
       // Authenticate - API key first, then JWT (mirrors the SSE route).
       try {
-        apiKeyInfo = await verifyApiKey(headers);
+        apiKeyInfo = await verifyApiKey(headers, { allowExchangeKeys: true });
         userId = apiKeyInfo.userId;
         logger.info('[CLI_WS_HTTP] Authenticated via API key', { keyId: apiKeyInfo.keyId });
-        logApiKeyUsageOnResponse({
+        await logApiKeyUsageOnResponse({
           req,
           res,
           apiKey: apiKeyInfo,

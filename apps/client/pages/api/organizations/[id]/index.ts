@@ -13,8 +13,8 @@ import {
 import { groupRepository } from '@bike4mind/database/social';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
-import { clearDeletedOrganizationReferences } from '@server/organizations/clearDeletedOrganizationReferences';
+import { assertDataLakeShareScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { clearDeletedOrganizationReferences } from '@bike4mind/server-utils/organizations/clearDeletedOrganizationReferences';
 import { creditService, organizationService } from '@bike4mind/services';
 import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -30,7 +30,7 @@ const updateOrgBodySchema = z.object({
   // No bare coerce: it reads null (what JSON makes of NaN) and '' as 0, which would wipe the balance.
   currentCredits: z
     .union([z.number(), z.string().trim().min(1)])
-    .pipe(z.coerce.number<string | number>().min(0))
+    .pipe(z.coerce.number<string | number>().int().min(0))
     .optional(),
   systemPrompt: z.string().max(10000).optional(),
   redactPushContent: z.boolean().optional(),

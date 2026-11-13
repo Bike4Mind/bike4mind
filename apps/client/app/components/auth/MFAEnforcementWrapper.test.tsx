@@ -37,32 +37,38 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (s: unknown) => unknown) => selector({ currentUser: { id: 'u1', mfa: null } }),
 }));
 
-// Not impersonating; getState is only touched on the verify path (not exercised here).
+// Not impersonating; getState is touched on the verify path and by the sign-out's funnel report.
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: Object.assign((selector: (s: unknown) => unknown) => selector({ impersonating: false }), {
-    getState: () => ({ forceLogoutTokens: vi.fn() }),
+    getState: () => ({ forceLogoutTokens: vi.fn(), accessToken: 'session-tok' }),
   }),
 }));
+
+const { reportMfaEnrollmentAbandoned } = vi.hoisted(() => ({ reportMfaEnrollmentAbandoned: vi.fn() }));
+vi.mock('@client/app/utils/mfaEnrollmentFunnel', () => ({ reportMfaEnrollmentAbandoned }));
 
 const { logoutMutate } = vi.hoisted(() => ({ logoutMutate: vi.fn() }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useUserLogout: () => ({ mutate: logoutMutate, isPending: false }),
 }));
 
-// A stub modal: surfaces the inline error and lets a test submit a code.
+// A stub modal: surfaces the inline error and lets a test submit a code or sign out.
 vi.mock('@client/app/components/common/MFAModal', () => ({
   default: ({
     error,
     mode,
     onVerify,
+    onSignOut,
   }: {
     error?: string | null;
     mode?: string;
     onVerify: (code: string, remember: boolean) => void;
+    onSignOut?: () => void;
   }) => (
     <div data-testid="mfa-modal-stub" data-mode={mode}>
       <span data-testid="mfa-modal-stub-error">{error}</span>
       <button data-testid="mfa-modal-stub-verify" onClick={() => onVerify('000000', false)} />
+      {onSignOut && <button data-testid="mfa-modal-stub-sign-out" onClick={onSignOut} />}
     </div>
   ),
 }));
@@ -193,6 +199,16 @@ describe('MFAEnforcementWrapper - a session stuck at the verification prompt', (
 
     fireEvent.click(signOut);
     expect(logoutMutate).toHaveBeenCalledTimes(1);
+    expect(reportMfaEnrollmentAbandoned).toHaveBeenCalledExactlyOnceWith('session-tok');
+  });
+
+  it('labels the exit as a sign-out and explains the step without pointing at an administrator', async () => {
+    renderWrapper();
+
+    expect((await screen.findByTestId('mfa-enforcement-sign-out-btn')).textContent).toBe('Sign out');
+    const reason = screen.getByTestId('mfa-enforcement-reason').textContent ?? '';
+    expect(reason).toContain('your credits');
+    expect(reason).not.toMatch(/administrator/i);
   });
 
   it('tells the user when the sign-out fails, instead of leaving them on the screen silently', async () => {
@@ -326,6 +342,15 @@ describe('MFAEnforcementWrapper - failed setup verification', () => {
     );
     expect(toastError).toHaveBeenCalledWith('Invalid code (2 attempts remaining)');
     expect(screen.getByTestId('mfa-modal-stub').getAttribute('data-mode')).toBe('setup');
+  });
+
+  it('offers the same labelled sign-out inside the setup dialog that covers the screen', async () => {
+    renderWrapper();
+
+    fireEvent.click(await screen.findByTestId('mfa-modal-stub-sign-out'));
+
+    expect(logoutMutate).toHaveBeenCalledTimes(1);
+    expect(reportMfaEnrollmentAbandoned).toHaveBeenCalledExactlyOnceWith('session-tok');
   });
 
   it('clears the inline error when the user retries', async () => {

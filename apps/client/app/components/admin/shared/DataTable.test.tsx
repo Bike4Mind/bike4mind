@@ -55,6 +55,17 @@ describe('DataTable', () => {
     expect(onPageSizeChange).toHaveBeenCalledWith(50);
   });
 
+  it('drops its own border when it is the body of a card', () => {
+    const { unmount } = renderTable();
+    const framed = getComputedStyle(screen.getByTestId('admin-data-table-frame'));
+    expect(framed.borderWidth).toBe('1px');
+    unmount();
+    renderTable({ framed: false });
+    const frame = screen.getByTestId('admin-data-table-frame');
+    expect(frame).toHaveAttribute('data-framed', 'false');
+    expect(getComputedStyle(frame).borderWidth).toBe('0px');
+  });
+
   it('offers a way back from an empty server page past the end', () => {
     const onPageChange = vi.fn();
     renderTable({
@@ -78,6 +89,19 @@ describe('DataTable', () => {
     expect(row).toHaveAttribute('aria-selected', 'true');
     fireEvent.keyDown(row, { key: 'x' });
     expect(row).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('marks the active row independently of bulk selection', () => {
+    renderTable({
+      rows: rows.slice(0, 2),
+      activeRowId: '1',
+      selection: { mode: 'explicit', ids: ['2'] },
+      onSelectionChange: vi.fn(),
+    });
+    expect(screen.getByTestId('admin-table-row-1')).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByTestId('admin-table-row-1')).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByTestId('admin-table-row-2')).not.toHaveAttribute('aria-current');
+    expect(screen.getByTestId('admin-table-row-2')).toHaveAttribute('aria-selected', 'true');
   });
 
   it('runs a row shortcut on the focused row only for a plain, fresh key press', () => {

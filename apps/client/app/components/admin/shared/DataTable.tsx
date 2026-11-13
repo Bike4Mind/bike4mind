@@ -17,6 +17,8 @@ import type { AdminSelection } from './BulkActionBar';
 export type DataColumn<Row> = {
   id: string;
   label: string;
+  /** A help control after the header label, such as the definition of the term. */
+  help?: ReactNode;
   render: (row: Row) => ReactNode;
   /** Sorts the loaded rows locally. Ignored when the table's sort is controlled. */
   sortValue?: (row: Row) => string | number;
@@ -36,7 +38,11 @@ export type DataTablePagination = {
   onPageSizeChange: (pageSize: number) => void;
 };
 /** A header row followed by its rows. Rows in no group render last, without a header. */
-export type DataTableGroup = { id: string; header: ReactNode; rowIds: readonly string[] };
+export type DataTableGroup = {
+  id: string;
+  header: ReactNode | ((visibleCount: number) => ReactNode);
+  rowIds: readonly string[];
+};
 export type DataTableProps<Row> = {
   rows: readonly Row[];
   columns: readonly DataColumn<Row>[];
@@ -70,6 +76,11 @@ export type DataTableProps<Row> = {
   maxHeight?: string;
   /** Show the scrollbar thumb all the time instead of only on hover. */
   alwaysShowScrollbar?: boolean;
+  /**
+   * `false` drops the table's own border and radius, for a table that is the body of a `SectionCard`
+   * (`body="custom"`): the card is then the one surface (DESIGN_GUIDE.md, Cards).
+   */
+  framed?: boolean;
 };
 const CELL_CONTROLS = 'button, input, a, [role="checkbox"], [role="menu"], [role="menuitem"]';
 
@@ -104,6 +115,7 @@ export function DataTable<Row>({
   minWidth = '40rem',
   maxHeight = '65vh',
   alwaysShowScrollbar = false,
+  framed = true,
 }: DataTableProps<Row>) {
   const [localSort, setLocalSort] = useState<DataTableSort>();
   const [localPage, setLocalPage] = useState(0);
@@ -265,12 +277,18 @@ export function DataTable<Row>({
       sx={{
         ...adminSurface,
         ...adminFocusScope,
-        borderWidth: 1,
-        borderStyle: 'solid',
-        borderRadius: 'lg',
+        ...(framed
+          ? { borderWidth: 1, borderStyle: 'solid', borderRadius: 'lg' }
+          : {
+              border: 0,
+              borderRadius: 0,
+              // As a card's last child, round with the card or the square corner paints over its border arc.
+              '&:last-child': { borderBottomLeftRadius: 'inherit', borderBottomRightRadius: 'inherit' },
+            }),
         overflow: 'hidden',
       }}
       data-testid={`${testId}-frame`}
+      data-framed={framed}
     >
       <Box
         role="region"
@@ -300,7 +318,8 @@ export function DataTable<Row>({
             '--TableCell-headBackground': 'var(--joy-palette-admin-surfaceSubtle)',
             '--TableCell-paddingX': '12px',
             '& th, & td': { borderColor: 'admin.border', color: 'admin.ink', verticalAlign: 'middle' },
-            '& thead th': { height: 38, color: 'admin.inkMuted', fontSize: 12, fontWeight: 500 },
+            // No block padding: a sortable header's 32 px skinned `sm` button would otherwise push the row to 42.
+            '& thead th': { height: 38, py: 0, color: 'admin.inkMuted', fontSize: 12, fontWeight: 500 },
             '& tbody tr[data-row-id] td': { height: 56 },
             '& tbody tr[data-row-id]:focus-visible': {
               outline: '2px solid var(--joy-palette-admin-accent)',
@@ -362,6 +381,20 @@ export function DataTable<Row>({
                   ) : (
                     column.label
                   )}
+                  {column.help && (
+                    <Box
+                      component="span"
+                      sx={{
+                        display: 'inline-flex',
+                        verticalAlign: 'middle',
+                        ml: 0.25,
+                        my: -1,
+                        '& svg': { fontSize: 16 },
+                      }}
+                    >
+                      {column.help}
+                    </Box>
+                  )}
                 </th>
               ))}
               {rowActions && <th style={{ width: '3.5rem' }} aria-label="Row actions" />}
@@ -395,6 +428,7 @@ export function DataTable<Row>({
                           data-row-id={id}
                           tabIndex={onRowActivate || selectable || rowShortcuts ? 0 : undefined}
                           aria-keyshortcuts={rowKeyShortcuts(row)}
+                          aria-current={activeRowId === id ? true : undefined}
                           aria-selected={selectable ? isSelected(id) : activeRowId === id}
                           data-testid={rowTestId?.(row) ?? `admin-table-row-${id}`}
                           onClick={event => onRowClick(event, row)}
@@ -535,7 +569,13 @@ function groupSections<Row>(
       placed.add(id);
       return true;
     });
-    if (groupRows.length > 0) sections.push({ id: group.id, header: group.header, rows: groupRows });
+    if (groupRows.length > 0) {
+      sections.push({
+        id: group.id,
+        header: typeof group.header === 'function' ? group.header(groupRows.length) : group.header,
+        rows: groupRows,
+      });
+    }
   }
   const rest = rows.filter(row => !placed.has(getRowId(row)));
   if (rest.length > 0) sections.push({ id: 'ungrouped', rows: rest });

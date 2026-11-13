@@ -27,7 +27,7 @@ import { ModelServersSettings, modelServersSummary, useModelServers } from './Mo
 import { WorktreesSettings } from './WorktreesSettings';
 import type { CuratedListSettings as CuratedListSettingsState } from '@shared/models';
 import { CuratedListSettings, curatedListSummary, useCuratedListSettings } from './CuratedListSettings';
-import { EntrySection, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
+import { SettingsRow, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
 import {
   ArrowLeftIcon,
   BranchIcon,
@@ -43,6 +43,7 @@ import {
   SubSessionsIcon,
 } from './icons';
 import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
+import { useMenuBarSetting } from './menuBarSetting';
 import { useOrchestratorSound } from './orchestrator/chime';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { useCostDisplayPreference } from './costDisplay';
@@ -70,6 +71,10 @@ function appearanceEntry(
     icon: <ContrastIcon />,
     label: 'Appearance',
     summary: themeModeSummary(mode, resolved),
+    description:
+      currentThemeMode(mode) === 'system'
+        ? `Choose a light or dark appearance, or follow your system settings (currently ${resolved}).`
+        : 'Choose a light or dark appearance, or follow your system settings.',
     control: (
       <ToggleButtonGroup
         size="sm"
@@ -78,6 +83,13 @@ function appearanceEntry(
           if (next) setMode(next as ThemeMode);
         }}
         data-testid="settings-appearance-group"
+        sx={{
+          bgcolor: 'background.level1',
+          borderRadius: 'md',
+          p: 0.5,
+          gap: 0.5,
+          '& .MuiButton-root': { border: 0, borderRadius: 'sm' },
+        }}
       >
         {THEME_MODES.map(themeMode => (
           <Button key={themeMode} value={themeMode} data-testid={`settings-appearance-${themeMode}-btn`}>
@@ -95,18 +107,32 @@ function suggestionsEntry(enabled: boolean, toggle: () => void, model: string | 
     icon: <SparkIcon />,
     label: 'Suggested next prompt',
     summary: promptSuggestionsSummary(enabled, model),
+    description: 'Suggest a next prompt after a reply. Uses a little extra model usage.',
     control: (
-      <Stack spacing={1.25}>
+      <Stack spacing={1.25} sx={{ alignItems: { xs: 'flex-start', md: 'flex-end' } }}>
         <Switch
           size="sm"
           checked={enabled}
           onChange={toggle}
-          sx={{ alignSelf: 'flex-start' }}
+          sx={{ alignSelf: { xs: 'flex-start', md: 'flex-end' } }}
           slotProps={{
             input: { 'aria-label': 'Suggested next prompt', 'data-testid': 'settings-suggestions-switch' },
           }}
         />
-        {enabled && <SuggestionModelPicker />}
+        {enabled && (
+          <Box component="details" sx={{ width: '100%' }}>
+            <Typography
+              component="summary"
+              level="body-sm"
+              sx={{ display: 'list-item', cursor: 'pointer', color: 'text.secondary' }}
+            >
+              Suggestion model: {model ?? 'Automatic'}
+            </Typography>
+            <Box sx={{ mt: 1.5 }}>
+              <SuggestionModelPicker />
+            </Box>
+          </Box>
+        )}
       </Stack>
     ),
   };
@@ -118,22 +144,17 @@ function worktreeEntry(enabled: boolean, toggle: () => void): ConfigEntry {
     icon: <BranchIcon />,
     label: 'Worktree by default',
     summary: worktreeDefaultSummary(enabled),
+    description:
+      'Start Code sessions in a separate git worktree by default. You can change this before the first message.',
     control: (
-      <Stack spacing={1.25}>
-        <Typography level="body-xs" textColor="text.tertiary">
-          Tick the worktree box whenever a Code session gets a git folder. You can still untick it before the first
-          message.
-        </Typography>
-        <Switch
-          size="sm"
-          checked={enabled}
-          onChange={toggle}
-          sx={{ alignSelf: 'flex-start' }}
-          slotProps={{
-            input: { 'aria-label': 'Worktree by default', 'data-testid': 'settings-worktree-default-switch' },
-          }}
-        />
-      </Stack>
+      <Switch
+        size="sm"
+        checked={enabled}
+        onChange={toggle}
+        slotProps={{
+          input: { 'aria-label': 'Worktree by default', 'data-testid': 'settings-worktree-default-switch' },
+        }}
+      />
     ),
   };
 }
@@ -144,22 +165,17 @@ function nestedSessionsEntry(enabled: boolean, toggle: () => void): ConfigEntry 
     icon: <SubSessionsIcon />,
     label: 'Nest sub-sessions',
     summary: nestedSessionsSummary(enabled),
+    description:
+      'Group agent-created sessions under the conversation that started them. Turn off to list each session separately.',
     control: (
-      <Stack spacing={1.25}>
-        <Typography level="body-xs" textColor="text.tertiary">
-          Draw sessions an agent spawns as a branch under the session that started it, folded or open. Off lists every
-          session on its own row.
-        </Typography>
-        <Switch
-          size="sm"
-          checked={enabled}
-          onChange={toggle}
-          sx={{ alignSelf: 'flex-start' }}
-          slotProps={{
-            input: { 'aria-label': 'Nest sub-sessions', 'data-testid': 'settings-nested-sessions-switch' },
-          }}
-        />
-      </Stack>
+      <Switch
+        size="sm"
+        checked={enabled}
+        onChange={toggle}
+        slotProps={{
+          input: { 'aria-label': 'Nest sub-sessions', 'data-testid': 'settings-nested-sessions-switch' },
+        }}
+      />
     ),
   };
 }
@@ -170,6 +186,7 @@ function orchestratorSoundEntry(enabled: boolean, toggle: () => void): ConfigEnt
     icon: <SoundIcon />,
     label: 'Orchestrator sounds',
     summary: enabled ? 'A chime when an agent needs you or a run finishes.' : 'Off.',
+    description: 'Play a chime when an agent needs your attention or a run finishes.',
     control: (
       <Switch
         size="sm"
@@ -178,6 +195,25 @@ function orchestratorSoundEntry(enabled: boolean, toggle: () => void): ConfigEnt
         slotProps={{
           input: { 'aria-label': 'Orchestrator sounds', 'data-testid': 'settings-orchestrator-sound-switch' },
         }}
+      />
+    ),
+  };
+}
+
+function menuBarEntry(shown: boolean, toggle: () => void): ConfigEntry {
+  return {
+    id: 'menu-bar',
+    icon: null,
+    label: 'Show in menu bar',
+    summary: shown ? 'Agent status and quick approvals in the menu bar.' : 'Off.',
+    description:
+      'Show how your orchestrations are doing in the menu bar, with quick approvals and the mini Tavern. It appears once you start an orchestration.',
+    control: (
+      <Switch
+        size="sm"
+        checked={shown}
+        onChange={toggle}
+        slotProps={{ input: { 'aria-label': 'Show in menu bar', 'data-testid': 'settings-menu-bar-switch' } }}
       />
     ),
   };
@@ -206,22 +242,17 @@ function tokenRateEntry(enabled: boolean, toggle: () => void): ConfigEntry {
     icon: <ModelsIcon />,
     label: 'Self-hosted model speed',
     summary: tokenRateSummary(enabled),
+    description:
+      'Show tokens per second for self-hosted models. Hover the rate for prompt speed, load time, and draft acceptance when available. A rate starting with ~ is timed by this app.',
     control: (
-      <Stack spacing={1.25}>
-        <Typography level="body-xs" textColor="text.tertiary">
-          Show tokens per second where hosted models show credits. Hover it for prompt speed, load time and draft
-          acceptance when the server reports them; a figure starting with ~ was timed by this app.
-        </Typography>
-        <Switch
-          size="sm"
-          checked={enabled}
-          onChange={toggle}
-          sx={{ alignSelf: 'flex-start' }}
-          slotProps={{
-            input: { 'aria-label': 'Self-hosted model speed', 'data-testid': 'settings-token-rate-switch' },
-          }}
-        />
-      </Stack>
+      <Switch
+        size="sm"
+        checked={enabled}
+        onChange={toggle}
+        slotProps={{
+          input: { 'aria-label': 'Self-hosted model speed', 'data-testid': 'settings-token-rate-switch' },
+        }}
+      />
     ),
   };
 }
@@ -253,6 +284,12 @@ function curatedListEntry(
     icon: <DownloadIcon />,
     label: 'Curated models list',
     summary: !settings && error ? error : curatedListSummary(settings),
+    description:
+      !settings && error
+        ? error
+        : settings?.available
+          ? 'Check for an updated list when you open Models, at most every 6 hours. Models are never downloaded automatically.'
+          : curatedListSummary(settings),
     control: (
       <CuratedListSettings settings={settings} onEnabled={onEnabled} error={error} onRetry={onRetry} saving={saving} />
     ),
@@ -304,10 +341,6 @@ function LocalDataExport() {
 
   return (
     <Stack spacing={1}>
-      <Typography level="body-xs" textColor="text.tertiary">
-        Save conversations, attachments, generated media, and project memories to a folder you choose. Credentials and
-        server settings are not included.
-      </Typography>
       <Button
         size="sm"
         variant="outlined"
@@ -337,6 +370,8 @@ function localDataExportEntry(): ConfigEntry {
     icon: <DownloadIcon />,
     label: 'Export local data',
     summary: 'Save your local conversations and project memories in a portable bundle.',
+    description:
+      'Save conversations, attachments, generated media, and project memories to a folder. Credentials and server settings are not included.',
     control: <LocalDataExport />,
   };
 }
@@ -495,6 +530,7 @@ function useSettingsEntries(
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
   const [nestedSessions, toggleNestedSessions] = useNestedSessions();
   const [orchestratorSound, toggleOrchestratorSound] = useOrchestratorSound();
+  const [menuBar, toggleMenuBar] = useMenuBarSetting();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
@@ -506,12 +542,27 @@ function useSettingsEntries(
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
+      menuBarEntry(menuBar, toggleMenuBar),
       {
         id: 'orchestration-policy',
         icon: null,
         label: 'Orchestration worker models',
         summary: 'Explicit worker defaults and targeted model upgrades',
-        control: <OrchestrationSettings key={`${auth?.environment?.url ?? 'device'}:${auth?.user?.id ?? 'local'}`} />,
+        control: (
+          <Box component="details">
+            <Typography
+              component="summary"
+              level="body-sm"
+              sx={{ display: 'list-item', cursor: 'pointer', color: 'text.secondary' }}
+              data-testid="settings-worker-models-details"
+            >
+              Configure worker models
+            </Typography>
+            <Box sx={{ mt: 2 }}>
+              <OrchestrationSettings key={`${auth?.environment?.url ?? 'device'}:${auth?.user?.id ?? 'local'}`} />
+            </Box>
+          </Box>
+        ),
       },
       localContextEntry(localContext, next => void setLocalContext(next), localContextError, localContextFit),
       tokenRateEntry(showTokenRate, toggleTokenRate),
@@ -550,21 +601,64 @@ function SingleEntryPage({ entry }: { entry: ConfigEntry }) {
   );
 }
 
+const GENERAL_GROUPS = [
+  {
+    id: 'appearance',
+    label: 'Appearance & feedback',
+    entries: ['appearance', 'orchestrator-sound', 'menu-bar', 'nested-sessions'],
+  },
+  {
+    id: 'conversations',
+    label: 'Conversations & code',
+    entries: ['prompt-suggestions', 'worktree-default', 'orchestration-policy'],
+  },
+  { id: 'models', label: 'Models', entries: ['local-context', 'token-rate', 'curated-list'] },
+  { id: 'data', label: 'Data & privacy', entries: ['local-history', 'local-data-export'] },
+  { id: 'connection', label: 'Connection & updates', entries: ['server', 'updates', 'dollar-costs'] },
+];
+
+const EXPANDED_SETTINGS = new Set(['orchestration-policy', 'local-context', 'server', 'updates']);
+
+/** Entries missing from GENERAL_GROUPS land in a trailing "Other" group instead of vanishing. */
+function groupEntries(entries: ConfigEntry[]) {
+  const grouped = new Set(GENERAL_GROUPS.flatMap(group => group.entries));
+  const groups = [
+    ...GENERAL_GROUPS.map(group => ({
+      group,
+      rows: group.entries.flatMap(id => entries.filter(entry => entry.id === id)),
+    })),
+    { group: { id: 'other', label: 'Other' }, rows: entries.filter(entry => !grouped.has(entry.id)) },
+  ];
+  return groups.filter(({ rows }) => rows.length > 0);
+}
+
 function SectionPage({ section, entries }: { section: SettingsSection; entries: ConfigEntry[] }) {
   if (entries.length === 1) return <SingleEntryPage entry={entries[0]} />;
   return (
-    <Stack spacing={2}>
-      <Stack>
-        <Typography level="title-lg">{SECTION_LABEL[section]}</Typography>
+    <Stack spacing={4}>
+      <Stack spacing={1}>
+        <Typography component="h2" level="h3" sx={{ fontSize: 26 }}>
+          {SECTION_LABEL[section]}
+        </Typography>
         <Typography level="body-sm" textColor="text.tertiary">
           {SETTINGS_INTRO}
         </Typography>
       </Stack>
-      <Box>
-        {entries.map(entry => (
-          <EntrySection key={entry.id} entry={entry} />
-        ))}
-      </Box>
+      {groupEntries(entries).map(({ group, rows }) => (
+        <Box
+          component="section"
+          key={group.id}
+          aria-labelledby={`settings-group-${group.id}`}
+          data-testid={`settings-group-${group.id}`}
+        >
+          <Typography id={`settings-group-${group.id}`} component="h3" level="title-md" sx={{ mb: 0.5 }}>
+            {group.label}
+          </Typography>
+          {rows.map(entry => (
+            <SettingsRow key={entry.id} entry={entry} expanded={EXPANDED_SETTINGS.has(entry.id)} />
+          ))}
+        </Box>
+      ))}
     </Stack>
   );
 }
@@ -647,7 +741,10 @@ export function SettingsScreen({
         </List>
 
         <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto', scrollbarGutter: 'stable', ...thinScrollbarSx }}>
-          <Box sx={{ ...contentColumnSx, py: 3 }} data-testid={`settings-page-${section}`}>
+          <Box
+            sx={{ ...contentColumnSx, maxWidth: 1040, boxSizing: 'border-box', px: { xs: 3, md: 5 }, py: 4 }}
+            data-testid={`settings-page-${section}`}
+          >
             <SectionPage section={section} entries={entries[section]} />
           </Box>
         </Box>

@@ -36,7 +36,17 @@ export const ADMIN_REASON_PRESETS = {
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
   apiKeyAdminScope: ['Partner integration', 'Internal service', 'Requested by the account owner'],
   embedKeyRevoke: ['Compromised or leaked key', 'Site no longer embeds the agent', 'Customer request'],
+  publishedPageTakedown: [
+    'Harmful or abusive content',
+    'Phishing or impersonation',
+    'Copyright or trademark claim',
+    'Spam or junk content',
+  ],
+  appFileDelete: ['Outdated or replaced file', 'Uploaded in error', 'No longer used on the site'],
+  publishedPageRestore: ['Report reviewed, not a violation', 'Taken down in error', 'Appeal accepted'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
+  orgGroupTypes: ['Pilot or partner access', 'Plan change', 'Support request'],
+  rateLimitReset: ['Support request', 'Key locked out', 'Counter correction'],
   productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
   systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],
   permissionsChange: ['Joined the support rotation', 'Role change on the team', 'Access no longer needed'],
@@ -45,6 +55,11 @@ export const ADMIN_REASON_PRESETS = {
   userDeletion: ['User requested deletion', 'Spam or bot account', 'Terms of service violation', 'Duplicate account'],
   deletionVerification: ['Request sent from the email on file', 'Confirmed by reply from the email on file'],
   deletionCancel: ['User asked to cancel, identity verified', 'Scheduled in error'],
+  dataSubjectExport: [
+    'Access request from the user (GDPR Art. 15)',
+    'Portability request from the user (GDPR Art. 20)',
+    'Request from a legal authority',
+  ],
   mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
   sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
@@ -109,7 +124,9 @@ export const ADMIN_REASON_PRESETS = {
   signupDomainHoldConfirm: ['Reviewed, domain is abusive', 'Matches a known abuse pattern', 'Under investigation'],
   heldSignupGrantRelease: ['Reviewed, not abusive', 'Verified customer', 'Support request', 'Internal testing'],
   heldSignupGrantRevoke: ['Abuse / automated signups', 'Credit farming', 'Granted in error'],
+  tutorialDraftDelete: ['Superseded by a newer draft', 'Captured in error', 'No longer needed'],
   knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
+  dlqDiscard: ['Account refused', 'Job obsolete', 'Fixed with no replay needed', 'Bad payload', 'Other'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

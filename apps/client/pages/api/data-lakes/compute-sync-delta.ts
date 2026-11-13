@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import {
   adminSettingsRepository,
@@ -12,6 +12,7 @@ import { ComputeSyncDeltaRequestInput } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { Request } from 'express';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import { adminBypassLakeIds } from '@bike4mind/server-utils/dataLakes/index';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 
@@ -76,13 +77,14 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       }
     }
 
-    // Best-effort audit write - a hash match reveals a file's existence (id + name)
+    // Audit write - a hash match reveals a file's existence (id + name)
     // regardless of which policy branch then classifies it, so every matched hash counts here,
     // not only the skip/update arms. Skipped entirely when nothing matched: a manifest full of
     // new files touches no existing lake content, so there is nothing to attribute a read to.
-    // Awaited (never rethrows): a per-request serverless route must not race a post-response
-    // environment freeze.
+    // Awaited so a per-request serverless route does not race a post-response freeze; strict
+    // (rethrows) for an admin-bypass read.
     if (existingHashMap.size > 0) {
+      const bypass = await adminBypassLakeIds(req, [dataLake.id]);
       await dataLakeService.recordLakeAccessEvent(
         lakeAccessEventRepository,
         {
@@ -90,6 +92,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           organizationId: normalizeId(req.user.organizationId),
           resolvedLakeIds: [dataLake.id],
           fileIds: [...existingHashMap.values()].map(f => f.fileId),
+          ...(bypass.length ? { adminBypassLakeIds: bypass } : {}),
           surface: 'data-lake-sync-delta',
         },
         req.logger,

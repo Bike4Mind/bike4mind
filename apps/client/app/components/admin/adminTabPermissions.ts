@@ -22,6 +22,7 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   // The modal endpoints' CASL rules grant read and write on settings:manage. What's new shares
   // them but stays out: its highlights panel and LiveOps lookup are full-admin only.
   [AdminTab.Modals]: 'settings:manage',
+  [AdminTab.AiOperations]: 'settings:manage',
 
   // Read-only for support:read. Their write controls name the permission they need
   // (AdminPermissionAction), or are already decided per row by the server (Approvals, Audit log).
@@ -29,6 +30,7 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   [AdminTab.WebhookAuditLogs]: 'support:read',
   [AdminTab.HelpAnalytics]: 'support:read',
   [AdminTab.ApiKeyScopePreflight]: 'support:read',
+  [AdminTab.LegacyApiKeys]: 'support:read',
   [AdminTab.IntegrationDemand]: 'support:read',
   [AdminTab.AuditLog]: 'support:read',
   [AdminTab.Approvals]: 'support:read',

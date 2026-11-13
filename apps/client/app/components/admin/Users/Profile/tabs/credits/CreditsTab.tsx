@@ -458,6 +458,7 @@ export const CreditsTab: React.FC<{ user: AdminUserProfile; onAdjust: () => void
             </Muted>
           }
           testId="user-credits-table"
+          framed={false}
           pageResetKey={JSON.stringify(query)}
         />
         {(ledger.hasNextPage || !contiguous) && rows.length > 0 && (

@@ -1,7 +1,7 @@
 {
   "name": "@bike4mind/services",
   "description": "This packages contains all the core business logic",
-  "version": "25.0.0",
+  "version": "26.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -512,7 +512,7 @@
     "marked": "^15.0.11",
     "mathjs": "^15.2.0",
     "mime-types": "^3.0.2",
-    "mongoose": "^8.24.1",
+    "mongoose": "^8.24.7",
     "openai": "^6.46.0",
     "p-limit": "^7.3.2",
     "sharp": "^0.35.4",

@@ -14,11 +14,14 @@ const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => (rateLimitOptions.push(options), () => undefined),
 }));
-vi.mock('@server/admin/usersBulk/adapters', () => ({ usersBulkResolveDeps: {}, usersBulkPreviewDeps: {} }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/adapters', () => ({
+  usersBulkResolveDeps: {},
+  usersBulkPreviewDeps: {},
+}));
 
 const mockResolve = vi.fn();
 const mockPreview = vi.fn();
-vi.mock('@server/admin/usersBulk/resolve', () => ({
+vi.mock('@bike4mind/server-utils/admin/usersBulk/resolve', () => ({
   resolveAdminUsersBulk: (...a: unknown[]) => mockResolve(...a),
   previewAdminUsersBulk: (...a: unknown[]) => mockPreview(...a),
 }));

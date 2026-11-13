@@ -93,6 +93,8 @@ const createUserApiKeySchema = z.object({
   // only thing the field is for. No new ApiKeyScope: the widening is bound to specific lake ids
   // rather than gated by a scope.
   preauthorizedLakeIds: z.array(z.string().min(1)).max(25).optional(),
+  // Org-owned key (IUserApiKey.orgOwned): held by the org's service account, never a member.
+  orgOwned: z.object({ createdByUserId: z.string().min(1) }).optional(),
 });
 
 type MintUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
@@ -105,7 +107,10 @@ export type CreateUserApiKeyParameters = Omit<MintUserApiKeyParameters, 'metadat
 };
 
 /** Parameters for the federated AI-token exchange mint; createdFrom is fixed by the entry point. */
-export type CreateExchangeUserApiKeyParameters = Omit<MintUserApiKeyParameters, 'metadata' | 'expiresAt'> & {
+export type CreateExchangeUserApiKeyParameters = Omit<
+  MintUserApiKeyParameters,
+  'metadata' | 'expiresAt' | 'orgOwned'
+> & {
   expiresAt: Date;
   metadata: { clientIP?: string; userAgent?: string; oauthClientId: string };
 };
@@ -175,6 +180,7 @@ export interface CreateUserApiKeyResult {
   branding?: IEmbedBranding;
   spendCap?: number;
   preauthorizedLakeIds?: string[];
+  orgOwned?: { createdByUserId: string };
   createdAt: Date;
 }
 
@@ -269,7 +275,7 @@ const mintUserApiKey = async (
   // Embed keys bill a bounded Organization pool, never a user's. Enforce the org
   // pairing at mint so an incoherent key is never created (e.g. a forged/scripted
   // request bypassing the admin UI). Must match assertEmbedCredential in
-  // apps/client/server/cli/auth.ts, which rejects a non-org-owned embed key at serve/session.
+  // packages/server-utils/src/cli/auth.ts, which rejects a non-org-owned embed key at serve/session.
   if (isEmbedKey && (params.billingOwnerType !== CreditHolderType.Organization || !params.organizationId)) {
     throw new BadRequestError(
       'embed:chat scope requires organization billing (billingOwnerType Organization with an organizationId)'
@@ -311,6 +317,9 @@ const mintUserApiKey = async (
   const billsOrg = params.billingOwnerType === CreditHolderType.Organization;
   if (billsOrg !== !!params.organizationId) {
     throw new BadRequestError('organizationId must be set exactly when billingOwnerType is Organization');
+  }
+  if (params.orgOwned && !billsOrg) {
+    throw new BadRequestError('An org-owned key must bill its organization');
   }
 
   // Per-product cap: max 20 active keys (counts ACTIVE + RATE_LIMITED)
@@ -385,6 +394,7 @@ const mintUserApiKey = async (
     branding: params.branding,
     spendCap: params.spendCap,
     preauthorizedLakeIds: params.preauthorizedLakeIds,
+    orgOwned: params.orgOwned,
   };
 
   let apiKeyDocument: IUserApiKeyDocument;
@@ -430,6 +440,7 @@ const mintUserApiKey = async (
     branding: apiKeyDocument.branding,
     spendCap: apiKeyDocument.spendCap,
     preauthorizedLakeIds: apiKeyDocument.preauthorizedLakeIds,
+    orgOwned: apiKeyDocument.orgOwned,
     createdAt: apiKeyDocument.createdAt,
   };
 };

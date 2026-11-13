@@ -23,10 +23,12 @@ export type SetGroupTypesResult = {
 // PUT /api/admin/organizations/:id/group-types - platform-admin only.
 export const setOrganizationGroupTypes = async (
   organizationId: string,
-  allowedGroupTypes: string[]
+  allowedGroupTypes: string[],
+  reason: string
 ): Promise<SetGroupTypesResult> => {
   const response = await api.put<SetGroupTypesResult>(`/api/admin/organizations/${organizationId}/group-types`, {
     allowedGroupTypes,
+    reason,
   });
   return response.data;
 };

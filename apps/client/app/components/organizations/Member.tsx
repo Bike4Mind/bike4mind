@@ -7,8 +7,8 @@ import {
   isOrgMember,
   isOrgOwnerOrCurrentAdmin,
   isOrgOwnerOrPlatformAdmin,
-  IUserDocument,
-  Permission,
+  ORG_INVITE_ROLES,
+  OrgInviteRole,
 } from '@bike4mind/common';
 import GenericAddItemsModal from '@client/app/components/common/GenericAddItemsModal';
 import UserCard from '@client/app/components/common/UserCard';
@@ -16,19 +16,28 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useCancelInvite, useShareDocument } from '@client/app/hooks/data/invites';
 import { useGetOrganizationUsers, useGetPendingOrganizationUsers, useGetUsers } from '@client/app/hooks/data/user';
 import { IGetUsersParams } from '@client/app/utils/userAPICalls';
-import SearchIcon from '@mui/icons-material/Search';
-import { Box, Button, Card, Chip, IconButton, Input, Stack, Typography } from '@mui/joy';
+import { Box, Button, Card, Chip, Stack, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import debounce from 'lodash/debounce';
-import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
 import AddIcon from '@mui/icons-material/Add';
-import { FC, Fragment, useCallback, useMemo, useState } from 'react';
+import GroupAddIcon from '@mui/icons-material/GroupAdd';
+import { FC, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import OrganizationUserCard from './UserCard';
+import { OrganizationRosterRow } from './UserCard';
+import BulkInviteModal from './BulkInviteModal';
+import InviteLinksPanel from './InviteLinksPanel';
+import OrgInviteRoleSelect from './OrgInviteRoleSelect';
 import MemberCreditBudgetCard from './MemberCreditBudgetCard';
-import { getMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
-import { useOrganizationInvites, useOrganizationSeats } from '@client/app/hooks/data/organizations';
+import OrganizationMfaPolicy from './OrganizationMfaPolicy';
+import MemberRoster from './MemberRoster';
+import { getMemberCreditUsage } from './memberCreditBudget';
+import { getMemberRole } from './memberRosterView';
+import {
+  useOrganizationInvites,
+  useOrganizationSeats,
+  useResendOrganizationInvite,
+} from '@client/app/hooks/data/organizations';
 
 import { z } from 'zod';
 
@@ -36,10 +45,13 @@ interface OrganizationMembersProps {
   organization: IOrganizationDocument;
 }
 
-const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => {
-  const { data: users } = useGetOrganizationUsers(organization.id);
-  const [search, setSearch] = useState('');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization }) => {
+  const {
+    data: users,
+    isLoading: membersLoading,
+    isError: membersError,
+    refetch: refetchMembers,
+  } = useGetOrganizationUsers(organization.id);
   const { currentUser } = useUser();
   const { data: pendingUsers } = useGetPendingOrganizationUsers(organization.id);
   const { maxSeats, currentSeats, availableSeats } = useOrganizationSeats(organization.id);
@@ -65,10 +77,10 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
   );
   const { data: usersData, isFetching } = useGetUsers(params, { enabled: modalSearch.length >= 3 });
 
-  const [permissions] = useState<{ value: Permission[]; error?: string | null }>({
-    value: [Permission.read],
-    error: null,
-  });
+  const [role, setRole] = useState<OrgInviteRole>('viewer');
+  const [bulkInviteOpen, setBulkInviteOpen] = useState(false);
+  // Mirrors the server gate in sharingService.createInvite: only the owner tier may invite an admin.
+  const canGrantAdmin = !!currentUser && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
   const shareDocument = useShareDocument({
     onSuccess: () => {
@@ -84,6 +96,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     },
   });
 
+  const resendEmailInvite = useResendOrganizationInvite(organization.id);
   const cancelEmailInvite = useCancelInvite({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['organizations', organization.id, 'invites'] });
@@ -93,53 +106,39 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     onError: error => toast.error(error.message),
   });
 
-  const toggleSortOrder = () => {
-    setSortOrder(prev => (prev === 'asc' ? 'desc' : 'asc'));
-  };
-
-  const debouncedSearch = useMemo(
-    () =>
-      debounce((value: string) => {
-        setSearch(value);
-      }, 300),
-    []
-  );
-
   const debouncedModalSearch = useMemo(() => debounce(setModalSearch, 300), []);
 
-  // Filter and sort users
-  const filteredUsers = useMemo(() => {
-    let result: (IUserDocument & {
-      status: 'accepted' | 'pending';
-      permissions: Permission[];
-      creditUsage: MemberCreditUsage | null;
-    })[] =
-      users?.map(u => ({
+  const members = useMemo((): OrganizationRosterRow[] => {
+    const showUsage = !!currentUser && canManageMemberCreditBudgets(currentUser, organization);
+    const accepted = (users ?? []).map(u => {
+      const permissions = organization.users.find(m => m.userId === u.id)?.permissions || [];
+      return {
         ...u,
         status: 'accepted' as const,
-        permissions: organization.users.find(m => m.userId === u.id)?.permissions || [],
-        creditUsage:
-          currentUser && canManageMemberCreditBudgets(currentUser, organization)
-            ? getMemberCreditUsage(organization, u.id)
-            : null,
-      })) || [];
-    result.push(
-      ...(pendingUsers
-        ?.filter(
-          user => !pendingInvites || pendingInvites.some(invite => invite.recipients?.pending?.includes(user.id))
-        )
-        .map(u => ({ ...u, status: 'pending' as const, permissions: [], creditUsage: null })) || [])
-    );
-
-    if (search) {
-      const searchLower = search.toLowerCase();
-      result = result.filter(
-        user => user.name.toLowerCase().includes(searchLower) || user.email?.toLowerCase().includes(searchLower)
-      );
-    }
-
-    return result.sort((a, b) => (sortOrder === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)));
-  }, [users, search, sortOrder, pendingUsers, pendingInvites, organization, currentUser]);
+        permissions,
+        role: getMemberRole(organization, u.id),
+        creditUsage: showUsage ? getMemberCreditUsage(organization, u.id) : null,
+      };
+    });
+    const pending = (pendingUsers ?? [])
+      .filter(user => !pendingInvites || pendingInvites.some(invite => invite.recipients?.pending?.includes(user.id)))
+      .map(user => {
+        const email = user.email?.toLowerCase();
+        const invite = pendingInvites?.find(candidate =>
+          candidate.recipients?.pending?.some(
+            recipient => recipient === user.id || (!!email && recipient.toLowerCase() === email)
+          )
+        );
+        return {
+          ...user,
+          status: 'pending' as const,
+          permissions: invite && 'permissions' in invite ? invite.permissions : [],
+          role: 'member' as const,
+          creditUsage: null,
+        };
+      });
+    return [...accepted, ...pending];
+  }, [users, pendingUsers, pendingInvites, organization, currentUser]);
 
   // Each roster control mirrors the server predicate behind its own endpoint; only the owner may
   // revoke a manager.
@@ -148,7 +147,8 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
   const canInviteMembers =
     !!currentUser && isOrgMember(currentUser, organization) && isOrgOwnerOrCurrentAdmin(currentUser, organization);
   // DELETE /members/:userId gates on canRevokeOrgMember in organizationService.revokeAccess, which
-  // also depends on the target; this coarse flag only decides whether the seats card shows.
+  // also depends on the target; this coarse flag only decides whether the seats card and the
+  // roster's selection column show.
   const canRevokeMembers = !!currentUser && canAdministerOrganization(currentUser, organization);
 
   // Mirrors the server gate on the credit-budget routes.
@@ -170,15 +170,15 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     (selectedUserIds: string[]) => {
       selectedUserIds.forEach(id => {
         shareDocument.mutate({
-          description: `You've been invited to join the organization`,
+          description: `You've been invited to join the team`,
           recipients: [id],
           id: organization.id,
           type: InviteType.Organization,
-          permissions: permissions.value,
+          permissions: [...ORG_INVITE_ROLES[role]],
         });
       });
     },
-    [organization.id, permissions.value, shareDocument]
+    [organization.id, role, shareDocument]
   );
 
   const pendingEmails = useMemo(
@@ -209,11 +209,11 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
               loading={shareDocument.isPending}
               onClick={() =>
                 shareDocument.mutate({
-                  description: "You've been invited to join the organization",
+                  description: "You've been invited to join the team",
                   recipients: [email],
                   id: organization.id,
                   type: InviteType.Organization,
-                  permissions: permissions.value,
+                  permissions: [...ORG_INVITE_ROLES[role]],
                 })
               }
             >
@@ -232,7 +232,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
       hasAvailableSeats,
       shareDocument,
       organization.id,
-      permissions.value,
+      role,
     ]
   );
   const pendingEmailInvites = (pendingInvites ?? []).flatMap(invite =>
@@ -384,40 +384,14 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
       )}
 
       <MemberCreditBudgetCard organization={organization} canManage={canManageCreditBudgets} />
+      <OrganizationMfaPolicy
+        key={`${organization.id}:${organization.mfaPolicy?.required}:${organization.mfaPolicy?.graceEndsAt}`}
+        organization={organization}
+      />
 
-      {/* Search and Actions Section */}
+      {/* Add members */}
       <Stack className="organization-members-search-container" spacing={1} mx={{ xs: 0, sm: '20px' }}>
-        <Input
-          className="organization-members-search-input"
-          placeholder="Search by name or email"
-          slotProps={{ input: { 'data-testid': 'organization-members-search-input' } }}
-          onChange={e => {
-            debouncedSearch(e.target.value);
-          }}
-          startDecorator={
-            <SearchIcon
-              className="organization-members-search-icon"
-              sx={theme => ({
-                width: '20px',
-                height: '20px',
-                '&:focus': {
-                  color: theme.palette.mode === 'dark' ? 'white' : 'black',
-                },
-              })}
-            />
-          }
-        />
         <Box display="flex" gap="10px">
-          <IconButton
-            className="organization-members-sort-button"
-            data-testid="organization-members-sort-btn"
-            variant="outlined"
-            onClick={toggleSortOrder}
-            title={`Sort ${sortOrder === 'desc' ? 'Z to A' : 'A to Z'}`}
-          >
-            <SortByAlphaIcon sx={{ transform: sortOrder === 'desc' ? 'scaleY(-1)' : 'scaleY(1)' }} />
-          </IconButton>
-
           {canInviteMembers &&
             (hasAvailableSeats ? (
               <GenericAddItemsModal
@@ -450,6 +424,14 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
                 renderNoResults={renderNoResults}
                 isLoadingMore={isFetching}
                 showButtonBadge={false}
+                leftGridContent={
+                  <OrgInviteRoleSelect
+                    value={role}
+                    onChange={setRole}
+                    canGrantAdmin={canGrantAdmin}
+                    testId="organization-members-role-select"
+                  />
+                }
               />
             ) : (
               <Button
@@ -467,8 +449,29 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
                 {t('organizations.modals.members.button_label', 'Add Member')}
               </Button>
             ))}
+          {canInviteMembers && hasAvailableSeats && (
+            <Button
+              data-testid="organization-members-bulk-invite-btn"
+              size="sm"
+              variant="outlined"
+              startDecorator={<GroupAddIcon />}
+              onClick={() => setBulkInviteOpen(true)}
+            >
+              {t('organizations.modals.bulk_invite.button_label', 'Bulk invite')}
+            </Button>
+          )}
+          {bulkInviteOpen && (
+            <BulkInviteModal
+              organizationId={organization.id}
+              availableSeats={availableSeats}
+              canGrantAdmin={canGrantAdmin}
+              onDone={() => setBulkInviteOpen(false)}
+            />
+          )}
         </Box>
       </Stack>
+
+      {canInviteMembers && <InviteLinksPanel organizationId={organization.id} isOwnerTier={canGrantAdmin} />}
 
       {pendingInvitesError && (
         <Typography color="danger" data-testid="organization-pending-invites-error">
@@ -494,60 +497,41 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
                   Cancel invitation
                 </Button>
               )}
+              {canInviteMembers && !email.includes('*') && (
+                <Button
+                  size="sm"
+                  variant="plain"
+                  data-testid="organization-resend-email-invite-btn"
+                  aria-label={`Resend invitation to ${email}`}
+                  disabled={resendEmailInvite.isPending}
+                  onClick={() => resendEmailInvite.mutate({ email })}
+                >
+                  Resend
+                </Button>
+              )}
             </Stack>
           ))}
         </Stack>
       )}
-      {/* Members List */}
-      <Stack
-        className="organization-members-list-container"
-        flexGrow={1}
-        sx={{ overflow: 'auto' }}
-        gap="10px"
-        ml={{ xs: 0, sm: '20px' }}
-        pr={{ xs: 0, sm: '16px' }}
-      >
-        <Box
-          className="organization-members-list-header"
-          sx={{
-            display: { xs: 'none', sm: 'grid' },
-            gridTemplateColumns: '2fr 1fr 1fr',
-            borderBottom: '1px solid',
-            borderColor: 'divider',
-            color: 'divider',
-            fontSize: '14px',
-            lineHeight: '14px',
-            pb: '17px',
-            pl: { xs: '8px', sm: '24px' },
-            pr: { xs: '8px', sm: '24px' },
-          }}
-        >
-          <Box className="organization-members-list-header-user">User</Box>
-          <Box
-            className="organization-members-list-header-credits"
-            display="flex"
-            justifyContent="center"
-            alignItems="center"
-            sx={{ whiteSpace: 'nowrap' }}
-          >
-            Credits this month
-          </Box>
-        </Box>
-        {filteredUsers.map(user => (
-          <Fragment key={user.id}>
-            <OrganizationUserCard
-              organization={organization}
-              user={user}
-              canInviteMembers={canInviteMembers}
-              canRevokeMembers={!!currentUser && canRevokeOrgMember(currentUser, organization, user.id)}
-              canManageCreditBudgets={canManageCreditBudgets}
-              canManageManagers={canManageManagers}
-            />
-          </Fragment>
-        ))}
-      </Stack>
+      <MemberRoster
+        organization={organization}
+        members={members}
+        isLoading={membersLoading}
+        isError={membersError}
+        onRetry={() => refetchMembers()}
+        currentUserId={currentUser?.id}
+        canInviteMembers={canInviteMembers}
+        canRevokeMembers={canRevokeMembers}
+        canRevokeMember={userId => !!currentUser && canRevokeOrgMember(currentUser, organization, userId)}
+        canManageCreditBudgets={canManageCreditBudgets}
+        canManageManagers={canManageManagers}
+      />
     </Card>
   );
 };
+
+const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => (
+  <OrganizationMembersView key={organization.id} organization={organization} />
+);
 
 export default OrganizationMembers;

@@ -67,3 +67,58 @@ export function canonicalizeEmail(email: string): string | null {
   }
   return `${localPart}@${mailboxDomain}`;
 }
+
+/**
+ * The `+tag` of an address at a provider that delivers it to the untagged mailbox (Gmail and the
+ * plus-addressing providers above), lowercased; null when there is none. Real people use tags, so
+ * this is a soft signal only (packages/server-utils/src/auth/signupGrantRisk.ts), never a refusal.
+ */
+export function plusAddressTagOf(email: string): string | null {
+  const normalized = email.normalize('NFC').trim().toLowerCase();
+  const atIndex = normalized.lastIndexOf('@');
+  const domain = emailDomainOf(normalized);
+  if (atIndex <= 0 || !domain) return null;
+  const mailboxDomain = SAME_MAILBOX_DOMAINS.get(domain) ?? domain;
+  if (!GMAIL_DOMAINS.has(domain) && !PLUS_ADDRESSING_DOMAINS.has(mailboxDomain)) return null;
+  const localPart = normalized.slice(0, atIndex);
+  const plusIndex = localPart.indexOf('+');
+  if (plusIndex <= 0) return null;
+  const tag = localPart.slice(plusIndex + 1);
+  return tag.length > 0 ? tag : null;
+}
+
+const RANDOM_TAG_MIN_LENGTH = 8;
+// Letter-digit switches a word with a year or a counter ("work2024", "shop2") stays under.
+const RANDOM_TAG_MIN_SWITCHES = 3;
+// A consonant run no English-like tag reaches ("strengths" peaks at 5).
+const RANDOM_TAG_MIN_CONSONANT_RUN = 6;
+
+/**
+ * Whether a plus tag looks machine-generated: at least 8 letters and digits only, and either
+ * letters and digits interleaved several times or a long unpronounceable consonant run.
+ */
+export function isRandomLookingTag(tag: string): boolean {
+  if (tag.length < RANDOM_TAG_MIN_LENGTH || !/^[a-z0-9]+$/.test(tag)) return false;
+  let switches = 0;
+  for (let index = 1; index < tag.length; index += 1) {
+    if (/\d/.test(tag[index]) !== /\d/.test(tag[index - 1])) switches += 1;
+  }
+  const longestConsonantRun = Math.max(0, ...(tag.match(/[bcdfghjklmnpqrstvwxyz]+/g) ?? []).map(run => run.length));
+  return switches >= RANDOM_TAG_MIN_SWITCHES || longestConsonantRun >= RANDOM_TAG_MIN_CONSONANT_RUN;
+}
+
+/**
+ * How to find every stored address that canonicalizes to the same mailbox as `email`: the
+ * canonical local part, every domain that delivers to it, and whether dots in the stored local
+ * part are insignificant (Gmail). Null when `canonicalizeEmail` is.
+ */
+export function mailboxAliasesOf(email: string): { local: string; domains: string[]; ignoreDots: boolean } | null {
+  const canonical = canonicalizeEmail(email);
+  if (!canonical) return null;
+  const at = canonical.lastIndexOf('@');
+  const domain = canonical.slice(at + 1);
+  const domains = GMAIL_DOMAINS.has(domain)
+    ? [...GMAIL_DOMAINS]
+    : [domain, ...[...SAME_MAILBOX_DOMAINS].filter(([, target]) => target === domain).map(([alias]) => alias)];
+  return { local: canonical.slice(0, at), domains, ignoreDots: GMAIL_DOMAINS.has(domain) };
+}

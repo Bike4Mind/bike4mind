@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import {
+  ABUSE_ASSESSMENT_EVIDENCE_VERSION,
   ApiKeyScope,
-  RISK_EVIDENCE_VERSION,
   type AbuseAssessmentItem,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
@@ -43,13 +43,13 @@ vi.mock('@bike4mind/database', () => ({
   abuseAssessmentRepository: { listForDetection: h.listForDetection },
   shadowDetectionRepository: { findById: h.findById },
 }));
-vi.mock('@server/security/abuseAssessment/abuseAssessment', () => ({
+vi.mock('@bike4mind/server-utils/security/abuseAssessment/abuseAssessment', () => ({
   assessShadowDetection: h.assess,
   replayAbuseAssessments: h.replay,
   loadAbuseAssessmentSettings: h.loadSettings,
   summarizeDetection: h.summarize,
 }));
-vi.mock('@server/security/abuseAssessment/linkedAccountEvidence', () => ({
+vi.mock('@bike4mind/server-utils/security/abuseAssessment/linkedAccountEvidence', () => ({
   linkedAccountGroupEvidence: vi.fn(),
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
@@ -84,10 +84,10 @@ const assessment = (overrides: Partial<AbuseAssessmentItem> = {}): AbuseAssessme
   model: 'test-decisions',
   modelVersion: null,
   policyVersion: 1,
-  evidenceVersion: RISK_EVIDENCE_VERSION,
+  evidenceVersion: ABUSE_ASSESSMENT_EVIDENCE_VERSION,
   evidenceHash: 'hash',
   featureSummary: {
-    evidenceVersion: RISK_EVIDENCE_VERSION,
+    evidenceVersion: ABUSE_ASSESSMENT_EVIDENCE_VERSION,
     detection: {
       detector: 'signupNetworkBurst',
       detectorPolicyVersion: 1,

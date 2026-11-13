@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SUBSCRIPTION_USAGE_COHORTS, type SubscriptionUsage } from './subscriptionUsage';
 
 /**
  * The admin subscriptions list's filter contract, shared by the list page and GET /api/admin/subscriptions
@@ -94,6 +95,7 @@ export const AdminSubscriptionsFilterSchema = z.object({
   cancel: z.enum(SUBSCRIPTION_CANCEL_FILTERS).optional(),
   /** `yes`: only rows the nightly Stripe reconciliation has an open finding for. */
   mismatch: z.enum(['yes']).optional(),
+  usageCohort: z.enum(SUBSCRIPTION_USAGE_COHORTS).optional(),
 });
 export type AdminSubscriptionsFilter = z.infer<typeof AdminSubscriptionsFilterSchema>;
 
@@ -185,6 +187,7 @@ export type AdminSubscriptionRow = {
   /** When a scheduled cancel takes effect: Stripe's cancelAt, or the period end under cancelAtPeriodEnd. */
   cancelAt: string | null;
   createdAt: string | null;
+  usage?: SubscriptionUsage;
 };
 
 // The Plan column and the CSV export both label intervals here, so the list and the export agree.

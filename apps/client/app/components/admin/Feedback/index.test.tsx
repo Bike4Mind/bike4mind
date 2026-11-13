@@ -65,6 +65,8 @@ vi.mock('./FeedbackDetailDrawer', () => ({
       </div>
     ) : null,
 }));
+// Covered by FeedbackTrendStrip.test.tsx; it reads its own query, which these tests do not provide.
+vi.mock('./FeedbackTrendStrip', () => ({ default: () => null }));
 
 import FeedbackTab from './index';
 
@@ -120,7 +122,10 @@ const defaultFiltersReturn: UseFeedbackFiltersReturn = {
   setStatusFilters: vi.fn(),
   setSelectedOrganizations: vi.fn(),
   setSubject: vi.fn(),
+  setResolution: vi.fn(),
   setTypes: vi.fn(),
+  setReceived: vi.fn(),
+  showOnly: vi.fn(),
   toggleSortDirection: vi.fn(),
   filterParams: { sort: 'desc' },
 };
@@ -144,6 +149,9 @@ const makeOperationsReturn = (
   isError: false,
   refreshFeedback: vi.fn(),
   handleStatusChange: vi.fn(),
+  feedbackToClose: null,
+  cancelClose: vi.fn(),
+  confirmClose: vi.fn(),
   handleDeleteFeedbackClick: vi.fn(),
   confirmDeleteFeedback: vi.fn(),
   feedbackToDelete: null,
@@ -288,6 +296,34 @@ describe('FeedbackTab', () => {
       await userEvent.click(screen.getByTestId(`admin-filter-feedback-type-${FeedbackType.THUMBS_DOWN}`));
 
       expect(defaultFiltersReturn.setTypes).toHaveBeenCalledWith([FeedbackType.THUMBS_DOWN]);
+    });
+  });
+
+  describe('received filter', () => {
+    beforeEach(() => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem()]));
+    });
+
+    it('sends the picked window to the filter hook', async () => {
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-received'));
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-received-7d'));
+
+      expect(defaultFiltersReturn.setReceived).toHaveBeenCalledWith('7d');
+    });
+
+    it('clears the window back to any time', async () => {
+      mocks.useFeedbackFilters.mockReturnValue({
+        ...defaultFiltersReturn,
+        filters: { ...defaultFiltersReturn.filters, received: '7d' },
+      });
+
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('admin-filter-clear-feedback-received-btn'));
+
+      expect(defaultFiltersReturn.setReceived).toHaveBeenCalledWith(undefined);
     });
   });
 
@@ -520,6 +556,43 @@ describe('FeedbackTab', () => {
         expect(open.textContent).toBe(label);
       });
 
+      it('offers an email draft to the reporter, with the report quoted', async () => {
+        mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([item]));
+
+        renderFeedbackTab();
+        openRowMenu();
+        const email = await screen.findByTestId('feedback-row-email-reporter-fb-1');
+
+        expect(email.textContent).toBe('Email reporter');
+        expect(email).not.toHaveAttribute('target');
+        const href = email.getAttribute('href') ?? '';
+        expect(href).toMatch(/^mailto:reporter%40example\.com\?subject=/);
+        expect(decodeURIComponent(href.split('&body=')[1])).toBe('> Some feedback content');
+      });
+
+      it('lists the email action with the links, above the delete divider', async () => {
+        mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem({ sessionId: 'sess-1' })]));
+
+        renderFeedbackTab();
+        openRowMenu();
+        const conversation = await screen.findByTestId('feedback-row-open-conversation-fb-1');
+        const email = screen.getByTestId('feedback-row-email-reporter-fb-1');
+        const divider = screen.getByRole('separator');
+
+        expect(conversation.compareDocumentPosition(email) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(email.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      });
+
+      it('hides the email action for a report with no email', async () => {
+        mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem({ userEmail: '' })]));
+
+        renderFeedbackTab();
+        openRowMenu();
+
+        expect(await screen.findByTestId('feedback-row-copy-link-fb-1')).toBeInTheDocument();
+        expect(screen.queryByTestId('feedback-row-email-reporter-fb-1')).toBeNull();
+      });
+
       it('offers no conversation for a report with no session', async () => {
         mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([item]));
 
@@ -557,12 +630,12 @@ describe('FeedbackTab', () => {
       expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No feedback matches these filters');
       await userEvent.click(screen.getByTestId('feedback-empty-clear-btn'));
 
-      expect(defaultFiltersReturn.setSubject).toHaveBeenCalledWith(undefined);
-      expect(defaultFiltersReturn.setSelectedOrganizations).toHaveBeenCalledWith([]);
-      expect(defaultFiltersReturn.setStatusFilters).toHaveBeenCalledWith({
-        [FeedbackStatus.New]: true,
-        [FeedbackStatus.InProgress]: true,
-        [FeedbackStatus.Closed]: true,
+      expect(defaultFiltersReturn.showOnly).toHaveBeenCalledWith({
+        statusFilters: {
+          [FeedbackStatus.New]: true,
+          [FeedbackStatus.InProgress]: true,
+          [FeedbackStatus.Closed]: true,
+        },
       });
     });
 
@@ -670,7 +743,8 @@ describe('FeedbackTab', () => {
       renderFeedbackTab();
 
       expect(screen.getByTestId('feedback-detail-drawer-stub')).toHaveAttribute('data-feedback-id', 'fb-1');
-      expect(screen.getByTestId('feedback-row-fb-1')).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByTestId('feedback-row-fb-1')).toHaveAttribute('aria-current', 'true');
+      expect(screen.getByTestId('feedback-row-fb-1')).toHaveAttribute('aria-selected', 'false');
     });
 
     it('clears ?feedbackId= on close and returns focus to the row', async () => {

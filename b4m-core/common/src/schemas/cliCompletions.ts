@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ModelIdSchema } from './modelId';
 import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
+import { COMPLETION_RUN_PURPOSES, COMPLETION_RUN_ROLES } from '../constants/completionRuns';
 // Specific file, not the `../types` barrel - this module is imported by
 // completions.contract.ts, which must stay off the barrel (see the note there).
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
@@ -300,6 +301,62 @@ export const CompletionSessionIdSchema = z
     "Your own identifier for the conversation this request belongs to. Recorded with the request's credit usage so spend can be grouped by conversation. Not interpreted otherwise."
   );
 
+export {
+  COMPLETION_RUN_ROLES,
+  COMPLETION_RUN_PURPOSES,
+  type CompletionRunRole,
+  type CompletionRunPurpose,
+} from '../constants/completionRuns';
+
+/** A run id issued by `POST /api/v1/completion-runs`. Knowing one grants nothing; the server checks its owner. */
+export const CompletionRunIdSchema = z.uuid().describe('A run id issued by `POST /api/v1/completion-runs`.');
+
+const CompletionRunLabelSchema = z.string().min(1).max(128);
+
+/**
+ * Attributes a completion's spend to a run issued by `POST /api/v1/completion-runs`. The server
+ * rejects a run that the caller (same user, same billing owner) did not create, so a run id can
+ * neither read nor collect another account's charges. Recorded alongside the existing ledger row,
+ * never charged again.
+ */
+export const CompletionRunAttributionSchema = z
+  .object({
+    runId: CompletionRunIdSchema,
+    role: z
+      .enum(COMPLETION_RUN_ROLES)
+      .describe('`root` for the session that started the run, `worker` for one it spawned.'),
+    purpose: z
+      .enum(COMPLETION_RUN_PURPOSES)
+      .optional()
+      .describe('What the request was for. Treated as `turn` when absent.'),
+    taskId: CompletionRunLabelSchema.optional().describe("Your own id for the worker's task within the run."),
+    attemptId: CompletionRunLabelSchema.optional().describe(
+      'Your own id for this attempt at the task; retries get new ids.'
+    ),
+    parentSessionId: CompletionSessionIdSchema.optional().describe(
+      'The `sessionId` of the session that spawned this one, for nested workers.'
+    ),
+  })
+  .describe(
+    'Groups this request\'s spend under a run you created with `POST /api/v1/completion-runs`. A run you did not create is refused with `404` (`errorCode: "run_not_found"`).'
+  );
+
+export type CompletionRunAttribution = z.infer<typeof CompletionRunAttributionSchema>;
+
+export const CreateCompletionRunRequestSchema = z.object({
+  rootSessionId: CompletionSessionIdSchema.optional().describe(
+    'Your own id for the conversation that starts the run. A conversation can start many runs; each gets its own id.'
+  ),
+});
+
+export const CompletionRunSchema = z.object({
+  runId: CompletionRunIdSchema,
+  rootSessionId: z.string().optional(),
+  createdAt: z.iso.datetime(),
+});
+
+export type CompletionRun = z.infer<typeof CompletionRunSchema>;
+
 /**
  * Schema for CLI LLM completion requests
  * Shared between Next.js API route (dev) and Lambda function (production)
@@ -320,6 +377,7 @@ export const CompletionRequestSchema = z.object({
   // OpenAI wire naming; normalizes into options.maxTokens alongside the legacy `maxTokens` alias.
   max_tokens: z.number().optional(),
   sessionId: CompletionSessionIdSchema.optional(),
+  run: CompletionRunAttributionSchema.optional(),
   options: z
     .object({
       temperature: z.number().optional(),
@@ -431,6 +489,19 @@ const CompletionContentEventSchema = z.object({
 });
 
 /**
+ * Sent once, after the request's credits are committed to the ledger and before `[DONE]`. Unlike
+ * `credits.used` on the terminal content event (computed before settlement), `creditsCharged` is
+ * what the ledger recorded. `requestId` is the idempotency key for counting this charge exactly once.
+ */
+const CompletionSettledEventSchema = z.object({
+  type: z.literal('settled'),
+  requestId: z.string(),
+  creditsCharged: z.number(),
+  usdCost: z.number().optional(),
+  runId: z.string().optional(),
+});
+
+/**
  * Classifiers the completions `error` frame may carry: the persisted quest codes plus the two
  * provider codes. A separate tuple because QUEST_ERROR_CODES is stored on quests and must not widen.
  */
@@ -483,6 +554,7 @@ export const CompletionStreamEventSchema = z.union([
   CompletionMetaEventSchema,
   CompletionContentEventSchema,
   CompletionProviderBlockEventSchema,
+  CompletionSettledEventSchema,
   CompletionSseErrorEventSchema,
 ]);
 

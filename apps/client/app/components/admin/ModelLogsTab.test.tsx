@@ -62,6 +62,12 @@ const enterSupportCase = async (value = SUPPORT_CASE) => {
   await userEvent.type(screen.getByTestId('model-logs-support-case-input'), `${value}{Enter}`);
 };
 
+// A row opens its detail drawer, which holds the prompt-details toggle.
+const openLog = async (id = 'log-1') => {
+  await userEvent.click(screen.getByTestId(`model-logs-row-${id}`));
+  return within(screen.getByTestId('model-logs-drawer'));
+};
+
 describe('ModelLogsTab', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -97,8 +103,8 @@ describe('ModelLogsTab', () => {
     act(() => fakeAdminRouter.reset({ tab: 'model-logs', modelLogsPage: 3 }));
     renderTab();
 
-    await userEvent.click(within(screen.getByTestId('model-logs-model-select')).getByRole('combobox'));
-    await userEvent.click(await screen.findByRole('option', { name: 'Claude 3 Opus' }));
+    await userEvent.click(screen.getByTestId('admin-filter-model-logs-model'));
+    await userEvent.click(await screen.findByRole('menuitemradio', { name: 'Claude 3 Opus' }));
 
     expect(fakeAdminRouter.search).toEqual({ tab: 'model-logs', modelLogsModel: 'claude-3-opus' });
   });
@@ -109,7 +115,7 @@ describe('ModelLogsTab', () => {
     act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
     renderTab();
 
-    expect(screen.getByTestId('model-logs-error')).toBeTruthy();
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Could not load model logs.');
     expect(screen.queryByTestId('model-logs-empty')).toBeNull();
     await userEvent.click(screen.getByTestId('admin-error-retry-btn'));
     expect(refetch).toHaveBeenCalled();
@@ -121,14 +127,31 @@ describe('ModelLogsTab', () => {
     renderTab();
 
     expect(screen.getByTestId('model-logs-empty')).toBeTruthy();
-    expect(screen.queryByTestId('model-logs-error')).toBeNull();
+    expect(screen.queryByTestId('admin-error-state')).toBeNull();
+  });
+
+  it('offers the last 30 days from the empty state, and a refresh once that is the range', async () => {
+    const refetch = vi.fn();
+    mocks.useModelLogs.mockReturnValue(queryResult({ data: { logs: [], total: 0 }, refetch }));
+    act(() => fakeAdminRouter.reset({ tab: 'model-logs', modelLogsPage: 2 }));
+    renderTab();
+
+    await userEvent.click(screen.getByTestId('model-logs-empty-30-days-btn'));
+    expect(fakeAdminRouter.search).toEqual({
+      tab: 'model-logs',
+      modelLogsFrom: '2026-09-22',
+      modelLogsTo: '2026-10-21',
+    });
+
+    await userEvent.click(screen.getByTestId('model-logs-empty-refresh-btn'));
+    expect(refetch).toHaveBeenCalled();
   });
 
   it('requests the URL page and pages by the server total', () => {
     mocks.useModelLogs.mockReturnValue(
       queryResult({
         data: {
-          logs: [summary('log-1')],
+          logs: Array.from({ length: 25 }, (_, index) => summary(`log-${index + 1}`)),
           total: 60,
         },
       })
@@ -136,22 +159,21 @@ describe('ModelLogsTab', () => {
     act(() => fakeAdminRouter.reset({ tab: 'model-logs', modelLogsPage: 2 }));
     renderTab();
 
-    expect(mocks.useModelLogs).toHaveBeenCalledWith(expect.objectContaining({ page: 2, limit: 10 }));
-    expect(screen.getByText('Page 2 of 6')).toBeTruthy();
-    expect(screen.getByText('Total Logs: 60')).toBeTruthy();
+    expect(mocks.useModelLogs).toHaveBeenCalledWith(expect.objectContaining({ page: 2, limit: 25 }));
+    expect(screen.getByTestId('admin-table-range')).toHaveTextContent('26 to 50 of 60');
+    expect(screen.getByRole('heading', { level: 1, name: /Model logs/ })).toHaveTextContent('(60)');
   });
 
   it('stops at the final allowed page and explains how to reach additional matching logs', () => {
     mocks.useModelLogDetail.mockReturnValue({ data: undefined, isError: false });
     mocks.useModelLogs.mockReturnValue(
-      queryResult({ data: { logs: [summary('log-1')], total: MODEL_LOGS_MAX_PAGE * 10 + 1 } })
+      queryResult({ data: { logs: [summary('log-1')], total: MODEL_LOGS_MAX_PAGE * 25 + 1 } })
     );
     act(() => fakeAdminRouter.reset({ tab: 'model-logs', modelLogsPage: MODEL_LOGS_MAX_PAGE }));
     renderTab();
 
-    expect(mocks.useModelLogs).toHaveBeenCalledWith(expect.objectContaining({ page: MODEL_LOGS_MAX_PAGE, limit: 10 }));
-    expect(screen.getByText(`Page ${MODEL_LOGS_MAX_PAGE} of ${MODEL_LOGS_MAX_PAGE}`)).toBeTruthy();
-    expect(screen.getByTestId('model-logs-next-page-btn').hasAttribute('disabled')).toBe(true);
+    expect(mocks.useModelLogs).toHaveBeenCalledWith(expect.objectContaining({ page: MODEL_LOGS_MAX_PAGE, limit: 25 }));
+    expect(screen.getByTestId('admin-table-next-btn')).toBeDisabled();
     expect(screen.getByTestId('model-logs-page-limit').textContent).toContain(
       'Narrow the filters to see additional logs.'
     );
@@ -172,13 +194,14 @@ describe('ModelLogsTab', () => {
     renderTab();
 
     await enterSupportCase();
-    await waitFor(() => expect(screen.getByTestId('model-logs-details-toggle-btn')).toBeEnabled());
+    const drawer = await openLog();
+    await waitFor(() => expect(drawer.getByTestId('model-logs-details-toggle-btn')).toBeEnabled());
     expect(mocks.useModelLogDetail).toHaveBeenLastCalledWith('log-1', SUPPORT_CASE, false);
-    await userEvent.click(screen.getByTestId('model-logs-details-toggle-btn'));
+    await userEvent.click(drawer.getByTestId('model-logs-details-toggle-btn'));
     expect(mocks.useModelLogDetail).toHaveBeenLastCalledWith('log-1', SUPPORT_CASE, true);
-    expect(screen.getByTestId('model-logs-details').textContent).toContain('"gpt-4o"');
+    expect(drawer.getByTestId('model-logs-details').textContent).toContain('"gpt-4o"');
 
-    await userEvent.click(screen.getByTestId('model-logs-details-toggle-btn'));
+    await userEvent.click(drawer.getByTestId('model-logs-details-toggle-btn'));
     expect(screen.queryByTestId('model-logs-details')).toBeNull();
     expect(mocks.useModelLogDetail).toHaveBeenLastCalledWith('log-1', SUPPORT_CASE, false);
   });
@@ -190,11 +213,12 @@ describe('ModelLogsTab', () => {
     renderTab();
 
     expect(screen.getByTestId('model-logs-search-input')).toBeDisabled();
+    await openLog();
     expect(screen.getByTestId('model-logs-details-toggle-btn')).toBeDisabled();
+    await userEvent.click(screen.getByTestId('model-logs-drawer-close-btn'));
 
     await enterSupportCase('ab');
     await waitFor(() => expect(screen.getByTestId('model-logs-search-input')).toBeDisabled());
-    expect(screen.getByTestId('model-logs-details-toggle-btn')).toBeDisabled();
 
     // Typed but not committed: a half-typed case must never reach the server.
     await userEvent.type(screen.getByTestId('model-logs-support-case-input'), 'c');
@@ -203,6 +227,7 @@ describe('ModelLogsTab', () => {
 
     await userEvent.type(screen.getByTestId('model-logs-support-case-input'), '{Enter}');
     await waitFor(() => expect(screen.getByTestId('model-logs-search-input')).toBeEnabled());
+    await openLog();
     expect(screen.getByTestId('model-logs-details-toggle-btn')).toBeEnabled();
   });
 
@@ -234,6 +259,7 @@ describe('ModelLogsTab', () => {
     const { rerender } = renderTab();
 
     await enterSupportCase();
+    await openLog();
     await waitFor(() => expect(screen.getByTestId('model-logs-details-toggle-btn')).toBeEnabled());
     await userEvent.click(screen.getByTestId('model-logs-details-toggle-btn'));
     expect(screen.getByTestId('model-logs-details-loading')).toBeTruthy();
@@ -253,17 +279,18 @@ describe('ModelLogsTab', () => {
 
   it('moves between pages and resets to the first page on a page-size change', async () => {
     mocks.useModelLogDetail.mockReturnValue({ data: undefined, isError: false });
-    mocks.useModelLogs.mockReturnValue(queryResult({ data: { logs: [summary('log-1')], total: 60 } }));
+    mocks.useModelLogs.mockReturnValue(queryResult({ data: { logs: [summary('log-1')], total: 120 } }));
     act(() => fakeAdminRouter.reset({ tab: 'model-logs', modelLogsPage: 2 }));
     renderTab();
 
-    await userEvent.click(screen.getByTestId('model-logs-next-page-btn'));
+    await userEvent.click(screen.getByTestId('admin-table-next-btn'));
     expect(fakeAdminRouter.search).toMatchObject({ modelLogsPage: 3 });
-    await userEvent.click(screen.getByTestId('model-logs-prev-page-btn'));
+    await userEvent.click(screen.getByTestId('admin-table-previous-btn'));
     expect(fakeAdminRouter.search).toMatchObject({ modelLogsPage: 2 });
 
-    await userEvent.click(screen.getByTestId('model-logs-page-size-25-radio'));
-    expect(fakeAdminRouter.search).toEqual({ tab: 'model-logs', modelLogsLimit: 25 });
+    await userEvent.click(within(screen.getByTestId('admin-table-page-size')).getByRole('combobox'));
+    await userEvent.click(await screen.findByTestId('admin-table-page-size-50'));
+    expect(fakeAdminRouter.search).toEqual({ tab: 'model-logs', modelLogsLimit: 50 });
   });
 
   it('disables Previous on the first page and Next on the last', () => {
@@ -272,8 +299,8 @@ describe('ModelLogsTab', () => {
     act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
     renderTab();
 
-    expect(screen.getByTestId('model-logs-prev-page-btn').hasAttribute('disabled')).toBe(true);
-    expect(screen.getByTestId('model-logs-next-page-btn').hasAttribute('disabled')).toBe(true);
+    expect(screen.getByTestId('admin-table-previous-btn')).toBeDisabled();
+    expect(screen.getByTestId('admin-table-next-btn')).toBeDisabled();
   });
 
   it('does not clamp the page against a placeholder from the previous filter', () => {
@@ -299,7 +326,7 @@ describe('ModelLogsTab', () => {
     );
   });
 
-  it('renders a card from the summary fields alone', () => {
+  it('renders a row from the summary fields alone, and the full summary in its drawer', async () => {
     mocks.useModelLogDetail.mockReturnValue({ data: undefined, isError: false });
     mocks.useModelLogs.mockReturnValue(
       queryResult({
@@ -314,7 +341,7 @@ describe('ModelLogsTab', () => {
               messageHistoryLength: 4,
               completedStepCount: 3,
               failedStepCount: 1,
-              artifacts: [{ type: 'html', preview: '<p>hi' }],
+              artifacts: [{ type: 'html' }],
             },
           ],
           total: 1,
@@ -324,11 +351,16 @@ describe('ModelLogsTab', () => {
     act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
     renderTab();
 
-    expect(screen.getByText('1234ms')).toBeTruthy();
-    expect(screen.getByText('10 in / 20 out')).toBeTruthy();
-    expect(screen.getByText('Files: 2 | History: 4')).toBeTruthy();
-    expect(screen.getByText('3 completed / 1 failed')).toBeTruthy();
-    expect(screen.getByText('html: <p>hi...')).toBeTruthy();
+    const row = within(screen.getByTestId('model-logs-row-log-1'));
+    expect(row.getByText('1,234 ms')).toBeTruthy();
+    expect(row.getByText('10 / 20')).toBeTruthy();
+    expect(row.getByText('2 / 4')).toBeTruthy();
+    expect(screen.getByTestId('model-logs-row-log-1')).toHaveTextContent('3 completed, 1 failed');
+
+    const drawer = await openLog();
+    expect(drawer.getByTestId('model-logs-drawer-summary')).toHaveTextContent('Steps failed1');
+    expect(drawer.getByText('html')).toBeTruthy();
+    expect(mocks.useModelLogDetail).toHaveBeenLastCalledWith('log-1', '', false);
   });
 
   it('shows the loading state, not the empty state, before the first page arrives', () => {
@@ -337,8 +369,8 @@ describe('ModelLogsTab', () => {
     renderTab();
 
     expect(screen.queryByTestId('model-logs-empty')).toBeNull();
-    expect(screen.queryByTestId('model-logs-error')).toBeNull();
-    expect(screen.getByRole('progressbar')).toBeTruthy();
+    expect(screen.queryByTestId('admin-error-state')).toBeNull();
+    expect(screen.getAllByTestId('admin-table-skeleton-row').length).toBeGreaterThan(0);
   });
 
   it('refreshes active details and marks collapsed details stale', async () => {
@@ -391,14 +423,14 @@ describe('ModelLogsTab', () => {
     renderTab();
 
     expect(screen.getByTestId('model-logs-refetching')).toBeTruthy();
-    expect(screen.queryByTestId('model-logs-loading')).toBeNull();
-    expect(screen.queryByTestId('model-logs-empty')).toBeNull();
+    expect(screen.queryByTestId('admin-table-skeleton-row')).toBeNull();
+    expect(screen.getByTestId('model-logs-row-log-1')).toBeTruthy();
     expect(screen.getByTestId('model-logs-refresh-btn').hasAttribute('disabled')).toBe(true);
   });
 
   it.each([
-    ['Last 7 Days', '2026-10-15'],
-    ['Last 30 Days', '2026-09-22'],
+    ['7 days', '2026-10-15'],
+    ['30 days', '2026-09-22'],
   ])('highlights %s once it sets the range', async (name, startDate) => {
     mocks.useModelLogs.mockReturnValue(queryResult({}));
     act(() => fakeAdminRouter.reset({ tab: 'model-logs', modelLogsFrom: '2026-10-01', modelLogsTo: '2026-10-02' }));
@@ -406,11 +438,11 @@ describe('ModelLogsTab', () => {
 
     await userEvent.click(screen.getByRole('button', { name }));
 
-    expect(screen.getByLabelText('Start Date')).toHaveValue(startDate);
+    expect(screen.getByLabelText('Start date')).toHaveValue(startDate);
     expect(screen.getByRole('button', { name, pressed: true })).toBeTruthy();
   });
 
-  it.each(['Start Date', 'End Date'])('updates %s when the URL changes while unfocused', label => {
+  it.each(['Start date', 'End date'])('updates %s when the URL changes while unfocused', label => {
     mocks.useModelLogs.mockReturnValue(queryResult({}));
     act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
     renderTab();
@@ -418,10 +450,10 @@ describe('ModelLogsTab', () => {
     const input = screen.getByLabelText(label);
     act(() => fakeAdminRouter.reset({ tab: 'model-logs', modelLogsFrom: '2026-10-01', modelLogsTo: '2026-10-02' }));
 
-    expect(input).toHaveValue(label === 'Start Date' ? '2026-10-01' : '2026-10-02');
+    expect(input).toHaveValue(label === 'Start date' ? '2026-10-01' : '2026-10-02');
   });
 
-  it.each(['Start Date', 'End Date'])('reconciles a rejected %s draft on blur', label => {
+  it.each(['Start date', 'End date'])('reconciles a rejected %s draft on blur', label => {
     mocks.useModelLogs.mockReturnValue(queryResult({}));
     act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
     renderTab();
@@ -471,7 +503,7 @@ describe('ModelLogsTab', () => {
 
     // The real router commits a navigate after React re-renders, so the old date comes back in
     // first; writing it into the input resets the browser's year-typing buffer.
-    it.each(['Start Date', 'End Date'])('keeps each year digit in %s when the URL commits late', async label => {
+    it.each(['Start date', 'End date'])('keeps each year digit in %s when the URL commits late', async label => {
       failOnlyFirstKey();
       act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
       const commit = fakeAdminRouter.navigate.getMockImplementation()!;
@@ -490,7 +522,7 @@ describe('ModelLogsTab', () => {
 
         await waitFor(() =>
           expect(fakeAdminRouter.search).toMatchObject({
-            [label === 'Start Date' ? 'modelLogsFrom' : 'modelLogsTo']: '2026-10-01',
+            [label === 'Start date' ? 'modelLogsFrom' : 'modelLogsTo']: '2026-10-01',
           })
         );
         expect(input).toHaveValue('2026-10-01');
@@ -500,7 +532,7 @@ describe('ModelLogsTab', () => {
       }
     });
 
-    it.each(['Start Date', 'End Date'])('keeps each typed year digit and focus in %s', label => {
+    it.each(['Start date', 'End date'])('keeps each typed year digit and focus in %s', label => {
       failOnlyFirstKey();
       act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
       renderTab();
@@ -516,7 +548,7 @@ describe('ModelLogsTab', () => {
 
       expect(input).toHaveValue('2026-10-01');
       expect(fakeAdminRouter.search).toMatchObject({
-        [label === 'Start Date' ? 'modelLogsFrom' : 'modelLogsTo']: '2026-10-01',
+        [label === 'Start date' ? 'modelLogsFrom' : 'modelLogsTo']: '2026-10-01',
       });
     });
   });

@@ -7,6 +7,7 @@ import {
   IEmbedBranding,
   IUserApiKeyDocument,
   IUserApiKeyRepository,
+  isExchangeKeyMetadata,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import { KEY_PREFIX_LENGTH, LEGACY_KEY_PREFIX_LENGTH } from './constants';
@@ -16,6 +17,15 @@ interface ValidateUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
   };
+}
+
+export interface ValidateUserApiKeyOptions {
+  /**
+   * Whether this check is a use of the key, stamping its `lastUsedAt`. Defaults to true. Pass false
+   * when the caller is only connecting or sending first-party telemetry, so an idle client never
+   * makes a key look used.
+   */
+  recordUse?: boolean;
 }
 
 export interface ValidationResult {
@@ -49,6 +59,10 @@ export interface ValidationResult {
   currentSpend?: number;
   /** The admin who provisioned the key for its owner (admin generate-api-key route only). */
   createdByUserId?: string;
+  /** When the key was minted; rotation keeps it. Decides legacy status for grandfathered scope gates. */
+  createdAt?: Date;
+  /** OAuth client that minted the key, present only for a federated exchange key. */
+  oauthExchangeClientId?: string;
   reason?: 'not_found' | 'invalid_hash' | 'expired' | 'disabled' | 'rate_limited';
 }
 
@@ -69,6 +83,13 @@ async function matchStoredSecret(key: string, apiKey: IUserApiKeyDocument): Prom
   return null;
 }
 
+/** Stamps `lastUsedAt` without blocking the request; a failed write is logged, never thrown. */
+export function recordUserApiKeyUse(keyId: string, db: ValidateUserApiKeyAdapters['db']): void {
+  db.userApiKeys.updateLastUsed(keyId).catch(err => {
+    Logger.globalInstance.warn('Failed to update API key last used timestamp:', err);
+  });
+}
+
 /**
  * Post-lookup gates shared by every key-validation path (raw-key-by-prefix and
  * by-id). Runs the checks that must hold regardless of HOW the doc was located -
@@ -76,18 +97,23 @@ async function matchStoredSecret(key: string, apiKey: IUserApiKeyDocument): Prom
  * Centralized so a future gate (revoked flag, org-suspend, ...) can't land on one
  * path and silently skip the other.
  */
-function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserApiKeyAdapters['db']): ValidationResult {
+function finalizeApiKeyValidation(
+  apiKey: IUserApiKeyDocument,
+  db: ValidateUserApiKeyAdapters['db'],
+  { recordUse = true }: ValidateUserApiKeyOptions
+): ValidationResult {
   if (apiKey.expiresAt && apiKey.expiresAt < new Date()) {
     return { isValid: false, reason: 'expired' };
   }
   if (apiKey.status !== ApiKeyStatus.ACTIVE) {
     return { isValid: false, reason: 'disabled' };
   }
+  // An exchange key with no client id cannot be confined or attributed, so refuse it.
+  if (isExchangeKeyMetadata(apiKey.metadata) && !apiKey.metadata.oauthClientId) {
+    return { isValid: false, reason: 'disabled' };
+  }
 
-  // Update last used timestamp (fire and forget)
-  db.userApiKeys.updateLastUsed(apiKey.id).catch(err => {
-    Logger.globalInstance.warn('Failed to update API key last used timestamp:', err);
-  });
+  if (recordUse) recordUserApiKeyUse(apiKey.id, db);
 
   return {
     isValid: true,
@@ -107,12 +133,15 @@ function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserA
     spendCap: apiKey.spendCap,
     currentSpend: apiKey.usage?.totalSpendCredits,
     createdByUserId: apiKey.metadata?.createdByUserId,
+    createdAt: apiKey.createdAt,
+    oauthExchangeClientId: isExchangeKeyMetadata(apiKey.metadata) ? apiKey.metadata.oauthClientId : undefined,
   };
 }
 
 export const validateUserApiKey = async (
   key: string,
-  adapters: ValidateUserApiKeyAdapters
+  adapters: ValidateUserApiKeyAdapters,
+  options: ValidateUserApiKeyOptions = {}
 ): Promise<ValidationResult> => {
   const { db } = adapters;
 
@@ -140,7 +169,7 @@ export const validateUserApiKey = async (
     return { isValid: false, reason: 'invalid_hash' };
   }
 
-  const result = finalizeApiKeyValidation(apiKey, db);
+  const result = finalizeApiKeyValidation(apiKey, db, options);
 
   // Self-heal legacy records: now that the full key is in hand (hash matched),
   // upgrade the stored prefix to the current length so future lookups hit directly
@@ -198,11 +227,12 @@ export const findOwnerOfDisabledUserApiKey = async (
  */
 export const validateUserApiKeyById = async (
   keyId: string,
-  adapters: ValidateUserApiKeyAdapters
+  adapters: ValidateUserApiKeyAdapters,
+  options: ValidateUserApiKeyOptions = {}
 ): Promise<ValidationResult> => {
   const apiKey = await adapters.db.userApiKeys.findById(keyId);
   if (!apiKey) {
     return { isValid: false, reason: 'not_found' };
   }
-  return finalizeApiKeyValidation(apiKey, adapters.db);
+  return finalizeApiKeyValidation(apiKey, adapters.db, options);
 };

@@ -123,6 +123,8 @@ export interface IAdminAuditLogRepository {
   ): Promise<number>;
   /** Entries one actor recorded under `actions` with occurredAt at or after `since`, skipping approval-run ones. */
   countActions(actorUserId: string, actions: readonly AdminAuditAction[], since: Date): Promise<number>;
+  /** Entries under `actions` by any actor with occurredAt at or after `since`. */
+  countActionsSince(actions: readonly AdminAuditAction[], since: Date): Promise<number>;
 }
 
 /** The subscription Timeline read capability, without extending the base repository's required contract. */

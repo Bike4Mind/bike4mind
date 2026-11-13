@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.101",
+  "version": "0.1.102",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -13,6 +13,7 @@
     "./help/ingestHelpDatalake": "./help/ingestHelpDatalake.ts"
   },
   "scripts": {
+    "feedback-notes:scrub": "tsx src/scrubLegacyFeedbackNotes.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "typecheck:native": "tsgo --noEmit --types node",
@@ -133,7 +134,7 @@
     "dotenv": "^17.4.2",
     "glob": "^13.0.6",
     "gray-matter": "^4.0.3",
-    "mongoose": "^8.24.1",
+    "mongoose": "^8.24.7",
     "p-limit": "^7.3.2",
     "sst": "4.17.1",
     "stripe": "^22.6.2",

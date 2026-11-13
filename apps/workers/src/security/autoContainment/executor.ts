@@ -1,22 +1,16 @@
 import {
-  AutoContainmentConfigSchema,
   type AbuseAssessmentItem,
   type AutoContainmentConfig,
   type AutoContainmentDecisionItem,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
-import {
-  adminSettingsRepository,
-  autoContainmentDecisionRepository,
-  cacheRepository,
-  shadowDetectionRepository,
-} from '@bike4mind/database';
+import { autoContainmentDecisionRepository, cacheRepository, shadowDetectionRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { loadAutoContainmentConfig } from '@bike4mind/server-utils/security/autoContainment/config';
 import type { AdminUsersBulkResult } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
-import { usersBulkExecuteDepsFor, usersBulkResolveDeps } from '@server/admin/usersBulk/adapters';
-import { executeAdminUsersBulk } from '@server/admin/usersBulk/execute';
-import { cohortHashOf, resolveAdminUsersBulk } from '@server/admin/usersBulk/resolve';
+import { usersBulkExecuteDepsFor, usersBulkResolveDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
+import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/execute';
+import { cohortHashOf, resolveAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 import { systemAuditWriter } from '@workers/utils/systemAuditWriter';
 import { decideContainment, type AutoContainmentSkipReason } from './policy';
 
@@ -72,13 +66,8 @@ export type AutoContainmentRunResult =
   | { status: 'skipped'; reason: AutoContainmentSkipReason | 'detection_not_found' | 'already_decided' }
   | { status: 'decided'; decision: AutoContainmentDecisionItem };
 
-export const loadAutoContainmentConfig = async (): Promise<AutoContainmentConfig> => {
-  const settings = await getSettingsMap(
-    { adminSettings: adminSettingsRepository },
-    { names: ['autoContainmentConfig'], skipCache: true }
-  );
-  return getSettingsValue('autoContainmentConfig', settings, AutoContainmentConfigSchema.parse({}));
-};
+// Re-exported so the rule modules beside this one keep one import site for the containment policy.
+export { loadAutoContainmentConfig };
 
 /** The Contain path with a system actor; null when no account on the request is eligible (full admins never are; accounts with only delegated admin access can be). */
 export const containAsSystem =

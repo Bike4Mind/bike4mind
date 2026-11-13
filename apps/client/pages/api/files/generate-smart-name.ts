@@ -6,7 +6,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { FILES_WRITE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 import { meterCompletionBackend } from '@bike4mind/services';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const generateSmartNameSchema = z.object({
@@ -24,7 +24,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
       const fallbackName = fileType === 'image' ? `pasted-image-${Date.now()}` : `pasted-text-${Date.now()}`;
 
       try {
-        const operations = await OperationsModelService.getOperationsModel();
+        const operations = await OperationsModelService.getOperationsModel({ endUserId: req.user.id });
         const { modelId, modelInfo } = operations;
         const llm = meterCompletionBackend(
           operations.llm,

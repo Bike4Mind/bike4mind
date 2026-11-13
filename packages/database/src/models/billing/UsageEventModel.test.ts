@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
@@ -48,6 +48,19 @@ const record = (overrides: Partial<IUsageEventInput> = {}) =>
 
 describe('UsageEventRepository', () => {
   describe('record', () => {
+    it('persists run lineage as sent, leaving an absent purpose absent', async () => {
+      const run = { runId: 'run-1', role: 'worker' as const, taskId: 'task-1', parentSessionId: 'root-session' };
+      const doc = await record({ feature: 'completion_api', run });
+
+      const stored = await UsageEvent.findById(doc!.id).lean();
+      expect(stored?.run).toEqual(run);
+      expect(stored?.run).not.toHaveProperty('purpose');
+    });
+
+    it('rejects a run role outside the vocabulary', async () => {
+      await expect(record({ run: { runId: 'run-1', role: 'boss' as unknown as 'root' } })).rejects.toThrow(/role/);
+    });
+
     it('persists an event with all quantities and money fields', async () => {
       const doc = await record({
         providerInputTokens: 900,
@@ -274,6 +287,73 @@ describe('UsageEventRepository', () => {
       await UsageEvent.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
       const rows = await usageEventRepository.marginByUser(30);
       expect(rows).toHaveLength(0);
+    });
+  });
+
+  describe('spendProfileByUsers', () => {
+    const since = new Date('2026-10-01T00:00:00Z');
+    const backdate = (requestId: string, createdAt: Date) =>
+      UsageEvent.collection.updateOne({ requestId }, { $set: { createdAt } });
+
+    it('sums spend per model, counts written-off credits, and finds the first spend', async () => {
+      await record({ requestId: 'a1', userId: 'u1', model: 'm-big', creditsCharged: 40 });
+      await record({ requestId: 'a2', userId: 'u1', model: 'm-big', creditsCharged: 10, writtenOffCredits: 5 });
+      await record({ requestId: 'a3', userId: 'u1', model: 'm-small', creditsCharged: 3 });
+      await record({ requestId: 'a4', userId: 'u1', model: 'm-small', creditsCharged: 0 });
+      await record({ requestId: 'a5', userId: 'u1', model: 'm-old', creditsCharged: 99 });
+      await record({ requestId: 'a6', userId: 'other', creditsCharged: 7 });
+      await backdate('a1', new Date('2026-10-05T00:00:00Z'));
+      await backdate('a2', new Date('2026-10-03T00:00:00Z'));
+      await backdate('a3', new Date('2026-10-04T00:00:00Z'));
+      await backdate('a4', new Date('2026-10-02T00:00:00Z'));
+      await backdate('a5', new Date('2026-09-30T00:00:00Z'));
+
+      const profiles = await usageEventRepository.spendProfileByUsers(['u1', 'nobody'], since);
+
+      expect(Object.keys(profiles)).toEqual(['u1']);
+      expect(profiles.u1.firstSpendAt).toEqual(new Date('2026-10-03T00:00:00Z'));
+      expect(profiles.u1.totalCredits).toBe(58);
+      expect(profiles.u1.byModel).toEqual([
+        { model: 'm-big', credits: 55, events: 2 },
+        { model: 'm-small', credits: 3, events: 1 },
+      ]);
+    });
+
+    it('keeps the largest models up to the cap', async () => {
+      await record({ requestId: 'b1', userId: 'u1', model: 'm1', creditsCharged: 1 });
+      await record({ requestId: 'b2', userId: 'u1', model: 'm2', creditsCharged: 2 });
+      await record({ requestId: 'b3', userId: 'u1', model: 'm3', creditsCharged: 3 });
+      const profiles = await usageEventRepository.spendProfileByUsers(['u1'], since, 2);
+      expect(profiles.u1.byModel.map(m => m.model)).toEqual(['m3', 'm2']);
+    });
+
+    it('keeps the same top models when equally funded aggregate rows arrive in a different order', async () => {
+      const rows = ['m6', 'm2', 'm4', 'm1', 'm5', 'm3'].map(model => ({
+        _id: { userId: 'u1', model },
+        credits: 10,
+        events: 1,
+        firstAt: since,
+      }));
+      const query = UsageEvent.aggregate<(typeof rows)[number]>([]);
+      const execute = vi
+        .spyOn(query, 'exec')
+        .mockResolvedValueOnce(rows)
+        .mockResolvedValueOnce([...rows].reverse());
+      const aggregate = vi.spyOn(UsageEvent, 'aggregate').mockReturnValue(query);
+      try {
+        const first = await usageEventRepository.spendProfileByUsers(['u1'], since);
+        const second = await usageEventRepository.spendProfileByUsers(['u1'], since);
+        expect(first.u1.byModel.map(entry => entry.model)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5']);
+        expect(second).toEqual(first);
+        expect(execute).toHaveBeenCalledTimes(2);
+      } finally {
+        aggregate.mockRestore();
+        execute.mockRestore();
+      }
+    });
+
+    it('reads nothing for an empty id list', async () => {
+      expect(await usageEventRepository.spendProfileByUsers([], since)).toEqual({});
     });
   });
 

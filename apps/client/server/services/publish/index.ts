@@ -80,6 +80,7 @@ export {
   signDraftUploadToken,
   verifyDraftUploadToken,
   mintDraftUploadUrl,
+  DRAFT_UPLOAD_TOKEN_HEADER,
   DRAFT_UPLOAD_EXPIRY_SECONDS,
   type DraftUploadClaims,
   type DraftUploadStorage,
@@ -104,7 +105,7 @@ export {
 } from './transpileReactArtifact';
 export { renderArtifactIndexHtml } from './renderArtifactHtml';
 export { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
-export { loadLiveOwner } from './loadLiveOwner';
+export { excludeNonLiveOwners, loadLiveOwner } from './loadLiveOwner';
 export {
   consumePublishAction,
   publishActionLimit,

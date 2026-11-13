@@ -340,24 +340,30 @@ export const DetectionLinkedAccountsCard: React.FC<{ userId: string }> = ({ user
       data-testid="user-profile-detection-links"
     >
       {links.data && <DetectionList detections={links.data.detections} />}
-      <Box sx={{ px: 1, pb: 1 }}>
-        <DataTable
-          rows={accounts}
-          columns={columns}
-          getRowId={account => account.id}
-          label="Accounts linked by detections"
-          loading={links.isLoading}
-          error={links.isError ? 'Linked accounts could not be loaded.' : undefined}
-          onRetry={() => void links.refetch()}
-          empty="No other account is named by these detections."
-          pagination={false}
-          minWidth="46rem"
-          testId="detection-links-table"
-          rowTestId={account => `detection-links-row-${account.id}`}
-        />
-      </Box>
+      <DataTable
+        rows={accounts}
+        columns={columns}
+        getRowId={account => account.id}
+        label="Accounts linked by detections"
+        loading={links.isLoading}
+        error={links.isError ? 'Linked accounts could not be loaded.' : undefined}
+        onRetry={() => void links.refetch()}
+        empty={
+          <Typography level="body-sm" sx={{ p: 2, color: 'admin.inkMuted' }}>
+            No other account is named by these detections.
+          </Typography>
+        }
+        pagination={false}
+        minWidth="46rem"
+        testId="detection-links-table"
+        framed={false}
+        rowTestId={account => `detection-links-row-${account.id}`}
+      />
       {links.data?.truncated && (
-        <Typography level="body-xs" sx={{ px: 2, pb: 1.5, color: 'admin.inkMuted' }}>
+        <Typography
+          level="body-xs"
+          sx={{ px: 2, py: 1.5, color: 'admin.inkMuted', borderTop: '1px solid', borderColor: 'admin.border' }}
+        >
           More accounts are linked than shown. Open the detections page for the full groups.
         </Typography>
       )}

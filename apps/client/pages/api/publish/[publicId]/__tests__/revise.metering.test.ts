@@ -63,7 +63,7 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   },
 }));
 vi.mock('@bike4mind/database', async () => ({
-  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   PublishedArtifact: {
     findOne: () => ({
       lean: async () => ({

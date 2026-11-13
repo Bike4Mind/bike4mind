@@ -342,11 +342,28 @@ const UsersTab: React.FC = () => {
             }
             selection={selection}
             onSelectionChange={setSelection}
-            onRowActivate={row => openProfile(row.id)}
+            onRowActivate={row =>
+              openProfile(row.id, {
+                signupRange,
+                signupAsOf: chartQuery.data?.until,
+                signupTzOffset: -new Date().getTimezoneOffset(),
+              })
+            }
             sort={sort}
             onSortChange={onSortChange}
             groups={groups}
-            rowActions={row => <UserRowActions row={row} onOpen={() => openProfile(row.id)} />}
+            rowActions={row => (
+              <UserRowActions
+                row={row}
+                onOpen={() =>
+                  openProfile(row.id, {
+                    signupRange,
+                    signupAsOf: chartQuery.data?.until,
+                    signupTzOffset: -new Date().getTimezoneOffset(),
+                  })
+                }
+              />
+            )}
             pagination={{
               page: params.page,
               pageSize: params.limit,

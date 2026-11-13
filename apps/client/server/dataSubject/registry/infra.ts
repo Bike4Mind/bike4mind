@@ -2,6 +2,19 @@ import type { DataHolderRegistry } from '../types';
 import { AUDIT_LOG, EMAIL_SUPPRESSION, expiresAfterTtl } from './retention';
 
 export const infraHolders = {
+  // A frozen evaluation set of accounts for measuring abuse detection. Account deletion
+  // (abuseEvalSetRepository.removeUser) pulls the person's own example, with its verdicts, from every set.
+  // Campaign keys are opaque hashes, so no other example names the person. The admin references below
+  // are classified for export; deletion does not rewrite them.
+  AbuseEvalSet: {
+    kind: 'holder',
+    references: [
+      { path: 'examples.userId', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'createdBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'examples.verdicts.reviewerId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'runs.ranBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
   // Advisory model judgment of a shadow detection, kept for as long as the detection.
   AbuseAssessment: {
     kind: 'viaParent',
@@ -16,28 +29,88 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'decidedBy.userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['decidedBy.name'] }],
   },
+  AdminAiAttempt: {
+    kind: 'noUserData',
+    note: 'Platform AI call accounting and outcome metadata; suggestionId links a suggestion, not a user account.',
+  },
+  AdminAiClass: {
+    kind: 'noUserData',
+    note: 'Operator-maintained action-class modes and aggregate replay evidence; replayArtifact is free text and is not scanned.',
+  },
+  AdminMorningBrief: {
+    kind: 'noUserData',
+    note: 'Environment/day operational counts, alarm names, aggregate AI activity and admin page links; no user references or source queue content are stored.',
+  },
   // An admin's request for a second admin's sign-off on a privileged action, kept with the audit trail.
-  // `summary` and `paramsJson` (which may name the target account) are free text and not scanned.
+  // `summary` and `paramsJson` (which may name the target account) are free text and not scanned, so
+  // both admins are actors on it: their export carries only their own reference.
   AdminApproval: {
     kind: 'holder',
     references: [
-      { path: 'requestedBy.id', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
-      { path: 'requestedBy.selfIds', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
-      { path: 'requestedBy.email', matchBy: 'email', action: 'retain', ...AUDIT_LOG },
-      { path: 'decidedBy.id', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      {
+        path: 'requestedBy.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['requestedBy.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'requestedBy.selfIds',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        exportScope: 'reference',
+      },
+      {
+        path: 'requestedBy.email',
+        matchBy: 'email',
+        action: 'retain',
+        ...AUDIT_LOG,
+        exportScope: 'reference',
+      },
+      {
+        path: 'decidedBy.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['decidedBy.name'],
+        exportScope: 'reference',
+      },
     ],
   },
   AdminAuditAlertState: {
     kind: 'holder',
     references: [{ path: 'openBursts.actorUserId', matchBy: 'userId', action: 'pullFromArray' }],
   },
+  OrganizationAuditEvent: {
+    kind: 'holder',
+    references: [
+      { path: 'actorUserId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      { path: 'targetId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG, where: { action: 'member.added' } },
+      { path: 'targetId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG, where: { action: 'member.removed' } },
+    ],
+  },
   // Append-only: the model rejects every update, so the entry cannot be anonymized in place. Free-text `summary`,
   // `changes` and `details` are not scanned for the person.
   AdminAuditLog: {
     kind: 'holder',
     references: [
-      { path: 'actor.userId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
-      { path: 'actor.impersonatedUserId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      {
+        path: 'actor.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['actor.email', 'actor.name', 'actor.apiKeyId', 'context.ip', 'context.userAgent'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'actor.impersonatedUserId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        exportScope: 'reference',
+      },
       {
         path: 'target.id',
         matchBy: 'userId',
@@ -47,6 +120,9 @@ export const infraHolders = {
       },
     ],
     secretPaths: ['related.impersonationSessionId'],
+    // Written by `approvalAuditDetails` (server/admin/approvals/auditWriter.ts) and the team grant in
+    // server/admin/creditGrants/grantSubscription.ts: the requesting admin and the org owner.
+    withheldPaths: ['details.approval.requestedBy', 'details.organizationOwnerId'],
     unmatchedPaths: { 'actor.email': 'The acting admin, kept in the audit trail; not resolved to their account.' },
   },
   // A reviewer's sign-off on an audit entry: the sign-off stays, the link to the reviewer goes.
@@ -120,6 +196,7 @@ export const infraHolders = {
     references: [
       { path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['userName'] },
       // Free-form context on admin and membership counters.
+      { path: 'metadata.userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'metadata.targetUserId', matchBy: 'userId', action: 'anonymize' },
       { path: 'metadata.memberEmail', matchBy: 'email', action: 'anonymize' },
       { path: 'metadata.email', matchBy: 'email', action: 'anonymize' },
@@ -302,6 +379,7 @@ export const infraHolders = {
   // anonymized here. Deleting the person's personal organizations (the `personal` flag, which
   // `purgeAccountContent` filters on) is deferred to the erasure flow.
   // `userDetails.email` and `.name` are removed with the element that `userDetails.id` pulls.
+  // `serviceAccountUserId` names the org's system service account, never a person.
   Organization: {
     kind: 'holder',
     references: [
@@ -310,7 +388,13 @@ export const infraHolders = {
       { path: 'adminUserIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'userDetails.id', matchBy: 'userId', action: 'pullFromArray' },
     ],
-    unrelatedPaths: ['userDetails.email', 'maxCreditsPerMember', 'signupGrantUnlockCount', 'signupInviteBonusCount'],
+    unrelatedPaths: [
+      'userDetails.email',
+      'maxCreditsPerMember',
+      'signupGrantUnlockCount',
+      'signupInviteBonusCount',
+      'serviceAccountUserId',
+    ],
   },
   OverwatchProduct: { kind: 'noUserData', note: 'Tracked product catalogue entry.' },
   // The event `userId` is an HMAC of the Bike4Mind user id under a server-side salt (`pseudonymizeUserId`), not the id.

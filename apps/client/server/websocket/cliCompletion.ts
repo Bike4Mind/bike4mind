@@ -27,7 +27,7 @@ import {
   verifyApiKey,
   checkApiKeyRateLimitOrThrow,
   ApiKeyInfo,
-} from '@server/cli/auth';
+} from '@bike4mind/server-utils/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { withWebSocketContext, sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
@@ -38,6 +38,7 @@ import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkin
 import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
 import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
+import { recordUserActivity } from '@server/users/recordUserActivity';
 
 const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or JWT token.';
 
@@ -148,6 +149,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   logger.updateMetadata({ userId, model, requestId });
   logger.info(`[CLI_WS] Starting completion for user ${userId}, model: ${model}`);
+  recordUserActivity(userId, logger);
 
   // Track token counts for analytics
   let finalInputTokens = 0;

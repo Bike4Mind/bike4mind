@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-11-06T04:51:42.061Z",
-  "notice": "Fallback defaults last maintained on 2026-11-06. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-11-12T12:06:08.138Z",
+  "notice": "Fallback defaults last maintained on 2026-11-12. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -650,7 +650,8 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
-          "status": "active"
+          "status": "deprecated",
+          "deprecationDate": "2026-11-30"
         },
         "description": "Anthropic's most intelligent model in the Claude 4 family. Delivers exceptional performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency. Ideal for production workloads requiring both power and reliability.",
         "logoFile": "Anthropic_logo.png",

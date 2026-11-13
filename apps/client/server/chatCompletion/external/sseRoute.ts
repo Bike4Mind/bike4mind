@@ -1,3 +1,4 @@
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, type ApiCompletionOutcome } from '@bike4mind/common';
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
 import { actorScopeForKey } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
@@ -5,13 +6,17 @@ import express, { type Request, type Response, type Express, type NextFunction }
 import {
   CompletionRequestSchema,
   BadRequestError,
+  CreditHolderType,
   HTTPError,
+  NotFoundError,
+  RUN_NOT_FOUND_ERROR_CODE,
   LEGACY_REQUEST_ID_HEADER,
   REQUEST_ID_HEADER,
   TooManyRequestsError,
   UnauthorizedError,
   UnprocessableEntityError,
   buildMetaEvent,
+  buildSettledEvent,
   buildCompletionStreamEvent,
   createCompletionContract,
   formatSSEError,
@@ -22,6 +27,7 @@ import {
   serializeSSEEvent,
   SSE_DONE_SIGNAL,
   SSE_KEEPALIVE,
+  type CompletionRunAttribution,
   type CompletionSource,
   type CompletionSseErrorCode,
   type IMessage,
@@ -44,9 +50,11 @@ import {
   usageEventRepository,
   organizationRepository,
   cacheRepository,
+  completionRunRepository,
 } from '@bike4mind/database';
-import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
-import { resolveContractAuth } from '@server/cli/resolveContractAuth';
+import type { CompletionSettlement } from '@bike4mind/services/cliCompletions';
+import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
+import { resolveContractAuth } from '@bike4mind/server-utils/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
@@ -112,6 +120,28 @@ function isUpstreamCallerError(error: unknown): error is Error {
   if (!(error instanceof Error) || error instanceof HTTPError) return false;
   if (!UPSTREAM_CALLER_ERROR_STATUSES.has(getHttpStatus(error) ?? 0)) return false;
   return !OPERATOR_SIDE_4XX_PATTERNS.some(pattern => pattern.test(error.message));
+}
+
+/**
+ * Returns the attribution only when the run was minted by this user for this billing owner, resolved
+ * as completion-runs.ts resolves it. A missing run and someone else's run get the same 404, so a run
+ * id reveals nothing about other accounts.
+ */
+async function verifyRunOwnership(
+  run: CompletionRunAttribution,
+  caller: { userId: string; billingOrganizationId?: string }
+): Promise<CompletionRunAttribution> {
+  // _id is stored lowercase (randomUUID) but z.uuid accepts uppercase.
+  const runId = run.runId.toLowerCase();
+  const stored = await completionRunRepository.findById(runId);
+  const ownerType = caller.billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
+  const ownerId = caller.billingOrganizationId ?? caller.userId;
+  if (!stored || stored.userId !== caller.userId || stored.ownerType !== ownerType || stored.ownerId !== ownerId) {
+    throw new NotFoundError('Completion run not found. Create one with POST /api/v1/completion-runs.', {
+      errorCode: RUN_NOT_FOUND_ERROR_CODE,
+    });
+  }
+  return { ...run, runId };
 }
 
 function requestIdFrom(headers: Record<string, string | undefined>): string {
@@ -254,6 +284,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       heartbeat = setInterval(() => write(SSE_KEEPALIVE), HEARTBEAT_INTERVAL_MS);
     };
 
+    let completionOutcome: ApiCompletionOutcome = 'unknown';
     let body: z.infer<typeof CompletionRequestSchema> | undefined;
     let userId: string | undefined;
     let apiKeyInfo: ApiKeyInfo | undefined;
@@ -287,7 +318,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       let authResult;
       try {
-        authResult = await resolveContractAuth(headers, createCompletionContract);
+        authResult = await resolveContractAuth(headers, createCompletionContract, { allowExchangeKeys: true });
       } catch (authError) {
         logger.warn('[CLI_LLM] Authentication failed', { requestId, error: serializeError(authError) });
         // verifyApiKey and verifyJwtToken throw plain Errors for a missing or invalid credential.
@@ -301,13 +332,14 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       if (authResult.method === 'apiKey') {
         apiKeyInfo = authResult.apiKeyInfo;
         // Register before admission so authenticated rejections count as requests too.
-        logApiKeyUsageOnResponse({
+        await logApiKeyUsageOnResponse({
           req,
           res,
           apiKey: apiKeyInfo,
           endpoint: COMPLETIONS_ENDPOINT,
           source,
           startTime,
+          completion: { requestId, requestedModel: body.model, outcome: () => completionOutcome },
           logger,
           track,
         });
@@ -344,6 +376,10 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         }
       }
 
+      const run = body.run
+        ? await verifyRunOwnership(body.run, { userId, billingOrganizationId: apiKeyInfo?.organizationId })
+        : undefined;
+
       // Stream the completion, tracking usage for analytics.
       let finalInputTokens = 0;
       let finalOutputTokens = 0;
@@ -352,6 +388,8 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       let finalTurnUsage: TurnUsage[] | undefined;
       let finalCreditsUsed: number | undefined;
       let hasToolCalls = false;
+      // A holder, not a `let`: control-flow analysis does not see the assignment inside the callback.
+      const settled: { outcome?: CompletionSettlement } = {};
 
       // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
       await checkFreeTierDailySpendCap({
@@ -394,8 +432,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         requestId,
         source,
         sessionId: body.sessionId,
+        run,
         logger,
         onReady,
+        onSettled: outcome => {
+          settled.outcome = outcome;
+        },
         onChunk: async (text, info) => {
           if (info?.inputTokens) finalInputTokens = info.inputTokens;
           if (info?.outputTokens) finalOutputTokens = info.outputTokens;
@@ -408,6 +450,13 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           write(serializeSSEEvent(buildCompletionStreamEvent(text, info)));
         },
       });
+
+      completionOutcome = 'completed';
+
+      // After the last content event and before [DONE]. Embed streams never send it: it carries usdCost.
+      if (settled.outcome?.committed) {
+        write(serializeSSEEvent(buildSettledEvent({ ...settled.outcome, runId: run?.runId })));
+      }
 
       // Close the stream and log success analytics.
       write(SSE_DONE_SIGNAL);
@@ -437,6 +486,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       });
     } catch (error) {
       const jsonError = toJsonError(error, requestId);
+      completionOutcome =
+        jsonError.body.errorCode === DAILY_FREE_LIMIT_REACHED_ERROR_CODE
+          ? 'daily_cap_rejected'
+          : jsonError.status < 500
+            ? 'rejected'
+            : 'failed';
       // Budget exhaustion is expected, not an operator fault, whoever chose the budget (same policy as
       // /api/chat); emitProcessingFailed already skips it via isOperatorFault. Only a positive
       // max_tokens counts as the caller's: resolveOutputMaxTokens discards the rest.

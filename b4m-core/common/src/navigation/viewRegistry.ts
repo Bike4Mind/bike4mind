@@ -306,10 +306,20 @@ export const VIEW_REGISTRY: NavigableView[] = [
     section: 'admin',
     label: 'User Management',
     description:
-      'View and manage user accounts, roles, and permissions; the AI advisory filter lists accounts the AI advisory flagged, with bulk Contain',
+      'View and manage user accounts, roles, and permissions; the profile Billing tab shows payments, subscription standing and credit funding; the AI advisory filter lists accounts the AI advisory flagged, with bulk Contain',
     navigationType: 'tab',
     target: '0', // AdminTab.Users
-    keywords: ['users', 'accounts', 'roles', 'permissions', 'manage users', 'ai advisories', 'flagged accounts'],
+    keywords: [
+      'users',
+      'accounts',
+      'roles',
+      'permissions',
+      'manage users',
+      'ai advisories',
+      'flagged accounts',
+      'billing',
+      'payments',
+    ],
     requiresAdmin: true,
   },
   {
@@ -373,7 +383,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
       'List, create and edit organizations: members, top up credits, adjust seats, sync from Stripe, grant a free org, convert a granted org to paid or revoke the grant',
     navigationType: 'tab',
     target: '14', // AdminTab.Organizations
-    keywords: ['organizations', 'teams', 'tenants', 'companies'],
+    keywords: ['organizations', 'teams', 'tenants', 'companies', 'billing', 'payments'],
     requiresAdmin: true,
   },
   {
@@ -864,6 +874,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.legacy_api_keys',
+    section: 'admin',
+    label: 'Legacy API keys',
+    description: 'See which recently used API keys still rely on legacy access, and their owners',
+    navigationType: 'tab',
+    target: '79', // AdminTab.LegacyApiKeys
+    keywords: ['legacy api keys', 'legacy keys', 'api keys', 'grandfathered', 'scoped key', 'key owners'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.published_pages',
     section: 'admin',
     label: 'Published pages',
@@ -982,6 +1002,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '42', // AdminTab.DlqReplay
     keywords: ['dlq', 'dead letters', 'dead-letter queue', 'failed messages', 'replay', 'retry'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.ai_operations',
+    section: 'admin',
+    label: 'AI operations',
+    description: 'Admin AI spend, agreement, budget caps, kill switches and autonomy readiness',
+    navigationType: 'tab',
+    target: '78',
+    keywords: ['AI operations', 'AI spend', 'agreement', 'kill switch', 'autonomy', 'AI budget'],
     requiresAdmin: true,
   },
   {

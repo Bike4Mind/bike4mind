@@ -2,6 +2,8 @@ import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { agentRepository, organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { getApiKeyLegacyStatus, LEGACY_API_KEY_WINDOW } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
+import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
 import {
   embedKeyOwnerHasEntitlement,
@@ -28,6 +30,7 @@ import {
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
 import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
+import { requireStepUp } from '@server/auth/stepUp';
 import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import { Request } from 'express';
 
@@ -96,6 +99,7 @@ function redactForNonMinter(json: IUserApiKey, isMinter: boolean): IUserApiKey {
 const handler = baseApi()
   .get(async (req, res) => {
     const userId = req.user?.id;
+    assertNotOrgServiceAccount(req.user);
 
     // Opt-in so the documented public API keeps its active-only default; the
     // management UIs pass it to render revoked keys as `Revoked` rows.
@@ -136,8 +140,12 @@ const handler = baseApi()
       })
     );
 
+    const now = new Date();
     const payload = keys.map(key => {
-      const json = redactForNonMinter(serializeKey(key), key.userId === userId);
+      const json = {
+        ...redactForNonMinter(serializeKey(key), key.userId === userId),
+        ...getApiKeyLegacyStatus(key, now, LEGACY_API_KEY_WINDOW),
+      };
       return key.scopes.includes(ApiKeyScope.EMBED_CHAT)
         ? { ...json, ownerHasWhitelabel: ownerHasWhitelabel.get(ownerCacheKey(key)) ?? false }
         : json;
@@ -147,6 +155,7 @@ const handler = baseApi()
   })
   .post(async (req: Request<{}, unknown, CreateApiKeyRequest>, res) => {
     const userId = req.user?.id;
+    assertNotOrgServiceAccount(req.user);
     const { name, scopes, expiresAt, rateLimit, organizationId, agentId, allowedOrigins, branding, spendCap } =
       req.body;
 
@@ -166,6 +175,9 @@ const handler = baseApi()
     if (unentitledScopes.length > 0) {
       throw new ForbiddenError(`Scope not available on your account: ${unentitledScopes.join(', ')}`);
     }
+    // A persona-mint key creates accounts, so it needs a fresh sign-in; an API key caller has no
+    // session to verify and is refused.
+    if (requestedScopes.includes(ApiKeyScope.PERSONAS_MINT)) await requireStepUp(req);
 
     // Authorize org-billed minting: caller must administer the org (owner or
     // manager) or be a platform admin. Fail closed on anything else.

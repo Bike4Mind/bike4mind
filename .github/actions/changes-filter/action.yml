@@ -3,11 +3,11 @@ description: >-
   Decide whether a workflow run touched deployable paths, and (separately)
   whether it touched the Docusaurus docs site. Evaluates the whole-PR diff vs
   its merge-base with the target branch on every pull_request event (the
-  "Files changed" three-dot semantics), the push range on push, and the
-  queue group's base..head range on merge_group. Returns deployable=false only
-  when every changed file matches the non-deployable pathspec list; returns
-  docs-changed=true when any changed file matches the docs pathspec list - the
-  docs-site/ corpus plus the help tooling in packages/scripts/help/; returns
+  "Files changed" three-dot semantics) and the push range on push. Returns
+  deployable=false only when every changed file matches the non-deployable
+  pathspec list; returns docs-changed=true when any changed file matches the
+  docs pathspec list - the docs-site/ corpus plus the help tooling in
+  packages/scripts/help/; returns
   published-changed=true when any changed file matches the published pathspec
   list - b4m-core, the SDK and its spec, the lockfile, the check, its fixture
   and the CI wiring.
@@ -21,8 +21,7 @@ description: >-
   Every event ci.yml triggers on needs its own arm in the case block below.
   An unhandled event falls through to the fail-open default on EVERY run of
   that trigger, so the gate it produces diverges from the one the same content
-  got elsewhere - merge_group did exactly that until it was handled. The arms
-  are cross-checked against ci.yml's trigger list by
+  got elsewhere. The arms are cross-checked against ci.yml's trigger list by
   packages/scripts/src/checkChangesFilterEvents.test.ts.
 
   Requires the repo to be checked out first with fetch-depth: 0.
@@ -48,6 +47,8 @@ inputs:
       :(exclude,glob)docs-site/**
       :(exclude,glob)docs/**
       :(exclude,glob)agents/**
+      :(exclude,glob)apps/ios/**
+      :(exclude,glob)apps/android/**
       :(exclude,glob)**/*.md
       :(exclude,glob)**/*.mdx
       :(exclude)LICENSE
@@ -130,11 +131,6 @@ runs:
         PUSH_AFTER: ${{ github.event.after }}
         PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        # github.sha IS the merge-group head on this event, so the fallback is redundant when
-        # head_sha is present and the difference between a correct range and a permanent
-        # fail-open when it is not.
-        MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha || github.sha }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         CONTENT_PATHS: ${{ inputs.content-paths }}
         DOCS_PATHS: ${{ inputs.docs-paths }}
@@ -180,14 +176,6 @@ runs:
             # An empty BASE (merge-base failed) trips the fail-open guard below.
             HEAD="$PR_HEAD_SHA"
             BASE="$(git merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA" 2>/dev/null || true)" ;;
-          merge_group)
-            # Merge-queue run: this entry's own base..head. base_sha is the commit this
-            # entry was built on (target-branch tip, or the previous entry's speculative
-            # head in a stacked group), so it is an ancestor of head_sha and two-dot
-            # equals three-dot. The range is this entry's own change: each queue entry is
-            # gated on exactly the diff its own PR CI evaluated, and a trailing entry that
-            # is wholly non-deployable skips the build legs - the batch is not re-tested.
-            BASE="$MERGE_GROUP_BASE_SHA"; HEAD="$MERGE_GROUP_HEAD_SHA" ;;
           *)
             BASE=""; HEAD="" ;;
         esac

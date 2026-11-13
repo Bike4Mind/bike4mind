@@ -26,8 +26,8 @@ import {
   estimateImageCredits,
   UnsupportedImageModelError,
 } from '@bike4mind/services/imageCost';
-import { createModelAdmission, isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
-import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import { createModelAdmission, isCreditsEnforced } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { reserveRequestCredits } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 
 interface GenerateFeaturedImageRequest {
   imagePrompt: string;
@@ -86,7 +86,7 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
         imageLogger.info(`[Blog Image] Using user-selected image model: ${imageModelId}`);
       } else {
         // Fall back to operations model
-        const operationsResult = await OperationsModelService.getOperationsModel();
+        const operationsResult = await OperationsModelService.getOperationsModel({ endUserId: userId });
         imageModelId = operationsResult.imageModelId;
         imageModelInfo = operationsResult.imageModelInfo;
 

@@ -48,6 +48,22 @@ const openDialog = (props: HarnessProps = {}) => {
 };
 
 describe('ActionDialog', () => {
+  it('allows a reason-free command when the caller policy does not require one', async () => {
+    const onConfirm = vi.fn();
+    const confirm = openDialog({ onConfirm, reasonRequired: false });
+    expect(confirm).toBeEnabled();
+    expect(screen.queryByTestId('adjust-dialog-reason-input')).not.toBeInTheDocument();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith(''));
+  });
+
+  it('still gates a reason-free command on typed confirmation', () => {
+    const confirm = openDialog({ reasonRequired: false, typedConfirm: { expected: 'queue', noun: 'queue name' } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByTestId('adjust-dialog-typed-input'), { target: { value: 'queue' } });
+    expect(confirm).toBeEnabled();
+  });
+
   it('seeds a complete, editable reason from initialReason', async () => {
     const onConfirm = vi.fn();
     expect(isAdminReasonComplete(ACCEPTED_AI_REASON)).toBe(true);
@@ -121,6 +137,21 @@ describe('ActionDialog', () => {
     fireEvent.click(confirm);
 
     await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('Goodwill credit'));
+  });
+
+  it('offers a gated secondary commit that gets the same reason and not the primary handler', async () => {
+    const onConfirm = vi.fn();
+    const onSecondary = vi.fn();
+    openDialog({ onConfirm, secondaryAction: { label: 'Save and next', onConfirm: onSecondary } });
+    const secondary = screen.getByTestId('adjust-dialog-secondary-btn');
+
+    expect(secondary).toBeDisabled();
+    fireEvent.click(screen.getByTestId('adjust-dialog-reason-input-preset-0'));
+    expect(secondary).toBeEnabled();
+    fireEvent.click(secondary);
+
+    await waitFor(() => expect(onSecondary).toHaveBeenCalledWith('Goodwill credit'));
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 
   it('combines a preset and a note as "Preset: note"', async () => {
