@@ -471,8 +471,10 @@ async function partAsk(entry: ShellScan['commands'][number]): Promise<ApprovalPa
     kinds.push('gitUnlisted');
   }
   if (kinds.length === 0) return undefined;
+  // A listed git form unread only because an earlier git command moved refs: the routine fetch-then-merge.
+  const refsMovedOnly = entry.refsMovedOnly === true && kinds.length === 1;
   return {
-    mode: (entry.unread && !entry.refsMovedOnly) || entry.gitUnlisted ? 'full' : 'auto',
+    mode: (entry.unread && !entry.refsMovedOnly) || entry.gitUnlisted ? 'full' : refsMovedOnly ? 'ask' : 'auto',
     reason: reasons.join(' '),
     kinds,
   };
@@ -614,7 +616,7 @@ export async function shellApproval(
   // not reaching outside the project, so it does not need that folder granted first.
   const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
   const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
-  const asks = scriptAsks || parts.some(ask => ask !== undefined);
+  const asks = scriptAsks || parts.some(ask => ask !== undefined && ask.mode !== 'ask');
   const asksInFull = scriptAsksInFull || parts.some(ask => ask?.mode === 'full');
   const unchecked =
     scan.unread === true ||

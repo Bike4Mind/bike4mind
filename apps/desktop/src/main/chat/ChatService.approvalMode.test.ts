@@ -370,24 +370,26 @@ describe('ChatService approval modes', () => {
       expect(calls('awaiting-approval')).toHaveLength(0);
     });
 
-    it.each(routine.filter(command => command !== 'git show --format= HEAD'))(
-      'asks before %s in approve for me',
-      async command => {
-        await startTurn('auto');
-        streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
-        streams[0].write(frame('[DONE]'));
-
-        await awaitStatus('awaiting-approval');
-        expect(calls('done')).toHaveLength(0);
-      }
-    );
-
-    it('runs a literal empty git format option in approve for me', async () => {
+    it.each(routine)('runs %s in approve for me', async command => {
       await startTurn('auto');
-      streams[0].write(toolTurn('c1', 'bash_execute', { command: 'git show --format= HEAD', cwd: root }));
+      streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
       streams[0].write(frame('[DONE]'));
+
       await vi.waitUntil(() => calls('done')[0] ?? calls('error')[0], { timeout: 10_000, interval: 10 });
       expect(calls('awaiting-approval')).toHaveLength(0);
+    });
+
+    it.each([
+      'git fetch origin main && git reset --hard "$OPAQUE_REF"',
+      'git fetch origin main && git reset --hard origin/main > "$OPAQUE_OUTPUT"',
+      'git status --frobnicate',
+      'echo "unterminated',
+    ])('asks before the opaque command %s in approve for me', async command => {
+      await startTurn('auto');
+      streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
+      streams[0].write(frame('[DONE]'));
+      await awaitStatus('awaiting-approval');
+      expect(calls('done')).toHaveLength(0);
     });
 
     it.each([

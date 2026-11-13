@@ -9011,7 +9011,7 @@ interface PartDecision {
 /** Whether the conversation's mode runs this part unasked. */
 function modeCovers(mode: ChatApprovalMode, part: ApprovalPart): boolean {
   if (mode === 'full') return part.ask?.mode !== 'full';
-  return mode === 'auto' && part.ask === undefined;
+  return mode === 'auto' && (part.ask === undefined || part.ask.mode === 'ask');
 }
 
 /**

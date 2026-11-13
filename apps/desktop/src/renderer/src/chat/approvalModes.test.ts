@@ -38,6 +38,13 @@ describe('approval mode copy', () => {
     expect(approvalModeOption('auto').description).toMatch(/everything except/i);
     expect(approvalModeOption('auto').description).toMatch(/outside this project/i);
     expect(approvalModeOption('auto').description).toMatch(/send data out/i);
+    expect(approvalModeOption('auto').description).toMatch(/Desktop cannot follow/i);
+  });
+
+  it('says approve-for-me keeps the opaque-command floor but runs a listed git sync', () => {
+    const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
+    expect(notes).toMatch(/"Approve for me" asks, like "Full access", when Desktop cannot follow a command/);
+    expect(notes).toMatch(/earlier git command that moved a branch runs without asking/i);
   });
 
   it('says approve-for-me asks before sending data out and after reading untrusted content', () => {

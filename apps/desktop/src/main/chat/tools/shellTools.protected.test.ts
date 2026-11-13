@@ -195,7 +195,8 @@ describe('shell commands that reach a protected location', () => {
       permissionSubject({ name: 'bash_execute', input: { command } }, prompt, context)
     ).catch(() => null);
     return {
-      auto: !prompt.askInAuto && (prompt.always?.directories ?? []).length === 0,
+      // Like `runsCheckedInFull`: a listed git form after a ref change runs unchecked in both modes.
+      auto: !prompt.askInAuto && !prompt.unchecked && (prompt.always?.directories ?? []).length === 0,
       full: runsCheckedInFull(prompt),
       allowed: subject !== null && rules.evaluate(subject).decision === 'allow',
     };
