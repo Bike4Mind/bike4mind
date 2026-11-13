@@ -14,7 +14,6 @@ const card = (id: string, overrides: Partial<StudioModelCard> = {}): StudioModel
   strength: `Strength of ${id}.`,
   creditsPerOutput: 10,
   outputNoun: 'image',
-  modes: ['Generate'],
   pickedFor: `focus ${id}`,
   whyNotCode: null,
   unavailableReason: null,

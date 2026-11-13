@@ -6,7 +6,6 @@
 import {
   IMAGE_MODEL_CATALOG,
   IMAGE_MODEL_STRENGTHS,
-  IMAGE_MODES,
   IMAGE_PROVIDER_LABELS,
   type ImageModels,
   getImageModelCatalogEntry,
@@ -15,7 +14,6 @@ import {
   usdToCredits,
   validateImageRequest,
   type ImageCapabilityRequest,
-  type ImageMode,
   type ImageProviderId,
   type ImageRequestField,
   type OpenAIImageQuality,
@@ -43,8 +41,6 @@ const COMMON_ASPECT_RATIOS = ['1:1', '4:3', '3:4', '3:2', '2:3', '16:9', '9:16',
 // The providers whose image job adapter is wired; the job route answers model_unavailable for the others. Add a
 // provider here when its adapter lands.
 const STUDIO_IMAGE_JOB_PROVIDERS: readonly ImageProviderId[] = ['openai', 'gemini'];
-
-const MODE_LABELS: Record<ImageMode, string> = { generate: 'Generate', edit: 'Edit' };
 
 export const isCatalogImageModel = (id: string): id is ImageModels => Object.hasOwn(IMAGE_MODEL_CATALOG, id);
 
@@ -178,7 +174,6 @@ export const imageModelCards = (
       strength: IMAGE_MODEL_STRENGTHS[ranked.id],
       creditsPerOutput: imageCreditsPerImage(ranked.id, intent),
       outputNoun: 'image',
-      modes: IMAGE_MODES.filter(mode => entry.modes[mode]).map(mode => MODE_LABELS[mode]),
       ...rankedCardFit(ranked),
       // Every reason, not just the ranker's first, so the picker says all a switch would mark.
       mismatchReason: ranked.status === 'mismatch' ? imageModelWhyNot(ranked.id, intent) : null,

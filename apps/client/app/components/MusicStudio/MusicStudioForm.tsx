@@ -7,7 +7,7 @@ import {
   type NonEmptyList,
   type StudioFormRules,
 } from '@client/app/components/Studio/useCapabilityFormState';
-import { musicModelCards, withRankedDefaultFirst } from './musicCreateV2';
+import { musicModelCards, withRankedMusicDefaultFirst } from './musicCreateV2';
 import { musicCapabilityFields } from './musicFields';
 import {
   canSubmit,
@@ -34,7 +34,7 @@ type MusicStudioFormProps = {
 
 const MusicStudioForm = ({ models, isSubmitting, onSubmit, createV2 = false }: MusicStudioFormProps) => {
   // Create v2 opens on the ranker's pick; legacy keeps the server's order.
-  const ordered = useMemo(() => (createV2 ? withRankedDefaultFirst(models) : models), [models, createV2]);
+  const ordered = useMemo(() => (createV2 ? withRankedMusicDefaultFirst(models) : models), [models, createV2]);
   const { form, model, changes, update, selectModel } = useCapabilityFormState(
     ordered,
     MUSIC_FORM_RULES,

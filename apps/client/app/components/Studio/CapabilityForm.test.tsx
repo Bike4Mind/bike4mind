@@ -278,7 +278,6 @@ describe('CapabilityForm', () => {
       strength: 'Good at things.',
       creditsPerOutput: 12,
       outputNoun: 'image',
-      modes: ['Generate'],
       pickedFor: 'photoreal',
       whyNotCode: null,
       unavailableReason: null,

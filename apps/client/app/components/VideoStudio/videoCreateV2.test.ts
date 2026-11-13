@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { discreteModel, optionalAudioModel, rangeModel } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
-import { videoFieldProblems, videoModelCards, withRankedDefaultFirst } from './videoCreateV2';
+import { videoFieldProblems, videoModelCards, withRankedVideoDefaultFirst } from './videoCreateV2';
 import { estimateCredits, initialFormFor, type VideoFormState } from './videoForm';
 
 const form = (overrides: Partial<VideoFormState> = {}): VideoFormState => ({
@@ -88,12 +88,13 @@ describe('videoModelCards', () => {
   });
 });
 
-describe('withRankedDefaultFirst', () => {
-  it('moves the ranker pick for a fresh form to the front', () => {
-    expect(withRankedDefaultFirst([discreteModel, rangeModel, omniModel]).map(model => model.id)).toEqual([
-      omniModel.id,
-      discreteModel.id,
+describe('withRankedVideoDefaultFirst', () => {
+  it('moves the model that ranks first against its own defaults to the front', () => {
+    // Omni ranks first at Veo's defaults, but this fixture's own 480p default does not fit it; Grok's does.
+    expect(withRankedVideoDefaultFirst([discreteModel, rangeModel, omniModel]).map(model => model.id)).toEqual([
       rangeModel.id,
+      discreteModel.id,
+      omniModel.id,
     ]);
   });
 });

@@ -224,6 +224,15 @@ describe('VideoStudioForm in Create v2', () => {
     </CssVarsProvider>
   );
 
+  it('opens on the ranked pick in Create v2, while the legacy form keeps the server order', () => {
+    // Veo is retired, so the ranker sinks it below Grok; the legacy form still opens on the first model listed.
+    const { unmount } = render(v2Tree([discreteModel, rangeModel]));
+    expect(screen.getByTestId('video-form-model-row-name')).toHaveTextContent(rangeModel.display_name);
+    unmount();
+    render(tree([discreteModel, rangeModel]));
+    expect(screen.getByTestId('video-form-model-select')).toHaveTextContent(discreteModel.display_name);
+  });
+
   it('picks models from cards and draws the aspect ratio as tiles', () => {
     render(v2Tree([rangeModel, discreteModel]));
     expect(screen.queryByTestId('video-form-model-select')).not.toBeInTheDocument();

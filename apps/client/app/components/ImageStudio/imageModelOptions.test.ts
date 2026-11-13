@@ -40,7 +40,6 @@ describe('imageModelCards', () => {
       provider: 'OpenAI',
       strength: IMAGE_MODEL_STRENGTHS[ImageModels.GPT_IMAGE_1_5],
       outputNoun: 'image',
-      modes: ['Generate', 'Edit'],
       pickedFor: 'sharp detail and text',
       whyNotCode: null,
       unavailableReason: null,

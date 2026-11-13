@@ -1,12 +1,16 @@
 /**
  * Create v2's video rules on top of videoForm: a model switch keeps every value, so each one the model does not take
  * is reported here with its why-not reason (videoFailureReason, the same text the server refuses with) and the value
- * the user can move to in one click. The model cards read the same problems to grey out the models that do not fit.
+ * the user can move to in one click. The model cards come from rankVideoModels, which runs the same validator.
  */
 import { rankVideoModels, videoFailureReason, type VideoModel, type VideoRankingRequest } from '@bike4mind/common';
 import type { FieldProblem } from '@client/app/components/Studio/capabilityFields';
 import type { NonEmptyList } from '@client/app/components/Studio/useCapabilityFormState';
-import { rankedCardFit, type StudioModelCard } from '@client/app/components/Studio/studioModelCard';
+import {
+  rankedCardFit,
+  withRankedDefaultFirst,
+  type StudioModelCard,
+} from '@client/app/components/Studio/studioModelCard';
 import { MODE_LABELS, estimateCredits, initialFormFor, snapDuration, type VideoFormState } from './videoForm';
 
 export type VideoProblemField = 'mode' | 'duration' | 'aspect' | 'resolution';
@@ -103,16 +107,12 @@ export const videoModelCards = (models: readonly VideoModel[], form: VideoFormSt
         strength: model.blurb ?? '',
         creditsPerOutput: estimateCredits(initialFormFor(model)),
         outputNoun: 'clip',
-        modes: model.modes.map(mode => MODE_LABELS[mode]),
         ...rankedCardFit(ranked),
       },
     ];
   });
 };
 
-/** `models` with the ranker's pick for a fresh form first, so Create v2 opens on it (the form state opens on [0]). */
-export const withRankedDefaultFirst = (models: NonEmptyList<VideoModel>): NonEmptyList<VideoModel> => {
-  const pick = videoModelCards(models, initialFormFor(models[0])).find(card => card.unavailableReason === null);
-  const first = models.find(model => model.id === pick?.id);
-  return first ? [first, ...models.filter(model => model !== first)] : models;
-};
+/** `models` with the ranked default first, so Create v2 opens on it (see withRankedDefaultFirst). */
+export const withRankedVideoDefaultFirst = (models: NonEmptyList<VideoModel>): NonEmptyList<VideoModel> =>
+  withRankedDefaultFirst(models, model => videoModelCards(models, initialFormFor(model)));

@@ -1,7 +1,7 @@
 /**
  * Create v2's music rules on top of musicForm: a model switch keeps every value, so each one the model does not take
  * is reported here with its why-not reason (musicFailureReason, the same text the server refuses with) and the value
- * the user can move to in one click. The model cards read the same problems to grey out the models that do not fit.
+ * the user can move to in one click. The model cards come from rankMusicModels, which runs the same validator.
  */
 import {
   musicFailureReason,
@@ -11,7 +11,11 @@ import {
 } from '@bike4mind/common';
 import type { FieldProblem } from '@client/app/components/Studio/capabilityFields';
 import type { NonEmptyList } from '@client/app/components/Studio/useCapabilityFormState';
-import { rankedCardFit, type StudioModelCard } from '@client/app/components/Studio/studioModelCard';
+import {
+  rankedCardFit,
+  withRankedDefaultFirst,
+  type StudioModelCard,
+} from '@client/app/components/Studio/studioModelCard';
 import { clampDuration, estimateCredits, initialFormFor, type MusicFormState } from './musicForm';
 
 export type MusicProblemField = 'instrumental' | 'lyrics' | 'duration';
@@ -65,12 +69,6 @@ export function musicFieldProblems(model: PublicMusicModel, form: MusicFormState
   return problems;
 }
 
-const capabilitiesOf = (model: PublicMusicModel): string[] => [
-  ...(model.vocals === 'never' ? [] : ['Vocals']),
-  'Instrumental',
-  ...(model.lyrics !== null && model.vocals !== 'never' ? ['Your lyrics'] : []),
-];
-
 /** The form as the ranker reads it: lyrics only while the song has vocals, a length only when one is set. */
 export const musicRankingRequest = (form: MusicFormState): MusicRankingRequest => {
   const lyrics = form.lyrics.trim();
@@ -98,16 +96,12 @@ export const musicModelCards = (models: readonly PublicMusicModel[], form: Music
         strength: model.blurb ?? '',
         creditsPerOutput: estimateCredits(initialFormFor(model)),
         outputNoun: 'song',
-        modes: capabilitiesOf(model),
         ...rankedCardFit(ranked),
       },
     ];
   });
 };
 
-/** `models` with the ranker's pick for a fresh form first, so Create v2 opens on it (the form state opens on [0]). */
-export const withRankedDefaultFirst = (models: NonEmptyList<PublicMusicModel>): NonEmptyList<PublicMusicModel> => {
-  const pick = musicModelCards(models, initialFormFor(models[0])).find(card => card.unavailableReason === null);
-  const first = models.find(model => model.id === pick?.id);
-  return first ? [first, ...models.filter(model => model !== first)] : models;
-};
+/** `models` with the ranked default first, so Create v2 opens on it (see withRankedDefaultFirst). */
+export const withRankedMusicDefaultFirst = (models: NonEmptyList<PublicMusicModel>): NonEmptyList<PublicMusicModel> =>
+  withRankedDefaultFirst(models, model => musicModelCards(models, initialFormFor(model)));

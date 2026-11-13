@@ -9,7 +9,7 @@ import {
   type StudioFormRules,
 } from '@client/app/components/Studio/useCapabilityFormState';
 import { useImageBrowser } from '@client/app/hooks/agent/useImageBrowser';
-import { videoModelCards, withRankedDefaultFirst } from './videoCreateV2';
+import { videoModelCards, withRankedVideoDefaultFirst } from './videoCreateV2';
 import { videoCapabilityFields } from './videoFields';
 import {
   canSubmit,
@@ -33,7 +33,7 @@ type VideoStudioFormProps = {
 
 const VideoStudioForm = ({ models, isSubmitting, onSubmit, createV2 = false }: VideoStudioFormProps) => {
   // Create v2 opens on the ranker's pick; legacy keeps the server's order.
-  const ordered = useMemo(() => (createV2 ? withRankedDefaultFirst(models) : models), [models, createV2]);
+  const ordered = useMemo(() => (createV2 ? withRankedVideoDefaultFirst(models) : models), [models, createV2]);
   const { form, model, changes, update, selectModel } = useCapabilityFormState(
     ordered,
     VIDEO_FORM_RULES,
