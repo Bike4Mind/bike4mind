@@ -111,7 +111,7 @@ export function isLegacyApiKey(
 export type ApiKeyLegacyStatus = {
   /** The key would be grandfathered on a route that opts in with `grandfatherLegacyKeys`. */
   legacy: boolean;
-  /** When legacy access ends; `null` for a non-legacy key or while no end date is set. */
+  /** When legacy access ends; `null` for a non-legacy key or while the cutoff or end date is unset. */
   legacyEndsAt: Date | null;
 };
 
@@ -137,7 +137,9 @@ export function getApiKeyLegacyStatus(
     !isExchangeKeyMetadata(key.metadata) &&
     !isConfinedKey(key.scopes) &&
     isLegacyApiKey(key.createdAt, now, window);
-  return { legacy, legacyEndsAt: legacy ? window.endsAt : null };
+  // With no cutoff every key is legacy, so a new key would be too: an end date there would tell
+  // owners to replace a key with one that is just as legacy.
+  return { legacy, legacyEndsAt: legacy && window.cutoff ? window.endsAt : null };
 }
 
 export type ScopeGateDecision =

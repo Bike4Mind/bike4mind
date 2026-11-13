@@ -74,7 +74,7 @@ const LegacyApiKeysTab: React.FC = () => {
       <AdminPageHeader
         title="Legacy API keys"
         count={data ? total : undefined}
-        description="Keys created before the scope cutoff still reach routes they hold no scope for, until legacy access ends. Owners listed here need a new scoped key before then."
+        description="Keys created before the scope cutoff still reach routes they hold no scope for, until legacy access ends. Owners listed here need a new scoped key before then. Sorted by last use, which changes as keys are used, so a key can move between pages while you browse."
       />
 
       <StatStrip aria-label="Legacy window">

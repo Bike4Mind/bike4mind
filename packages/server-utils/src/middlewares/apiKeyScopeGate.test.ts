@@ -336,6 +336,14 @@ describe('getApiKeyLegacyStatus', () => {
   it('reports legacy with no end date while the window is unset', () => {
     expect(getApiKeyLegacyStatus({ ...ACTIVE, createdAt: before })).toEqual({ legacy: true, legacyEndsAt: null });
   });
+
+  it('reports no end date while the cutoff is unset, as a replacement key would be legacy too', () => {
+    const endOnly = { cutoff: null, endsAt: window.endsAt };
+    expect(getApiKeyLegacyStatus({ ...ACTIVE, createdAt: midWindow }, before, endOnly)).toEqual({
+      legacy: true,
+      legacyEndsAt: null,
+    });
+  });
 });
 
 describe('decideScopeGate grandfathering', () => {
