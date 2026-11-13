@@ -626,7 +626,6 @@ export async function shellApproval(
   const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
   const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
   const asks = scriptAsks || parts.some(ask => ask !== undefined && ask.mode !== 'ask');
-  const asksInFull = scriptAsksInFull || parts.some(ask => ask?.mode === 'full');
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
@@ -636,7 +635,7 @@ export async function shellApproval(
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
     // The file tools refuse these writes, and reads of secrets, in every mode, so 'full' stops for them too.
-    ...(asksInFull ? { askInFull: true as const } : {}),
+    ...(scriptAsksInFull ? { askInFull: true as const } : {}),
     ...(unchecked ? { unchecked: true as const } : {}),
     ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
     ...(scan.contained && !runsSessionCode ? { contained: true as const } : {}),

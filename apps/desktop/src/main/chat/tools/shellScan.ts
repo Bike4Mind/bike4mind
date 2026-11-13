@@ -6230,7 +6230,7 @@ async function ownPlaces(
 
 /**
  * Every simple command a shell script would run, and every directory outside the project it
- * names. Null when the script does not parse, which the caller treats as a reason to ask.
+ * names. Null when the script does not parse; the caller decides by what the text names.
  *
  * `cd`, `pushd` and `popd` move the directory later commands resolve against, except inside a
  * subshell, a `$( )` or a pipeline, where the shell discards the move. An argument built from a

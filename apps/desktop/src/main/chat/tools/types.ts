@@ -776,9 +776,9 @@ export interface ApprovalPart {
   opaque?: string;
   /**
    * Why this part asks, and the most permissive mode that still asks: 'ask' only in "Ask for approval",
-   * 'auto' there and in "Approve for me", 'full' in every mode. Only set with `byPart`.
+   * 'auto' there and in "Approve for me". Only set with `byPart`.
    */
-  ask?: { mode: 'ask' | 'auto' | 'full'; reason: string; kinds: readonly PartAskKind[] };
+  ask?: { mode: 'ask' | 'auto'; reason: string; kinds: readonly PartAskKind[] };
 }
 
 /** What makes a part ask: an "Allow in this chat" covers it only when given over every one of these. */
