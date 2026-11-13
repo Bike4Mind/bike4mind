@@ -36,6 +36,7 @@ import {
   recordNotebookAddedToProjectActivity,
 } from '@bike4mind/server-utils/managers/sessionSideEffects';
 import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
+import { resolveRetentionOrganization } from '@bike4mind/server-utils/organizations/retentionOwnership';
 
 /**
  * Session lifecycle, querying, and basic persistence.
@@ -288,6 +289,7 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
           agents: agentRepository,
         },
         ...lakeAdapters,
+        resolveRetentionOrganization,
       },
       { origin }
     );
@@ -531,7 +533,13 @@ export const createSession = async (
     firstCreated: new Date(),
   };
 
-  const finalData = { ...defaultData, ...data };
+  const owner = await userRepository.findById(userId);
+  const finalData = {
+    ...defaultData,
+    ...data,
+    userId,
+    retentionOrganizationId: owner ? await resolveRetentionOrganization(owner) : undefined,
+  };
   const notebook = new Session(finalData);
   await notebook.save({ session });
 

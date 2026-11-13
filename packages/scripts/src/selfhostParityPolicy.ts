@@ -53,6 +53,19 @@ const wired = (
 // Reviewed snapshots, never automatically refreshed by CI. Portable means wiring only.
 export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker(
+    'queue:infra/organizationRetention.ts:organizationRetentionDlq',
+    'ac4a28905799e117ee2ab119fd37de18b424e94ff7d5cdad2a86d248d914f5cf'
+  ),
+  wired(
+    'schedule:infra/organizationRetention.ts:organizationRetention',
+    '1f2ee32c678dd7299e779844d893a69f1325a7c425caf3647756cbf2bf9a5a11',
+    {
+      source: 'apps/workers/src/selfhost/main.ts',
+      symbol: 'schedule:organizationRetention',
+      fingerprint: '85a57745503979861a7145d26e370eb375d25a579181f4a7c5711e3b9cdc5226',
+    }
+  ),
+  broker(
     'queue:infra/adminMorningBrief.ts:adminMorningBriefDlq',
     '02f77874c10969d8ede24d54d660f8722b34b4826b403446b8a06ca17bceae54'
   ),

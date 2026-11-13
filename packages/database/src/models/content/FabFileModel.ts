@@ -4346,6 +4346,7 @@ FabFileSchema.index(
   { organizationId: 1, deletedAt: 1 },
   { partialFilterExpression: { organizationId: { $type: 'string' } } }
 );
+FabFileSchema.index({ organizationId: 1, deletedAt: 1, createdAt: 1, _id: 1 });
 
 // An org pool's recent client uploads (apps/client/server/files/pendingUploads.ts), including
 // completed rows whose charge transaction has not committed. Pre-built by

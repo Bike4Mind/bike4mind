@@ -138,6 +138,9 @@ async function main() {
   registerOauthAbuseAutoBlock(worker);
   registerSignupGrantHeldRelease(worker);
   registerAccountDeletionSweep(worker);
+  worker.registerScheduledTask('organizationRetention', 60 * 60_000, async () => {
+    await (await import('@workers/cron/organizationRetention')).runOrganizationRetention();
+  });
   registerRealtimeConnectionSweep(worker);
   registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);

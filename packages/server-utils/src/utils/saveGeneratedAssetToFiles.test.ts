@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   upload: vi.fn(),
   getSignedUrl: vi.fn(),
   scopedSettingsRepository: { name: 'scopedSettings' },
+  findSession: vi.fn(),
+  recordObject: vi.fn(),
 }));
 
 vi.mock('@bike4mind/services', () => ({ saveGeneratedAsset: mocks.saveGeneratedAsset }));
@@ -15,6 +17,8 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   fabFileRepository: {},
   scopedSettingsRepository: mocks.scopedSettingsRepository,
+  sessionRepository: { findByIdAndUserId: mocks.findSession },
+  OrganizationGeneratedObject: { updateOne: mocks.recordObject },
   User: {},
 }));
 vi.mock('./storage/index', () => ({
@@ -63,5 +67,30 @@ describe('saveGeneratedAssetToFiles', () => {
     const deps: SaveGeneratedAssetDeps = mocks.saveGeneratedAsset.mock.calls[0][1];
     expect(deps.db.scopedSettings).toBe(mocks.scopedSettingsRepository);
     expect(deps.logger).toBe(logger);
+  });
+  it('takes generated ownership from the creator-owned bound notebook and records an immutable object origin', async () => {
+    mocks.findSession.mockResolvedValue({ id: 's1', retentionOrganizationId: 'org1' });
+    await saveGeneratedAssetToFiles({ ...params(), sessionId: 's1', generatedOutputKey: 'output.png' }, logger);
+    expect(mocks.findSession).toHaveBeenCalledWith('s1', 'u1');
+    expect(mocks.recordObject).toHaveBeenCalledWith(
+      { key: 'output.png' },
+      {
+        $setOnInsert: {
+          key: 'output.png',
+          organizationId: 'org1',
+          userId: 'u1',
+          sessionId: 's1',
+          createdAt: expect.any(Date),
+        },
+      },
+      { upsert: true }
+    );
+    expect(mocks.saveGeneratedAsset.mock.calls[0][1].ownerOrganizationId).toBe('org1');
+  });
+  it('keeps unbound or foreign-notebook generations personal', async () => {
+    mocks.findSession.mockResolvedValue(null);
+    await saveGeneratedAssetToFiles({ ...params(), sessionId: 'foreign', generatedOutputKey: 'output.png' }, logger);
+    expect(mocks.recordObject).not.toHaveBeenCalled();
+    expect(mocks.saveGeneratedAsset.mock.calls[0][1].ownerOrganizationId).toBeUndefined();
   });
 });

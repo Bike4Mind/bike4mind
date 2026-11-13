@@ -6,6 +6,7 @@ export * from './AdminSupportAccessAuditLogModel';
 export * from './InternalTeamMemberModel';
 export * from './OrganizationModel';
 export * from './OrganizationAuditEventModel';
+export * from './OrganizationRetentionModel';
 export * from './AdminApprovalModel';
 export * from './AdminGateReservationModel';
 export * from './AdminAiSuggestionModel';

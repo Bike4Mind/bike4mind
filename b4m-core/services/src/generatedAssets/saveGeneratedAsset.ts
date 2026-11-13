@@ -77,6 +77,7 @@ export type SaveGeneratedAssetParams = {
 };
 
 export type SaveGeneratedAssetDeps = {
+  ownerOrganizationId?: string;
   db: CreateFabFileAdapters['db'] & {
     fabFiles: CreateFabFileAdapters['db']['fabFiles'] & Pick<IBaseRepository<IFabFileDocument>, 'findOne'>;
   };
@@ -148,6 +149,7 @@ export async function saveGeneratedAsset(
       {
         db: deps.db,
         storage: deps.storage,
+        ownerOrganizationId: deps.ownerOrganizationId,
         provenance: {
           sourceType: FabFileSourceType.TOOL_GENERATED,
           sourceMetadata: {

@@ -19,6 +19,7 @@ import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitH
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
 import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
+import OrganizationRetentionSection from '@client/app/components/organizations/OrganizationRetentionSection';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
@@ -306,6 +307,7 @@ const OrganizationPage: FC = () => {
             )}
             <TabPanel value={OrganizationTabs.Overview}>
               <OrganizationOverviewSection organization={organization} />
+              <OrganizationRetentionSection key={organization.id} organization={organization} />
             </TabPanel>
             <TabPanel value={OrganizationTabs.Members}>
               <Typography level="title-lg" startDecorator={<GroupOutlinedIcon />} sx={{ mb: 3 }}>

@@ -270,6 +270,24 @@ describe('createSession knowledgeIds validation', () => {
     );
     expect(created[0].preauthorizedLakeIds).toBeUndefined();
   });
+  it('takes retention ownership only from the server resolver, never the request or a copied field', async () => {
+    const { adapters, created } = makeAdapters();
+    await createSession(
+      user,
+      { name: 'copy', retentionOrganizationId: 'foreign' } as unknown as Parameters<typeof createSession>[1],
+      {
+        ...adapters,
+        resolveRetentionOrganization: async () => 'destination',
+      }
+    );
+    expect(created[0].retentionOrganizationId).toBe('destination');
+    await createSession(
+      user,
+      { name: 'personal', retentionOrganizationId: 'foreign' } as unknown as Parameters<typeof createSession>[1],
+      adapters
+    );
+    expect(created[1].retentionOrganizationId).toBeUndefined();
+  });
 });
 
 /**

@@ -70,6 +70,16 @@ If you do not see **Connectors**, ask the Team owner to check your management ac
 
 If the deployment has custom connectors turned off, the page shows a notice; saving a Team policy cannot turn them on. If the saved policy is invalid, save a valid replacement or use **Use platform default**. If a policy or member-connections request fails, use **Retry** instead of treating the missing data as an empty list. A member who belongs to several Teams is subject to every Team's connector policy, so another Team's restrictions can also block a connection.
 
+## Data retention
+
+Open **Teams > View Details > Overview > Data retention** to see the active periods for **Chat history**, **Uploaded files** and **Generated media**. Each starts at **Keep forever**.
+
+If you own or manage the Team, enter a whole number of days for each category you want cleaned up. Leave a field empty to keep that category forever. Shortening a period first shows **Estimate deletions**. Read the estimated message, uploaded-file and generated-file/object counts, then choose **Confirm shorter retention** to enable automatic cleanup. An estimate expires after ten minutes; changing a field requires a new estimate.
+
+Cleanup runs hourly in bounded batches, so a backlog can take multiple runs. Chat age is measured per message, independently of the file and generated-media periods. Only explicitly Team-owned data qualifies. Personal files, older unbound chats and imported notebooks are excluded; membership alone never makes personal content eligible. New notebooks created with a validated Team selected record their Team ownership at creation. Shared generated media stays while another live notebook or library file references it.
+
+Estimates are counts of eligible records, not guaranteed storage savings. The counts can change before cleanup. Deletion follows the existing soft-delete and storage-version behavior; it does not immediately erase backups. Deletions appear in the Team audit log, and held data is preserved.
+
 ## Roles
 
 Each member shows a role label on the Members tab.

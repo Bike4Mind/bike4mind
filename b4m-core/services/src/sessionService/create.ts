@@ -121,6 +121,7 @@ export interface CreateSessionAdapters {
    * session created on a workspace records none, leaving every such value to that workspace.
    */
   workspaceSessionSettings?: WorkspaceSessionSettingsTable;
+  resolveRetentionOrganization?: (user: IUserDocument) => Promise<string | undefined>;
 }
 
 export interface CreateSessionOptions {
@@ -214,6 +215,7 @@ export const createSession = async (
     ...(options.origin ? { origin: options.origin } : {}),
     ...(userSetFields.length ? { userSetFields } : {}),
     userId: user.id,
+    retentionOrganizationId: await adapters.resolveRetentionOrganization?.(user),
     knowledgeIds,
     artifactIds,
     agentIds: authorizedAgentIds,
