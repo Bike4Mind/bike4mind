@@ -122,7 +122,7 @@ vi.mock('@server/auth/stepUp', () => ({ requireStepUp }));
 const resolveApiKeyTrust = vi.hoisted(() => vi.fn().mockResolvedValue({ assessment: { status: 'trusted' } }));
 vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
 
-import { CreditHolderType } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
 import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import '@pages/api/user-api-keys/index';
@@ -473,6 +473,36 @@ describe('GET /api/user-api-keys - revoked-key visibility', () => {
 
     expect(listUserApiKeys).toHaveBeenCalledWith('u1', expect.anything(), { includeDisabled: false });
     expect(listOrganizationApiKeys).toHaveBeenCalledWith('org-1', expect.anything(), { includeDisabled: false });
+  });
+});
+
+describe('GET /api/user-api-keys - legacy status', () => {
+  beforeEach(() => {
+    findIdsAdministeredBy.mockResolvedValue([]);
+  });
+
+  it('attaches the legacy flag and end date from the shared rule, never for a confined key', async () => {
+    listUserApiKeys.mockResolvedValueOnce([
+      { id: 'k-ordinary', userId: 'u1', scopes: [ApiKeyScope.AI_GENERATE], createdAt: new Date('2026-01-01') },
+      { id: 'k-embed', userId: 'u1', scopes: [ApiKeyScope.EMBED_CHAT], createdAt: new Date('2026-01-01') },
+    ]);
+    const { req, res } = createMocks({ method: 'GET' });
+    const json = vi.fn();
+    Object.assign(req, { user: { id: 'u1' } });
+    Object.assign(res, { json });
+
+    await mockRefs.getHandler!(req, res);
+
+    // The shipped window has no dates: every ordinary key is legacy, with no end date to show.
+    const payload: Array<{ id: string }> = json.mock.calls[0][0];
+    expect(payload.find(k => k.id === 'k-ordinary')).toMatchObject({
+      legacy: true,
+      legacyEndsAt: null,
+    });
+    expect(payload.find(k => k.id === 'k-embed')).toMatchObject({
+      legacy: false,
+      legacyEndsAt: null,
+    });
   });
 });
 

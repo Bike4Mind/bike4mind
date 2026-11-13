@@ -3,6 +3,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import {
   assertApiKeyScope,
   decideScopeGate,
+  getApiKeyLegacyStatus,
   holdsApiKeyScope,
   isLegacyApiKey,
   LEGACY_API_KEY_WINDOW,
@@ -285,6 +286,40 @@ describe('isLegacyApiKey', () => {
     expect(isLegacyApiKey(before, endsAt, window)).toBe(false);
     expect(isLegacyApiKey(before, new Date('2027-05-01T00:00:00Z'), window)).toBe(false);
     expect(isLegacyApiKey(before, endsAt, { cutoff: null, endsAt })).toBe(false);
+  });
+});
+
+describe('getApiKeyLegacyStatus', () => {
+  const window = { cutoff: new Date('2027-01-01T00:00:00Z'), endsAt: new Date('2027-04-01T00:00:00Z') };
+  const before = new Date('2026-12-31T00:00:00Z');
+  const midWindow = new Date('2027-02-01T00:00:00Z');
+
+  it('reports a key created before the cutoff as legacy, with the end date', () => {
+    expect(getApiKeyLegacyStatus({ createdAt: before, scopes: [ApiKeyScope.AI_GENERATE] }, midWindow, window)).toEqual({
+      legacy: true,
+      legacyEndsAt: window.endsAt,
+    });
+  });
+
+  it('reports a key created at or after the cutoff as not legacy, with no date', () => {
+    expect(getApiKeyLegacyStatus({ createdAt: window.cutoff }, midWindow, window)).toEqual({
+      legacy: false,
+      legacyEndsAt: null,
+    });
+  });
+
+  it('never reports a confined or exchange key as legacy, as the gate never grandfathers one', () => {
+    expect(
+      getApiKeyLegacyStatus({ createdAt: before, scopes: [ApiKeyScope.EMBED_CHAT] }, midWindow, window).legacy
+    ).toBe(false);
+    expect(
+      getApiKeyLegacyStatus({ createdAt: before, metadata: { createdFrom: 'oauth-exchange' } }, midWindow, window)
+        .legacy
+    ).toBe(false);
+  });
+
+  it('reports legacy with no end date while the window is unset', () => {
+    expect(getApiKeyLegacyStatus({ createdAt: before })).toEqual({ legacy: true, legacyEndsAt: null });
   });
 });
 

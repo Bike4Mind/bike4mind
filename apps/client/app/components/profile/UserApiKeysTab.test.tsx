@@ -187,6 +187,43 @@ describe('UserApiKeysTab - revoked keys', () => {
   });
 });
 
+describe('UserApiKeysTab - legacy keys', () => {
+  const endsAt = '2027-04-01T00:00:00.000Z';
+  const legacyKey = { ...activeKey, legacy: true, legacyEndsAt: endsAt };
+  const newerKey = { ...activeKey, id: 'key-3', name: 'Scoped key', legacy: false, legacyEndsAt: null };
+
+  beforeEach(() => {
+    h.keys = [];
+  });
+
+  it('badges a legacy key with its end date and explains how to replace it, but not a newer key', () => {
+    h.keys = [legacyKey, newerKey];
+    renderTab();
+
+    expect(screen.getByTestId('api-key-legacy-badge-key-1')).toHaveTextContent('Legacy until Apr 1, 2027');
+    expect(screen.queryByTestId('api-key-legacy-badge-key-3')).not.toBeInTheDocument();
+    expect(screen.getByTestId('api-keys-legacy-alert')).toHaveTextContent(/Create a new key with the scopes/);
+    expect(screen.getByTestId('api-keys-legacy-alert')).toHaveTextContent(/rotating a legacy key keeps it legacy/);
+  });
+
+  it('shows no badge while no end date is set, so every older key is not flagged without a date', () => {
+    h.keys = [{ ...legacyKey, legacyEndsAt: null }];
+    renderTab();
+
+    expect(screen.queryByTestId('api-key-legacy-badge-key-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-keys-legacy-alert')).not.toBeInTheDocument();
+  });
+
+  it('does not badge a revoked legacy key', () => {
+    h.keys = [{ ...revokedKey, legacy: true, legacyEndsAt: endsAt }];
+    renderTab();
+    fireEvent.click(screen.getByText('Show revoked (1)'));
+
+    expect(screen.queryByTestId('api-key-legacy-badge-key-2')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-keys-legacy-alert')).not.toBeInTheDocument();
+  });
+});
+
 describe('keyTestPath', () => {
   it('prefers /api/v1/me, falls back to a read the key holds, and gives up on write-only keys', () => {
     expect(keyTestPath([ApiKeyScope.ME_READ, ApiKeyScope.READ_FILES])).toBe('/api/v1/me');

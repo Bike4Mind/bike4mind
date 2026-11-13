@@ -59,6 +59,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import {
   IUserApiKeyDocument,
+  IUserApiKeyListItem,
   ApiKeyScope,
   ApiKeyScopeValue,
   getMeContract,
@@ -2028,8 +2029,14 @@ export default function UserApiKeysTab() {
     return 'Active';
   };
 
+  // The server decides legacy status. The badge waits for an end date: while none is announced
+  // every older key is legacy, and a dateless badge on all of them would only alarm.
+  const legacyEndsAt = (key: IUserApiKeyListItem) =>
+    key.legacy && key.legacyEndsAt && getStatusText(key) === 'Active' ? key.legacyEndsAt : null;
+
   const keys = data ?? [];
   const revokedCount = keys.filter(isRevoked).length;
+  const legacyKeyEndDates = keys.map(legacyEndsAt).filter(endsAt => endsAt !== null);
   const visibleKeys = showRevoked ? keys : keys.filter(key => !isRevoked(key));
 
   return (
@@ -2101,6 +2108,19 @@ export default function UserApiKeysTab() {
             </Alert>
           )}
 
+          {legacyKeyEndDates.length > 0 && (
+            <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-keys-legacy-alert">
+              <Typography level="body-sm">
+                {legacyKeyEndDates.length === 1
+                  ? 'One of your keys uses'
+                  : `${legacyKeyEndDates.length} of your keys use`}{' '}
+                legacy access, which ends on {dayjs(legacyKeyEndDates[0]).format('MMM D, YYYY')}. After that a key
+                reaches only what its scopes allow. Create a new key with the scopes your integration needs and switch
+                to it; rotating a legacy key keeps it legacy.
+              </Typography>
+            </Alert>
+          )}
+
           {isLoading ? (
             <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
               <CircularProgress />
@@ -2155,7 +2175,26 @@ export default function UserApiKeysTab() {
                   {visibleKeys.map(key => (
                     <tr key={key.id}>
                       <td>
-                        <Typography fontWeight="lg">{key.name}</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Typography fontWeight="lg">{key.name}</Typography>
+                          {legacyEndsAt(key) && (
+                            <Tooltip
+                              title="This key was created before scopes were enforced. Create a new key with the scopes it needs before this date; rotating keeps the key legacy."
+                              variant="soft"
+                              size="sm"
+                              sx={{ maxWidth: 320 }}
+                            >
+                              <Chip
+                                size="sm"
+                                variant="soft"
+                                color="warning"
+                                data-testid={`api-key-legacy-badge-${key.id}`}
+                              >
+                                Legacy until {dayjs(legacyEndsAt(key)).format('MMM D, YYYY')}
+                              </Chip>
+                            </Tooltip>
+                          )}
+                        </Box>
                       </td>
                       <td>
                         {key.organizationId ? (

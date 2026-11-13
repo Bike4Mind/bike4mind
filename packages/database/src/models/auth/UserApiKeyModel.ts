@@ -10,6 +10,8 @@ import {
   IUserApiKeyDocument,
   IUserApiKeyRateLimit,
   IUserApiKeyRepository,
+  LegacyApiKeyCandidatePage,
+  LegacyApiKeyCandidateQuery,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
@@ -66,6 +68,36 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       { $group: { _id: '$userId', count: { $sum: 1 } } },
     ]);
     return Object.fromEntries(rows.map(row => [String(row._id), row.count]));
+  }
+
+  async findLegacyCandidatesPage({
+    createdBefore,
+    usedSince,
+    excludeScopes,
+    skip,
+    limit,
+  }: LegacyApiKeyCandidateQuery): Promise<LegacyApiKeyCandidatePage> {
+    const now = new Date();
+    const filter = {
+      status: ApiKeyStatus.ACTIVE,
+      // Repeated because aggregate skips the soft-delete filter.
+      deletedAt: null,
+      lastUsedAt: { $gte: usedSince },
+      ...(createdBefore ? { createdAt: { $lt: createdBefore } } : {}),
+      scopes: { $nin: [...excludeScopes] },
+      'metadata.createdFrom': { $ne: 'oauth-exchange' },
+      $or: [{ expiresAt: { $gt: now } }, { expiresAt: null }],
+    };
+    const [keys, total, owners] = await Promise.all([
+      this.model.find(filter).sort({ lastUsedAt: -1, _id: -1 }).skip(skip).limit(limit).exec(),
+      this.model.countDocuments(filter).exec(),
+      this.model.aggregate<{ count: number }>([
+        { $match: filter },
+        { $group: { _id: '$userId' } },
+        { $count: 'count' },
+      ]),
+    ]);
+    return { keys, total, ownerCount: owners[0]?.count ?? 0 };
   }
 
   /** When each user created their first key, deleted keys included; users with no key are absent. */
