@@ -18,7 +18,11 @@ public struct ReplySpeechChunker: Sendable {
   public mutating func ingest(cumulative: String, isFinal: Bool) -> [String] {
     // A reply that no longer starts with what was already handed out was rewritten (a filtered block
     // vanished); speaking from an unknown offset would repeat or skip text, so wait for a stable update.
-    guard cumulative.hasPrefix(consumed) else { return [] }
+    // The final update is that one: resume from the longest prefix the two still share.
+    if !cumulative.hasPrefix(consumed) {
+      guard isFinal else { return [] }
+      consumed = String(zip(consumed, cumulative).prefix { $0 == $1 }.map(\.0))
+    }
     let rest = cumulative.dropFirst(consumed.count)
 
     var chunks: [String] = []

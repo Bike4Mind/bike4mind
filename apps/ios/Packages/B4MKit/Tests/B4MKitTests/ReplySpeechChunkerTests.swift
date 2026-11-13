@@ -54,6 +54,14 @@ final class ReplySpeechChunkerTests: XCTestCase {
     XCTAssertEqual(chunker.ingest(cumulative: "Something else entirely now. ", isFinal: false), [])
   }
 
+  func testARewrittenFinalReplyStillSpeaksItsTail() {
+    var chunker = ReplySpeechChunker()
+    _ = chunker.ingest(cumulative: "The first sentence is long enough. ", isFinal: false)
+    XCTAssertEqual(
+      chunker.ingest(cumulative: "The first sentence is long enough. Then the rewrite ends here.", isFinal: true),
+      ["Then the rewrite ends here."])
+  }
+
   func testMarkdownIsCleanedForSpeech() {
     XCTAssertEqual(SpeechText.clean("## Title\n- **bold** and `code`"), "Title bold and code")
     XCTAssertEqual(SpeechText.clean("See [the docs](https://example.com/x) now"), "See the docs now")
