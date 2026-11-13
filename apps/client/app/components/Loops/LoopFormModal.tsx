@@ -385,7 +385,13 @@ export default function LoopFormModal({ open, onClose, loop, template }: LoopFor
   const { currentUser } = useUser();
   // The list includes agents shared with the owner, which a loop may not run (isAgentUsableBy); the save rejects them.
   const agents = (useGetAgents().data ?? []).filter(agent => !agent.userId || agent.userId === currentUser?.id);
-  const { data: skills = [] } = useGetSkills();
+  // Mirrors the save's skillRepository.findAccessibleByIdsForUser: the list also has system and org-admin skills.
+  const skills = (useGetSkills().data ?? []).filter(
+    skill =>
+      skill.userId === currentUser?.id ||
+      skill.isGlobalRead ||
+      skill.users?.some(share => share.userId === currentUser?.id)
+  );
   const { accessibleTextModels } = useAccessibleModels();
   const { data: loops = [], isSuccess: loopsLoaded } = useLoops();
   const toolAvailability = useConfig().data?.toolAvailability;

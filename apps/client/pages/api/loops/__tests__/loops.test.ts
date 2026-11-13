@@ -1234,6 +1234,7 @@ describe('agent and skill ownership', () => {
     [{ agentId: missing }, /^agentId is not available/],
     [{ stageConfig: [{ stage: 'review', agentId: theirs }] }, /agentId for stage review is not available/],
     [{ stageConfig: [{ stage: 'review', agentId: deleted }] }, /agentId for stage review/],
+    [{ agentId: theirs, stageConfig: [{ stage: 'review', agentId: theirs }] }, /agentId for stage review/],
     [{ stageConfig: [{ stage: 'todo', skills: ['owned', 'private'] }] }, /skills for stage todo/],
   ])('rejects an agent or skill the owner may not use on POST (%#)', async (body, message) => {
     const result = post(body);

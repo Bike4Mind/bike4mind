@@ -44,8 +44,11 @@ vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUs
 vi.mock('@client/app/hooks/data/skills', () => ({
   useGetSkills: () => ({
     data: [
-      { id: 's1', name: 'review-checklist' },
-      { id: 's2', name: 'release-notes' },
+      { id: 's1', name: 'review-checklist', userId: 'u1' },
+      { id: 's2', name: 'release-notes', isGlobalRead: true },
+      { id: 's3', name: 'shared-with-me', userId: 'u2', users: [{ userId: 'u1' }] },
+      { id: 's4', name: 'system-only', isSystem: true },
+      { id: 's5', name: 'org-admin-only', organizationId: 'org1' },
     ],
   }),
 }));
@@ -574,6 +577,12 @@ describe('LoopFormModal stage settings', () => {
     expect(screen.getByRole('option', { name: 'Mine' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'Shared with me' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('option', { name: 'Alpha' }));
+    // Only skills the save accepts: owned, shared with the owner, or global-read.
+    fireEvent.click(within(screen.getByTestId('loop-form-stage-skills-0')).getByRole('combobox'));
+    expect(screen.getByRole('option', { name: 'shared-with-me' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'system-only' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'org-admin-only' })).not.toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
     pick('loop-form-stage-skills-1', 'release-notes');
     fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
     expect(updateLoop.mutate).toHaveBeenCalledWith(

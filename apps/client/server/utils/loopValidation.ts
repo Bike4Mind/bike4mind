@@ -54,8 +54,8 @@ export async function validateLoopAgentsAndSkills(
   stageConfig: Pick<ILoopStageConfig, 'stage' | 'agentId' | 'skills'>[]
 ): Promise<void> {
   const agents = new Map<string, string>();
-  for (const c of stageConfig) if (c.agentId) agents.set(c.agentId, `agentId for stage ${c.stage}`);
   if (agentId) agents.set(agentId, 'agentId');
+  for (const c of stageConfig) if (c.agentId) agents.set(c.agentId, `agentId for stage ${c.stage}`);
   await Promise.all([
     ...[...agents].map(async ([id, field]) => {
       const agent = isValidObjectId(id) ? await agentRepository.findById(id) : null;
