@@ -9,16 +9,44 @@ export const authHolders = {
     kind: 'holder',
     references: [
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
-      { path: 'author.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
-      { path: 'editor.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
+      {
+        path: 'author.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ADMIN_NOTE,
+        identifies: ['author.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'editor.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ADMIN_NOTE,
+        identifies: ['editor.name'],
+        exportScope: 'reference',
+      },
     ],
   },
   AdminUserNoteRevision: {
     kind: 'holder',
     references: [
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
-      { path: 'author.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
-      { path: 'editor.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
+      {
+        path: 'author.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ADMIN_NOTE,
+        identifies: ['author.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'editor.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ADMIN_NOTE,
+        identifies: ['editor.name'],
+        exportScope: 'reference',
+      },
     ],
   },
   ApiKey: {
@@ -56,8 +84,9 @@ export const authHolders = {
     kind: 'holder',
     references: [
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
-      // The admin who impersonated is recorded on the impersonated person's session.
-      { path: 'impersonatedBy', matchBy: 'userId', action: 'anonymize' },
+      // The admin who impersonated is recorded on the impersonated person's session, and `device` is
+      // their request's, not the person's.
+      { path: 'impersonatedBy', matchBy: 'userId', action: 'anonymize', alsoRedact: ['device'] },
     ],
     secretPaths: [
       'sid',
@@ -294,6 +323,15 @@ export const authHolders = {
       'pendingEmailToken',
       // A hash of the user id that only resolves provider safety notices; the export already has the id.
       'providerEndUserId',
+      // The stored abuse-scoring results and evidence, withheld for the same reason as
+      // `PendingOtcToken.codes.riskSignals`: exporting them would teach an abuser what the scoring sees.
+      'signupGrantAssessment',
+      'riskScore',
+      'riskSignals',
+      'riskEvidence',
+      'signupMeta',
+      // The admin who wrote a note about this person; `AdminUserNote` withholds `author.name` the same way.
+      'userNotes.userName',
     ],
   },
   UserActivityCounter: {
@@ -327,6 +365,8 @@ export const authHolders = {
   UserUsagePatternSignals: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    // The score itself is withheld from the export, as `User.riskScore` is.
+    secretPaths: ['signals', 'score', 'needsReview', 'skipped'],
   },
   Voice: {
     kind: 'holder',
