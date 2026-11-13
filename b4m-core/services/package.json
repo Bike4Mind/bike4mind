@@ -40,6 +40,16 @@
         "default": "./dist/dataLakeService/lakeGateWideningRule.cjs"
       }
     },
+    "./notebookMirror": {
+      "import": {
+        "types": "./dist/notebookExportService/mirror.d.mts",
+        "default": "./dist/notebookExportService/mirror.mjs"
+      },
+      "require": {
+        "types": "./dist/notebookExportService/mirror.d.cts",
+        "default": "./dist/notebookExportService/mirror.cjs"
+      }
+    },
     "./evals/lakeRag": {
       "import": {
         "types": "./dist/llm/evals/lakeRag/index.d.mts",
@@ -512,7 +522,7 @@
     "marked": "^15.0.11",
     "mathjs": "^15.2.0",
     "mime-types": "^3.0.2",
-    "mongoose": "^8.24.1",
+    "mongoose": "^8.24.7",
     "openai": "^6.46.0",
     "p-limit": "^7.3.2",
     "sharp": "^0.35.4",

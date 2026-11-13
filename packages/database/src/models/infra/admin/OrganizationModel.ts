@@ -167,6 +167,24 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     maxCreditsPerMember: { type: Number, required: false },
     serviceAccountUserId: { type: String, required: false },
     redactPushContent: { type: Boolean, default: false },
+    sharingPolicy: {
+      type: new Schema(
+        {
+          allowPublicLinks: { type: Boolean, required: true },
+          allowExternalSharing: { type: Boolean, required: true },
+          allowedDomains: { type: [String], default: [] },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    mfaPolicy: {
+      type: new Schema(
+        { required: { type: Boolean, default: false }, graceEndsAt: { type: Date, default: null } },
+        { _id: false }
+      ),
+      default: undefined,
+    },
   },
   {
     virtuals: true,
@@ -271,7 +289,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     const counterFilter = expected === 0 ? { $in: [0, null] } : expected;
     const res = await this.organizationModel.updateOne(
       { _id: organizationId, currentStorageSize: counterFilter },
-      { $set: { currentStorageSize: next } }
+      { $set: { currentStorageSize: Math.max(0, next) } }
     );
     return res.matchedCount === 1;
   }

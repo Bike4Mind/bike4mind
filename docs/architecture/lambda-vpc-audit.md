@@ -71,7 +71,6 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/client/server/websocket/ccAgentDisconnect.func` | `infra/websocket.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/ccAgentEvent.func` | `infra/websocket.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/ccAgentRegister.func` | `infra/websocket.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
-| `apps/client/server/websocket/cliCompletion.func` | `infra/websocket.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/cliToolExecution.func` | `infra/websocket.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/connect.func` | `infra/websocket.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/dataSubscribeRequest.func` | `infra/subscriberFanout.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `websocketApi` | Yes | Connects to MongoDB. |

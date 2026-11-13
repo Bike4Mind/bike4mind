@@ -1,12 +1,17 @@
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { CliToolRequestAction } from '@bike4mind/common';
-import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
+import {
+  verifyJwtToken,
+  checkRateLimit,
+  verifyApiKey,
+  checkApiKeyRateLimitOrThrow,
+} from '@bike4mind/server-utils/cli/auth';
 import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { validateToolRequest, executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { withWebSocketContext, sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
-import { buildWebToolExecutors } from '@server/cli/webToolExecutors';
+import { buildWebToolExecutors } from '@bike4mind/server-utils/cli/webToolExecutors';
 
 /**
  * WebSocket handler for CLI tool execution (request-response)

@@ -54,13 +54,16 @@ describe('role routing and task runtime compatibility', () => {
       { id: 'worker', name: 'Worker', supportsTools: true },
       { id: 'reviewer', name: 'Reviewer', supportsTools: true },
     ];
-    streams = [];
-    events = [];
-    post = vi.fn().mockImplementation(() => {
+    const opened: PassThrough[] = [];
+    const emitted: ChatStreamEvent[] = [];
+    streams = opened;
+    events = emitted;
+    const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = boundPost;
     service = new ChatService({
       store,
       queue: new MessageQueue(() => undefined),
@@ -71,10 +74,10 @@ describe('role routing and task runtime compatibility', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
   afterEach(() => {
@@ -603,6 +606,7 @@ describe('role routing and task runtime compatibility', () => {
     await drain([parent.id, child.id], { parentId: parent.id, childId: child.id });
     await service.actOnTask(parent.id, child.id, { kind: 'cancel', reason: 'Closing out: the work is finished.' });
     await drain([parent.id, child.id]);
+    await service.setSessionOrchestrate(parent.id, true);
     const canceled = await store.get(child.id);
     if (canceled?.workerTask?.state.status !== 'canceled') throw new Error('Task was not canceled');
     return { parent, child: canceled };
