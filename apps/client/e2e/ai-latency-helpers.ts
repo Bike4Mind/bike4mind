@@ -155,8 +155,11 @@ export interface PromptCorrelation {
   /** ISO time of Enter, and of the stream ending. */
   sentAt?: string;
   streamEndAt?: string;
-  /** Quest `fallbackInfo` (null: the poll body reports none; a dropped or cleared record also reads null), or 'unknown' when the quest could not be read. */
-  fallback?: Record<string, unknown> | null | 'unknown';
+  /**
+   * Quest `fallbackInfo`, or 'unknown' when the quest could not be read. null means the poll body
+   * reports none; a dropped or cleared record also reads null.
+   */
+  fallback: Record<string, unknown> | null | 'unknown';
   /** Quests do not persist the effective reasoning effort. */
   effort: 'unknown';
 }
