@@ -1,3 +1,4 @@
+import { act, render } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StudioJobCompletion } from '@bike4mind/common';
 
@@ -7,9 +8,14 @@ const { toastMock } = vi.hoisted(() => ({
 vi.mock('sonner', () => ({ toast: toastMock }));
 vi.mock('@client/app/router', () => ({ router: { history: { push: vi.fn() } } }));
 vi.mock('@client/app/contexts/WebsocketContext', () => ({ useWebsocket: vi.fn() }));
-vi.mock('@client/app/components/Studio/useStudioFeature', () => ({ useStudioFeature: vi.fn() }));
+vi.mock('@client/app/components/Studio/useStudioFeature', () => ({
+  useStudioFeature: vi.fn(),
+  useStudioFeaturesLoading: vi.fn(),
+}));
 
-import { showStudioCompletionToast } from './StudioJobCompletedListener';
+import { useWebsocket } from '@client/app/contexts/WebsocketContext';
+import { useStudioFeature, useStudioFeaturesLoading } from '@client/app/components/Studio/useStudioFeature';
+import StudioJobCompletedListener, { showStudioCompletionToast } from './StudioJobCompletedListener';
 
 const completion: StudioJobCompletion = {
   version: 1,
@@ -47,5 +53,88 @@ describe('showStudioCompletionToast', () => {
     showStudioCompletionToast({ ...completion, readyCount: 0, failedCount: 4 }, vi.fn());
     expect(toastMock.success).toHaveBeenCalledWith('4 takes ready, Cold brew launch', expect.anything());
     expect(toastMock.error).toHaveBeenCalledWith('4 takes failed, Cold brew launch', expect.anything());
+  });
+});
+
+describe('StudioJobCompletedListener', () => {
+  type Handler = (message: { action: string; completion?: StudioJobCompletion }) => Promise<void>;
+  let handler: Handler | undefined;
+  const unsubscribe = vi.fn();
+
+  const setGate = (gate: { enabled: boolean; loading: boolean }) => {
+    vi.mocked(useStudioFeature).mockReturnValue(gate.enabled);
+    vi.mocked(useStudioFeaturesLoading).mockReturnValue(gate.loading);
+  };
+  const frame = (groupId: string) =>
+    act(() => handler!({ action: 'studio_job_completed', completion: { ...completion, groupId } }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    handler = undefined;
+    vi.mocked(useWebsocket).mockReturnValue({
+      subscribeToAction: vi.fn((action: string, next: Handler) => {
+        expect(action).toBe('studio_job_completed');
+        handler = next;
+        return unsubscribe;
+      }),
+    } as unknown as ReturnType<typeof useWebsocket>);
+  });
+
+  it('toasts a frame once the flag is on', async () => {
+    setGate({ enabled: true, loading: false });
+    render(<StudioJobCompletedListener />);
+
+    await frame('g1');
+    expect(toastMock.warning).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ id: 'studio-completion-g1' })
+    );
+  });
+
+  it('shows nothing while the flag is off', async () => {
+    setGate({ enabled: false, loading: false });
+    render(<StudioJobCompletedListener />);
+
+    await frame('g1');
+    expect(toastMock.warning).not.toHaveBeenCalled();
+  });
+
+  it('holds a frame that lands while the flag is loading and shows it once the flag resolves on', async () => {
+    setGate({ enabled: false, loading: true });
+    const { rerender } = render(<StudioJobCompletedListener />);
+
+    await frame('g1');
+    expect(toastMock.warning).not.toHaveBeenCalled();
+
+    setGate({ enabled: true, loading: false });
+    rerender(<StudioJobCompletedListener />);
+    expect(toastMock.warning).toHaveBeenCalledTimes(1);
+    expect(toastMock.warning).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ id: 'studio-completion-g1' })
+    );
+
+    rerender(<StudioJobCompletedListener />);
+    expect(toastMock.warning).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a held frame when the flag resolves off', async () => {
+    setGate({ enabled: false, loading: true });
+    const { rerender } = render(<StudioJobCompletedListener />);
+
+    await frame('g1');
+    setGate({ enabled: false, loading: false });
+    rerender(<StudioJobCompletedListener />);
+    setGate({ enabled: true, loading: false });
+    rerender(<StudioJobCompletedListener />);
+
+    expect(toastMock.warning).not.toHaveBeenCalled();
+  });
+
+  it('unsubscribes on unmount', () => {
+    setGate({ enabled: true, loading: false });
+    const { unmount } = render(<StudioJobCompletedListener />);
+    unmount();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 });

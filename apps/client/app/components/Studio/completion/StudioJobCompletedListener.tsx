@@ -1,8 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useEffectEvent, useRef } from 'react';
 import { toast } from 'sonner';
 import type { StudioJobCompletion } from '@bike4mind/common';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
-import { useStudioFeature } from '@client/app/components/Studio/useStudioFeature';
+import { useStudioFeature, useStudioFeaturesLoading } from '@client/app/components/Studio/useStudioFeature';
 import { router } from '@client/app/router';
 import { describeStudioCompletion } from './studioCompletionToast';
 
@@ -26,19 +26,34 @@ export const showStudioCompletionToast = (
 
 /**
  * Shows a toast when a Studio group finishes (studio_job_completed frames), wherever the user is in the app.
- * Behind EnableStudioImage. Mounted once inside UserProvider (app/providers.tsx), since the flag reads the user.
+ * Behind EnableStudioImage. Mounted in ProviderBundle, under AdminSettingsProvider, since the flag reads admin settings.
+ * Subscribes from mount: a frame that lands while the flag is still loading (just after a reload) is held, then shown
+ * or dropped once the flag resolves, so it is not lost to the gap.
  */
 const StudioJobCompletedListener = () => {
   const { subscribeToAction } = useWebsocket();
   const enabled = useStudioFeature('image');
+  const loading = useStudioFeaturesLoading();
+  const held = useRef<StudioJobCompletion[]>([]);
+
+  const deliver = useEffectEvent((completion: StudioJobCompletion) => {
+    if (loading) held.current.push(completion);
+    else if (enabled) showStudioCompletionToast(completion);
+  });
+
+  useEffect(
+    () =>
+      subscribeToAction('studio_job_completed', async message => {
+        if (message.action === 'studio_job_completed') deliver(message.completion);
+      }),
+    [subscribeToAction]
+  );
 
   useEffect(() => {
-    if (!enabled) return;
-    return subscribeToAction('studio_job_completed', async message => {
-      if (message.action !== 'studio_job_completed') return;
-      showStudioCompletionToast(message.completion);
-    });
-  }, [enabled, subscribeToAction]);
+    if (loading) return;
+    const released = held.current.splice(0);
+    if (enabled) released.forEach(completion => showStudioCompletionToast(completion));
+  }, [enabled, loading]);
 
   return null;
 };
