@@ -18,6 +18,7 @@ import {
   shadowDetectionRepository,
   campaignWatchRepository,
   withTransaction,
+  deleteFeedbackAiForUser,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
@@ -62,12 +63,25 @@ const ownerFilter = (userId: string) => {
   const objectId = new mongoose.Types.ObjectId(userId);
   return { userId: { $in: [userId, objectId.toHexString(), objectId] } };
 };
-const personalFilter = (userId: string, personalOrganizationIds: readonly string[]) => ({
+/**
+ * A person's own content, not their organization's: owned with no organization, or in one of their
+ * personal workspaces. Shared with the data subject export (`server/dataSubject/subjectRecordExport.ts`),
+ * which passes the owner path of its registry reference.
+ */
+export const personalFilter = (userId: string, personalOrganizationIds: readonly string[], ownerPath = 'userId') => ({
   $or: [
-    { ...ownerFilter(userId), organizationId: { $in: [null, ''] } },
+    { [ownerPath]: ownerFilter(userId).userId, organizationId: { $in: [null, ''] } },
     { organizationId: { $in: personalOrganizationIds } },
   ],
 });
+
+/** The ids of the person's personal-workspace organizations, tombstones included. */
+export async function findPersonalOrganizationIds(userId: string): Promise<string[]> {
+  const workspaces = await collectionFor('Organization')
+    .find({ ...ownerFilter(userId), personal: true }, { projection: { _id: 1 } })
+    .toArray();
+  return workspaces.map(workspace => String(workspace._id));
+}
 
 async function purgeNotebookMedia(
   userId: string,
@@ -473,10 +487,8 @@ async function purgePersonalMemory(
  */
 export async function purgeAccountContent(userId: string, { logger, assertLease }: PurgeOptions): Promise<void> {
   await assertLease();
-  const workspaces = await collectionFor('Organization')
-    .find({ ...ownerFilter(userId), personal: true }, { projection: { _id: 1 } })
-    .toArray();
-  const personalOrganizationIds = workspaces.map(workspace => String(workspace._id));
+  await deleteFeedbackAiForUser(userId, { assertLease });
+  const personalOrganizationIds = await findPersonalOrganizationIds(userId);
   await purgeUserPublishedArtifacts(userId, { deletedBy: userId, logger });
   await withdrawAuthorListings(userId);
   await purgePublishedOriginals(userId, personalOrganizationIds, assertLease);

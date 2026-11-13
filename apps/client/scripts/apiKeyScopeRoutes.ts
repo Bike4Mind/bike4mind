@@ -139,10 +139,20 @@ export function gatesIn(code: string, helpers: ReadonlyMap<string, Gate>): Gate[
   return gates;
 }
 
+/** A `baseApi` door as written: its raw gate text and the scopes that text resolves to (possibly none). */
+export type DoorSite = { raw: string; scopes: Gate };
+
+/** Every `baseApi` door in `code`, including ones whose gate resolves to no scope. */
+export function doorSitesIn(code: string): DoorSite[] {
+  const resolve = listResolver(code);
+  return [...code.matchAll(DOOR_SITE)].map(([, raw]) => ({ raw, scopes: resolve(raw) }));
+}
+
 /** The `baseApi` doors in `code`. A file may hold several (one per handler), so any one may admit. */
 export function doorsIn(code: string): Gate[] {
-  const resolve = listResolver(code);
-  return [...code.matchAll(DOOR_SITE)].map(([, expr]) => resolve(expr)).filter(door => door.size > 0);
+  return doorSitesIn(code)
+    .map(door => door.scopes)
+    .filter(door => door.size > 0);
 }
 
 /**

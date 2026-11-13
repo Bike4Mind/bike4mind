@@ -4,6 +4,8 @@ import {
   realtimeConnectionRepository,
   userRepository,
   withTransaction,
+  deleteFeedbackAiForUser,
+  FeedbackNoteModel,
   type IErasureRecord,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
@@ -45,13 +47,17 @@ export async function reapplyErasure(
     const assertLease = async () => {}; // no purge lease: the account is already past its grace period
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
-    await withTransaction(async () => {
+    await withTransaction(async session => {
       await Organization.deleteMany({ userId, personal: true }, { hardDelete: true });
+      await deleteFeedbackAiForUser(userId, { session });
+      await FeedbackNoteModel.deleteMany({ userId: userId.toLowerCase() }, { session });
       await userRepository.delete(userId);
       await writeRecord();
     });
   } else {
-    await withTransaction(async () => {
+    await withTransaction(async session => {
+      await deleteFeedbackAiForUser(userId, { session });
+      await FeedbackNoteModel.deleteMany({ userId: userId.toLowerCase() }, { session });
       await userRepository.delete(userId);
       await writeRecord();
     });

@@ -17,6 +17,7 @@ export { generateSoundEffectContract } from './contracts/soundEffects.contract';
 export { getMeContract } from './contracts/me.contract';
 export { getClientConfigContract } from './contracts/clientConfig.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
+export { mintPersonaContract, deletePersonaContract } from './contracts/personas.contract';
 export { getCreditBalanceContract } from './contracts/credits.contract';
 export { listModelsContract } from './contracts/models.contract';
 export { generateImageContract } from './contracts/imageGeneration.contract';

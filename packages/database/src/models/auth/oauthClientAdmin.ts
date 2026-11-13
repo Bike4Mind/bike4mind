@@ -74,6 +74,14 @@ export function toOAuthClientView(doc: IOAuthClientDocument): OAuthClientView {
         }
       : {}),
     ...(doc.overwatchProductId ? { overwatchProductId: doc.overwatchProductId } : {}),
+    ...(doc.rateLimit
+      ? {
+          rateLimit: {
+            requestsPerMinute: doc.rateLimit.requestsPerMinute,
+            requestsPerDay: doc.rateLimit.requestsPerDay,
+          },
+        }
+      : {}),
     createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : null,
     updatedAt: doc.updatedAt ? new Date(doc.updatedAt).toISOString() : null,
   };
@@ -112,6 +120,7 @@ export async function createOAuthClient(input: CreateOAuthClientInput): Promise<
     clientType: data.clientType,
     isActive: true,
     ...(federatedIdp ? { federatedIdp } : {}),
+    ...(data.rateLimit ? { rateLimit: data.rateLimit } : {}),
   });
 
   return { client: toOAuthClientView(doc), clientSecret };
@@ -178,10 +187,14 @@ export async function updateOAuthClient(
   if (unknownScopes.length) throw new BadRequestError(`Unknown scope: ${unknownScopes.join(', ')}`);
 
   const scopesOrTrustChanged = data.allowedScopes !== undefined || data.federatedIdp !== undefined;
+  const finalFederated = data.federatedIdp === undefined ? !!before.federatedIdp : data.federatedIdp !== null;
+  const finalRateLimit = data.rateLimit === undefined ? before.rateLimit : data.rateLimit;
+  if (finalRateLimit && !finalFederated) {
+    throw new BadRequestError('A rate-limit profile requires a federated client');
+  }
   const finalScopes = data.allowedScopes ?? before.allowedScopes;
   const grantsOptIn = nonOptInScopes(finalScopes).length < finalScopes.length;
   if (scopesOrTrustChanged && grantsOptIn) {
-    const finalFederated = data.federatedIdp === undefined ? !!before.federatedIdp : data.federatedIdp !== null;
     if (!finalFederated || before.clientType !== 'relying-party') {
       throw new BadRequestError('Opt-in scopes can only be granted to a federated relying-party client');
     }
@@ -193,10 +206,12 @@ export async function updateOAuthClient(
     ...(data.allowedScopes ? { allowedScopes: data.allowedScopes } : {}),
     ...(federatedIdp ? { federatedIdp } : {}),
     ...(data.overwatchProductId ? { overwatchProductId: data.overwatchProductId } : {}),
+    ...(data.rateLimit ? { rateLimit: data.rateLimit } : {}),
   };
   const $unset: Record<string, ''> = {
     ...(data.federatedIdp === null ? { federatedIdp: '' } : {}),
     ...(data.overwatchProductId === null ? { overwatchProductId: '' } : {}),
+    ...(data.rateLimit === null ? { rateLimit: '' } : {}),
   };
   const update = { $set, ...(Object.keys($unset).length > 0 ? { $unset } : {}) };
 
@@ -216,6 +231,11 @@ export async function updateOAuthClient(
   }
   if (data.expectedUpdatedAt !== undefined) {
     filter.updatedAt = data.expectedUpdatedAt === null ? null : new Date(data.expectedUpdatedAt);
+  }
+  if (data.rateLimit !== undefined || data.federatedIdp !== undefined) {
+    filter['rateLimit.requestsPerMinute'] = before.rateLimit?.requestsPerMinute ?? null;
+    filter['rateLimit.requestsPerDay'] = before.rateLimit?.requestsPerDay ?? null;
+    if (data.federatedIdp === undefined) filter.federatedIdp = { $exists: finalFederated };
   }
 
   const doc = await OAuthClientModel.findOneAndUpdate(filter, update, { new: true, runValidators: true }).exec();

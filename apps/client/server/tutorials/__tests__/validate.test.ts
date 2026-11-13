@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TutorialModule } from '../types';
 import { csvCells, knownSelectorsOf, unsafeLinkTargets, validateSheet, validateTutorialModule } from '../validate';
+import { CORE_TUTORIAL_CONTENT } from '../content';
 import { FIXTURE_CONTENT } from './fixture';
 
 const moduleOf = (): TutorialModule => ({
@@ -93,5 +94,20 @@ describe('sheet rules', () => {
   it('accepts a small csv and refuses an oversized one', () => {
     expect(validateSheet({ name: 'a.csv', csv: 'a,b\n1,2\n' })).toEqual([]);
     expect(validateSheet({ name: 'a.csv', csv: 'x'.repeat(70 * 1024) }).length).toBeGreaterThan(0);
+  });
+});
+
+describe('the shipped core tutorials', () => {
+  it('validates every module against the selectors the shipped modules name', () => {
+    const modules = CORE_TUTORIAL_CONTENT.map(t => ({
+      ...t.intro,
+      version: t.version,
+      revision: 0,
+      enabled: t.enabled,
+      steps: [...t.steps],
+      transcript: [...t.transcript],
+    }));
+    const known = knownSelectorsOf(modules);
+    for (const m of modules) expect(validateTutorialModule(m, { known }), m.id).toEqual([]);
   });
 });

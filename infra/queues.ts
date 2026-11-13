@@ -786,8 +786,9 @@ const questExportQueueSubscription = questExportQueue.subscribe(
 );
 
 // Account Data Export Queue
-// Self-service "download all my data": builds a zip of the user's data under the fabFileBucket
-// exports/ prefix (expired by its lifecycle rule) and emails a link to the app download page.
+// "Download all my data": builds a zip of the user's data under the fabFileBucket exports/ prefix
+// (expired by its lifecycle rule). Self-serve exports email a link to the app download page; admin
+// data subject exports (with the registry records) are fetched from the admin user profile instead.
 const accountDataExportQueueDLQ = new sst.aws.Queue('accountDataExportQueueDLQ', {});
 const accountDataExportQueue = new sst.aws.Queue('accountDataExportQueue', {
   visibilityTimeout: '16 minutes',
@@ -805,7 +806,7 @@ const accountDataExportQueueSubscription = accountDataExportQueue.subscribe(
     // The zip is written to /tmp before upload; sized for MAX_FILE_BYTES in accountDataExport.ts.
     storage: '5 GB',
     vpc: lambdaVpc,
-    link: [...allSecrets, fabFileBucket, generatedImagesBucket, eventBus, websocketApi],
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, eventBus, websocketApi, accountDataExportQueue],
     permissions: [
       {
         actions: ['s3:ListBucketVersions', 's3:DeleteObjectVersion'],
@@ -1011,15 +1012,15 @@ const lakeInconsistencyModelQueueSubscription = lakeInconsistencyModelQueue.subs
 // makes up to `maxResults` sequential LLM judgments and then one outbound page fetch per survivor,
 // and the URL fetcher alone allows a long per-page budget. The loop stops itself short of the
 // deadline (TIME_BUDGET_RESERVE_MS) so a run ends as `completed` with a `time_budget` stop reason
-// rather than being killed mid-candidate and left `running` forever. No bucket link: the run never
-// writes a file - approving one of its proposals does, through the ordinary ingestion door.
+// rather than being killed mid-candidate and left `running` forever. fabFileBucket: a config that
+// auto-admits trusted hits writes the admitted file through the ordinary ingestion door in-run.
 const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
   {
     handler: 'apps/workers/src/queueHandlers/dataLakeResearchRun.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets],
+    link: [...allSecrets, fabFileBucket],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       // Research runs resolve the web-search provider like ChatCompletion does; same wiring

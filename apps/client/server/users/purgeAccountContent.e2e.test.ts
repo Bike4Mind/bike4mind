@@ -1,3 +1,4 @@
+import { FeedbackAiModel, FeedbackModel } from '@bike4mind/database';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
@@ -450,5 +451,38 @@ describe('permanent personal-content purge', () => {
     expect(effects.deleteGenerated).not.toHaveBeenCalled();
     expect(effects.cdnAdd).not.toHaveBeenCalled();
     expect(await collection('Quest').findOne({ sessionId: String(survivingId) })).not.toBeNull();
+  });
+  it('keeps the permanent purge anchor when AI cleanup fails and retries the cleanup', async () => {
+    const purgeStartedAt = new Date();
+    await collection('User').insertOne({
+      _id: new mongoose.Types.ObjectId(ownerId),
+      username: 'reporter',
+      email: 'reporter@example.test',
+      deletion: { purgeStartedAt },
+    });
+    const report = await FeedbackModel.create({ userId: ownerId, username: 'Reporter', status: 'New' });
+    await FeedbackAiModel.create({
+      feedbackId: report.id,
+      inputHash: 'hash',
+      model: 'test-embedding',
+      vector: [1],
+      similar: [],
+      reportCreatedAt: report.createdAt,
+      expiresAt: new Date(Date.now() + 86400000),
+    });
+    const failure = vi.spyOn(FeedbackAiModel, 'deleteMany').mockImplementationOnce(() => {
+      throw new Error('AI cleanup failed');
+    });
+    try {
+      await expect(purgeAccountContent(ownerId, { assertLease, logger })).rejects.toThrow('AI cleanup failed');
+    } finally {
+      failure.mockRestore();
+    }
+    const anchor: unknown = await collection('User').findOne({ _id: new mongoose.Types.ObjectId(ownerId) });
+    expect(anchor).toMatchObject({ deletion: { purgeStartedAt } });
+    expect(await FeedbackAiModel.countDocuments()).toBe(1);
+    await purgeAccountContent(ownerId, { assertLease, logger });
+    expect(await FeedbackAiModel.countDocuments()).toBe(0);
+    expect(await collection('User').countDocuments({ _id: new mongoose.Types.ObjectId(ownerId) })).toBe(1);
   });
 });

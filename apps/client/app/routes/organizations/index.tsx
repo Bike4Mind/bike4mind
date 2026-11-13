@@ -20,6 +20,7 @@ import {
   Button,
   Card,
   CardContent,
+  Link,
   Chip,
   Grid,
   Input,
@@ -57,7 +58,7 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
       variant="outlined"
       data-testid="organization-card"
       data-org-id={organization.id}
-      sx={{ height: '100%', borderColor: isOwner ? 'primary.solidBg' : undefined }}
+      sx={{ height: '100%', borderColor: isOwner ? 'primary.solidBg' : undefined, position: 'relative' }}
     >
       <CardContent>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
@@ -127,16 +128,19 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
           </Chip>
         </Stack>
 
-        <Button
-          variant="outlined"
+        <Link
+          overlay
           color="neutral"
-          size="sm"
-          fullWidth
-          onClick={() => navigate({ to: `/organizations/${organization.id}` })}
+          href={`/organizations/${organization.id}`}
+          onClick={event => {
+            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            navigate({ to: `/organizations/${organization.id}` });
+          }}
           data-testid="organization-card-view-btn"
         >
-          {t('organization.view_details')}
-        </Button>
+          Open
+        </Link>
       </CardContent>
     </Card>
   );
@@ -180,6 +184,8 @@ const OrganizationListPage: FC = () => {
     data: memberOrganizations,
     isLoading: membersLoading,
     isFetching: membersFetching,
+    isError,
+    refetch,
   } = useGetUserOrganizations(currentUser?.id);
   const [searchQuery, setSearchQuery] = useState('');
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
@@ -275,11 +281,35 @@ const OrganizationListPage: FC = () => {
         )}
       </Grid>
 
-      {!isLoading && filteredOrganizations.length === 0 && (
+      {isError && (
+        <Stack alignItems="center" spacing={2} role="alert" data-testid="organizations-error-state">
+          <Typography>Could not load your teams.</Typography>
+          <Button onClick={() => refetch()} data-testid="organizations-retry-btn">
+            Retry
+          </Button>
+        </Stack>
+      )}
+      {!isError && !isLoading && filteredOrganizations.length === 0 && (
         <Box sx={{ textAlign: 'center', py: 8 }} data-testid="organizations-empty-state">
-          <Typography level="body-lg" color="neutral">
-            {t('organization.no_organizations')}
+          <Typography level="h3">{organizations.length === 0 ? 'Create your first team' : 'No matches'}</Typography>
+          <Typography sx={{ my: 2 }}>
+            {organizations.length === 0
+              ? 'Bring your teammates together in a shared workspace.'
+              : 'Try a different team name or clear your search.'}
           </Typography>
+          {organizations.length === 0 ? (
+            <Button
+              onClick={openCreateTeamModal}
+              disabled={!teamPlanAvailable}
+              data-testid="organizations-empty-create-btn"
+            >
+              Create team
+            </Button>
+          ) : (
+            <Button onClick={() => setSearchQuery('')} data-testid="organizations-clear-search-btn">
+              Clear search
+            </Button>
+          )}
         </Box>
       )}
     </Box>

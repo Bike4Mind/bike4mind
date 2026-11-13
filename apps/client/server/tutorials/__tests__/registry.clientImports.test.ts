@@ -45,9 +45,15 @@ describe('client import graph', () => {
   });
 
   it('no file under apps/client/app imports the server-only content or wiring', () => {
-    const guarded = ['content.ts', 'core.ts', 'coreDeps.ts'].map(f => join(SERVER_ROOT, 'tutorials', f));
+    const guarded = ['content.ts', 'core.ts', 'coreDeps.ts', 'coreDrafts.ts'].map(f =>
+      join(SERVER_ROOT, 'tutorials', f)
+    );
+    const draftsDir = join(SERVER_ROOT, 'tutorials/drafts') + '/';
     const offenders = sourceFiles(CLIENT_ROOT).filter(file =>
-      [...readFileSync(file, 'utf8').matchAll(SPEC)].some(([, spec]) => guarded.includes(resolveSpec(file, spec) ?? ''))
+      [...readFileSync(file, 'utf8').matchAll(SPEC)].some(([, spec]) => {
+        const target = resolveSpec(file, spec) ?? '';
+        return guarded.includes(target) || target.startsWith(draftsDir);
+      })
     );
     expect(offenders).toEqual([]);
   });

@@ -64,6 +64,13 @@ export const LAKE_ACCESS_SURFACES = [
   // metadata + URL read as the articles `?id=` deep link, reached through a different door, so it
   // gets its own value rather than reusing data-lake-articles and conflating the two entry points.
   'data-lake-file-fallback',
+  // Lake management reads: one value per route under /api/data-lakes/:id.
+  'data-lake-health',
+  'data-lake-proposals',
+  'data-lake-findings',
+  'data-lake-inconsistencies',
+  'data-lake-skipped-files',
+  'data-lake-membership-duplicates',
   'chat-kb-search',
   'chat-kb-search-scoped',
   'chat-kb-retrieve',

@@ -133,6 +133,7 @@ export * from './schemas/shadowDetection';
 export * from './schemas/campaignWatch';
 export * from './schemas/abuseAssessment';
 export * from './schemas/adminAi';
+export * from './schemas/feedbackAi';
 export * from './schemas/adminAiOperations';
 export * from './schemas/stripeDispute';
 export * from './schemas/autoContainment';

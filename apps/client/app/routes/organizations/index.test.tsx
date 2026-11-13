@@ -86,7 +86,7 @@ describe('Teams list for an appointed manager', () => {
     expect(preview.tagName).toBe('A');
     expect(preview.getAttribute('href')).toBe('https://docs.bike4mind.com/features/team-admin-preview');
     expect(preview.textContent).toBe('Preview Team administration');
-    expect(screen.getByText('No teams found')).toBeTruthy();
+    expect(screen.getByText('Create your first team')).toBeTruthy();
     expect(screen.getByTestId('organizations-create-team-btn').hasAttribute('disabled')).toBe(true);
     expect(mocks.openCreateTeamModal).not.toHaveBeenCalled();
   });
@@ -114,7 +114,7 @@ describe('Teams list for an appointed manager', () => {
 
     expect(screen.getByText('Managed Team')).toBeTruthy();
     expect(screen.getByText('Manager')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'View Details' }));
+    fireEvent.click(screen.getByTestId('organization-card-view-btn'));
     expect(mocks.navigate).toHaveBeenCalledWith({ to: '/organizations/org1' });
   });
 
@@ -131,6 +131,18 @@ describe('Teams list for an appointed manager', () => {
 
     if (label) expect(screen.getByText(label)).toBeTruthy();
     expect(screen.queryByText('Manager')).toBeNull();
+  });
+
+  it('distinguishes an unmatched search and lets the user clear it', () => {
+    render(
+      <CssVarsProvider theme={theme}>
+        <OrganizationListPage />
+      </CssVarsProvider>
+    );
+    fireEvent.change(screen.getByTestId('organizations-search-input'), { target: { value: 'missing' } });
+    expect(screen.getByText('No matches')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('organizations-clear-search-btn'));
+    expect(screen.getByTestId('organization-card')).toBeTruthy();
   });
 
   it('lists teams once each, sorted by name', () => {

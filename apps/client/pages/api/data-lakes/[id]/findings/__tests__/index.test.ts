@@ -5,6 +5,8 @@ const h = vi.hoisted(() => ({
   listByLake: vi.fn(),
   listLakeSupersededIds: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
+  record: vi.fn(),
+  adminBypassLakeIds: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -33,10 +35,21 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => unknown) => next(),
 }));
-vi.mock('@bike4mind/services', () => ({
-  dataLakeService: { assertLakeWriteAccess: h.assertLakeWriteAccess },
+vi.mock('@bike4mind/services', async () => ({
+  dataLakeService: {
+    assertLakeWriteAccess: h.assertLakeWriteAccess,
+    recordLakeAccessEvent: (
+      await import('../../../../../../../../b4m-core/services/src/dataLakeService/recordLakeAccessEvent')
+    ).recordLakeAccessEvent,
+  },
 }));
+vi.mock('@server/dataLakes', () => ({ adminBypassLakeIds: h.adminBypassLakeIds }));
 vi.mock('@bike4mind/database', () => ({
+  lakeAccessEventRepository: { record: h.record },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   dataLakeFindingRepository: { listByLake: h.listByLake },
@@ -45,6 +58,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../index';
+import { describeLakeReadAudit } from '../../../__tests__/lakeReadAuditCases';
 
 const lake = { id: 'lakeDoc1' };
 const invoke = (query: Record<string, unknown> = {}) => {
@@ -53,7 +67,12 @@ const invoke = (query: Record<string, unknown> = {}) => {
   return {
     json,
     done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-      { method: 'GET', query: { id: 'lake1', ...query }, user: { id: 'u1' } },
+      {
+        method: 'GET',
+        query: { id: 'lake1', ...query },
+        user: { id: 'u1' },
+        logger: { warn: vi.fn(), error: vi.fn() },
+      },
       res
     ),
   };
@@ -64,6 +83,8 @@ beforeEach(() => {
   h.assertLakeWriteAccess.mockResolvedValue(lake);
   h.listByLake.mockResolvedValue([]);
   h.listLakeSupersededIds.mockResolvedValue([]);
+  h.record.mockResolvedValue(undefined);
+  h.adminBypassLakeIds.mockResolvedValue([]);
 });
 
 describe('GET /api/data-lakes/[id]/findings (#3039)', () => {
@@ -157,7 +178,7 @@ describe('GET /api/data-lakes/[id]/findings (#3039)', () => {
   });
 
   it('returns the rows under data, with hasMore false when the page is short', async () => {
-    const rows = [{ id: 'f1', kind: 'expired-claim' }];
+    const rows = [{ id: 'f1', kind: 'expired-claim', sources: [] }];
     h.listByLake.mockResolvedValue(rows);
 
     const { json, done } = invoke();
@@ -168,7 +189,7 @@ describe('GET /api/data-lakes/[id]/findings (#3039)', () => {
 
   it('strips undeclared fields from each row, keeping supersededFabFileIds and hasMore', async () => {
     h.listByLake.mockResolvedValue([
-      { id: 'f1', kind: 'expired-claim', _id: 'raw-object-id', __v: 7, notInSchema: 'secret' },
+      { id: 'f1', kind: 'expired-claim', sources: [], _id: 'raw-object-id', __v: 7, notInSchema: 'secret' },
     ]);
 
     const { json, done } = invoke();
@@ -176,7 +197,7 @@ describe('GET /api/data-lakes/[id]/findings (#3039)', () => {
 
     const [body] = json.mock.calls[0];
     expect(body.hasMore).toBe(false);
-    expect(body.data).toEqual([{ id: 'f1', kind: 'expired-claim', supersededFabFileIds: [] }]);
+    expect(body.data).toEqual([{ id: 'f1', kind: 'expired-claim', sources: [], supersededFabFileIds: [] }]);
   });
 
   it('marks which cited files of an open finding are superseded in the resolved lake', async () => {
@@ -203,7 +224,7 @@ describe('GET /api/data-lakes/[id]/findings (#3039)', () => {
   it('reports hasMore, and trims the lookahead row, when the queue outruns the page', async () => {
     // 51 findings on a 50-row page: the repo call asked for 51, so a 51st row back means there is
     // at least one more beyond this page.
-    const rows = Array.from({ length: 51 }, (_, i) => ({ id: `f${i}`, kind: 'expired-claim' }));
+    const rows = Array.from({ length: 51 }, (_, i) => ({ id: `f${i}`, kind: 'expired-claim', sources: [] }));
     h.listByLake.mockResolvedValue(rows);
 
     const { json, done } = invoke();
@@ -212,5 +233,34 @@ describe('GET /api/data-lakes/[id]/findings (#3039)', () => {
     const [{ data, hasMore }] = json.mock.calls[0];
     expect(data).toHaveLength(50);
     expect(hasMore).toBe(true);
+  });
+});
+
+const finding = (status: string, ...fabFileIds: string[]) => ({
+  id: `f-${fabFileIds.join('')}`,
+  status,
+  sources: fabFileIds.map(fabFileId => ({ fabFileId })),
+});
+
+const runWith = async (rows: unknown[]) => {
+  h.listByLake.mockResolvedValue(rows);
+  const { json, done } = invoke();
+  await done;
+  return json.mock.calls.length > 0;
+};
+
+describeLakeReadAudit({
+  surface: 'data-lake-findings',
+  lakeId: 'lakeDoc1',
+  record: h.record,
+  bypass: h.adminBypassLakeIds,
+  run: () => runWith([finding('open', 'a')]),
+  runEmpty: () => runWith([]),
+});
+
+describe('findings audit file ids', () => {
+  it('records the sources of every returned row, open or not', async () => {
+    await runWith([finding('open', 'a'), finding('resolved', 'b')]);
+    expect(h.record.mock.calls[0][0].fileIds.sort()).toEqual(['a', 'b']);
   });
 });
