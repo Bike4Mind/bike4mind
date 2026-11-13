@@ -3,7 +3,11 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { UsageEvent } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { featureAdoptionQuerySchema, featureAdoptionResponseSchema } from '@client/app/utils/featureAdoption';
+import {
+  ADOPTION_CLIENTS,
+  featureAdoptionQuerySchema,
+  featureAdoptionResponseSchema,
+} from '@client/app/utils/featureAdoption';
 import {
   ADOPTION_GROUP_LIMIT,
   adoptionPipeline,
@@ -59,6 +63,18 @@ beforeEach(async () => {
 });
 
 describe('feature adoption ledger aggregation', () => {
+  it('uses DocumentDB 5 compatible stages for every client filter', () => {
+    for (const client of ADOPTION_CLIENTS) {
+      const pipeline = adoptionPipeline({ ...query, client }, window);
+      expect(pipeline.some(stage => '$set' in stage)).toBe(false);
+      expect(pipeline).toContainEqual({
+        $addFields: {
+          client: { $cond: [{ $eq: [{ $size: '$sources' }, 1] }, { $arrayElemAt: ['$sources', 0] }, 'unknown'] },
+        },
+      });
+    }
+  });
+
   it('deduplicates retries across models and periods, excludes subevents and failed attempts, and counts each feature per person', async () => {
     await seed('previous', '2026-06-03');
     await seed('current', '2026-06-10');

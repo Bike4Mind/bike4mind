@@ -65,7 +65,7 @@ export function adoptionPipeline(query: FeatureAdoptionQuery, window: FeatureAdo
       },
     },
     {
-      $set: {
+      $addFields: {
         client: { $cond: [{ $eq: [{ $size: '$sources' }, 1] }, { $arrayElemAt: ['$sources', 0] }, 'unknown'] },
       },
     },
