@@ -7,7 +7,12 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { Organization, OrgDomainClaim, PartnerSignupRule, User } from '@bike4mind/database';
-import { applyOrgDomainMembership, joinOrgViaDomain, listOrgDomainJoinSuggestions } from './orgDomainClaims';
+import {
+  addDomainClaim,
+  applyOrgDomainMembership,
+  joinOrgViaDomain,
+  listOrgDomainJoinSuggestions,
+} from './orgDomainClaims';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -228,4 +233,60 @@ describe('suggest-join for an existing user (real Mongo)', () => {
     await expect(joinOrgViaDomain(user.id, org.id)).rejects.toThrow(/Verify your email|does not grant/);
     expect((await reload(org.id)).users).toEqual([]);
   });
+});
+
+it.each(['auto-join', 'suggest'] as const)(
+  'uses canonical membership and pointer IDs for a legacy %s claim',
+  async policy => {
+    const org = await makeOrg(5);
+    await OrgDomainClaim.collection.insertOne({
+      organizationId: org.id.toUpperCase(),
+      domain: 'example.com',
+      status: 'verified',
+      policy,
+      verificationToken: 'legacy-token',
+      verifiedAt: new Date(),
+      createdBy: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await PartnerSignupRule.collection.insertOne({
+      domain: 'example.com',
+      organizationId: org.id.toUpperCase(),
+      enabled: true,
+    });
+    const user = await makeUser('legacy@example.com');
+    if (policy === 'auto-join') {
+      expect(await applyOrgDomainMembership(user.id, user.email!)).toEqual({ joined: true, organizationId: org.id });
+    } else {
+      expect(await listOrgDomainJoinSuggestions(user.id)).toEqual([
+        expect.objectContaining({ organizationId: org.id }),
+      ]);
+      expect((await joinOrgViaDomain(user.id, org.id.toUpperCase())).joined).toBe(true);
+    }
+    await expectRepaired(org.id, user.id);
+    await User.collection.updateOne({ _id: user._id }, { $set: { organizationId: org.id.toUpperCase() } });
+    if (policy === 'auto-join') await applyOrgDomainMembership(user.id, user.email!);
+    else await joinOrgViaDomain(user.id, org.id.toUpperCase());
+    await expectRepaired(org.id, user.id);
+  }
+);
+
+it('rejects a duplicate pending domain stored under a legacy organization alias', async () => {
+  const org = await makeOrg();
+  await OrgDomainClaim.collection.insertOne({
+    organizationId: org.id.toUpperCase(),
+    domain: 'legacy.example',
+    status: 'pending',
+    policy: 'off',
+    verificationToken: 'legacy-token',
+    verifiedAt: null,
+    createdBy: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  await expect(addDomainClaim(org.id.toUpperCase(), 'owner-1', 'legacy.example')).rejects.toMatchObject({
+    statusCode: 409,
+  });
+  expect(await OrgDomainClaim.countDocuments({ domain: 'legacy.example' })).toBe(1);
 });

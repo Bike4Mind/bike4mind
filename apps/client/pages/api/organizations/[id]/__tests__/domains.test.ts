@@ -66,7 +66,7 @@ import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/admi
 
 const TOKEN = 'a'.repeat(32);
 const ORG = {
-  id: 'org1',
+  id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
   name: 'Acme',
   userId: 'owner1',
   adminUserIds: ['mgr1'],
@@ -76,8 +76,8 @@ const ORG = {
   ],
 };
 const claim = (overrides: Record<string, unknown> = {}) => ({
-  id: 'c1',
-  organizationId: 'org1',
+  id: 'cccccccccccccccccccccccc',
+  organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
   domain: 'acme.com',
   status: 'pending',
   verificationToken: TOKEN,
@@ -109,7 +109,7 @@ const call = (
   {
     userId = 'owner1',
     isAdmin = false,
-    query = { id: 'org1', claimId: 'c1' } as Record<string, unknown>,
+    query = { id: 'aaaaaaaaaaaaaaaaaaaaaaaa', claimId: 'cccccccccccccccccccccccc' } as Record<string, unknown>,
     body,
   }: { userId?: string; isAdmin?: boolean; query?: Record<string, unknown>; body?: unknown } = {}
 ) => {
@@ -123,6 +123,7 @@ beforeEach(() => {
   orgs.findById.mockResolvedValue(ORG);
   claims.findVerifiedByDomain.mockResolvedValue(null);
   claims.countByOrganization.mockResolvedValue(0);
+  claims.listByOrganization.mockResolvedValue([]);
   partnerRules.findByDomain.mockResolvedValue(null);
   disposable.disposableSources.mockResolvedValue([]);
 });
@@ -138,7 +139,10 @@ describe('org domain routes - access gate', () => {
     ['manager', 'mgr1', false],
     ['platform admin', 'outsider', true],
   ])('lets the %s list claims, with TXT instructions and no raw token', async (_label, userId, isAdmin) => {
-    claims.listByOrganization.mockResolvedValue([claim(), claim({ id: 'c2', domain: 'b.com', status: 'verified' })]);
+    claims.listByOrganization.mockResolvedValue([
+      claim(),
+      claim({ id: 'dddddddddddddddddddddddd', domain: 'b.com', status: 'verified' }),
+    ]);
 
     const { res, run } = call(collection.get, { userId, isAdmin });
     await run();
@@ -146,11 +150,11 @@ describe('org domain routes - access gate', () => {
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
     expect(body.claims[0]).toMatchObject({
-      id: 'c1',
+      id: 'cccccccccccccccccccccccc',
       recordName: '_b4m-verify.acme.com',
       recordValue: `b4m-domain-verification=${TOKEN}`,
     });
-    expect(body.claims[1]).toMatchObject({ id: 'c2', recordName: null, recordValue: null });
+    expect(body.claims[1]).toMatchObject({ id: 'dddddddddddddddddddddddd', recordName: null, recordValue: null });
     expect(JSON.stringify(body)).not.toContain('verificationToken');
   });
 
@@ -185,12 +189,12 @@ describe('org domain routes - access gate', () => {
 
   it('400s a missing organization or claim id', async () => {
     await expect(call(collection.get, { query: {} }).run()).rejects.toThrow(BadRequestError);
-    await expect(call(item.patch, { query: { id: 'org1' }, body: { policy: 'off' } }).run()).rejects.toThrow(
-      BadRequestError
-    );
-    await expect(call(verify.post, { query: { id: 'org1', claimId: ['a', 'b'] } }).run()).rejects.toThrow(
-      BadRequestError
-    );
+    await expect(
+      call(item.patch, { query: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa' }, body: { policy: 'off' } }).run()
+    ).rejects.toThrow(BadRequestError);
+    await expect(
+      call(verify.post, { query: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa', claimId: ['a', 'b'] } }).run()
+    ).rejects.toThrow(BadRequestError);
   });
 });
 
@@ -202,7 +206,9 @@ describe('POST /api/organizations/[id]/domains', () => {
     await run();
 
     expect(res._getStatusCode()).toBe(201);
-    expect(claims.create).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'org1', domain: 'acme.com' }));
+    expect(claims.create).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa', domain: 'acme.com' })
+    );
     expect(res._getJSONData().claim.recordName).toBe('_b4m-verify.acme.com');
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
@@ -219,7 +225,9 @@ describe('POST /api/organizations/[id]/domains', () => {
   );
 
   it('409s a domain another org has verified', async () => {
-    claims.findVerifiedByDomain.mockResolvedValue(claim({ organizationId: 'org2', status: 'verified' }));
+    claims.findVerifiedByDomain.mockResolvedValue(
+      claim({ organizationId: 'bbbbbbbbbbbbbbbbbbbbbbbb', status: 'verified' })
+    );
     await expect(call(collection.post, { body: { domain: 'acme.com' } }).run()).rejects.toThrow(ConflictError);
     expect(claims.create).not.toHaveBeenCalled();
   });
@@ -229,7 +237,7 @@ describe('PATCH /api/organizations/[id]/domains/[claimId]', () => {
   it('404s a claim id that belongs to another org', async () => {
     claims.findByIdForOrg.mockResolvedValue(null);
     await expect(call(item.patch, { body: { policy: 'off' } }).run()).rejects.toThrow(NotFoundError);
-    expect(claims.findByIdForOrg).toHaveBeenCalledWith('c1', 'org1');
+    expect(claims.findByIdForOrg).toHaveBeenCalledWith('cccccccccccccccccccccccc', 'aaaaaaaaaaaaaaaaaaaaaaaa');
     expect(claims.updatePolicy).not.toHaveBeenCalled();
   });
 
@@ -247,7 +255,9 @@ describe('PATCH /api/organizations/[id]/domains/[claimId]', () => {
     await run();
 
     expect(res._getStatusCode()).toBe(200);
-    expect(claims.updatePolicy).toHaveBeenCalledWith('c1', 'org1', { policy: 'auto-join' });
+    expect(claims.updatePolicy).toHaveBeenCalledWith('cccccccccccccccccccccccc', 'aaaaaaaaaaaaaaaaaaaaaaaa', {
+      policy: 'auto-join',
+    });
     expect(res._getJSONData().claim).toMatchObject({ policy: 'auto-join' });
     expect(res._getJSONData().claim).not.toHaveProperty('defaultRole');
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
@@ -276,7 +286,7 @@ describe('DELETE /api/organizations/[id]/domains/[claimId]', () => {
     await run();
 
     expect(res._getStatusCode()).toBe(204);
-    expect(claims.deleteForOrg).toHaveBeenCalledWith('c1', 'org1');
+    expect(claims.deleteForOrg).toHaveBeenCalledWith('cccccccccccccccccccccccc', 'aaaaaaaaaaaaaaaaaaaaaaaa');
   });
 
   it('404s a claim of another org', async () => {
@@ -300,7 +310,7 @@ describe('POST /api/organizations/[id]/domains/[claimId]/verify', () => {
     await run();
 
     expect(resolveTxt).toHaveBeenCalledWith('_b4m-verify.acme.com');
-    expect(claims.markVerified).toHaveBeenCalledWith('c1', 'org1');
+    expect(claims.markVerified).toHaveBeenCalledWith('cccccccccccccccccccccccc', 'aaaaaaaaaaaaaaaaaaaaaaaa');
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ verified: true, claim: { status: 'verified', recordValue: null } });
   });
@@ -325,4 +335,28 @@ describe('POST /api/organizations/[id]/domains/[claimId]/verify', () => {
 
     await expect(call(verify.post).run()).rejects.toThrow(ConflictError);
   });
+});
+
+it('uses verified canonical organization IDs for uppercase domain route inputs and audits', async () => {
+  const query = { id: ORG.id.toUpperCase(), claimId: 'C'.repeat(24) };
+  claims.create.mockImplementation(async data => claim(data));
+  claims.findByIdForOrg.mockResolvedValue(claim());
+  claims.updatePolicy.mockResolvedValue(claim());
+  claims.markVerified.mockResolvedValue(claim({ status: 'verified' }));
+  claims.deleteForOrg.mockResolvedValue(true);
+  resolveTxt.mockResolvedValue([[`b4m-domain-verification=${TOKEN}`]]);
+  await call(collection.get, { query }).run();
+  await call(collection.post, { query, body: { domain: 'acme.com' } }).run();
+  await call(item.patch, { query, body: { policy: 'off' } }).run();
+  await call(verify.post, { query }).run();
+  await call(item.delete, { query }).run();
+  expect(claims.listByOrganization).toHaveBeenCalledWith(ORG.id);
+  expect(claims.create).toHaveBeenCalledWith(expect.objectContaining({ organizationId: ORG.id }));
+  expect(claims.findByIdForOrg).toHaveBeenCalledWith('c'.repeat(24), ORG.id);
+  expect(claims.markVerified).toHaveBeenCalledWith('c'.repeat(24), ORG.id);
+  expect(claims.updatePolicy).toHaveBeenCalledWith('c'.repeat(24), ORG.id, { policy: 'off' });
+  expect(claims.deleteForOrg).toHaveBeenCalledWith('c'.repeat(24), ORG.id);
+  for (const [, action] of vi.mocked(recordAdminActionFromRequest).mock.calls) {
+    expect(action.target.id).toBe(ORG.id);
+  }
 });

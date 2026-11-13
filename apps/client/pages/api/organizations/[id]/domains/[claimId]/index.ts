@@ -2,7 +2,7 @@
 // DELETE /api/organizations/:id/domains/:claimId - remove the claim
 // Owner, manager or platform admin (canAdministerOrganization). Claims resolve only within :id.
 
-import { updateOrgDomainPolicySchema } from '@bike4mind/common';
+import { updateOrgDomainPolicySchema, orgDomainPathIdSchema } from '@bike4mind/common';
 import { orgDomainClaimRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -17,9 +17,11 @@ import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/er
 type Query = { id?: string; claimId?: string };
 
 const idsFrom = (query: Query) => {
-  if (typeof query.id !== 'string' || !query.id) throw new BadRequestError('Invalid organization id');
-  if (typeof query.claimId !== 'string' || !query.claimId) throw new BadRequestError('Invalid domain claim id');
-  return { organizationId: query.id, claimId: query.claimId };
+  const organizationId = orgDomainPathIdSchema.safeParse(query.id);
+  const claimId = orgDomainPathIdSchema.safeParse(query.claimId);
+  if (!organizationId.success) throw new BadRequestError('Invalid organization id');
+  if (!claimId.success) throw new BadRequestError('Invalid domain claim id');
+  return { organizationId: organizationId.data, claimId: claimId.data };
 };
 
 const handler = baseApi({ auth: 'jwtOnly' })
@@ -28,12 +30,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
       const { organizationId, claimId } = idsFrom(req.query);
       const organization = await loadOrgForDomainAdmin(req.user!, organizationId);
       const update = updateOrgDomainPolicySchema.parse(req.body ?? {});
-      const { before, after } = await updateDomainClaimPolicy(organizationId, claimId, update);
+      const { before, after } = await updateDomainClaimPolicy(organization.id, claimId, update);
 
       await recordAdminActionFromRequest(req, {
         action: 'org.domain.policy_updated',
         actorScope: 'organization',
-        target: { kind: 'organization', id: organizationId, displayName: organization.name },
+        target: { kind: 'organization', id: organization.id, displayName: organization.name },
         summary: `updated join policy for ${after.domain}`,
         changes: [{ field: 'policy', before: before.policy, after: after.policy }],
       });
@@ -45,15 +47,15 @@ const handler = baseApi({ auth: 'jwtOnly' })
     asyncHandler<{}, unknown, unknown, Query>(async (req, res) => {
       const { organizationId, claimId } = idsFrom(req.query);
       const organization = await loadOrgForDomainAdmin(req.user!, organizationId);
-      const claim = await orgDomainClaimRepository.findByIdForOrg(claimId, organizationId);
-      if (!claim || !(await orgDomainClaimRepository.deleteForOrg(claimId, organizationId))) {
+      const claim = await orgDomainClaimRepository.findByIdForOrg(claimId, organization.id);
+      if (!claim || !(await orgDomainClaimRepository.deleteForOrg(claimId, organization.id))) {
         throw new NotFoundError('Domain claim not found');
       }
 
       await recordAdminActionFromRequest(req, {
         action: 'org.domain.removed',
         actorScope: 'organization',
-        target: { kind: 'organization', id: organizationId, displayName: organization.name },
+        target: { kind: 'organization', id: organization.id, displayName: organization.name },
         summary: `removed domain ${claim.domain}`,
       });
 

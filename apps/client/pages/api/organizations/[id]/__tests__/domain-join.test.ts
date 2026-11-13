@@ -48,11 +48,17 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-const ORG = { id: 'org1', name: 'Acme', userId: 'owner1', seats: 5, users: [{ userId: 'm1', permissions: ['read'] }] };
+const ORG = {
+  id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+  name: 'Acme',
+  userId: 'owner1',
+  seats: 5,
+  users: [{ userId: 'm1', permissions: ['read'] }],
+};
 const USER = { id: 'u1', email: 'dee@acme.com', username: 'dee', name: 'Dee', emailVerified: true };
 const CLAIM = {
-  id: 'c1',
-  organizationId: 'org1',
+  id: 'cccccccccccccccccccccccc',
+  organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
   domain: 'acme.com',
   status: 'verified',
   policy: 'suggest',
@@ -66,7 +72,7 @@ beforeAll(async () => {
   join = mockRefs.current.post;
 });
 
-const call = (query: Record<string, unknown> = { id: 'org1' }, userId = 'u1') => {
+const call = (query: Record<string, unknown> = { id: 'aaaaaaaaaaaaaaaaaaaaaaaa' }, userId = 'u1') => {
   const { req, res } = createMocks({ method: 'POST', query: query as Record<string, string> });
   (req as unknown as { user: unknown }).user = { id: userId, isAdmin: false };
   return { res, run: () => join(req, res) };
@@ -92,10 +98,21 @@ describe('POST /api/organizations/:id/domain-join', () => {
     await run();
 
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual({ joined: true, organizationId: 'org1', organizationName: 'Acme' });
-    expect(orgs.addMemberIfUnderCeiling).toHaveBeenCalledWith('org1', { userId: 'u1', permissions: ['read'] });
-    expect(users.update).toHaveBeenCalledWith({ id: 'u1', organizationId: 'org1' });
-    expect(orgs.ensureUserDetails).toHaveBeenCalledWith('org1', { id: 'u1', email: 'dee@acme.com', name: 'Dee' });
+    expect(res._getJSONData()).toEqual({
+      joined: true,
+      organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+      organizationName: 'Acme',
+    });
+    expect(orgs.addMemberIfUnderCeiling).toHaveBeenCalledWith('aaaaaaaaaaaaaaaaaaaaaaaa', {
+      userId: 'u1',
+      permissions: ['read'],
+    });
+    expect(users.update).toHaveBeenCalledWith({ id: 'u1', organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa' });
+    expect(orgs.ensureUserDetails).toHaveBeenCalledWith('aaaaaaaaaaaaaaaaaaaaaaaa', {
+      id: 'u1',
+      email: 'dee@acme.com',
+      name: 'Dee',
+    });
   });
 
   it('looks the claim up by the email on the stored user, not anything in the request', async () => {
@@ -109,7 +126,7 @@ describe('POST /api/organizations/:id/domain-join', () => {
     ['an existing member', { ...USER, id: 'm1' }],
   ])('is an idempotent 200 for %s without touching the roster', async (_label, user) => {
     users.findById.mockResolvedValue(user);
-    const { res, run } = call({ id: 'org1' }, user.id);
+    const { res, run } = call({ id: 'aaaaaaaaaaaaaaaaaaaaaaaa' }, user.id);
     await run();
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().joined).toBe(false);
@@ -124,12 +141,16 @@ describe('POST /api/organizations/:id/domain-join', () => {
     const { res, run } = call();
     await run();
     expect(res._getJSONData().joined).toBe(false);
-    expect(users.update).toHaveBeenCalledWith({ id: 'u1', organizationId: 'org1' });
-    expect(orgs.ensureUserDetails).toHaveBeenCalledWith('org1', { id: 'u1', email: 'dee@acme.com', name: 'Dee' });
+    expect(users.update).toHaveBeenCalledWith({ id: 'u1', organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa' });
+    expect(orgs.ensureUserDetails).toHaveBeenCalledWith('aaaaaaaaaaaaaaaaaaaaaaaa', {
+      id: 'u1',
+      email: 'dee@acme.com',
+      name: 'Dee',
+    });
   });
 
   it('leaves the org pointer alone for a member whose join already completed', async () => {
-    users.findById.mockResolvedValue({ ...USER, organizationId: 'org1' });
+    users.findById.mockResolvedValue({ ...USER, organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa' });
     orgs.findById.mockResolvedValue({ ...ORG, users: [...ORG.users, { userId: 'u1', permissions: ['read'] }] });
     const { res, run } = call();
     await run();
@@ -154,11 +175,17 @@ describe('POST /api/organizations/:id/domain-join', () => {
     ],
     [
       'a claim owned by a different org',
-      () => claims.findVerifiedJoinableByDomain.mockResolvedValue({ ...CLAIM, organizationId: 'org2' }),
+      () =>
+        claims.findVerifiedJoinableByDomain.mockResolvedValue({ ...CLAIM, organizationId: 'bbbbbbbbbbbbbbbbbbbbbbbb' }),
     ],
     [
       'a partner rule routing the domain to another org',
-      () => partnerRules.findByDomain.mockResolvedValue({ domain: 'acme.com', organizationId: 'org2', enabled: true }),
+      () =>
+        partnerRules.findByDomain.mockResolvedValue({
+          domain: 'acme.com',
+          organizationId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+          enabled: true,
+        }),
     ],
   ])('refuses %s with 403 before touching the roster', async (_label, arrange) => {
     arrange();
@@ -167,7 +194,11 @@ describe('POST /api/organizations/:id/domain-join', () => {
   });
 
   it('allows a partner rule that routes the domain to the same org', async () => {
-    partnerRules.findByDomain.mockResolvedValue({ domain: 'acme.com', organizationId: 'org1', enabled: true });
+    partnerRules.findByDomain.mockResolvedValue({
+      domain: 'acme.com',
+      organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+      enabled: true,
+    });
     const { res, run } = call();
     await run();
     expect(res._getJSONData().joined).toBe(true);

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { addOrgDomainSchema, updateOrgDomainPolicySchema, ORG_DOMAIN_MEMBER_PERMISSIONS } from './orgDomainClaim';
+import {
+  addOrgDomainSchema,
+  updateOrgDomainPolicySchema,
+  ORG_DOMAIN_MEMBER_PERMISSIONS,
+  orgDomainPathIdSchema,
+} from './orgDomainClaim';
 import { orgAclRowConfersMembership } from '../constants/organization';
 import { Permission } from '../types/entities/ShareableDocumentTypes';
 
@@ -53,4 +58,11 @@ describe('ORG_DOMAIN_MEMBER_PERMISSIONS', () => {
   it('grants no edit, share or delete access', () => {
     expect(ORG_DOMAIN_MEMBER_PERMISSIONS).toEqual([Permission.read]);
   });
+});
+
+it('canonicalizes only valid ObjectId path strings', () => {
+  expect(orgDomainPathIdSchema.parse('Aa'.repeat(12))).toBe('a'.repeat(24));
+  for (const input of ['.*', 'a'.repeat(23), 'g'.repeat(24), ['a'.repeat(24)], null]) {
+    expect(orgDomainPathIdSchema.safeParse(input).success).toBe(false);
+  }
 });

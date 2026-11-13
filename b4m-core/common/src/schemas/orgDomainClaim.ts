@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { Permission } from '../types/entities/ShareableDocumentTypes';
 
+/** Canonical ObjectId strings at domain route and storage boundaries. */
+export const orgDomainPathIdSchema = z
+  .string()
+  .regex(/^[a-f\d]{24}$/i)
+  .toLowerCase();
+
 export const ORG_DOMAIN_JOIN_POLICIES = ['off', 'suggest', 'auto-join'] as const;
 
 /** Hard cap on domain claims (pending + verified) a single organization may hold. */

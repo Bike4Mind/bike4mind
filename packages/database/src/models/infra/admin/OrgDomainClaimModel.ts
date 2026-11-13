@@ -6,10 +6,17 @@ import {
   OrgDomainJoinPolicy,
   normalizeSignupRuleDomain,
   ORG_DOMAIN_JOIN_POLICIES,
+  orgDomainPathIdSchema,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 export interface IOrgDomainClaimModel extends Model<IOrgDomainClaimDocument> {}
+
+// Read old case aliases without rewriting claim rows or colliding with their unique index.
+const organizationIdFilter = (organizationId: string) => ({
+  $regex: `^${orgDomainPathIdSchema.parse(organizationId)}$`,
+  $options: 'i',
+});
 
 const isDuplicateKeyError = (err: unknown): boolean =>
   typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000;
@@ -23,17 +30,17 @@ export class OrgDomainClaimRepository
   }
 
   async listByOrganization(organizationId: string) {
-    const docs = await this.model.find({ organizationId }).sort({ createdAt: 1 });
+    const docs = await this.model.find({ organizationId: organizationIdFilter(organizationId) }).sort({ createdAt: 1 });
     return docs.map(doc => doc.toJSON());
   }
 
   countByOrganization(organizationId: string) {
-    return this.model.countDocuments({ organizationId });
+    return this.model.countDocuments({ organizationId: organizationIdFilter(organizationId) });
   }
 
   async findByIdForOrg(id: string, organizationId: string) {
     if (!mongoose.isValidObjectId(id)) return null;
-    const doc = await this.model.findOne({ _id: id, organizationId });
+    const doc = await this.model.findOne({ _id: id, organizationId: organizationIdFilter(organizationId) });
     return doc?.toJSON() ?? null;
   }
 
@@ -58,13 +65,13 @@ export class OrgDomainClaimRepository
     try {
       // Ordinary conditional updates work on DocumentDB 5 and preserve the first verification time.
       const first = await this.model.findOneAndUpdate(
-        { _id: id, organizationId, verifiedAt: null },
+        { _id: id, organizationId: organizationIdFilter(organizationId), verifiedAt: null },
         { $set: { status: 'verified', verifiedAt: new Date() } },
         { new: true }
       );
       if (first) return first.toJSON();
       const existing = await this.model.findOneAndUpdate(
-        { _id: id, organizationId, verifiedAt: { $ne: null } },
+        { _id: id, organizationId: organizationIdFilter(organizationId), verifiedAt: { $ne: null } },
         { $set: { status: 'verified' } },
         { new: true }
       );
@@ -78,7 +85,7 @@ export class OrgDomainClaimRepository
   async updatePolicy(id: string, organizationId: string, update: { policy: OrgDomainJoinPolicy }) {
     if (!mongoose.isValidObjectId(id)) return null;
     const doc = await this.model.findOneAndUpdate(
-      { _id: id, organizationId },
+      { _id: id, organizationId: organizationIdFilter(organizationId) },
       { $set: { policy: update.policy } },
       { new: true }
     );
@@ -87,19 +94,25 @@ export class OrgDomainClaimRepository
 
   async deleteForOrg(id: string, organizationId: string) {
     if (!mongoose.isValidObjectId(id)) return false;
-    const result = await this.model.deleteOne({ _id: id, organizationId });
+    const result = await this.model.deleteOne({ _id: id, organizationId: organizationIdFilter(organizationId) });
     return result.deletedCount > 0;
   }
 
   async deleteByOrganization(organizationId: string) {
-    const result = await this.model.deleteMany({ organizationId });
+    const result = await this.model.deleteMany({ organizationId: organizationIdFilter(organizationId) });
     return result.deletedCount;
   }
 }
 
 export const OrgDomainClaimSchema = new Schema<IOrgDomainClaimDocument, IOrgDomainClaimModel>(
   {
-    organizationId: { type: String, required: true },
+    organizationId: {
+      type: String,
+      required: true,
+      lowercase: true,
+      validate: (value: string) => orgDomainPathIdSchema.safeParse(value).success,
+      get: (value: unknown) => orgDomainPathIdSchema.parse(value),
+    },
     // Normalized at the model boundary: the domain is the lookup key for joins and the unique index.
     domain: { type: String, required: true, set: normalizeSignupRuleDomain },
     status: { type: String, enum: ['pending', 'verified'], default: 'pending' },
@@ -110,8 +123,8 @@ export const OrgDomainClaimSchema = new Schema<IOrgDomainClaimDocument, IOrgDoma
   },
   {
     timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true },
+    toJSON: { virtuals: true, getters: true },
+    toObject: { virtuals: true, getters: true },
   }
 );
 

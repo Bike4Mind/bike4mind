@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import mongoose from 'mongoose';
 import { OrgDomainClaim, orgDomainClaimRepository } from './OrgDomainClaimModel';
 import { setupMongoTest } from '../../../__test__/utils';
 
@@ -134,7 +135,10 @@ describe('OrgDomainClaimModel', () => {
       // DocumentDB 5 supports update documents, not this feature's former aggregation-update stage.
       expect(updates).toHaveBeenCalled();
       for (const [filter, update] of updates.mock.calls) {
-        expect(filter).toMatchObject({ _id: String(claim.id), organizationId: ORG_A });
+        expect(filter).toMatchObject({
+          _id: String(claim.id),
+          organizationId: { $regex: `^${ORG_A}$`, $options: 'i' },
+        });
         expect(Array.isArray(update)).toBe(false);
       }
     } finally {
@@ -155,5 +159,78 @@ describe('OrgDomainClaimModel', () => {
       verifiedAt: expect.any(Date),
       status: 'verified',
     });
+  });
+});
+
+describe('canonical organization IDs and legacy aliases', () => {
+  setupMongoTest();
+  beforeEach(async () => {
+    await OrgDomainClaim.deleteMany({});
+    await OrgDomainClaim.syncIndexes();
+  });
+
+  it('persists canonical IDs even for a direct uppercase model write', async () => {
+    const claim = await createClaim(ORG_A.toUpperCase());
+    expect(claim.organizationId).toBe(ORG_A);
+    expect(
+      (await OrgDomainClaim.collection.findOne({ _id: new mongoose.Types.ObjectId(claim.id) }))?.organizationId
+    ).toBe(ORG_A);
+  });
+
+  it('finds and modifies case aliases without crossing organization boundaries or rewriting them', async () => {
+    const seedLegacy = async (organizationId: string, domain: string) => {
+      const inserted = await OrgDomainClaim.collection.insertOne({
+        organizationId,
+        domain,
+        status: 'pending',
+        verificationToken: 'legacy-token',
+        verifiedAt: null,
+        policy: 'off',
+        createdBy: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      return String(inserted.insertedId);
+    };
+    const first = await seedLegacy(ORG_A.toUpperCase(), 'legacy-first.example');
+    const second = await seedLegacy('Aa'.repeat(12), 'legacy-second.example');
+    const other = await createClaim(ORG_B, 'other.example');
+    for (const caller of [ORG_A, ORG_A.toUpperCase(), 'Aa'.repeat(12)]) {
+      expect(await orgDomainClaimRepository.countByOrganization(caller)).toBe(2);
+      const listed = await orgDomainClaimRepository.listByOrganization(caller);
+      expect(listed.map(claim => claim.organizationId)).toEqual([ORG_A, ORG_A]);
+      expect(await orgDomainClaimRepository.findByIdForOrg(first, caller)).toMatchObject({ organizationId: ORG_A });
+    }
+    expect(await orgDomainClaimRepository.findByIdForOrg(first, ORG_B)).toBeNull();
+    expect(await orgDomainClaimRepository.updatePolicy(first, ORG_B, { policy: 'off' })).toBeNull();
+    expect(await orgDomainClaimRepository.deleteForOrg(first, ORG_B)).toBe(false);
+    const verified = await orgDomainClaimRepository.markVerified(first, ORG_A);
+    expect(verified).toMatchObject({ organizationId: ORG_A, status: 'verified' });
+    if (!verified || verified === 'conflict') throw new Error('Expected a verified claim');
+    expect(await orgDomainClaimRepository.markVerified(first, ORG_A.toUpperCase())).toMatchObject({
+      organizationId: ORG_A,
+      verifiedAt: verified.verifiedAt,
+    });
+    await orgDomainClaimRepository.updatePolicy(first, ORG_A, { policy: 'auto-join' });
+    expect(await orgDomainClaimRepository.findVerifiedByDomain('legacy-first.example')).toMatchObject({
+      organizationId: ORG_A,
+    });
+    expect(await orgDomainClaimRepository.findVerifiedJoinableByDomain('legacy-first.example')).toMatchObject({
+      organizationId: ORG_A,
+    });
+    expect((await OrgDomainClaim.collection.findOne({ _id: new mongoose.Types.ObjectId(first) }))?.organizationId).toBe(
+      ORG_A.toUpperCase()
+    );
+    expect(await orgDomainClaimRepository.deleteForOrg(first, ORG_A.toUpperCase())).toBe(true);
+    expect(await orgDomainClaimRepository.deleteByOrganization(ORG_A)).toBe(1);
+    expect(await OrgDomainClaim.findById(second)).toBeNull();
+    expect(await OrgDomainClaim.findById(other.id)).not.toBeNull();
+  });
+
+  it('rejects malformed organization filters before any query can broaden the scope', async () => {
+    await expect(orgDomainClaimRepository.listByOrganization('.*')).rejects.toThrow();
+    await expect(orgDomainClaimRepository.deleteByOrganization('.*')).rejects.toThrow();
+    await expect(createClaim('.*')).rejects.toThrow();
+    expect(await OrgDomainClaim.countDocuments({})).toBe(0);
   });
 });

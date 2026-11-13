@@ -1,3 +1,4 @@
+import { orgDomainPathIdSchema } from '@bike4mind/common';
 // POST /api/organizations/:id/domains/:claimId/verify - check the claim's DNS TXT record
 // A lookup miss is 200 { verified: false, reason }, not an error; losing a verify race is 409.
 
@@ -15,18 +16,19 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit(VERIFY_RATE_LIMIT))
   .post(
     asyncHandler<{}, unknown, unknown, { id?: string; claimId?: string }>(async (req, res) => {
-      const { id: organizationId, claimId } = req.query;
-      if (typeof organizationId !== 'string' || !organizationId) throw new BadRequestError('Invalid organization id');
-      if (typeof claimId !== 'string' || !claimId) throw new BadRequestError('Invalid domain claim id');
+      const organizationId = orgDomainPathIdSchema.safeParse(req.query.id);
+      const claimId = orgDomainPathIdSchema.safeParse(req.query.claimId);
+      if (!organizationId.success) throw new BadRequestError('Invalid organization id');
+      if (!claimId.success) throw new BadRequestError('Invalid domain claim id');
 
-      const organization = await loadOrgForDomainAdmin(req.user!, organizationId);
-      const result = await verifyDomainClaim(organizationId, claimId);
+      const organization = await loadOrgForDomainAdmin(req.user!, organizationId.data);
+      const result = await verifyDomainClaim(organization.id, claimId.data);
       if (!result.verified) return res.status(200).json({ verified: false, reason: result.reason });
 
       await recordAdminActionFromRequest(req, {
         action: 'org.domain.verified',
         actorScope: 'organization',
-        target: { kind: 'organization', id: organizationId, displayName: organization.name },
+        target: { kind: 'organization', id: organization.id, displayName: organization.name },
         summary: `verified domain ${result.claim.domain}`,
       });
 

@@ -9,6 +9,7 @@ import {
   MAX_ORG_DOMAIN_CLAIMS,
   NotFoundError,
   normalizeSignupRuleDomain,
+  orgDomainPathIdSchema,
   ORG_DOMAIN_MEMBER_PERMISSIONS,
   organizationSeatUsage,
   type IOrgDomainClaimDocument,
@@ -63,24 +64,31 @@ async function enabledPartnerRule(domain: string) {
   return rule?.enabled ? rule : null;
 }
 
+function sameOrganizationId(left: string, right: string): boolean {
+  const first = orgDomainPathIdSchema.safeParse(left);
+  const second = orgDomainPathIdSchema.safeParse(right);
+  return first.success && second.success && first.data === second.data;
+}
+
 /** Rules every claim must pass on add, and again on verify (state can change in between). */
 async function assertDomainClaimable(organizationId: string, domain: string): Promise<void> {
   const verified = await orgDomainClaimRepository.findVerifiedByDomain(domain);
-  if (verified && verified.organizationId !== organizationId) {
+  if (verified && !sameOrganizationId(verified.organizationId, organizationId)) {
     throw new ConflictError('Domain already claimed by another organization');
   }
   // A platform partner rule that routes this domain into another org owns the domain's joins.
   const partnerRule = await enabledPartnerRule(domain);
-  if (partnerRule?.organizationId && partnerRule.organizationId !== organizationId) {
+  if (partnerRule?.organizationId && !sameOrganizationId(partnerRule.organizationId, organizationId)) {
     throw new ConflictError('Domain is reserved by a platform signup rule');
   }
 }
 
 export async function addDomainClaim(
-  organizationId: string,
+  rawOrganizationId: string,
   actorId: string,
   rawDomain: string
 ): Promise<IOrgDomainClaimDocument> {
+  const organizationId = orgDomainPathIdSchema.parse(rawOrganizationId);
   const domain = normalizeSignupRuleDomain(rawDomain);
   if (DISALLOWED_SIGNUP_RULE_DOMAINS.includes(domain)) {
     throw new BadRequestError('Public mail providers cannot be claimed');
@@ -90,7 +98,11 @@ export async function addDomainClaim(
     throw new BadRequestError('Disposable email domains cannot be claimed');
   }
   await assertDomainClaimable(organizationId, domain);
-  if ((await orgDomainClaimRepository.countByOrganization(organizationId)) >= MAX_ORG_DOMAIN_CLAIMS) {
+  const existingClaims = await orgDomainClaimRepository.listByOrganization(organizationId);
+  if (existingClaims.some(claim => claim.domain === domain)) {
+    throw new ConflictError('This organization has already added that domain');
+  }
+  if (existingClaims.length >= MAX_ORG_DOMAIN_CLAIMS) {
     throw new BadRequestError(`An organization can claim at most ${MAX_ORG_DOMAIN_CLAIMS} domains`);
   }
 
@@ -127,10 +139,11 @@ function lookupFailureReason(err: unknown): string {
  * the TXT record at `recordNameFor(domain)`. Re-verifying an already verified claim is a no-op success.
  */
 export async function verifyDomainClaim(
-  organizationId: string,
+  rawOrganizationId: string,
   claimId: string,
   resolver?: TxtResolver
 ): Promise<VerifyDomainClaimResult> {
+  const organizationId = orgDomainPathIdSchema.parse(rawOrganizationId);
   const claim = await orgDomainClaimRepository.findByIdForOrg(claimId, organizationId);
   if (!claim) throw new NotFoundError('Domain claim not found');
   if (claim.status === 'verified') return { verified: true, claim };
@@ -185,10 +198,11 @@ export async function loadOrgForDomainAdmin(
 
 /** A join policy other than 'off' needs a verified claim. */
 export async function updateDomainClaimPolicy(
-  organizationId: string,
+  rawOrganizationId: string,
   claimId: string,
   update: UpdateOrgDomainPolicyInput
 ): Promise<{ before: IOrgDomainClaimDocument; after: IOrgDomainClaimDocument }> {
+  const organizationId = orgDomainPathIdSchema.parse(rawOrganizationId);
   const before = await orgDomainClaimRepository.findByIdForOrg(claimId, organizationId);
   if (!before) throw new NotFoundError('Domain claim not found');
   if (update.policy !== 'off' && before.status !== 'verified') {
@@ -299,7 +313,7 @@ export async function applyOrgDomainMembership(userId: string, email: string): P
     return { joined: false, reason: 'already-member' };
   }
 
-  return addMemberViaClaim(claim, user);
+  return addMemberViaClaim({ ...claim, organizationId: organization.id }, user);
 }
 
 /**
@@ -312,7 +326,7 @@ async function joinableClaimForEmail(email: string | null | undefined): Promise<
   const claim = await orgDomainClaimRepository.findVerifiedJoinableByDomain(domain);
   if (!claim) return null;
   const partnerRule = await enabledPartnerRule(domain);
-  if (partnerRule?.organizationId && partnerRule.organizationId !== claim.organizationId) return null;
+  if (partnerRule?.organizationId && !sameOrganizationId(partnerRule.organizationId, claim.organizationId)) return null;
   return claim;
 }
 
@@ -338,14 +352,15 @@ export async function listOrgDomainJoinSuggestions(userId: string): Promise<OrgD
  */
 export async function joinOrgViaDomain(
   userId: string,
-  organizationId: string
+  rawOrganizationId: string
 ): Promise<{ joined: boolean; organization: IOrganizationDocument }> {
+  const organizationId = orgDomainPathIdSchema.parse(rawOrganizationId);
   const user = await userRepository.findById(userId);
   if (!user) throw new NotFoundError('User not found');
   if (user.emailVerified !== true) throw new ForbiddenError('Verify your email address before joining');
 
   const claim = await joinableClaimForEmail(user.email);
-  if (!claim || claim.organizationId !== organizationId) {
+  if (!claim || !sameOrganizationId(claim.organizationId, organizationId)) {
     throw new ForbiddenError('Your email domain does not grant access to this organization');
   }
   const organization = await organizationRepository.findById(organizationId);
@@ -356,7 +371,7 @@ export async function joinOrgViaDomain(
     return { joined: false, organization };
   }
 
-  const outcome = await addMemberViaClaim(claim, user);
+  const outcome = await addMemberViaClaim({ ...claim, organizationId: organization.id }, user);
   if (outcome.joined) return { joined: true, organization };
   if (outcome.reason === 'already-member') return { joined: false, organization };
   if (outcome.reason === 'org-missing') throw new NotFoundError('Organization not found');

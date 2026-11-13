@@ -17,7 +17,7 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { assertDataLakeShareScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { clearDeletedOrganizationReferences } from '@bike4mind/server-utils/organizations/clearDeletedOrganizationReferences';
 import { creditService, organizationService } from '@bike4mind/services';
-import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
+import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization, orgDomainPathIdSchema } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Request } from 'express';
@@ -140,7 +140,9 @@ const handler = baseApi()
     // grants and can hand lakes to the billing owner. No-ops for a session caller.
     assertDataLakeShareScope(req);
 
-    const id = req.query.id;
+    const parsedId = orgDomainPathIdSchema.safeParse(req.query.id);
+    if (!parsedId.success) throw new BadRequestError('Invalid organization id');
+    const id = parsedId.data;
 
     // Wrapped in withTransaction (org-groups #1172/#1219): the member purge, the group
     // soft-deletes, the members' lake-grant lapse, the user organizationId reset, and the org delete

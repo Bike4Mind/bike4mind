@@ -2,7 +2,7 @@
 // POST /api/organizations/:id/domains - add a pending claim { domain }
 // Owner, manager or platform admin (canAdministerOrganization); session routes, not public API contract.
 
-import { addOrgDomainSchema } from '@bike4mind/common';
+import { addOrgDomainSchema, orgDomainPathIdSchema } from '@bike4mind/common';
 import { orgDomainClaimRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -11,16 +11,17 @@ import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/admi
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const organizationIdFrom = (query: { id?: unknown }): string => {
-  if (typeof query.id !== 'string' || !query.id) throw new BadRequestError('Invalid organization id');
-  return query.id;
+  const parsed = orgDomainPathIdSchema.safeParse(query.id);
+  if (!parsed.success) throw new BadRequestError('Invalid organization id');
+  return parsed.data;
 };
 
 const handler = baseApi({ auth: 'jwtOnly' })
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const organizationId = organizationIdFrom(req.query);
-      await loadOrgForDomainAdmin(req.user!, organizationId);
-      const claims = await orgDomainClaimRepository.listByOrganization(organizationId);
+      const organization = await loadOrgForDomainAdmin(req.user!, organizationId);
+      const claims = await orgDomainClaimRepository.listByOrganization(organization.id);
       return res.status(200).json({ claims: claims.map(toOrgDomainClaimView) });
     })
   )
@@ -30,12 +31,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
       const organization = await loadOrgForDomainAdmin(req.user!, organizationId);
       // ZodError propagates to the central errorHandler (422).
       const { domain } = addOrgDomainSchema.parse(req.body ?? {});
-      const claim = await addDomainClaim(organizationId, req.user!.id, domain);
+      const claim = await addDomainClaim(organization.id, req.user!.id, domain);
 
       await recordAdminActionFromRequest(req, {
         action: 'org.domain.added',
         actorScope: 'organization',
-        target: { kind: 'organization', id: organizationId, displayName: organization.name },
+        target: { kind: 'organization', id: organization.id, displayName: organization.name },
         summary: `added domain ${claim.domain}`,
       });
 
