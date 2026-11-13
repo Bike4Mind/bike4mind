@@ -47,6 +47,34 @@ describe('registerAutoFixAttemptsIpc', () => {
     expect(await call(IPC_CHANNELS.prGetAutoFixAttempts)).toBe(5);
   });
 
+  it('rejects and skips the monitor when the value cannot be saved', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'b4m-auto-fix-attempts-'));
+    const blocker = join(dir, 'file');
+    await writeFile(blocker, '');
+    const apply = vi.fn(async (_attempts: number) => undefined);
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    registerAutoFixAttemptsIpc(
+      {
+        handle: (channel: string, listener: (...args: never[]) => unknown) =>
+          void handlers.set(channel, listener as never),
+      },
+      { preference: new AutoFixAttemptsPreference(join(blocker, 'auto-fix-attempts.json')), apply }
+    );
+    await expect(handlers.get(IPC_CHANNELS.prSetAutoFixAttempts)?.({ sender: {} }, 2)).rejects.toThrow();
+    expect(apply).not.toHaveBeenCalled();
+    expect(await handlers.get(IPC_CHANNELS.prGetAutoFixAttempts)?.({ sender: {} })).toBe(5);
+  });
+
+  it('still answers saved when the monitor fails to apply the value', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { apply, call } = await setup();
+    apply.mockRejectedValueOnce(new Error('disk full'));
+    expect(await call(IPC_CHANNELS.prSetAutoFixAttempts, 8)).toBe(8);
+    expect(await call(IPC_CHANNELS.prGetAutoFixAttempts)).toBe(8);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it('reads a stored value back after a restart', async () => {
     const { call } = await setup('{"attempts":12}');
     expect(await call(IPC_CHANNELS.prGetAutoFixAttempts)).toBe(12);

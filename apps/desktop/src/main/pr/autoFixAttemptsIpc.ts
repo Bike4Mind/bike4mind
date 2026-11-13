@@ -12,7 +12,8 @@ export function registerAutoFixAttemptsIpc(ipc: Pick<IpcMain, 'handle'>, deps: A
   ipc.handle(IPC_CHANNELS.prGetAutoFixAttempts, () => deps.preference.read());
   ipc.handle(IPC_CHANNELS.prSetAutoFixAttempts, async (_event, attempts: unknown) => {
     const saved = await deps.preference.record(attempts);
-    await deps.apply(saved);
+    // The value is already saved; a failed hand-off only delays the PR monitor until its next read.
+    await deps.apply(saved).catch(error => console.warn('[auto-fix] could not apply the new attempt cap', error));
     return saved;
   });
 }
