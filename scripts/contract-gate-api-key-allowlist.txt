@@ -796,7 +796,6 @@ apps/client/pages/api/webhooks/deliveries/[id]/retry.ts
 apps/client/pages/api/webhooks/deliveries/index.ts
 apps/client/pages/api/webhooks/github.ts
 apps/client/pages/api/webhooks/github/[token].ts
-apps/client/pages/api/well-known/assetlinks.ts # public Digital Asset Links statement fetched by Android without credentials
 apps/client/pages/api/webhooks/github/lake.ts
 apps/client/pages/api/webhooks/github/sre.ts
 apps/client/pages/api/webhooks/github/subscriptions/[id].ts
@@ -805,6 +804,7 @@ apps/client/pages/api/webhooks/jira/[token].ts
 apps/client/pages/api/webhooks/jira/config/index.ts
 apps/client/pages/api/webhooks/jira/subscriptions/[id].ts
 apps/client/pages/api/webhooks/jira/subscriptions/index.ts
+apps/client/pages/api/well-known/assetlinks.ts  # public Digital Asset Links statement fetched by Android without credentials
 apps/client/pages/api/work-items/[id]/index.ts
 apps/client/pages/api/work-items/graph.ts
 apps/client/pages/api/work-items/index.ts
