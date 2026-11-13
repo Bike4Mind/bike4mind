@@ -54,13 +54,16 @@ describe('role routing and task runtime compatibility', () => {
       { id: 'worker', name: 'Worker', supportsTools: true },
       { id: 'reviewer', name: 'Reviewer', supportsTools: true },
     ];
-    streams = [];
-    events = [];
-    post = vi.fn().mockImplementation(() => {
+    const opened: PassThrough[] = [];
+    const emitted: ChatStreamEvent[] = [];
+    streams = opened;
+    events = emitted;
+    const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = boundPost;
     service = new ChatService({
       store,
       queue: new MessageQueue(() => undefined),
@@ -71,10 +74,10 @@ describe('role routing and task runtime compatibility', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
   afterEach(() => {
@@ -568,15 +571,26 @@ describe('role routing and task runtime compatibility', () => {
     ).rejects.toThrow(/settled/);
     expect((await store.get(child.id))?.workerTask?.state).toMatchObject({ status: 'canceled' });
   });
-  async function drain(ids: string[]) {
+  async function drain(ids: string[], initialReport?: { parentId: string; childId: string }) {
     const ended = new Set<number>();
     await vi.waitUntil(
-      () => {
+      async () => {
         streams.forEach((stream, index) => {
           if (ended.has(index)) return;
           ended.add(index);
           finish(index);
         });
+        if (initialReport) {
+          const parent = await store.get(initialReport.parentId);
+          if (
+            !parent?.messages.some(
+              message =>
+                message.automatic?.kind === 'agents-settled' &&
+                message.automatic.sessionIds.includes(initialReport.childId)
+            )
+          )
+            return false;
+        }
         return ids.every(id => !service.isSessionBusy(id));
       },
       { timeout: 5000, interval: 20 }
@@ -589,7 +603,7 @@ describe('role routing and task runtime compatibility', () => {
     const child = await spawn(parent, { contract });
     if (!child) throw new Error('No child');
     await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
-    await drain([parent.id, child.id]);
+    await drain([parent.id, child.id], { parentId: parent.id, childId: child.id });
     await service.actOnTask(parent.id, child.id, { kind: 'cancel', reason: 'Closing out: the work is finished.' });
     await drain([parent.id, child.id]);
     const canceled = await store.get(child.id);
@@ -664,6 +678,84 @@ describe('role routing and task runtime compatibility', () => {
     releaseCatalog?.({ models });
     expect(await continuing).toMatchObject({ ok: true });
     expect((await store.get(child.id))?.workerTask?.state.status).toBe('canceled');
+  });
+  const LOCAL = 'local:ollama:qwen3.8:27b';
+  async function localWorker(task?: 'escalating') {
+    const root = await store.create('planner');
+    const policy = {
+      ...inheritancePolicy(),
+      escalation: {
+        mode: 'ask' as const,
+        allowedModels: ['worker'],
+        allowedRoles: ['implementation' as const],
+        maxAutomaticUpgrades: 0 as const,
+      },
+    };
+    return store.create(LOCAL, {
+      origin: { parentSessionId: root.id, depth: 1, seedPrompt: 'Brief' },
+      orchestrationPolicy: { rootSessionId: root.id, rootRunId: 'run-one', policy },
+      workerSelection: { role: 'implementation', effectiveModel: LOCAL, source: 'parent', rootRunId: 'run-one' },
+      ...(task
+        ? {
+            workerTask: {
+              version: 1 as const,
+              contract,
+              automaticUpgrades: 0,
+              resolvedDecisions: [],
+              attempts: [{ id: 'attempt-one', model: LOCAL, startedAt: '2026-11-12', trigger: 'initial' as const }],
+              state: {
+                status: 'escalation-requested' as const,
+                decisionId: 'upgrade-one',
+                reason: 'Needs a stronger model',
+                evidence: ['Local attempt stalled'],
+                requestedModelId: 'worker',
+              },
+            },
+          }
+        : {}),
+    });
+  }
+  it('lets an explicit pick move a worker off an unavailable local model onto a hosted one', async () => {
+    const child = await localWorker();
+    expect(await service.send(child.id, 'Carry on')).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/not in the connected catalog/),
+    });
+    const updated = await service.setSessionModel(child.id, 'worker');
+    expect(updated?.model).toBe('worker');
+    expect((await store.get(child.id))?.workerSelection?.effectiveModel).toBe('worker');
+    expect(await service.send(child.id, 'Carry on')).toMatchObject({ ok: true });
+    await waitStream(0);
+    expect(wire(0).model).toBe('worker');
+    service.stop(child.id);
+  });
+  it('still refuses to move local work to a hosted model on an approved escalation', async () => {
+    const child = await localWorker('escalating');
+    await expect(
+      service.actOnTask(null, child.id, { kind: 'upgrade', modelId: 'worker', decisionId: 'upgrade-one' })
+    ).rejects.toThrow(/never moved to a hosted model automatically\. To move it, pick a hosted model/);
+    expect((await store.get(child.id))?.model).toBe(LOCAL);
+    expect(post).not.toHaveBeenCalled();
+  });
+  it('keeps a device-local app on local models even for an explicit pick', async () => {
+    const child = await localWorker();
+    service.dispose();
+    models = [...models, { id: LOCAL, name: 'Qwen', supportsTools: true }];
+    service = new ChatService({
+      store,
+      access: { list: async () => [] } as unknown as AccessStore,
+      models: { list: async () => ({ models }), cached: () => models } as unknown as ModelCatalog,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      getApiClient: () => null,
+      isDeviceLocal: () => true,
+      getEnvironmentUrl: () => 'http://localhost:3000',
+      emit: event => events.push(event),
+    });
+    await expect(service.setSessionModel(child.id, 'worker')).rejects.toThrow(
+      /device-local, so only local models can run here\. Choose a local model, or sign in/
+    );
+    expect((await store.get(child.id))?.model).toBe(LOCAL);
+    expect((await service.setSessionModel(child.id, LOCAL))?.model).toBe(LOCAL);
   });
   it('refuses orchestrator restarts, relays and automatic wakes in a canceled worker session without saving them', async () => {
     const { parent, child } = await canceledChild();
