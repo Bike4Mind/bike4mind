@@ -16,6 +16,19 @@ import { ShareableDocumentSchema, ShareableDocumentRepository } from '../content
 
 const ModelName = 'Agent';
 
+export const MEMORY_JOURNAL_CONTENT_MAX_LENGTH = 500;
+
+// Truncates to the schema maxlength. $push skips schema validators, so the writer must
+// enforce the cap itself. Mongoose counts UTF-16 code units, the same unit slice() uses.
+export const clampMemoryContent = (content: string): string => {
+  if (content.length <= MEMORY_JOURNAL_CONTENT_MAX_LENGTH) return content;
+  let clamped = content.slice(0, MEMORY_JOURNAL_CONTENT_MAX_LENGTH);
+  const last = clamped.charCodeAt(clamped.length - 1);
+  // Do not leave a lone high surrogate at the cut.
+  if (last >= 0xd800 && last <= 0xdbff) clamped = clamped.slice(0, -1);
+  return clamped;
+};
+
 export const THOROUGHNESS_LEVELS = ['quick', 'medium', 'very_thorough'] as const;
 export type ThoroughnessLevel = (typeof THOROUGHNESS_LEVELS)[number];
 
@@ -183,7 +196,7 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
       {
         $push: {
           memoryJournal: {
-            $each: [entry],
+            $each: [{ ...entry, content: clampMemoryContent(entry.content) }],
             $slice: -maxEntries,
           },
         },
@@ -523,7 +536,7 @@ export const AgentSchema = new Schema<IAgent, IAgentModel, IAgentMethods>(
         id: { type: String, required: true },
         timestamp: { type: Date, required: true },
         source: { type: String, enum: ['conversation', 'heartbeat', 'consolidation', 'manual'], required: true },
-        content: { type: String, required: true, maxlength: 500 },
+        content: { type: String, required: true, maxlength: MEMORY_JOURNAL_CONTENT_MAX_LENGTH },
         importance: { type: Number, required: true, min: 1, max: 5 },
         tags: [{ type: String }],
         relatedEntityIds: [{ type: String }],
