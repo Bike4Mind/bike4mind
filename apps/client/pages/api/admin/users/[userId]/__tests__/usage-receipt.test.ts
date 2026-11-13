@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/common';
+import { BadRequestError, CREDITS_PAGE_READ, ForbiddenError, NotFoundError } from '@bike4mind/common';
+import type { Request, Response } from 'express';
 
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
@@ -13,10 +14,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config: unknown) => {
     h.config = config;
     return {
-      get: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
-        h.handler = fn;
-        return {};
-      },
+      use: (guard: (req: Request, res: Response, next: () => void) => void) => ({
+        get: (fn: (req: Request, res: Response) => Promise<unknown>) => {
+          h.handler = async (req, res) => {
+            guard(req as Request, res as Response, () => {});
+            return fn(req as Request, res as Response);
+          };
+          return {};
+        },
+      }),
     };
   },
 }));
@@ -67,16 +73,26 @@ beforeEach(() => {
 
 describe('GET /api/admin/users/[userId]/usage-receipt', () => {
   it('is jwt-only', () => {
-    expect(h.config).toEqual({ auth: 'jwtOnly' });
+    expect(h.config).toEqual({ auth: 'jwtOnly', allowedMethods: ['GET'] });
   });
 
-  it('rejects a support-read delegate without full admin access before any read', async () => {
-    const { promise } = run({}, { id: 'support1', isAdmin: false, adminPermissions: ['support:read'] });
-    await expect(promise).rejects.toBeInstanceOf(ForbiddenError);
-    await expect(promise).rejects.toMatchObject({ statusCode: 403 });
-    expect(h.findUser).not.toHaveBeenCalled();
-    expect(h.loadUsageReceipt).not.toHaveBeenCalled();
+  it.each(CREDITS_PAGE_READ)('admits a %s delegate', async permission => {
+    const { res, promise } = run({}, { id: 'delegate', adminPermissions: [permission] });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.loadUsageReceipt).toHaveBeenCalledWith('u1', 'quest-1', new Date(AT));
   });
+
+  it.each([null, { id: 'u', isAdmin: false }, { id: 'u', adminPermissions: ['users:moderate'] }])(
+    'rejects an unauthorized caller %j before any read',
+    async user => {
+      const { promise } = run({}, user);
+      await expect(promise).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(promise).rejects.toMatchObject({ statusCode: 403 });
+      expect(h.findUser).not.toHaveBeenCalled();
+      expect(h.loadUsageReceipt).not.toHaveBeenCalled();
+    }
+  );
 
   it('rejects a missing request id or a bad timestamp', async () => {
     await expect(run({ requestId: '' }).promise).rejects.toBeInstanceOf(BadRequestError);

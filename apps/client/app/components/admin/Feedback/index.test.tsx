@@ -183,6 +183,31 @@ describe('FeedbackTab', () => {
     expect(screen.getByTestId('feedback-help-outdated-chip')).toBeInTheDocument();
   });
 
+  it('moves with j/k, opens with Enter and routes i/c through the status and resolution flow', async () => {
+    const one = makeFeedbackItem({ _id: 'one', id: 'one' });
+    const two = makeFeedbackItem({ _id: 'two', id: 'two' });
+    const operations = makeOperationsReturn([one, two]);
+    const navigate = vi.fn();
+    mocks.useNavigate.mockReturnValue(navigate);
+    mocks.useFeedbackOperations.mockReturnValue(operations);
+    renderFeedbackTab();
+    screen.getByTestId('feedback-row-one').focus();
+    await userEvent.keyboard('j');
+    expect(screen.getByTestId('feedback-row-two')).toHaveFocus();
+    await userEvent.keyboard('x');
+    expect(screen.getByTestId('feedback-row-two')).toHaveAttribute('aria-selected', 'true');
+    await userEvent.keyboard('x');
+    expect(screen.getByTestId('feedback-row-two')).toHaveAttribute('aria-selected', 'false');
+    await userEvent.keyboard('ic');
+    expect(operations.handleStatusChange).toHaveBeenCalledWith(two, FeedbackStatus.InProgress);
+    expect(operations.handleStatusChange).toHaveBeenCalledWith(two, FeedbackStatus.Closed);
+    await userEvent.keyboard('{Enter}');
+    const navigation = navigate.mock.calls[0][0];
+    expect(navigation.search({})).toMatchObject({ feedbackId: 'two' });
+    await userEvent.keyboard('k');
+    expect(screen.getByTestId('feedback-row-one')).toHaveFocus();
+  });
+
   it('exports the help article slug as the HelpArticle CSV column', async () => {
     mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([helpFeedbackItem]));
     mocks.getAllFeedbackForExport.mockResolvedValue({ items: [helpFeedbackItem], truncated: false });
@@ -854,7 +879,7 @@ describe('FeedbackTab', () => {
       expect(navigate).not.toHaveBeenCalled();
     });
 
-    it('opens from ?feedbackId= and marks the row as the open one', () => {
+    it('opens from ?feedbackId= without adding a bulk selection', () => {
       mocks.useSearch.mockReturnValue({ feedbackId: 'fb-1' });
 
       renderFeedbackTab();

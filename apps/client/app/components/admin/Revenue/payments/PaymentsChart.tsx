@@ -10,7 +10,7 @@ import {
   xAxisProps,
   yAxisProps,
   type ChartLegendItem,
-} from '../chartParts';
+} from '../../shared/chartParts';
 
 export type PaymentsChartPoint = { date: string; label: string; subscription: number; creditPurchase: number };
 

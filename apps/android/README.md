@@ -1,12 +1,42 @@
 # Bike4Mind Android
 
-Native Android client (Kotlin). `make test`, `make build`, `make generate-client` (see the Makefile). Needs a JDK 17+ on
-`PATH`; Gradle comes from the pinned wrapper. CI: [`.github/workflows/android.yml`](../../.github/workflows/android.yml),
+Native Android client (Kotlin, Jetpack Compose). `make test`, `make build`, `make lint`, `make generate-client` (see the
+Makefile). Needs a JDK 17+ on `PATH` and an Android SDK (`ANDROID_HOME`, or `sdk.dir` in `local.properties`); Gradle
+comes from the pinned wrapper. CI: [`.github/workflows/android.yml`](../../.github/workflows/android.yml),
 path-filtered to this directory and kept out of the web pipelines, as `apps/ios` is.
 
 ## Modules
 
-- **client**: the generated OpenAPI client (see below), a plain Kotlin/JVM library the app depends on.
+- **client**: the generated OpenAPI client (see below), a plain Kotlin/JVM library.
+- **kit**: the engine, a plain Kotlin/JVM library with JVM tests (twin of `apps/ios/Packages/B4MKit`): client identity
+  headers and the 426 upgrade signal, the HTTP transport (bearer token, one refresh-and-retry on 401), PKCE sign-in and
+  the token session, sessions, the chat send/stream/poll loop and the realtime socket. Android types stay out of it.
+- **app**: the Compose app (twin of `apps/ios/Bike4Mind`): screens, the Keystore-encrypted token store, the Custom Tab
+  sign-in and the debug server picker. Behavior belongs in `kit`; the app wires it (`AppGraph`).
+
+## Running the app
+
+`./gradlew :app:installDebug` on a running emulator or a connected phone. Debug builds talk to staging unless built with
+`-Pb4m.serverUrl=https://...` (or `http://10.0.2.2:3000` for a local server from the emulator), and the sign-in screen can
+switch servers at runtime. Release builds always use production. Walkthroughs that need a device are in
+[DEVICE_TESTING.md](./DEVICE_TESTING.md).
+
+## Sign-in callback
+
+Sign-in is the server's own OAuth 2.0 + PKCE web flow in a Custom Tab, so email and Google sign-in need no native SDK.
+
+| Build | OAuth client | Redirect |
+| --- | --- | --- |
+| debug (non-production servers) | `b4m-ios-app-dev` (shared with iOS debug builds) | `com.bike4mind.app://auth-callback` |
+| release (production) | `b4m-android-app` (not registered on the server yet) | `https://app.bike4mind.com/android/auth-callback` (App Link) |
+
+A production build needs the server to register `b4m-android-app` and publish `/.well-known/assetlinks.json` first.
+
+## Client identity
+
+Every request carries `X-Client-Name: b4m-android` and `X-Client-Version` (the app's `versionName`, padded to
+`MAJOR.MINOR.PATCH`), so `minimumClientVersions["b4m-android"]` can refuse an old build with a 426. Keep `versionName`
+to one to three integers; anything else sends neither header.
 
 ## Generated API client
 

@@ -218,7 +218,9 @@ export const InviteTable: React.FC<InviteTableProps & { empty?: ReactNode; label
       sort={{ columnId: 'createdAt', direction: sortDirection }}
       onSortChange={toggleSortDirection}
       rowActions={rowActions}
-      minWidth="52rem"
+      // Delete plus the "..." menu.
+      actionsWidth="5.75rem"
+      minWidth="54.25rem"
       maxHeight="none"
     />
   );

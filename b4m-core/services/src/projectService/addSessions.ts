@@ -10,6 +10,7 @@ import {
   BadRequestError,
   NotFoundError,
   secureParameters,
+  withoutOrgApiKeyReach,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { distinctIdCount, mergeIds } from '../utils/objectIds';
@@ -60,7 +61,7 @@ export const addSessions = async (
 
   // Sessions/files being added stay read-level: adding a notebook you can only read into a
   // project you can update is legitimate, same call addFiles.ts makes for fileIds.
-  const sessions = await db.sessions.shareable.findAllAccessibleByIds(user, sessionIds);
+  const sessions = await db.sessions.shareable.findAllAccessibleByIds(withoutOrgApiKeyReach(user), sessionIds);
   // Any unreachable id is a 400, all-missing included, same as addFiles: a 404 here would read as
   // the project 404 above. Counted as DISTINCT rows ignoring hex case: the reader returns one row
   // per document, so the same notebook sent twice - or sent as both `abc` and `ABC` - is not one
@@ -112,7 +113,7 @@ const resolveKnowledgeFiles = async (
     // being inherited. Pinned in addSessions.fileIds.test.ts.
     const files =
       session.knowledgeIds && session.knowledgeIds.length > 0
-        ? await db.fabFiles.shareable.findAllAccessibleByIds(user, session.knowledgeIds)
+        ? await db.fabFiles.shareable.findAllAccessibleByIds(withoutOrgApiKeyReach(user), session.knowledgeIds)
         : [];
     knowledge.push({ session, files });
   }
