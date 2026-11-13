@@ -1164,6 +1164,7 @@ async function runExecution(
     const organization = execution.organizationId
       ? await organizationRepository.findById(execution.organizationId)
       : null;
+    const orgModelPolicy = readOrgModelPolicy(organization?.modelPolicy);
 
     // If continuation, increment Lambda invocation count and check cap.
     // Subagent resumes (awaiting_subagent -> running) bump `subagentHandoffCount`
@@ -1277,6 +1278,7 @@ async function runExecution(
       requested: modelInfo,
       models,
       adminSettings: adminSettingsRepository,
+      orgModelPolicy,
       logger,
     });
     const runModelInfo = shadowModelInfo ?? modelInfo;
@@ -1305,6 +1307,7 @@ async function runExecution(
     // model that actually runs is the one checked. Admission only: billing stays per-iteration.
     const modelAdmission = await createModelAdmission(user as IUserDocument, models, false, {
       organizationId: execution.organizationId,
+      orgModelPolicy,
     });
     const refusal = await modelAdmission.assert(resolvedModelId).then(
       () => null,
@@ -2428,7 +2431,7 @@ async function runExecution(
       // them to `toolNames`, which MCP tools never pass through, so a profile that denies
       // `atlassian__jira_create_issue` could not reach it either. Both sets are pure subtraction,
       // so unioning them cannot widen what this agent is offered.
-      orgToolPolicy: readOrgModelPolicy(organization?.modelPolicy),
+      orgToolPolicy: orgModelPolicy,
       sessionDisabledTools: mcpSessionDisabledTools(
         sessionDeniedTools(session),
         orchestrationProfile?.deniedTools,
@@ -4239,6 +4242,7 @@ async function processSubagentDispatch(
       premiumWorkspaceSessionSettings
     );
     const organization = child.organizationId ? await organizationRepository.findById(child.organizationId) : null;
+    const orgModelPolicy = readOrgModelPolicy(organization?.modelPolicy);
 
     // Pre-flight credit check.
     const availableCredits = organization
@@ -4322,6 +4326,7 @@ async function processSubagentDispatch(
       requested: modelInfo,
       models,
       adminSettings: adminSettingsRepository,
+      orgModelPolicy,
       logger,
     });
     const runModel = shadowModelInfo ? shadowModelInfo.id : childModel;
@@ -4381,6 +4386,7 @@ async function processSubagentDispatch(
 
     const modelAdmission = await createModelAdmission(user as IUserDocument, models, false, {
       organizationId: child.organizationId,
+      orgModelPolicy,
     });
     const admissionRefusal = await modelAdmission.assert(childModel).then(
       () => null,
@@ -4727,7 +4733,7 @@ async function processSubagentDispatch(
       config: subagentToolConfig,
       // This site passes no `enabledTools`, so the denylist is the only thing standing between a
       // session-forbidden MCP tool and a dispatched subagent.
-      orgToolPolicy: readOrgModelPolicy(organization?.modelPolicy),
+      orgToolPolicy: orgModelPolicy,
       sessionDisabledTools: [...sessionDeniedTools(session), ...(child.scopeDeniedTools ?? [])],
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP

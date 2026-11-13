@@ -33,6 +33,13 @@ const orgQuery = vi.hoisted(() => ({
 const searchParams = vi.hoisted(() => ({ current: {} as { tab?: string } }));
 const user = vi.hoisted(() => ({ current: { id: 'owner1' } as { id: string; isAdmin?: boolean } | null }));
 const navigateSpy = vi.hoisted(() => vi.fn());
+const libraryRender = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/components/organizations/OrganizationLibrarySection', () => ({
+  default: () => {
+    libraryRender();
+    return <div data-testid="library-contents" />;
+  },
+}));
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptionsByOwner: () => ({ data: [] }),
@@ -201,6 +208,19 @@ describe('organization detail page - ?tab= deep link', () => {
 
     expect(selectedTabName()).toBe('Settings');
     expect(screen.getByTestId('model-policy-editor')).toBeTruthy();
+  });
+
+  it('keeps the Library tab ARIA target mounted while loading its contents only when selected', () => {
+    libraryRender.mockClear();
+    orgQuery.current = { data: ORG, isLoading: false, isError: false, error: undefined };
+    const view = render(wrapper(<OrganizationPage />));
+    const target = screen.getByTestId('organization-library-tab').getAttribute('aria-controls');
+    expect(target).toBeTruthy();
+    expect(document.getElementById(target!)).toBeTruthy();
+    expect(libraryRender).not.toHaveBeenCalled();
+    searchParams.current = { tab: OrganizationTabs.Library };
+    view.rerender(wrapper(<OrganizationPage />));
+    expect(screen.getByTestId('library-contents')).toBeTruthy();
   });
 
   it('still falls back to Overview for a member who may not see Usage', () => {

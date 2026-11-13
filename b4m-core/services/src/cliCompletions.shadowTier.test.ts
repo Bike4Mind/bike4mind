@@ -15,6 +15,7 @@ const h = vi.hoisted(() => {
     cheap: { id: 'cheap-model', type: 'text', backend: 'gemini', max_tokens: 1000, pricing: cheapPricing },
     complete: vi.fn(),
     getLlmByModel: vi.fn(),
+    shadowAllowlist: ['cheap-model'] as string[],
   };
 });
 
@@ -29,7 +30,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   usdToCreditsStochastic: vi.fn((usd: number) => Math.ceil(usd * 1e6)),
   getSettingsMap: vi.fn().mockResolvedValue({}),
   getSettingsValue: vi.fn((key: string) => {
-    if (key === 'shadowTierModelAllowlist') return ['cheap-model'];
+    if (key === 'shadowTierModelAllowlist') return h.shadowAllowlist;
     if (key === 'shadowTierDailyTokenCap') return 20000;
     if (key === 'shadowTierRequestsPerMin') return 3;
     if (key === 'freeTierModelGateEnabled') return false;
@@ -40,6 +41,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 
 import { executeCompletion, estimateInputTokens } from './cliCompletions';
 import { CREDITS_PER_USD_COST, getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { usdToCredits } from '@bike4mind/utils';
 import { subtractCredits } from './creditService';
 
@@ -89,8 +91,105 @@ const errorShape = (err: unknown) => {
 describe('executeCompletion for a restricted-tier caller', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.shadowAllowlist = ['cheap-model'];
     h.complete.mockImplementation(async (_m, _msgs, _o, cb) => cb(['ok'], { inputTokens: 30, outputTokens: 5 }));
     h.getLlmByModel.mockImplementation(() => ({ currentModel: '', complete: h.complete }));
+  });
+
+  it.each(['provider', 'model'])(
+    'uses the allowed cheap backend under a personally billed governing %s policy',
+    async rule => {
+      const allowed = { ...h.cheap, id: 'cheap-allowed', backend: 'anthropic' };
+      vi.mocked(getAvailableModels).mockResolvedValueOnce([h.premium, h.cheap, allowed] as unknown as ModelInfo[]);
+      h.shadowAllowlist = ['cheap-model', 'cheap-allowed'];
+      const db = buildDb(restricted);
+      await executeCompletion({
+        userId: 'user1',
+        model: 'premium-model',
+        messages: [{ role: 'user', content: 'hi' }],
+        onChunk: vi.fn().mockResolvedValue(undefined),
+        db,
+        governingOrgModelPolicy:
+          rule === 'provider'
+            ? { allowedProviders: ['anthropic'] }
+            : { allowedModels: ['premium-model', 'cheap-allowed'] },
+      });
+      expect(h.complete.mock.calls.map(call => call[0])).toEqual(['cheap-allowed']);
+      expect(h.getLlmByModel.mock.calls.map(call => call[1].modelInfo.id)).toEqual(['cheap-allowed']);
+      expect(db.usageEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'premium-model',
+          executedModel: 'cheap-allowed',
+          executedProvider: 'anthropic',
+        })
+      );
+    }
+  );
+
+  it('keeps the requested model when every cheap substitute is forbidden by the governing policy', async () => {
+    await executeCompletion({
+      userId: 'user1',
+      model: 'premium-model',
+      messages: [{ role: 'user', content: 'hi' }],
+      onChunk: vi.fn().mockResolvedValue(undefined),
+      db: buildDb(restricted),
+      governingOrgModelPolicy: { allowedProviders: ['anthropic'] },
+    });
+    expect(h.complete.mock.calls.map(call => call[0])).toEqual(['premium-model']);
+  });
+
+  it('uses the billing organization policy for the substitute and retains the organization payer', async () => {
+    const allowed = { ...h.cheap, id: 'cheap-allowed', backend: 'anthropic' };
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([h.premium, h.cheap, allowed] as unknown as ModelInfo[]);
+    h.shadowAllowlist = ['cheap-model', 'cheap-allowed'];
+    const organization = {
+      id: 'org-1',
+      userId: 'user1',
+      users: [{ userId: 'user1' }],
+      currentCredits: 100_000,
+      creditLimit: 0,
+      maxCreditsPerMember: null,
+      userDetails: [],
+      modelPolicy: { allowedProviders: ['anthropic'] },
+    };
+    const wallet = {
+      findById: vi.fn().mockResolvedValue(organization),
+      incrementCredits: vi.fn().mockResolvedValue(organization),
+      ensureUserDetails: vi.fn().mockResolvedValue(undefined),
+      updateUserDetails: vi.fn().mockResolvedValue(undefined),
+    };
+    const db = buildDb(restricted);
+    db.organizations = wallet;
+    await executeCompletion({
+      userId: 'user1',
+      model: 'premium-model',
+      billingOrganizationId: 'org-1',
+      governingOrgModelPolicy: { allowedProviders: ['gemini'] },
+      messages: [{ role: 'user', content: 'hi' }],
+      onChunk: vi.fn().mockResolvedValue(undefined),
+      db,
+    });
+    expect(h.complete.mock.calls.map(call => call[0])).toEqual(['cheap-allowed']);
+    expect(wallet.incrementCredits).toHaveBeenCalled();
+    expect(db.users.incrementCredits).not.toHaveBeenCalled();
+    expect(subtractCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'premium-model' }),
+      expect.anything()
+    );
+  });
+
+  it('refuses an invalid governing policy before invoking a provider', async () => {
+    await expect(
+      executeCompletion({
+        userId: 'user1',
+        model: 'premium-model',
+        messages: [{ role: 'user', content: 'hi' }],
+        onChunk: vi.fn().mockResolvedValue(undefined),
+        db: buildDb(restricted),
+        governingOrgModelPolicy: { allowedProviders: [] },
+      })
+    ).rejects.toMatchObject({ additionalInfo: { errorCode: 'org_model_not_allowed' } });
+    expect(h.complete).not.toHaveBeenCalled();
   });
 
   it('runs the allowlisted model and reports only the requested one', async () => {

@@ -183,38 +183,74 @@ export async function resolveCallerDefaultModel(
   logger: { log: (message: string) => void },
   opts: CallerModelListOptions = {}
 ): Promise<string> {
-  const freeTierDefault = await resolveFreeTierDefaultModel(defaultModel, user, logger);
+  const context = createDefaultResolutionContext(user, logger);
+  const freeTierDefault = await resolveFreeTierDefaultModel(defaultModel, user, context);
   const policy = await loadOrgModelPolicy(opts.organizationId);
   if (policy === null) return freeTierDefault;
-  const { models } = withOrgPolicy(
-    await withoutPaidOnlyModels(await getCachedCallerModelList(user.id, logger), user),
-    policy
-  );
-  if (models.some(model => model.id === freeTierDefault)) return freeTierDefault;
-  // No allowed text model leaves the default in place for admission to refuse with the org reason.
-  return models.find(model => model.type === 'text')?.id ?? freeTierDefault;
+  const {
+    list: { models },
+  } = await context.catalog();
+  const admission = await context.admission(policy);
+  if (models.some(model => model.id === freeTierDefault) && (await admission.admits(freeTierDefault))) {
+    return freeTierDefault;
+  }
+  for (const model of models) {
+    if (model.type === 'text' && (await admission.admits(model.id))) return model.id;
+  }
+  // Preserve the original refusal path when no candidate passes all execution gates.
+  return freeTierDefault;
+}
+
+function createDefaultResolutionContext(user: IUserDocument, logger: { log: (message: string) => void }) {
+  let catalogPromise: Promise<{ list: CatalogModelList; enforceCredits: boolean }> | undefined;
+  let freeTierPromise: ReturnType<typeof loadFreeTierAllowedModels> | undefined;
+  let entitlementsPromise: Promise<string[]> | undefined;
+  let configurationsPromise: ReturnType<typeof loadModelConfigurations> | undefined;
+  const catalog = () =>
+    (catalogPromise ??= (async () => {
+      const enforceCredits = await readEnforceCredits();
+      return { list: await getCachedCallerModelList(user.id, logger, enforceCredits), enforceCredits };
+    })());
+  const freeTier = () =>
+    (freeTierPromise ??= isFreeTierExempt(user)
+      ? Promise.resolve(undefined)
+      : loadFreeTierAllowedModels(adminSettingsRepository));
+  const entitlements = () => (entitlementsPromise ??= getUserEntitlements(toEntitlementUser(user)));
+  const admission = async (policy: ReadOrgModelPolicy) => {
+    const [{ list, enforceCredits }, allowedModels, configurations] = await Promise.all([
+      catalog(),
+      freeTier(),
+      (configurationsPromise ??= loadModelConfigurations(adminSettingsRepository)),
+    ]);
+    return createModelAdmission({
+      user,
+      configs: configurations,
+      models: list.models,
+      enforceCredits,
+      freeTierAllowedModels: allowedModels,
+      getEntitlements: entitlements,
+      orgModelPolicy: policy,
+    });
+  };
+  return { catalog, freeTier, entitlements, admission };
 }
 
 async function resolveFreeTierDefaultModel(
   defaultModel: string,
   user: IUserDocument,
-  logger: { log: (message: string) => void }
+  context: ReturnType<typeof createDefaultResolutionContext>
 ): Promise<string> {
   if (isFreeTierExempt(user)) return defaultModel;
-  const allowedModels = await loadFreeTierAllowedModels(adminSettingsRepository);
+  const allowedModels = await context.freeTier();
   if (!allowedModels || allowedModels.has(defaultModel)) return defaultModel;
-  const entitlements = await getUserEntitlements(toEntitlementUser(user));
+  const entitlements = await context.entitlements();
   if (entitlements.includes(PAID_PLAN_ENTITLEMENT_KEY)) return defaultModel;
-  const { models } = await getCachedCallerModelList(user.id, logger);
+  const {
+    list: { models },
+  } = await context.catalog();
   const defaultModelInfo = models.find(model => model.id === defaultModel);
   if (isFreeTierModel(defaultModel, allowedModels, defaultModelInfo)) return defaultModel;
-  const admission = createModelAdmission({
-    user,
-    configs: await loadModelConfigurations(adminSettingsRepository),
-    getEntitlements: async () => entitlements,
-    models,
-    freeTierAllowedModels: allowedModels,
-  });
+  const admission = await context.admission(null);
   for (const id of allowedModels) {
     if (models.some(model => model.id === id && model.type === 'text') && (await admission.admits(id))) return id;
   }
@@ -266,10 +302,10 @@ export async function getCallerModelList(
 
 async function getCachedCallerModelList(
   userId: string | null,
-  logger: { log: (message: string) => void }
+  logger: { log: (message: string) => void },
+  preloadedEnforceCredits?: boolean
 ): Promise<CatalogModelList> {
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
-  const enforceCredits = Boolean(getSettingsValue('enforceCredits', settings));
+  const enforceCredits = preloadedEnforceCredits === undefined ? await readEnforceCredits() : preloadedEnforceCredits;
   // The flag is in the key so toggling enforceCredits takes effect immediately, not after the TTL.
   const cacheKey = `${CacheKeys.modelList(userId ?? ANONYMOUS_CACHE_ID)}:credits-${enforceCredits ? 'on' : 'off'}`;
 
@@ -309,4 +345,9 @@ async function getCachedCallerModelList(
   }
 
   return payload;
+}
+
+async function readEnforceCredits(): Promise<boolean> {
+  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  return Boolean(getSettingsValue('enforceCredits', settings));
 }

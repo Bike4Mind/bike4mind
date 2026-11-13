@@ -13,7 +13,7 @@ import { orgIdOfAccount } from '@client/app/components/datalake/lakeSourceShared
 export const MODEL_CATALOG_QUERY_KEY = ['llm', 'models'] as const;
 
 // One entry per active org (null = Personal): the org's model policy changes what is listed.
-const catalogQueryKey = (orgId: string | null) => [...MODEL_CATALOG_QUERY_KEY, orgId] as const;
+export const catalogQueryKey = (orgId: string | null) => [...MODEL_CATALOG_QUERY_KEY, orgId] as const;
 
 const activeOrgOf = (state: ReturnType<typeof useSelectedAccount.getState>) =>
   orgIdOfAccount(state.selectedAccount) ?? null;

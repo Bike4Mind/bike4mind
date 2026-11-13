@@ -692,6 +692,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Fail closed: an admission over no user would skip the account-state gate it exists to apply.
   if (!storedActor) throw new UnauthorizedError('User not found');
   const actor = params.scopeActor ? params.scopeActor(storedActor) : storedActor;
+  const orgModelPolicy = readOrgModelPolicy(organization ? organization.modelPolicy : params.governingOrgModelPolicy);
   await createModelAdmission({
     user: actor,
     configs: modelConfigs,
@@ -699,7 +700,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     models,
     enforceCredits: Boolean(enforceCredits),
     freeTierAllowedModels,
-    orgModelPolicy: readOrgModelPolicy(organization ? organization.modelPolicy : params.governingOrgModelPolicy),
+    orgModelPolicy,
   }).assert(model);
 
   if (requestedModelInfo && !supportsAssistantPrefill(requestedModelInfo) && hasAssistantPrefill(messages)) {
@@ -716,6 +717,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     requested: requestedModelInfo,
     models,
     adminSettings: db.adminSettings,
+    orgModelPolicy,
     logger,
   });
   // External completion routes skip the per-user rpm middleware, so the restricted-tier rpm is enforced here.

@@ -371,6 +371,8 @@ export const useSubscribeCollection = <T>(
   callbackFn?: SubscriptionCallbackFunction<T>,
   options?: {
     fetchInitialData?: boolean;
+    /** Opt in only for a single-organization signal listener that refetches authoritative HTTP data. */
+    initialDataAfterSubscribe?: boolean;
   }
 ) => {
   const [subscriptionId] = useState(() => Math.random().toString(36).substring(2, 9));
@@ -450,6 +452,7 @@ export const useSubscribeCollection = <T>(
           // guard in server/websocket/dataSubscribeRequest.ts handles.
           fields: {},
           fetchInitialData: options?.fetchInitialData ?? true,
+          ...(options?.initialDataAfterSubscribe ? { initialDataAfterSubscribe: true } : {}),
         };
         unsubscribeFn = subscribeToAction('data_update', processActionEvent);
         sendJsonMessage(payload);
@@ -503,6 +506,7 @@ export const useSubscribeCollection = <T>(
     subscribeToAction,
     subscriptionId,
     options?.fetchInitialData,
+    options?.initialDataAfterSubscribe,
   ]);
 };
 

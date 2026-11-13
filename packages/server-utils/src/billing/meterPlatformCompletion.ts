@@ -16,6 +16,7 @@ import {
   type IUserDocument,
   type ModelInfo,
   type ApiKeyCompletionSource,
+  type ReadOrgModelPolicy,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -82,13 +83,17 @@ export async function createModelAdmission(
   opts: {
     organizationId?: string | null;
     getOrgModelBackend?: ModelAdmissionInput['getOrgModelBackend'];
+    /** Trusted parsed snapshot already loaded for this execution; explicit null is unrestricted. */
+    orgModelPolicy?: ReadOrgModelPolicy;
   } = {}
 ): Promise<ModelAdmission> {
   const [configs, enforceCredits, freeTierAllowedModels, org] = await Promise.all([
     systemModel ? [] : loadModelConfigurations(adminSettingsRepository),
     isCreditsEnforced(),
     systemModel ? undefined : loadFreeTierAllowedModels(adminSettingsRepository),
-    systemModel || !opts.organizationId ? null : organizationRepository.findById(opts.organizationId),
+    systemModel || opts.orgModelPolicy !== undefined || !opts.organizationId
+      ? null
+      : organizationRepository.findById(opts.organizationId),
   ]);
   const admission = createSharedModelAdmission({
     user,
@@ -97,7 +102,11 @@ export async function createModelAdmission(
     models,
     enforceCredits,
     freeTierAllowedModels,
-    orgModelPolicy: readOrgModelPolicy(org?.modelPolicy),
+    orgModelPolicy: systemModel
+      ? null
+      : opts.orgModelPolicy === undefined
+        ? readOrgModelPolicy(org?.modelPolicy)
+        : opts.orgModelPolicy,
     getOrgModelBackend: opts.getOrgModelBackend,
   });
   return {

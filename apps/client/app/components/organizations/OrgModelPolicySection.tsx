@@ -148,7 +148,8 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
           <Typography level="title-md">Models and tools</Typography>
           <Typography level="body-sm">
             Limit which AI providers, models and built-in tools members can use when working in this organization.
-            Connector (MCP) tools are governed by the connector policy instead.
+            Connector (MCP) tools are governed by the connector policy instead. Requests outside an organization context
+            and platform-selected system models are exempt from this policy.
           </Typography>
         </Box>
         {invalidStored && (

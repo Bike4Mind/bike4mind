@@ -4,6 +4,7 @@ import {
   getTextModelCost,
   ModelBackend,
   type ModelInfo,
+  type ReadOrgModelPolicy,
 } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { withholdAdminRole } from '../auth/apiKeyAdminScope';
@@ -569,6 +570,33 @@ describe('createModelAdmission', () => {
       { id: 'claude', backend: 'anthropic' } as unknown as ModelInfo,
     ];
     const policy = { allowedProviders: null, allowedModels: ['claude'], allowedTools: null };
+    const snapshots: Array<[ReadOrgModelPolicy, boolean]> = [
+      [policy, false],
+      [null, true],
+      ['invalid', false],
+    ];
+
+    it.each(snapshots)(
+      'reuses the supplied snapshot without reloading the organization (%j)',
+      async (snapshot, admitted) => {
+        m.orgFindById.mockRejectedValue(new Error('precomputed policy must not be reloaded'));
+        const admission = await createModelAdmission(user(), catalog, false, {
+          organizationId: 'org1',
+          orgModelPolicy: snapshot,
+        });
+        await expect(admission.admits('gpt')).resolves.toBe(admitted);
+        expect(m.orgFindById).not.toHaveBeenCalled();
+      }
+    );
+
+    it('preserves the platform-selected exemption even when a precomputed policy is invalid', async () => {
+      const admission = await createModelAdmission(user(), catalog, true, {
+        organizationId: 'org1',
+        orgModelPolicy: 'invalid',
+      });
+      await expect(admission.assert('gpt')).resolves.toBeUndefined();
+      expect(m.orgFindById).not.toHaveBeenCalled();
+    });
 
     it('forwards authoritative provider metadata through both methods without reloading the org', async () => {
       m.orgFindById.mockResolvedValue({ id: 'org1', modelPolicy: { allowedProviders: ['openai'] } });

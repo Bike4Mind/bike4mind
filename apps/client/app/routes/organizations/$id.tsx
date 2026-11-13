@@ -369,15 +369,15 @@ const OrganizationPage: FC = () => {
               )}
               <OrganizationOverviewSection organization={organization} />
             </TabPanel>
-            {selectedTab === OrganizationTabs.Library && (
-              <TabPanel value={OrganizationTabs.Library}>
+            <TabPanel value={OrganizationTabs.Library}>
+              {selectedTab === OrganizationTabs.Library && (
                 <OrganizationLibrarySection
                   key={organization.id}
                   organizationId={organization.id}
                   canManage={!!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization)}
                 />
-              </TabPanel>
-            )}
+              )}
+            </TabPanel>
             <TabPanel value={OrganizationTabs.Members}>
               <Typography level="title-lg" startDecorator={<GroupOutlinedIcon />} sx={{ mb: 3 }}>
                 {t('organization.headings.members_seats', { current: currentSeats, max: maxSeats })}
