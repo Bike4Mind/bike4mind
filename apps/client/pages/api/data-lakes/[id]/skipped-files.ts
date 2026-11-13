@@ -6,6 +6,7 @@ import { dataLakeRepository, dataLakeAccessGrantRepository, lakeSkippedFileRepos
 import type { ILakeSkippedFileDocument, LakeSkippedFileView, LakeSkippedFilesResponse } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
+import { recordLakeRead } from '@server/dataLakes/recordLakeRead';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 
 // Scalar-first coercion so a repeated param is a 400 - see findings/index.ts for the full reasoning.
@@ -61,6 +62,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       total,
       hasMore: pageOffset + rows.length < total,
     };
+    if (rows.length > 0) await recordLakeRead(req, { lakeIds: [lake.id], surface: 'data-lake-skipped-files' });
     return res.json(body);
   });
 

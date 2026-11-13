@@ -102,7 +102,9 @@
     "no_subscription": "Walay Subscription",
     "x_members": "{{count}} nga mga miyembro",
     "x_credits": "{{count}} nga mga kredito",
-    "owner": "Tag-iya"
+    "roles": {
+      "owner": "Tag-iya"
+    }
   },
   "session": {
     "typeYourMessage": "I-type ang imong mensahe dinhi",

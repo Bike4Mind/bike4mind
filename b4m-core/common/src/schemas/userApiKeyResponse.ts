@@ -36,6 +36,7 @@ const USER_API_KEY_RESPONSE_FIELDS = {
   allowedOrigins: true,
   identifiedClientIds: true,
   preauthorizedLakeIds: true,
+  orgOwned: true,
   branding: true,
   spendCap: true,
   ownerHasWhitelabel: true,

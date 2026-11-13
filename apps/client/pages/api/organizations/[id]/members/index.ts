@@ -20,7 +20,7 @@ import {
 import { respond } from '@server/utils/respond';
 import { Request } from 'express';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { userRepository } from '@bike4mind/database/auth';
+import { userApiKeyRepository, userRepository } from '@bike4mind/database/auth';
 import { groupRepository } from '@bike4mind/database/social';
 
 // No `force` here, deliberately. The service still accepts a seat-ceiling override for the
@@ -86,11 +86,12 @@ const handler = baseApi()
           type: OrganizationEvents.ADD_ORG_MEMBER,
           metadata: {
             organizationId,
+            userId: newMember.id,
             memberEmail: newMember.email || '',
             memberLevel: newMember.level,
           },
         },
-        { ability: req.ability }
+        { ability: req.ability, organizationAuditActorUserId: req.user.impersonatedBy ?? req.user.id }
       );
 
       return respond(res, safeUserResponseSchema, toSafeUser(newMember, 'same-org'));
@@ -119,6 +120,7 @@ const handler = baseApi()
             groups: groupRepository,
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            userApiKeys: userApiKeyRepository,
             ...lakeConfigAuditDb,
           },
           // See the sibling removal route: a key-driven departure must be attributed to the KEY,
@@ -142,7 +144,7 @@ const handler = baseApi()
           organizationId: organization.id,
         },
       },
-      { ability: req.ability }
+      { ability: req.ability, organizationAuditActorUserId: req.user.impersonatedBy ?? req.user.id }
     );
 
     return res.json(toSafeOrganization(organization, { userId: req.user.id, isAdmin: req.user.isAdmin }));

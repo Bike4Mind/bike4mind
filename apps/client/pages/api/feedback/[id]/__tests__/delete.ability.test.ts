@@ -26,6 +26,8 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 vi.mock('@bike4mind/database', () => ({
+  FeedbackAiModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
+  FeedbackNoteModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
   FeedbackModel: { findById: mockFindById, deleteOne: vi.fn() },
   FeedbackTextModel: { deleteOne: vi.fn() },
 }));

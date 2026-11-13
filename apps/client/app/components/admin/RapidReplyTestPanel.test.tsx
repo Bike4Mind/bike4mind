@@ -216,4 +216,38 @@ describe('RapidReplyTestPanel', () => {
     expect(screen.getByText('Over limit')).toBeTruthy();
     expect(screen.getByText('Rapid reply latency 2400ms exceeds limit of 1500ms')).toBeTruthy();
   });
+  it('never shows a latency pass or fail chip when no rapid reply exists', () => {
+    lastResult = {
+      ...fullResult,
+      success: false,
+      testResults: {
+        ...fullResult.testResults,
+        rapidReplyTest: { success: false, response: null, error: 'No rapid reply result was saved' },
+      },
+    };
+    renderPanel();
+
+    expect(screen.queryByText('Within limit')).toBeNull();
+    expect(screen.queryByText('Over limit')).toBeNull();
+    expect(screen.getByText('No rapid reply result was saved')).toBeTruthy();
+  });
+
+  it.each([
+    [{ mainModelTtfvt: 2112 }, '2,112 ms'],
+    [{ mainModelTtfvt: 2112, mainModelError: 'Main model unavailable' }, 'Main model unavailable'],
+  ])('shows the main result separately from rapid timing: %j', (mainResult, expected) => {
+    lastResult = {
+      ...fullResult,
+      testResults: {
+        ...fullResult.testResults,
+        performance: { ...fullResult.testResults?.performance, ...mainResult },
+      },
+    };
+    renderPanel();
+
+    expect(screen.getByText('Main model TTFVT').nextElementSibling).toHaveTextContent(expected);
+    expect(screen.getByText('Rapid reply TTFVT')).toBeTruthy();
+    expect(screen.getByText('320 ms')).toBeTruthy();
+  });
+
 });

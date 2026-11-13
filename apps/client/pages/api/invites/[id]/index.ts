@@ -18,6 +18,8 @@ import {
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sharingService } from '@bike4mind/services';
+import { InviteType } from '@bike4mind/common';
+import { recordOrganizationAuditEventSafe } from '@bike4mind/server-utils/utils/organizationAudit';
 
 const handler = baseApi()
   /**
@@ -47,6 +49,9 @@ const handler = baseApi()
       const access = await canViewInvite(req.user, invite);
       if (access === 'expired') {
         return res.status(410).json({ message: 'Invite has expired' });
+      }
+      if (access === 'revoked') {
+        return res.status(410).json({ message: 'Invite has been revoked', revoked: true });
       }
       if (access !== 'allowed') {
         return res.status(404).json({ message: 'Invite Not Found' });
@@ -86,6 +91,14 @@ const handler = baseApi()
       );
 
       const [view] = await toSharerInviteViews([updatedInvite], req.user);
+      if (updatedInvite?.type === InviteType.Organization) {
+        await recordOrganizationAuditEventSafe({
+          organizationId: updatedInvite.documentId,
+          actorUserId: req.user.id,
+          action: 'invite.revoked',
+          targetId: updatedInvite.id,
+        });
+      }
       return res.json(view);
     })
   );

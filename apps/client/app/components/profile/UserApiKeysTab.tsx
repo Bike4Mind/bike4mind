@@ -177,7 +177,12 @@ const buildScopeModel = (scopes: ApiKeyScopeOption[]): ScopeModel => {
   return {
     scopeValues,
     groups: [...groups.values()],
-    presetScopes: { read: readScopes, readwrite: [...readScopes, ...writeScopes], full: [...scopeValues] },
+    presetScopes: {
+      read: readScopes,
+      readwrite: [...readScopes, ...writeScopes],
+      // Minting personas creates accounts, so it is only granted by ticking it explicitly.
+      full: scopeValues.filter(value => value !== ApiKeyScope.PERSONAS_MINT),
+    },
   };
 };
 
@@ -601,7 +606,7 @@ curl -H "Authorization: Bearer $B4M_API_KEY" \\
 
   return (
     <Modal open={open} onClose={onClose} className="project-api-keys-created-modal">
-      <ModalDialog size="lg" className="project-api-keys-created-dialog">
+      <ModalDialog size="lg" className="project-api-keys-created-dialog" data-testid="api-key-created-dialog">
         <Typography level="h4" mb={2} color="success" className="project-api-keys-created-title">
           🎉 API Key Created Successfully!
         </Typography>
@@ -673,7 +678,11 @@ curl -H "Authorization: Bearer $B4M_API_KEY" \\
           <Button variant="outlined" onClick={onClose} className="project-api-keys-created-cancel-button">
             I&apos;ve Copied My Key
           </Button>
-          <Button onClick={onClose} className="project-api-keys-created-continue-button">
+          <Button
+            onClick={onClose}
+            className="project-api-keys-created-continue-button"
+            data-testid="api-key-created-continue-btn"
+          >
             Continue
           </Button>
         </Stack>
@@ -991,7 +1000,7 @@ ai_response = response.json()`,
         <TabList sx={{ gap: 1, mb: '20px', flexWrap: 'wrap' }}>
           <StyledTab>Quick Start</StyledTab>
           <StyledTab>Endpoints</StyledTab>
-          <StyledTab>Scopes</StyledTab>
+          <StyledTab data-testid="api-keys-docs-scopes-tab">Scopes</StyledTab>
           <StyledTab>Examples</StyledTab>
         </TabList>
 
@@ -2038,7 +2047,7 @@ export default function UserApiKeysTab() {
       <Tabs value={mainTab} onChange={(_, value) => setMainTab(value as number)}>
         <TabList sx={{ gap: '2px', mb: '20px', flexWrap: 'wrap' }}>
           <StyledTab>My keys</StyledTab>
-          <StyledTab>API Documentation</StyledTab>
+          <StyledTab data-testid="api-keys-docs-tab">API Documentation</StyledTab>
         </TabList>
 
         <TabPanel value={0}>

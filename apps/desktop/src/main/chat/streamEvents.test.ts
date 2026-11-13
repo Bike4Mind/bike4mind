@@ -94,3 +94,28 @@ describe('the local rate on a frame', () => {
     expect(foldUsage(undefined, parseStreamEvent(frame)!)).toEqual({ outputTokens: 12 });
   });
 });
+
+describe('run attribution events', () => {
+  it('keeps the request id the meta event echoes', () => {
+    expect(parseStreamEvent({ type: 'meta', requestId: 'req-1' })).toEqual({ type: 'meta', requestId: 'req-1' });
+  });
+
+  it('parses the settled charge', () => {
+    expect(
+      parseStreamEvent({ type: 'settled', requestId: 'req-1', creditsCharged: 12, usdCost: 0.03, runId: 'run-1' })
+    ).toEqual({ type: 'settled', requestId: 'req-1', creditsCharged: 12, usdCost: 0.03, runId: 'run-1' });
+  });
+
+  it('skips a settled event missing its charge rather than failing the turn', () => {
+    expect(parseStreamEvent({ type: 'settled', requestId: 'req-1' })).toBeNull();
+  });
+
+  it('still tolerates an event type it does not know', () => {
+    expect(parseStreamEvent({ type: 'something_new', value: 1 })).toBeNull();
+  });
+
+  it('leaves usage alone on a settled event', () => {
+    const usage = { creditsUsed: 4 };
+    expect(foldUsage(usage, parseStreamEvent({ type: 'settled', requestId: 'r', creditsCharged: 9 })!)).toBe(usage);
+  });
+});

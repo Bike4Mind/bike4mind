@@ -512,6 +512,51 @@ describe('GenerationJobEngine', () => {
     });
   });
 
+  describe('a submit mode chosen per job', () => {
+    const modeByProvider: GenerationJobHandler['submitMode'] = job =>
+      job.payload.providerId === 'sync-provider' ? 'sync' : 'async';
+    const withProvider = (providerId: string) => ({ ...payload, providerId }) as IGenerationJob['payload'];
+
+    it.each([
+      ['sync-provider', 'orphaned_submit'],
+      ['async-provider', undefined],
+    ])('a running job with a recorded submit attempt (%s) settles as %s', async (providerId, errorCode) => {
+      const t = setup({ submitMode: modeByProvider });
+      const job = await t.create({
+        state: 'running',
+        payload: withProvider(providerId),
+        submitAttemptedAt: new Date('2026-10-05T23:59:00Z'),
+      });
+      t.results.poll.push({ next: 'poll_again', progress: 0.5 });
+      await t.engine.step(job.id);
+      expect(t.repository.jobs.get(job.id)!.error?.code).toBe(errorCode);
+      expect(t.handler.poll).toHaveBeenCalledTimes(errorCode ? 0 : 1);
+    });
+
+    it.each([
+      ['sync-provider', true],
+      ['async-provider', false],
+    ])('submit for %s marks the job running: %s', async (providerId, markRunning) => {
+      const t = setup({ submitMode: modeByProvider });
+      const job = await t.create({ payload: withProvider(providerId) });
+      const markSubmitAttempted = vi.spyOn(t.repository, 'markSubmitAttempted');
+      t.results.submit.push({ next: 'succeeded', payload: withProvider(providerId) });
+      await t.engine.step(job.id);
+      expect(markSubmitAttempted).toHaveBeenCalledWith(job.id, expect.any(Date), { markRunning });
+    });
+
+    it.each([
+      ['sync-provider', true],
+      ['async-provider', false],
+    ])('a cancel for %s restricts the cancel to before the submit: %s', async (providerId, beforeSubmitOnly) => {
+      const t = setup({ submitMode: modeByProvider });
+      const job = await t.create({ payload: withProvider(providerId) });
+      const requestCancel = vi.spyOn(t.repository, 'requestCancel');
+      await t.engine.requestCancel(job);
+      expect(requestCancel).toHaveBeenCalledWith(job.id, { beforeSubmitOnly });
+    });
+  });
+
   // The cancel lands after the step's own cancelRequested check but before the provider call.
   it.each(['sync', 'async'] as const)(
     'a %s submit that loses the race to a cancel ends cancelled without calling the provider',

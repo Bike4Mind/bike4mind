@@ -166,6 +166,23 @@ describe('executeCompletion - output capped at what the balance can pay for', ()
     );
   });
 
+  it('reports the capped ledger charge to onSettled, not the higher computed cost the client was shown', async () => {
+    const startingBalance = hold + 50;
+    const { db } = buildDb(startingBalance);
+    llm.complete.mockImplementation(async (_model, _messages, _options, cb) => {
+      await cb([''], { inputTokens: 200_000, outputTokens: 100_000 });
+    });
+    const onSettled = vi.fn();
+
+    await executeCompletion({ ...baseParams, db, requestId: 'req-capped', onSettled });
+
+    const shown = onChunk.mock.calls.map(([, info]) => info?.creditsUsed).find(used => typeof used === 'number');
+    expect(shown).toBeGreaterThan(startingBalance);
+    expect(onSettled).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: 'req-capped', committed: true, creditsCharged: startingBalance })
+    );
+  });
+
   it('holds the floor against a concurrent spend landing between the balance read and settlement', async () => {
     const startingBalance = hold + 500;
     const { db, balance, spendAfterNextRead } = buildDb(startingBalance);

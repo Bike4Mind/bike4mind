@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatDiff, ChatToolCall, ChatToolStatus } from '@shared/chat';
 import { diffTotals, groupToolCalls, shortenArgument, toolRowLabel } from './toolRows';
+import { MODEL_REQUEST_REFUSED } from '@shared/orchestration';
 
 function call(
   id: string,
@@ -334,5 +335,27 @@ describe('browser_tabs rows', () => {
     expect(toolRowLabel(call('1', 'browser_tabs', { action: 'select', id: 9 }, 'error'))).toBe(
       'Failed to change browser tabs'
     );
+  });
+});
+
+describe('a spawn refused only for its model request', () => {
+  const refused = (id: string): ChatToolCall => ({
+    ...call(id, 'session_spawn', { title: 'Worker', requested_model_id: 'sonnet' }, 'error'),
+    error: `${MODEL_REQUEST_REFUSED} 'sonnet' is not an allowed override (allowed: none).`,
+  });
+
+  it('reads as muted, while any other spawn failure stays an error', () => {
+    expect(toolRowLabel(refused('1'))).toBe('Not started: model sonnet is not allowed');
+    const started = { ...call('2', 'session_spawn', { title: 'Worker' }), label: 'Started a session: Worker' };
+    const [group] = groupToolCalls([refused('1'), started]);
+    expect(group.status).toBe('done');
+    expect(group.label).toBe('Not started: model sonnet is not allowed, started a session: Worker');
+    expect(groupToolCalls([refused('4'), refused('5'), refused('6')])[0].label).toBe(
+      'Not started: model sonnet is not allowed (3 requests)'
+    );
+    const opus = { ...refused('7'), input: { requested_model_id: 'opus' } };
+    expect(groupToolCalls([refused('8'), opus])[0].label).toBe('Not started: 2 model requests were not allowed');
+    const blocked = { ...refused('3'), error: 'Worker model x is blocked: not in the connected catalog.' };
+    expect(groupToolCalls([blocked])[0]).toMatchObject({ status: 'error', label: 'Failed to start a session' });
   });
 });

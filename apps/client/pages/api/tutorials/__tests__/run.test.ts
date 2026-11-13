@@ -41,7 +41,7 @@ vi.mock('@server/tutorials/models', async importOriginal => ({
     Progress: {},
     Override: { find: () => ({ lean: async () => [] }) },
     OverrideChange: {},
-    Draft: {},
+    Draft: { find: () => ({ lean: async () => [] }) },
   }),
 }));
 vi.mock('@server/tutorials/progressStore', () => ({

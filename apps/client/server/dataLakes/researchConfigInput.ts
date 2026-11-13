@@ -23,8 +23,11 @@ export const ResearchLeversInput = z.object({
   recencyDays: z.number().nullable().optional(),
   // Legacy: still sent by tabs opened before the tiers. Ignored when the tier fields are present.
   allowedDomains: z.array(z.string()).optional(),
+  trustedDomains: z.array(z.string()).optional(),
   reviewDomains: z.array(z.string()).optional(),
   unlistedSources: z.enum(RESEARCH_UNLISTED_SOURCES).optional(),
+  autoAdmitTrusted: z.boolean().optional(),
+  maxAutoAdmits: z.number().optional(),
   blockedDomains: z.array(z.string()).optional(),
   minRelevance: z.number().optional(),
   costCeilingMicroUsd: z.number().optional(),

@@ -105,6 +105,13 @@ export const RESEARCH_MAX_PROPOSALS_LIMIT = 25;
  */
 export const RESEARCH_RECENCY_DAYS_LIMIT = 366;
 
+/**
+ * How many trusted-site results one run may add to the lake without a reviewer. Its own cap, below
+ * the proposal cap by default: the lower of the two wins at run time.
+ */
+export const RESEARCH_MAX_AUTO_ADMITS_DEFAULT = 3;
+export const RESEARCH_MAX_AUTO_ADMITS_LIMIT = 25;
+
 /** How many domains an allow or deny list may hold. Bounded so one config cannot become a corpus. */
 export const RESEARCH_DOMAIN_LIST_MAX = 50;
 
@@ -225,14 +232,22 @@ export interface ResearchRunLevers {
    */
   recencyDays?: number;
   /**
-   * Sites whose hits are queued for review tagged as trusted. Not settable through the API yet;
-   * matched on a label-boundary suffix (`docs.example.com` matches an `example.com` entry).
+   * Sites whose hits are queued for review tagged as trusted, or admitted directly while
+   * `autoAdmitTrusted` is on. Matched on a label-boundary suffix (`docs.example.com` matches an
+   * `example.com` entry).
    */
   trustedDomains: string[];
   /** Sites whose hits are queued for review. Same matching as `trustedDomains`. */
   reviewDomains: string[];
   /** What happens to a hit that matches neither list. `drop` makes the lists an allow list. */
   unlistedSources: ResearchUnlistedSources;
+  /**
+   * When on, a first-time hit from a trusted site is admitted without a reviewer. The authority is
+   * the trusted-site entry a lake manager set, never a score. Off by default.
+   */
+  autoAdmitTrusted: boolean;
+  /** How many trusted hits one run may admit. The proposal cap still applies on top. */
+  maxAutoAdmits: number;
   /**
    * Derived on every write: the trusted plus review lists when `unlistedSources` is `drop`, else
    * empty. Read by no new code path except the legacy-mismatch rule; kept for readers that predate
@@ -255,9 +270,14 @@ export interface ResearchRunLevers {
  */
 export type LegacyResearchRunLevers = Omit<
   ResearchRunLevers,
-  'trustedDomains' | 'reviewDomains' | 'unlistedSources' | 'allowedDomains'
+  'trustedDomains' | 'reviewDomains' | 'unlistedSources' | 'allowedDomains' | 'autoAdmitTrusted' | 'maxAutoAdmits'
 > &
-  Partial<Pick<ResearchRunLevers, 'trustedDomains' | 'reviewDomains' | 'unlistedSources' | 'allowedDomains'>>;
+  Partial<
+    Pick<
+      ResearchRunLevers,
+      'trustedDomains' | 'reviewDomains' | 'unlistedSources' | 'allowedDomains' | 'autoAdmitTrusted' | 'maxAutoAdmits'
+    >
+  >;
 
 // -- Schedule ----------------------------------------------------------------------------------
 //
@@ -333,7 +353,10 @@ export interface IDataLakeResearchConfig extends ResearchRunLevers {
 
 export type IDataLakeResearchConfigDocument = IDataLakeResearchConfig & IMongoDocument;
 
-/** What the run loop counted. Every candidate lands in exactly one of the outcome buckets. */
+/**
+ * What the run loop counted. Every candidate lands in exactly one of the outcome buckets.
+ * `autoAdmitted` and `autoAdmitSkipped` are not buckets: they are sub-counts of `proposed`.
+ */
 export interface ResearchRunTotals {
   /** Hits the search provider returned. */
   searchHits: number;
@@ -351,6 +374,10 @@ export interface ResearchRunTotals {
   /** Candidates whose page could not be fetched or parsed. */
   fetchFailed: number;
   proposed: number;
+  /** Of `proposed`, the trusted results the run added to the lake without a reviewer. */
+  autoAdmitted: number;
+  /** Of `proposed`, the trusted results the rule attempted but did not admit. */
+  autoAdmitSkipped: number;
   /** Already awaiting a human for this source. */
   duplicatePending: number;
   /** The lake already holds this, by prior approval or by text. */
@@ -375,6 +402,8 @@ export const emptyResearchRunTotals = (): ResearchRunTotals => ({
   judgeFailed: 0,
   fetchFailed: 0,
   proposed: 0,
+  autoAdmitted: 0,
+  autoAdmitSkipped: 0,
   duplicatePending: 0,
   alreadyInLake: 0,
   suppressedByTombstone: 0,

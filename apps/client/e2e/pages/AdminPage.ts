@@ -107,6 +107,14 @@ export class AdminPage extends BasePage {
     await expect(this.page.getByTestId('invite-center-codes-tab')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
+  async navigateToGrowthPricing() {
+    await this.expandUserOps();
+    await (await this.revealSidebarItem('admin-growth-pricing-btn', 'money')).click();
+    await expect(this.page.getByTestId('admin-growth-pricing-section-credits')).toBeVisible({
+      timeout: TIMEOUTS.NAVIGATION,
+    });
+  }
+
   async switchToInviteCodesTab() {
     await this.page.getByTestId('invite-center-codes-tab').click();
   }

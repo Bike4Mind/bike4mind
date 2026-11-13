@@ -11,7 +11,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/dataLakes', () => ({
   adminBypassLakeIds: vi.fn(async () => []),
   resolveAccessibleLakes: vi.fn(async () => []),
-  isFileInAccessibleLake: vi.fn(),
+  grantingLakes: vi.fn(() => []),
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: h.getSignedUrl }),

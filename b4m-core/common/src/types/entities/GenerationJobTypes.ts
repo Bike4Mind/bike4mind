@@ -1,4 +1,4 @@
-import type { ProviderOutput } from '../../generation';
+import type { GenerationProviderJobHandle, ProviderOutput } from '../../generation';
 import type { ImageProviderId, StoredImageRequest } from '../../image';
 import type { MusicGenerationRequest, MusicProviderId } from '../../music';
 import type { ProviderJobHandle, VideoGenerationRequest, VideoProviderId } from '../../video';
@@ -120,12 +120,15 @@ export type MusicJobPayload = {
 export type ImageJobOutput = Omit<VideoJobOutput, 'durationSeconds'>;
 
 /**
- * One image per job. Like music, the provider returns the finished image from one blocking call, so the output
- * is moderated and stored in the submit step and provider bytes never reach this payload.
+ * One image per job. Most providers return the finished image from one blocking call, so the output is moderated
+ * and stored in the submit step. An async provider (BFL) queues a task instead: the handle is kept while the job
+ * polls, and the provider's delivery URL (never its bytes) until the store step downloads it.
  */
 export type ImageJobPayload = {
   request: StoredImageRequest;
   providerId: ImageProviderId;
+  providerHandle?: GenerationProviderJobHandle<ImageProviderId>;
+  providerOutput?: ProviderOutput;
   /** Shared by the jobs one "make N" request created, so a surface can show them as one batch. */
   groupId?: string;
   /**

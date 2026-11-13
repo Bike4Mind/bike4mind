@@ -22,7 +22,8 @@ import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import PersonIcon from '@mui/icons-material/Person';
 import { useQuery } from '@tanstack/react-query';
-import { adminUserProfilePath, FeedbackStatus } from '@bike4mind/common';
+import { adminUserProfilePath, FeedbackStatus, FEEDBACK_RESOLUTION_LABELS } from '@bike4mind/common';
+import FeedbackHistory from './FeedbackHistory';
 import { getFeedbackByIdFromServer } from '@client/app/utils/feedbackAPICalls';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import { openHelpPanel, useHelpPanel } from '@client/app/hooks/useHelpPanel';
@@ -37,6 +38,7 @@ import HelpContextChip from './HelpContextChip';
 import ClientContextChips from './ClientContextChips';
 import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER, FEEDBACK_SUBJECT_LABELS } from './constants';
 import { summarizePromptMeta } from './promptMetaSummary';
+import FeedbackAiPanel from './FeedbackAiPanel';
 
 const STATUS_TONES: Record<FeedbackStatus, AdminStatusTone> = {
   [FeedbackStatus.New]: 'info',
@@ -315,6 +317,8 @@ const FeedbackDetailBody = ({
         </Stack>
       )}
 
+      <FeedbackAiPanel key={record._id} feedbackId={record._id} />
+
       <SectionCard
         title="Reporter"
         data-testid="feedback-detail-reporter"
@@ -372,6 +376,12 @@ const FeedbackDetailBody = ({
       )}
 
       <SectionCard title="Status" data-testid="feedback-detail-status">
+        {record.resolution && (
+          <Fact label="Resolution">
+            {FEEDBACK_RESOLUTION_LABELS[record.resolution]}
+            {record.resolutionDuplicateId ? ` (${record.resolutionDuplicateId})` : ''}
+          </Fact>
+        )}
         <Fact label="Status">
           <Select
             size="sm"
@@ -399,6 +409,7 @@ const FeedbackDetailBody = ({
           {record.updatedAt ? formatDateTime(record.updatedAt) : undefined}
         </Fact>
       </SectionCard>
+      <FeedbackHistory key={record._id} id={record._id} />
     </Stack>
   );
 };

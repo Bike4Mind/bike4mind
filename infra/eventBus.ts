@@ -96,6 +96,11 @@ const emailEventsDLQ = new sst.aws.Queue('emailEventsDLQ', {
 });
 const emailEventsDeadLetter = createEventBusDeadLetter('emailEventsDLQ', emailEventsDLQ);
 
+// Recipient domains the worker drops instead of handing to the transport. The E2E suites sign up
+// and invite synthetic test.com users on every non-production stage, and SES would otherwise
+// bounce those and count them against the stage's configuration set metrics.
+const mailSinkDomains = $app.stage === 'production' ? '' : 'test.com';
+
 export const emailSendSubscription = eventBus.subscribe(
   'email-send',
   {
@@ -107,6 +112,7 @@ export const emailSendSubscription = eventBus.subscribe(
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       OTC_SES_CONFIGURATION_SET: otcEmailConfigurationSet?.name ?? '',
       ...mailTransportEnvironment,
+      MAIL_SINK_DOMAINS: mailSinkDomains,
     },
     permissions: [emailEventsDeadLetter.sendPermission, ...sesSendPermissions],
     transform: emailEventsDeadLetter.functionTarget,

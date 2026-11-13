@@ -18,10 +18,12 @@ import { adminAuditService } from '@bike4mind/services';
 import { getClientIp } from './ip';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
+import { recordOrganizationAuditEvent, organizationLifecycleAuditActions } from './organizationAudit';
 
 // A hand-written slice of the client's augmented Express.User (apps/client/global.d.ts). Keep in sync:
 // apps/client/server/utils/adminAuditActor.typecheck.ts fails client typecheck when the user stops fitting it.
 export type ActorIdentity = { id: string; username: string; name: string; email?: string | null; isAdmin: boolean };
+type RequestAuditActor = AuditActor & { userId: string };
 
 // Typed routes pass Request<unknown, ...>; this accepts those as well as the express default. The
 // extra fields are a structural slice of the Express augmentation in apps/client/global.d.ts,
@@ -37,7 +39,7 @@ export type RecordAdminActionFromRequestInput = Omit<adminAuditService.RecordAdm
   actorScope?: AuditActor['scope'];
 };
 
-export const toUserActor = (user: ActorIdentity, scope: AuditActor['scope']): AuditActor => ({
+export const toUserActor = (user: ActorIdentity, scope: AuditActor['scope']): RequestAuditActor => ({
   kind: 'user',
   scope,
   userId: user.id,
@@ -58,7 +60,7 @@ const lookUpImpersonator = async (req: AuditRequest, impersonatedBy: string) => 
   }
 };
 
-const resolveActor = async (req: AuditRequest, scope: AuditActor['scope']): Promise<AuditActor> => {
+const resolveActor = async (req: AuditRequest, scope: AuditActor['scope']): Promise<RequestAuditActor> => {
   const { user, apiKeyInfo } = req;
   if (!user) throw new Error('recordAdminActionFromRequest requires an authenticated request');
 
@@ -67,7 +69,7 @@ const resolveActor = async (req: AuditRequest, scope: AuditActor['scope']): Prom
   const { impersonatedBy } = user as typeof user & { impersonatedBy?: string };
   // The acting identity is the real admin; req.user is the account being impersonated.
   const admin = impersonatedBy ? await lookUpImpersonator(req, impersonatedBy) : undefined;
-  const base: AuditActor = !impersonatedBy
+  const base: RequestAuditActor = !impersonatedBy
     ? toUserActor(user, scope)
     : {
         ...(admin
@@ -128,11 +130,27 @@ export const recordAdminActionFromRequest = async (
   req: AuditRequest,
   { actorScope, ...input }: RecordAdminActionFromRequestInput,
   options: { creditGrantPolicy?: () => Promise<adminAuditService.CreditGrantPolicy> } = {}
-): Promise<AuditEntry | null> =>
-  adminAuditService.recordAdminAction(
-    { ...input, actor: await resolveActor(req, actorScope ?? 'platform'), context: buildContext(req) },
+): Promise<AuditEntry | null> => {
+  const actor = await resolveActor(req, actorScope ?? 'platform');
+  const entry = await adminAuditService.recordAdminAction(
+    { ...input, actor, context: buildContext(req) },
     await writerAdapters(req, input.action, options.creditGrantPolicy)
   );
+  const action = organizationLifecycleAuditActions[input.action];
+  if (action && actorScope === 'organization' && input.target.kind === 'organization' && req.user) {
+    try {
+      await recordOrganizationAuditEvent({
+        organizationId: input.target.id,
+        actorUserId: actor.userId,
+        action,
+      });
+    } catch (error) {
+      if (input.action === 'org.owner.transferred') throw error;
+      Logger.error('[ORGANIZATION_AUDIT_WRITE_FAILED]', { action, error });
+    }
+  }
+  return entry;
+};
 
 /**
  * Writes one admin audit entry for a caller that has already decided who the actor is. Lets shared

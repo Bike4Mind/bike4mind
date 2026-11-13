@@ -5,6 +5,8 @@ const {
   mockUserFindById,
   mockDestination,
   mockSessionFindOne,
+  mockSessionFind,
+  mockAgentFindOne,
   mockProjectFindOne,
   mockUserFindOne,
   mockUserFindByIdAndUpdate,
@@ -12,6 +14,8 @@ const {
   mockUserFindById: vi.fn(),
   mockDestination: vi.fn(),
   mockSessionFindOne: vi.fn(),
+  mockSessionFind: vi.fn(),
+  mockAgentFindOne: vi.fn(),
   mockProjectFindOne: vi.fn(),
   mockUserFindOne: vi.fn(),
   mockUserFindByIdAndUpdate: vi.fn(),
@@ -51,8 +55,11 @@ vi.mock('@bike4mind/database', () => ({
     findOne: (...a: unknown[]) => mockUserFindOne(...a),
     findByIdAndUpdate: (...a: unknown[]) => mockUserFindByIdAndUpdate(...a),
   },
-  Session: { findOne: (...a: unknown[]) => selectResolving(mockSessionFindOne(...a)) },
-  Agent: { findOne: vi.fn() },
+  Session: {
+    findOne: (...a: unknown[]) => selectResolving(mockSessionFindOne(...a)),
+    find: (...a: unknown[]) => selectResolving(mockSessionFind(...a)),
+  },
+  Agent: { findOne: (...a: unknown[]) => Promise.resolve(mockAgentFindOne(...a)) },
   Project: { findOne: (...a: unknown[]) => selectResolving(mockProjectFindOne(...a)) },
 }));
 
@@ -63,6 +70,8 @@ const OWN_NOTEBOOK = '507f1f77bcf86cd799439011';
 const FOREIGN_NOTEBOOK = '507f1f77bcf86cd799439012';
 const OWN_PROJECT = '507f1f77bcf86cd799439013';
 const FOREIGN_PROJECT = '507f1f77bcf86cd799439014';
+const DELETED_NOTEBOOK = '507f1f77bcf86cd799439015';
+const AGENT_ID = '507f1f77bcf86cd799439016';
 
 const run = (body: Record<string, unknown>, userId = OWN) => {
   const { req, res } = createMocks({ method: 'PATCH', query: { id: userId }, body });
@@ -72,7 +81,10 @@ const run = (body: Record<string, unknown>, userId = OWN) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockUserFindById.mockReset();
   mockSessionFindOne.mockReset();
+  mockSessionFind.mockReset();
+  mockAgentFindOne.mockReset();
   mockProjectFindOne.mockReset();
   mockUserFindOne.mockReset().mockResolvedValue(null);
   mockUserFindByIdAndUpdate.mockReset().mockResolvedValue({ slackSettings: {} });
@@ -283,5 +295,207 @@ describe('Slack identity and preference boundaries', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockDestination).not.toHaveBeenCalled();
     expect(mockUserFindByIdAndUpdate).toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/users/:id/slack-settings - stale stored references', () => {
+  const stored = (slackSettings: Record<string, unknown>) => mockUserFindById.mockReturnValue({ slackSettings });
+  const update = () => mockUserFindByIdAndUpdate.mock.calls[0][1];
+
+  it('drops a stored keyword rule whose notebook was deleted and saves the rest', async () => {
+    stored({
+      keywordRouting: [
+        { keywords: ['bug'], notebookId: DELETED_NOTEBOOK },
+        { keywords: ['ops'], notebookId: OWN_NOTEBOOK },
+      ],
+    });
+    mockSessionFind.mockReturnValue([{ _id: OWN_NOTEBOOK }]);
+    const { res, promise } = run({
+      keywordRouting: [
+        { keywords: ['bug'], notebookId: DELETED_NOTEBOOK },
+        { keywords: ['ops'], notebookId: OWN_NOTEBOOK },
+      ],
+      autoCreateNotebook: false,
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(update().$set['slackSettings.keywordRouting']).toEqual([{ keywords: ['ops'], notebookId: OWN_NOTEBOOK }]);
+    expect(res._getJSONData().removed).toEqual([{ field: 'keywordRouting', id: DELETED_NOTEBOOK }]);
+  });
+
+  it('unsets keyword routing when every stored rule is stale', async () => {
+    stored({ keywordRouting: [{ keywords: ['bug'], notebookId: DELETED_NOTEBOOK }] });
+    mockSessionFind.mockReturnValue([]);
+    const { res, promise } = run({ keywordRouting: [{ keywords: ['bug'], notebookId: DELETED_NOTEBOOK }] });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(update().$unset).toHaveProperty('slackSettings.keywordRouting', 1);
+    expect(update().$set).not.toHaveProperty('slackSettings.keywordRouting');
+  });
+
+  it('drops an unchanged malformed keyword target without querying it', async () => {
+    stored({ keywordRouting: [{ keywords: ['bug'], notebookId: 'legacy-invalid-id' }] });
+    mockSessionFind.mockImplementation(() => {
+      throw new Error('Cannot cast malformed notebook id');
+    });
+    const { res, promise } = run({ keywordRouting: [{ keywords: ['bug'], notebookId: 'legacy-invalid-id' }] });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSessionFind).not.toHaveBeenCalled();
+    expect(update().$unset).toHaveProperty('slackSettings.keywordRouting', 1);
+    expect(res._getJSONData().removed).toEqual([{ field: 'keywordRouting', id: 'legacy-invalid-id' }]);
+  });
+
+  it('rejects a new malformed keyword target without querying or saving', async () => {
+    stored({});
+    mockSessionFind.mockImplementation(() => {
+      throw new Error('Cannot cast malformed notebook id');
+    });
+    const { res, promise } = run({ keywordRouting: [{ keywords: ['bug'], notebookId: 'new-invalid-id' }] });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockSessionFind).not.toHaveBeenCalled();
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a new keyword rule pointing at a notebook the caller does not own', async () => {
+    stored({});
+    mockSessionFind.mockReturnValue([]);
+    const { res, promise } = run({ keywordRouting: [{ keywords: ['bug'], notebookId: FOREIGN_NOTEBOOK }] });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toMatch(/Notebook 507f1f77bcf86cd799439012 not found or does not belong to you/);
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('drops an unchanged stale defaultNotebookId', async () => {
+    stored({ defaultNotebookId: DELETED_NOTEBOOK });
+    mockSessionFindOne.mockReturnValue(null);
+    const { res, promise } = run({ defaultNotebookId: DELETED_NOTEBOOK });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(update().$unset['slackSettings.defaultNotebookId']).toBe(1);
+    expect(res._getJSONData().removed).toContainEqual({ field: 'defaultNotebookId', id: DELETED_NOTEBOOK });
+  });
+
+  it('still rejects a changed defaultNotebookId the caller does not own', async () => {
+    stored({ defaultNotebookId: DELETED_NOTEBOOK });
+    mockSessionFindOne.mockReturnValue(null);
+    const { res, promise } = run({ defaultNotebookId: FOREIGN_NOTEBOOK });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('drops an unchanged stale agent routing notebook and keeps the others', async () => {
+    stored({ agentNotebookRouting: { dev: DELETED_NOTEBOOK, pm: OWN_NOTEBOOK } });
+    mockSessionFindOne.mockImplementation((q: { _id: string }) => (q._id === OWN_NOTEBOOK ? { _id: q._id } : null));
+    const { res, promise } = run({ agentNotebookRouting: { dev: DELETED_NOTEBOOK, pm: OWN_NOTEBOOK } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(update().$set['slackSettings.agentNotebookRouting']).toEqual({ pm: OWN_NOTEBOOK });
+    expect(res._getJSONData().removed).toEqual([{ field: 'agentNotebookRouting.dev', id: DELETED_NOTEBOOK }]);
+  });
+
+  it('drops an unchanged inaccessible defaultProjectId', async () => {
+    stored({ defaultProjectId: FOREIGN_PROJECT });
+    mockProjectFindOne.mockReturnValue(null);
+    const { res, promise } = run({ defaultProjectId: FOREIGN_PROJECT });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(update().$unset['slackSettings.defaultProjectId']).toBe(1);
+    expect(res._getJSONData().removed).toContainEqual({ field: 'defaultProjectId', id: FOREIGN_PROJECT });
+  });
+
+  it('drops an unchanged inaccessible customAgentId', async () => {
+    stored({ customAgentId: AGENT_ID });
+    mockAgentFindOne.mockReturnValue(null);
+    const { res, promise } = run({ customAgentId: AGENT_ID });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(update().$unset['slackSettings.customAgentId']).toBe(1);
+    expect(res._getJSONData().removed).toContainEqual({ field: 'customAgentId', id: AGENT_ID });
+  });
+
+  it('refuses a changed customAgentId the caller cannot access', async () => {
+    stored({});
+    mockAgentFindOne.mockReturnValue(null);
+    const { res, promise } = run({ customAgentId: AGENT_ID });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toBe('Selected custom agent not found or not accessible');
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed new customAgentId', async () => {
+    stored({});
+    const { res, promise } = run({ customAgentId: 'not-an-id' });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toBe('Invalid agent ID format');
+    expect(mockAgentFindOne).not.toHaveBeenCalled();
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a mixed keyword save when the new rule points at a foreign notebook', async () => {
+    stored({ keywordRouting: [{ keywords: ['bug'], notebookId: DELETED_NOTEBOOK }] });
+    mockSessionFind.mockReturnValue([]);
+    const { res, promise } = run({
+      keywordRouting: [
+        { keywords: ['bug'], notebookId: DELETED_NOTEBOOK },
+        { keywords: ['x'], notebookId: FOREIGN_NOTEBOOK },
+      ],
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toContain(FOREIGN_NOTEBOOK);
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a changed agent routing notebook the caller does not own', async () => {
+    stored({ agentNotebookRouting: { dev: DELETED_NOTEBOOK } });
+    mockSessionFindOne.mockReturnValue(null);
+    const { res, promise } = run({ agentNotebookRouting: { dev: FOREIGN_NOTEBOOK } });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toBe('Agent routing notebook not found or does not belong to you');
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stale agent routing id moved to a different key', async () => {
+    stored({ agentNotebookRouting: { dev: DELETED_NOTEBOOK } });
+    mockSessionFindOne.mockReturnValue(null);
+    const { res, promise } = run({ agentNotebookRouting: { pm: DELETED_NOTEBOOK } });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a changed defaultProjectId the caller cannot access', async () => {
+    stored({ defaultProjectId: FOREIGN_PROJECT });
+    mockProjectFindOne.mockReturnValue(null);
+    const { res, promise } = run({ defaultProjectId: OWN_PROJECT });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toBe('Default project not found or not accessible');
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('omits removed when nothing was stale', async () => {
+    stored({ defaultNotebookId: OWN_NOTEBOOK });
+    mockSessionFindOne.mockReturnValue({ _id: OWN_NOTEBOOK });
+    const { res, promise } = run({ defaultNotebookId: OWN_NOTEBOOK });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).not.toHaveProperty('removed');
+  });
+
+  it('drops an unchanged malformed stored defaultNotebookId without querying', async () => {
+    stored({ defaultNotebookId: 'legacy-bad' });
+    const { res, promise } = run({ defaultNotebookId: 'legacy-bad' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().removed).toContainEqual({ field: 'defaultNotebookId', id: 'legacy-bad' });
+    expect(mockSessionFindOne).not.toHaveBeenCalled();
   });
 });
