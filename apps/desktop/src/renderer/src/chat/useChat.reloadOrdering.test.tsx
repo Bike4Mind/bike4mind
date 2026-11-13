@@ -115,4 +115,91 @@ describe('reloading the session list', () => {
 
     expect(controller().sessions.map(session => session.id)).toEqual(['newer', 'old']);
   });
+
+  it('resolves a reload overtaken twice only once the last listing has been applied', async () => {
+    const first = deferred<ChatSessionSummary[]>();
+    const second = deferred<ChatSessionSummary[]>();
+    const third = deferred<ChatSessionSummary[]>();
+    const listSessions = vi
+      .fn<() => Promise<ChatSessionSummary[]>>()
+      .mockResolvedValueOnce([summary('old')])
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValueOnce(third.promise);
+    const controller = await mount(listSessions);
+
+    let firstDone = false;
+    await act(async () => {
+      void controller()
+        .reload()
+        .then(() => {
+          firstDone = true;
+        });
+      void controller().reload();
+      void controller().reload();
+      first.resolve([summary('old')]);
+      second.resolve([summary('old')]);
+    });
+    expect(firstDone).toBe(false);
+
+    await act(async () => third.resolve([summary('fresh'), summary('old')]));
+
+    expect(firstDone).toBe(true);
+    expect(controller().sessions.map(session => session.id)).toEqual(['fresh', 'old']);
+  });
+
+  it('re-lists when a local edit lands while an overtaking listing is in flight', async () => {
+    const first = deferred<ChatSessionSummary[]>();
+    const second = deferred<ChatSessionSummary[]>();
+    const listSessions = vi
+      .fn<() => Promise<ChatSessionSummary[]>>()
+      .mockResolvedValueOnce([summary('old')])
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockResolvedValueOnce([summary('relisted'), summary('old')]);
+    const controller = await mount(listSessions);
+
+    let firstDone = false;
+    await act(async () => {
+      void controller()
+        .reload()
+        .then(() => {
+          firstDone = true;
+        });
+      void controller().reload();
+      controller().apply(summary('old'));
+      first.resolve([summary('old')]);
+      second.resolve([summary('stale')]);
+    });
+
+    expect(listSessions).toHaveBeenCalledTimes(4);
+    expect(firstDone).toBe(true);
+    expect(controller().sessions.map(session => session.id)).toEqual(['relisted', 'old']);
+  });
+
+  it('rejects an overtaken reload when the newer listing fails', async () => {
+    const first = deferred<ChatSessionSummary[]>();
+    const listSessions = vi
+      .fn<() => Promise<ChatSessionSummary[]>>()
+      .mockResolvedValueOnce([summary('old')])
+      .mockReturnValueOnce(first.promise)
+      .mockRejectedValueOnce(new Error('list failed'));
+    const controller = await mount(listSessions);
+
+    let outcome: unknown = null;
+    await act(async () => {
+      controller()
+        .reload()
+        .catch(error => {
+          outcome = error;
+        });
+      controller()
+        .reload()
+        .catch(() => {});
+      first.resolve([summary('old')]);
+    });
+
+    expect(outcome).toEqual(new Error('list failed'));
+    expect(controller().sessions.map(session => session.id)).toEqual(['old']);
+  });
 });
