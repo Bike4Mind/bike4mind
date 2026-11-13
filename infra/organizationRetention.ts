@@ -3,6 +3,7 @@ import { createEventBusDeadLetter } from './eventBusDeadLetter';
 import { allSecrets } from './secrets';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
 import { router, routerDistributionId } from './router';
+import { lambdaVpc } from './vpc';
 
 const organizationRetentionDlq = runsScheduledJobs
   ? new sst.aws.Queue('organizationRetentionDlq', { transform: { queue: { messageRetentionSeconds: 1209600 } } })
@@ -16,6 +17,7 @@ const cron =
     ? new sst.aws.Cron('organizationRetention', {
         schedule: 'rate(1 hour)',
         function: {
+          vpc: lambdaVpc,
           handler: 'apps/workers/src/cron/organizationRetention.handler',
           runtime: 'nodejs24.x',
           timeout: '3 minutes',

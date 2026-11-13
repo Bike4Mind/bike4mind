@@ -120,6 +120,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/cron/modelDiscovery.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/modelDiscoveryStaleness.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/oauthAbuseAutoBlock.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
+| `apps/workers/src/cron/organizationRetention.handler` | `infra/organizationRetention.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `generatedImagesBucket`, `routerDistributionId` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/providerUsagePoll.handler` | `infra/cron.ts` | linked: `allSecrets` | No | Already outside the VPC. Provider usage APIs and CloudWatch only. |
 | `apps/workers/src/cron/questTimeoutSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets`, `generationCallbackQueue` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/realtimeConnectionSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |

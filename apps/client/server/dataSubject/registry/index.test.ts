@@ -5,6 +5,20 @@ import type { DataHolderRegistry } from '../types';
 
 const noData = { kind: 'noUserData', note: 'test' } as const;
 
+describe('organization retention personal-data policy', () => {
+  it('deletes actor-owned estimates and withholds their confirmation tokens', () => {
+    const holder = DATA_HOLDER_REGISTRY.OrganizationRetentionEstimate;
+    if (holder.kind !== 'holder') throw new Error('Estimate must be a holder');
+    expect(holder.references).toEqual([{ path: 'actorUserId', matchBy: 'userId', action: 'deleteDocument' }]);
+    expect(holder.secretPaths).toContain('token');
+  });
+  it('keeps organization media records while anonymizing creator attribution', () => {
+    const holder = DATA_HOLDER_REGISTRY.OrganizationGeneratedObject;
+    if (holder.kind !== 'holder') throw new Error('Generated object must be a holder');
+    expect(holder.references).toEqual([{ path: 'userId', matchBy: 'userId', action: 'anonymize' }]);
+  });
+});
+
 describe('organization audit personal-data policy', () => {
   it('classifies membership target IDs in analytics as attribution on another account record', () => {
     const holder = DATA_HOLDER_REGISTRY.CounterLog;
