@@ -337,6 +337,7 @@ export const shouldStampPersistedVersion = (params: {
   latestVersion?: number;
 }): boolean =>
   params.latestVersion !== undefined &&
+  params.latestContent !== undefined &&
   params.currentContent === params.latestContent &&
   params.latestVersion > (params.currentVersion ?? 0);
 
