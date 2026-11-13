@@ -77,12 +77,16 @@ export const useSearchProjects = (
   search: string,
   filters: { favorite?: boolean },
   orderBy: { by: 'createdAt' | 'updatedAt'; direction: 'asc' | 'desc' },
-  options?: { enabled?: boolean }
+  options?: { enabled?: boolean; propagateErrors?: boolean }
 ) => {
   const queryClient = useQueryClient();
 
   return useInfiniteQuery({
-    queryKey: ['projects', 'search', { search, filters, orderBy }],
+    queryKey: [
+      'projects',
+      'search',
+      { search, filters, orderBy, ...(options?.propagateErrors ? { propagateErrors: true } : {}) },
+    ],
     initialPageParam: { page: 1 },
     queryFn: async params => {
       const { page = 1 } = params.pageParam || {};
@@ -107,7 +111,8 @@ export const useSearchProjects = (
         });
 
         return response.data;
-      } catch (e) {
+      } catch (error) {
+        if (options?.propagateErrors) throw error;
         return { data: [], hasMore: false };
       }
     },

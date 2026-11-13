@@ -6,6 +6,7 @@ export interface IProjectMethods {}
 
 export interface IProjectRepository extends IBaseRepository<IProjectDocument> {
   shareable: IShareableStaticMethods<IProjectDocument>;
+  setOwnedGroupReadAccess: (projectId: string, ownerId: string, groupId: string, enabled: boolean) => Promise<boolean>;
   /**
    * Partial update that re-checks update access and not-deleted in the write filter; null when the
    * project is gone, deleted, or no longer writable by `user`.
