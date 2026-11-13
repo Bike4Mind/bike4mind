@@ -12,6 +12,7 @@ import { distinctIdCount } from '../utils/objectIds';
 const createProjectSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  organizationId: z.string().optional(),
   sessionIds: z.array(z.string()).optional(),
   fileIds: z.array(z.string()).optional(),
 });
@@ -34,7 +35,7 @@ export const createProject = async (
   adapters: CreateProjectAdapters
 ) => {
   const { db } = adapters;
-  const { name, description, sessionIds, fileIds } = secureParameters(params, createProjectSchema);
+  const { name, description, organizationId, sessionIds, fileIds } = secureParameters(params, createProjectSchema);
   const userId = actor.id;
 
   // Resolved through the caller's access predicate before persisting, same shape as addFiles.ts:
@@ -58,6 +59,7 @@ export const createProject = async (
     name,
     description: description ?? '',
     userId,
+    organizationId,
 
     sessionIds: resolvedSessionIds,
     fileIds: resolvedFileIds,

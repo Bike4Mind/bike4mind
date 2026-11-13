@@ -179,6 +179,17 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       ),
       required: false,
     },
+    sharingPolicy: {
+      type: new Schema(
+        {
+          allowPublicLinks: { type: Boolean, required: true },
+          allowExternalSharing: { type: Boolean, required: true },
+          allowedDomains: { type: [String], default: [] },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     mfaPolicy: {
       type: new Schema(
         { required: { type: Boolean, default: false }, graceEndsAt: { type: Date, default: null } },

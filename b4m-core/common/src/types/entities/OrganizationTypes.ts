@@ -2,6 +2,7 @@ import { IAppFileDocument, IShareableDocument, IShareableStaticMethods } from '.
 import { IBaseRepository } from './BaseTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { IModelConfig } from './ModelConfigTypes';
+import type { OrganizationSharingPolicy } from '../../organizationSharingPolicy';
 import type { IOrgBudgetAlerts } from './OrgAlertTypes';
 
 export interface IUserDetails {
@@ -83,6 +84,7 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * Applies to pushes for users whose active organization is this one.
    */
   redactPushContent?: boolean;
+  sharingPolicy?: OrganizationSharingPolicy;
   mfaPolicy?: {
     required: boolean;
     graceEndsAt: Date | null;
