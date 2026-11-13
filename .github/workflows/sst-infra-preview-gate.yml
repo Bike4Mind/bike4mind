@@ -160,7 +160,7 @@ jobs:
           preview_labels=$(gh api "repos/$REPO/issues/$PR/labels" -q '.[].name')
 
           # Maintainers use skip-preview for non-deployment changes. A fresh waiver
-          # is required after every push; labeled events re-evaluate the gate.
+          # is required after every push; the relay re-runs the gate when it moves.
           if grep -qx 'skip-preview' <<< "$preview_labels"; then
             echo "::notice title=Preview skipped::'skip-preview' label is set. Gate satisfied without a preview deploy."
             exit 0
