@@ -7,8 +7,10 @@ import { desktopTheme } from './theme';
 // no color or metric. If a value changes on purpose, regenerate the fixture in the same PR and say
 // so: temporarily replace `expect(snapshot()).toEqual(fixture)` below with
 // `console.log(JSON.stringify(snapshot(), null, 2))`, run this file with
-// `pnpm --filter @bike4mind/desktop exec vitest run src/renderer/src/themeTokenParity.test.ts`,
-// paste the output over __fixtures__/desktopThemeBefore.json, and restore the assertion.
+// `pnpm --filter @bike4mind/desktop exec vitest run --reporter=default src/renderer/src/themeTokenParity.test.ts`,
+// paste only the JSON body (not vitest's `stdout |` header line) over
+// __fixtures__/desktopThemeBefore.json, and restore the assertion. `--reporter=default` is
+// needed because the agent reporter hides console output from passing tests.
 
 const COLOR = /^(?:#([0-9a-f]{6})|rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)(?:\s*[,/]\s*([\d.]+))?\s*\))$/i;
 

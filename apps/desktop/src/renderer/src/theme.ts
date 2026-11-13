@@ -21,7 +21,7 @@ const avoidPage = [avoidPageModifier];
 const tokens = emitJoyThemeFragment(designTokens);
 const web = tokens.colorSchemes.dark.palette;
 
-/** The light-mode page and surface: the web's light body token. */
+/** The light-mode surface (also the Electron window background): the web's light body token. */
 export const LIGHT_SURFACE = tokens.colorSchemes.light.palette.background.body;
 
 /**
