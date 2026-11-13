@@ -3,27 +3,37 @@ import { createMocks } from 'node-mocks-http';
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: any = { use: () => chain, post: (fn: any) => fn, get: (fn: any) => fn, delete: (fn: any) => fn };
+    const chain: Record<string, unknown> = {
+      use: () => chain,
+      post: (fn: unknown) => fn,
+      get: (fn: unknown) => fn,
+      delete: (fn: unknown) => fn,
+    };
     return chain;
   },
 }));
-vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
+vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
-const mockLogAuthAudit = vi.fn((..._args: any[]) => Promise.resolve());
-vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: any[]) => mockLogAuthAudit(...a) }));
+const mockLogAuthAudit = vi.fn((..._args: unknown[]) => Promise.resolve());
+vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: unknown[]) => mockLogAuthAudit(...a) }));
 
 const mockCompleteMfaLogin = vi.fn();
-vi.mock('@server/auth/completeMfaLogin', () => ({ completeMfaLogin: (...a: any[]) => mockCompleteMfaLogin(...a) }));
+vi.mock('@server/auth/completeMfaLogin', () => ({ completeMfaLogin: (...a: unknown[]) => mockCompleteMfaLogin(...a) }));
+
+const mockCompleteMfaEnrollment = vi.fn();
+vi.mock('@server/auth/completeMfaEnrollment', () => ({
+  completeMfaEnrollment: (...a: unknown[]) => mockCompleteMfaEnrollment(...a),
+}));
 
 const mockFindById = vi.fn();
 const mockFindByIdWithMfaSecrets = vi.fn();
 const mockRecordFailedAttempt = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   userRepository: {
-    findById: (...a: any[]) => mockFindById(...a),
-    findByIdWithMfaSecrets: (...a: any[]) => mockFindByIdWithMfaSecrets(...a),
-    atomicRecordMfaFailedAttempt: (...a: any[]) => mockRecordFailedAttempt(...a),
+    findById: (...a: unknown[]) => mockFindById(...a),
+    findByIdWithMfaSecrets: (...a: unknown[]) => mockFindByIdWithMfaSecrets(...a),
+    atomicRecordMfaFailedAttempt: (...a: unknown[]) => mockRecordFailedAttempt(...a),
   },
   passkeyCredentialRepository: {},
   passkeyChallengeRepository: {},
@@ -42,11 +52,16 @@ vi.mock('@bike4mind/services', async () => {
       isMfaAttemptRejectedError,
       recordFailedMfaAttempt,
       resolvePasskeyRelyingParty: () => RP,
-      finishPasskeyAuthentication: (...a: any[]) => mockFinishAuthentication(...a),
-      finishPasskeyRegistration: (...a: any[]) => mockFinishRegistration(...a),
-      startPasskeyRegistration: (...a: any[]) => mockStartRegistration(...a),
+      userHasMFAConfigured: (
+        user: { mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean } | null } | null | undefined
+      ) => !!user?.mfa?.totpEnabled || !!user?.mfa?.passkeyEnabled,
+      finishPasskeyAuthentication: (...a: unknown[]) => mockFinishAuthentication(...a),
+      finishPasskeyRegistration: (...a: unknown[]) => mockFinishRegistration(...a),
+      startPasskeyRegistration: (...a: unknown[]) => mockStartRegistration(...a),
       MAX_FAILED_ATTEMPTS: MFA_MAX_FAILED_ATTEMPTS,
-      isUserLockedOut: (user: any) => !!user?.mfa?.lockedUntil && new Date(user.mfa.lockedUntil) > new Date(),
+      isUserLockedOut: (
+        user: { mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean } | null } | null | undefined
+      ) => !!user?.mfa?.lockedUntil && new Date(user.mfa.lockedUntil) > new Date(),
       getLockoutTimeRemaining: () => 15,
     },
   };
@@ -81,9 +96,9 @@ const attestation = {
 
 const makeReqRes = (body: unknown) => {
   const { req, res } = createMocks({ method: 'POST' });
-  (req as any).user = { id: 'user-1' };
-  (req as any).body = body;
-  (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  Object.assign(req, { user: { id: 'user-1' } });
+  Object.assign(req, { body: body });
+  Object.assign(req, { logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
   return { req, res };
 };
 
@@ -92,6 +107,7 @@ beforeEach(() => {
   mockFindByIdWithMfaSecrets.mockResolvedValue({ id: 'user-1', mfa: { totpEnabled: true, totpSecret: 'SECRET' } });
   mockFindById.mockResolvedValue({ id: 'user-1', mfa: { totpEnabled: true } });
   mockCompleteMfaLogin.mockResolvedValue({ accessToken: 'full-access', deviceRemembered: true });
+  mockCompleteMfaEnrollment.mockResolvedValue({ accessToken: 'fresh-access' });
 });
 
 describe('/api/auth/mfa/passkey/authenticate', () => {
@@ -99,7 +115,7 @@ describe('/api/auth/mfa/passkey/authenticate', () => {
     mockFinishAuthentication.mockResolvedValue({ user: { id: 'user-1', tokenVersion: 3 }, credentialId: 'pk-1' });
     const { req, res } = makeReqRes({ response: assertion, rememberDevice: true });
 
-    await authenticateHandler(req as any, res as any);
+    await authenticateHandler(req as never, res as never);
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ verified: true, accessToken: 'full-access', deviceRemembered: true });
@@ -133,7 +149,7 @@ describe('/api/auth/mfa/passkey/authenticate', () => {
     });
     const { req, res } = makeReqRes({ response: assertion });
 
-    await authenticateHandler(req as any, res as any);
+    await authenticateHandler(req as never, res as never);
 
     expect(res._getStatusCode()).toBe(423);
     expect(mockFinishAuthentication).not.toHaveBeenCalled();
@@ -145,7 +161,7 @@ describe('/api/auth/mfa/passkey/authenticate', () => {
     mockRecordFailedAttempt.mockResolvedValue({ id: 'user-1', mfa: { failedAttempts: 1 } });
     const { req, res } = makeReqRes({ response: assertion });
 
-    await authenticateHandler(req as any, res as any);
+    await authenticateHandler(req as never, res as never);
 
     expect(mockRecordFailedAttempt).toHaveBeenCalledWith('user-1');
     expect(res._getStatusCode()).toBe(400);
@@ -161,7 +177,7 @@ describe('/api/auth/mfa/passkey/authenticate', () => {
     });
     const { req, res } = makeReqRes({ response: assertion });
 
-    await authenticateHandler(req as any, res as any);
+    await authenticateHandler(req as never, res as never);
 
     expect(res._getStatusCode()).toBe(423);
   });
@@ -170,7 +186,7 @@ describe('/api/auth/mfa/passkey/authenticate', () => {
     mockFinishAuthentication.mockRejectedValue(passkeyError('challenge_expired'));
     const { req, res } = makeReqRes({ response: assertion });
 
-    await authenticateHandler(req as any, res as any);
+    await authenticateHandler(req as never, res as never);
 
     expect(res._getStatusCode()).toBe(400);
     expect(mockRecordFailedAttempt).not.toHaveBeenCalled();
@@ -180,45 +196,99 @@ describe('/api/auth/mfa/passkey/authenticate', () => {
     mockFinishAuthentication.mockRejectedValue(new Error('db down'));
     const { req, res } = makeReqRes({ response: assertion });
 
-    await expect(authenticateHandler(req as any, res as any)).rejects.toThrow('db down');
+    await expect(authenticateHandler(req as never, res as never)).rejects.toThrow('db down');
     expect(mockRecordFailedAttempt).not.toHaveBeenCalled();
   });
 
   it('rejects a body that is not a WebAuthn assertion', async () => {
     const { req, res } = makeReqRes({ response: { ...assertion, type: 'password' } });
 
-    await expect(authenticateHandler(req as any, res as any)).rejects.toThrow();
+    await expect(authenticateHandler(req as never, res as never)).rejects.toThrow();
     expect(mockFinishAuthentication).not.toHaveBeenCalled();
   });
 });
 
 describe('/api/auth/mfa/passkey/register', () => {
-  it('stores the passkey and writes an audit entry', async () => {
-    mockFinishRegistration.mockResolvedValue({
-      id: 'pk-1',
-      name: 'Laptop',
-      deviceType: 'multiDevice',
-      backedUp: true,
-      createdAt: new Date('2026-01-01'),
-      credentialId: 'secret-ish',
-      publicKey: 'pub',
-    });
+  const storedCredential = {
+    id: 'pk-1',
+    name: 'Laptop',
+    deviceType: 'multiDevice',
+    backedUp: true,
+    createdAt: new Date('2026-01-01'),
+    credentialId: 'secret-ish',
+    publicKey: 'pub',
+  };
+
+  it('adds a passkey to an enrolled user: answers the passkey only and skips the enrollment tail', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', mfa: { totpEnabled: true } });
+    mockFinishRegistration.mockResolvedValue({ credential: storedCredential, firstFactor: false });
     const { req, res } = makeReqRes({ response: attestation, name: 'Laptop' });
 
-    await registerHandler(req as any, res as any);
+    await registerHandler(req as never, res as never);
 
     expect(res._getStatusCode()).toBe(200);
-    const { passkey } = res._getJSONData();
-    expect(passkey).toMatchObject({ id: 'pk-1', name: 'Laptop', lastUsedAt: null });
-    expect(passkey.publicKey).toBeUndefined();
+    const body = res._getJSONData();
+    expect(body.passkey).toMatchObject({ id: 'pk-1', name: 'Laptop', lastUsedAt: null });
+    expect(body.passkey.publicKey).toBeUndefined();
+    expect(body.backupCodes).toBeUndefined();
+    expect(body.accessToken).toBeUndefined();
+    expect(mockCompleteMfaEnrollment).not.toHaveBeenCalled();
     expect(mockLogAuthAudit.mock.calls[0][1]).toMatchObject({ userId: 'user-1', event: 'passkey_registered' });
+  });
+
+  it('finishes a first-factor enrollment: backup codes, fresh session and the refreshed user', async () => {
+    const before = { id: 'user-1', mfa: {} };
+    const after = { id: 'user-1', mfa: { passkeyEnabled: true } };
+    mockFindById.mockResolvedValueOnce(before).mockResolvedValueOnce(after);
+    mockFinishRegistration.mockResolvedValue({
+      credential: storedCredential,
+      firstFactor: true,
+      backupCodes: ['c1', 'c2'],
+    });
+    const { req, res } = makeReqRes({ response: attestation });
+
+    await registerHandler(req as never, res as never);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({
+      passkey: { id: 'pk-1' },
+      backupCodes: ['c1', 'c2'],
+      accessToken: 'fresh-access',
+      user: after,
+    });
+    // The user as it was before the factor was saved, so a forced enrollment still counts as forced.
+    expect(mockCompleteMfaEnrollment).toHaveBeenCalledWith(req, res, before);
+    expect(mockFinishRegistration.mock.calls[0][1]).toHaveProperty('users');
+  });
+
+  it('refuses a pending sign-in whose user already has a factor, before touching the ceremony', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', mfa: { passkeyEnabled: true } });
+    const { req, res } = makeReqRes({ response: attestation });
+    Object.assign(req, { user: { id: 'user-1', mfaPending: true } });
+
+    await registerHandler(req as never, res as never);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockFinishRegistration).not.toHaveBeenCalled();
+    expect(mockCompleteMfaEnrollment).not.toHaveBeenCalled();
+  });
+
+  it('refuses first-factor enrollment from an emergency sign-in', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', mfa: {} });
+    const { req, res } = makeReqRes({ response: attestation });
+    Object.assign(req, { user: { id: 'user-1', mfaSignIn: { createdVia: 'emergency' } } });
+
+    await registerHandler(req as never, res as never);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockFinishRegistration).not.toHaveBeenCalled();
   });
 
   it('maps a ceremony error to its status without auditing', async () => {
     mockFinishRegistration.mockRejectedValue(passkeyError('limit_reached'));
     const { req, res } = makeReqRes({ response: attestation });
 
-    await registerHandler(req as any, res as any);
+    await registerHandler(req as never, res as never);
 
     expect(res._getStatusCode()).toBe(409);
     expect(res._getJSONData()).toMatchObject({ code: 'limit_reached' });
@@ -232,18 +302,51 @@ describe('/api/auth/mfa/passkey/register-options', () => {
     mockStartRegistration.mockResolvedValue({ challenge: 'chal' });
     const { req, res } = makeReqRes({});
 
-    await registerOptionsHandler(req as any, res as any);
+    await registerOptionsHandler(req as never, res as never);
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ challenge: 'chal' });
     expect(mockStartRegistration.mock.calls[0][0]).toMatchObject({ user: { id: 'user-1' }, rp: RP });
   });
 
+  it('refuses a pending sign-in whose user already has a factor', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', mfa: { totpEnabled: true } });
+    const { req, res } = makeReqRes({});
+    Object.assign(req, { user: { id: 'user-1', mfaPending: true } });
+
+    await registerOptionsHandler(req as never, res as never);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockStartRegistration).not.toHaveBeenCalled();
+  });
+
+  it('lets a pending sign-in with no factor start its first enrollment', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', mfa: {} });
+    mockStartRegistration.mockResolvedValue({ challenge: 'chal' });
+    const { req, res } = makeReqRes({});
+    Object.assign(req, { user: { id: 'user-1', mfaPending: true } });
+
+    await registerOptionsHandler(req as never, res as never);
+
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('refuses first-factor enrollment from an emergency sign-in', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', mfa: {} });
+    const { req, res } = makeReqRes({});
+    Object.assign(req, { user: { id: 'user-1', mfaSignIn: { createdVia: 'emergency' } } });
+
+    await registerOptionsHandler(req as never, res as never);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockStartRegistration).not.toHaveBeenCalled();
+  });
+
   it('maps a ceremony refusal to its status', async () => {
     mockStartRegistration.mockRejectedValue(passkeyError('limit_reached'));
     const { req, res } = makeReqRes({});
 
-    await registerOptionsHandler(req as any, res as any);
+    await registerOptionsHandler(req as never, res as never);
 
     expect(res._getStatusCode()).toBe(409);
     expect(res._getJSONData()).toMatchObject({ code: 'limit_reached' });

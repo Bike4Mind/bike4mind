@@ -10,7 +10,11 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { Artifact, ArtifactContent, ArtifactVersion, Session, withTransaction } from '@bike4mind/database';
 import { notebookImportService } from '@bike4mind/services';
-import { createArtifactWrites, createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
+import {
+  createArtifactWrites,
+  createChatHistoryWrites,
+  createSessionWrites,
+} from '@bike4mind/server-utils/s3/notebookImportComplete';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).

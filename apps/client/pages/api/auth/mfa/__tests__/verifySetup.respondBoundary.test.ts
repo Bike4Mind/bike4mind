@@ -32,6 +32,8 @@ vi.mock('@bike4mind/services', async () => {
     await vi.importActual<typeof import('@bike4mind/auth/mfaService')>('@bike4mind/auth/mfaService');
   return {
     mfaService: {
+      userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean } }) =>
+        !!user?.mfa?.totpEnabled || !!user?.mfa?.passkeyEnabled,
       verifyMFASetup: (...a: unknown[]) => mockVerifyMFASetup(...a),
       isUserLockedOut: (user: { mfa?: { lockedUntil?: Date } }) => !!user?.mfa?.lockedUntil,
       getLockoutTimeRemaining: () => 15,

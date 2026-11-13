@@ -745,11 +745,13 @@ export function buildArtifactPublishWiring(input: {
   resolvePublished: () => Promise<PublishResult | null>;
   publish: (visibility: PublishVisibility, opts?: ArtifactPublishOpts) => Promise<PublishResult>;
   incompleteWarning?: string;
+  policySource?: { artifactId?: string; sessionId?: string };
 } {
   // The dialog runs both lookups on open; one request serves both.
   let lookup: Promise<ManagedArtifact | null> | undefined;
   const findExisting = () => (lookup ??= findPublishedByArtifact(input.artifactId));
   return {
+    policySource: { artifactId: input.artifactId },
     resolveExisting: findExisting,
     resolvePublished: async () => {
       const a = await findExisting();
