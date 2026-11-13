@@ -39,7 +39,7 @@ vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
 
-vi.mock('@server/managers/sessionManager', () => ({
+vi.mock('@bike4mind/server-utils/managers/sessionManager', () => ({
   getMessagesFromSession: (...a: unknown[]) => mockGetMessages(...a),
   addMessageToSession: (...a: unknown[]) => mockAddMessage(...a),
 }));
