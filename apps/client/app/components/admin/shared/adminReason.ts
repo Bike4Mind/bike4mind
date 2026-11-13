@@ -42,6 +42,7 @@ export const ADMIN_REASON_PRESETS = {
     'Copyright or trademark claim',
     'Spam or junk content',
   ],
+  appFileDelete: ['Outdated or replaced file', 'Uploaded in error', 'No longer used on the site'],
   publishedPageRestore: ['Report reviewed, not a violation', 'Taken down in error', 'Appeal accepted'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
   orgGroupTypes: ['Pilot or partner access', 'Plan change', 'Support request'],
