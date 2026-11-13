@@ -204,7 +204,7 @@ describe('org-owned API keys', () => {
     const afterRemoval = await authenticate(created.data.key, orgId);
     expect(afterRemoval.ok && afterRemoval.billing).toEqual({ kind: 'org', organizationId: orgId });
     const personalAfterRemoval = await authenticate(personal.key, orgId);
-    expect(personalAfterRemoval).toEqual({ ok: false, reason: expect.any(String) });
+    expect(personalAfterRemoval).toEqual({ ok: false, reason: 'not_found' });
     expect(await userApiKeyRepository.findById(personal.id)).toMatchObject({
       status: ApiKeyStatus.DISABLED,
       revokedBy: owner.id,

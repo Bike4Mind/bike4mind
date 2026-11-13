@@ -65,7 +65,7 @@ packages/server-utils/src/dataLakes/resolveRetrievalLakeScope.test.ts
 apps/client/server/entitlements/apiKeyScopeAccess.ts
 packages/server-utils/src/entitlements/partnerRules.test.ts
 apps/client/server/entitlements/signupDomainGrant.test.ts
-apps/client/server/files/loadAccessibleFabFile.ts
+packages/server-utils/src/files/loadAccessibleFabFile.ts
 apps/client/server/middlewares/apiKeyAuth.test.ts
 packages/server-utils/src/middlewares/apiKeyScopeGate.test.ts
 packages/server-utils/src/middlewares/apiKeyScopeGate.ts

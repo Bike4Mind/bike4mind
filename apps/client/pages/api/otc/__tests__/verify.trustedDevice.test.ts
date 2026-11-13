@@ -39,6 +39,8 @@ const mockLogAuthAudit = vi.fn((..._args: any[]) => Promise.resolve());
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: any[]) => mockLogAuthAudit(...a) }));
 
 const mockConsumeTrustedDevice = vi.fn();
+const mockOrgEnrollment = vi.hoisted(() => vi.fn());
+vi.mock('@server/auth/organizationMfa', () => ({ requiresOrganizationMfaEnrollment: mockOrgEnrollment }));
 vi.mock('@server/auth/trustedDevice', () => ({
   consumeTrustedDevice: (...a: any[]) => mockConsumeTrustedDevice(...a),
   trustedDevicesAllowed: () => Promise.resolve(settingsValues.allowTrustedDevices !== false),
@@ -138,6 +140,7 @@ describe('/api/otc/verify - trusted device', () => {
     mockFindByEmail.mockResolvedValue({ id: 'user-1', tokenVersion: 3, emailVerified: true });
     mockConsumeTrustedDevice.mockResolvedValue(null);
     mockUserHasMFA.mockReturnValue(true);
+    mockOrgEnrollment.mockResolvedValue(false);
   });
 
   it('challenges for MFA when no trusted device is presented', async () => {
@@ -212,6 +215,16 @@ describe('/api/otc/verify - trusted device', () => {
 
     expect(mockConsumeTrustedDevice).not.toHaveBeenCalled();
     expect(res._getJSONData().accessToken).toBe('full-access');
+  });
+
+  it('hands an unenrolled org member to setup without minting a session', async () => {
+    mockUserHasMFA.mockReturnValue(false);
+    mockOrgEnrollment.mockResolvedValue(true);
+    const { req, res } = makeReqRes();
+    await handler(req, res);
+    expect(res._getJSONData()).toEqual({ mfaSetupRequired: true, userId: 'user-1', accessToken: 'mfa-pending-token' });
+    expect(mockSetRefreshCookie).not.toHaveBeenCalled();
+    expect(mockConsumeTrustedDevice).not.toHaveBeenCalled();
   });
 
   it('still requires a valid emailed code - a trusted device alone is not a credential', async () => {

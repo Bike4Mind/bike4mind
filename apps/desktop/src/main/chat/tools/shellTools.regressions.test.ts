@@ -1193,6 +1193,13 @@ describe('shell approval in a project with a large node_modules', () => {
     expect(await judge(command)).toMatchObject({ auto: true, full: true });
   });
 
+  it.each(['git show --format= HEAD', 'git log --pretty= -1', 'git show --format= --remerge-diff HEAD'])(
+    'runs %s unasked, as an empty option value names no place',
+    async command => {
+      expect(await judge(command)).toMatchObject({ auto: true, full: true });
+    }
+  );
+
   it('asks in every mode for a rebase continued with an editor that runs nothing', async () => {
     expect(await judge('GIT_EDITOR=true git rebase --continue')).toMatchObject(asks);
   });

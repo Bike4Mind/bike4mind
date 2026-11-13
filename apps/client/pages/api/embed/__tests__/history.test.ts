@@ -20,7 +20,7 @@ const mockVerifyEmbedSessionToken = vi.hoisted(() => vi.fn());
 vi.mock('@server/embed/embedSessionToken', () => ({ verifyEmbedSessionToken: mockVerifyEmbedSessionToken }));
 
 const mockVerifyEmbedKeyById = vi.hoisted(() => vi.fn());
-vi.mock('@server/cli/auth', () => ({ verifyEmbedKeyById: mockVerifyEmbedKeyById }));
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({ verifyEmbedKeyById: mockVerifyEmbedKeyById }));
 
 const mockReauthorize = vi.hoisted(() => vi.fn());
 vi.mock('@server/embed/identifiedEmbedUser', () => ({ reauthorizeIdentifiedSession: mockReauthorize }));

@@ -1751,7 +1751,11 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
     accountDataExportLease: {
       type: new Schema(
-        { id: { type: String, required: true }, expiresAt: { type: Date, required: true } },
+        {
+          id: { type: String, required: true },
+          jobId: { type: String, required: false },
+          expiresAt: { type: Date, required: true },
+        },
         { _id: false }
       ),
       required: false,
@@ -2208,7 +2212,7 @@ UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
 UserSchema.index({ 'notionConnect.status': 1 });
 // Admin users list: the Signed up, Last active and Credits sorts and the built-in view counts
-// (apps/client/server/admin/usersList/listAdminUsers.ts). The sort keys end in _id because
+// (packages/server-utils/src/admin/usersList/listAdminUsers.ts). The sort keys end in _id because
 // adminUsersSort adds an _id tiebreak, and a sort only uses an index whose key it prefixes; each
 // serves both directions. The flag and band indexes are partial/sparse so they stay small. Built
 // by the ensure-user-admin-list-indexes migration.

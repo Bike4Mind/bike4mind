@@ -6,10 +6,10 @@ vi.mock('@server/middlewares/adminApi', async () =>
   (await import('@server/middlewares/__tests__/adminApiMock')).adminApiMock()
 );
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockSummary = vi.fn();
-vi.mock('@server/admin/usersList/listAdminUsers', () => ({
+vi.mock('@bike4mind/server-utils/admin/usersList/listAdminUsers', () => ({
   adminUsersSummary: (...args: unknown[]) => mockSummary(...args),
 }));
 
