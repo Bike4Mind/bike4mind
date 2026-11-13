@@ -29,6 +29,7 @@ export * from './StockPortfolioModel';
 export * from './StockTradeModel';
 export * from './SystemPromptHistoryModel';
 export * from './SystemPromptModel';
+export * from './systemPromptLimits';
 export * from './TagModel';
 export * from './DungeonInstanceModel';
 export * from './TavernMapModel';

@@ -118,6 +118,7 @@ describe('applySignupDomainGrant', () => {
       tagsApplied: ['Partner', 'cohort-a'],
       subscriptionCreditsGranted: 0,
       subscriptionGranted: false,
+      packageRefusal: null,
     });
     expect(mockAddCredits).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -157,6 +158,7 @@ describe('applySignupDomainGrant', () => {
       tagsApplied: [],
       subscriptionCreditsGranted: 0,
       subscriptionGranted: false,
+      packageRefusal: null,
     });
     expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
     expect(mockAddTagsToUser).not.toHaveBeenCalled();
@@ -217,6 +219,7 @@ describe('applySignupDomainGrant', () => {
       tagsApplied: [],
       subscriptionCreditsGranted: 0,
       subscriptionGranted: false,
+      packageRefusal: null,
     });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
   });
@@ -280,6 +283,7 @@ describe('applySignupDomainGrant', () => {
       tagsApplied: ['Partner', 'cohort-a'],
       subscriptionCreditsGranted: 0,
       subscriptionGranted: false,
+      packageRefusal: null,
     });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
   });
@@ -297,6 +301,7 @@ describe('applySignupDomainGrant', () => {
       tagsApplied: ['Partner', 'cohort-a'],
       subscriptionCreditsGranted: 0,
       subscriptionGranted: false,
+      packageRefusal: null,
     });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
   });
@@ -314,6 +319,7 @@ describe('applySignupDomainGrant', () => {
       tagsApplied: [],
       subscriptionCreditsGranted: 0,
       subscriptionGranted: false,
+      packageRefusal: null,
     });
     expect(mockAddCredits).not.toHaveBeenCalled();
     expect(mockAddTagsToUser).not.toHaveBeenCalled();
@@ -390,6 +396,7 @@ describe('applySignupDomainGrant', () => {
         tagsApplied: ['Partner', 'cohort-a'],
         subscriptionCreditsGranted: 3000,
         subscriptionGranted: true,
+        packageRefusal: null,
       });
       expect(mockPushInvalidation).toHaveBeenCalledWith('user-1', expect.anything());
     });
@@ -565,6 +572,7 @@ describe('applySignupDomainGrant', () => {
         tagsApplied: ['Partner'],
         subscriptionCreditsGranted: 0,
         subscriptionGranted: false,
+        packageRefusal: null,
       });
       expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('rule-1'), expect.any(Error));
     });
@@ -658,6 +666,7 @@ describe('applySignupDomainGrant', () => {
         tagsApplied: ['Partner', 'cohort-a'],
         subscriptionCreditsGranted: 0,
         subscriptionGranted: false,
+        packageRefusal: null,
       });
       expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('overlay-grant'), expect.any(Error));
       expect(mockPushInvalidation).toHaveBeenCalledWith('user-1', expect.anything());
@@ -764,8 +773,38 @@ describe('applySignupDomainGrant - rule linked to a grant package', () => {
     expect(grantPackages.reserveRedemption).not.toHaveBeenCalled();
     expect(mockAddCredits).not.toHaveBeenCalled();
     expect(result.joinedOrganizationId).toBe('org-1');
+    expect(result.packageRefusal).toBe('inactive');
 
     grantPackages.findById.mockResolvedValue(null);
-    expect((await run()).creditsGranted).toBe(0);
+    const missing = await run();
+    expect(missing.creditsGranted).toBe(0);
+    expect(missing.packageRefusal).toBe('missing');
+  });
+
+  it('refuses an expired package explicitly, withholding only the credits', async () => {
+    grantPackages.findById.mockResolvedValue({
+      id: 'pkg-1',
+      credits: 100,
+      active: true,
+      expiresAt: new Date(Date.now() - 1000),
+    });
+    const result = await run();
+    expect(result.packageRefusal).toBe('expired');
+    expect(result.creditsGranted).toBe(0);
+    expect(grantPackages.reserveRedemption).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(result.joinedOrganizationId).toBe('org-1');
+  });
+
+  it('reports a cap refusal from the reservation as the package refusal', async () => {
+    grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'refused', reason: 'daily_cap' });
+    const result = await run();
+    expect(result.packageRefusal).toBe('daily_cap');
+    expect(result.creditsGranted).toBe(0);
+  });
+
+  it('reports no refusal when the package pays out', async () => {
+    grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+    expect((await run()).packageRefusal).toBeNull();
   });
 });

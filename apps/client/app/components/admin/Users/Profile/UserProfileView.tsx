@@ -14,6 +14,7 @@ import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { ReinstateDialog, SuspendDialog } from './actions/SuspendDialog';
 import { EditProfileDialog } from './actions/EditProfileDialog';
 import { DataExportDialog } from './actions/DataExportDialog';
+import { EraseUserDialog } from './actions/EraseUserDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
 import { AdminPermissionsDialog } from './actions/AdminPermissionsDialog';
 import {
@@ -104,6 +105,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <CancelDeletionDialog {...props} />;
     case 'dataExport':
       return <DataExportDialog {...props} />;
+    case 'erase':
+      return <EraseUserDialog {...props} />;
     case 'delete':
       return <DeleteUserDialog {...props} onDeleted={onDeleted} />;
   }

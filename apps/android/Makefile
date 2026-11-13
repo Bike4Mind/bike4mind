@@ -1,15 +1,20 @@
-# Bike4Mind Android. Needs a JDK 17+ on PATH (CI uses 21); Gradle comes from the pinned wrapper.
+# Bike4Mind Android. Needs a JDK 17+ on PATH (CI uses 21) and an Android SDK (ANDROID_HOME or local.properties);
+# Gradle comes from the pinned wrapper.
 GRADLE := ./gradlew
 CLIENT := client
 SPEC_PATH_IN_REPO := apps/client/public/openapi.json
 
-.PHONY: build test clean generate-client
+.PHONY: build test lint clean generate-client
 
 build:
 	$(GRADLE) assemble
 
 test:
 	$(GRADLE) test
+
+# Android lint for the app module; warnings the project has not opted out of fail the build.
+lint:
+	$(GRADLE) :app:lintDebug
 
 clean:
 	$(GRADLE) clean
