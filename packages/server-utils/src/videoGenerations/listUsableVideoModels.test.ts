@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import { usdToCredits, VIDEO_MODEL_STRENGTHS, VideoModelSchema, type VideoProviderId } from '@bike4mind/common';
+import {
+  usdToCredits,
+  VIDEO_MODEL_CATALOG,
+  VIDEO_MODEL_STRENGTHS,
+  VideoModelSchema,
+  type VideoModelId,
+  type VideoProviderId,
+} from '@bike4mind/common';
 import { createVideoProviderRegistry, TestVideoProvider, type VideoProvider } from '@bike4mind/utils/videoProviders';
-import { hasUsableKey, listUsableVideoModels } from './listUsableVideoModels';
+import { hasUsableKey, listUsableVideoModels, toPublicVideoModel } from './listUsableVideoModels';
 
 // The real Gemini adapter is registered by a later task; the listing only needs a provider that serves its catalog model.
 const fakeGemini = (): VideoProvider => ({
@@ -88,6 +95,18 @@ describe('listUsableVideoModels', () => {
     expect(d.resolveApiKey).toHaveBeenCalledTimes(2);
     expect(d.resolveApiKey).toHaveBeenCalledWith('test', 'u1');
     expect(d.resolveApiKey).toHaveBeenCalledWith('gemini-omni', 'u1');
+  });
+});
+
+describe('toPublicVideoModel card copy', () => {
+  it('pins a non-empty blurb and provider label on every catalog model', () => {
+    for (const id of Object.keys(VIDEO_MODEL_CATALOG) as VideoModelId[]) {
+      const model = toPublicVideoModel(id);
+      expect(model.blurb, id).toEqual(expect.any(String));
+      expect(model.blurb?.length, id).toBeGreaterThan(0);
+      expect(model.provider_label, id).toEqual(expect.any(String));
+      expect(model.provider_label?.length, id).toBeGreaterThan(0);
+    }
   });
 });
 

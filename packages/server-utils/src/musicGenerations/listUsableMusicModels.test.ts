@@ -94,6 +94,16 @@ describe('toPublicMusicModel card copy', () => {
       blurb: MUSIC_MODEL_STRENGTHS.music_v2_5,
     });
   });
+
+  it('pins a non-empty blurb and provider label on every catalog model', () => {
+    for (const id of Object.keys(MUSIC_MODEL_CATALOG) as MusicModelId[]) {
+      const model = toPublicMusicModel(id);
+      expect(model.blurb, id).toEqual(expect.any(String));
+      expect(model.blurb?.length, id).toBeGreaterThan(0);
+      expect(model.provider_label, id).toEqual(expect.any(String));
+      expect(model.provider_label?.length, id).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe('listUsableMusicModels', () => {
