@@ -271,7 +271,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     const counterFilter = expected === 0 ? { $in: [0, null] } : expected;
     const res = await this.organizationModel.updateOne(
       { _id: organizationId, currentStorageSize: counterFilter },
-      { $set: { currentStorageSize: next } }
+      { $set: { currentStorageSize: Math.max(0, next) } }
     );
     return res.matchedCount === 1;
   }
