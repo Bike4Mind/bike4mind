@@ -7,13 +7,13 @@ import { useRefreshArtifactOnNewVersion } from './useRefreshArtifactOnNewVersion
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.fn() } }));
 
-const setup = () => {
+const setup = (onNewVersion?: (artifactId: string) => void) => {
   const queryClient = new QueryClient();
   const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
   const wrapper = ({ children }: { children: React.ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
-  const hook = renderHook(() => useRefreshArtifactOnNewVersion(), { wrapper });
+  const hook = renderHook(() => useRefreshArtifactOnNewVersion(onNewVersion), { wrapper });
   const keys = () => invalidate.mock.calls.map(([filters]) => filters?.queryKey);
   return { hook, keys };
 };
@@ -38,6 +38,24 @@ describe('useRefreshArtifactOnNewVersion', () => {
     announce({});
 
     expect(keys()).toEqual([]);
+  });
+
+  it('tells the caller which artifact got a version, after invalidating', () => {
+    const calls: string[] = [];
+    const { keys } = setup(id => calls.push(`${id}@${keys().length}`));
+
+    announce({ artifactId: 'artifact_react_counter_1_0' });
+
+    expect(calls).toEqual(['artifact_react_counter_1_0@2']);
+  });
+
+  it('does not call back for an announcement without an id', () => {
+    const onNewVersion = vi.fn();
+    setup(onNewVersion);
+
+    announce({});
+
+    expect(onNewVersion).not.toHaveBeenCalled();
   });
 
   it('stops listening once unmounted', () => {
