@@ -9,10 +9,16 @@ import { getThemeConfig } from '@client/app/utils/themes';
 
 type SlackSettings = NonNullable<IUser['slackSettings']>;
 type TestUser = { id: string; slackSettings: SlackSettings };
-const mocks = vi.hoisted(() => ({ patch: vi.fn(), get: vi.fn(), warning: vi.fn(), success: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  patch: vi.fn(),
+  get: vi.fn(),
+  warning: vi.fn(),
+  success: vi.fn(),
+  projects: vi.fn(),
+}));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { patch: mocks.patch, get: mocks.get } }));
 vi.mock('sonner', () => ({ toast: { warning: mocks.warning, success: mocks.success, error: vi.fn() } }));
-vi.mock('@client/app/hooks/data/projects', () => ({ useGetJoinedProjects: () => ({ data: [] }) }));
+vi.mock('@client/app/hooks/data/projects', () => ({ useGetJoinedProjects: () => mocks.projects() }));
 vi.mock('@client/app/components/help', () => ({ FieldTooltip: () => null, ContextHelpButton: () => null }));
 vi.mock('next/image', () => ({ default: () => null }));
 vi.mock('@client/app/contexts/UserContext', async () => {
@@ -49,6 +55,8 @@ beforeEach(() => {
   mocks.warning.mockReset();
   mocks.success.mockReset();
   mocks.get.mockReset();
+  mocks.projects.mockReset();
+  mocks.projects.mockReturnValue({ data: [] });
   mocks.get.mockImplementation(async (url: string) => ({
     data: url.includes('workspaces')
       ? { workspaces: [] }
@@ -146,6 +154,25 @@ describe('Slack settings saves', () => {
       );
     }
   );
+
+  it('keeps a saved project that is absent from a loaded project list', async () => {
+    const saved: SlackSettings = { ...settings, keywordRouting: [], defaultProjectId: 'saved-project' };
+    useUser.setState({
+      currentUser: { id: 'user-one', slackSettings: saved } as ReturnType<typeof useUser.getState>['currentUser'],
+    });
+    mocks.projects.mockReturnValue({ data: [{ id: 'other-project', name: 'Other project' }] });
+    mocks.patch.mockResolvedValue({ data: { slackSettings: saved } });
+    show();
+    await waitFor(() =>
+      expect(screen.getByTestId('slack-default-project-select')).toHaveTextContent('Saved project (not loaded)')
+    );
+    fireEvent.click(save());
+    await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
+    expect(mocks.patch).toHaveBeenCalledWith(
+      '/api/users/user-one/slack-settings',
+      expect.objectContaining({ defaultProjectId: 'saved-project' })
+    );
+  });
 
   it('still lets the user deliberately clear a saved routing choice', async () => {
     const saved: SlackSettings = { ...settings, keywordRouting: [], agentNotebookRouting: { dev: 'saved-notebook' } };
