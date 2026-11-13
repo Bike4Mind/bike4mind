@@ -31,7 +31,7 @@ import { recordInsufficientCredits } from '../billing/userLimitEvents';
 import { Logger } from '@bike4mind/observability';
 import { modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine, emitStudioJobCompletion } from '@bike4mind/services/generationJobs';
-import { StudioEvents } from '@bike4mind/server-utils/utils/eventBus';
+import { StudioEvents } from '../utils/eventBus';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { createMusicJobHandler, type CreateMusicJobDeps, type MusicJobDeps } from '@bike4mind/services/musicJobs';
 import { createImageJobHandler, type CreateImageJobsDeps, type ImageJobDeps } from '@bike4mind/services/imageJobs';
