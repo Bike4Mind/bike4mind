@@ -9,7 +9,6 @@ import {
   isOrgOwnerOrPlatformAdmin,
   ORG_INVITE_ROLES,
   OrgInviteRole,
-  Permission,
 } from '@bike4mind/common';
 import GenericAddItemsModal from '@client/app/components/common/GenericAddItemsModal';
 import UserCard from '@client/app/components/common/UserCard';

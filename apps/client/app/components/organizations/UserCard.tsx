@@ -42,7 +42,7 @@ import { formatAccountAge, formatLastActiveTitle } from '@client/app/components/
 import CreditLimitModal from './CreditLimitModal';
 import OffboardMemberDialog from './OffboardMemberDialog';
 import { formatMemberCredits, formatMemberCreditUsage } from './memberCreditBudget';
-import { RosterMember, rosterGridColumns } from './memberRosterView';
+import { RosterMember, rosterGridColumns, ROSTER_TABLE_QUERY } from './memberRosterView';
 
 /** A roster row: the safe user shape plus its org standing. `creditUsage` is null for a pending invite. */
 export type OrganizationRosterRow = IUserDocument & RosterMember & { permissions: Permission[] };
@@ -166,7 +166,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     <Typography
       level="body-sm"
       component="span"
-      sx={{ color: creditUsage.tracked ? 'text.primary' : 'text.tertiary', whiteSpace: 'nowrap' }}
+      sx={{ color: creditUsage.tracked ? 'text.primary' : 'text.tertiary', whiteSpace: 'normal' }}
       data-testid="organization-user-card-credit-usage"
     >
       {formatMemberCreditUsage(creditUsage)}
@@ -234,7 +234,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     );
 
   const selectCell = selectable && (
-    <Box display="flex" alignItems="center">
+    <Box display="flex" alignItems="center" sx={{ gridArea: 'select', [ROSTER_TABLE_QUERY]: { gridArea: 'auto' } }}>
       {onToggleSelect && (
         <Checkbox
           size="sm"
@@ -355,6 +355,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
             <Stack sx={{ minWidth: 0 }}>
               <Box
                 className="organization-user-card-name"
+                data-testid="organization-user-card-name"
                 sx={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               >
                 {user.name}
@@ -388,7 +389,16 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       sx={theme => ({
         borderRadius: '8px',
         display: 'grid',
-        gridTemplateColumns: rosterGridColumns(selectable),
+        gridTemplateColumns: `${selectable ? '32px ' : ''}minmax(0, 1fr) 48px`,
+        gridTemplateAreas: selectable
+          ? '"select name actions" ". email email" ". role role" ". credits credits" ". active active"'
+          : '"name actions" "email email" "role role" "credits credits" "active active"',
+        rowGap: 1,
+        [ROSTER_TABLE_QUERY]: {
+          gridTemplateColumns: rosterGridColumns(selectable),
+          gridTemplateAreas: 'none',
+          rowGap: 0,
+        },
         columnGap: '12px',
         width: '100%',
         border: '1px solid',
@@ -406,23 +416,80 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         spacing={1.5}
         alignItems="center"
         minWidth={0}
+        flexWrap="wrap"
+        useFlexGap
+        sx={{ gridArea: 'name', [ROSTER_TABLE_QUERY]: { gridArea: 'auto' } }}
       >
         {avatar}
-        <Box className="organization-user-card-name" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <Box
+          className="organization-user-card-name"
+          data-testid="organization-user-card-name"
+          sx={{ minWidth: 0, flex: '1 1 100px', overflowWrap: 'anywhere' }}
+        >
           {user.name}
         </Box>
         {statusChips}
       </Stack>
-      <Typography level="body-sm" noWrap data-testid="organization-user-card-email">
+      <Typography
+        level="body-sm"
+        data-testid="organization-user-card-email"
+        title={user.email ?? undefined}
+        sx={{
+          gridArea: 'email',
+          overflowWrap: 'anywhere',
+          [ROSTER_TABLE_QUERY]: {
+            gridArea: 'auto',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          },
+        }}
+      >
         {user.email}
       </Typography>
-      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+      <Stack
+        direction="row"
+        spacing={0.5}
+        flexWrap="wrap"
+        useFlexGap
+        sx={{ gridArea: 'role', [ROSTER_TABLE_QUERY]: { gridArea: 'auto' } }}
+      >
         {roleChip}
         {settingsAccessChip}
       </Stack>
-      <Box className="organization-user-card-credits">{creditUsageCell}</Box>
-      <Box>{lastActiveCell}</Box>
-      <Box className="organization-user-card-actions" display="flex" justifyContent="flex-end">
+      <Box
+        className="organization-user-card-credits"
+        sx={{ gridArea: 'credits', minWidth: 0, [ROSTER_TABLE_QUERY]: { gridArea: 'auto' } }}
+      >
+        <Typography
+          component="span"
+          level="body-sm"
+          sx={{ color: 'text.secondary', [ROSTER_TABLE_QUERY]: { display: 'none' } }}
+        >
+          Credits this month:{' '}
+        </Typography>
+        {creditUsageCell}
+      </Box>
+      <Box sx={{ gridArea: 'active', [ROSTER_TABLE_QUERY]: { gridArea: 'auto' } }}>
+        <Typography
+          component="span"
+          level="body-sm"
+          sx={{ color: 'text.secondary', [ROSTER_TABLE_QUERY]: { display: 'none' } }}
+        >
+          Last active:{' '}
+        </Typography>
+        {lastActiveCell}
+      </Box>
+      <Box
+        className="organization-user-card-actions"
+        display="flex"
+        justifyContent="flex-end"
+        sx={{
+          gridArea: 'actions',
+          alignSelf: 'start',
+          [ROSTER_TABLE_QUERY]: { gridArea: 'auto', alignSelf: 'center' },
+        }}
+      >
         {actionsMenu}
       </Box>
       {creditLimitModal}

@@ -31,6 +31,7 @@ import {
   REMOVE_MEMBER_EFFECT,
   RoleFilter,
   rosterGridColumns,
+  ROSTER_TABLE_QUERY,
   RosterSortKey,
   SortDirection,
   sortMembers,
@@ -246,7 +247,13 @@ const MemberRoster: FC<MemberRosterProps> = ({
   };
 
   return (
-    <Stack spacing={1.5} flexGrow={1} mx={{ xs: 0, sm: '20px' }} minHeight={0}>
+    <Stack
+      spacing={1.5}
+      flexGrow={1}
+      mx={{ xs: 0, sm: '20px' }}
+      minHeight={0}
+      sx={{ minWidth: 0, containerType: 'inline-size', containerName: 'organization-members-roster' }}
+    >
       <Input
         className="organization-members-search-input"
         placeholder="Search by name or email"
@@ -341,7 +348,8 @@ const MemberRoster: FC<MemberRosterProps> = ({
           data-testid="organization-members-list-header"
           sx={{
             display: { xs: 'none', sm: 'grid' },
-            gridTemplateColumns: rosterGridColumns(canRevokeMembers),
+            gridTemplateColumns: `${canRevokeMembers ? '32px ' : ''}minmax(0, 1fr)`,
+            [ROSTER_TABLE_QUERY]: { gridTemplateColumns: rosterGridColumns(canRevokeMembers) },
             columnGap: '12px',
             alignItems: 'center',
             borderBottom: '1px solid',
@@ -368,10 +376,20 @@ const MemberRoster: FC<MemberRosterProps> = ({
             />
           )}
           <Box>Name</Box>
-          <Box>Email</Box>
-          <Box>Role</Box>
-          <Box sx={{ whiteSpace: 'nowrap' }}>Credits this month</Box>
-          <Box>Last active</Box>
+          <Box sx={{ display: 'none', [ROSTER_TABLE_QUERY]: { display: 'block' } }}>Email</Box>
+          <Box sx={{ display: 'none', [ROSTER_TABLE_QUERY]: { display: 'block' } }}>Role</Box>
+          <Box
+            data-testid="organization-members-header-credits"
+            sx={{ display: 'none', whiteSpace: 'nowrap', [ROSTER_TABLE_QUERY]: { display: 'block' } }}
+          >
+            Credits this month
+          </Box>
+          <Box
+            data-testid="organization-members-header-active"
+            sx={{ display: 'none', [ROSTER_TABLE_QUERY]: { display: 'block' } }}
+          >
+            Last active
+          </Box>
           <Box sx={visuallyHidden}>Actions</Box>
         </Box>
         {renderList()}

@@ -161,6 +161,63 @@ test.describe('Teams', () => {
     await expect.poll(async () => (await teamsPage.seatsUsed()).used).toBe(before.used + 1);
   });
 
+  test('roster identities and headers stay readable across narrow and wide panels', async ({ teamsPage, page }) => {
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    await expect(teamsPage.memberRow(invitee.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    const header = page.getByTestId('organization-members-list-header');
+    const credits = header.getByTestId('organization-members-header-credits');
+    const active = header.getByTestId('organization-members-header-active');
+    for (const width of [768, 1024, 1440, 1920]) {
+      await page.setViewportSize({ width, height: 1000 });
+      for (const user of [owner, member, manager, invitee]) {
+        const row = teamsPage.memberRow(user.userId);
+        const name = row.getByTestId('organization-user-card-name');
+        await expect(name).not.toHaveText('');
+        await expect
+          .poll(() =>
+            name.evaluate(
+              element =>
+                element.scrollWidth <= element.clientWidth + 1 &&
+                element.scrollHeight <= element.clientHeight + 1 &&
+                getComputedStyle(element).textOverflow !== 'ellipsis'
+            )
+          )
+          .toBe(true);
+        await expect.poll(() => row.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+        const role = row.getByTestId(/^organization-user-card-(owner|manager|member)-chip$/);
+        await expect
+          .poll(() =>
+            role.evaluate(element => {
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              return range.getBoundingClientRect().width <= element.getBoundingClientRect().width + 1;
+            })
+          )
+          .toBe(true);
+      }
+      const pending = teamsPage.memberRow(invitee.userId).getByTestId('organization-user-card-pending-chip');
+      await expect
+        .poll(() =>
+          pending.evaluate(element => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            return range.getBoundingClientRect().width <= element.getBoundingClientRect().width + 1;
+          })
+        )
+        .toBe(true);
+      if (width <= 1024) await expect(credits).toBeHidden();
+      if (width === 1920) await expect(credits).toBeVisible();
+      if (await credits.isVisible()) {
+        const creditBounds = await credits.boundingBox();
+        const activeBounds = await active.boundingBox();
+        expect(creditBounds).not.toBeNull();
+        expect(activeBounds).not.toBeNull();
+        if (!creditBounds || !activeBounds) throw new Error('Missing visible roster header bounds');
+        expect(creditBounds.x + creditBounds.width).toBeLessThanOrEqual(activeBounds.x + 1);
+      }
+    }
+  });
+
   test('cancelling a pending invite frees the seat', async ({ teamsPage, page }) => {
     await teamsPage.gotoTeam(mainTeamId, 'members');
     await expect(teamsPage.memberRow(invitee.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
