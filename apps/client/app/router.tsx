@@ -47,6 +47,7 @@ import { parseSubscriptionDetailSearch } from './components/admin/Subscriptions/
 import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
 import {
   isIntegrationsPageSource,
+  PERSONA_LOGIN_PAGE_PATH,
   SUBSCRIBER_SOURCES,
   type IntegrationsPageSource,
   type SubscriberSource,
@@ -1348,7 +1349,7 @@ const bedrockNewsClaimRoute = createRoute({
 // fragment and is moved out of the address before render; the page POSTs it to the redeem API.
 const personaRedeemRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/personas/redeem',
+  path: PERSONA_LOGIN_PAGE_PATH,
   beforeLoad: () => captureCodeFromFragment(),
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>

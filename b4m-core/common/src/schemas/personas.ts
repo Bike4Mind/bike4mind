@@ -3,7 +3,8 @@ import { ApiErrorSchema } from './chat';
 
 /**
  * Wire schemas for the test-persona endpoints (`/api/v1/personas`) and the login-code redemption
- * route (`/api/personas/redeem`). Served by apps/client/pages/api/v1/personas/*.
+ * route (`/api/personas/redeem`). Minted by apps/client/pages/api/v1/personas/*; redeemed by
+ * pages/api/personas/redeem.ts and the `/personas/redeem` page.
  */
 
 /** The name a caller picks; it becomes the username middle and, on production, the mailbox. */
