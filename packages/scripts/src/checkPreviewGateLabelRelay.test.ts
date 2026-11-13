@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -77,5 +78,79 @@ describe('preview gate label relay', () => {
     expect(gate).toMatch(
       /^ {6}- name: Expire preview waiver on push\n(?: {8}#.*\n)* {8}if: github\.run_attempt == 1$/m
     );
+  });
+});
+
+const relayScript = relay.split('        run: |\n')[1];
+if (!relayScript) throw new Error('Preview gate relay shell is missing');
+
+type RerunCase = 'expired' | 'forbidden' | 'busy' | 'success' | 'missing';
+function runRelay(scenario: RerunCase) {
+  const script = `set -euo pipefail
+export REPO=example/repo HEAD_SHA=example-head LABEL=skip-preview ACTION=labeled
+scenario=${scenario}
+posts=0
+gh() {
+  if [ "$1" != "api" ]; then return 99; fi
+  if [ "\${2:-}" != "-X" ]; then
+    if [ "$scenario" != "missing" ]; then printf '123\\n'; fi
+    return 0
+  fi
+  posts=$((posts + 1))
+  printf 'POST %s\\n' "$posts" >&2
+  case "$scenario" in
+    expired) printf 'gh: This workflow was created over a month ago (HTTP 403)\\n' >&2; return 1 ;;
+    forbidden) printf 'gh: Resource not accessible by integration (HTTP 403)\\n' >&2; return 1 ;;
+    busy)
+      if [ "$posts" -eq 1 ]; then printf 'gh: already running (HTTP 409)\\n' >&2; return 1; fi
+      ;;
+  esac
+  return 0
+}
+sleep() { printf 'SLEEP %s\\n' "$1"; }
+${relayScript}`;
+  return spawnSync('bash', ['-c', script], { encoding: 'utf8' });
+}
+
+describe('preview gate relay actual shell failures', () => {
+  it('explains an expired run, fails honestly and makes only one POST without sleeping', () => {
+    const result = runRelay('expired');
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('::warning title=Gate run expired::');
+    expect(result.stdout).toContain('Push a new commit');
+    expect(result.stdout).toContain('existing gate result has not changed');
+    expect(result.stdout.match(/POST /g)).toHaveLength(1);
+    expect(result.stdout).not.toContain('SLEEP');
+    expect(result.stdout).not.toContain('Re-run requested.');
+  });
+
+  it('does not mistake an unrelated 403 for an expired run', () => {
+    const result = runRelay('forbidden');
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('Resource not accessible');
+    expect(result.stdout).not.toContain('Gate run expired');
+    expect(result.stdout).not.toContain('SLEEP');
+  });
+
+  it('still retries a busy run and succeeds when GitHub accepts the next request', () => {
+    const result = runRelay('busy');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('SLEEP 15');
+    expect(result.stdout).toContain('Re-run requested.');
+  });
+
+  it('returns success immediately for a successful request', () => {
+    const result = runRelay('success');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Re-run requested.');
+    expect(result.stdout).not.toContain('SLEEP');
+  });
+
+  it('keeps the existing no-run warning without attempting a POST', () => {
+    const result = runRelay('missing');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('::warning title=No gate run::');
+    expect(result.stdout).not.toContain('POST');
+    expect(result.stdout).not.toContain('Re-run requested.');
   });
 });

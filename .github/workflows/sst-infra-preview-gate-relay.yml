@@ -54,6 +54,11 @@ jobs:
               echo "Re-run requested."
               exit 0
             fi
+            if grep -qF 'created over a month ago' /tmp/rerun.err; then
+              cat /tmp/rerun.err
+              echo "::warning title=Gate run expired::GitHub cannot re-run a gate created over 30 days ago. Push a new commit to trigger a fresh gate evaluation; the existing gate result has not changed."
+              exit 1
+            fi
             if ! grep -qE 'already running|HTTP 409' /tmp/rerun.err; then
               cat /tmp/rerun.err
               exit 1
