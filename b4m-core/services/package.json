@@ -190,6 +190,16 @@
         "default": "./dist/llm/toolFinishObserver.cjs"
       }
     },
+    "./organizationService/orgEventObserver": {
+      "import": {
+        "types": "./dist/organizationService/orgEventObserver.d.mts",
+        "default": "./dist/organizationService/orgEventObserver.mjs"
+      },
+      "require": {
+        "types": "./dist/organizationService/orgEventObserver.d.cts",
+        "default": "./dist/organizationService/orgEventObserver.cjs"
+      }
+    },
     "./llm/ChatCompletionInvoke": {
       "import": {
         "types": "./dist/llm/ChatCompletionInvoke.d.mts",

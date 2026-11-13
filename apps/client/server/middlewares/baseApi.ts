@@ -1,6 +1,7 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { authMiddleware, auth } from '@server/auth/auth';
 import { registerToolGearObserver } from '@bike4mind/server-utils/services/gears/toolGearObserver';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/orgAlertDispatcher';
 import { logging } from '@server/middlewares/logging';
 import { deployRevision } from '@server/middlewares/deployRevision';
 import errorHandler from '@server/middlewares/errorHandler';
@@ -24,6 +25,7 @@ import { requestLogUrl } from './requestLogUrl';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();
+registerOrgAlertObserver();
 
 interface BaseAPIOptions {
   /**

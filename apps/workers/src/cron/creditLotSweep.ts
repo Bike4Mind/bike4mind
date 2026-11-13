@@ -21,6 +21,10 @@ import { CreditHolderType, ICreditHolderMethods, assignConsumptionFIFO, computeC
 import { creditService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/orgAlertDispatcher';
+
+// Expiring lots debit org pools, which can cross an org's alert thresholds.
+registerOrgAlertObserver();
 
 const contextToLogs = (context: Context) => ({
   requestId: context.awsRequestId ?? randomUUID(),
