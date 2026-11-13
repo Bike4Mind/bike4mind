@@ -136,9 +136,9 @@ export const canViewOrgBilling = (
 };
 
 /**
- * Who may see the Connectors section of the Integrations tab - the org's custom MCP connector policy and kill switch
- * (`organizations/[id]/custom-mcp/*`, `verifyOrgAccess`). Owner, current manager or platform admin;
- * must stay in sync with that gate.
+ * Who may see the Connectors section of the Integrations tab - the org's custom MCP connector policy
+ * and kill switch (`organizations/[id]/custom-mcp/*`, `verifyOrgAccess`). Owner, current manager or
+ * platform admin; must stay in sync with that gate.
  */
 export const canManageOrgConnectors = (
   currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
