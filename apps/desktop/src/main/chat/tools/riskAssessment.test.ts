@@ -101,6 +101,8 @@ describe('the untrusted-content and outbound axes', () => {
     'session_suggestion_dismiss',
     'ask_user',
     'request_directory',
+    // Schedules turns in this conversation only; starting one is gated by its own card.
+    'loop',
     'mcp_list_servers',
     'mcp_add_server',
     'mcp_update_server',

@@ -998,28 +998,30 @@ describe('shell approval in a project with a large node_modules', () => {
     'env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=./x.sh git log',
     `GIT_CONFIG_PARAMETERS="'man.man.path=./x.sh'" git help clean`,
     `env GIT_CONFIG_PARAMETERS="'core.pager=./x.sh'" git log`,
-    'GIT_EDITOR=./x.sh git status',
-    'GIT_PAGER=./x.sh git log',
+    'GIT_EDITOR=./x.sh git tag -a v1',
+    'GIT_PAGER=./x.sh git log > /dev/tty',
     'GIT_TRACE=$PWD/.claude/settings.json git status',
     'env GIT_TRACE2_EVENT=/tmp/t git status',
     'GIT_TRACE2_EVENT=af_unix:./s git status',
-    'GIT_PAGER+=x git log',
-    'export GIT_PAGER; git log',
-    'declare -x GIT_PAGER=./x.sh; git log',
-    'typeset GIT_PAGER=./x.sh; git log',
-    'local GIT_PAGER=./x.sh; git log',
-    'readonly GIT_PAGER=./x.sh; git log',
-    'read -r GIT_PAGER <<< ./x.sh; git log',
-    'readarray GIT_PAGER <<< ./x.sh; git log',
-    'mapfile GIT_PAGER < f; git log',
-    'printf -v GIT_PAGER %s ./x.sh; git log',
-    'getopts a GIT_PAGER; git log',
-    'for GIT_PAGER in ./x.sh; do git log; done',
-    'select GIT_PAGER in ./x.sh; do git log; done',
-    'let GIT_PAGER=1; git log',
-    ': ${GIT_PAGER:=./x.sh}; git log',
-    ': ${GIT_PAGER=./x.sh}; git log',
-    'true && export GIT_PAGER=./x.sh && git log',
+    'GIT_PAGER+=x git log > /dev/tty',
+    'export GIT_PAGER; git log > /dev/tty',
+    'declare -x GIT_PAGER=./x.sh; git log > /dev/tty',
+    'typeset GIT_PAGER=./x.sh; git log > /dev/tty',
+    'local GIT_PAGER=./x.sh; git log > /dev/tty',
+    'readonly GIT_PAGER=./x.sh; git log > /dev/tty',
+    'read -r GIT_PAGER <<< ./x.sh; git log > /dev/tty',
+    'readarray GIT_PAGER <<< ./x.sh; git log > /dev/tty',
+    'mapfile GIT_PAGER < f; git log > /dev/tty',
+    'printf -v GIT_PAGER %s ./x.sh; git log > /dev/tty',
+    'getopts a GIT_PAGER; git log > /dev/tty',
+    'for GIT_PAGER in ./x.sh; do git log > /dev/tty; done',
+    'select GIT_PAGER in ./x.sh; do git log > /dev/tty; done',
+    'let GIT_PAGER=1; git log > /dev/tty',
+    ': ${GIT_PAGER:=./x.sh}; git log > /dev/tty',
+    ': ${GIT_PAGER=./x.sh}; git log > /dev/tty',
+    'true && export GIT_PAGER=./x.sh && git log > /dev/tty',
+    'GIT_PAGER=./x.sh unbuffer git log',
+    'export GIT_PAGER=./x.sh; script -qc true /dev/null; git log',
     'v=PAGER; export GIT_$v=./x.sh; git log',
     'v=GIT_PAGER; export $v=./x.sh; git log',
     'v=GIT_PAGER; printf -v "$v" %s ./x.sh; git log',
@@ -1103,7 +1105,7 @@ describe('shell approval in a project with a large node_modules', () => {
     "export GIT_EXEC_PATH=./bin; sh -ec 'git help clean'",
     "export GIT_PAGER=./x.sh; eval 'git log'",
     "export GIT_PAGER=./x.sh; builtin eval 'git log'",
-    'GIT_PAGER=less git log',
+    'GIT_PAGER=less git log > /dev/tty',
     'GIT_EDITOR=vi git commit --allow-empty',
     'GIT_SSH_COMMAND=cat git fetch',
     'GIT_EXEC_PATH= git mergetool',
@@ -1155,8 +1157,40 @@ describe('shell approval in a project with a large node_modules', () => {
     expect(await judge(command)).toMatchObject({ auto: true, full: true });
   });
 
-  it('asks in every mode for a -c key that names a program, whatever its value', async () => {
-    expect(await judge('git -c core.pager=cat log -1')).toMatchObject(asks);
+  it.each(['git -c core.pager=less log -1', 'git -c core.editor=true commit --amend'])(
+    'asks in every mode for %s, whose -c key names a program with a value the table does not list',
+    async command => {
+      expect(await judge(command)).toMatchObject(asks);
+    }
+  );
+
+  it.each([
+    'GIT_EDITOR=./x.sh git status',
+    'GIT_PAGER=./x.sh git log',
+    'GIT_PAGER+=x git log',
+    'export GIT_PAGER; git log',
+    'declare -x GIT_PAGER=./x.sh; git log',
+    'typeset GIT_PAGER=./x.sh; git log',
+    'local GIT_PAGER=./x.sh; git log',
+    'readonly GIT_PAGER=./x.sh; git log',
+    'read -r GIT_PAGER <<< ./x.sh; git log',
+    'readarray GIT_PAGER <<< ./x.sh; git log',
+    'mapfile GIT_PAGER < f; git log',
+    'printf -v GIT_PAGER %s ./x.sh; git log',
+    'getopts a GIT_PAGER; git log',
+    'for GIT_PAGER in ./x.sh; do git log; done',
+    'select GIT_PAGER in ./x.sh; do git log; done',
+    'let GIT_PAGER=1; git log',
+    ': ${GIT_PAGER:=./x.sh}; git log',
+    ': ${GIT_PAGER=./x.sh}; git log',
+    'true && export GIT_PAGER=./x.sh && git log',
+    'GIT_PAGER=less git log',
+    'export GIT_EDITOR=./x.sh; git commit -m x',
+    'git status; export GIT_EXEC_PATH=./bin',
+    'git -c core.pager=cat log -1',
+    'git -c core.hooksPath=/dev/null -c core.fsmonitor=false commit -m x',
+  ])('runs %s unasked, as git starts no program the script names there', async command => {
+    expect(await judge(command)).toMatchObject({ auto: true, full: true });
   });
 
   it('asks in every mode for a rebase continued with an editor that runs nothing', async () => {
@@ -1274,9 +1308,9 @@ describe('shell approval in a project with a large node_modules', () => {
   });
 
   const lowercased = [
-    'export git_pager=./x.sh; git log',
+    'export git_pager=./x.sh; git log > /dev/tty',
     'Git_Exec_Path=./bin git status',
-    'env git_editor=./x.sh git log',
+    'env git_editor=./x.sh git commit --allow-empty',
   ];
 
   it.each(lowercased)('asks in every mode for %s on Windows, which reads variable names in any case', async command => {
@@ -1389,11 +1423,18 @@ describe('shell approval in a project with a large node_modules', () => {
     'git commit -m x',
     'git -c gpg.format=ssh log -1',
     'git -c diff.tool=meld log -1',
-    'git -c remote.x.vcs=svn log -1',
     'git init -q y',
     'git difftool --tool-help',
   ])('runs %s unasked, as git runs no command line its words give', async command => {
     expect(await judge(command)).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
+    ['git -c remote.x.vcs=svn log -1', ''],
+    ['git -c core.x=y st', 'qrepo'],
+    ['git -c core.x=y help clean', ''],
+  ])('asks in every mode for %s (in proj/%s), as the safe table lists no such -c setting', async (command, folder) => {
+    expect(await judge(command, folder)).toMatchObject(asks);
   });
 
   it.each(['git push origin main', 'git push', 'git send-email --to=a@example.invalid x.patch'])(
@@ -1501,9 +1542,9 @@ describe('shell approval in a project with a large node_modules', () => {
   );
 
   it.each(["eval 'echo x' && git st", 'cd nosuchdir; git st'])(
-    'asks in auto mode only for %s (in proj/yrepo), as the folder and PATH git runs with are not known',
+    'asks in every mode for %s (in proj/yrepo), as the folder and PATH git runs with are not known',
     async command => {
-      expect(await judge(command, 'yrepo')).toMatchObject({ auto: false, full: true });
+      expect(await judge(command, 'yrepo')).toMatchObject(asks);
     }
   );
 
@@ -1528,7 +1569,7 @@ describe('shell approval in a project with a large node_modules', () => {
     'rm -f out.txt && git st',
     'git worktree prune && git st',
     'git -c color.ui=always st',
-    'git -c core.x=y st',
+    'git -c color.ui=never st',
     'git -C . -c color.ui=always --no-pager st',
   ])('runs %s (in proj/qrepo) unasked, reading the git alias it names as git expands it', async command => {
     expect(await judge(command, 'qrepo')).toMatchObject({ auto: true, full: true });
@@ -1597,7 +1638,6 @@ describe('shell approval in a project with a large node_modules', () => {
   });
 
   it.each([
-    'git add -A && git ci',
     'echo x > out.txt && git st',
     'git stash && git st',
     'git checkout -b feat && git st',
@@ -1632,8 +1672,6 @@ describe('shell approval in a project with a large node_modules', () => {
     'cd cfgdir3 && mkdir -p objects refs && git st',
     'echo x > src/commondir && git st',
     'echo x > cfgdir3/config.worktree && git -C cfgdir3 st',
-    'git -C cfgbare st',
-    'cd cfgbare && git st',
     'GIT_PAGER=cat git st',
     'env -u FOO git st',
     'env -u GIT_PAGER git st',
@@ -1651,6 +1689,13 @@ describe('shell approval in a project with a large node_modules', () => {
   ])('runs %s (in proj/xrepo) unasked, as nothing it does reaches the config git reads', async command => {
     expect(await judge(command, 'xrepo')).toMatchObject({ auto: true, full: true });
   });
+
+  it.each(['git add -A && git ci', 'git -C cfgbare st', 'cd cfgbare && git st'])(
+    'asks in every mode for %s (in proj/xrepo), where the scan reads no alias naming a form the safe table lists',
+    async command => {
+      expect(await judge(command, 'xrepo')).toMatchObject(asks);
+    }
+  );
 
   // The shell hands git safe.bareRepository=explicit, so a bare repository one of these lays out is refused by git
   // when it runs; the scan has no reason to ask about writing one.
@@ -1815,8 +1860,8 @@ describe('shell approval in a project with a large node_modules', () => {
     }
   });
 
-  it('runs a mistyped command unasked where help.autocorrect only names its guess', async () => {
-    expect(await judge('git cleen -fdx', 'qrepo')).toMatchObject({ auto: true, full: true });
+  it('asks in every mode for a mistyped command, which the safe table does not list', async () => {
+    expect(await judge('git cleen -fdx', 'qrepo')).toMatchObject(asks);
   });
 
   it('reads an alias over pack-redundant first only where git lists the command as deprecated', async () => {
@@ -1836,7 +1881,7 @@ describe('shell approval in a project with a large node_modules', () => {
     expect(await judge('git status', 'qrepo')).toMatchObject({ auto: true, full: true, allowed: true });
     expect(await judge('git st', 'qrepo')).toMatchObject({ auto: true, full: true, allowed: true });
     expect(await judge('git bang', 'qrepo')).toMatchObject({ allowed: false });
-    expect(await judge('git nosuch', 'qrepo')).toMatchObject({ allowed: true });
+    expect(await judge('git nosuch', 'qrepo')).toMatchObject({ allowed: false });
   });
 
   it('still applies a deny rule that names the command an alias expands to', async () => {
@@ -1896,15 +1941,16 @@ describe('shell approval in a project with a large node_modules', () => {
     expect(await judge(command, 'frepo')).toMatchObject({ auto: true, full: true });
   });
 
-  it.each(['export PATH="$(pnpm bin):$PATH" && git st', 'source .venv/bin/activate && git st'])(
+  it.each(['export PATH="$(pnpm bin):$PATH" && git st'])(
     'asks in auto only for %s (in proj/frepo), as a PATH folder it adds cannot be placed',
     async command => {
       expect(await judge(command, 'frepo')).toMatchObject({ auto: false, full: true });
     }
   );
 
-  it('asks only in auto mode for an alias after a sourced file, whose PATH and config the scan does not read', async () => {
-    expect(await judge('source .venv/bin/moves && git st', 'frepo')).toMatchObject({ auto: false, full: true });
+  it('asks in every mode for an alias after a sourced file, whose PATH and config the scan does not read', async () => {
+    expect(await judge('source .venv/bin/moves && git st', 'frepo')).toMatchObject(asks);
+    expect(await judge('source .venv/bin/activate && git st', 'frepo')).toMatchObject(asks);
   });
 
   it.each([
@@ -1919,9 +1965,12 @@ describe('shell approval in a project with a large node_modules', () => {
     'rsync -a src/ dist/ && git st',
     'cp -r tpl2/. src && git st',
     'git init -q x && git st',
-    'mkdir newdir && git init newdir && cd newdir && git st',
   ])('runs %s (in proj/frepo) unasked, as nothing it does reaches the config git reads', async command => {
     expect(await judge(command, 'frepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it('asks in every mode for an alias in a folder the script inits, where git reads no alias for it', async () => {
+    expect(await judge('mkdir newdir && git init newdir && cd newdir && git st', 'frepo')).toMatchObject(asks);
   });
 
   it.each([
@@ -2068,7 +2117,7 @@ describe('shell approval in a project with a large node_modules', () => {
     'git --version',
     'git --exec-path',
     'git --exec-path status',
-    'git -c core.x=y help clean',
+    'git -c color.ui=never help clean',
   ])('runs %s unasked, as no program is named', async command => {
     expect(await judge(command)).toMatchObject({ auto: true, full: true });
   });
@@ -2260,6 +2309,8 @@ describe('shell approval in a project with a large node_modules', () => {
     // A `..` after a link leads to the link target's parent, which may be /dev.
     'rg -l foo 2>src/../err | xargs sed -i s/a/b/',
     'rg -l foo | grep -v zz 2>src/../err | xargs sed -i s/a/b/',
+    'rg -l foo 02>/dev/null | xargs sed -i s/a/b/',
+    'rg -l foo 002>/dev/null | xargs sed -i s/a/b/',
   ])('asks for %s, whose stderr may reach xargs', async command => {
     expect(await judge(command)).toMatchObject(asks);
   });

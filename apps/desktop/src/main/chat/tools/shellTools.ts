@@ -466,8 +466,12 @@ async function partAsk(entry: ShellScan['commands'][number]): Promise<ApprovalPa
     reasons.push(`Reads ${entry.envFiles.join(', ')}, which usually holds secrets.`);
     kinds.push('env');
   }
+  if (entry.gitUnlisted) {
+    reasons.push(`Runs git in a form Desktop does not list as safe (${entry.gitUnlisted}).`);
+    kinds.push('gitUnlisted');
+  }
   if (kinds.length === 0) return undefined;
-  return { mode: entry.unread ? 'full' : 'auto', reason: reasons.join(' '), kinds };
+  return { mode: entry.unread || entry.gitUnlisted ? 'full' : 'auto', reason: reasons.join(' '), kinds };
 }
 
 /**
@@ -537,6 +541,7 @@ export async function shellApproval(
   // A push or gh write to the folder's own origin still says so on the card, but does not stop
   // auto mode; a reply that has read untrusted content asks anyway, as these are never contained.
   const parts = await Promise.all(scan.commands.map(entry => partAsk(entry)));
+  const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
   const scriptAsks =
     envScript ||
     !!script ||
@@ -577,6 +582,9 @@ export async function shellApproval(
       : []),
     ...(scan.unread
       ? ['Runs a program or builds a path that Desktop cannot follow, so where it acts cannot be checked.']
+      : []),
+    ...(gitUnlisted.length > 0
+      ? [`Runs git in a form Desktop does not list as safe (${gitUnlisted.join(', ')}).`]
       : []),
     ...(writesWhileUnresolved
       ? ['May write while Desktop cannot resolve a protected folder, so where it writes cannot be checked.']

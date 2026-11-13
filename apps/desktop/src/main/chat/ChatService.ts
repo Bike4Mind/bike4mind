@@ -15,7 +15,7 @@ import {
   type TaskAction,
 } from '@shared/orchestration';
 import { randomUUID } from 'node:crypto';
-import { LOOP_HELP, parseLoop, type LoopResult, type LoopState } from '@shared/loop';
+import { LOOP_HELP, parseLoop, type LoopResult, type LoopStart, type LoopState } from '@shared/loop';
 import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -249,6 +249,7 @@ import {
   type ApprovalSettlement,
 } from './tools/ApprovalGate';
 import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirectoryTool';
+import { LOOP_TOOL_NAME } from './tools/loopTool';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { QUEST_COMPLETE_TOOL_NAME, SESSION_SPAWN_TOOL_NAME } from './tools/hostTools';
 import { isWithin } from './tools/paths';
@@ -796,6 +797,12 @@ export class ChatService {
     if (action.kind === 'help' || action.kind === 'list') {
       return { ok: true, state: this.getLoop(sessionId), notice: action.kind === 'help' ? LOOP_HELP : undefined };
     }
+    return this.startLoop(sessionId, action);
+  }
+
+  /** Both /loop and the agent's `loop` tool start here, so every check below applies to both. */
+  private async startLoop(sessionId: string, action: LoopStart, callingSignal?: AbortSignal): Promise<LoopResult> {
+    if (callingSignal?.aborted) return { ok: false, error: 'Loop start was cancelled.' };
     this.loopRequests.get(sessionId)?.abort();
     const request = new AbortController();
     this.loopRequests.set(sessionId, request);
@@ -828,10 +835,17 @@ export class ChatService {
         : undefined;
       if (invocation && !command)
         return { ok: false, error: `No skill called /${invocation.name}. Type / to see what is available.` };
-      if (request.signal.aborted || this.deps.store.scopeKey() !== scope)
+      if (request.signal.aborted || callingSignal?.aborted || this.deps.store.scopeKey() !== scope)
         return { ok: false, error: 'Loop stopped or account changed. Start the loop again.' };
       this.loops.start(
-        { sessionId, prompt: action.prompt, intervalMs: action.intervalMs, phase: 'scheduled', nextRunAt: Date.now() },
+        {
+          sessionId,
+          prompt: action.prompt,
+          intervalMs: action.intervalMs,
+          phase: 'scheduled',
+          nextRunAt: Date.now(),
+          ...(action.until === undefined ? {} : { until: action.until }),
+        },
         async signal => {
           const current = await this.deps.store.get(sessionId);
           const valid = async (value: ChatSession) => {
@@ -2936,7 +2950,8 @@ export class ChatService {
       historyScope,
       undefined,
       released?.relay?.hops ?? seedHops ?? 0,
-      options.loop?.settled
+      options.loop?.settled,
+      Boolean(options.loop)
     );
     this.noteNotify(sessionId, released?.relay);
 
@@ -3278,7 +3293,8 @@ export class ChatService {
      * `continueReply`, which is carrying an existing turn on and keeps the depth it had.
      */
     hops?: number,
-    onSettled?: (outcome: TurnOutcome, reply: { content: string; stopReason?: string }) => void
+    onSettled?: (outcome: TurnOutcome, reply: { content: string; stopReason?: string }) => void,
+    isLoopTurn = false
   ): string {
     const sessionId = session.id;
     const replyId = resume?.id ?? randomUUID();
@@ -3288,9 +3304,18 @@ export class ChatService {
     if (hops !== undefined) this.turnRelay.set(sessionId, { hops, sends: 0 });
 
     let finalReply = { content: '' } as { content: string; stopReason?: string };
-    void this.runReply(session, replyId, api, controller, historyScope, resume, reply => {
-      finalReply = reply;
-    })
+    void this.runReply(
+      session,
+      replyId,
+      api,
+      controller,
+      historyScope,
+      resume,
+      reply => {
+        finalReply = reply;
+      },
+      isLoopTurn
+    )
       // runReply already catches, so this only covers a throw from its own bookkeeping. A turn
       // whose end cannot be classified is treated as failed, which HOLDS the queue rather than
       // firing it - the safe direction when the outcome is unknown.
@@ -3485,7 +3510,8 @@ export class ChatService {
     controller: AbortController,
     historyScope: string | null,
     resume?: ResumedReply,
-    completed?: (reply: { content: string; stopReason?: string }) => void
+    completed?: (reply: { content: string; stopReason?: string }) => void,
+    isLoopTurn = false
   ): Promise<TurnOutcome> {
     const sessionId = session.id;
     // A new id from each mid-turn message on: see takeArrivals and the round loop below.
@@ -4219,6 +4245,7 @@ export class ChatService {
                 patchEdits,
                 ask,
                 attended,
+                isLoopTurn,
                 title: session.title,
                 directories: directoryTurn,
                 ...(deferred ? { offered: new Set(toolsFor(roots).map(tool => tool.toolSchema.name)) } : {}),
@@ -4905,6 +4932,8 @@ export class ChatService {
       ask: boolean;
       /** Whether the user typed this turn, as opposed to a relay, an automatic turn or a seed prompt. */
       attended: boolean;
+      /** Captured when the reply starts; stopping its schedule does not change its origin. */
+      isLoopTurn: boolean;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
       /** Absent outside a reply's own loop, where request_directory then has no turn to track. */
@@ -5097,6 +5126,17 @@ export class ChatService {
                 pullRequests: {
                   bind: (target: string) => pullRequests.bindForAgent(sessionId, target),
                   clear: () => pullRequests.dismiss(sessionId),
+                },
+              }
+            : {}),
+          ...(ask
+            ? {
+                loop: {
+                  // The schedule may be stopped while its model turn is still running.
+                  inRun: () => scope.isLoopTurn,
+                  start: request => this.startLoop(sessionId, request, signal),
+                  current: () => this.getLoop(sessionId),
+                  stop: () => this.stopLoop(sessionId),
                 },
               }
             : {}),
@@ -8389,6 +8429,9 @@ const MODEL_GUIDANCE: readonly string[] = [
   'batch as the save) to fix any build error it reports. Check it',
   'with model_screenshot from several angles before saying it is done. Each good build also writes',
   '<name>.glb beside it, ready for three.js or Unity (via glTFast); wire it into their game if asked.',
+  'A turn may carry a point-and-edit note: the user clicked those parts in the pane, so "this" means',
+  'them. Change only their code, starting from the lines the note lists, and leave every other part',
+  'as it is; then model_view in a later batch and model_screenshot to confirm the change.',
 ];
 
 const WEB_GUIDANCE: readonly string[] = [
@@ -8430,6 +8473,8 @@ const ASK_GUIDANCE: readonly string[] = [
   'to its label. Never add an "Other" option, never use it to ask "should I proceed?", and never',
   'end a turn with an offer of next steps. Keep labels short, a few words, and put the detail in',
   'the description.',
+  `For anything recurring ("every hour", "until 6pm") call ${LOOP_TOOL_NAME} with action start; never`,
+  'emulate a schedule with sleep, a shell loop or a background timer.',
 ];
 
 /** For GPT models, which stop at plans and offers more readily than the rest. */

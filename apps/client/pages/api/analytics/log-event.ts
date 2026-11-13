@@ -2,6 +2,7 @@ import { CreditPurchaseEvents, FirstRunEvents, MfaEnrollmentEvents, Organization
 import { AnalyticsEventPayloads } from '@bike4mind/server-utils/types/analytics/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
+import { forwardQuestFeature } from '@server/analytics/questFeature';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 
@@ -26,6 +27,9 @@ const handler = baseApi({ defaultWriteRateLimit: false, recordsActivity: false }
     const body = { ...req.body, userId: req.user?.id } as AnalyticsEventPayloads;
 
     await logEvent(body, { ability: req.ability });
+    // Only once the event is recorded, so a type the log refuses is never forwarded. Rounds players
+    // only, and it never throws (questFeature.ts).
+    await forwardQuestFeature(req, body.type);
 
     return res.status(204).send();
   }

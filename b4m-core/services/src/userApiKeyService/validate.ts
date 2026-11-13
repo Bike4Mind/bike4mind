@@ -7,6 +7,7 @@ import {
   IEmbedBranding,
   IUserApiKeyDocument,
   IUserApiKeyRepository,
+  isExchangeKeyMetadata,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import { KEY_PREFIX_LENGTH, LEGACY_KEY_PREFIX_LENGTH } from './constants';
@@ -60,6 +61,8 @@ export interface ValidationResult {
   createdByUserId?: string;
   /** When the key was minted; rotation keeps it. Decides legacy status for grandfathered scope gates. */
   createdAt?: Date;
+  /** OAuth client that minted the key, present only for a federated exchange key. */
+  oauthExchangeClientId?: string;
   reason?: 'not_found' | 'invalid_hash' | 'expired' | 'disabled' | 'rate_limited';
 }
 
@@ -80,6 +83,13 @@ async function matchStoredSecret(key: string, apiKey: IUserApiKeyDocument): Prom
   return null;
 }
 
+/** Stamps `lastUsedAt` without blocking the request; a failed write is logged, never thrown. */
+export function recordUserApiKeyUse(keyId: string, db: ValidateUserApiKeyAdapters['db']): void {
+  db.userApiKeys.updateLastUsed(keyId).catch(err => {
+    Logger.globalInstance.warn('Failed to update API key last used timestamp:', err);
+  });
+}
+
 /**
  * Post-lookup gates shared by every key-validation path (raw-key-by-prefix and
  * by-id). Runs the checks that must hold regardless of HOW the doc was located -
@@ -98,13 +108,12 @@ function finalizeApiKeyValidation(
   if (apiKey.status !== ApiKeyStatus.ACTIVE) {
     return { isValid: false, reason: 'disabled' };
   }
-
-  // Update last used timestamp (fire and forget)
-  if (recordUse) {
-    db.userApiKeys.updateLastUsed(apiKey.id).catch(err => {
-      Logger.globalInstance.warn('Failed to update API key last used timestamp:', err);
-    });
+  // An exchange key with no client id cannot be confined or attributed, so refuse it.
+  if (isExchangeKeyMetadata(apiKey.metadata) && !apiKey.metadata.oauthClientId) {
+    return { isValid: false, reason: 'disabled' };
   }
+
+  if (recordUse) recordUserApiKeyUse(apiKey.id, db);
 
   return {
     isValid: true,
@@ -125,6 +134,7 @@ function finalizeApiKeyValidation(
     currentSpend: apiKey.usage?.totalSpendCredits,
     createdByUserId: apiKey.metadata?.createdByUserId,
     createdAt: apiKey.createdAt,
+    oauthExchangeClientId: isExchangeKeyMetadata(apiKey.metadata) ? apiKey.metadata.oauthClientId : undefined,
   };
 }
 

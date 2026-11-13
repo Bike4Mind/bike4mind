@@ -211,7 +211,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     }
   } else if (manifest.source.artifactType) {
     // Non-react artifact types signal "render this raw content server-side": wrap the uploaded
-    // source into the canonical published page (byte-identical to the web client's pre-render)
+    // source into the canonical published page (bytes pinned in renderArtifactHtml.test.ts)
     // so the caps, validateBundle, and promote below all operate on the FINAL served bytes.
     const rendered = renderArtifactIndexHtml(
       manifest.source.artifactType,

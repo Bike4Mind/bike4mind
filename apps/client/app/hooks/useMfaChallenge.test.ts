@@ -110,6 +110,22 @@ describe('useMfaChallenge begin', () => {
     });
   });
 
+  it('explains forced setup without an administrator and offers a labelled sign-out', async () => {
+    const { result } = setup();
+
+    await act(() => result.current.begin({ ...verifyStart, mode: 'setup' }));
+
+    expect(result.current.modalProps.description).toContain('your credits');
+    expect(result.current.modalProps.description).not.toMatch(/administrator/i);
+    expect(result.current.modalProps.onSignOut).toBeTypeOf('function');
+  });
+
+  it('offers no sign-out while verifying', async () => {
+    const { result } = setup();
+    await act(() => result.current.begin(verifyStart));
+    expect(result.current.modalProps.onSignOut).toBeUndefined();
+  });
+
   it('ends the sign-in as a cancelled setup when enrollment cannot start', async () => {
     mocks.setupMutateAsync.mockRejectedValue(new Error('setup down'));
     const { result, onCancel } = setup();
@@ -177,7 +193,7 @@ describe('useMfaChallenge verification', () => {
     const { result, onCancel } = setup();
     await act(() => result.current.begin({ ...verifyStart, mode: 'setup' }));
 
-    act(() => result.current.modalProps.onCancel?.());
+    act(() => result.current.modalProps.onSignOut?.());
 
     expect(mocks.reportMfaEnrollmentAbandoned).toHaveBeenCalledExactlyOnceWith('pending-tok');
     expect(mocks.reportMfaEnrollmentAbandoned.mock.invocationCallOrder[0]).toBeLessThan(
