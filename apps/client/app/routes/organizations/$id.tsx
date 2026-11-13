@@ -14,6 +14,9 @@ import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgC
 import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
 import OrganizationAuditSection from '@client/app/components/organizations/OrganizationAuditSection';
+import TeamOnboardingChecklist from '@client/app/components/organizations/TeamOnboardingChecklist';
+import { readTeamPreference, recentTeamsKey, rememberTeam } from '@client/app/components/organizations/teamPreferences';
+import { isAxiosError } from 'axios';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
@@ -27,6 +30,7 @@ import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { creditBalanceParams, formatCreditAmount } from '@client/app/utils/formatCredits';
 import {
   Avatar,
+  Alert,
   Box,
   Button,
   Card,
@@ -126,7 +130,7 @@ const RAIL_GROUPS: ReadonlyArray<{ key: 'team' | 'insights' | 'integrations' | '
 const OrganizationPage: FC = () => {
   const { t } = useTranslation();
   const { id } = useParams({ strict: false });
-  const { data: organization, isLoading } = useGetOrganization(id as string);
+  const { data: organization, isLoading, isError, error, refetch } = useGetOrganization(id as string);
   const { maxSeats, currentSeats } = useOrganizationSeats(id as string);
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { tab?: string; section?: string };
@@ -224,6 +228,40 @@ const OrganizationPage: FC = () => {
 
   useDocumentTitle(organization?.name, t('organization.document_title_suffix'));
 
+  useEffect(() => {
+    if (organization && !isError && currentUser) rememberTeam(currentUser.id, organization.id);
+  }, [organization, isError, currentUser]);
+
+  if (isError || (!isLoading && !organization)) {
+    const status = isAxiosError(error) ? error.response?.status : undefined;
+    const knownTeam = currentUser && readTeamPreference(recentTeamsKey(currentUser.id)).includes(id as string);
+    const unavailable = status === 400 || status === 404 || !error;
+    return (
+      <Stack spacing={2} alignItems="center" sx={{ p: 4 }} role="alert" data-testid="organization-error-state">
+        <Typography level="h2">
+          {status === 403 || (unavailable && knownTeam)
+            ? 'You no longer have access'
+            : unavailable
+              ? 'Team not found'
+              : 'Could not load team'}
+        </Typography>
+        <Typography>
+          {unavailable
+            ? 'This team may have been removed or is not available to your account.'
+            : 'Please try again or return to your teams.'}
+        </Typography>
+        {!unavailable && status !== 403 && (
+          <Button onClick={() => refetch()} data-testid="organization-retry-btn">
+            Retry
+          </Button>
+        )}
+        <Button onClick={() => navigate({ to: '/organizations' })} data-testid="organization-back-btn">
+          All teams
+        </Button>
+      </Stack>
+    );
+  }
+
   if (isLoading || !organization) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="100%" width="100%">
@@ -264,6 +302,12 @@ const OrganizationPage: FC = () => {
       })}
     >
       <Box sx={{ mx: '24px' }}>
+        {currentUser?.id === organization.userId &&
+          new URLSearchParams(window.location.search).get('team_created') === 'true' && (
+            <Alert color="success" sx={{ mb: 2 }} data-testid="organization-created-confirmation">
+              Team created successfully! Get started with the checklist below.
+            </Alert>
+          )}
         <Breadcrumbs
           items={[{ name: t('organization.organizations'), href: '/organizations' }, { name: organization.name }]}
         />
@@ -336,6 +380,14 @@ const OrganizationPage: FC = () => {
           <Box sx={{ p: 3, flex: 1, overflow: 'auto' }}>
             <TabPanel value={OrganizationTabs.Overview}>
               {header(OrganizationTabs.Overview)}
+              {currentUser?.id === organization.userId && !organization.personal && (
+                <TeamOnboardingChecklist
+                  key={`${currentUser.id}:${organization.id}`}
+                  organization={organization}
+                  userId={currentUser.id}
+                  onOpen={requestTab}
+                />
+              )}
               <OrganizationOverviewSection organization={organization} />
             </TabPanel>
             <TabPanel value={OrganizationTabs.Members}>
