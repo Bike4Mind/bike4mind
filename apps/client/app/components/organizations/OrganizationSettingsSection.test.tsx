@@ -8,6 +8,7 @@ import OrganizationSettingsSection from './OrganizationSettingsSection';
 
 const currentUser = vi.fn();
 const transfer = vi.hoisted(() => vi.fn());
+const updateProfile = vi.hoisted(() => vi.fn());
 const navigate = vi.hoisted(() => vi.fn());
 const members = vi.hoisted(() => ({
   list: [] as { id: string; name: string; email?: string; isBanned?: boolean }[],
@@ -16,7 +17,7 @@ const members = vi.hoisted(() => ({
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useDeleteOrganization: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useUpdateOrganization: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useUpdateOrganization: () => ({ mutateAsync: updateProfile, isPending: false }),
   useTransferOrganizationOwnership: () => ({ mutateAsync: transfer, isPending: false }),
 }));
 
@@ -68,6 +69,20 @@ describe('OrganizationSettingsSection - Danger Zone visibility', () => {
     renderAs({ id: 'member1' });
     expect(screen.queryByTestId('organization-export-section')).toBeNull();
   });
+  it('exposes policy controls to read-only managers while keeping generic profile writes disabled', () => {
+    updateProfile.mockClear();
+    renderAs({ id: 'manager', isAdmin: false }, {
+      ...org,
+      adminUserIds: ['manager'],
+      users: [{ userId: 'manager', permissions: ['read'] }],
+    } as IOrganizationDocument);
+    expect(screen.getByTestId('organization-sharing-save-btn')).not.toBeDisabled();
+    expect(screen.getByTestId('organization-settings-system-prompt-input')).toBeDisabled();
+    expect(screen.getByTestId('organization-settings-system-prompt-save-btn')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('organization-settings-system-prompt-save-btn'));
+    expect(updateProfile).not.toHaveBeenCalled();
+  });
+
   it('shows Delete Team to the billing owner', () => {
     renderAs({ id: OWNER_ID, isAdmin: false });
 

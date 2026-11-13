@@ -20,7 +20,7 @@ vi.mock('@bike4mind/services/llm/modelAdmission', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/services/llm/modelAdmission')>()),
   loadFreeTierAllowedModels: async () => undefined,
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ isCreditsEnforced: async () => false }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({ isCreditsEnforced: async () => false }));
 
 import { resolveAdminModelFilterIds } from './adminModelFilter';
 import { loadAdminModelRows } from './adminModelList';

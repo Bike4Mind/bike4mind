@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import {
   IUserApiKeyDocument,
+  IUserApiKeyListItem,
   ApiKeyScopeValue,
   IEmbedBranding,
   API_KEY_TRUST_REQUIRED_ERROR_CODE,
@@ -138,7 +139,7 @@ export interface RotateCallbackSigningSecretResponse {
  * one key would clobber each other's cache.
  */
 export function useGetUserApiKeys() {
-  return useQuery<IUserApiKeyDocument[]>({
+  return useQuery<IUserApiKeyListItem[]>({
     queryKey: ['user-api-keys'],
     queryFn: async () => {
       const response = await api.get('/api/user-api-keys', { params: { includeDisabled: true } });

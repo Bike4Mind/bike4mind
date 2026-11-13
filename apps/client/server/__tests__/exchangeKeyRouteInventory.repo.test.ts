@@ -149,9 +149,8 @@ const SCOPE_LESS_CREDENTIAL_ROUTES = [
 // still contains the identifier, so it shows up here.
 const EXCHANGE_KEY_OPT_IN_OCCURRENCES: Record<string, number> = {
   'client/server/chatCompletion/external/sseRoute.ts': 1,
-  'client/server/chatCompletion/external/wsRoute.ts': 1,
-  'client/server/cli/auth.ts': 2,
-  'client/server/cli/resolveContractAuth.ts': 3,
+  'server-utils/src/cli/auth.ts': 2,
+  'server-utils/src/cli/resolveContractAuth.ts': 3,
 };
 
 function sourceFiles(dir: string): string[] {

@@ -19,8 +19,8 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import { SlackClient } from '@bike4mind/slack';
 import { apiKeyService } from '@bike4mind/services';
-import { sanitizeErrorMessage, REQUIRED_GITHUB_LABELS } from '@server/services/liveopsTriageService';
-import { JiraIssueTracker } from '@server/services/issueTrackers/jiraIssueTracker';
+import { sanitizeErrorMessage, REQUIRED_GITHUB_LABELS } from '@bike4mind/server-utils/services/liveopsTriageService';
+import { JiraIssueTracker } from '@bike4mind/server-utils/services/issueTrackers/jiraIssueTracker';
 import { resolveJiraConfig, resolveSlackBotToken } from '@bike4mind/server-utils/services/liveopsConnectionResolver';
 
 const logger = new Logger({ metadata: { service: 'liveops-config-health' } });

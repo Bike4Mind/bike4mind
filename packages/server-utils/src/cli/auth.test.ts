@@ -1,0 +1,1010 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  UnauthorizedError,
+  ForbiddenError,
+  TooManyRequestsError,
+  ServiceUnavailableError,
+  InternalServerError,
+} from '../utils/errors';
+
+const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
+const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+const assertCliSessionAllowedMock = vi.hoisted(() =>
+  vi.fn(async (_user: unknown, _sid?: string, _options?: { requireApiAccess?: boolean }) => undefined)
+);
+vi.mock('../utils/apiKeyAccessGate', async () => {
+  const { ForbiddenError } = await import('../utils/errors');
+  const message = 'API keys require an active paid subscription';
+  return {
+    API_KEY_ACCESS_DENIED_MESSAGE: message,
+    isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertCliSessionAllowed: assertCliSessionAllowedMock,
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
+    },
+  };
+});
+vi.mock('../auth/mfaEnforcement', () => ({
+  isMfaEnrollmentOwed: (user: unknown, opts?: unknown) => mockIsMfaEnrollmentOwed(user, opts),
+  MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
+}));
+
+vi.mock('../utils/config', () => ({
+  Config: { JWT_SECRET: 'test-secret' },
+}));
+
+const cacheStore = new Map<string, { value: number; expiresAt: number }>();
+
+vi.mock('@bike4mind/database', () => ({
+  User: { findById: vi.fn() },
+  userApiKeyRepository: { findById: vi.fn() },
+  cacheRepository: {},
+}));
+
+vi.mock('@bike4mind/services', async importOriginal => ({
+  // Real `userService.accountBlockReasons` drives the account-state gate; the rest of the barrel
+  // loads alongside it (its db/config deps are mocked here).
+  ...(await importOriginal<typeof import('@bike4mind/services')>()),
+  // Real kill-switch + token-type comparisons so the tests exercise actual enforcement (not stubs).
+  isTokenVersionCurrent: (a?: number, b?: number) => (a ?? 0) === (b ?? 0),
+  isTokenTypeAcceptable: (t: unknown, expected: string) => t === undefined || t === expected,
+  userApiKeyService: { validateUserApiKey: vi.fn(), validateUserApiKeyById: vi.fn(), recordUserApiKeyUse: vi.fn() },
+  cacheService: {
+    get: vi.fn(async ({ key }: { key: string }) => {
+      const entry = cacheStore.get(key);
+      if (!entry) return null;
+      if (entry.expiresAt <= Date.now()) {
+        cacheStore.delete(key);
+        return null;
+      }
+      return entry.value;
+    }),
+    set: vi.fn(async ({ key, value, ttl }: { key: string; value: number; ttl: number }) => {
+      cacheStore.set(key, { value, expiresAt: Date.now() + ttl });
+      return value;
+    }),
+    ttl: vi.fn(async ({ key }: { key: string }) => {
+      const entry = cacheStore.get(key);
+      if (!entry) return 0;
+      return entry.expiresAt - Date.now();
+    }),
+  },
+}));
+
+const resolveUntrustedKeyLimits = vi.hoisted(() =>
+  vi.fn(async (_owner: unknown, key: { rateLimit: { requestsPerMinute: number; requestsPerDay: number } }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }))
+);
+vi.mock('../utils/apiKeyTrust', () => ({ resolveUntrustedKeyLimits }));
+const refuseIfSuspendedOwner = vi.hoisted(() => vi.fn(async (_key: string, _logger?: unknown) => undefined));
+vi.mock('../auth/suspendedApiKeyRefusal', () => ({ refuseIfSuspendedOwner }));
+
+vi.mock('../utils/apiKeyRateLimitCheck', () => ({
+  extractApiKeyFromHeaders: vi.fn(),
+  checkApiKeyRateLimit: vi.fn(),
+}));
+
+import jwt from 'jsonwebtoken';
+import {
+  checkApiKeyRateLimitOrThrow,
+  checkRateLimit,
+  verifyApiKey,
+  verifyJwtToken,
+  verifyEmbedApiKey,
+  verifyEmbedKeyById,
+} from './auth';
+import { cacheService, userApiKeyService } from '@bike4mind/services';
+import { User } from '@bike4mind/database';
+import { checkApiKeyRateLimit, extractApiKeyFromHeaders } from '../utils/apiKeyRateLimitCheck';
+import { ACCOUNT_DELETION_PENDING_CODE, ApiKeyScope, CreditHolderType } from '@bike4mind/common';
+
+const userId = 'user-abc';
+const key = `rate-limit:ws-auth:${userId}`;
+const desktopKey = `rate-limit:ws-auth:desktop:${userId}`;
+const completionsKey = `rate-limit:ws-auth:completions:${userId}`;
+const HOUR_MS = 60 * 60_000;
+
+describe('checkRateLimit (JWT per-user rate limiter)', () => {
+  beforeEach(() => {
+    cacheStore.clear();
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  describe('fixed-window TTL behavior', () => {
+    it('seeds a fresh window with the full TTL on the first request', async () => {
+      vi.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
+
+      await checkRateLimit(userId);
+
+      const entry = cacheStore.get(key);
+      expect(entry).toBeDefined();
+      expect(entry!.value).toBe(1);
+      expect(entry!.expiresAt - Date.now()).toBe(HOUR_MS);
+    });
+
+    it('preserves the original window expiry on subsequent increments — does NOT slide the TTL forward', async () => {
+      vi.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
+
+      await checkRateLimit(userId);
+      const windowOpensAt = Date.now();
+      const originalExpiry = cacheStore.get(key)!.expiresAt;
+
+      // Advance 30 min and make another request - the window should still
+      // expire exactly 60 min from the FIRST request, not 60 min from now.
+      vi.setSystemTime(new Date(windowOpensAt + 30 * 60_000));
+      await checkRateLimit(userId);
+
+      const entry = cacheStore.get(key)!;
+      expect(entry.value).toBe(2);
+      expect(entry.expiresAt).toBe(originalExpiry);
+    });
+
+    it('opens a fresh window once the previous one expires', async () => {
+      vi.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
+
+      await checkRateLimit(userId);
+      // Jump past the original window
+      vi.setSystemTime(new Date(Date.now() + HOUR_MS + 1));
+
+      await checkRateLimit(userId);
+
+      const entry = cacheStore.get(key)!;
+      expect(entry.value).toBe(1);
+      expect(entry.expiresAt - Date.now()).toBe(HOUR_MS);
+    });
+  });
+
+  describe('per-source caps', () => {
+    it('allows up to 100 requests for an unspecified source (the legacy default)', async () => {
+      for (let i = 0; i < 100; i++) {
+        await checkRateLimit(userId);
+      }
+      await expect(checkRateLimit(userId)).rejects.toThrow(/Rate limit exceeded/);
+    });
+
+    it("allows up to 100 requests for source: 'web'", async () => {
+      for (let i = 0; i < 100; i++) {
+        await checkRateLimit(userId, 'web');
+      }
+      await expect(checkRateLimit(userId, 'web')).rejects.toThrow(/Rate limit exceeded/);
+    });
+
+    it("allows up to 1000 requests for source: 'cli' (CLI tool loops need a much higher ceiling)", async () => {
+      // Spot-check: 100 should be well under the CLI cap
+      for (let i = 0; i < 100; i++) {
+        await checkRateLimit(userId, 'cli');
+      }
+      // Still allowed - would have thrown under the legacy 100-cap
+      await expect(checkRateLimit(userId, 'cli')).resolves.toBeUndefined();
+
+      // Drive to the cap and confirm it throws on the 1001st request
+      for (let i = 102; i <= 1000; i++) {
+        await checkRateLimit(userId, 'cli');
+      }
+      await expect(checkRateLimit(userId, 'cli')).rejects.toThrow(/Rate limit exceeded/);
+    });
+
+    // Seeded rather than looped: the boundary is the only interesting call, and 6000 serial
+    // awaits to reach it cost more than they prove.
+    const seedDesktop = (value: number) => cacheStore.set(desktopKey, { value, expiresAt: Date.now() + 3_600_000 });
+
+    it('carries the desktop app to 6000, where source desktop alone would stop at 100', async () => {
+      seedDesktop(5999);
+      await expect(checkRateLimit(userId, 'desktop', { client: 'b4m-desktop/0.1.0' })).resolves.toBeUndefined();
+      await expect(checkRateLimit(userId, 'desktop', { client: 'b4m-desktop/0.1.0' })).rejects.toThrow(
+        /Rate limit exceeded/
+      );
+    });
+
+    it('counts the desktop app on its own bucket, so a busy desktop cannot lock the CLI out', async () => {
+      seedDesktop(5999);
+      await checkRateLimit(userId, 'desktop', { client: 'b4m-desktop/0.1.0' });
+
+      // The raised ceiling must not be spent on the counter the CLI and every other JWT surface
+      // read, or a desktop session past 1000 would exhaust that user's CLI budget.
+      expect(cacheStore.get(key)).toBeUndefined();
+      expect(cacheStore.get(completionsKey)).toBeUndefined();
+      await expect(checkRateLimit(userId, 'cli')).resolves.toBeUndefined();
+      expect(cacheStore.get(completionsKey)!.value).toBe(1);
+    });
+
+    it('keeps the 100 cap for any other API client', async () => {
+      for (let i = 0; i < 100; i++) {
+        await checkRateLimit(userId, 'api', { client: 'my-script/1.0' });
+      }
+      await expect(checkRateLimit(userId, 'api', { client: 'my-script/1.0' })).rejects.toThrow(/Rate limit exceeded/);
+    });
+  });
+
+  describe('buckets', () => {
+    it('keeps a bucketed counter apart from the shared one, in both directions', async () => {
+      // A CLI session at 1000 on the shared counter must not spend the tools budget.
+      for (let i = 0; i < 1000; i++) {
+        await checkRateLimit(userId, 'cli');
+      }
+      await expect(checkRateLimit(userId, undefined, { bucket: 'tools' })).resolves.toBeUndefined();
+      expect(cacheStore.get(completionsKey)!.value).toBe(1000);
+      expect(cacheStore.get(`rate-limit:ws-auth:tools:${userId}`)!.value).toBe(1);
+    });
+
+    it('keeps the ws bucket apart from a completions session at its cap', async () => {
+      for (let i = 0; i < 1000; i++) {
+        await checkRateLimit(userId, 'cli');
+      }
+      await expect(checkRateLimit(userId, undefined, { bucket: 'ws' })).resolves.toBeUndefined();
+      expect(cacheStore.get(completionsKey)!.value).toBe(1000);
+      expect(cacheStore.get(`rate-limit:ws-auth:ws:${userId}`)!.value).toBe(1);
+    });
+
+    it.each(['cli', 'agent'] as const)(
+      'keeps a %s session above 100 off the counter that 100-cap sources read',
+      async source => {
+        for (let i = 0; i < 150; i++) {
+          await checkRateLimit(userId, source);
+        }
+
+        expect(cacheStore.get(key)).toBeUndefined();
+        expect(cacheStore.get(completionsKey)!.value).toBe(150);
+        await expect(checkRateLimit(userId, 'api')).resolves.toBeUndefined();
+        await expect(checkRateLimit(userId, 'web')).resolves.toBeUndefined();
+        await expect(checkRateLimit(userId)).resolves.toBeUndefined();
+        expect(cacheStore.get(key)!.value).toBe(3);
+      }
+    );
+
+    it('applies the source cap to the bucketed counter', async () => {
+      for (let i = 0; i < 100; i++) {
+        await checkRateLimit(userId, undefined, { bucket: 'tools' });
+      }
+      await expect(checkRateLimit(userId, undefined, { bucket: 'tools' })).rejects.toThrow(/Rate limit exceeded/);
+      expect(cacheStore.has(key)).toBe(false);
+    });
+  });
+
+  describe('error message', () => {
+    it('reports the remaining window in seconds (not a reset-to-full hour)', async () => {
+      vi.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
+
+      // Burn through the cap
+      for (let i = 0; i < 100; i++) {
+        await checkRateLimit(userId);
+      }
+
+      // 45 minutes into the window - 15 min should remain
+      vi.setSystemTime(new Date(Date.now() + 45 * 60_000));
+
+      await expect(checkRateLimit(userId)).rejects.toThrow(/Try again in 900 seconds/);
+    });
+  });
+
+  it('uses cacheService.ttl (not a hardcoded fallback) to compute the increment TTL', async () => {
+    vi.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
+
+    await checkRateLimit(userId); // seeds
+    const ttlCallsBefore = vi.mocked(cacheService.ttl).mock.calls.length;
+    await checkRateLimit(userId); // increment
+    const ttlCallsAfter = vi.mocked(cacheService.ttl).mock.calls.length;
+
+    expect(ttlCallsAfter).toBeGreaterThan(ttlCallsBefore);
+  });
+});
+
+describe('verifyJwtToken (P0-B policy consent gate)', () => {
+  const sign = (id: string) => jwt.sign({ id }, 'test-secret');
+  const mockUser = (over: Record<string, unknown>) => ({
+    id: 'u1',
+    email: 'a@b.com',
+    username: 'a',
+    aupAcceptedVersion: undefined,
+    isSystem: false,
+    ...over,
+  });
+
+  beforeEach(() => {
+    vi.mocked(User.findById).mockReset();
+    assertCliSessionAllowedMock.mockReset().mockResolvedValue(undefined);
+    isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
+    mockIsMfaEnrollmentOwed.mockReset().mockResolvedValue(false);
+  });
+
+  it('rejects a JWT for an account with no recorded acceptance (fail-closed on the LLM surface)', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: undefined }));
+    await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('Policy acceptance required');
+  });
+
+  it('rejects when aupAcceptedVersion is null/empty (absent or blank both mean not accepted)', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: null }));
+    await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('Policy acceptance required');
+  });
+
+  it('accepts a JWT for an account with a recorded version', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
+    await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
+  });
+
+  it('refuses a deletion-pending account with the deletion-pending code', async () => {
+    vi.mocked(User.findById).mockResolvedValue(
+      mockUser({
+        aupAcceptedVersion: 'v1',
+        deletion: {
+          requestedAt: new Date('2026-11-01T00:00:00Z'),
+          scheduledFor: new Date('2026-12-01T00:00:00Z'),
+          source: 'self_serve',
+        },
+      })
+    );
+    await expect(verifyJwtToken(sign('u1'))).rejects.toMatchObject({
+      additionalInfo: { code: ACCOUNT_DELETION_PENDING_CODE },
+    });
+  });
+
+  it('accepts a grandfathered account (sentinel version passes the gate)', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'grandfathered' }));
+    await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
+  });
+
+  it('accepts a system account regardless of acceptance (service users never attest)', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ isSystem: true, aupAcceptedVersion: undefined }));
+    await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
+  });
+
+  it('rejects a first-factor-only (mfaPending) token before hitting the DB', async () => {
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', mfaPending: true }, 'test-secret'))).rejects.toThrow(
+      'MFA verification required'
+    );
+    expect(User.findById).not.toHaveBeenCalled();
+  });
+
+  it('rejects a token whose tokenVersion is stale relative to the user (revocation kill-switch)', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', tokenVersion: 3 }));
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', tokenVersion: 1 }, 'test-secret'))).rejects.toThrow(
+      'Session expired'
+    );
+  });
+
+  it('accepts a token whose tokenVersion matches the user', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', tokenVersion: 3 }));
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', tokenVersion: 3 }, 'test-secret'))).resolves.toMatchObject({
+      id: 'u1',
+    });
+  });
+
+  it('accepts a legacy token with no tokenVersion against a v0 user (self-expiring grace)', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
+    await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
+  });
+
+  it('rejects a refresh token presented as an access bearer (wrong token type)', async () => {
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', typ: 'refresh' }, 'test-secret'))).rejects.toThrow(
+      'Invalid token type'
+    );
+  });
+
+  it('accepts a token explicitly typed as access', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', typ: 'access' }, 'test-secret'))).resolves.toMatchObject({
+      id: 'u1',
+    });
+  });
+
+  it('rejects a relying-party OAuth access token before hitting the DB (oauthRouteGate does not cover this surface)', async () => {
+    // Wiring guard: this primitive backs the CLI/LLM surfaces the route gate never runs on, so the
+    // kind:oauth rejection here is the ONLY thing keeping a scope-bound OAuth token off them.
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', kind: 'oauth' }, 'test-secret'))).rejects.toThrow(
+      'OAuth access tokens are not accepted on this endpoint'
+    );
+    expect(User.findById).not.toHaveBeenCalled();
+  });
+
+  // A still-valid session JWT for a consented account must still be refused once the account is
+  // banned/disputed/suspended: ban does not bump tokenVersion, and the WS/CLI completion surfaces
+  // fall back to this primitive. Same gate verifyApiKey applies via assertOwnerAccountUsable.
+  describe('account state (ban / dispute / suspension) on the JWT/WS/CLI fallback', () => {
+    it('rejects a banned owner even with accepted policy and a current tokenVersion', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', isBanned: true }));
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('This account is suspended');
+      await expect(verifyJwtToken(sign('u1'))).rejects.toBeInstanceOf(ForbiddenError);
+    });
+
+    it('rejects a chargeback/dispute-pending owner', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', disputePending: true }));
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('on hold pending a payment review');
+      await expect(verifyJwtToken(sign('u1'))).rejects.toBeInstanceOf(ForbiddenError);
+    });
+
+    it('rejects a content-policy-suspended owner', async () => {
+      vi.mocked(User.findById).mockResolvedValue(
+        mockUser({ aupAcceptedVersion: 'v1', moderation: { status: 'suspended' } })
+      );
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('suspended for repeated content-policy');
+      await expect(verifyJwtToken(sign('u1'))).rejects.toBeInstanceOf(ForbiddenError);
+    });
+
+    it('accepts a usable account (not banned, disputed, or suspended)', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
+      await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
+    });
+  });
+
+  // enforceMFA turned on after this session was minted: the token is still valid, but the
+  // CLI/WS/LLM surfaces must refuse it until the user enrolls, as REST does.
+  it('rejects a valid session JWT once the user owes MFA enrollment', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
+    mockIsMfaEnrollmentOwed.mockResolvedValueOnce(true);
+    const refusal = verifyJwtToken(sign('u1'));
+    await expect(refusal).rejects.toThrow('MFA enrollment required.');
+    // ForbiddenError, so the Function-URL adapter answers 403 with the message intact.
+    await expect(refusal).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockIsMfaEnrollmentOwed).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'u1' }), {
+      impersonatedBy: undefined,
+    });
+  });
+
+  it('rejects impersonation on alternate completion credentials', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', impersonatedBy: 'admin-1' }, 'test-secret'))).rejects.toThrow(
+      'Impersonated sessions cannot use CLI or completion credentials'
+    );
+  });
+
+  it('fails closed when the enforcement read fails', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
+    mockIsMfaEnrollmentOwed.mockRejectedValueOnce(new Error('settings read failed'));
+    await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('settings read failed');
+  });
+});
+
+describe('verifyEmbedApiKey (embed credential-class gates)', () => {
+  const rateLimit = { requestsPerMinute: 10, requestsPerDay: 100 };
+  const validEmbed = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'k1',
+    scopes: [ApiKeyScope.EMBED_CHAT],
+    rateLimit,
+    billingOwnerType: CreditHolderType.Organization as const,
+    organizationId: 'org-1',
+    agentId: 'agent-1',
+    allowedOrigins: ['https://example.com'],
+  };
+
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_embedkey');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    // The key owner's account state is now checked on this path too.
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+  });
+
+  it('returns the bound agentId and allowedOrigins on a valid org-owned embed key', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(validEmbed);
+    const info = await verifyEmbedApiKey({});
+    expect(info.agentId).toBe('agent-1');
+    expect(info.allowedOrigins).toEqual(['https://example.com']);
+    expect(info.organizationId).toBe('org-1');
+  });
+
+  it('rejects a key without the embed:chat scope', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...validEmbed,
+      scopes: [ApiKeyScope.AI_CHAT],
+    });
+    await expect(verifyEmbedApiKey({})).rejects.toThrow(/embed:chat/);
+  });
+
+  it('rejects a user-owned embed key (org-only)', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...validEmbed,
+      billingOwnerType: CreditHolderType.User as const,
+      organizationId: undefined,
+    });
+    await expect(verifyEmbedApiKey({})).rejects.toThrow(/organization-owned/);
+  });
+
+  it('rejects an org-typed key with no organizationId', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...validEmbed,
+      organizationId: undefined,
+    });
+    await expect(verifyEmbedApiKey({})).rejects.toThrow(/organization-owned/);
+  });
+
+  it('rejects an embed key not bound to an agent (fail closed)', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...validEmbed,
+      agentId: undefined,
+    });
+    await expect(verifyEmbedApiKey({})).rejects.toThrow(/not bound to an agent/);
+  });
+});
+
+describe('verifyEmbedKeyById (session-token path re-validation)', () => {
+  // verifyEmbedKeyById delegates the status/expiry/last-used gates to the shared
+  // validateUserApiKeyById; these cases drive that service result, then assert the
+  // embed-specific scope + credential-class checks layered on top.
+  const validResult = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'key-1',
+    scopes: [ApiKeyScope.EMBED_CHAT],
+    rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    billingOwnerType: CreditHolderType.Organization as const,
+    organizationId: 'org-1',
+    agentId: 'agent-1',
+    allowedOrigins: ['https://example.com'],
+  };
+
+  beforeEach(() => {
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockReset();
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+  });
+
+  it('resolves an active org-owned embed key by id', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue(validResult);
+    const info = await verifyEmbedKeyById('key-1');
+    expect(info).toMatchObject({ keyId: 'key-1', agentId: 'agent-1', organizationId: 'org-1' });
+  });
+
+  it('rejects a revoked/disabled key (revocation caught within the token TTL)', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue({ isValid: false, reason: 'disabled' });
+    await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/disabled/);
+  });
+
+  it('rejects an expired key (shared gate with the raw-key path)', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue({ isValid: false, reason: 'expired' });
+    await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/expired/);
+  });
+
+  it('rejects a missing key', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue({ isValid: false, reason: 'not_found' });
+    await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/not_found/);
+  });
+
+  it('rejects a key lacking the embed:chat scope', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue({
+      ...validResult,
+      scopes: [ApiKeyScope.AI_CHAT],
+    });
+    await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/embed:chat/);
+  });
+
+  it('rejects a non-org embed key by id', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue({
+      ...validResult,
+      billingOwnerType: CreditHolderType.User as const,
+      organizationId: undefined,
+    });
+    await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/organization-owned/);
+  });
+});
+
+describe('api-key account-state gates (mirrors apiKeyAuth)', () => {
+  const validKey = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'k1',
+    scopes: [ApiKeyScope.AI_CHAT],
+    rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+  };
+
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_somekey');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(validKey);
+    vi.mocked(User.findById).mockReset();
+  });
+
+  it('admits a key whose owner is in good standing', async () => {
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+    await expect(verifyApiKey({})).resolves.toMatchObject({ keyId: 'k1' });
+  });
+
+  // The thrown error class + message must stay in sync with apiKeyAuth.ts: a bare
+  // Error would flatten to a 500 (or the wrong status) on the surfaces this path backs.
+  it("returns the rate limit clamped by the owner's trust standing", async () => {
+    const owner = { id: 'u1', isBanned: false };
+    const clamped = { requestsPerMinute: 3, requestsPerDay: 100 };
+    vi.mocked(User.findById).mockResolvedValue(owner);
+    resolveUntrustedKeyLimits.mockResolvedValueOnce({ rateLimit: clamped, ownerUntrusted: true });
+
+    const info = await verifyApiKey({});
+
+    expect(info.rateLimit).toEqual(clamped);
+    expect(info.ownerUntrusted).toBe(true);
+    expect(resolveUntrustedKeyLimits).toHaveBeenLastCalledWith(
+      owner,
+      expect.objectContaining({ rateLimit: validKey.rateLimit })
+    );
+  });
+
+  it('refuses a banned owner with the account_suspended ForbiddenError', async () => {
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: true });
+    await expect(verifyApiKey({})).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(verifyApiKey({})).rejects.toThrow(/This account is suspended/);
+  });
+
+  it("answers a suspended owner's disabled key with account_suspended, other unknown keys with 401", async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({ isValid: false, reason: 'not_found' });
+    refuseIfSuspendedOwner.mockRejectedValueOnce(new ForbiddenError('This account is suspended'));
+    await expect(verifyApiKey({})).rejects.toBeInstanceOf(ForbiddenError);
+    expect(refuseIfSuspendedOwner).toHaveBeenCalledWith('b4m_live_somekey', expect.anything());
+
+    await expect(verifyApiKey({})).rejects.toBeInstanceOf(UnauthorizedError);
+  });
+
+  it('refuses an owner with a pending payment dispute with a ForbiddenError', async () => {
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false, disputePending: true });
+    await expect(verifyApiKey({})).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(verifyApiKey({})).rejects.toThrow(/payment review/i);
+  });
+
+  it('refuses a moderation-suspended owner with a ForbiddenError and the full appeal message', async () => {
+    vi.mocked(User.findById).mockResolvedValue({
+      id: 'u1',
+      isBanned: false,
+      moderation: { status: 'suspended' },
+    });
+    await expect(verifyApiKey({})).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(verifyApiKey({})).rejects.toThrow(/contact support to appeal/i);
+  });
+
+  it('refuses a key whose owner no longer exists', async () => {
+    vi.mocked(User.findById).mockResolvedValue(null);
+    await expect(verifyApiKey({})).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('verifyApiKey scope gate', () => {
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_somekey');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      isValid: true,
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [ApiKeyScope.EMBED_CHAT],
+      rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    });
+  });
+
+  it('throws a ForbiddenError naming the scopes the endpoint accepts', async () => {
+    const rejection = verifyApiKey({}, { requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE] });
+    await expect(rejection).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { required_scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE] },
+    });
+    await expect(rejection).rejects.toThrow('requires ai:chat or ai:generate');
+  });
+});
+
+describe('verifyApiKey exchange keys', () => {
+  const exchangeKey = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'k1',
+    scopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ],
+    rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    oauthExchangeClientId: 'client-1',
+  };
+
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_somekey');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+  });
+
+  it('refuses an exchange key by default', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+    const rejection = verifyApiKey({});
+    await expect(rejection).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(rejection).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('admits an exchange key when the caller allows them', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+    await expect(verifyApiKey({}, { allowExchangeKeys: true })).resolves.toMatchObject({
+      keyId: 'k1',
+      oauthExchangeClientId: 'client-1',
+    });
+  });
+
+  it('leaves a personal key with the same scopes unchanged either way', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...exchangeKey,
+      oauthExchangeClientId: undefined,
+    });
+    await expect(verifyApiKey({})).resolves.toMatchObject({ keyId: 'k1' });
+    await expect(verifyApiKey({}, { allowExchangeKeys: true })).resolves.toMatchObject({ keyId: 'k1' });
+  });
+});
+
+describe('rate-limit errors carry their status and retry window', () => {
+  beforeEach(() => {
+    cacheStore.clear();
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('checkRateLimit throws a TooManyRequestsError with retryAfter in seconds', async () => {
+    vi.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    for (let i = 0; i < 100; i++) {
+      await checkRateLimit(userId);
+    }
+    vi.setSystemTime(new Date(Date.now() + 45 * 60_000));
+
+    const rejection = checkRateLimit(userId);
+    await expect(rejection).rejects.toBeInstanceOf(TooManyRequestsError);
+    await expect(rejection).rejects.toMatchObject({ statusCode: 429, additionalInfo: { retryAfter: 900 } });
+    await expect(rejection).rejects.toThrow(/^Rate limit exceeded/);
+  });
+
+  it('checkApiKeyRateLimitOrThrow throws a TooManyRequestsError carrying retryAfter and the rate-limit headers', async () => {
+    const headers = {
+      'X-RateLimit-Limit-Minute': 10,
+      'X-RateLimit-Remaining-Minute': 0,
+      'X-RateLimit-Reset-Minute': 1767225612,
+      'X-RateLimit-Limit-Day': 100,
+      'X-RateLimit-Remaining-Day': 50,
+      'X-RateLimit-Reset-Day': 1767312000,
+    };
+    vi.mocked(checkApiKeyRateLimit).mockResolvedValue({
+      allowed: false,
+      error: 'Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.',
+      retryAfter: 12,
+      limitType: 'minute',
+      headers,
+    });
+    const info = {
+      keyId: 'k1',
+      userId: 'u1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    };
+
+    const rejection = checkApiKeyRateLimitOrThrow(info, { endpoint: '/api/ai/v1/completions', method: 'POST' });
+    await expect(rejection).rejects.toBeInstanceOf(TooManyRequestsError);
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 429,
+      additionalInfo: { retryAfter: 12, rateLimitHeaders: headers },
+    });
+    await expect(rejection).rejects.toThrow('Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.');
+  });
+});
+
+describe('API-key verification failures (credential miss vs infra failure)', () => {
+  const driverError = () =>
+    Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' });
+
+  describe('verifyApiKey', () => {
+    beforeEach(() => {
+      vi.mocked(extractApiKeyFromHeaders).mockReset().mockReturnValue('b4m_live_somekey');
+      vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    });
+
+    it('throws a 503 without driver text when the database is unreachable', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKey).mockRejectedValue(driverError());
+      const rejection = verifyApiKey({});
+      await expect(rejection).rejects.toBeInstanceOf(ServiceUnavailableError);
+      await expect(rejection).rejects.toMatchObject({
+        statusCode: 503,
+        message: 'Authentication temporarily unavailable',
+      });
+      await expect(rejection).rejects.not.toThrow(/ECONNREFUSED|10\.0\.0\.1/);
+    });
+
+    it('throws a 500 for an unexpected non-connection error', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKey).mockRejectedValue(new Error('boom'));
+      const rejection = verifyApiKey({});
+      await expect(rejection).rejects.toBeInstanceOf(InternalServerError);
+      await expect(rejection).rejects.toMatchObject({ statusCode: 500, message: 'Authentication failed' });
+    });
+
+    it('throws UnauthorizedError for an invalid key', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({ isValid: false, reason: 'not_found' });
+      const rejection = verifyApiKey({});
+      await expect(rejection).rejects.toBeInstanceOf(UnauthorizedError);
+      await expect(rejection).rejects.toMatchObject({ statusCode: 401 });
+    });
+
+    it('throws UnauthorizedError when no key is provided', async () => {
+      vi.mocked(extractApiKeyFromHeaders).mockReturnValue(undefined as never);
+      const rejection = verifyApiKey({});
+      await expect(rejection).rejects.toBeInstanceOf(UnauthorizedError);
+      await expect(rejection).rejects.toMatchObject({ statusCode: 401 });
+    });
+  });
+
+  describe('verifyEmbedKeyById', () => {
+    beforeEach(() => {
+      vi.mocked(userApiKeyService.validateUserApiKeyById).mockReset();
+    });
+
+    it('throws a 503 without driver text when the database is unreachable', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKeyById).mockRejectedValue(driverError());
+      const rejection = verifyEmbedKeyById('key-1');
+      await expect(rejection).rejects.toBeInstanceOf(ServiceUnavailableError);
+      await expect(rejection).rejects.toMatchObject({
+        statusCode: 503,
+        message: 'Authentication temporarily unavailable',
+      });
+      await expect(rejection).rejects.not.toThrow(/ECONNREFUSED|10\.0\.0\.1/);
+    });
+
+    it('throws UnauthorizedError for an unknown key id', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue({ isValid: false, reason: 'not_found' });
+      const rejection = verifyEmbedKeyById('key-1');
+      await expect(rejection).rejects.toBeInstanceOf(UnauthorizedError);
+      await expect(rejection).rejects.toMatchObject({ statusCode: 401 });
+    });
+  });
+});
+
+describe('api-key paid-only access switch (mirrors apiKeyAuth)', () => {
+  const orgKey = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'k1',
+    scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.EMBED_CHAT],
+    rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    billingOwnerType: CreditHolderType.Organization as const,
+    organizationId: 'org-1',
+    agentId: 'agent-1',
+  };
+
+  beforeEach(() => {
+    isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
+    resolveUntrustedKeyLimits.mockClear();
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_key');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(orgKey);
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockReset();
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue(orgKey);
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+  });
+
+  it('403s verifyApiKey (CLI, WebSocket and contract routes) when the setting denies the owner', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    await expect(verifyApiKey({})).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'API keys require an active paid subscription',
+    });
+    expect(resolveUntrustedKeyLimits).not.toHaveBeenCalled();
+  });
+
+  it('preserves the trust ceiling for a personal key accepted by the access switch', async () => {
+    const { billingOwnerType: _billing, organizationId: _organization, ...personalKey } = orgKey;
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValueOnce(personalKey);
+    const clamped = { requestsPerMinute: 3, requestsPerDay: 100 };
+    resolveUntrustedKeyLimits.mockResolvedValueOnce({ rateLimit: clamped, ownerUntrusted: true });
+
+    expect((await verifyApiKey({})).rateLimit).toEqual(clamped);
+    expect(isApiKeyAccessAllowedMock.mock.invocationCallOrder[0]).toBeLessThan(
+      resolveUntrustedKeyLimits.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('gates the embed raw-key and session-token paths by the key owner and paying org', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    await expect(verifyEmbedApiKey({})).rejects.toMatchObject({ statusCode: 403 });
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    await expect(verifyEmbedKeyById('k1')).rejects.toMatchObject({ statusCode: 403 });
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), {
+      billingOwnerType: CreditHolderType.Organization as const,
+      organizationId: 'org-1',
+      createdByUserId: undefined,
+    });
+  });
+
+  it('preserves trusted admin-provisioned provenance on raw and by-id key validation', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValueOnce({ ...orgKey, createdByUserId: 'admin-1' });
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValueOnce({
+      ...orgKey,
+      createdByUserId: 'admin-1',
+    });
+    const raw = await verifyEmbedApiKey({});
+    const byId = await verifyEmbedKeyById('k1');
+    expect(raw.createdByUserId).toBe('admin-1');
+    expect(byId.createdByUserId).toBe('admin-1');
+    expect(isApiKeyAccessAllowedMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'u1' }), {
+      billingOwnerType: CreditHolderType.Organization as const,
+      organizationId: 'org-1',
+      createdByUserId: 'admin-1',
+    });
+  });
+
+  it('turns an access-check read failure into a 5xx, never a pass', async () => {
+    isApiKeyAccessAllowedMock.mockRejectedValueOnce(new Error('db down'));
+    await expect(verifyApiKey({})).rejects.toMatchObject({ statusCode: 500 });
+  });
+});
+
+describe('verifyJwtToken paid-only switch for CLI sessions', () => {
+  beforeEach(() => {
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', aupAcceptedVersion: 'v1' });
+    mockIsMfaEnrollmentOwed.mockReset().mockResolvedValue(false);
+    assertCliSessionAllowedMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('checks the session the token names, so pre-existing CLI sessions are covered', async () => {
+    await verifyJwtToken(jwt.sign({ id: 'u1', sid: 'sid-1' }, 'test-secret'));
+    expect(assertCliSessionAllowedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'sid-1', {});
+  });
+
+  it('requires access for dedicated CLI surfaces even for a legacy JWT without a session id', async () => {
+    await verifyJwtToken(jwt.sign({ id: 'u1' }, 'test-secret'), { requireApiAccess: true });
+    expect(assertCliSessionAllowedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), undefined, {
+      requireApiAccess: true,
+    });
+  });
+
+  it('maps session and subscription lookup failures to server errors', async () => {
+    assertCliSessionAllowedMock.mockRejectedValueOnce(new Error('database down'));
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', sid: 'sid-1' }, 'test-secret'))).rejects.toMatchObject({
+      statusCode: 500,
+    });
+  });
+
+  it('refuses a CLI session the setting denies with the subscription message', async () => {
+    const { ForbiddenError } = await import('../utils/errors');
+    assertCliSessionAllowedMock.mockRejectedValueOnce(
+      new ForbiddenError('The CLI and desktop app require an active paid subscription')
+    );
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', sid: 'sid-1' }, 'test-secret'))).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'The CLI and desktop app require an active paid subscription',
+    });
+  });
+});
+
+describe('verifyApiKey (use recording)', () => {
+  const validKey = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'k1',
+    scopes: [ApiKeyScope.AI_GENERATE],
+    rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+  };
+
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_key');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(userApiKeyService.recordUserApiKeyUse).mockReset();
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+  });
+
+  it('does not record use for a refused exchange key', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...validKey,
+      oauthExchangeClientId: 'client-1',
+    });
+    await expect(verifyApiKey({})).rejects.toThrow(/cannot be used for this endpoint/);
+    expect(userApiKeyService.recordUserApiKeyUse).not.toHaveBeenCalled();
+    expect(vi.mocked(userApiKeyService.validateUserApiKey).mock.calls[0][2]).toEqual({ recordUse: false });
+  });
+
+  it('records use for an exchange key the caller allows', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...validKey,
+      oauthExchangeClientId: 'client-1',
+    });
+    await verifyApiKey({}, { allowExchangeKeys: true });
+    expect(userApiKeyService.recordUserApiKeyUse).toHaveBeenCalledWith('k1', expect.anything());
+  });
+
+  it('records use for an ordinary key, unless the caller opts out', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(validKey);
+    await verifyApiKey({});
+    expect(userApiKeyService.recordUserApiKeyUse).toHaveBeenCalledTimes(1);
+    await verifyApiKey({}, { recordUse: false });
+    expect(userApiKeyService.recordUserApiKeyUse).toHaveBeenCalledTimes(1);
+  });
+});

@@ -1,6 +1,6 @@
 import { FC, useState, useEffect, useMemo } from 'react';
 import { Card, Typography, Box, Button, Stack, Textarea, FormControl, FormLabel, FormHelperText } from '@mui/joy';
-import { IOrganizationDocument, orgAclRowConfersMembership } from '@bike4mind/common';
+import { IOrganizationDocument, orgAclRowConfersMembership, Permission } from '@bike4mind/common';
 import {
   useDeleteOrganization,
   useTransferOrganizationOwnership,
@@ -12,6 +12,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useNavigate } from '@tanstack/react-router';
 import TransferOwnershipModal, { TransferCandidate } from './TransferOwnershipModal';
 import OrganizationExportSection from './OrganizationExportSection';
+import { OrganizationSharingSettings } from './OrganizationSharingSettings';
 
 const MAX_SYSTEM_PROMPT_LENGTH = 10000; // ~2500 tokens
 
@@ -33,6 +34,15 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
   // The owner tier of organizationService.transferOwnership (a platform admin reaches it only if the
   // Settings tab is open to them); a personal org has no successor.
   const canTransferOwnership = canDeleteOrg && !organization.personal;
+  const canEditProfile =
+    !!currentUser &&
+    (currentUser.isAdmin === true ||
+      currentUser.id === organization.userId ||
+      organization.users.some(
+        row =>
+          row.userId === currentUser.id &&
+          row.permissions.some(permission => permission === Permission.update || permission === Permission.share)
+      ));
   const [transferOpen, setTransferOpen] = useState(false);
   const transferOwnership = useTransferOrganizationOwnership();
   const { data: members, isSuccess: membersLoaded } = useGetOrganizationUsers(
@@ -77,6 +87,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
   };
 
   const handleSaveSystemPrompt = async () => {
+    if (!canEditProfile || updateOrganization.isPending) return;
     await updateOrganization.mutateAsync({
       orgId: organization.id,
       data: { systemPrompt },
@@ -100,16 +111,18 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
 
   return (
     <Stack spacing={3} className="organization-settings-container">
+      <OrganizationSharingSettings organization={organization} />
       {/* Team System Prompt */}
       <Card variant="outlined">
         <Typography level="title-sm" sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
           Team System Prompt
         </Typography>
         <Stack spacing={2} sx={{ p: 2 }}>
-          <FormControl>
+          <FormControl disabled={!canEditProfile || updateOrganization.isPending}>
             <FormLabel>Team-wide AI Context</FormLabel>
             <Textarea
               value={systemPrompt}
+              disabled={!canEditProfile || updateOrganization.isPending}
               onChange={e => handleSystemPromptChange(e.target.value)}
               placeholder="Enter custom context that will be included in all AI conversations for team members. For example: 'Our company specializes in lunar space elevators, not Earth-based ones. Always focus on lunar applications when discussing space elevator technology.'"
               minRows={4}
@@ -138,7 +151,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
               color="primary"
               onClick={handleSaveSystemPrompt}
               loading={updateOrganization.isPending}
-              disabled={!hasChanges}
+              disabled={!canEditProfile || !hasChanges || updateOrganization.isPending}
               data-testid="organization-settings-system-prompt-save-btn"
             >
               Save System Prompt

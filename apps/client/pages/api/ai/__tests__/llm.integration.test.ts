@@ -136,11 +136,11 @@ vi.mock('@bike4mind/database', async orig => {
   };
 });
 
-vi.mock('@server/managers/sessionManager', () => ({
+vi.mock('@bike4mind/server-utils/managers/sessionManager', () => ({
   getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
 }));
 
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({}),
   getSharedTokenizer: () => ({}),
 }));

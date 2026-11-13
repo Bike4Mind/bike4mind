@@ -265,7 +265,7 @@ export const billingHolders = {
       { path: 'grantedBy', matchBy: 'userId', action: 'anonymize' },
     ],
   },
-  // Mirrors `purgePersonalUsage` (server/users/purgeAccountContent.ts): the person's own usage goes,
+  // Mirrors `purgePersonalUsage` (packages/server-utils/src/users/purgeAccountContent.ts): the person's own usage goes,
   // and an organization's rows keep their quantities and prices with the person's links severed. The
   // charges themselves stay on the credit ledger (CreditTransaction). The purge also deletes the
   // organization-owned rows of the person's personal workspaces, which no equality filter here can say.

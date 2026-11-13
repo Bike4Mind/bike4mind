@@ -1,12 +1,12 @@
 import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import {
   adminBypassLakeIds,
   resolveAccessibleLakes,
   queryDataLakeArticles,
   type DataLakeArticlesQuery,
-} from '@server/dataLakes';
+} from '@bike4mind/server-utils/dataLakes/index';
 import { narrowAccessibleLakes } from '@bike4mind/server-utils/dataLakes/narrowAccessibleLakes';
 import { adminSettingsRepository, lakeAccessEventRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
@@ -26,7 +26,7 @@ import { firstQueryValue } from '@bike4mind/server-utils/dataLakes/firstQueryVal
  * product-namespace twin was reachable without it.
  *
  * Browse scope is resolved separately from semantic-search's retrieval scope and is the wider
- * of the two - see the difference list in server/dataLakes/index.ts.
+ * of the two - see the difference list in packages/server-utils/src/dataLakes/index.ts.
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES }).get(
   async (req: Request<{}, unknown, unknown, DataLakeArticlesQuery>, res) => {

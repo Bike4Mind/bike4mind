@@ -1,5 +1,5 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import {
@@ -61,7 +61,7 @@ import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
-import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
+import { summarizeSession, contextSummarizeSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { accessibleBy } from '@casl/mongoose';
 import { isTerminalCreditRefusal, IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
 import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
@@ -78,18 +78,21 @@ import {
 } from '@bike4mind/slack';
 import { cancelPendingActionOnQuest } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
-import { getSharedTokenizer, publishTelemetryAlertCallback } from '@server/utils/chatCompletionDefaults';
+import {
+  getSharedTokenizer,
+  publishTelemetryAlertCallback,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@bike4mind/server-utils/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import {
   buildSlackVideoToolConfig,
   type PendingSlackNotification,
 } from '@workers/videoGenerations/slackVideoToolConfig';
-import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 
 // Cache static ChatCompletion options that don't change between invocations
 type ChatCompletionOptions = ConstructorParameters<typeof ChatCompletionProcess>[0];

@@ -49,7 +49,7 @@ vi.mock('@bike4mind/services', async () => ({
 }));
 
 const resolveAccessibleLakes = vi.fn();
-vi.mock('@server/dataLakes', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/index', () => ({
   adminBypassLakeIds: (...args: unknown[]) => h.adminBypassLakeIds(...args),
   grantingLakes: (...args: unknown[]) => h.grantingLakes(...args),
   resolveAccessibleLakes: (...args: unknown[]) => resolveAccessibleLakes(...args),

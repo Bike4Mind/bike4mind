@@ -46,7 +46,7 @@ vi.mock('@bike4mind/utils', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   SQSService: class {},
 }));
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({}),
   getSharedTokenizer: () => ({}),
 }));

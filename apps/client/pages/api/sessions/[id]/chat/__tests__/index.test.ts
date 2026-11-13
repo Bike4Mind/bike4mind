@@ -37,7 +37,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 
 const getMessagesFromSession = vi.hoisted(() => vi.fn());
 const addMessageToSession = vi.hoisted(() => vi.fn());
-vi.mock('@server/managers/sessionManager', () => ({ getMessagesFromSession, addMessageToSession }));
+vi.mock('@bike4mind/server-utils/managers/sessionManager', () => ({ getMessagesFromSession, addMessageToSession }));
 
 import '@pages/api/sessions/[id]/chat/index';
 

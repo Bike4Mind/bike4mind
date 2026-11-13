@@ -1203,7 +1203,7 @@ const whatsNewHighlightsQueueSubscription = whatsNewHighlightsQueue.subscribe(
 // Generation Job Queue
 // One engine step per message (submit, poll or store) for the generic GenerationJob engine; a step that
 // needs another turn re-enqueues itself with a delay. The subscription timeout, queue visibility timeout
-// and the engine lease (apps/client/server/generationJobs/wiring.ts LEASE_MS) must stay ordered:
+// and the engine lease (packages/server-utils/src/generationJobs/wiring.ts LEASE_MS) must stay ordered:
 // timeout (5 min) < lease (5.5 min) < visibility (6 min), so a running step is never redelivered or
 // overlapped by another worker. That ordering holds because Lambda enforces the timeout; the self-host
 // runner (apps/workers/src/selfhost/main.ts) has no hard kill, so there it relies on provider and storage
