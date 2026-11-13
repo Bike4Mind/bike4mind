@@ -20,8 +20,13 @@ const rows = ['a', 'b'].map(letter => ({
   createdAt: '2026-01-01T00:00:00.000Z',
 }));
 
-const selectRow = async (id: string) =>
-  fireEvent.click(within(await screen.findByTestId(`admin-table-select-${id}`)).getByRole('checkbox'));
+// hidden: the release dialog is modal and keeps the table aria-hidden while a release is in flight.
+const rowCheckbox = (id: string) =>
+  within(screen.getByTestId(`admin-table-select-${id}`)).getByRole('checkbox', { hidden: true });
+const selectRow = async (id: string) => {
+  await screen.findByTestId(`admin-table-select-${id}`);
+  fireEvent.click(rowCheckbox(id));
+};
 const confirmRelease = async () => {
   fireEvent.click(await screen.findByTestId('held-signup-grants-release-btn'));
   fireEvent.click(await screen.findByTestId('held-signup-grants-release-dialog-reason-input-preset-0'));
@@ -112,8 +117,8 @@ describe('HeldSignupGrantsTab', () => {
     await selectRow(rows[1].id);
     resolve({ data: { batchId: 'batch-1', results: [] } });
     await waitFor(() => {
-      expect(within(screen.getByTestId(`admin-table-select-${rows[0].id}`)).getByRole('checkbox')).not.toBeChecked();
-      expect(within(screen.getByTestId(`admin-table-select-${rows[1].id}`)).getByRole('checkbox')).toBeChecked();
+      expect(rowCheckbox(rows[0].id)).not.toBeChecked();
+      expect(rowCheckbox(rows[1].id)).toBeChecked();
     });
   });
 
@@ -143,7 +148,7 @@ describe('HeldSignupGrantsTab', () => {
 
   it('keeps release blocked until a reason is entered', async () => {
     renderTab();
-    fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
+    await selectRow(rows[1].id);
     fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
     const confirm = await screen.findByTestId('held-signup-grants-release-dialog-confirm-btn');
     expect(confirm).toBeDisabled();
