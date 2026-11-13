@@ -42,8 +42,8 @@ const QuerySchema = z.object({
  *
  * Access: platform admins see any owner. A delegate holding support:read (API keys
  * need ApiKeyScope.ADMIN) gets the same read-only view minus key names/prefixes.
- * Otherwise an Organization owner needs `viewUsage` (verifyOrgPermission; managers do not
- * hold it); a User owner may read only their own id.
+ * Otherwise an Organization reader needs `viewUsage` (verifyOrgPermission: owner, manager or
+ * billing manager); a User owner may read only their own id.
  */
 const handler = baseApi().get(async (req, res) => {
   if (!req.user) {

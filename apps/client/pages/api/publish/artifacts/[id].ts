@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
@@ -192,6 +193,7 @@ const handler = baseApi()
         return res.status(400).json({ error: viz.error, code: viz.code });
       }
       artifact.visibility = parsed.data.visibility;
+      if (artifact.visibility === 'public') await assertPublicationPublicLink(artifact);
     }
     if (parsed.data.accessGate !== undefined) {
       if (parsed.data.accessGate === null) {
