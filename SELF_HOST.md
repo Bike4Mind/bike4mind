@@ -1380,6 +1380,10 @@ Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/
 
 The consumer uses the same redrive admission, one-at-a-time receive, 900-second visibility renewal and ten-minute cooperative budget as quest exports. The worker reads the generated-images bucket as well as the FabFile bucket, copying images generated in notebooks under `images/`. It stops building notebooks once two thirds of the time before the last five minutes is used, and file bytes, generated images and artifacts five minutes before it ends, listing what is left in `notebooks/index.json`, `files/index.json` and `artifacts/index.json` as omitted, so a very large account can receive a partial export. A redelivery after the upload only re-sends the email.
 
+### Admin data subject erasure
+
+`ACCOUNT_ERASURE_QUEUE` and `ACCOUNT_ERASURE_QUEUE_DLQ` enable the admin data subject erasure, which runs the account purge for one user at once instead of waiting for the daily account deletion sweep. The consumer uses the same redrive admission, one-at-a-time receive and visibility renewal as account data exports.
+
 ## Kubernetes evaluation package
 
 For an independent package using the current application and worker entrypoints, see [the Kubernetes self-host guide](selfhost/kubernetes/README.md). It runs on portable Kubernetes, including EKS, with retained database/object/queue volumes and explicit image references. It is an evaluation deployment; complete workflow parity and production readiness remain separate validation work.

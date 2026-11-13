@@ -8,7 +8,9 @@ import {
   briefcasePromptRepository,
   imageGenerationTemplateRepository,
   OrganizationLibrary,
+  withTransaction,
 } from '@bike4mind/database';
+import { recordOrganizationAuditEvent } from '@bike4mind/server-utils/utils/organizationAudit';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLibraryAccess } from '@server/organizations/libraryAccess';
 import { respond } from '@server/utils/respond';
@@ -57,8 +59,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
         respond(res, librarySourcesResponse, { sources });
         return;
       }
-      await assertLibraryAccess(req.user, organizationId);
-      const items = await OrganizationLibrary.find({ organizationId })
+      const organization = await assertLibraryAccess(req.user, organizationId);
+      const items = await OrganizationLibrary.find({ organizationId: organization.id })
         .select('-definition')
         .sort({ pinned: -1, name: 1 });
       respond(res, libraryListResponse, { items });
@@ -68,27 +70,36 @@ const handler = baseApi({ auth: 'jwtOnly' })
     csrfProtection(),
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const organizationId = z.string().parse(req.query.id);
-      await assertLibraryAccess(req.user, organizationId, true);
-      const { kind, sourceId } = publishSchema.parse(req.body);
-      const owned = <T extends { userId?: string | null }>(source: T | null): T => {
-        if (!source || source.userId !== req.user.id) throw new NotFoundError('Owned source not found');
-        return source;
-      };
-      const snapshot =
-        kind === 'agent'
-          ? agentLibraryDefinition(owned(await agentRepository.findById(sourceId)))
-          : kind === 'skill'
-            ? skillLibraryDefinition(owned(await skillRepository.findById(sourceId)))
-            : kind === 'prompt'
-              ? promptLibraryDefinition(owned(await briefcasePromptRepository.findById(sourceId)))
-              : templateLibraryDefinition(owned(await imageGenerationTemplateRepository.findById(sourceId)));
-      if (!snapshot.definition.name) throw new BadRequestError('Source must have a name');
-      const item = await OrganizationLibrary.create({
-        ...snapshot,
-        organizationId,
-        name: snapshot.definition.name,
-        description: snapshot.definition.description ?? '',
-        pinned: false,
+      const item = await withTransaction(async () => {
+        const organization = await assertLibraryAccess(req.user, organizationId, true);
+        const { kind, sourceId } = publishSchema.parse(req.body);
+        const owned = <T extends { userId?: string | null }>(source: T | null): T => {
+          if (!source || source.userId !== req.user.id) throw new NotFoundError('Owned source not found');
+          return source;
+        };
+        const snapshot =
+          kind === 'agent'
+            ? agentLibraryDefinition(owned(await agentRepository.findById(sourceId)))
+            : kind === 'skill'
+              ? skillLibraryDefinition(owned(await skillRepository.findById(sourceId)))
+              : kind === 'prompt'
+                ? promptLibraryDefinition(owned(await briefcasePromptRepository.findById(sourceId)))
+                : templateLibraryDefinition(owned(await imageGenerationTemplateRepository.findById(sourceId)));
+        if (!snapshot.definition.name) throw new BadRequestError('Source must have a name');
+        const item = await OrganizationLibrary.create({
+          ...snapshot,
+          organizationId: organization.id,
+          name: snapshot.definition.name,
+          description: snapshot.definition.description ?? '',
+          pinned: false,
+        });
+        await recordOrganizationAuditEvent({
+          organizationId: organization.id,
+          actorUserId: req.user.impersonatedBy ?? req.user.id,
+          action: 'library.published',
+          targetId: String(item._id),
+        });
+        return item;
       });
       respond(res, librarySummaryResponse, { item }, 201);
     })
@@ -97,14 +108,25 @@ const handler = baseApi({ auth: 'jwtOnly' })
     csrfProtection(),
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const organizationId = z.string().parse(req.query.id);
-      await assertLibraryAccess(req.user, organizationId, true);
-      const { itemId, pinned } = pinSchema.parse(req.body);
-      const item = await OrganizationLibrary.findOneAndUpdate(
-        { _id: itemId, organizationId },
-        { $set: { pinned } },
-        { new: true }
-      ).select('-definition');
-      if (!item) throw new NotFoundError('Library item not found');
+      const item = await withTransaction(async () => {
+        const organization = await assertLibraryAccess(req.user, organizationId, true);
+        const { itemId, pinned } = pinSchema.parse(req.body);
+        const filter = { _id: itemId, organizationId: organization.id };
+        const existing = await OrganizationLibrary.findOne(filter).select('-definition');
+        if (!existing) throw new NotFoundError('Library item not found');
+        if (existing.pinned === pinned) return existing;
+        const updated = await OrganizationLibrary.findOneAndUpdate(filter, { $set: { pinned } }, { new: true }).select(
+          '-definition'
+        );
+        if (!updated) throw new NotFoundError('Library item not found');
+        await recordOrganizationAuditEvent({
+          organizationId: organization.id,
+          actorUserId: req.user.impersonatedBy ?? req.user.id,
+          action: pinned ? 'library.pinned' : 'library.unpinned',
+          targetId: String(updated._id),
+        });
+        return updated;
+      });
       respond(res, librarySummaryResponse, { item });
     })
   )
@@ -112,10 +134,21 @@ const handler = baseApi({ auth: 'jwtOnly' })
     csrfProtection(),
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const organizationId = z.string().parse(req.query.id);
-      await assertLibraryAccess(req.user, organizationId, true);
-      const { itemId } = itemSchema.parse(req.body);
-      const result = await OrganizationLibrary.deleteOne({ _id: itemId, organizationId });
-      if (!result.deletedCount) throw new NotFoundError('Library item not found');
+      await withTransaction(async () => {
+        const organization = await assertLibraryAccess(req.user, organizationId, true);
+        const { itemId } = itemSchema.parse(req.body);
+        const item = await OrganizationLibrary.findOneAndDelete({
+          _id: itemId,
+          organizationId: organization.id,
+        }).select('_id');
+        if (!item) throw new NotFoundError('Library item not found');
+        await recordOrganizationAuditEvent({
+          organizationId: organization.id,
+          actorUserId: req.user.impersonatedBy ?? req.user.id,
+          action: 'library.removed',
+          targetId: String(item._id),
+        });
+      });
       res.status(204).end();
     })
   );

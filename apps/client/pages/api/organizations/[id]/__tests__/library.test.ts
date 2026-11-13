@@ -11,6 +11,8 @@ const h = vi.hoisted(() => ({
   update: vi.fn(),
   remove: vi.fn(),
   find: vi.fn(),
+  findOne: vi.fn(),
+  audit: vi.fn(),
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -37,12 +39,20 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
 vi.mock('@server/organizations/libraryAccess', () => ({ assertLibraryAccess: h.access }));
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({ recordOrganizationAuditEvent: h.audit }));
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async <T>(write: () => Promise<T>) => write(),
   agentRepository: { findById: h.source },
   skillRepository: { findById: h.source },
   briefcasePromptRepository: { findById: h.source },
   imageGenerationTemplateRepository: { findById: h.source },
-  OrganizationLibrary: { create: h.create, findOneAndUpdate: h.update, deleteOne: h.remove, find: h.find },
+  OrganizationLibrary: {
+    create: h.create,
+    findOneAndUpdate: h.update,
+    findOneAndDelete: h.remove,
+    find: h.find,
+    findOne: h.findOne,
+  },
 }));
 import '../library';
 
@@ -58,7 +68,8 @@ describe('organization library management API', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.access.mockResolvedValue({ id: 'org-a' });
-    h.create.mockImplementation(async item => ({ ...item, id: ID }));
+    h.create.mockImplementation(async item => ({ ...item, id: ID, _id: ID }));
+    h.findOne.mockReturnValue({ select: vi.fn().mockResolvedValue({ _id: ID, pinned: false }) });
     h.source.mockResolvedValue({
       userId: 'author',
       name: 'Helper',
@@ -97,6 +108,7 @@ describe('organization library management API', () => {
   });
 
   it('refuses publishing a viewable but unowned source', async () => {
+    h.findOne.mockReturnValue({ select: vi.fn().mockResolvedValue({ _id: ID, pinned: false }) });
     h.source.mockResolvedValue({ userId: 'another-author', name: 'Private' });
     await expect(run('post', { kind: 'agent', sourceId: ID })).rejects.toThrow('Owned source not found');
     expect(h.create).not.toHaveBeenCalled();
@@ -110,7 +122,7 @@ describe('organization library management API', () => {
       { $set: { pinned: true } },
       { new: true }
     );
-    h.remove.mockResolvedValue({ deletedCount: 0 });
+    h.remove.mockReturnValue({ select: vi.fn().mockResolvedValue(null) });
     await expect(run('delete', { itemId: ID })).rejects.toThrow('Library item not found');
     expect(h.remove).toHaveBeenCalledWith({ _id: ID, organizationId: 'org-a' });
   });

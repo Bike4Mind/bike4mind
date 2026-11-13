@@ -29,6 +29,14 @@ describe('organization library access', () => {
     await expect(assertLibraryAccess({ id: 'manager' }, 'org')).rejects.toThrow('Organization not found');
     await expect(assertLibraryAccess({ id: 'manager' }, 'org', true)).rejects.toThrow('Organization not found');
   });
+  it('uses the resolved canonical organization ID for membership', async () => {
+    const canonicalId = 'abcdef0123456789abcdef01';
+    db.findById.mockResolvedValue({ id: canonicalId, userId: 'owner', users: [] });
+    db.findMembershipOrgIds.mockResolvedValue([canonicalId]);
+    await expect(assertLibraryAccess({ id: 'owner' }, canonicalId.toUpperCase(), true)).resolves.toMatchObject({
+      id: canonicalId,
+    });
+  });
   it('does not require the original author to remain a member', async () => {
     await expect(assertLibraryAccess({ id: 'member' }, 'org')).resolves.toBeTruthy();
     expect(db.findMembershipOrgIds).toHaveBeenCalledWith('member');

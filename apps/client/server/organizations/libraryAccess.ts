@@ -9,7 +9,7 @@ export async function assertLibraryAccess(
 ) {
   const organization = await organizationRepository.findById(organizationId);
   const membershipIds = await organizationRepository.findMembershipOrgIds(actor.id);
-  if (!organization || !membershipIds.includes(organizationId)) throw new NotFoundError('Organization not found');
+  if (!organization || !membershipIds.includes(organization.id)) throw new NotFoundError('Organization not found');
   if (manage && !isOrgOwnerOrCurrentAdmin(actor, organization)) {
     throw new ForbiddenError('Only organization admins can manage the library');
   }
