@@ -97,7 +97,8 @@ export async function deleteSoleOwnedOrganizations(
     if (!removed) continue;
     deleted.push(org);
     await clearDeletedOrganizationReferences(org.id, logger);
-    await Promise.all(
+    // The org delete has committed; a failed teardown must not stop the remaining solo orgs.
+    const teardowns = await Promise.allSettled(
       removed.revokedApiKeyIds.map(apiKeyId =>
         authSessionService.endRealtimeConnections(
           { apiKeyId },
@@ -111,6 +112,13 @@ export async function deleteSoleOwnedOrganizations(
         )
       )
     );
+    teardowns.forEach((outcome, i) => {
+      if (outcome.status === 'rejected') {
+        logger.warn(
+          `[AccountDeletion] Failed to end realtime connections for revoked key ${removed.revokedApiKeyIds[i]}: ${String(outcome.reason)}`
+        );
+      }
+    });
     logger.info(`[AccountDeletion] Deleted sole-owner organization ${org.id} for user ${userId}`);
   }
   return deleted;

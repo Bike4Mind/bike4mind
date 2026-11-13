@@ -108,7 +108,10 @@ describe('POST /api/oauth/ai-token account gates', () => {
     const res = await run();
 
     expect(res._getStatusCode()).toBe(401);
-    expect(res._getJSONData()).toMatchObject({ error: 'invalid_grant' });
+    expect(res._getJSONData()).toEqual({
+      error: 'invalid_grant',
+      error_description: 'Token subject does not resolve to a B4M user',
+    });
     expect(h.checkFederatedGrant).not.toHaveBeenCalled();
   });
 });

@@ -542,7 +542,9 @@ describe('POST /api/oauth/token refresh_token grant', () => {
   it('rejects a family owned by a system account without consuming the token', async () => {
     (h.findById as Mock).mockResolvedValue({ id: 'u1', email: 'u@x.com', tokenVersion: 0, isSystem: true });
 
-    expectRejected(await call(refreshBody));
+    const res = await call(refreshBody);
+    expectRejected(res);
+    expect(res.body).toEqual({ error: 'invalid_grant', error_description: 'Invalid refresh token' });
     expect(h.rotate).not.toHaveBeenCalled();
   });
 

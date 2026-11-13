@@ -181,7 +181,17 @@ const handler = baseApi()
     );
 
     await clearDeletedOrganizationReferences(id, req.logger);
-    await Promise.all(revokedApiKeyIds.map(keyId => endKeyRealtimeConnections(keyId, req.logger)));
+    // The delete has committed, so a failed teardown is logged rather than turned into an error response.
+    const teardowns = await Promise.allSettled(
+      revokedApiKeyIds.map(keyId => endKeyRealtimeConnections(keyId, req.logger))
+    );
+    teardowns.forEach((outcome, i) => {
+      if (outcome.status === 'rejected') {
+        req.logger.warn(
+          `Failed to end realtime connections for revoked key ${revokedApiKeyIds[i]}: ${String(outcome.reason)}`
+        );
+      }
+    });
 
     return res.json({ id });
   });

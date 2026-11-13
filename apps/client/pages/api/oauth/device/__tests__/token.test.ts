@@ -182,7 +182,7 @@ describe('POST /api/oauth/device/token paid-only access switch', () => {
     await mockRefs.handler!(req, res);
 
     expect(res.statusCode).toBe(400);
-    expect(res.body).toMatchObject({ error: 'invalid_grant' });
+    expect(res.body).toEqual({ error: 'invalid_grant', error_description: 'Invalid device code' });
     expect(repo.claimApproved).not.toHaveBeenCalled();
   });
 });
