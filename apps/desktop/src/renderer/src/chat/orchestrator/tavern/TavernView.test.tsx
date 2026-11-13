@@ -166,9 +166,21 @@ describe('TavernView', () => {
 
   it('gives agents waiting side by side at the bar one bubble with their count', async () => {
     await renderTavern(['a', 'b', 'c'].map(id => agentFixture(id, 'needs-you')));
-    expect(el('orchestrator-tavern-bubble-b').textContent).toBe('Needs you! ×3');
+    expect(el('orchestrator-tavern-bubble-b').textContent).toBe('Needs you! \u00d73');
     expect(query('orchestrator-tavern-bubble-a')).toBeNull();
     expect(query('orchestrator-tavern-bubble-c')).toBeNull();
+  });
+
+  it('hands the shared bubble to whoever is left as waiting agents are approved', async () => {
+    await renderTavern(['a', 'b', 'c'].map(id => agentFixture(id, 'needs-you')));
+    await renderTavern([agentFixture('a', 'needs-you'), agentFixture('b', 'needs-you'), agentFixture('c', 'done')]);
+    expect(query('orchestrator-tavern-bubble-c')).toBeNull();
+    const shared = ['a', 'b'].map(id => query(`orchestrator-tavern-bubble-${id}`)).filter(Boolean);
+    expect(shared.map(node => node?.textContent)).toEqual(['Needs you! \u00d72']);
+    await renderTavern([agentFixture('a', 'needs-you'), agentFixture('b', 'done'), agentFixture('c', 'done')]);
+    expect(el('orchestrator-tavern-bubble-a').textContent).toBe('Needs you!');
+    await renderTavern(['a', 'b', 'c'].map(id => agentFixture(id, 'done')));
+    expect(query('orchestrator-tavern-bubble-a')).toBeNull();
   });
 
   it("moves the Innkeeper's plate aside while the bar's bubble is up, and brings it back after", async () => {

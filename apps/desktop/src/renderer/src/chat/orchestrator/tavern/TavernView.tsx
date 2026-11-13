@@ -111,7 +111,7 @@ const truncate = (text: string, max: number) => (text.length > max ? `${text.sli
 function bubbleText(agent: AgentView, needsYou: number): string | undefined {
   if (agent.state === 'needs-you') {
     if (needsYou === 0) return undefined;
-    return needsYou === 1 ? 'Needs you!' : `Needs you! ×${needsYou}`;
+    return needsYou === 1 ? 'Needs you!' : `Needs you! \u00d7${needsYou}`;
   }
   if (agent.state === 'working' && agent.preparing) return `${SESSION_SETUP_LABEL[agent.preparing]}\u2026`;
   if (agent.state === 'working' && agent.activity) return truncate(activityLabel(agent.activity), BUBBLE_MAX);
