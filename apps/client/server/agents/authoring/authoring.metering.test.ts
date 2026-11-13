@@ -64,7 +64,7 @@ const RUNS: Array<[string, (meter: typeof m.meter) => Promise<string>]> = [
     'enhanceAgentField',
     meter => enhanceAgentField(agent, 'u1', { fieldName: 'personalMission', currentValue: 'x' }, logger, meter),
   ],
-  ['generateAgentDescription', meter => generateAgentDescription(agent, logger, meter)],
+  ['generateAgentDescription', meter => generateAgentDescription(agent, logger, meter, 'u1')],
   ['generateAgentSystemPrompt', meter => generateAgentSystemPrompt(agent, 'u1', logger, meter)],
 ];
 

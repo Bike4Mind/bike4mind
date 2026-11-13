@@ -241,7 +241,7 @@
   },
   "apps/client/app/components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 6
+      "count": 2
     }
   },
   "apps/client/app/components/Project/AddMembersModal.tsx": {
@@ -501,7 +501,7 @@
   },
   "apps/client/app/components/admin/FilesTab/index.tsx": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 2
+      "count": 1
     }
   },
   "apps/client/app/components/admin/IdentityProvidersTab.tsx": {
@@ -545,11 +545,6 @@
     }
   },
   "apps/client/app/components/admin/OrganizationProfile.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/admin/OrganizationProfileUpdated.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -787,11 +782,6 @@
   "apps/client/app/hooks/data/inbox.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
-    }
-  },
-  "apps/client/app/hooks/data/llmModelConfig.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
     }
   },
   "apps/client/app/hooks/data/mfa.ts": {
@@ -1225,11 +1215,6 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/admin/llm-models/configurations.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 6
-    }
-  },
   "apps/client/pages/api/admin/mementos/__tests__/reembed-ledger.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 8
@@ -1332,11 +1317,6 @@
     },
     "b4m/no-raw-entity-response": {
       "count": 2
-    }
-  },
-  "apps/client/pages/api/admin/rapid-reply/test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
     }
   },
   "apps/client/pages/api/admin/rate-limits.ts": {
@@ -1543,11 +1523,6 @@
   "apps/client/pages/api/ai/optimize-input.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "apps/client/pages/api/ai/rapid-reply.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 3
     }
   },
   "apps/client/pages/api/ai/tavern-conversation.ts": {
@@ -3037,11 +3012,6 @@
       "count": 5
     }
   },
-  "apps/client/server/integrations/slack/slackPackageInit.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
-    }
-  },
   "apps/client/server/managers/countersManager.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
@@ -3055,11 +3025,6 @@
   "apps/client/server/managers/regInviteManager.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
-    }
-  },
-  "apps/client/server/managers/sessionCrud.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
     }
   },
   "apps/client/server/middlewares/__tests__/requireStripeWebhook.test.ts": {
@@ -3165,11 +3130,6 @@
   "apps/client/server/utils/cacheExternalImage.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "apps/client/server/utils/chatCompletionDefaults.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 5
     }
   },
   "apps/client/server/websocket/__tests__/dataSubscribeRequest.test.ts": {
@@ -3744,7 +3704,7 @@
   },
   "b4m-core/services/src/llm/ChatCompletion.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 620
+      "count": 619
     }
   },
   "b4m-core/services/src/llm/ChatCompletionInvoke.test.ts": {
@@ -4194,7 +4154,7 @@
   },
   "b4m-core/services/src/userService/register.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 10
+      "count": 9
     }
   },
   "b4m-core/services/src/userService/requestEmailChange.test.ts": {
@@ -4682,6 +4642,16 @@
       "count": 43
     }
   },
+  "packages/server-utils/src/integrations/slack/slackPackageInit.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/server-utils/src/managers/sessionCrud.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
   "packages/server-utils/src/models/Subscription.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -4715,6 +4685,11 @@
   "packages/server-utils/src/utils/auditLog.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
+    }
+  },
+  "packages/server-utils/src/utils/chatCompletionDefaults.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
     }
   },
   "packages/server-utils/src/utils/cloudwatch.test.ts": {

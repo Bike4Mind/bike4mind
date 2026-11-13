@@ -40,7 +40,7 @@ const UPLOAD_PATTERN = new RegExp(`${UPLOAD_CALL.source}|PutObjectCommand|putObj
 /** First-write and backup paths: they upload bytes but invalidate nothing. */
 const NOT_A_REWRITE = new Set([
   // First write of a new object; the key is hashed from user, tag, name and slot.
-  'apps/client/server/tutorials/sheet.ts',
+  'packages/server-utils/src/tutorials/sheet.ts',
   // Presigns Turborepo cache artifacts in a separate bucket; no FabFile row exists.
   'apps/workers/src/turboCache/handler.ts',
   'b4m-core/services/src/fabFileService/create.ts',
@@ -63,7 +63,7 @@ const NOT_A_REWRITE = new Set([
   'apps/client/server/s3/notebookImportComplete.ts',
   'packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts',
   'apps/client/server/slack/dataLakeIngestDeps.ts',
-  'apps/client/server/dataLakes/proposalAdmissionDeps.ts',
+  'packages/server-utils/src/dataLakes/proposalAdmissionDeps.ts',
   // Uploads a freshly generated avatar under a new filename and creates a new FabFile row; a first write.
   'apps/client/server/agents/authoring/generateAgentAvatar.ts',
   'apps/client/server/files/createPresignedUpload.ts',
@@ -78,7 +78,7 @@ const NOT_A_REWRITE = new Set([
   'apps/client/server/utils/cacheExternalImage.ts',
   'apps/client/server/utils/generatedAudioDelivery.ts',
   'apps/client/server/utils/mailer/emailAttachments.ts',
-  'apps/client/server/generationJobs/wiring.ts',
+  'packages/server-utils/src/generationJobs/wiring.ts',
   // Posts a clip to Slack (SlackClient.uploadFile); it writes no FabFile bytes.
   'packages/server-utils/src/generationJobs/slackJobDelivery.ts',
   'apps/workers/src/queueHandlers/orgFeedbackSummary.ts',

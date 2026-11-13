@@ -155,7 +155,13 @@ ${contextString}
 Generate a description that captures this agent's unique personality, personal mission, and approach to helping users. Remember: they have their own burning goals and aren't just docile assistants - they're beings with purpose!`;
 };
 
-export async function generateAgentDescription(agent: IAgent, logger: Logger, meter: CompletionMeter): Promise<string> {
+export async function generateAgentDescription(
+  agent: IAgent,
+  logger: Logger,
+  meter: CompletionMeter,
+  /** The requesting user, for provider abuse attribution. */
+  endUserId: string
+): Promise<string> {
   // Build the context prompt from agent metadata
   const userPrompt = buildAgentContextPrompt(agent);
 
@@ -172,7 +178,7 @@ export async function generateAgentDescription(agent: IAgent, logger: Logger, me
   ];
 
   // Use operations model for agent description generation
-  const { modelId, llm: rawLlm, modelInfo } = await OperationsModelService.getOperationsModel();
+  const { modelId, llm: rawLlm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId });
 
   if (!rawLlm) {
     throw new Error('Failed to initialize LLM backend');

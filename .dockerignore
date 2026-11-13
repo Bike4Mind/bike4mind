@@ -22,6 +22,8 @@
 **/.open-next
 **/coverage
 apps/client/ios
+apps/ios
+apps/android
 apps/client/android
 apps/client/e2e
 docs-site

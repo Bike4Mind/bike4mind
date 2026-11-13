@@ -45,7 +45,7 @@ const {
 // back the raw handler so tests can call it directly. Mirrors
 // pages/api/data-lakes/__tests__/semantic-search.test.ts.
 // The real billing helpers read repositories (and mongoose models via entitlements) the database mock lacks.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({ createCompletionMeter: vi.fn() }));
 vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -64,7 +64,7 @@ vi.mock('@bike4mind/server-utils/premium-generated/premiumLlmTools.generated', (
 
 // The wiring module reads infra Resources at load; the resolver is the unit under test, not the job engine.
 const mockBuildVideoToolConfig = vi.fn();
-vi.mock('@server/generationJobs/wiring', () => ({
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', () => ({
   getVideoJobDeps: () => ({ deps: 'availability' }),
   getCreateVideoJobDeps: () => ({ deps: 'create' }),
 }));
@@ -72,7 +72,7 @@ vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => (
   buildVideoToolConfig: (...args: unknown[]) => mockBuildVideoToolConfig(...args),
 }));
 
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({ db: { users: { findById: mockOptionsFindUser } } }),
   getSharedTokenizer: () => ({}),
 }));
@@ -269,7 +269,7 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
       createCompletionMeter: (opts: { organizationId: string | null; featureLabel: string }) => unknown;
     };
     createMeter({ organizationId: null, featureLabel: 'QuestMaster planning' });
-    const { createCompletionMeter } = await import('@server/billing/meterPlatformCompletion');
+    const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
     expect(createCompletionMeter).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),

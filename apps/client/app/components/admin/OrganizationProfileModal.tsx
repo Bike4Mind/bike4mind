@@ -1,11 +1,11 @@
 import { IOrganizationDocument, WithId } from '@bike4mind/common';
 import { useGetOrganization } from '@client/app/hooks/data/organizations';
-import { Button, LinearProgress, Modal, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy';
-import { isAxiosError } from 'axios';
 import React, { useEffect, useState } from 'react';
+import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import OrganizationProfileUpdated from './OrganizationProfileUpdated';
 import { useOpenOrganizationId } from './useOrganizationsTabParams';
+import { AdminDialog, ErrorState, LoadingState } from './shared';
 
 /**
  * The profile of the organization named by `?orgId=`. Only a settled 404 closes it. It shows the org
@@ -47,33 +47,21 @@ const OrganizationProfileModal: React.FC<{ onClosed: () => void }> = ({ onClosed
   };
 
   return (
-    <Modal open={!!orgId} onClose={close}>
-      <ModalDialog
-        size="lg"
-        sx={{ maxHeight: '80vh', overflow: 'auto' }}
-        data-testid="admin-organization-profile-modal"
-      >
-        <ModalClose />
-        {shownOrganization ? (
-          <OrganizationProfileUpdated org={shownOrganization} onClose={close} activeDays={30} />
-        ) : failedToLoad ? (
-          <Stack spacing={1.5} alignItems="flex-start">
-            <Typography role="alert" color="danger" data-testid="admin-organization-profile-error">
-              This organization could not be loaded.
-            </Typography>
-            <Button
-              variant="outlined"
-              onClick={() => organization.refetch()}
-              data-testid="admin-organization-profile-retry-btn"
-            >
-              Retry
-            </Button>
-          </Stack>
-        ) : (
-          <LinearProgress data-testid="admin-organization-profile-loading" />
-        )}
-      </ModalDialog>
-    </Modal>
+    <AdminDialog
+      open={!!orgId}
+      onClose={close}
+      title="Organization profile"
+      width={1200}
+      data-testid="admin-organization-profile-modal"
+    >
+      {shownOrganization ? (
+        <OrganizationProfileUpdated org={shownOrganization} onClose={close} activeDays={30} />
+      ) : failedToLoad ? (
+        <ErrorState message="This organization could not be loaded." onRetry={() => void organization.refetch()} />
+      ) : (
+        <LoadingState label="Loading organization" />
+      )}
+    </AdminDialog>
   );
 };
 

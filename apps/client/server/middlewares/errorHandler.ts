@@ -1,7 +1,7 @@
 import { HTTPError, HttpStatus, NotFoundError, UnprocessableEntityError, isZodError } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { fromZodError } from 'zod-validation-error';
-import type { RateLimitErrorInfo } from '@server/cli/auth';
+import type { RateLimitErrorInfo } from '@bike4mind/server-utils/cli/auth';
 import { requestLogUrl } from './requestLogUrl';
 
 /**

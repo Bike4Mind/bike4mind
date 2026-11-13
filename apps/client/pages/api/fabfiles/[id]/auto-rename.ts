@@ -8,7 +8,7 @@ import { BadRequestError, NotFoundError, InternalServerError } from '@bike4mind/
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { meterCompletionBackend } from '@bike4mind/services';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const handler = baseApi()
@@ -118,7 +118,7 @@ const handler = baseApi()
           }
 
           // Get the operations model (optimized for fast operations like gpt-4o-mini)
-          const { llm, modelId, modelInfo } = await OperationsModelService.getOperationsModel();
+          const { llm, modelId, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: user.id });
 
           // Get file extension to preserve it (including compound extensions like .tar.gz, .test.ts)
           const getFileExtension = (filename: string): string => {

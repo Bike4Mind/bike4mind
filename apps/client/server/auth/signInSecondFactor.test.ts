@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import jwt from 'jsonwebtoken';
-import { AuthEvents, type IUserDocument } from '@bike4mind/common';
+import { AuthEvents, MfaEnrollmentEvents, type IUserDocument } from '@bike4mind/common';
 
 const {
   mockCountByUser,
@@ -10,7 +10,11 @@ const {
   mockGetSettingsMap,
   mockLogEvent,
   mockLogAuthAudit,
+  mockRecordMfaEnrollmentEvent,
+  mockOrgEnrollment,
 } = vi.hoisted(() => ({
+  mockOrgEnrollment: vi.fn(),
+  mockRecordMfaEnrollmentEvent: vi.fn(),
   mockGetSettingsMap: vi.fn(),
   mockLogEvent: vi.fn(),
   mockLogAuthAudit: vi.fn(),
@@ -38,6 +42,10 @@ vi.mock('@server/auth/trustedDevice', () => ({
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: unknown[]) => mockLogAuthAudit(...a) }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
+vi.mock('@server/auth/mfaEnrollmentFunnel', () => ({
+  recordMfaEnrollmentEvent: (...a: unknown[]) => mockRecordMfaEnrollmentEvent(...a),
+}));
+vi.mock('./organizationMfa', () => ({ requiresOrganizationMfaEnrollment: mockOrgEnrollment }));
 
 import {
   logSecondFactorSignIn,
@@ -66,9 +74,32 @@ beforeEach(() => {
   mockTrustedDevicesAllowed.mockResolvedValue(true);
   mockConsumeTrustedDevice.mockResolvedValue(null);
   mockCountByUser.mockResolvedValue(0);
+  mockOrgEnrollment.mockResolvedValue(false);
 });
 
 describe('resolveSecondFactor', () => {
+  it('uses the existing setup handoff when an org requires enrollment', async () => {
+    mockOrgEnrollment.mockResolvedValue(true);
+    const outcome = await resolveSecondFactor(req, unenrolled, { origin });
+    expect(outcome.kind).toBe('enroll');
+    expect(decodePending((outcome as { mfaToken: string }).mfaToken)).toMatchObject({ id: 'u2', mfaPending: true });
+  });
+
+  it('does not consult org policy for an enrolled user', async () => {
+    mockOrgEnrollment.mockResolvedValue(true);
+    expect((await resolveSecondFactor(req, enrolled, { origin })).kind).toBe('challenge');
+    expect(mockOrgEnrollment).not.toHaveBeenCalled();
+  });
+
+  it('requires org enrollment for an enterprise sign-in without applying global MFA', async () => {
+    mockSettingsValue.mockReturnValue(true);
+    expect((await resolveSecondFactor(req, unenrolled, { origin, enterpriseIdp: true })).kind).toBe('satisfied');
+    expect(mockGetSettingsMap).not.toHaveBeenCalled();
+    mockOrgEnrollment.mockResolvedValue(true);
+    expect((await resolveSecondFactor(req, unenrolled, { origin, enterpriseIdp: true })).kind).toBe('enroll');
+    expect((await resolveSecondFactor(req, enrolled, { origin, enterpriseIdp: true })).kind).toBe('satisfied');
+  });
+
   it('challenges an enrolled user with a short-lived mfaPending token', async () => {
     mockCountByUser.mockResolvedValue(2);
 
@@ -105,6 +136,7 @@ describe('resolveSecondFactor', () => {
     mockConsumeTrustedDevice.mockResolvedValue(device);
 
     expect((await resolveSecondFactor(req, enrolled, { origin, honourTrustedDevice: false })).kind).toBe('challenge');
+    expect(mockRecordMfaEnrollmentEvent).not.toHaveBeenCalled();
     expect(mockConsumeTrustedDevice).not.toHaveBeenCalled();
   });
 
@@ -119,6 +151,11 @@ describe('resolveSecondFactor', () => {
       mfaPending: true,
       signInStrategy: 'otc',
       signInVia: 'otc',
+    });
+    expect(mockRecordMfaEnrollmentEvent).toHaveBeenCalledExactlyOnceWith('u2', MfaEnrollmentEvents.REQUIRED, {
+      surface: 'signin',
+      source: 'otc',
+      strategy: 'otc',
     });
   });
 
@@ -144,6 +181,7 @@ describe('resolveSecondFactor', () => {
 
   it('is satisfied for an unenrolled user when MFA is not enforced', async () => {
     expect(await resolveSecondFactor(req, unenrolled, { origin })).toEqual({ kind: 'satisfied', trustedDevice: null });
+    expect(mockRecordMfaEnrollmentEvent).not.toHaveBeenCalled();
   });
 });
 

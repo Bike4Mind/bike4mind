@@ -74,9 +74,8 @@ export const PublishSourceSchema = z.object({
    * Set when the uploaded index.html is RAW artifact content that finalize must render into the
    * canonical published page server-side, rather than an already-inert bundle. `react` transpiles
    * to a self-contained inert HTML bundle (issue #21); every other type is wrapped by
-   * `renderArtifactIndexHtml`. Absent for already-inert HTML/SVG bundles that need no server
-   * transform (the web client pre-renders those until the raw-upload switch lands), so this stays
-   * backward compatible: existing drafts omit it and finalize serves their bytes unchanged.
+   * `renderArtifactIndexHtml`. Absent when the upload is already the final page (a client that
+   * still renders before upload), in which case finalize serves its bytes unchanged.
    */
   artifactType: ArtifactTypeSchema.optional(),
   /**
@@ -583,7 +582,15 @@ export type UploadUrlRequest = z.infer<typeof UploadUrlRequestSchema>;
 
 export const UploadUrlResponseSchema = z.object({
   draftId: z.uuid(),
-  uploadUrls: z.array(z.object({ path: z.string(), url: z.string(), expiresAt: z.string() })),
+  uploadUrls: z.array(
+    z.object({
+      path: z.string(),
+      url: z.string(),
+      expiresAt: z.string(),
+      /** Headers the PUT must send. Absent for a presigned URL, which carries its own signature. */
+      headers: z.record(z.string(), z.string()).optional(),
+    })
+  ),
 });
 export type UploadUrlResponse = z.infer<typeof UploadUrlResponseSchema>;
 

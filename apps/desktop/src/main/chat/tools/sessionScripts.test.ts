@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -108,6 +108,13 @@ describe('sessionScriptRun', () => {
     ['powershell.exe -File b.ps1', 'b.ps1'],
     ['bunx tsx tools/x.ts', 'tools/x.ts'],
     ['pnpm exec tsx tools/x.ts', 'tools/x.ts'],
+    ['pnpm --filter app exec tsx tools/x.ts', 'tools/x.ts'],
+    ['pnpm -F app exec tsx tools/x.ts', 'tools/x.ts'],
+    ['npm exec -- tsx tools/x.ts', 'tools/x.ts'],
+    ['npm x -- tsx tools/x.ts', 'tools/x.ts'],
+    ['pnpx tsx tools/x.ts', 'tools/x.ts'],
+    ['yarn exec tsx tools/x.ts', 'tools/x.ts'],
+    ['bun x tsx tools/x.ts', 'tools/x.ts'],
     ['pnpm dlx tsx tools/x.ts', 'tools/x.ts'],
     ['yarn dlx tsx tools/x.ts', 'tools/x.ts'],
     ['uv run python tools/go.py', 'tools/go.py'],
@@ -252,6 +259,166 @@ describe('sessionScriptRun', () => {
     expect((await sessionScriptRun('git status', join(root, 'tools'), id))?.hooks).toHaveLength(1);
   });
 
+  it.each([
+    'git --git-dir ./evil --work-tree=. status',
+    'git --git-dir=evil status',
+    'GIT_DIR=./evil GIT_WORK_TREE=. git status',
+    'export GIT_DIR=evil; git status',
+    'env GIT_COMMON_DIR=evil git log',
+    'cd sub && GIT_DIR=../evil git status',
+    'XDG_CONFIG_HOME=./xdg git status',
+    'export XDG_CONFIG_HOME=xdg && git log',
+    'EDITOR=./x.sh git commit --allow-empty',
+    'VISUAL=./x.sh git commit --allow-empty',
+    "EDITOR='./x.sh --wait' git rebase -i HEAD~1",
+    'PAGER=./x.sh git log',
+    'SSH_ASKPASS=./x.sh git fetch',
+    'PATH=./bin:$PATH git help clean',
+    'PATH=bin:"$PATH" git --help clean',
+    'export PATH="$PWD/bin:$PATH"; git log',
+    'PATH=$PATH:./bin git help clean',
+    'GIT_DIR=""./evil git status',
+    'GIT_DIR="$PWD"/evil git status',
+    'GIT_DIR=${PWD}/evil git status',
+    'GIT_DIR=$(pwd)/evil git status',
+    'GIT_DIR=`pwd`/evil git status',
+    'GIT_DIR=e\\vil git status',
+    'd=evil; GIT_DIR=$d git status',
+    'GIT_DIR=$X git status',
+    'git --git-dir=""./evil status',
+    "git --git-dir './evil' status",
+    'XDG_CONFIG_HOME=""./xdg git status',
+    'XDG_CONFIG_HOME=$X git status',
+    'PATH=:$PATH git help clean',
+    'PATH=$PATH: git help clean',
+    'PATH=$(pwd)/bin:$PATH git help clean',
+    'PATH="$PWD"/bin:$PATH git help clean',
+    'export GIT_DIR=./evil; find . -maxdepth 0 -exec git status \\;',
+    'export GIT_DIR=./evil; find . -maxdepth 0 -execdir env git status \\;',
+    'env -C sub GIT_DIR=../evil git status',
+    'set -a; read -r GIT_DIR <<< ./evil; git status',
+    'set -a; read -r GIT_COMMON_DIR <<< ./evil; git status',
+    'set -a; read -r XDG_CONFIG_HOME <<< ./xdg; git status',
+    'set -a; read -r PATH <<< ./bin; git help clean',
+    'export PATH="$(pnpm bin):$PATH"; git status',
+  ])('flags %s, where git reads config or runs a program from a file this session wrote', async command => {
+    const id = 'session-scripts-git-reads';
+    for (const file of ['evil/config', 'xdg/git/config', 'x.sh', 'bin/man']) {
+      await recordSessionWrite({ sessionId: id } as ToolContext, join(root, file));
+    }
+    expect(await runs(command, id)).not.toBeNull();
+  });
+
+  it.each([
+    'git status',
+    'git --git-dir=other status',
+    'GIT_DIR=other git status',
+    'XDG_CONFIG_HOME=other git status',
+    'EDITOR=vim git commit',
+    'PAGER=cat git log',
+    'PATH=/usr/bin:$PATH git log',
+    'PATH=other:$PATH git help clean',
+    'PATH=other:${PATH} git help clean',
+    'echo PATH=./bin; git status',
+    "git commit -m 'EDITOR=./x.sh'",
+  ])('ignores %s, where git reads nothing this session wrote', async command => {
+    const id = 'session-scripts-git-reads';
+    for (const file of ['evil/config', 'xdg/git/config', 'x.sh', 'bin/man']) {
+      await recordSessionWrite({ sessionId: id } as ToolContext, join(root, file));
+    }
+    expect(await runs(command, id)).toBeNull();
+  });
+
+  it('counts a file the script itself makes executable as a program in a PATH folder', async () => {
+    const id = 'session-scripts-chmod-program';
+    await writeFile(join(root, 'tools', 'later'), '#!/bin/sh\n', 'utf8');
+    await chmod(join(root, 'tools', 'later'), 0o644);
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'tools', 'later'));
+    const path = 'export PATH="$(cd tools && pwd):$PATH" && git commit --allow-empty';
+    expect(await runs(path, id)).toBeNull();
+    expect(await runs(`chmod +x tools/later && ${path}`, id)).not.toBeNull();
+    expect(await runs(`chmod a+x tools/later && ${path}`, id)).not.toBeNull();
+    expect(await runs(`chmod 755 tools/later && ${path}`, id)).not.toBeNull();
+    expect(await runs(`chmod -R u+x tools/later && ${path}`, id)).not.toBeNull();
+    expect(await runs(`chmod 644 tools/later && ${path}`, id)).toBeNull();
+    expect(await runs(`chmod -x tools/later && ${path}`, id)).toBeNull();
+    expect(await runs(`chmod +x tools/other && ${path}`, id)).toBeNull();
+  });
+
+  it('reads a PATH entry bash fills in as a folder of programs only once the session wrote a program', async () => {
+    const id = 'session-scripts-path-programs';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'src', 'a.ts'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', id)).toBeNull();
+    expect(await runs('set -a; read -r PATH <<< ./x; git status', id)).toBeNull();
+    await writeFile(join(root, 'tools', 'plain'), 'x\n', 'utf8');
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'tools', 'plain'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', id)).toBeNull();
+    await writeFile(join(root, 'tools', 'vim'), '#!/bin/sh\n', 'utf8');
+    await chmod(join(root, 'tools', 'vim'), 0o755);
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'tools', 'vim'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', id)).not.toBeNull();
+    expect(await runs('export PATH="$(cd tools && pwd):$PATH"; git commit --allow-empty', id)).not.toBeNull();
+    const binId = 'session-scripts-path-bin';
+    await recordSessionWrite({ sessionId: binId } as ToolContext, join(root, 'node_modules', '.bin', 'x'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', binId)).not.toBeNull();
+    const treeId = 'session-scripts-path-tree';
+    await recordSessionTreeWrite({ sessionId: treeId } as ToolContext, join(root, 'vendor'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', treeId)).not.toBeNull();
+  });
+
+  it('reads a git dir from each folder git is moved into', async () => {
+    const id = 'session-scripts-git-dir-moved';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'evil', 'config'));
+    expect(await runs('GIT_DIR=evil git -C sub status', id)).not.toBeNull();
+    expect(await runs('GIT_DIR=evil git status', id)).toBeNull();
+  });
+
+  it('reads a variable name in any case on Windows only', async () => {
+    const id = 'session-scripts-git-reads';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'evil/config'));
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
+    try {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      expect(await runs('git_dir=./evil git status', id)).toBeNull();
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      expect(await runs('git_dir=./evil git status', id)).not.toBeNull();
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
+  it('does not flag git run in a bare layout the session wrote, which the shell refuses to find by itself', async () => {
+    const id = 'session-scripts-bare';
+    const folder = join(root, 'bare');
+    await mkdir(join(folder, 'objects'), { recursive: true });
+    await mkdir(join(folder, 'refs'), { recursive: true });
+    await writeFile(join(folder, 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+    await writeFile(join(folder, 'config'), '[diff]\n\texternal = touch MARK\n', 'utf8');
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'config'));
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'commondir'));
+    expect(await sessionScriptRun('git -C bare diff HEAD~1 HEAD', root, id)).toBeNull();
+    expect(await sessionScriptRun('cd bare && git diff HEAD~1 HEAD', root, id)).toBeNull();
+  });
+
+  it('runs a launched file from the folder env -C names', async () => {
+    const id = 'session-scripts-env-c';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'y.sh'));
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'npx'));
+    expect(await runs('env -C sub ./y.sh', id)).toEqual(['./y.sh']);
+    expect(await runs('env -C sub bash y.sh', id)).toEqual(['y.sh']);
+    // bash opens a redirect from its own folder, not the one env moves the command to.
+    expect(await runs('env -C sub bash < y.sh', id)).toBeNull();
+    expect(await runs('bash < sub/y.sh', id)).toEqual(['sub/y.sh']);
+    expect(await runs('env -C sub ./npx ls', id)).toEqual(['./npx']);
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'jest'));
+    expect(await runs('env -C sub ./npx vitest', id)).toEqual(['./npx']);
+    expect(await runs('env -C sub ./jest', id)).toEqual(['./jest']);
+    expect(await runs('env -C other ./npx vitest', id)).toBeNull();
+    expect(await runs('env -C other ./jest', id)).toBeNull();
+    expect(await runs('env -C other ./y.sh', id)).toBeNull();
+    expect(await runs('cd sub && ./y.sh', id)).toEqual(['./y.sh']);
+  });
+
   it('flags git after a write under .husky', async () => {
     const id = 'session-scripts-husky';
     await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'repo', '.husky', 'pre-push'));
@@ -382,11 +549,21 @@ describe('gitRunsConfiguredProgram', () => {
     ['git -c core.fsmonitor=./x status', 'core.fsmonitor'],
     ["git -c 'core.hooksPath=h' commit", 'core.hookspath'],
     ['sudo git -c core.sshCommand=ssh push', 'core.sshcommand'],
+    ['git -c core.fsmonitor status', 'core.fsmonitor'],
+    ['git --config-env core.hooksPath=H commit', 'core.hookspath'],
+    ['git -c core.hooksPath=/dev/null -c core.fsmonitor=./x status', 'core.fsmonitor'],
+    ['git -c core.fsmonitor=$X status', 'core.fsmonitor'],
   ])('flags %s', (command, key) => {
     expect(gitRunsConfiguredProgram([{ words: command }])?.toLowerCase()).toBe(key);
   });
 
-  it.each(['git status', 'git -c color.ui=never log', 'echo -c core.fsmonitor=x'])('ignores %s', command => {
+  it.each([
+    'git status',
+    'git -c color.ui=never log',
+    'echo -c core.fsmonitor=x',
+    'git -c core.hooksPath=/dev/null commit -m x',
+    "git -c 'core.fsmonitor=false' status",
+  ])('ignores %s', command => {
     expect(gitRunsConfiguredProgram([{ words: command }])).toBeNull();
   });
 });

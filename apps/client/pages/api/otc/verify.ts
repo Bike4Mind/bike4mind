@@ -692,6 +692,23 @@ const handler = baseApi({ auth: false })
     });
     await emitFunnelEvent({ user: funnelUser, event: 'signup_completed', metadata: { method: 'otc' }, visitId });
 
+    // Domain grants may have just joined an MFA-required organization. Resolve only after
+    // those memberships commit, before minting any full session or refresh cookie.
+    const secondFactor = await resolveSecondFactor(req, newUser, {
+      origin: { strategy: 'otc', createdVia: 'otc-registration' },
+    });
+    if (secondFactor.kind === 'challenge') {
+      return res.status(200).json({
+        mfaRequired: true,
+        passkeyAvailable: secondFactor.passkeyAvailable,
+        userId: newUser.id,
+        accessToken: secondFactor.mfaToken,
+      });
+    }
+    if (secondFactor.kind === 'enroll') {
+      return res.status(200).json({ mfaSetupRequired: true, userId: newUser.id, accessToken: secondFactor.mfaToken });
+    }
+
     const registrationSession = await issueSessionForRequest(req, newUser.id, {
       createdVia: 'otc-registration',
       tokenVersion: newUser.tokenVersion ?? 0,

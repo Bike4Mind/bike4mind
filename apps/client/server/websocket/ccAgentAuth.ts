@@ -1,6 +1,11 @@
 import { Connection } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { checkApiKeyRateLimitOrThrow, checkRateLimit, verifyBridgeApiKey, verifyJwtToken } from '@server/cli/auth';
+import {
+  checkApiKeyRateLimitOrThrow,
+  checkRateLimit,
+  verifyBridgeApiKey,
+  verifyJwtToken,
+} from '@bike4mind/server-utils/cli/auth';
 import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 export interface ResolvedBridgeAuth {
@@ -35,14 +40,20 @@ export async function resolveBridgeWsAuth(params: {
   endpoint: string;
   logger: Logger;
   handlerName: string;
+  /** Whether this message is a use of the bridge key (stamps its `lastUsedAt`). Registering an agent
+   *  is; the event and disconnect stream that follows is the daemon reporting, so it is not. */
+  recordKeyUse: boolean;
 }): Promise<ResolvedBridgeAuth | null> {
-  const { accessToken, connectionId, endpoint, logger, handlerName } = params;
+  const { accessToken, connectionId, endpoint, logger, handlerName, recordKeyUse } = params;
 
   let userId: string | null = null;
   let apiKeyId: string | null = null;
 
   try {
-    const apiKeyInfo = await verifyBridgeApiKey({ authorization: `Bearer ${accessToken}` });
+    const apiKeyInfo = await verifyBridgeApiKey(
+      { authorization: `Bearer ${accessToken}` },
+      { recordUse: recordKeyUse }
+    );
     await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
       userId: apiKeyInfo.userId,
       endpoint,

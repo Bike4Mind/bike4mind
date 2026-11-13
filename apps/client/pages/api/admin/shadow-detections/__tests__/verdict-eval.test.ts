@@ -30,7 +30,10 @@ const report = {
   detections: 0,
   labelledDetections: 0,
   labelledAccounts: 0,
+  excludedAutoApprovals: 0,
   scores: [],
+  operations: [],
+  cohorts: [],
   disagreements: [],
   truncated: false,
 };

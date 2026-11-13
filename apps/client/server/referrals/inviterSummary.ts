@@ -46,6 +46,8 @@ export interface InviterSummary {
   subscribed: number;
   creditsEarned: number;
   recentRewards: InviterRecentReward[];
+  /** Credits the inviter earns per milestone; 0 means that reward is off. */
+  rewards: { firstAnswer: number; firstPayment: number; secondPayment: number };
 }
 
 const EMPTY_SUMMARY: InviterSummary = {
@@ -55,6 +57,7 @@ const EMPTY_SUMMARY: InviterSummary = {
   subscribed: 0,
   creditsEarned: 0,
   recentRewards: [],
+  rewards: { firstAnswer: 0, firstPayment: 0, secondPayment: 0 },
 };
 
 /**
@@ -138,5 +141,10 @@ export async function getInviterSummary(inviterId: string, now = new Date()): Pr
       grantedAt: row.createdAt.toISOString(),
       expiresAt: new Date(row.createdAt.getTime() + REWARD_LOT_DAYS * DAY_MS).toISOString(),
     })),
+    rewards: {
+      firstAnswer: getSettingsValue('ReferralFirstAnswerCredits', settings, 0),
+      firstPayment: getSettingsValue('ReferralFirstPaymentCredits', settings, 0),
+      secondPayment: getSettingsValue('ReferralSecondPaymentCredits', settings, 0),
+    },
   };
 }

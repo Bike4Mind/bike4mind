@@ -1,6 +1,6 @@
 import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import {
   adminSettingsRepository,
@@ -13,9 +13,10 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { fileContentUrl } from '@server/files/browserFileSigner';
+import { fileContentUrl } from '@bike4mind/server-utils/files/browserFileSigner';
 import { fabFilesService } from '@bike4mind/services';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import { adminBypassLakeIds } from '@bike4mind/server-utils/dataLakes/index';
 import {
   dataLakeArticleListResponseSchema,
   getFileMembershipArm,
@@ -149,11 +150,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       membershipArm: getFileMembershipArm(file, lakeMembership) ?? undefined,
     }));
 
-    // Best-effort audit write, only when something was actually returned - an empty
-    // page reflects no lake content read. The lake is already resolved, so no attribution needed.
-    // Awaited (never rethrows): a per-request serverless route must not race a post-response
-    // freeze of the execution environment.
+    // Audit write, only when something was actually returned - an empty page reflects no lake
+    // content read. Awaited so a serverless route does not race a post-response freeze. Best-effort
+    // (never rethrows) except for an admin-bypass read, whose failed write fails the request.
     if (data.length > 0) {
+      const bypass = await adminBypassLakeIds(req, [dataLake.id]);
       await dataLakeService.recordLakeAccessEvent(
         lakeAccessEventRepository,
         {
@@ -161,6 +162,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           organizationId: normalizeId(req.user.organizationId),
           resolvedLakeIds: [dataLake.id],
           fileIds: (data as Array<{ id: string }>).map(f => f.id),
+          ...(bypass.length ? { adminBypassLakeIds: bypass } : {}),
           surface: 'data-lake-articles',
           ...(search ? { queryText: search } : {}),
         },

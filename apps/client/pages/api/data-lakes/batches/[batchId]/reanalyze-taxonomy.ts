@@ -1,11 +1,11 @@
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_WRITE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
-import { analyzeBatchTaxonomy, claimBatchForAnalysis } from '@server/dataLakes/analyzeBatchTaxonomy';
-import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
+import { analyzeBatchTaxonomy, claimBatchForAnalysis } from '@bike4mind/server-utils/dataLakes/analyzeBatchTaxonomy';
+import { serializeLakeClaim } from '@bike4mind/server-utils/dataLakes/serializeLakeClaim';
 import {
   TAXONOMY_DAILY_CAP,
   TAXONOMY_RATE_LIMIT_BUCKET,
@@ -23,7 +23,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { dataLakeBatchRepository, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
-import { assertRequestCanAfford } from '@server/billing/meterPlatformCompletion';
+import { assertRequestCanAfford } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { respond } from '@server/utils/respond';
 
 // Shared with the automatic post-upload trigger (see taxonomyRateLimit.ts) - a manual

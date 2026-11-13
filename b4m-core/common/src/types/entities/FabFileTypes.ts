@@ -66,7 +66,7 @@ export enum FabFileSourceType {
   SALESFORCE = 'salesforce',
   GOOGLE_DRIVE = 'google_drive',
   SLACK = 'slack',
-  /** Admitted by a human approving an acquisition proposal (#1671), never by the producer itself. */
+  /** Admitted from an acquisition proposal, by a person approving it or by a trusted-site rule. */
   PROPOSAL_APPROVAL = 'proposal_approval',
   GITHUB = 'github',
   /**
@@ -1382,6 +1382,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       curated?: boolean;
       /** Only files saved by a generation tool (tagged GENERATED_ASSET_TAG); ANDed with `tags`. */
       generated?: boolean;
+      /** Only files NOT saved by a generation tool; the complement of `generated`. */
+      uploaded?: boolean;
+      /** Only generated files whose `sourceMetadata.generation.modelId` is exactly this. */
+      generationModelId?: string;
       fileIds?: string[]; // EXCLUDE these ids ($nin)
       restrictToFileIds?: string[]; // ALLOW-list ($in); present (incl. []) = hard restriction, [] matches nothing
     },

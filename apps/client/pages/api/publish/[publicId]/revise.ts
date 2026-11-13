@@ -19,7 +19,7 @@ import {
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 /**
  * POST /api/publish/[publicId]/revise - Phase C of the artifact-collab layer:
@@ -190,7 +190,11 @@ const handler = baseApi().post(
       action = await consumePublishAction(req.user);
 
       // ── Run the LLM (in-monorepo path; accumulate the non-streamed completion). ──
-      const { modelId, llm: rawLlm, modelInfo } = await OperationsModelService.getOperationsModel();
+      const {
+        modelId,
+        llm: rawLlm,
+        modelInfo,
+      } = await OperationsModelService.getOperationsModel({ endUserId: String(req.user.id) });
       req.logger.info(`[REVISE] ${publicId} using ${modelInfo.name} (${modelInfo.backend}) on ${open.length} comments`);
 
       const messages = buildPrompt(currentHtml, open);

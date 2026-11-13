@@ -53,6 +53,10 @@ export const operations = {
     method: 'POST',
     path: '/api/ai/v1/completions',
   },
+  createCompletionRun: {
+    method: 'POST',
+    path: '/api/v1/completion-runs',
+  },
   createDecision: {
     method: 'POST',
     path: '/api/v1/decisions',
@@ -116,6 +120,10 @@ export const operations = {
   deleteFile: {
     method: 'DELETE',
     path: '/api/v1/files/{id}',
+  },
+  deletePersona: {
+    method: 'DELETE',
+    path: '/api/v1/personas/{id}',
   },
   deleteProject: {
     method: 'DELETE',
@@ -376,6 +384,10 @@ export const operations = {
   listWhatsNew: {
     method: 'GET',
     path: '/api/v1/whats-new',
+  },
+  mintPersona: {
+    method: 'POST',
+    path: '/api/v1/personas',
   },
   postSlackMessage: {
     method: 'POST',

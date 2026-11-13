@@ -12,7 +12,7 @@ const ORG_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 describe('ORGS_SEARCH_PARSERS', () => {
   it('accepts numbers quoted by a hand-typed link', () => {
     expect(ORGS_SEARCH_PARSERS.orgsPage('3')).toBe(3);
-    expect(ORGS_SEARCH_PARSERS.orgsLimit('20')).toBe(20);
+    expect(ORGS_SEARCH_PARSERS.orgsLimit('50')).toBe(50);
   });
 
   it('rejects a page size outside the menu and a non-positive page', () => {
@@ -68,7 +68,7 @@ describe('organizationsViewToSearch', () => {
   });
 
   it('round-trips a non-default view', () => {
-    const view = { page: 4, limit: 20, sortBy: 'updatedAt', sortDirection: 'desc', personal: true } as const;
+    const view = { page: 4, limit: 50, sortBy: 'updatedAt', sortDirection: 'desc', personal: true } as const;
     expect(organizationsViewFromSearch(organizationsViewToSearch(view))).toEqual(view);
   });
 });

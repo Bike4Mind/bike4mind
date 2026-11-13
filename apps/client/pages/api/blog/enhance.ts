@@ -8,7 +8,7 @@ import {
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { meterCompletionBackend } from '@bike4mind/services';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 interface BlogEnhanceParams {
@@ -32,7 +32,7 @@ async function enhanceContent(
   logger: Logger
 ): Promise<BlogEnhanceResponse> {
   try {
-    const operationsModel = await OperationsModelService.getOperationsModel();
+    const operationsModel = await OperationsModelService.getOperationsModel({ endUserId: user.id });
     const operationsModelInfo = operationsModel.modelInfo;
 
     const apiKey = await getEffectiveApiKeyByBackend(user.id, operationsModelInfo.backend);

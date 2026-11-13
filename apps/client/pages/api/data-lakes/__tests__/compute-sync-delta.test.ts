@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   findByContentHashesInDataLake: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
   record: vi.fn().mockResolvedValue(undefined),
+  adminBypassLakeIds: vi.fn(async () => [] as string[]),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -21,6 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/dataLakes/index', () => ({ adminBypassLakeIds: h.adminBypassLakeIds }));
 vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
@@ -61,6 +63,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.assertLakeAccess.mockResolvedValue(LAKE);
   h.findByContentHashesInDataLake.mockResolvedValue([]);
+  h.adminBypassLakeIds.mockResolvedValue([]);
 });
 
 const REQ_BODY = {
@@ -130,5 +133,48 @@ describe('POST /api/data-lakes/compute-sync-delta access-event audit', () => {
 
     const call = h.record.mock.calls[0][0];
     expect(new Set(call.fileIds)).toEqual(new Set(['f1', 'f2']));
+  });
+
+  it('marks an admin-bypass read with adminBypassLakeIds on exactly one record call', async () => {
+    h.findByContentHashesInDataLake.mockResolvedValue([{ id: 'f1', fileName: 'a.md', contentHash: HASH_A }]);
+    h.adminBypassLakeIds.mockResolvedValue(['lake1']);
+
+    await route(makeReq(REQ_BODY), makeRes().res);
+
+    expect(h.record).toHaveBeenCalledTimes(1);
+    expect(h.record.mock.calls[0][0]).toMatchObject({ adminBypassLakeIds: ['lake1'] });
+  });
+
+  it('records and sends nothing when member-access classification is incomplete', async () => {
+    h.findByContentHashesInDataLake.mockResolvedValue([{ id: 'f1', fileName: 'a.md', contentHash: HASH_A }]);
+    h.adminBypassLakeIds.mockRejectedValue(new Error('classification unavailable'));
+    const { res, json } = makeRes();
+    await expect(route(makeReq(REQ_BODY), res)).rejects.toThrow('classification unavailable');
+    expect(h.record).not.toHaveBeenCalled();
+    expect(json).not.toHaveBeenCalled();
+  });
+
+  it('fails the request, sending nothing, when an admin-bypass audit write rejects', async () => {
+    h.findByContentHashesInDataLake.mockResolvedValue([{ id: 'f1', fileName: 'a.md', contentHash: HASH_A }]);
+    h.adminBypassLakeIds.mockResolvedValue(['lake1']);
+    h.record.mockRejectedValueOnce(new Error('mongo blip'));
+    const { res, json } = makeRes();
+
+    await expect(route(makeReq(REQ_BODY), res)).rejects.toThrow('mongo blip');
+    expect(json).not.toHaveBeenCalled();
+  });
+
+  it('leaves the marker off a member read', async () => {
+    h.findByContentHashesInDataLake.mockResolvedValue([{ id: 'f1', fileName: 'a.md', contentHash: HASH_A }]);
+
+    await route(makeReq(REQ_BODY), makeRes().res);
+
+    expect(h.record.mock.calls[0][0]).not.toHaveProperty('adminBypassLakeIds');
+  });
+
+  it('does not resolve the admin bypass when nothing matched', async () => {
+    await route(makeReq(REQ_BODY), makeRes().res);
+
+    expect(h.adminBypassLakeIds).not.toHaveBeenCalled();
   });
 });

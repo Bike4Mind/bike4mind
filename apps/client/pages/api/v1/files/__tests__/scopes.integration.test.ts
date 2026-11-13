@@ -46,7 +46,9 @@ vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEvent: vi.fn().mockResolvedValue(undefined),
   logEventSafe: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: (...a: unknown[]) => mockLoad(...a) }));
+vi.mock('@bike4mind/server-utils/files/loadAccessibleFabFile', () => ({
+  loadAccessibleFabFile: (...a: unknown[]) => mockLoad(...a),
+}));
 vi.mock('@server/files/deleteFileForUser', () => ({
   deleteFileForUser: (...a: unknown[]) => mockDeleteFileForUser(...a),
 }));

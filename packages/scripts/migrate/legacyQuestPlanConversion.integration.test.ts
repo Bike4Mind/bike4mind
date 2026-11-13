@@ -8,7 +8,11 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__t
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 vi.mock('../utils/config', () => ({ Config: {} }));
 
-import { convertLegacyQuestPlans, type ArchiveStorage } from './legacyQuestPlanConversion';
+import {
+  convertLegacyQuestPlans,
+  verifyLegacyQuestPlanCoverage,
+  type ArchiveStorage,
+} from './legacyQuestPlanConversion';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -391,5 +395,153 @@ describe('convertLegacyQuestPlans', () => {
     expect(counts).toMatchObject({ created: 1, failed: 1 });
     expect(counts.failedSamples).toEqual([poisonId]);
     expect((await archives())[0].sourceMetadata?.sourceId).toBe(fineId);
+  });
+});
+
+describe('verifyLegacyQuestPlanCoverage', () => {
+  const verify = (batchSize?: number, deadline?: Date) =>
+    verifyLegacyQuestPlanCoverage({ logger, batchSize, deadline });
+
+  it('reports matching source and file counts after a conversion pass', async () => {
+    const owner = await insertUser();
+    await insertPlan({ userId: owner });
+    await insertPlan({ userId: owner });
+    await insertGraph(owner);
+    await run();
+
+    const result = await verify();
+
+    expect(result.covered).toBe(true);
+    expect(result.plans).toMatchObject({ live: 2, expected: 2, files: 2, current: 2, missing: 0, stale: 0 });
+    expect(result.graphs).toMatchObject({ live: 1, expected: 1, files: 1, current: 1, missing: 0, stale: 0 });
+  });
+
+  it('fails a plan with no matching file and names it', async () => {
+    const owner = await insertUser();
+    const kept = await insertPlan({ userId: owner });
+    await run();
+    const missing = await insertPlan({ userId: owner });
+
+    const result = await verify();
+
+    expect(result.covered).toBe(false);
+    expect(result.plans).toMatchObject({ expected: 2, files: 1, missing: 1, stale: 0 });
+    expect(result.plans.uncoveredSamples).toEqual([missing]);
+    expect(result.plans.uncoveredSamples).not.toContain(kept);
+  });
+
+  it('does not count another owner file for the same source id', async () => {
+    const owner = await insertUser();
+    const other = await insertUser();
+    await insertPlan({ userId: owner });
+    await run();
+    await FabFile.collection.updateMany({}, { $set: { userId: other } });
+
+    const result = await verify();
+
+    expect(result.covered).toBe(false);
+    expect(result.plans).toMatchObject({ expected: 1, files: 0, missing: 1 });
+  });
+
+  it('fails a plan edited after its file was written, until the conversion is re-run', async () => {
+    const owner = await insertUser();
+    const id = await insertPlan({ userId: owner });
+    await run();
+    await plans().updateOne({ _id: new Types.ObjectId(id) }, { $set: { goal: 'Edited goal', updatedAt: T1 } });
+
+    const stale = await verify();
+    expect(stale.covered).toBe(false);
+    expect(stale.plans).toMatchObject({ expected: 1, files: 0, missing: 0, stale: 1 });
+    expect(stale.plans.uncoveredSamples).toEqual([id]);
+
+    await run();
+    const fresh = await verify();
+    expect(fresh.covered).toBe(true);
+    expect(fresh.plans).toMatchObject({ expected: 1, files: 1, current: 1, stale: 0 });
+  });
+
+  it('fails a graph whose node changed after its file was written', async () => {
+    const owner = await insertUser();
+    const id = await insertGraph(owner);
+    await run();
+    await nodes().updateOne({ graphId: id, deletedAt: null }, { $set: { title: 'Renamed', updatedAt: T1 } });
+
+    const result = await verify();
+
+    expect(result.covered).toBe(false);
+    expect(result.graphs).toMatchObject({ expected: 1, files: 0, stale: 1 });
+    expect(result.plans).toMatchObject({ expected: 0, files: 0 });
+  });
+
+  it('counts a file the user deleted or rewrote as covered', async () => {
+    const owner = await insertUser();
+    const deletedId = await insertPlan({ userId: owner });
+    const editedId = await insertPlan({ userId: owner });
+    await run();
+    await FabFile.collection.updateOne({ 'sourceMetadata.sourceId': deletedId }, { $set: { deletedAt: new Date() } });
+    await FabFile.collection.updateOne({ 'sourceMetadata.sourceId': editedId }, { $set: { fileSize: 7 } });
+    await plans().updateMany({}, { $set: { goal: 'Edited goal', updatedAt: T1 } });
+
+    const result = await verify();
+
+    expect(result.covered).toBe(true);
+    expect(result.plans).toMatchObject({ expected: 2, files: 2, current: 0, userDeleted: 1, userEdited: 1 });
+  });
+
+  it('leaves empty, soft-deleted and ownerless sources out of the expected count', async () => {
+    const owner = await insertUser();
+    await insertPlan({ userId: owner, quests: [] });
+    await insertPlan({ userId: owner, deletedAt: T0 });
+    await insertPlan({ userId: String(new Types.ObjectId()) });
+
+    const result = await verify();
+
+    expect(result.covered).toBe(true);
+    expect(result.plans).toMatchObject({ live: 2, skippedEmpty: 1, skippedNoOwner: 1, expected: 0, files: 0 });
+  });
+
+  it('is not covered when it stops before visiting every source', async () => {
+    const owner = await insertUser();
+    await insertPlan({ userId: owner });
+    await insertPlan({ userId: owner });
+    await run();
+
+    const result = await verify(1, new Date(0));
+
+    expect(result.stoppedEarly).toBe(true);
+    expect(result.covered).toBe(false);
+    expect(result.plans).toMatchObject({ expected: 1, files: 1 });
+  });
+
+  it('checks every page', async () => {
+    const owner = await insertUser();
+    for (let i = 0; i < 5; i++) await insertPlan({ userId: owner });
+    await run();
+
+    const result = await verify(2);
+
+    expect(result.covered).toBe(true);
+    expect(result.plans).toMatchObject({ expected: 5, files: 5 });
+  });
+
+  it('writes nothing', async () => {
+    const owner = await insertUser();
+    await insertPlan({ userId: owner });
+    await insertGraph(owner);
+    await run();
+    await plans().updateMany({}, { $set: { updatedAt: T1 } });
+    const snapshot = async () => [
+      await plans().find().toArray(),
+      await graphs().find().toArray(),
+      await nodes().find().toArray(),
+      await FabFile.collection.find().toArray(),
+    ];
+    const before = await snapshot();
+    const written = overwrites;
+
+    await verify();
+
+    expect(await snapshot()).toEqual(before);
+    expect(overwrites).toBe(written);
   });
 });

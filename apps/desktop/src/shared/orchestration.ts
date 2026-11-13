@@ -28,6 +28,12 @@ export const inheritancePolicy = (): RolePolicy => ({
 export const rootPolicySchema = z.strictObject({
   rootSessionId: z.string().min(1),
   rootRunId: z.string().min(1),
+  /**
+   * The run id `POST /api/v1/completion-runs` issued for this root, sent with each agent turn so
+   * the server can group the run's spend. Absent until that request succeeds, and on sessions
+   * stored before it existed. `rootRunId` stays the local identity; this one is the server's.
+   */
+  serverRunId: z.string().min(1).optional(),
   policy: rolePolicySchema,
 });
 export type RootPolicy = z.infer<typeof rootPolicySchema>;
@@ -76,33 +82,119 @@ export const modelSelectionSchema = z.strictObject({
 });
 export type ModelSelection = z.infer<typeof modelSelectionSchema>;
 
+/** Opens the error of a spawn refused only for its model request, which the thread draws muted. */
+export const MODEL_REQUEST_REFUSED = 'Model request refused:';
+
+const modelTokens = (value: string): string[] =>
+  value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+
+const containsRun = (haystack: readonly string[], needle: readonly string[]): boolean =>
+  haystack.some((_, start) => needle.every((token, offset) => haystack[start + offset] === token));
+
+const inCatalog = (id: string, models: readonly ChatModelOption[]): boolean =>
+  models.some(model => model.id === id || model.aliasIds?.includes(id));
+
+/**
+ * The newest of `candidates` that a family name such as `sonnet` or `gpt-6.1` names, by whole
+ * tokens of its id, name or alias ids. Only ever one of `candidates`, so an alias can never reach
+ * a model the user did not allow; an exact catalog id is never treated as an alias, or
+ * `claude-sonnet-5` could resolve to a `claude-sonnet-5-mini` variant.
+ */
+export function resolveModelAlias(
+  requested: string,
+  candidates: readonly string[],
+  models: readonly ChatModelOption[]
+): string | null {
+  const needle = modelTokens(requested);
+  if (!needle.length || inCatalog(requested, models)) return null;
+  const matches = [...new Set(candidates)]
+    .map(id => ({ id, option: models.find(model => model.id === id) }))
+    .filter(({ id, option }) =>
+      [id, option?.name ?? '', ...(option?.aliasIds ?? [])].some(source => containsRun(modelTokens(source), needle))
+    );
+  const usable = ({ option }: (typeof matches)[number]) => (option && !option.unavailable && !option.disabled ? 0 : 1);
+  matches.sort(
+    (left, right) =>
+      usable(left) - usable(right) ||
+      (right.option?.releaseDate ?? '').localeCompare(left.option?.releaseDate ?? '') ||
+      left.id.length - right.id.length ||
+      left.id.localeCompare(right.id)
+  );
+  return matches[0]?.id ?? null;
+}
+
+const effectiveDefaultFor = (parentModel: string, policy: RolePolicy, role: WorkerRole | undefined): string => {
+  const selected = role ? policy.roles[role] : 'inherit';
+  return selected === 'inherit' ? parentModel : selected;
+};
+
+/**
+ * What `requested_model_id` tells the agent it may ask for, or null to leave the field out of the
+ * schema: with no allowed override, the only model it could name is the default it gets anyway.
+ */
+export function modelRequestHint(parentModel: string, policy: RolePolicy): string | null {
+  if (!policy.allowedOverrides.length) return null;
+  const defaults = WORKER_ROLES.map(role => `${role}=${effectiveDefaultFor(parentModel, policy, role)}`);
+  return (
+    `Optional; omit for the role default (${defaults.join(', ')}). ` +
+    `Allowed: ${policy.allowedOverrides.join(', ')}. A family name like sonnet picks the newest allowed match.`
+  );
+}
+
 export function resolveWorkerModel(
   parentModel: string,
   policy: RolePolicy,
-  options: SpawnOptions
+  options: SpawnOptions,
+  models: readonly ChatModelOption[] = []
 ): Omit<ModelSelection, 'rootRunId'> {
   const role = options.role ?? options.contract?.role;
   const requested = options.requestedModelId;
   const selected = role ? policy.roles[role] : 'inherit';
-  const effectiveDefault = selected === 'inherit' ? parentModel : selected;
-  if (requested && requested !== effectiveDefault && !policy.allowedOverrides.includes(requested)) {
+  const effectiveDefault = effectiveDefaultFor(parentModel, policy, role);
+  const resolved =
+    !requested || requested === effectiveDefault || policy.allowedOverrides.includes(requested)
+      ? requested
+      : resolveModelAlias(requested, [effectiveDefault, ...policy.allowedOverrides], models);
+  if (requested && !resolved) {
+    const allowed = policy.allowedOverrides.length ? policy.allowedOverrides.join(', ') : 'none';
     throw new Error(
-      'Model override needs an explicit user model-change decision. Choose an allowed override in orchestration settings.'
+      `${MODEL_REQUEST_REFUSED} '${requested}' is not an allowed override (allowed: ${allowed}). Nothing was started. ` +
+        `Omit requested_model_id to use the role default (${effectiveDefault}), or ask the user to allow it in orchestration settings.`
     );
   }
   return {
     ...(role ? { role } : {}),
     ...(requested ? { requestedModelId: requested } : {}),
     ...(options.requirements ? { requirements: options.requirements } : {}),
-    effectiveModel: requested ?? effectiveDefault,
+    effectiveModel: resolved ?? effectiveDefault,
     source: requested ? 'override' : selected !== 'inherit' ? 'role-policy' : 'parent',
   };
 }
 
+/**
+ * Why a worker model must be local: `device` when the app runs device-local and cannot reach a
+ * hosted model at all, `local-work` when work already on a local model would otherwise be moved to
+ * a hosted one without the user picking it, and `local-parent` when a local planner attempts
+ * to start a hosted child before that child exists.
+ */
+export type WorkerLocality = false | 'device' | 'local-work' | 'local-parent';
+
+const LOCALITY_BLOCKS: Record<Exclude<WorkerLocality, false>, string> = {
+  device:
+    'this app is running device-local, so only local models can run here. Choose a local model, or sign in to use hosted models.',
+  'local-work':
+    'work on a local model is never moved to a hosted model automatically. To move it, pick a hosted model for this worker in the model picker.',
+  'local-parent':
+    'a conversation using a local model cannot start a hosted worker automatically. To start one, explicitly select a hosted model for the parent conversation first.',
+};
+
 export function validateWorkerModel(
   model: string,
   models: readonly ChatModelOption[],
-  requirements: { localOnly: boolean; vision?: boolean; contextTokens?: number }
+  requirements: { localOnly: WorkerLocality; vision?: boolean; contextTokens?: number }
 ): void {
   const option = models.find(entry => entry.id === model);
   const problem = !option
@@ -117,10 +209,11 @@ export function validateWorkerModel(
             : requirements.contextTokens && (!option.contextWindow || option.contextWindow < requirements.contextTokens)
               ? 'context window is too small'
               : null));
-  if (problem || (requirements.localOnly && !isLocalModel(model))) {
-    throw new Error(
-      `Worker model ${model} is blocked: ${problem ?? 'device-local work cannot use a hosted model'}. Choose a replacement explicitly; no fallback was started.`
-    );
+  if (problem) {
+    throw new Error(`Worker model ${model} is blocked: ${problem}. Choose a different model; no fallback was started.`);
+  }
+  if (requirements.localOnly && !isLocalModel(model)) {
+    throw new Error(`Worker model ${model} is blocked: ${LOCALITY_BLOCKS[requirements.localOnly]}`);
   }
 }
 

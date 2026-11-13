@@ -21,8 +21,7 @@ name: OpenNext Build Guard
 # also moves them and does not trigger this job; the deploy is the backstop.
 #
 # Path-filtered, so it is NOT eligible to be a required check (see
-# lambda-bundle-guard.yml). It also skips merge_group: path filters do not
-# apply there, and this is a multi-minute build.
+# lambda-bundle-guard.yml).
 
 on:
   pull_request:

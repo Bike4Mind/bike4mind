@@ -3,7 +3,7 @@ import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import express from 'express';
 import { ApiKeyScope, BadRequestError, CliCompletionChunkAction, TooManyRequestsError } from '@bike4mind/common';
-import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
+import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@bike4mind/server-utils/cli/auth';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
@@ -49,7 +49,7 @@ vi.mock('@bike4mind/database', () => ({
 // never starts a completion; the streaming test registers one.
 vi.mock('@bike4mind/database/social', () => ({ Connection: { find: vi.fn().mockResolvedValue([]) } }));
 
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyApiKey: vi.fn().mockRejectedValue(new Error('no api key')),
   verifyJwtToken: vi.fn().mockResolvedValue({ id: 'u1' }),
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
@@ -121,6 +121,18 @@ function postAs(headers: Record<string, string>) {
     body: JSON.stringify(BODY),
   });
 }
+
+describe('run attribution', () => {
+  it('refuses a run sent over the WebSocket route, which never verifies or forwards it', async () => {
+    const res = await fetch(`${baseUrl}/api/ai/v1/ws-completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer jwt' },
+      body: JSON.stringify({ ...BODY, run: { runId: '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80', role: 'worker' } }),
+    });
+    expect(res.status).toBe(400);
+    expect(verifyJwtToken).not.toHaveBeenCalled();
+  });
+});
 
 describe('JWT rate limiting', () => {
   it('hands the calling client to the rate limiter, so its own cap applies', async () => {

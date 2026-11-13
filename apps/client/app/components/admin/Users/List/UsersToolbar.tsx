@@ -145,7 +145,7 @@ export function UsersToolbar({
         <AdminSearchInput
           value={search}
           onChange={onSearchChange}
-          label="Search name, email or user ID"
+          label="Search name, email, user ID or provider ID"
           data-testid="admin-users-search-input"
         />
         <Stack direction="row" alignItems="center" gap={1} sx={{ ml: { md: 'auto' } }}>

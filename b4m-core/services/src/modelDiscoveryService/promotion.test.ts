@@ -6,6 +6,7 @@ import {
   AWAITING_PRICE_REASON,
   NOT_INVOCABLE_REASON,
   PRICED_IN_BUILD_REASON,
+  LEGACY_PRICED_IN_BUILD_REASON,
   UNCORROBORATED_PRICE_REASON,
   evaluatePromotion,
 } from './promotion';
@@ -81,19 +82,24 @@ describe('evaluatePromotion', () => {
     expect(decision.autoDisabledReason).toBe(UNCORROBORATED_PRICE_REASON);
   });
 
-  it('words the denial as priced in this build when only a non-per-token literal stands behind it', () => {
-    const decision = evaluate({ hasTrustedPrice: false, awaitingPrice: 'build-literal' });
+  it("words a non-text model's denial as missing from this build's model tables", () => {
+    const decision = evaluate({
+      hasTrustedPrice: false,
+      awaitingPrice: 'no-build-literal',
+      record: testRecord({ type: 'image' }),
+    });
 
     expect(decision.blockedBy).toEqual(['no-trusted-price']);
     expect(decision.autoDisabledReason).toBe(PRICED_IN_BUILD_REASON);
+    expect(PRICED_IN_BUILD_REASON).toBe("discovered, no price in this build's model tables");
   });
 
-  it('does not let the priced-in-build flag change a verdict', () => {
-    expect(evaluate({ hasTrustedPrice: true, awaitingPrice: 'build-literal' })).toEqual({
+  it('does not let the no-build-literal flag change a verdict', () => {
+    expect(evaluate({ hasTrustedPrice: true, awaitingPrice: 'no-build-literal' })).toEqual({
       promote: true,
       blockedBy: [],
     });
-    expect(evaluate({ hasTrustedPrice: false, awaitingPrice: 'build-literal' }).promote).toBe(false);
+    expect(evaluate({ hasTrustedPrice: false, awaitingPrice: 'no-build-literal' }).promote).toBe(false);
   });
 
   it('does not let the uncorroborated flag change a verdict', () => {
@@ -192,6 +198,7 @@ describe('evaluatePromotion', () => {
       AWAITING_PRICE_REASON,
       UNCORROBORATED_PRICE_REASON,
       PRICED_IN_BUILD_REASON,
+      LEGACY_PRICED_IN_BUILD_REASON,
       AWAITING_APPROVAL_REASON,
       NOT_INVOCABLE_REASON,
     ];

@@ -2,11 +2,11 @@ import { fabFileRepository } from '@bike4mind/database/content';
 import { userRepository } from '@bike4mind/database/auth';
 import { lakeAccessEventRepository } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
+import { adminBypassLakeIds, grantingLakes, resolveAccessibleLakes } from '@bike4mind/server-utils/dataLakes/index';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { fileContentUrl } from '@server/files/browserFileSigner';
-import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
+import { fileContentUrl } from '@bike4mind/server-utils/files/browserFileSigner';
+import { holdsDataLakeReadScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { adminSettingsRepository } from '@bike4mind/database/infra';
 import type { IFabFileDocument } from '@bike4mind/common';
@@ -70,11 +70,10 @@ export async function listFilesByIds(req: Request, ids: string[], { browser = fa
         results.push(
           ...(await Promise.all(accessibleGrants.map(({ file }) => fabFilesService.generateSignedUrl(file, adapter))))
         );
-        // Best-effort audit write - the byIds twin of the single-file fallback in files/[id],
-        // batched into one event covering every lake-authorized file this bulk fetch actually
-        // served. Awaited (never rethrows - see recordLakeAccessEvent's doc comment): a per-request
-        // serverless route must not race a post-response freeze of the execution environment.
+        // One audit event for every lake-authorized file served here (twin of the files/[id] fallback);
+        // strict for an admin-bypass read.
         const resolvedLakeIds = [...new Set(accessibleGrants.flatMap(({ grantors }) => grantors.map(l => l.id)))];
+        const bypass = await adminBypassLakeIds(req, resolvedLakeIds);
         await dataLakeService.recordLakeAccessEvent(
           lakeAccessEventRepository,
           {
@@ -82,6 +81,7 @@ export async function listFilesByIds(req: Request, ids: string[], { browser = fa
             organizationId: normalizeId(req.user.organizationId),
             resolvedLakeIds,
             fileIds: accessibleGrants.map(({ file }) => file.id),
+            ...(bypass.length ? { adminBypassLakeIds: bypass } : {}),
             surface: 'data-lake-file-fallback',
           },
           req.logger,

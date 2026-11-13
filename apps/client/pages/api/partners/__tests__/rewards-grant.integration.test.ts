@@ -7,7 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
-const { mockValidate, mockFindById, mockRateLimit, mockGrant } = vi.hoisted(() => ({
+const { mockValidate, mockFindById, mockRateLimit, mockGrant, mockUserUpdateOne } = vi.hoisted(() => ({
+  mockUserUpdateOne: vi.fn().mockResolvedValue({ acknowledged: true }),
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
   mockRateLimit: vi.fn(),
@@ -65,7 +66,10 @@ vi.mock('@bike4mind/database', async orig => {
   return {
     ...actual,
     connectDB: vi.fn().mockResolvedValue(undefined),
-    User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindById(...a) }),
+    User: Object.assign(Object.create(RealUser), {
+      findById: (...a: unknown[]) => mockFindById(...a),
+      updateOne: (...a: unknown[]) => mockUserUpdateOne(...a),
+    }),
   };
 });
 
@@ -148,6 +152,20 @@ describe('POST /api/partners/rewards/grant', () => {
   });
 
   describe('a key holding rewards:grant', () => {
+    it('counts the call as a use of the key but never stamps the partner account active', async () => {
+      mockUserUpdateOne.mockClear();
+      const { req, res } = fire();
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockValidate).toHaveBeenCalledWith(expect.any(String), expect.anything(), { recordUse: true });
+      expect(mockUserUpdateOne).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ $set: expect.objectContaining({ lastActiveAt: expect.any(Date) }) }),
+        expect.anything()
+      );
+    });
+
     it('pays through the service with the parsed body and answers its four fields', async () => {
       const { req, res } = fire();
       await handler(req, res);

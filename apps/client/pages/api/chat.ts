@@ -23,7 +23,7 @@ import {
   getSharedTokenizer,
   isChatModelUsable,
   resolveDefaultChatModel,
-} from '@server/utils/chatCompletionDefaults';
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import {
   adminSettingsRepository,
   agentRepository,
@@ -57,11 +57,12 @@ import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
-import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
-import { requestTurnAuth } from '@server/auth/turnAuth';
+import { apiKeyBillingOrgId, resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
+import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
+import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
@@ -192,7 +193,12 @@ async function handleChat(
   // actually belongs to it (resolveActiveOrg; throws 403/404 otherwise) and bill + scope
   // team-wide prompts to it; when omitted, the turn is personal (CreditHolderType.User). This
   // is what lets an org member whose org pool is empty still spend their own credits.
-  const organizationId = await resolveActiveOrg(req, simplifiedRequest.organizationId);
+  // An org-billed API key is the exception: its org pays whether or not the body names one, the
+  // same rule as sseRoute/wsRoute and the v1 routes (resolveRequestBillingOrgId). An org-owned key's
+  // service account is on no roster, so resolveActiveOrg's membership check would refuse it.
+  const organizationId = apiKeyBillingOrgId(req.apiKeyInfo)
+    ? ((await resolveRequestBillingOrgId(req, simplifiedRequest.organizationId)) ?? undefined)
+    : await resolveActiveOrg(req, simplifiedRequest.organizationId);
 
   // Refuse capped turns before creating a notebook or quest.
   await checkFreeTierDailySpendCap({

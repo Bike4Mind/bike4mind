@@ -6,7 +6,7 @@ import { dataLakeRepository, fabFileRepository, fileTagRepository, userRepositor
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { FILES_WRITE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 

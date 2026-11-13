@@ -65,7 +65,7 @@ Five tones with one meaning each, used everywhere. They differ in lightness as w
 | ------- | ----------------------- | ------------------------------------- | --------------------- | --------------------- |
 | good    | Healthy, allowed        | Active, Verified, Success             | `#166534` / `#E7F5EC` | `#BBF7D0` / `#14532D` |
 | info    | New or neutral-notable  | New, Pro                              | `#3730A3` / `#E8EEFF` | `#C7D2FE` / `#312E81` |
-| warn    | Needs a look            | Medium risk                           | `#8A4B00` / `#FFF1DE` | `#FED7AA` / `#7C2D12` |
+| warn    | Scan: needs a look      | Medium risk                           | `#8A4B00` / `#FFF1DE` | `#FED7AA` / `#7C2D12` |
 | bad     | Blocked or failing      | Suspended, High risk, Blocked sign-in | `#9F1C12` / `#FDECEA` | `#FECACA` / `#7F1D1D` |
 | neutral | Inactive, informational | Revoked, Free, Low risk               | `#52525B` / `#F1F1EE` | `#E4E4E7` / `#3F3F46` |
 
@@ -232,7 +232,7 @@ Build new admin pages from these, imported from `apps/client/app/components/admi
 ### Cards
 
 - A card is one `surface` with a 1 px `border`, 12 px radius, 16 px padding and no shadow. Group facts in a `SectionCard` and form fields in a `SettingsSection`.
-- **No card in a card.** Inside a card, separate groups with a 15 / 600 subheading, a `border` hairline or 16 px of space, never another bordered or grey box. The only surfaces allowed inside a card are a `DataTable`, a chart, a code block and an `Alert`.
+- **No card in a card.** Inside a card, separate groups with a 15 / 600 subheading, a `border` hairline or 16 px of space, never another bordered or grey box. The only surfaces allowed inside a card are a `DataTable`, a chart, a code block and an `Alert`. A `DataTable` that is a card's body (`SectionCard` with `body="custom"`) passes `framed={false}`, so the card's edge is the table's edge and there is no border or radius inside it.
 - No tinted backgrounds or colored borders on a card to signal state; put a `StatusChip` or an `Alert` in it instead.
 - Key numbers go in one `StatStrip`, not in separate tiles. A stat value is `ink` (`valueColor` only when the value is itself a status, such as a risk level); tiles are never solid green, orange or pastel, and carry no decorative icon.
 

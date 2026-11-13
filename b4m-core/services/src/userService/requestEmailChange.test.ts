@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { requestEmailChange, RequestEmailChangeParameters } from './requestEmailChange';
 import { EMAIL_VERIFICATION_TOKEN_EXPIRY } from './sendEmailVerification';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 
 const baseParams: RequestEmailChangeParameters = {
   userId: 'userId123',
@@ -42,6 +42,13 @@ describe('requestEmailChange', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('refuses a test persona, whose server-built address must not be swapped for a real one', async () => {
+    mockUser.isPersona = true;
+    await expect(requestEmailChange(baseParams, mockAdapters)).rejects.toThrow(ForbiddenError);
+    expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+    expect(mockAdapters.mailer.sendEmailChangeVerification).not.toHaveBeenCalled();
   });
 
   it('should request email change with new token', async () => {

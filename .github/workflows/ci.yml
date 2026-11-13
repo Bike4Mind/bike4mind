@@ -15,10 +15,6 @@ on:
     # the per-PR (merge-base) diff and skips the build/test legs on non-deployable
     # changes, while still reporting the required CI Complete/Run Tests checks (a
     # paths-ignore-skipped workflow never reports them and hangs the PR).
-  # A queue entry re-proves integration only (build, typecheck, tests). Jobs that
-  # check the PR's own diff already passed on the PR head and skip on merge_group.
-  merge_group:
-    branches: [main]
 
 env:
   NODE_VERSION: '24'
@@ -26,7 +22,7 @@ env:
 # Cancel superseded runs for the same PR so outdated commits stop holding scarce
 # ubuntu-latest-m runner slots — the dominant CI-queue bottleneck under heavy PR
 # concurrency (jobs were waiting ~15 min for a runner while executing in ~3 min).
-# PR-only: pushes to main and merge_group runs are NEVER cancelled.
+# PR-only: pushes to main are NEVER cancelled.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -50,7 +46,7 @@ jobs:
   # are ungated and still run on drafts.
   changes:
     # Root of the whole DAG.
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     outputs:
@@ -74,7 +70,7 @@ jobs:
   core-build:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Core Build
     timeout-minutes: 15
     permissions:
@@ -152,7 +148,7 @@ jobs:
   # parallel and still gate merges through `CI Complete`.
   repo-guards:
     needs: changes
-    if: needs.changes.outputs.deployable == 'true' && github.event_name != 'merge_group'
+    if: needs.changes.outputs.deployable == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Repo Guards
     timeout-minutes: 10
@@ -185,7 +181,7 @@ jobs:
       - name: Resolve base for the ASCII checks
         id: ascii-base
         env:
-          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: echo "base=$(bash scripts/resolve-guard-base.sh)" >> "$GITHUB_OUTPUT"
 
@@ -201,6 +197,17 @@ jobs:
         run: bash scripts/check-no-smart-punctuation.sh --changed "$SMART_PUNCTUATION_BASE"
         env:
           SMART_PUNCTUATION_BASE: ${{ steps.ascii-base.outputs.base }}
+
+      # Added core migrations must carry a generator-made id (fresh UTC timestamp), so two PRs
+      # cannot pick the same one. PR-only: the PR head gives the real fork point, and on push the
+      # squash commit would make a long-lived PR's id look stale after it already passed here.
+      # The whole-directory uniqueness test in packages/scripts still runs on push.
+      - name: Check added core migration ids are generated
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-migration-ids.mjs --base "$MIGRATION_IDS_BASE" --head "$MIGRATION_IDS_HEAD"
+        env:
+          MIGRATION_IDS_BASE: ${{ steps.ascii-base.outputs.base }}
+          MIGRATION_IDS_HEAD: ${{ github.event.pull_request.head.sha }}
 
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
@@ -262,7 +269,6 @@ jobs:
   # (docs, `**/*.md`, `**/.env.example`, docs-site/) skips repo-guards, and those are exactly the
   # paths a pasted credential lands in. checkSecretScanJobWired.test.ts pins this.
   secret-scan:
-    if: github.event_name != 'merge_group'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Secret Scan
     timeout-minutes: 10
@@ -278,7 +284,7 @@ jobs:
       - name: Resolve base for the range scan
         id: base
         env:
-          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: echo "base=$(bash scripts/resolve-guard-base.sh)" >> "$GITHUB_OUTPUT"
 
@@ -320,7 +326,6 @@ jobs:
   # The restricted-term list is not available here (it is a git-ignored local file), so that rule
   # is skipped and the Restricted Terms workflow remains the authority for it.
   leak-shapes:
-    if: github.event_name != 'merge_group'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Leak Shapes
     timeout-minutes: 10
@@ -336,7 +341,7 @@ jobs:
       - name: Resolve base for the leak-shapes check
         id: base
         env:
-          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: echo "base=$(bash scripts/resolve-guard-base.sh)" >> "$GITHUB_OUTPUT"
 
@@ -347,7 +352,6 @@ jobs:
 
   lint:
     needs: core-build
-    if: github.event_name != 'merge_group'
     # MEDIUM, not the 2-core tier: typed linting (b4m/no-raw-entity-response) holds the client
     # TypeScript program, so ESLint needs 3-4 GB of heap - past Node's RAM-derived default on a
     # 2-core runner. The heap is pinned in the root lint:* scripts, not inherited from the runner.
@@ -422,7 +426,7 @@ jobs:
   # core-build artifact nor SST types - it depends on `changes` directly.
   openapi:
     needs: changes
-    if: needs.changes.outputs.deployable == 'true' && github.event_name != 'merge_group'
+    if: needs.changes.outputs.deployable == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: OpenAPI Spec
     timeout-minutes: 10
@@ -513,11 +517,8 @@ jobs:
     # 4-core tier for jobs that build core or run a full-pool test suite; the plain
     # RUNNER_LABEL default is the 2-core tier for API, guard and shell-only jobs, and for any
     # leg here marked `tier: light` (none today: the integration lanes ride medium legs).
-    # Size full-pool worker budgets for 4 cores. On merge_group events every job prefers the
-    # matching *_QUEUE variable, so the queue can run on a separately capped pool; an unset
-    # *_QUEUE variable falls through to the PR label. The isolation is only as real as the
-    # variable: a *_QUEUE label equal to its PR label shares the PR pool.
-    runs-on: ${{ matrix.shard.tier == 'light' && (github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m') || (github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m') }}
+    # Size full-pool worker budgets for 4 cores.
+    runs-on: ${{ matrix.shard.tier == 'light' && (vars.RUNNER_LABEL || 'ubuntu-latest-m') || (vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m') }}
     name: Run Tests (${{ matrix.shard.name }})
     # Hard ceiling, not a budget: it costs nothing when a shard finishes early, and its only
     # job is to kill a genuine hang. It was 20, which the client shard's own runtime drifted
@@ -718,7 +719,7 @@ jobs:
 
       # Turborepo's local cache of this leg's passing package test tasks: a package whose hash
       # (its inputs plus .turbo/test-context, see scripts/turbo-test-cache.mjs) matches a cached
-      # pass is skipped. Read-only here; only push-to-main and merge_group runs save (the save
+      # pass is skipped. Read-only here; only push-to-main runs save (the save
       # step below), so a pull_request run can never put a result where another ref reads it -
       # GitHub scopes a PR's caches to that PR anyway, and main reads only main's.
       # `restore-keys` takes the newest save for this leg; the run attempt keeps a re-run's save
@@ -905,11 +906,11 @@ jobs:
 
       # Trusted refs only: a pull_request run restores but never saves (see the restore step).
       # Saved even when a package failed - turbo caches passing tasks only, so a re-run of a
-      # flaky queue entry re-runs just the failed package. Pruned first to the entries this
+      # flaky main run re-runs just the failed package. Pruned first to the entries this
       # job's runs used, so the cache holds the leg's current state and does not grow per save.
       - name: Prune turbo test cache
         id: prune-turbo-cache
-        if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'merge_group') && hashFiles('.turbo/runs/*.json') != '' }}
+        if: ${{ !cancelled() && github.event_name == 'push' && hashFiles('.turbo/runs/*.json') != '' }}
         run: node scripts/turbo-test-cache.mjs prune .turbo/runs .turbo/cache
 
       - name: Save turbo test cache
@@ -958,7 +959,7 @@ jobs:
     # Keep the block scalar: a bare `if: !cancelled() && ...` is a YAML tag indicator.
     if: |
       !cancelled() && needs.changes.outputs.deployable == 'true'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     steps:
@@ -984,7 +985,6 @@ jobs:
   cli-e2e:
     name: CLI e2e harness
     needs: core-build
-    if: github.event_name != 'merge_group'
     # Standard runner: builds the CLI and runs the bundle-baseline harness — a
     # light, I/O-bound leg. Off the capped ubuntu-latest-m pool to free a slot.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
@@ -1096,7 +1096,7 @@ jobs:
       !cancelled() &&
       needs.changes.outputs.docs-changed == 'true' &&
       needs.core-build.result != 'failure'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -1170,7 +1170,7 @@ jobs:
     name: Published Declarations
     needs: [changes, core-build]
     if: needs.changes.outputs.published-changed == 'true'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -1242,13 +1242,13 @@ jobs:
 
   # Pre-merge sensitive-term scan: a private workflow scans docs-site PRs and posts a `docs/sensitive-scan`
   # commit status on the PR head. This job turns that status into a gate through `ci-complete`, since a
-  # required status that only some PRs ever receive would block every other PR. Merge queue runs skip it
+  # required status that only some PRs ever receive would block every other PR. Push runs skip it
   # (the PR head was already gated). Fails closed if the status never arrives.
   docs-scan-gate:
     name: Docs Sensitive Scan
     needs: changes
     if: needs.changes.outputs.docs-changed == 'true' && github.event_name == 'pull_request'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -1325,7 +1325,7 @@ jobs:
       - docs-scan-gate
       - published-dts
     if: ${{ !cancelled() }}
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     steps:
@@ -1353,7 +1353,7 @@ jobs:
             exit 1
           fi
           # A CI leg that genuinely failed flips the check red. Skipped
-          # (non-deployable change, or a PR-only job on merge_group) is treated as passing.
+          # (non-deployable change, or a PR-only job on a push run) is treated as passing.
           for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$SECRET_SCAN" "$LEAK_SHAPES" "$LINT" "$OPENAPI" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."

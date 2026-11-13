@@ -5,6 +5,8 @@ import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 import { readSignInOrigin } from '@server/auth/signInSecondFactor';
 import { isFreshSignIn, stepUpGate } from '@server/auth/stepUp';
+import { MfaEnrollmentEvents } from '@bike4mind/common';
+import { recordForcedEnrollmentStep } from '@server/auth/mfaEnrollmentFunnel';
 
 // Sign-in enrollment has just proved the first factor, so it skips step-up: an mfaPending token
 // (email-code sign-in) or a session an interactive sign-in minted moments ago (SSO under forced
@@ -44,6 +46,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
           { user: freshUser, appName: process.env.APP_NAME || '' },
           userRepository
         );
+        // Funnel only: the enrollment screen has its secret and is on screen. Never throws.
+        await recordForcedEnrollmentStep(req, freshUser, MfaEnrollmentEvents.SHOWN);
 
         res.json(result);
       } catch (error: any) {

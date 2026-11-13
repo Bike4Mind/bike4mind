@@ -21,15 +21,18 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: {},
   shadowDetectionRepository: {},
 }));
-vi.mock('@server/admin/usersBulk/adapters', () => ({ usersBulkExecuteDepsFor: h.depsFor, usersBulkResolveDeps: {} }));
-vi.mock('@server/admin/usersBulk/execute', () => ({ executeAdminUsersBulk: h.execute }));
-vi.mock('@server/admin/usersBulk/resolve', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/admin/usersBulk/resolve')>()),
+vi.mock('@bike4mind/server-utils/admin/usersBulk/adapters', () => ({
+  usersBulkExecuteDepsFor: h.depsFor,
+  usersBulkResolveDeps: {},
+}));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/execute', () => ({ executeAdminUsersBulk: h.execute }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/resolve', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/admin/usersBulk/resolve')>()),
   resolveAdminUsersBulk: h.resolve,
 }));
 vi.mock('@workers/utils/systemAuditWriter', () => ({ systemAuditWriter: h.writer }));
 
-import { cohortHashOf } from '@server/admin/usersBulk/resolve';
+import { cohortHashOf } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 import {
   AUTO_CONTAINMENT_ACTOR,
   AUTO_CONTAINMENT_ACTOR_ID,
@@ -47,6 +50,7 @@ const assessment: AbuseAssessmentItem = {
   result: 'abuse',
   probabilities: [],
   confidence: 0.97,
+  reasons: [],
   model: 'jev-1.13.0',
   modelVersion: null,
   policyVersion: 1,

@@ -127,7 +127,9 @@ describe('SignInsTab', () => {
     expect(record).toHaveTextContent('203.0.113.7');
     expect(record).toHaveTextContent('AS64500 Example Hosting (hosting network)');
     expect(record).toHaveTextContent('Mozilla/5.0 test');
-    expect(await within(record).findByText('No other account from this client within 7 days')).toBeInTheDocument();
+    expect(
+      await within(record).findByText('No other signup with this JA4 fingerprint within 7 days')
+    ).toBeInTheDocument();
 
     fireEvent.click(within(record).getByTestId('user-signup-domain-link'));
     expect(mocks.navigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'users', groupBy: 'emailDomain' } });
@@ -151,7 +153,8 @@ describe('SignInsTab', () => {
     renderTab();
 
     const cluster = await screen.findByTestId('user-signup-cluster');
-    expect(cluster).toHaveTextContent('1 other account from this client within 7 days');
+    expect(cluster).toHaveTextContent('1 other signup with matching JA4 within 7 days');
+    expect(cluster).toHaveTextContent('does not prove the same device or operator');
     fireEvent.click(within(cluster).getByTestId('user-signup-cluster-link'));
     expect(mocks.navigate).toHaveBeenCalledWith({ to: '/admin/users/$userId', params: { userId: 'other-1' } });
   });

@@ -46,6 +46,28 @@ const mockDlqUrls = vi.hoisted(() => ({
   'github-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueueDLQ',
   'github-lake-revoke': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueueDLQ',
   'publish-thumbnail': 'https://sqs.us-east-2.amazonaws.com/123456789/publishThumbnailQueueDLQ',
+  ...Object.fromEntries(
+    [
+      'young-account-spend-alert',
+      'api-probe-detector',
+      'image-moderation-review-sweep',
+      'spend-monitor',
+      'signup-grant-held-release',
+      'revenue-snapshot',
+      'subscription-reconciliation',
+      'account-deletion-sweep',
+      'fab-file-moderation',
+      'telemetry-alert-rule',
+      'session-enrichment',
+      'billing-events',
+      'email-events',
+      'push-events',
+      'notebook-events',
+      'completion-events',
+      'business-metric-alerts',
+      'alarm-handler',
+    ].map(label => [label, `https://sqs.us-east-2.amazonaws.com/123456789/${label}`])
+  ),
   'generated-media-purge': 'https://sqs.us-east-2.amazonaws.com/123456789/generatedMediaPurgeQueueDLQ',
 }));
 
@@ -110,13 +132,17 @@ import {
   getSourceQueueUrl,
   getDlqUrl,
   missingQueueHelp,
+  entityAt,
+  firstEntity,
+  noEntity,
+  describeDlqMessage,
 } from './dlqRegistry';
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
     it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(43);
+      expect(registry).toHaveLength(61);
     });
 
     it('each entry has required fields', () => {
@@ -124,7 +150,8 @@ describe('dlqRegistry', () => {
         expect(entry.label).toBeTruthy();
         expect(entry.displayName).toBeTruthy();
         expect(entry.application).toBeTruthy();
-        expect(entry.sourceQueue).toBeTruthy();
+        if (entry.sourceQueue === null) expect(entry.replay).toBe('unsafe');
+        else expect(entry.sourceQueue).toBeTruthy();
       }
     });
 
@@ -144,6 +171,7 @@ describe('dlqRegistry', () => {
 
     it('getSourceQueueUrl returns source URL from Resource binding', () => {
       for (const entry of getDlqRegistry()) {
+        if (entry.sourceQueue === null) continue;
         const sourceUrl = getSourceQueueUrl(entry.sourceQueue as Parameters<typeof getSourceQueueUrl>[0]);
         expect(typeof sourceUrl).toBe('string');
         expect(sourceUrl).toContain('sqs.us-east-2.amazonaws.com');
@@ -251,12 +279,45 @@ describe('dlqUrls Linkable', () => {
     const webTs = readFileSync(fileURLToPath(new URL('../../../../infra/web.ts', import.meta.url)), 'utf8');
     const block = webTs.slice(webTs.indexOf("new sst.Linkable('dlqUrls'"));
     const properties = block.slice(block.indexOf('{'), block.indexOf('\n});'));
-    const linkableKeys = [...properties.matchAll(/^\s+'([a-z0-9-]+)':/gm)].map(m => m[1]).sort();
+    const linkableKeys = [...properties.matchAll(/['"]([a-z0-9-]+)['"]:/g)].map(m => m[1]).sort();
 
     expect(linkableKeys).toEqual(
       getDlqRegistry()
         .map(entry => entry.label)
         .sort()
     );
+  });
+});
+
+describe('dead-letter message describe', () => {
+  it('every core entry describes its messages', () => {
+    const undescribed = coreDlqDescriptors()
+      .filter(entry => typeof entry.describe !== 'function')
+      .map(entry => entry.label);
+    expect(undescribed).toEqual([]);
+  });
+
+  it('entityAt reads the first dotted path that holds a string or number', () => {
+    const describe = entityAt('Quest', 'payload.questId', 'questId');
+    expect(describe({ payload: { questId: 'q1' } })).toEqual({ type: 'Quest', id: 'q1' });
+    expect(describe({ questId: 42 })).toEqual({ type: 'Quest', id: '42' });
+    expect(entityAt('Notebook', 'sessionIds.0')({ sessionIds: ['s1', 's2'] })).toEqual({ type: 'Notebook', id: 's1' });
+    expect(describe({ payload: {} })).toBeNull();
+    expect(describe('not an object')).toBeNull();
+  });
+
+  it('firstEntity falls through to the next describer', () => {
+    const describe = firstEntity(entityAt('Invoice', 'invoiceId'), entityAt('Subscription', 'subscriptionId'));
+    expect(describe({ subscriptionId: 'sub_1' })).toEqual({ type: 'Subscription', id: 'sub_1' });
+    expect(describe({})).toBeNull();
+    expect(noEntity({ anything: 'x' })).toBeNull();
+  });
+
+  it('describeDlqMessage parses the body and tolerates non-JSON or a missing describe', () => {
+    const entry = getDlqByLabel('fab-file-vectorize')!;
+    expect(describeDlqMessage(entry, '{"fabFileId":"f1"}')).toEqual({ type: 'File', id: 'f1' });
+    expect(describeDlqMessage(entry, 'not json')).toBeNull();
+    expect(describeDlqMessage(entry, undefined)).toBeNull();
+    expect(describeDlqMessage({ ...entry, describe: undefined }, '{"fabFileId":"f1"}')).toBeNull();
   });
 });

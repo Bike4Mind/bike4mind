@@ -31,6 +31,9 @@ const ResearchRunLeversSchema = {
   reviewDomains: { type: [String], default: [] },
   // No default: a snapshot taken before the tiers has none, and the executor upgrades it.
   unlistedSources: { type: String, enum: RESEARCH_UNLISTED_SOURCES },
+  // No default on the snapshot: one taken before auto-admit has neither, and the executor upgrades it.
+  autoAdmitTrusted: { type: Boolean },
+  maxAutoAdmits: { type: Number },
   allowedDomains: { type: [String], default: [] },
   blockedDomains: { type: [String], default: [] },
   minRelevance: { type: Number, required: true },
@@ -45,6 +48,8 @@ const ResearchRunTotalsSchema = {
   judgeFailed: { type: Number, default: 0 },
   fetchFailed: { type: Number, default: 0 },
   proposed: { type: Number, default: 0 },
+  autoAdmitted: { type: Number, default: 0 },
+  autoAdmitSkipped: { type: Number, default: 0 },
   duplicatePending: { type: Number, default: 0 },
   alreadyInLake: { type: Number, default: 0 },
   suppressedByTombstone: { type: Number, default: 0 },

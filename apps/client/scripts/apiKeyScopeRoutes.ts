@@ -5,7 +5,7 @@
  * every route a scope opens is listed under it).
  *
  * Node-only and test-only: it walks pages/ with node:fs and imports the server scope modules. A caller
- * must `vi.mock('@bike4mind/services')` and `vi.mock('@server/auth/turnAuth')`, so the data-lake
+ * must `vi.mock('@bike4mind/services')` and `vi.mock('@bike4mind/server-utils/auth/turnAuth')`, so the data-lake
  * scope module does not load the services graph for a few gate lists.
  *
  * A gate is the set of scopes one check admits (any-of). In-handler checks are attributed per verb
@@ -17,7 +17,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { ApiKeyScope, CONTRACTS, isBuiltInApiKeyScope } from '@bike4mind/common';
 import * as agentScopes from '@server/agents/agentScopes';
-import * as dataLakeScopes from '@server/dataLakes/dataLakeScopes';
+import * as dataLakeScopes from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import * as fileScopes from '@bike4mind/server-utils/files/fileScopes';
 import * as projectScopes from '@server/projects/projectScopes';
 
@@ -43,10 +43,10 @@ export const isOverlayPath = (p: string) => OVERLAY_PATH_PREFIXES.some(prefix =>
 // Files whose exported functions are scope-check helpers a route may call instead of naming a list.
 const HELPER_SOURCES = [
   'server/agents/agentScopes.ts',
-  'server/dataLakes/dataLakeScopes.ts',
+  '../../packages/server-utils/src/dataLakes/dataLakeScopes.ts',
   '../../packages/server-utils/src/files/fileScopes.ts',
   'server/projects/projectScopes.ts',
-  'server/cli/auth.ts',
+  '../../packages/server-utils/src/cli/auth.ts',
 ];
 
 // Helpers that check scopes by hand (`.includes` + throw) rather than through an enforcing site, so
@@ -139,10 +139,20 @@ export function gatesIn(code: string, helpers: ReadonlyMap<string, Gate>): Gate[
   return gates;
 }
 
+/** A `baseApi` door as written: its raw gate text and the scopes that text resolves to (possibly none). */
+export type DoorSite = { raw: string; scopes: Gate };
+
+/** Every `baseApi` door in `code`, including ones whose gate resolves to no scope. */
+export function doorSitesIn(code: string): DoorSite[] {
+  const resolve = listResolver(code);
+  return [...code.matchAll(DOOR_SITE)].map(([, raw]) => ({ raw, scopes: resolve(raw) }));
+}
+
 /** The `baseApi` doors in `code`. A file may hold several (one per handler), so any one may admit. */
 export function doorsIn(code: string): Gate[] {
-  const resolve = listResolver(code);
-  return [...code.matchAll(DOOR_SITE)].map(([, expr]) => resolve(expr)).filter(door => door.size > 0);
+  return doorSitesIn(code)
+    .map(door => door.scopes)
+    .filter(door => door.size > 0);
 }
 
 /**
@@ -264,6 +274,13 @@ export function resolvePageFile(routePath: string): string | undefined {
   return walk(PAGES_DIR, segments);
 }
 
+/** True when `code` calls `baseApi` and every call declares `auth: 'jwtOnly'`, so no handler accepts an API key. */
+export function admitsNoApiKey(code: string): boolean {
+  const calls = code.match(/\bbaseApi\(/g)?.length ?? 0;
+  const jwtOnlyCalls = code.match(/\bbaseApi\(\s*\{[^{}]*?\bauth\s*:\s*['"]jwtOnly['"]/g)?.length ?? 0;
+  return calls > 0 && jwtOnlyCalls === calls;
+}
+
 /** How one method on one route is gated: a contract door (one method) or one source file read for that method. */
 export type RouteGates = { key: string; doors: Gate[]; gates: Gate[] } | { key?: undefined; problem: string };
 
@@ -285,6 +302,9 @@ export function gatesForRoute(method: string, routePath: string): RouteGates {
   if (!file) return { problem: 'no contract or pages/ route serves this path' };
   if (!offPages && !servesVerb(source, method))
     return { problem: `${path.relative(CLIENT_DIR, file)} does not serve this method` };
+  // A jwtOnly route never installs the api-key chain (baseApi), so no key gets through whatever
+  // `requiredScopes` it also declares. With no gate at all, no scope opens it.
+  if (!offPages && admitsNoApiKey(source)) return { key: path.relative(CLIENT_DIR, file), doors: [], gates: [] };
   return { key: path.relative(CLIENT_DIR, file), doors: offPages ? [] : doorsIn(source), gates: fileGates };
 }
 

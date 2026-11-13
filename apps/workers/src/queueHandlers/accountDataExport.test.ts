@@ -1,4 +1,7 @@
+import { readFileSync } from 'fs';
 import { readFile } from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { Readable } from 'stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import yauzl from 'yauzl';
@@ -29,17 +32,40 @@ const h = vi.hoisted(() => ({
   agentFind: vi.fn(),
   projectFind: vi.fn(),
   readProfile: vi.fn(),
+  personalOrganizations: vi.fn(),
+  sendToClient: vi.fn(),
+  assertClassified: vi.fn(),
+  exportSubject: vi.fn(),
+  recordModels: [] as string[],
+  records: vi.fn(),
+  sendToQueue: vi.fn(),
+  recordAdminAction: vi.fn(),
+  resource: {
+    accountDataExportQueue: { url: 'https://sqs.example/account-data-export' } as { url?: string },
+    websocket: { managementEndpoint: 'https://ws.example.com' },
+  },
+  failedReferences: vi.fn(),
   notebooks: [] as Array<{ id: string; name: string; chatHistory?: Array<{ images?: string[] }> }>,
 }));
 
 vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
+vi.mock('sst', () => ({ Resource: h.resource }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
+}));
 vi.mock('@bike4mind/utils', () => ({
   secureParameters: (obj: unknown, schema: { parse: (value: unknown) => unknown }) => schema.parse(obj),
 }));
 vi.mock('@bike4mind/database', () => ({
+  mongoose: {
+    model: () => ({ find: () => ({ lean: h.personalOrganizations }) }),
+    modelNames: () => ['User'],
+  },
   userRepository: { findById: h.userFindById },
+  adminAuditLogRepository: { append: vi.fn() },
   User: {
     findOneAndUpdate: (...args: unknown[]) => ({ lean: () => h.leaseClaim(...args) }),
     exists: h.leaseExists,
@@ -58,7 +84,28 @@ vi.mock('@bike4mind/database', () => ({
   memoryLedgerRepository: {},
   memoryPrincipalKeyRepository: {},
 }));
+
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({}));
+vi.mock('@server/models/UserSubscription', () => ({}));
+vi.mock('@server/dataSubject/subjectRecordExport', () => ({
+  assertEveryModelClassified: h.assertClassified,
+  SubjectRecordExport: class {
+    async walkOrder() {
+      return h.recordModels;
+    }
+    failedReferences(model: string) {
+      return h.failedReferences(model) ?? [];
+    }
+    constructor(subject: unknown) {
+      h.exportSubject(subject);
+    }
+    async *records(model: string) {
+      yield* await h.records(model);
+    }
+  },
+}));
 vi.mock('@bike4mind/services', () => ({
+  adminAuditService: { recordAdminAction: h.recordAdminAction },
   notebookExportService: {
     NotebookExportService: class {
       async *buildNotebooks() {
@@ -84,17 +131,41 @@ vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
   createLedgerMemoryStore: () => ({ readProfile: h.readProfile }),
 }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.sendToClient }));
+vi.mock('./accountDataExportCollections', () => ({
+  accountArchiveAdapters: [
+    {
+      name: 'ToolModel',
+      collect: async () => ({ records: Readable.from(['{"id":"tool-1"}\n']), count: () => 1 }),
+    },
+  ],
+}));
 
 import { ACCOUNT_DATA_EXPORT_TTL_MS } from '@bike4mind/server-utils/utils/accountDataExport';
-import { dispatch, MAX_FILE_BYTES } from './accountDataExport';
+import { ADMIN_DATA_EXPORT_GIVE_UP_MS } from '@server/dataSubject/adminDataExports';
+import {
+  dispatch,
+  LEASE_WAIT_DELAY_SECONDS,
+  LEASE_WAITS_PER_REDELIVERY,
+  MAX_FILE_BYTES,
+  MAX_LEASE_WAITS,
+} from './accountDataExport';
+import { MAX_RECEIVE_COUNT, RUN_BUDGET_MS, VISIBILITY_TIMEOUT_SECONDS } from '../selfhost/registerRedrivenQueue';
 
 const logger = { updateMetadata: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const FULL_BUDGET_MS = 15 * 60 * 1000;
 let remainingMs: () => number = () => FULL_BUDGET_MS;
 const context = { getRemainingTimeInMillis: () => remainingMs() } as Context;
-const run = (body: unknown = { exportJobId: JOB_ID, userId: USER_ID }) =>
+const run = (body: unknown = { exportJobId: JOB_ID, userId: USER_ID }, receiveCount?: number) =>
   (dispatch as unknown as (event: SQSEvent, context: Context, logger: unknown) => Promise<void>)(
-    { Records: [{ body: JSON.stringify(body) }] } as SQSEvent,
+    {
+      Records: [
+        {
+          body: JSON.stringify(body),
+          ...(receiveCount !== undefined && { attributes: { ApproximateReceiveCount: String(receiveCount) } }),
+        },
+      ],
+    } as SQSEvent,
     context,
     logger
   );
@@ -126,7 +197,9 @@ const notFound = () => Object.assign(new Error('Not Found'), { name: 'NotFound' 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.failedReferences.mockReset();
   h.leaseClaim.mockResolvedValue({ email: 'ada@example.com' });
+  h.personalOrganizations.mockResolvedValue([]);
   h.leaseRenew.mockResolvedValue({ matchedCount: 1 });
   h.leaseExists.mockResolvedValue({ _id: USER_ID });
   process.env.APP_URL = 'https://app.example.com/';
@@ -204,9 +277,11 @@ describe('account data export worker', () => {
       'agents.json',
       'artifacts/artifact_1-Plan.json',
       'artifacts/index.json',
+      'collections/ToolModel.jsonl',
       'files/f1-notes.txt',
       'files/f2-notes.txt',
       'files/index.json',
+      'manifest.json',
       'memories.json',
       'notebooks/index.json',
       'notebooks/nb-1-Trip_plans.json',
@@ -217,6 +292,15 @@ describe('account data export worker', () => {
     const profile = entries.get('profile.json')!;
     expect(JSON.parse(profile)).toMatchObject({ id: USER_ID, email: 'ada@example.com' });
     expect(profile).not.toContain('must-not-ship');
+    expect(entries.get('collections/ToolModel.jsonl')).toBe('{"id":"tool-1"}\n');
+    const manifest = JSON.parse(entries.get('manifest.json')!);
+    expect(manifest.completeness).toBe('partial');
+    expect(manifest.collections).toContainEqual({
+      name: 'ToolModel',
+      path: 'collections/ToolModel.jsonl',
+      count: 1,
+      representation: 'metadata',
+    });
 
     expect(entries.get('files/f1-notes.txt')).toBe('file-bytes');
     const index = JSON.parse(entries.get('files/index.json')!);
@@ -240,6 +324,10 @@ describe('account data export worker', () => {
         body: expect.stringContaining(`https://app.example.com/account-data-export/${JOB_ID}`),
       })
     );
+    expect(h.sendToClient).toHaveBeenCalledWith(USER_ID, 'https://ws.example.com', {
+      action: 'account_data_export_ready',
+      exportJobId: JOB_ID,
+    });
   });
 
   describe('notebook images', () => {
@@ -401,8 +489,27 @@ describe('account data export worker', () => {
       { id: 'artifact_1', title: 'Plan', type: 'markdown', omitted: 'time_limit' },
     ]);
     expect(entries.has('artifacts/artifact_1-Plan.json')).toBe(false);
+    expect(entries.has('collections/ToolModel.jsonl')).toBe(false);
+    expect(JSON.parse(entries.get('manifest.json')!).collections).toContainEqual({
+      name: 'ToolModel',
+      count: 0,
+      representation: 'metadata',
+      omitted: 'time_limit',
+    });
     expect(h.uploadFile).toHaveBeenCalledOnce();
     expect(h.publish).toHaveBeenCalledOnce();
+  });
+
+  it('still completes and emails once when the websocket notification fails', async () => {
+    h.sendToClient.mockRejectedValueOnce(new Error('gone'));
+
+    await run();
+
+    expect(h.publish).toHaveBeenCalledOnce();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Account data export: websocket notification failed',
+      expect.objectContaining({ error: expect.any(Error) })
+    );
   });
 
   it('only re-sends the email when the export already exists', async () => {
@@ -491,6 +598,7 @@ describe('account data export worker', () => {
 
     expect(h.getMetadata).not.toHaveBeenCalled();
     expect(h.publish).not.toHaveBeenCalled();
+    expect(h.recordAdminAction).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed job id', async () => {
@@ -511,6 +619,7 @@ describe('account data export worker', () => {
     expect(h.leaseClaim).not.toHaveBeenCalled();
     expect(h.permanentDelete).toHaveBeenCalledTimes(2);
     expect(h.permanentDelete).toHaveBeenCalledWith(KEY);
+    expect(h.recordAdminAction).not.toHaveBeenCalled();
   });
 
   it('atomically excludes the purge and concurrent exports, then releases only its own lease', async () => {
@@ -526,6 +635,7 @@ describe('account data export worker', () => {
       },
     ]);
     expect(update.$set.accountDataExportLease.id).toEqual(expect.any(String));
+    expect(update.$set.accountDataExportLease.jobId).toBe(JOB_ID);
     expect(update.$set.accountDataExportLease.expiresAt.getTime()).toBeGreaterThan(Date.now() + 19 * 60 * 1000);
     expect(h.leaseRelease).toHaveBeenCalledWith(
       { _id: USER_ID, 'accountDataExportLease.id': update.$set.accountDataExportLease.id },
@@ -550,11 +660,106 @@ describe('account data export worker', () => {
     expect(h.leaseRelease).toHaveBeenCalledOnce();
   });
 
-  it('retries a concurrent-export admission failure without releasing the other invocation lease', async () => {
-    h.leaseClaim.mockResolvedValue(null);
-    await expect(run()).rejects.toThrow('Another account data export');
-    expect(h.leaseRelease).not.toHaveBeenCalled();
-    expect(h.getMetadata).not.toHaveBeenCalled();
+  describe('when another export holds the account lease', () => {
+    beforeEach(() => {
+      h.leaseClaim.mockResolvedValue(null);
+      h.leaseExists.mockResolvedValue(null);
+      h.sendToQueue.mockResolvedValue('message-id');
+      h.resource.accountDataExportQueue = { url: 'https://sqs.example/account-data-export' };
+    });
+
+    it('re-sends the job with a delay and acks it, without touching the other lease', async () => {
+      await expect(run()).resolves.toBeUndefined();
+      expect(h.sendToQueue).toHaveBeenCalledOnce();
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        'https://sqs.example/account-data-export',
+        { exportJobId: JOB_ID, userId: USER_ID, leaseWaits: 1 },
+        LEASE_WAIT_DELAY_SECONDS
+      );
+      expect(LEASE_WAIT_DELAY_SECONDS).toBeGreaterThan(0);
+      expect(h.leaseRelease).not.toHaveBeenCalled();
+      expect(h.getMetadata).not.toHaveBeenCalled();
+      expect(h.uploadFile).not.toHaveBeenCalled();
+      expect(h.permanentDelete).not.toHaveBeenCalled();
+    });
+
+    it('keeps the requesting admin and counts the wait on an admin export', async () => {
+      await run({ exportJobId: JOB_ID, userId: USER_ID, requestedBy: 'admin-1', leaseWaits: 3 });
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        expect.any(String),
+        { exportJobId: JOB_ID, userId: USER_ID, requestedBy: 'admin-1', leaseWaits: 4 },
+        LEASE_WAIT_DELAY_SECONDS
+      );
+    });
+
+    it('re-sends a first delivery that reports its receive count', async () => {
+      await expect(run({ exportJobId: JOB_ID, userId: USER_ID }, 1)).resolves.toBeUndefined();
+      expect(h.sendToQueue).toHaveBeenCalledOnce();
+    });
+
+    it('re-sends a redelivery that finds another job holding the lease, charging its failed delivery', async () => {
+      await expect(run({ exportJobId: JOB_ID, userId: USER_ID, leaseWaits: 2 }, 2)).resolves.toBeUndefined();
+      expect(h.leaseExists).toHaveBeenCalledWith({ _id: USER_ID, 'accountDataExportLease.jobId': JOB_ID });
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        expect.any(String),
+        { exportJobId: JOB_ID, userId: USER_ID, leaseWaits: 3 + LEASE_WAITS_PER_REDELIVERY },
+        LEASE_WAIT_DELAY_SECONDS
+      );
+    });
+
+    it('falls back to SQS retries when a redelivery would be charged past the wait cap', async () => {
+      const leaseWaits = MAX_LEASE_WAITS - LEASE_WAITS_PER_REDELIVERY;
+      await expect(run({ exportJobId: JOB_ID, userId: USER_ID, leaseWaits }, 2)).rejects.toThrow(
+        'Another account data export'
+      );
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
+
+    it('does not wait on a lease this job kept from an earlier failed attempt', async () => {
+      h.leaseExists.mockResolvedValue({ _id: USER_ID });
+      await expect(run({ exportJobId: JOB_ID, userId: USER_ID }, 2)).rejects.toThrow('An earlier attempt');
+      await expect(run()).rejects.toThrow('An earlier attempt');
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.leaseRelease).not.toHaveBeenCalled();
+      expect(h.uploadFile).not.toHaveBeenCalled();
+    });
+
+    it('falls back to SQS retries at the wait cap', async () => {
+      await expect(run({ exportJobId: JOB_ID, userId: USER_ID, leaseWaits: MAX_LEASE_WAITS })).rejects.toThrow(
+        'Another account data export'
+      );
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.leaseRelease).not.toHaveBeenCalled();
+    });
+
+    it('falls back to SQS retries with no queue to re-send to', async () => {
+      h.resource.accountDataExportQueue = {};
+      await expect(run()).rejects.toThrow('Another account data export');
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
+
+    it('lets a failed re-send propagate so SQS redelivers the job', async () => {
+      h.sendToQueue.mockRejectedValue(new Error('send failed'));
+      await expect(run()).rejects.toThrow('send failed');
+      expect(h.leaseRelease).not.toHaveBeenCalled();
+    });
+
+    it('skips a re-sent job whose account deletion became due while it waited', async () => {
+      h.userFindById.mockResolvedValue({
+        email: 'ada@example.com',
+        deletion: { scheduledFor: new Date(Date.now() - 1) },
+      });
+      await run({ exportJobId: JOB_ID, userId: USER_ID, leaseWaits: 2 });
+      expect(h.leaseClaim).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.permanentDelete).toHaveBeenCalledWith(KEY);
+    });
+
+    it.each([0, -1, 1.5, MAX_LEASE_WAITS + 1, '2'])('rejects a malformed wait count %s', async leaseWaits => {
+      await expect(run({ exportJobId: JOB_ID, userId: USER_ID, leaseWaits })).rejects.toThrow();
+      expect(h.userFindById).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
   });
 
   it('renews the same unexpired account lease immediately before a hard-bounded upload', async () => {
@@ -630,5 +835,267 @@ describe('account data export worker', () => {
     expect(h.permanentDelete).toHaveBeenCalledWith(KEY);
     expect(h.uploadFile).not.toHaveBeenCalled();
     expect(h.leaseRelease).not.toHaveBeenCalled();
+  });
+
+  describe('admin data subject export', () => {
+    const ADMIN_KEY = `exports/account-data/${USER_ID}/admin/${JOB_ID}/data-subject-export.zip`;
+    const runForAdmin = () => run({ exportJobId: JOB_ID, userId: USER_ID, requestedBy: 'admin-1' });
+
+    beforeEach(() => {
+      h.recordModels = ['User', 'Note', 'Team'];
+      h.records.mockImplementation(async (model: string) =>
+        model === 'Note'
+          ? [
+              { _id: 'n1', body: 'mine' },
+              { _id: 'n2', body: 'also mine' },
+            ]
+          : []
+      );
+    });
+
+    describe('skipped by the worker', () => {
+      const skipEntry = (skipReason: string, displayName: string) => ({
+        action: 'user.data_export.failed',
+        actor: expect.objectContaining({ kind: 'system' }),
+        target: { kind: 'user', id: USER_ID, displayName },
+        summary: 'skipped a data subject export',
+        context: { source: 'worker', route: 'queueHandlers/accountDataExport' },
+        details: { exportJobId: JOB_ID, requestedBy: 'admin-1', skipReason },
+      });
+
+      it('records an account that is gone', async () => {
+        h.userFindById.mockResolvedValue(null);
+        await runForAdmin();
+        expect(h.recordAdminAction).toHaveBeenCalledExactlyOnceWith(
+          skipEntry('account_gone', USER_ID),
+          expect.anything()
+        );
+        expect(h.permanentDelete).toHaveBeenCalledWith(ADMIN_KEY);
+      });
+
+      it('records an account whose deletion is due', async () => {
+        h.userFindById.mockResolvedValue({ email: 'ada@example.com', deletion: { purgeStartedAt: new Date() } });
+        await runForAdmin();
+        expect(h.leaseClaim).not.toHaveBeenCalled();
+        expect(h.recordAdminAction).toHaveBeenCalledExactlyOnceWith(
+          skipEntry('deletion_due', 'ada@example.com'),
+          expect.anything()
+        );
+        expect(h.permanentDelete).toHaveBeenCalledWith(ADMIN_KEY);
+      });
+
+      it('records a deletion that won admission over the export lease', async () => {
+        h.leaseClaim.mockResolvedValue(null);
+        h.userFindById
+          .mockResolvedValueOnce({ email: 'ada@example.com' })
+          .mockResolvedValueOnce({ email: 'ada@example.com', deletion: { purgeStartedAt: new Date() } });
+        await runForAdmin();
+        expect(h.sendToQueue).not.toHaveBeenCalled();
+        expect(h.recordAdminAction).toHaveBeenCalledExactlyOnceWith(
+          skipEntry('deletion_won_admission', 'ada@example.com'),
+          expect.anything()
+        );
+        expect(h.permanentDelete).toHaveBeenCalledWith(ADMIN_KEY);
+      });
+
+      it('records an account that is gone by the time the lease claim fails', async () => {
+        h.leaseClaim.mockResolvedValue(null);
+        h.userFindById.mockResolvedValueOnce({ email: 'ada@example.com' }).mockResolvedValueOnce(null);
+        await runForAdmin();
+        expect(h.sendToQueue).not.toHaveBeenCalled();
+        expect(h.recordAdminAction).toHaveBeenCalledExactlyOnceWith(
+          skipEntry('account_gone', 'ada@example.com'),
+          expect.anything()
+        );
+        expect(h.permanentDelete).toHaveBeenCalledWith(ADMIN_KEY);
+      });
+    });
+
+    it('adds the registry records under its own key and emails no one', async () => {
+      await runForAdmin();
+
+      expect(h.uploadFile).toHaveBeenCalledWith(
+        expect.any(String),
+        ADMIN_KEY,
+        { ContentType: 'application/zip' },
+        expect.any(AbortSignal)
+      );
+      expect(h.assertClassified).toHaveBeenCalledWith(['User']);
+      expect(h.exportSubject).toHaveBeenCalledWith({ userId: USER_ID, email: 'ada@example.com' });
+      const entries = await unzip(h.uploaded!);
+      expect(entries.get('records/Note.ndjson')).toBe('{"_id":"n1","body":"mine"}\n{"_id":"n2","body":"also mine"}\n');
+      // A collection with no records is listed as searched but gets no file.
+      expect(entries.has('records/Team.ndjson')).toBe(false);
+      expect(JSON.parse(entries.get('records/index.json')!)).toEqual({
+        collections: [
+          { model: 'User', count: 0 },
+          { model: 'Note', count: 2 },
+          { model: 'Team', count: 0 },
+        ],
+      });
+      expect(entries.get('README.txt')).toContain('records/');
+      expect(entries.get('README.txt')).toContain('Made by an administrator');
+      expect(entries.has('profile.json')).toBe(true);
+      expect(h.publish).not.toHaveBeenCalled();
+      expect(h.leaseRelease).toHaveBeenCalled();
+    });
+
+    it('leaves the records out of a self-serve export', async () => {
+      await run();
+
+      const entries = await unzip(h.uploaded!);
+      expect([...entries.keys()].some(name => name.startsWith('records/'))).toBe(false);
+      expect(entries.get('README.txt')).not.toContain('records/');
+      expect(entries.get('README.txt')).not.toContain('Made by an administrator');
+      expect(h.exportSubject).not.toHaveBeenCalled();
+    });
+
+    it('builds for an account with no email', async () => {
+      h.userFindById.mockResolvedValue({ id: USER_ID, name: 'Ada', createdAt: new Date('2025-01-01T00:00:00Z') });
+
+      await runForAdmin();
+
+      expect(h.exportSubject).toHaveBeenCalledWith({ userId: USER_ID, email: null });
+      expect(h.uploadFile).toHaveBeenCalledWith(expect.any(String), ADMIN_KEY, expect.anything(), expect.anything());
+    });
+
+    it('lists a failing collection as omitted and keeps the others', async () => {
+      h.records.mockImplementation(async (model: string) => {
+        if (model === 'Team') throw new Error('query exceeded maxTimeMS');
+        return model === 'Note' ? [{ _id: 'n1' }] : [];
+      });
+
+      await runForAdmin();
+
+      const entries = await unzip(h.uploaded!);
+      expect(JSON.parse(entries.get('records/index.json')!).collections).toContainEqual({
+        model: 'Team',
+        count: 0,
+        omitted: 'error',
+      });
+      expect(entries.get('records/Note.ndjson')).toBe('{"_id":"n1"}\n');
+    });
+
+    it('keeps a collection whose reference failed and lists the reference as incomplete', async () => {
+      h.failedReferences.mockImplementation((model: string) =>
+        model === 'Note' ? [{ path: 'editorIds', error: new Error('operation exceeded time limit') }] : []
+      );
+
+      await runForAdmin();
+
+      const entries = await unzip(h.uploaded!);
+      expect(entries.get('records/Note.ndjson')).toBe('{"_id":"n1","body":"mine"}\n{"_id":"n2","body":"also mine"}\n');
+      expect(JSON.parse(entries.get('records/index.json')!).collections).toEqual([
+        { model: 'User', count: 0 },
+        { model: 'Note', count: 2, incompleteReferences: ['editorIds'] },
+        { model: 'Team', count: 0 },
+      ]);
+      expect(entries.get('README.txt')).toContain('incompleteReferences');
+    });
+
+    it('lists the remaining collections as omitted once the time budget runs low', async () => {
+      remainingMs = () => 60_000;
+
+      await runForAdmin();
+
+      expect(h.records).not.toHaveBeenCalled();
+      const entries = await unzip(h.uploaded!);
+      expect(JSON.parse(entries.get('records/index.json')!).collections).toEqual([
+        { model: 'User', count: 0, omitted: 'time_limit' },
+        { model: 'Note', count: 0, omitted: 'time_limit' },
+        { model: 'Team', count: 0, omitted: 'time_limit' },
+      ]);
+    });
+
+    it('writes the records within the shorter self-host run budget', async () => {
+      remainingMs = () => 599_000;
+
+      await runForAdmin();
+
+      expect(h.records.mock.calls.map(([model]) => model)).toEqual(['User', 'Note', 'Team']);
+      const entries = await unzip(h.uploaded!);
+      expect(JSON.parse(entries.get('records/index.json')!).collections).toEqual([
+        { model: 'User', count: 0 },
+        { model: 'Note', count: 2 },
+        { model: 'Team', count: 0 },
+      ]);
+    });
+
+    it('stops a collection that runs past the records share and omits the rest', async () => {
+      let left = 900_000;
+      remainingMs = () => left;
+      h.records.mockImplementation(async (model: string) => {
+        if (model !== 'Note') return [];
+        left = 100_000;
+        return [{ _id: 'n1' }];
+      });
+
+      await runForAdmin();
+
+      expect(h.records.mock.calls.map(([model]) => model)).toEqual(['User', 'Note']);
+      const entries = await unzip(h.uploaded!);
+      expect(entries.has('records/Note.ndjson')).toBe(false);
+      expect(JSON.parse(entries.get('records/index.json')!).collections).toEqual([
+        { model: 'User', count: 0 },
+        { model: 'Note', count: 0, omitted: 'time_limit' },
+        { model: 'Team', count: 0, omitted: 'time_limit' },
+      ]);
+    });
+
+    it('refuses to build when a registered model is unclassified', async () => {
+      h.assertClassified.mockImplementation(() => {
+        throw new Error('Data subject export refused: unclassified models Mystery');
+      });
+
+      await expect(runForAdmin()).rejects.toThrow(/unclassified models Mystery/);
+      expect(h.uploadFile).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// The admin dialog shows an export as failed once ADMIN_DATA_EXPORT_GIVE_UP_MS passes, so that window must
+// outlast the slowest job that can still succeed. A re-sent redelivery is charged its failed deliveries as
+// lease waits, so a job is at most every lease-wait re-send, then every redelivery of one copy, then one full run.
+describe('admin export give-up window', () => {
+  const MINUTE = 60 * 1000;
+  const QUEUES = readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../infra/queues.ts'),
+    'utf8'
+  );
+  const minutesIn = (block: string, field: string) => {
+    const match = block.match(new RegExp(`${field}: '(\\d+) minutes'`));
+    expect(match, field).not.toBeNull();
+    return Number(match![1]) * MINUTE;
+  };
+  const latestSuccessMs = (receives: number, visibilityMs: number, runMs: number) =>
+    MAX_LEASE_WAITS * LEASE_WAIT_DELAY_SECONDS * 1000 + (receives - 1) * visibilityMs + runMs;
+  // Slack for the short runs that do each re-send and for queue delivery latency.
+  const SLACK_MS = 5 * MINUTE;
+
+  it('outlasts the slowest successful job on AWS', () => {
+    const from = QUEUES.indexOf("new sst.aws.Queue('accountDataExportQueue'");
+    const queue = QUEUES.slice(from, QUEUES.indexOf('});', from));
+    const subscription = QUEUES.slice(QUEUES.indexOf('accountDataExportQueue.subscribe('));
+    // SST passes dlq.retry through as the redrive maxReceiveCount.
+    const receives = Number(queue.match(/retry: (\d+)/)?.[1]);
+    expect(receives).toBeGreaterThan(0);
+
+    const latest = latestSuccessMs(receives, minutesIn(queue, 'visibilityTimeout'), minutesIn(subscription, 'timeout'));
+    expect(latest).toBe(61 * MINUTE);
+    expect(LEASE_WAITS_PER_REDELIVERY * LEASE_WAIT_DELAY_SECONDS * 1000).toBeGreaterThanOrEqual(
+      minutesIn(queue, 'visibilityTimeout')
+    );
+    expect(ADMIN_DATA_EXPORT_GIVE_UP_MS).toBeGreaterThanOrEqual(latest + SLACK_MS);
+  });
+
+  // Not an upper bound: self-host run budgets are cooperative and the runner extends visibility while a
+  // run is in flight, so a run past RUN_BUDGET_MS delays every later receive by its overrun.
+  it('outlasts the slowest successful job on the self-host runner while each run keeps to its budget', () => {
+    const latest = latestSuccessMs(MAX_RECEIVE_COUNT, VISIBILITY_TIMEOUT_SECONDS * 1000, RUN_BUDGET_MS);
+    expect(latest).toBe(70 * MINUTE);
+    expect(LEASE_WAITS_PER_REDELIVERY * LEASE_WAIT_DELAY_SECONDS * 1000).toBeGreaterThanOrEqual(
+      VISIBILITY_TIMEOUT_SECONDS * 1000
+    );
+    expect(ADMIN_DATA_EXPORT_GIVE_UP_MS).toBeGreaterThanOrEqual(latest + SLACK_MS);
   });
 });

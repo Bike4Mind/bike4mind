@@ -36,6 +36,15 @@ describe('buildAdminUsersMatch', () => {
     expect((byId.$or as unknown[]).at(-1)).toEqual({ _id: { objectId: id } });
   });
 
+  it('matches the provider end-user id when the term is a 64-hex digest, case-insensitively', () => {
+    const digest = 'AB'.repeat(32);
+    const [byDigest] = conditionsOf(buildAdminUsersMatch({ search: digest }, context));
+    expect((byDigest.$or as unknown[]).at(-1)).toEqual({ providerEndUserId: digest.toLowerCase() });
+
+    const [byText] = conditionsOf(buildAdminUsersMatch({ search: 'ab'.repeat(31) }, context));
+    expect(JSON.stringify(byText)).not.toContain('providerEndUserId');
+  });
+
   it('reads the Admin tag as the isAdmin flag', () => {
     expect(conditionsOf(buildAdminUsersMatch({ tags: ['Admin'] }, context))).toEqual([{ isAdmin: true }]);
     expect(conditionsOf(buildAdminUsersMatch({ tags: ['Admin', 'beta'] }, context))).toEqual([

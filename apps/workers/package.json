@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/workers",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "private": true,
   "scripts": {
     "typecheck": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
@@ -48,7 +48,7 @@
     "mailparser": "^3.12.4",
     "mime-types": "^3.0.2",
     "mongodb": "^6.20.0",
-    "mongoose": "^8.24.1",
+    "mongoose": "^8.24.7",
     "p-limit": "^7.3.2",
     "playwright-core": "1.64.0",
     "sharp": "^0.35.5",

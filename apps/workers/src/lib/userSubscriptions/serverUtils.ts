@@ -26,6 +26,7 @@ import { organizationService, creditService } from '@bike4mind/services';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { CreditHolderType, IOrganizationDocument, dayjs } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { applyPlanStorageLimit } from './applyPlanStorageLimit';
 
 /**
  * Add credits to an organization and record a credit transaction.
@@ -689,6 +690,12 @@ export const handleUserSubscriptionInvoice = async (
       }
     }
   });
+
+  // The row created above is what customerSubscriptionUpdated checks ownership against, so its
+  // checkout-time update event can arrive first and skip the limit.
+  if (invoice.billing_reason === 'subscription_create') {
+    await applyPlanStorageLimit(subscription, user.id, logger);
+  }
 
   await sendToClient(metadata.userId, Resource.websocket.managementEndpoint, {
     action: 'invalidate_query',

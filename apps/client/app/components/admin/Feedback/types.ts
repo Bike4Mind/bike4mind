@@ -1,4 +1,13 @@
-import { IFeedbackDocument, FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
+import {
+  IFeedbackDocument,
+  FeedbackStatus,
+  FeedbackSubject,
+  FeedbackType,
+  type FeedbackAiLabels,
+} from '@bike4mind/common';
+import type { FeedbackView } from './feedbackTabSearch';
+import type { FeedbackReceivedWindow } from './feedbackTrends';
+import type { FeedbackResolution, UpdateFeedbackStatusRequest } from '@bike4mind/common';
 
 // Extended feedback document with MongoDB _id field. `contentExpired` is added by the API's
 // hydrateFeedbackText join - true when content was submitted but has since aged out under the
@@ -24,13 +33,18 @@ export function getFeedbackDisplayContent(
 }
 
 export interface FeedbackFilters {
+  area?: FeedbackAiLabels['area'];
+  severity?: FeedbackAiLabels['severity'];
   searchTerm: string;
   statusFilters: Record<FeedbackStatus, boolean>;
   selectedOrganizations: string[];
   /** Undefined is every subject: the server reads an absent `subject` as no filter at all. */
   subject?: FeedbackSubject;
+  resolution?: FeedbackResolution;
   /** Empty is every type. */
   types: FeedbackType[];
+  /** Undefined is any age. */
+  received?: FeedbackReceivedWindow;
   sortAscending: boolean;
 }
 
@@ -45,15 +59,19 @@ export interface FeedbackFilters {
  * in that group and is now also the triage table's own subject filter.
  */
 export interface FeedbackListFilterParams {
+  area?: FeedbackAiLabels['area'];
+  severity?: FeedbackAiLabels['severity'];
   userId?: string;
   sessionId?: string;
   questId?: string;
   organizationId?: string;
   subject?: FeedbackSubject;
+  resolution?: FeedbackResolution;
   status?: FeedbackStatus[];
   /** `Feedback` also matches reports with no type (help modal, older reports). */
   type?: FeedbackType[];
   organization?: string[];
+  received?: FeedbackReceivedWindow;
   search?: string;
   sort: 'asc' | 'desc';
 }
@@ -64,9 +82,11 @@ export type FeedbackListParams = FeedbackListFilterParams & {
   /**
    * Ask the server to compute the `organizations` facet. Opt-in because it is a `distinct` over
    * the caller's entire accessible set - for an admin, the whole collection on an unindexed field
-   * - and only the org filter menu's dedicated query consumes it.
+   * - and is returned alongside the requested rows. The org filter menu uses `facetsOnly` instead.
    */
   includeOrganizations?: boolean;
+  /** Return only the `organizations` facet; the server reads and audits no rows. */
+  facetsOnly?: boolean;
 };
 
 /** Response envelope of GET /api/feedback. */
@@ -77,21 +97,28 @@ export interface FeedbackListResponse {
   limit: number;
   /**
    * Distinct organization labels across the caller's whole accessible set, for the filter menu.
-   * Present only when the request asked for it (`includeOrganizations`).
+   * Present only when the request asked for it (`includeOrganizations` or `facetsOnly`).
    */
   organizations?: string[];
 }
 
 // Hook return types
 export interface UseFeedbackFiltersReturn {
+  setArea: (value: FeedbackAiLabels['area'] | undefined) => void;
+  setSeverity: (value: FeedbackAiLabels['severity'] | undefined) => void;
   filters: FeedbackFilters;
   setSearchTerm: (term: string) => void;
   setStatusFilters: React.Dispatch<React.SetStateAction<Record<FeedbackStatus, boolean>>>;
   setSelectedOrganizations: (orgs: string[]) => void;
   /** Undefined clears the filter back to every subject. */
   setSubject: (subject: FeedbackSubject | undefined) => void;
+  setResolution: (resolution: FeedbackResolution | undefined) => void;
   /** Empty clears the filter back to every type. */
   setTypes: (types: FeedbackType[]) => void;
+  /** Undefined clears the filter back to any age. */
+  setReceived: (received: FeedbackReceivedWindow | undefined) => void;
+  /** Replaces every filter with the defaults plus `view`, and clears the search box. */
+  showOnly: (view: Partial<Pick<FeedbackView, 'statusFilters' | 'types' | 'received'>>) => void;
   toggleSortDirection: () => void;
   /** Debounced, server-ready filter query. Feeds both the list and the CSV export. */
   filterParams: FeedbackListFilterParams;
@@ -117,8 +144,13 @@ export interface UseFeedbackOperationsReturn {
   isError: boolean;
   refreshFeedback: () => Promise<void>;
   handleStatusChange: (feedbackItem: IExtendedFeedbackDocument, newValue: FeedbackStatus | null) => Promise<void>;
+  feedbackToClose: IExtendedFeedbackDocument | null;
+  cancelClose: () => void;
+  confirmClose: (
+    body: Pick<UpdateFeedbackStatusRequest, 'resolution' | 'resolutionDuplicateId' | 'reason'>
+  ) => Promise<void>;
   handleDeleteFeedbackClick: (feedback: IExtendedFeedbackDocument) => void;
-  confirmDeleteFeedback: () => Promise<void>;
+  confirmDeleteFeedback: (reason: string) => Promise<void>;
   feedbackToDelete: string | null;
   openDeleteFeedbackModal: boolean;
   toggleDeleteFeedbackModal: () => void;

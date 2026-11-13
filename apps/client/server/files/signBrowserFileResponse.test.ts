@@ -13,7 +13,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 }));
 
 import { signBrowserFileResponse } from './signBrowserFileResponse';
-import { fileContentKey } from './browserFileSigner';
+import { fileContentKey } from '@bike4mind/server-utils/files/browserFileSigner';
 
 const FILE_ID = '0123456789abcdef01234567';
 

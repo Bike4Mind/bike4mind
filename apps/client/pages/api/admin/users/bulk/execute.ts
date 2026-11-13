@@ -4,10 +4,10 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { selfIdsOf } from '@server/admin/usersBulk/actor';
-import { usersBulkExecuteDeps } from '@server/admin/usersBulk/adapters';
+import { usersBulkExecuteDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
 import { assertCanRunUsersBulkAction } from '@server/admin/usersBulk/authorize';
 import { requestUsersBulkApprovalIfNeeded } from '@server/admin/usersBulk/approvalGate';
-import { executeAdminUsersBulk } from '@server/admin/usersBulk/execute';
+import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/execute';
 import {
   ADMIN_USERS_BULK_ROUTE_PERMISSIONS,
   AdminUsersBulkExecuteRequestSchema,

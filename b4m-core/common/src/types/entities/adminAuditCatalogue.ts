@@ -83,6 +83,13 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.deleted': { category: 'account', severity: 'critical', write: 'strict' },
   'user.deletion.scheduled': { category: 'account', severity: 'critical', write: 'strict' },
   'user.deletion.cancelled': { category: 'account', severity: 'notice', write: 'strict' },
+  // A data subject export carries all of a person's stored data, so both steps are critical and fail
+  // the action when they cannot be recorded (the request before it is queued, the download before it is signed).
+  'user.data_export.requested': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.data_export.downloaded': { category: 'account', severity: 'critical', write: 'strict' },
+  // The request was recorded but could not be queued; the export list shows it as failed.
+  'user.data_export.failed': { category: 'account', severity: 'notice', write: 'bestEffort' },
+  'user.data_export.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   // notice, not critical like user.deleted: the sweep carrying out a user's own scheduled deletion.
   'user.deletion.completed': { category: 'account', severity: 'notice', write: 'strict' },
@@ -100,19 +107,27 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.seats.ceiling_raised': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.conversion.initiated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.revoked': { category: 'org', severity: 'notice', write: 'strict' },
-  'org.group_types.updated': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.group_types.updated': { category: 'org', severity: 'info', write: 'strict' },
   'org.admins.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.owner.transferred': { category: 'org', severity: 'notice', write: 'strict' },
   'org.group_member.assigned': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.group_member.unassigned': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.invite.created': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.invite.resent': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.invite_link.created': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.invite_link.revoked': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.slack_channel_api_posting.updated': { category: 'org', severity: 'notice', write: 'strict' },
   // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
   'org.member.added': { category: 'org', severity: 'notice', write: 'strict' },
   'org.member.removed': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.content_reassigned': { category: 'org', severity: 'notice', write: 'strict' },
   'org.member.role_changed': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.api_key.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.rotated': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.member_revoked': { category: 'access', severity: 'notice', write: 'strict' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },
@@ -250,6 +265,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.api_keys.revoked_all': { category: 'access', severity: 'notice', write: 'strict' },
   'org.data_lake.embedding_spend_reset': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.storage.recalculated': { category: 'support', severity: 'info', write: 'bestEffort' },
+  // Test personas minted, deleted and expired (pages/api/v1/personas, server/personas).
+  'user.persona.created': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.persona.deleted': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.persona.expired': { category: 'account', severity: 'info', write: 'bestEffort' },
   // Handler coverage: liveops, sre and queues
 
   // ops
@@ -265,6 +284,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'ops.sre.tracking_rerun': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.sre.tracking_retried': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.dlq.replayed': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.dlq.discarded': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.agent_executions.cleaned_up': { category: 'support', severity: 'notice', write: 'bestEffort' },
   // Handler coverage: billing and model config
   'settings.model_price.repriced': { category: 'settings', severity: 'notice', write: 'strict' },
@@ -347,9 +367,17 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // bestEffort: the AbuseAssessment record is the source of truth; an advisory assessment never acts.
   'security.detection.assessed': { category: 'access', severity: 'info', write: 'bestEffort' },
   'security.detection.replayed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // bestEffort: the AbuseEvalSet record is the source of truth; evaluation sets are grading data and never act.
+  'abuse.eval_set.created': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'abuse.eval_set.verdict_recorded': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'abuse.eval_set.run': { category: 'access', severity: 'info', write: 'bestEffort' },
   'moderation.incident.viewed': { category: 'support', severity: 'notice', write: 'strict' },
   // An admin read of other users' feedback text. No support case (triage reads it routinely), but strict.
   'feedback.viewed': { category: 'support', severity: 'info', write: 'strict' },
+  'feedback.status_changed': { category: 'support', severity: 'info', write: 'strict' },
+  'feedback.ai_labels_changed': { category: 'support', severity: 'info', write: 'strict' },
+  'feedback.note_added': { category: 'support', severity: 'info', write: 'strict' },
+  'feedback.deleted': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },

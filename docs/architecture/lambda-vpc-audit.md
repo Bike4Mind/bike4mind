@@ -65,6 +65,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 
 | Handler | Declared in | Reaches | VPC required | Justification |
 |---|---|---|---|---|
+| `apps/workers/src/cron/adminMorningBrief.handler` | `infra/adminMorningBrief.ts` | MongoDB; linked: `allSecrets` | Yes | Reads and persists morning brief facts and delivery claims in MongoDB. |
 | `apps/client/server/s3/notebookImportComplete.dispatch` | `infra/buckets.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `appFilesBucket`, `generatedImagesBucket`, `historyImportBucket`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/agentExecute.func` | `infra/agentExecutor.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `agentExecutor` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/ccAgentDisconnect.func` | `infra/websocket.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
@@ -96,6 +97,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/cron/apiKeyBaselineCalculation.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/apiProbeDetector.handler` | `infra/apiProbeDetector.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/businessMetricAlerts.handler` | `infra/businessMetricAlerts.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
+| `apps/workers/src/cron/completionSequenceSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/creditHoldSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/creditLotSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/creditPurchaseReconciliation.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
@@ -132,6 +134,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/cron/signupDomainHoldTriage.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/signupGrantHeldRelease.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/signupIpRetention.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
+| `apps/workers/src/cron/personaExpirySweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/signupRiskSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets`, `riskEvidenceQueue` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/skillMarketReviewSla.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/spendMonitor.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |

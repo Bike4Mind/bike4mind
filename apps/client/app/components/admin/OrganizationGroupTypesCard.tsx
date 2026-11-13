@@ -1,22 +1,11 @@
 import { FC, useMemo, useState } from 'react';
-import {
-  Autocomplete,
-  Box,
-  Button,
-  Card,
-  Chip,
-  FormControl,
-  FormHelperText,
-  FormLabel,
-  Stack,
-  Typography,
-} from '@mui/joy';
-import GroupWorkOutlinedIcon from '@mui/icons-material/GroupWorkOutlined';
+import { Autocomplete, Box, Button, Chip, FormControl, FormHelperText, FormLabel, Stack, Typography } from '@mui/joy';
 import { GROUP_TYPE_CATALOG, getGroupType, IOrganizationDocument, WithId } from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { fetchOrganizationGroups, setOrganizationGroupTypes } from '@client/app/utils/groupsAPICalls';
 import { getErrorMessage, sanitizeErrorMessage } from '@client/app/utils/error';
+import { ActionDialog, ADMIN_REASON_PRESETS, SettingsSection } from './shared';
 
 const GROUP_TYPE_KEYS = GROUP_TYPE_CATALOG.map(type => type.key);
 const labelFor = (key: string) => getGroupType(key)?.label ?? key;
@@ -37,6 +26,7 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
   // It resyncs when a different org loads (allowedKey) and on each successful save.
   const [selected, setSelected] = useState<string[]>(org.allowedGroupTypes ?? []);
   const [baseline, setBaseline] = useState<string[]>(org.allowedGroupTypes ?? []);
+  const [reviewOpen, setReviewOpen] = useState(false);
   // Resync when a DIFFERENT org loads into this card (React's adjust-state-during-render pattern,
   // not an effect). Defensive: today OrganizationsTab renders the profile modal conditionally, so
   // the card unmounts between orgs and useState re-initializes anyway. Keyed on org.id rather than
@@ -62,9 +52,11 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
   });
 
   const saveMutation = useMutation({
-    mutationFn: (allowedGroupTypes: string[]) => setOrganizationGroupTypes(org.id, allowedGroupTypes),
-    onSuccess: (result, allowedGroupTypes) => {
+    mutationFn: ({ allowedGroupTypes, reason }: { allowedGroupTypes: string[]; reason: string }) =>
+      setOrganizationGroupTypes(org.id, allowedGroupTypes, reason),
+    onSuccess: (result, { allowedGroupTypes }) => {
       setBaseline(allowedGroupTypes);
+      setReviewOpen(false);
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.invalidateQueries({ queryKey: ['organizations', org.id, 'groups'] });
       const parts = [
@@ -80,30 +72,28 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
     () => selected.length !== baseline.length || selected.some(key => !baseline.includes(key)),
     [selected, baseline]
   );
+  const added = selected.filter(key => !baseline.includes(key)).map(labelFor);
+  const removed = baseline.filter(key => !selected.includes(key)).map(labelFor);
 
   if (org.personal) {
     return (
-      <Card variant="outlined" sx={{ p: 2, mt: 2 }} data-testid="org-group-types-card">
+      <SettingsSection data-testid="org-group-types-card">
         <Stack spacing={1}>
-          <Typography level="title-md" startDecorator={<GroupWorkOutlinedIcon fontSize="small" />}>
-            Group Types
-          </Typography>
+          <Typography level="title-md">Group types</Typography>
           <Typography level="body-sm" color="neutral">
             Personal organizations cannot be granted group types.
           </Typography>
         </Stack>
-      </Card>
+      </SettingsSection>
     );
   }
 
   const groups = groupsQuery.data ?? [];
 
   return (
-    <Card variant="outlined" sx={{ p: 2, mt: 2 }} data-testid="org-group-types-card">
+    <SettingsSection data-testid="org-group-types-card">
       <Stack spacing={1.5}>
-        <Typography level="title-md" startDecorator={<GroupWorkOutlinedIcon fontSize="small" />}>
-          Group Types
-        </Typography>
+        <Typography level="title-md">Group types</Typography>
 
         <FormControl>
           <FormLabel>Allowed group types</FormLabel>
@@ -124,12 +114,12 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
         <Box>
           <Button
             size="sm"
-            onClick={() => saveMutation.mutate(selected)}
+            onClick={() => setReviewOpen(true)}
             loading={saveMutation.isPending}
             disabled={!isDirty}
             data-testid="org-group-types-save-btn"
           >
-            Save group types
+            Review group type changes
           </Button>
         </Box>
 
@@ -169,7 +159,30 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
           )}
         </Stack>
       </Stack>
-    </Card>
+      <ActionDialog
+        open={reviewOpen}
+        onClose={() => setReviewOpen(false)}
+        title={`Update group types for ${org.name}`}
+        description={
+          removed.length > 0
+            ? 'Revoking a type removes its group and unassigns its members. Re-adding the type will not restore those assignments.'
+            : 'The new group types will be available to this organization.'
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.orgGroupTypes}
+        confirmLabel="Update group types"
+        blockedReason={isDirty ? null : 'Choose a different set of group types.'}
+        pending={saveMutation.isPending}
+        onConfirm={async reason => {
+          await saveMutation.mutateAsync({ allowedGroupTypes: [...selected], reason });
+        }}
+        data-testid="org-group-types-action-dialog"
+      >
+        <Stack gap={0.5} data-testid="org-group-types-preview">
+          <Typography level="body-sm">Grant: {added.length ? added.join(', ') : 'None'}</Typography>
+          <Typography level="body-sm">Revoke: {removed.length ? removed.join(', ') : 'None'}</Typography>
+        </Stack>
+      </ActionDialog>
+    </SettingsSection>
   );
 };
 

@@ -13,6 +13,7 @@ import { AdminPermissionAction } from '../../shared/MissingPermission';
 import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { ReinstateDialog, SuspendDialog } from './actions/SuspendDialog';
 import { EditProfileDialog } from './actions/EditProfileDialog';
+import { DataExportDialog } from './actions/DataExportDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
 import { AdminPermissionsDialog } from './actions/AdminPermissionsDialog';
 import {
@@ -41,6 +42,7 @@ import { ApiKeysTab } from './tabs/keys/ApiKeysTab';
 import { ActivityTab } from './tabs/ActivityTab';
 import { AdminLogTab } from './tabs/AdminLogTab';
 import { SignInsTab } from './tabs/SignInsTab';
+import { UserBillingTab } from './tabs/UserBillingTab';
 import { USER_PROFILE_TAB_LABELS, type UserProfileTab } from './userProfileSearch';
 import { DELETION_SOURCE_LABELS, displayName, formatDeletionDay, type AdminUserProfile } from './userProfileModel';
 
@@ -100,6 +102,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <ScheduleDeletionDialog {...props} />;
     case 'cancelDeletion':
       return <CancelDeletionDialog {...props} />;
+    case 'dataExport':
+      return <DataExportDialog {...props} />;
     case 'delete':
       return <DeleteUserDialog {...props} onDeleted={onDeleted} />;
   }
@@ -292,6 +296,8 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
         return <ActivityTab userId={user.id} onOpenCredits={() => onTabChange('credits')} />;
       case 'credits':
         return <CreditsTab user={user} onAdjust={() => setAction('credits')} />;
+      case 'billing':
+        return <UserBillingTab userId={user.id} />;
       case 'keys':
         return <ApiKeysTab user={user} />;
       case 'signins':
