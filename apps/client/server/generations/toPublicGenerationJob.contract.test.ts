@@ -4,10 +4,20 @@ import {
   GENERATION_JOB_ERROR_CODES,
   type IGenerationJobDocument,
   type IGenerationJobDocumentOf,
+  type MusicGeneration,
+  type VideoGeneration,
 } from '@bike4mind/common';
 import type { JobMapperDeps, SignedOutput } from '@bike4mind/server-utils/generations/signedOutput';
-import { toPublicVideoGeneration } from '../videoGenerations/toPublicVideoGeneration';
-import { toPublicMusicGeneration } from '../musicGenerations/toPublicMusicGeneration';
+import {
+  MUSIC_GENERATION_PROJECTION,
+  toPublicGenerationJob,
+  VIDEO_GENERATION_PROJECTION,
+} from './toPublicGenerationJob';
+
+const toPublicVideoGeneration = (job: IGenerationJobDocumentOf<'video'>, deps: JobMapperDeps): Promise<VideoGeneration> =>
+  toPublicGenerationJob(job, deps, VIDEO_GENERATION_PROJECTION);
+const toPublicMusicGeneration = (job: IGenerationJobDocumentOf<'music'>, deps: JobMapperDeps): Promise<MusicGeneration> =>
+  toPublicGenerationJob(job, deps, MUSIC_GENERATION_PROJECTION);
 
 // Byte-level pins for the public v1 video and music resources. A string snapshot (not an object one, which sorts
 // keys) also pins key order, so a projection change that reorders or renames a field fails here.
