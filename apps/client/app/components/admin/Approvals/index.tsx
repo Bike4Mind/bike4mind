@@ -203,6 +203,7 @@ const Approvals: React.FC = () => {
     {
       id: 'summary',
       label: 'Request',
+      wrap: true,
       render: row => (
         <Stack spacing={0.25}>
           <Typography level="body-sm" fontWeight={500}>

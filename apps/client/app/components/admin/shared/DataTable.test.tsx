@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { Typography } from '@mui/joy';
 import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { DataTable, type DataColumn, type DataTableProps } from './DataTable';
@@ -441,6 +442,33 @@ describe('DataTable cell overflow', () => {
     expect(cell(1)).not.toHaveAttribute('data-cell-truncate');
     expect(style.whiteSpace).toBe('normal');
     expect(style.overflowWrap).toBe('anywhere');
+  });
+
+  it('leaves a line-clamped Typography in a wrap column to clamp itself', () => {
+    const clamp = {
+      display: '-webkit-box',
+      WebkitLineClamp: 2,
+      WebkitBoxOrient: 'vertical',
+      overflow: 'hidden',
+    } as const;
+    renderPeople({
+      columns: [
+        {
+          id: 'note',
+          label: 'Note',
+          wrap: true,
+          render: row => (
+            <Typography level="body-sm" sx={clamp} data-testid="clamped-note">
+              {row.note}
+            </Typography>
+          ),
+        },
+      ],
+    });
+    const style = getComputedStyle(screen.getByTestId('clamped-note'));
+    expect(style.display).toBe('-webkit-box');
+    expect(style.whiteSpace).not.toBe('nowrap');
+    expect(style.textOverflow).not.toBe('ellipsis');
   });
 
   it('titles a clipped cell with its full text on hover, and leaves a cell that fits alone', () => {
