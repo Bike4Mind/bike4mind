@@ -59,6 +59,9 @@ export async function reflectLoopRun(run: LoopReflectRun, logger: Logger): Promi
       execution.runner === 'desktop' ||
       execution.abortedAt ||
       execution.failureReason ||
+      // Already reflected, or a throw after markComplete reached the executor's catch: one reflection per run.
+      execution.loopReflection ||
+      execution.status === 'completed' ||
       getQuestErrorCode(run.error) === 'insufficient_credits'
     ) {
       return;

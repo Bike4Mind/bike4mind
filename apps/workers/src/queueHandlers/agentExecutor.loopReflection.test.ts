@@ -100,6 +100,8 @@ describe('reflectLoopRun', () => {
     ['out-of-credits', { failureReason: 'insufficient_credits' }],
     ['not a loop run', { loopId: undefined }],
     ['capped below the hold', { creditCap: 5.5, totalCreditsUsed: 5 }],
+    ['completed', { status: 'completed' }],
+    ['reflected', { loopReflection: { reflection: 'r', nextIntendedAction: 'n', credits: 1, createdAt: new Date() } }],
   ])('makes no call for a %s run', async (_label, patch) => {
     meterState.ceilingUsd = 0.01;
     db.agentExecutionRepository.findById.mockResolvedValue(execution(patch));
