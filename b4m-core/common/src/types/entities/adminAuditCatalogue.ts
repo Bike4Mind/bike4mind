@@ -110,6 +110,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.invite_link.created': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.invite_link.revoked': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.budget_alerts.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.slack_channel_api_posting.updated': { category: 'org', severity: 'notice', write: 'strict' },
   // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
