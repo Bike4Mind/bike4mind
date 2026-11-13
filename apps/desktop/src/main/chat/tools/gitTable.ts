@@ -34,6 +34,8 @@ export type GitListing =
       contacts?: GitContacts;
       /** Programs git looks up on PATH for the call. */
       programs: readonly string[];
+      /** Config keys (lowercased) under any of which, set true, the call may sign or verify with gpg.program. */
+      signs: readonly string[];
     }
   | { listed: false; reason: string };
 
@@ -64,6 +66,7 @@ interface FormSpec {
   contacts?: (operands: readonly GitWord[], given: Given) => readonly GitWord[] | 'all' | null;
   push?: boolean;
   programs?: (call: Call) => readonly string[];
+  signs?: (given: Given, operands: readonly GitWord[]) => readonly string[];
   check?: (operands: readonly GitWord[], given: Given) => string | null;
   verbs?: Readonly<Record<string, FormSpec>>;
   /** Flags git reads before the verb. */
@@ -173,6 +176,33 @@ function signaturePrograms({ given, open }: Call): readonly string[] {
   return open || shown ? ['gpg', 'gpgsm', 'ssh-keygen'] : [];
 }
 
+/** The settings under which a call that may make commits signs them, or verifies what it merges, less those it turns off. */
+const commitSigning =
+  (verifies: boolean) =>
+  (given: Given): readonly string[] => {
+    if (['--abort', '--quit', '--show-current-patch'].some(mode => given.has(mode))) return [];
+    return [
+      ...(given.has('--no-gpg-sign') ? [] : ['commit.gpgsign']),
+      ...(verifies && !given.has('--no-verify-signatures') ? ['merge.verifysignatures'] : []),
+    ];
+  };
+
+const TAG_LISTS = `-l --list -d --delete -n --contains --no-contains --merged --no-merged --points-at`.split(' ');
+const TAG_ANNOTATES = ['-m', '--message', '-F', '--file', '--trailer', '-e', '--edit'];
+
+/**
+ * A tag created with tag.gpgSign on is signed. tag.forceSignAnnotated signs one a message annotates, unless -a asks
+ * for it (a later --no-annotate takes that back).
+ */
+function tagSigning(given: Given, operands: readonly GitWord[]): readonly string[] {
+  if (operands.length === 0 || TAG_LISTS.some(mode => given.has(mode))) return [];
+  const explicit = (given.has('-a') || given.has('--annotate')) && !given.has('--no-annotate');
+  const forced = !explicit && TAG_ANNOTATES.some(option => given.has(option));
+  return ['tag.gpgsign', ...(forced ? ['tag.forcesignannotated'] : [])];
+}
+
+const showsSignatures = (): readonly string[] => ['log.showsignature'];
+
 const ANY_VALUE_SETTINGS = new Set(
   `user.name user.email author.name author.email committer.name committer.email column.ui core.abbrev core.quotepath
   core.autocrlf core.safecrlf core.eol core.filemode core.ignorecase core.longpaths core.precomposeunicode
@@ -243,7 +273,7 @@ const STASH_PUSH: FormSpec = {
   options:
     '-quakS -m: --quiet --include-untracked --no-include-untracked --all --(no-)keep-index --staged --message= --pathspec-file-nul',
 };
-const REFLOG_SHOW: FormSpec = { options: LOG_DIFF, open: 'any', programs: signaturePrograms };
+const REFLOG_SHOW: FormSpec = { options: LOG_DIFF, open: 'any', programs: signaturePrograms, signs: showsSignatures };
 const SUBMODULE_STATUS: FormSpec = { options: '-q --quiet --cached --recursive' };
 
 const FORMS: Readonly<Record<string, FormSpec>> = {
@@ -254,8 +284,8 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
     open: 'any',
   },
   diff: { options: `${DIFF_SHORT} ${DIFF_LONG} --cached --staged --no-index`, open: 'any' },
-  log: { options: LOG_DIFF, open: 'any', programs: signaturePrograms },
-  show: { options: LOG_DIFF, open: 'any', programs: signaturePrograms },
+  log: { options: LOG_DIFF, open: 'any', programs: signaturePrograms, signs: showsSignatures },
+  show: { options: LOG_DIFF, open: 'any', programs: signaturePrograms, signs: showsSignatures },
   shortlog: {
     options: `-iEFPg -L: -nsec -w? ${LOG_LONG} --(no-)numbered --(no-)summary --(no-)email --(no-)committer --group=`,
     open: 'any',
@@ -265,6 +295,8 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
     options: `${DIFF_SHORT} ${DIFF_LONG} --creation-factor= --(no-)dual-color --(no-)left-only --(no-)right-only
       --max-memory=`,
     open: 'any',
+    // range-diff runs `git log`, which reads log.showSignature.
+    signs: showsSignatures,
   },
   'diff-tree': {
     options: `${LOG_DIFF} -v --root --no-commit-id --always`,
@@ -390,6 +422,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --no-gpg-sign --(no-)all --(no-)include --(no-)only --no-verify --verify --(no-)dry-run --(no-)short
       --(no-)branch --(no-)ahead-behind --(no-)porcelain --(no-)long --(no-)null --(no-)amend --no-edit
       --no-post-rewrite --post-rewrite --untracked-files[=] --allow-empty --allow-empty-message`,
+    signs: commitSigning(false),
   },
   merge: {
     options: `-nvq -m: -F: -s: -X: --(no-)stat --(no-)summary --(no-)compact-summary --log[=] --no-log --(no-)squash
@@ -398,6 +431,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --continue --(no-)allow-unrelated-histories --(no-)progress --no-gpg-sign --(no-)autostash
       --(no-)overwrite-ignore --(no-)signoff --no-verify --verify`,
     values: { '-s': strategy, '--strategy': strategy },
+    signs: commitSigning(true),
   },
   rebase: {
     options: `-qvnfm -C: -s: -X: -r? --onto= --(no-)keep-base --no-verify --verify --(no-)quiet --(no-)verbose
@@ -407,17 +441,20 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --(no-)autostash --rebase-merges[=] --no-rebase-merges --(no-)fork-point --strategy= --strategy-option=
       --(no-)root --(no-)reapply-cherry-picks --(no-)keep-empty`,
     values: { '-s': strategy, '--strategy': strategy },
+    signs: commitSigning(false),
   },
   'cherry-pick': {
     options: `-nsx -m: -X: --quit --continue --abort --skip --cleanup= --no-commit --commit --(no-)signoff --mainline=
       --(no-)rerere-autoupdate --strategy= --strategy-option= --no-gpg-sign --(no-)ff --(no-)allow-empty
       --(no-)allow-empty-message --(no-)keep-redundant-commits --empty= --no-edit`,
     values: { '--strategy': strategy },
+    signs: commitSigning(false),
   },
   revert: {
     options: `-ns -m: -X: --quit --continue --abort --skip --cleanup= --no-commit --commit --(no-)signoff --mainline=
       --(no-)rerere-autoupdate --strategy= --strategy-option= --no-gpg-sign --(no-)reference --no-edit`,
     values: { '--strategy': strategy },
+    signs: commitSigning(false),
   },
   branch: {
     options: `-vqrdDmMcCfial -t? -u: --(no-)verbose --(no-)quiet --track[=] --no-track --set-upstream-to=
@@ -433,6 +470,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --(no-)create-reflog --column[=] --no-column --contains=? --no-contains=? --merged=? --no-merged=?
       --(no-)omit-empty --sort= --points-at= --format= --color[=] --no-color --(no-)ignore-case`,
     programs: signaturePrograms,
+    signs: tagSigning,
   },
   stash: {
     verbs: {
@@ -584,6 +622,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
     },
     remotes: firstOperand,
     contacts: firstOrDefault,
+    signs: commitSigning(true),
   },
   push: {
     options: `-vqdnfu46 -o: --(no-)verbose --(no-)quiet --(no-)all --(no-)branches --(no-)mirror --(no-)delete --(no-)tags
@@ -593,6 +632,8 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
     remotes: firstOperand,
     contacts: firstOrDefault,
     push: true,
+    // push.gpgSign signs for `true` and, when the server takes certificates, `if-asked`.
+    signs: given => (given.has('--no-signed') ? [] : ['push.gpgsign']),
   },
   'ls-remote': {
     options: `-qtb -o: --(no-)quiet --(no-)tags --(no-)branches --(no-)heads --(no-)refs --(no-)get-url --sort=
@@ -795,6 +836,7 @@ const plainListing = (form: string, given: Given): GitListing => ({
   operands: [],
   open: false,
   programs: [],
+  signs: [],
 });
 
 function readForm(form: Form, words: readonly GitWord[], label: string): GitListing {
@@ -859,7 +901,58 @@ function readForm(form: Form, words: readonly GitWord[], label: string): GitList
         }
       : undefined;
   const programs = form.programs?.({ given, operands, open }) ?? [];
-  return { listed: true, form: label, given, operands, open, ...(contacts ? { contacts } : {}), programs };
+  const signs = form.signs?.(given, operands) ?? [];
+  return { listed: true, form: label, given, operands, open, ...(contacts ? { contacts } : {}), programs, signs };
+}
+
+/** A config entry as `git config --get-regexp` prints it; a null value for a key set without `=`. */
+export interface ConfigEntry {
+  key: string;
+  value: string | null;
+}
+
+/** `key` as git compares it: section and name in any case, a subsection as written. */
+export function configKey(key: string): string {
+  const first = key.indexOf('.');
+  const last = key.lastIndexOf('.');
+  if (first === last) return key.toLowerCase();
+  return `${key.slice(0, first).toLowerCase()}${key.slice(first, last)}${key.slice(last).toLowerCase()}`;
+}
+
+/** Whether git reads a boolean setting of `value` as true; any spelling it might not read as false counts as true. */
+export function configTrue(value: string | null): boolean {
+  return value === null || !/^(false|no|off|[-+]?0+|)$/i.test(value);
+}
+
+/** The keys of `keys` the last of `entries` (in the order git prints them) to name each sets true. */
+export function settingsOn(entries: readonly ConfigEntry[], keys: readonly string[]): string[] {
+  const last = new Map<string, string | null>();
+  for (const { key, value } of entries) last.set(configKey(key), value);
+  return keys.filter(key => last.has(key) && configTrue(last.get(key) as string | null));
+}
+
+/** The `format.pretty` and `pretty.<alias>` entries a log form reads, and whether they may make it print signatures. */
+export function prettyShowsSignatures(entries: readonly ConfigEntry[]): boolean {
+  const aliases = new Map<string, string | null>();
+  let chosen: string | null | undefined;
+  for (const { key, value } of entries) {
+    const name = key.toLowerCase();
+    if (name === 'format.pretty') chosen = value;
+    else if (name.startsWith('pretty.') && name.length > 7) aliases.set(name.slice(7), value);
+    else return true;
+  }
+  // git takes any alias whose name starts with the value, ignoring case, so every such alias is followed.
+  let sought: Set<string | null> = new Set(chosen === undefined ? [] : [chosen]);
+  for (let step = 0; sought.size > 0; step++) {
+    const next = new Set<string | null>();
+    for (const value of sought) {
+      if (value === null || step > 8 || value.includes('%G')) return true;
+      const prefix = value.toLowerCase();
+      for (const [name, alias] of aliases) if (name.startsWith(prefix)) next.add(alias);
+    }
+    sought = next;
+  }
+  return false;
 }
 
 /** The setting a `-c` or `--config-env` word names, and whether its value passes: null when the key is not fixed. */

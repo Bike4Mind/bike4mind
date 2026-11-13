@@ -757,7 +757,7 @@ describe('scanShell', () => {
 
   describe('what always allow remembers', () => {
     it('skips options before the subcommand, for the prefix and for the text matched', async () => {
-      const result = await scan('pnpm --filter @x/y exec vitest run foo && git -C sub commit -m x');
+      const result = await scan('pnpm --filter @x/y exec vitest run foo && git -C sub status -s');
       expect(result.commands).toEqual([
         {
           text: 'pnpm exec vitest run foo',
@@ -765,7 +765,7 @@ describe('scanShell', () => {
           coverable: true,
           words: 'pnpm --filter @x/y exec vitest run foo',
         },
-        { text: 'git commit -m x', always: 'git commit *', coverable: true, words: 'git -C sub commit -m x' },
+        { text: 'git status -s', always: 'git status *', coverable: true, words: 'git -C sub status -s' },
       ]);
     });
 
