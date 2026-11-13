@@ -4,7 +4,7 @@ import { createMocks } from 'node-mocks-http';
 const isApiKeyAccessAllowedMock = vi.hoisted(() =>
   vi.fn(async (_user: unknown, _billing?: unknown, _request?: unknown) => true)
 );
-vi.mock('@server/utils/apiKeyAccessGate', async () => {
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', async () => {
   const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
   const message = 'API keys require an active paid subscription';
   return {
@@ -168,6 +168,22 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
 
   afterEach(() => {
     delete process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT;
+  });
+
+  it('inherits the registered profile and ignores a request-supplied profile', async () => {
+    const rateLimit = { requestsPerMinute: 300, requestsPerDay: 20_000 };
+    mockVerifyClientSecret.mockResolvedValue({ ...FEDERATED_CLIENT, rateLimit });
+    const { req, res } = makeReq({ ...VALID_BODY, rateLimit: { requestsPerMinute: 9999, requestsPerDay: 999999 } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey.mock.calls[0][1].rateLimit).toEqual(rateLimit);
+  });
+
+  it('leaves mint defaults unchanged for a client without a profile', async () => {
+    const { req, res } = makeReq();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey.mock.calls[0][1].rateLimit).toBeUndefined();
   });
 
   it('grant gate (enforce): valid token but no grant for this client -> 403 access_denied, no mint', async () => {

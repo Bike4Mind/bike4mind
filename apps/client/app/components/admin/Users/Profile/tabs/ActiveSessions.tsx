@@ -34,6 +34,7 @@ const CREATED_VIA_LABELS: Readonly<Record<AuthSessionCreatedVia, string>> = {
   device: 'Device code',
   ios: 'Native app',
   'legacy-migration': 'Carried over',
+  'persona-mint': 'Persona login code',
 };
 
 /** "Browser on OS" from the stored fields, else parsed from the user agent (most sessions store only that); '-' when unknown. */
@@ -155,6 +156,7 @@ export const ActiveSessions: React.FC<{ user: AdminUserProfile }> = ({ user }) =
             </Typography>
           }
           testId="user-sessions-table"
+          framed={false}
           rowTestId={() => 'user-sessions-row'}
         />
         <Stack sx={{ px: 2, py: 1.5, borderTop: '1px solid', borderColor: 'admin.border' }}>

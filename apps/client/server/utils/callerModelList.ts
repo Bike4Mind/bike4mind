@@ -23,7 +23,7 @@ import {
   type ModelInfo,
   type SupersededModelInfo,
 } from '@bike4mind/common';
-import { getUserEntitlements, toEntitlementUser } from '@server/entitlements';
+import { getUserEntitlements, toEntitlementUser } from '@bike4mind/server-utils/entitlements/index';
 import { Logger } from '@bike4mind/observability';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { modelCatalogListingOptions } from '@server/utils/modelCatalogOptions';

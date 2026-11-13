@@ -1,10 +1,11 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Mint or replace the key's generation-callback signing secret. The plaintext is in this
@@ -14,6 +15,10 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
     const userId = req.user?.id;
+    assertNotOrgServiceAccount(req.user);
+    if (req.apiKeyInfo?.oauthExchangeClientId) {
+      throw new ForbiddenError('Keys minted for a connected app cannot manage API keys');
+    }
     const keyId = req.query.id;
 
     if (!keyId) throw new BadRequestError('Invalid key ID');

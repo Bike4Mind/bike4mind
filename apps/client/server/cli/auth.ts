@@ -19,7 +19,7 @@ import {
   API_KEY_ACCESS_DENIED_MESSAGE,
   assertCliSessionAllowed,
   isApiKeyAccessAllowed,
-} from '@server/utils/apiKeyAccessGate';
+} from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
@@ -69,6 +69,8 @@ export interface ApiKeyInfo {
   ownerUntrusted?: boolean;
   /** The admin who provisioned the key for its owner; exempts it from the paid-only switch. */
   createdByUserId?: string;
+  /** OAuth client that minted this key, present only for a federated exchange key. */
+  oauthExchangeClientId?: string;
 }
 
 /**
@@ -188,6 +190,12 @@ export interface VerifyApiKeyOptions {
   /** At least one of these scopes must be present on the key. Defaults to
    *  AI_GENERATE / AI_CHAT to preserve the legacy completions behavior. */
   requiredScopes?: ApiKeyScopeValue[];
+  /** Whether this check is a use of the key (stamps `lastUsedAt`). Defaults to true; false for
+   *  connecting and for first-party telemetry. */
+  recordUse?: boolean;
+  /** Accept a key minted by the federated AI-token exchange. Off by default: such a key is
+   *  confined to the routes that explicitly opt in. */
+  allowExchangeKeys?: boolean;
 }
 
 /**
@@ -219,6 +227,7 @@ function toApiKeyInfo(v: {
   spendCap?: number;
   currentSpend?: number;
   createdByUserId?: string;
+  oauthExchangeClientId?: string;
 }): ApiKeyInfo {
   return {
     keyId: v.keyId!,
@@ -234,6 +243,7 @@ function toApiKeyInfo(v: {
     spendCap: v.spendCap,
     currentSpend: v.currentSpend,
     createdByUserId: v.createdByUserId,
+    oauthExchangeClientId: v.oauthExchangeClientId,
   };
 }
 
@@ -295,9 +305,11 @@ export async function verifyApiKey(
   }
 
   try {
-    const validation = await userApiKeyService.validateUserApiKey(apiKey, {
-      db: { userApiKeys: userApiKeyRepository },
-    });
+    const validation = await userApiKeyService.validateUserApiKey(
+      apiKey,
+      { db: { userApiKeys: userApiKeyRepository } },
+      { recordUse: false }
+    );
 
     if (!validation.isValid || !validation.userId || !validation.keyId || !validation.scopes || !validation.rateLimit) {
       // Same suspended-owner answer apiKeyAuth gives: suspension disables the owner's keys.
@@ -305,6 +317,15 @@ export async function verifyApiKey(
       throw new UnauthorizedError(
         validation.reason ? `Invalid API key: ${validation.reason}` : 'Invalid or expired API key'
       );
+    }
+
+    if (validation.oauthExchangeClientId && !options?.allowExchangeKeys) {
+      throw new ForbiddenError('This key cannot be used for this endpoint');
+    }
+
+    // Deferred past the exchange refusal so a refused key is never stamped as used.
+    if (options?.recordUse !== false) {
+      userApiKeyService.recordUserApiKeyUse(validation.keyId, { userApiKeys: userApiKeyRepository });
     }
 
     const requiredScopes = options?.requiredScopes ?? DEFAULT_COMPLETION_SCOPES;
@@ -332,8 +353,11 @@ export async function verifyApiKey(
  * `CC_BRIDGE` scope is accepted - a leaked bridge key should have no ability
  * to bill completions or touch other endpoints.
  */
-export async function verifyBridgeApiKey(headers: Record<string, string | undefined>): Promise<ApiKeyInfo> {
-  return verifyApiKey(headers, { requiredScopes: [ApiKeyScope.CC_BRIDGE] });
+export async function verifyBridgeApiKey(
+  headers: Record<string, string | undefined>,
+  { recordUse }: { recordUse: boolean }
+): Promise<ApiKeyInfo> {
+  return verifyApiKey(headers, { requiredScopes: [ApiKeyScope.CC_BRIDGE], recordUse });
 }
 
 /**

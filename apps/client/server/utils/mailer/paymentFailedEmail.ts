@@ -104,7 +104,7 @@ const layout = (brand: string, heading: string, content: string): string => `
 
 /**
  * The first-failure notice for a subscription renewal. Access is paused from this point, not at
- * cancellation: `past_due` grants no entitlements (server/entitlements/index.ts), so the copy
+ * cancellation: `past_due` grants no entitlements (packages/server-utils/src/entitlements/index.ts), so the copy
  * must not promise otherwise.
  */
 export const buildPaymentFailedEmail = (input: PaymentFailedEmailInput): EmailContent => {

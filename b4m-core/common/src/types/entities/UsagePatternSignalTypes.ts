@@ -1,4 +1,10 @@
-export const USAGE_PATTERN_SIGNAL_IDS = ['apiOnlyUsage', 'regularCadence', 'creditPolling', 'quickApiKey'] as const;
+export const USAGE_PATTERN_SIGNAL_IDS = [
+  'apiOnlyUsage',
+  'regularCadence',
+  'creditPolling',
+  'quickApiKey',
+  'scriptedGrantDrain',
+] as const;
 export type UsagePatternSignalId = (typeof USAGE_PATTERN_SIGNAL_IDS)[number];
 
 /** One per-user usage pattern feature, as stored and as shown to a reviewer. */

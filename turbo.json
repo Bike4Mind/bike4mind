@@ -23,7 +23,8 @@
         "server/premium-generated/**",
         "../../infra/premium-generated/**",
         "../../packages/server-utils/src/premium-generated/**",
-        "../../packages/scripts/migrate/migrations/premium.generated.ts"
+        "../../packages/scripts/migrate/migrations/premium.generated.ts",
+        "../../packages/scripts/migrate/migrations/core.generated.ts"
       ]
     },
     "build": {
@@ -108,6 +109,18 @@
         ".turbo/test-context",
         "$TURBO_ROOT$/catalog/model-hub/**",
         "$TURBO_ROOT$/packages/scripts/migrate/migrations/**"
+      ]
+    },
+    // nativeOutputs.test.ts compares the committed iOS token files (generated Swift, AccentColor sets) with the
+    // emitters' output: a hand edit to one of them must not replay a cached pass.
+    "@bike4mind/design-tokens#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/apps/ios/Packages/B4MKit/Sources/B4MKit/Theme/Generated/**",
+        "$TURBO_ROOT$/apps/ios/Bike4Mind/Resources/Assets.xcassets/AccentColor.colorset/**",
+        "$TURBO_ROOT$/apps/ios/Widgets/Assets.xcassets/AccentColor.colorset/**"
       ]
     },
     // mcpRegistryEntry.test.ts checks the published registry entry at the repo root.

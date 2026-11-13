@@ -5,7 +5,7 @@ import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featu
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { analyzeBatchTaxonomy, claimBatchForAnalysis } from '@server/dataLakes/analyzeBatchTaxonomy';
-import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
+import { serializeLakeClaim } from '@bike4mind/server-utils/dataLakes/serializeLakeClaim';
 import {
   TAXONOMY_DAILY_CAP,
   TAXONOMY_RATE_LIMIT_BUCKET,
@@ -22,7 +22,7 @@ import {
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeBatchRepository, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { assertRequestCanAfford } from '@server/billing/meterPlatformCompletion';
 import { respond } from '@server/utils/respond';
 

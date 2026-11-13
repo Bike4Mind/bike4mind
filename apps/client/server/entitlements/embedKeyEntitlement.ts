@@ -3,7 +3,7 @@ import { organizationRepository, userRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { EMBED_WHITELABEL_ENTITLEMENT_KEY, normalizeTag } from '@bike4mind/server-utils/lib/entitlements/registry';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
-import { getUserEntitlements } from './index';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
 
 /** The slice of ApiKeyInfo the owner resolution needs; structurally assignable. */
 export interface EmbedKeyOwnerRef {

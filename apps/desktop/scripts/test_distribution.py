@@ -133,3 +133,16 @@ class DistributionTest(unittest.TestCase):
             prune(root)
             self.assertEqual(sorted(p.name for p in root.iterdir()),
                              ['Bike4Mind-0.2.2-arm64.dmg', 'Bike4Mind-0.2.2-x64.AppImage', 'SHA256SUMS.txt'])
+
+    def test_prune_keeps_signatures_of_published_manifests_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ('latest.yml', 'latest.yml.sig', 'latest-linux.yml', 'latest-linux.yml.sig',
+                         'latest-mac.yml.sig', 'Bike4Mind-0.2.2-setup.exe', 'Bike4Mind-0.2.2-setup.exe.sig'):
+                (root / name).write_text(name)
+            (root / 'SHA256SUMS.txt').write_text(
+                'abc  Bike4Mind-0.2.2-setup.exe\nabc  latest-linux.yml\nabc  latest.yml\n')
+            prune(root)
+            self.assertEqual(sorted(p.name for p in root.iterdir()),
+                             ['Bike4Mind-0.2.2-setup.exe', 'SHA256SUMS.txt', 'latest-linux.yml',
+                              'latest-linux.yml.sig', 'latest.yml', 'latest.yml.sig'])

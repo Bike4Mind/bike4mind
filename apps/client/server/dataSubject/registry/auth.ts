@@ -183,6 +183,8 @@ export const authHolders = {
       'conversationContext.github.repos.owner',
       'conversationContext.github.prs.owner',
       'conversationContext.github.issues.owner',
+      // Which code owns a tutorial walk ('core'), not a person.
+      'tutorial.owner',
     ],
   },
   SignupDomainReview: {
@@ -269,6 +271,7 @@ export const authHolders = {
     unrelatedPaths: ['regInvites'],
     secretPaths: [
       'password',
+      'personaLoginCodeHash',
       'mfa.totpSecret',
       'mfa.backupCodes',
       'mfa.pendingBackupCodes',
@@ -289,6 +292,8 @@ export const authHolders = {
       'resetPasswordToken',
       'emailVerificationToken',
       'pendingEmailToken',
+      // A hash of the user id that only resolves provider safety notices; the export already has the id.
+      'providerEndUserId',
     ],
   },
   UserActivityCounter: {
@@ -301,6 +306,8 @@ export const authHolders = {
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
       { path: 'revokedBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'metadata.createdByUserId', matchBy: 'userId', action: 'anonymize' },
+      // An org-owned key outlives its creator, so only the creator link goes.
+      { path: 'orgOwned.createdByUserId', matchBy: 'userId', action: 'anonymize' },
     ],
     secretPaths: ['keyHash', 'keyDigest', 'callbackSigningSecret'],
   },

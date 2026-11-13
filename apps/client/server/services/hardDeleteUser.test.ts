@@ -11,11 +11,13 @@ const h = vi.hoisted(() => ({
   order: [] as string[],
 }));
 vi.mock('@bike4mind/database', () => ({
+  deleteFeedbackAiForUser: vi.fn().mockResolvedValue(undefined),
+  FeedbackNoteModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
   userRepository: { findById: h.findUser, delete: h.deleteUser },
   erasureRecordRepository: { record: h.recordErasure },
   withTransaction: async (callback: () => Promise<unknown>) => callback(),
 }));
-vi.mock('@server/billing/cancelAccountSubscriptions', () => ({
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   cancelAccountSubscriptions: h.cancelSubscriptions,
   readAccountSubscriptionCustomerIds: h.readCustomers,
   NO_SUBSCRIPTIONS_CANCELED: { canceled: [], failed: [] },
@@ -26,8 +28,8 @@ vi.mock('@server/services/purgeDeletedUserData', () => ({
   purgeDeletedUserData: h.purge,
 }));
 vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: vi.fn() }));
-vi.mock('@server/analytics/billingEventDetails', () => ({ wholeDaysBetween: vi.fn() }));
-vi.mock('@server/analytics/resolveUserType', () => ({ resolveUserType: vi.fn() }));
+vi.mock('@bike4mind/server-utils/analytics/billingEventDetails', () => ({ wholeDaysBetween: vi.fn() }));
+vi.mock('@bike4mind/server-utils/analytics/resolveUserType', () => ({ resolveUserType: vi.fn() }));
 vi.mock('@bike4mind/server-utils/privacy/erasureHash', () => ({
   erasureIdHash: (id: string) => `hash:${id}`,
   erasureKeyId: () => 'key-1',

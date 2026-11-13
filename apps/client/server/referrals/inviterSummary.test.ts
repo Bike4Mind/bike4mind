@@ -71,9 +71,20 @@ describe('getInviterSummary', () => {
       subscribed: 0,
       creditsEarned: 0,
       recentRewards: [],
+      rewards: { firstAnswer: 0, firstPayment: 0, secondPayment: 0 },
     });
     expect(m.countUsers).not.toHaveBeenCalled();
     expect(m.aggregate).not.toHaveBeenCalled();
+  });
+
+  it('reports each reward amount the inviter can earn', async () => {
+    m.getSettingsMap.mockResolvedValue({ ReferralFirstAnswerCredits: '1000', ReferralSecondPaymentCredits: '2500' });
+
+    expect((await getInviterSummary('inviter1', NOW)).rewards).toEqual({
+      firstAnswer: 1000,
+      firstPayment: 0,
+      secondPayment: 2500,
+    });
   });
 
   it('reads the reward amounts past the settings cache so an admin switch shows at once', async () => {

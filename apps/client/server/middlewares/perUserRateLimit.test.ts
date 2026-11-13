@@ -4,7 +4,7 @@ import type { Request } from 'express';
 
 const { mockResolve } = vi.hoisted(() => ({ mockResolve: vi.fn() }));
 
-vi.mock('@server/utils/userRateTier', () => ({
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({
   resolveUserRateLimitPerMin: (...a: unknown[]) => mockResolve(...a),
 }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));

@@ -5,7 +5,7 @@ import { userRepository } from '@bike4mind/database';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { propagateBatchAccountRisk } from '@server/billing/linkedAccounts';
+import { propagateBatchAccountRisk } from '@bike4mind/server-utils/billing/linkedAccounts';
 
 /** Matches the accounts the detection-linked card can list (server/admin/detectionLinkedAccounts.ts). */
 export const LINKED_SUSPEND_PROPAGATION_MAX = 100;

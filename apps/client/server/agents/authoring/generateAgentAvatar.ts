@@ -125,7 +125,7 @@ export async function generateAgentAvatar(
 ): Promise<{ portraitUrl: string; generationPrompt: string }> {
   const userId = user.id;
   // Get operations model for text generation (LLM for prompt generation)
-  const operationsModel = await OperationsModelService.getOperationsModel();
+  const operationsModel = await OperationsModelService.getOperationsModel({ endUserId: userId });
   const { modelId, llm: rawLlm } = operationsModel;
 
   if (!rawLlm) {

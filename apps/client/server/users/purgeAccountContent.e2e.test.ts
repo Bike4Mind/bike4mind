@@ -1,3 +1,4 @@
+import { FeedbackAiModel, FeedbackModel } from '@bike4mind/database';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
@@ -37,16 +38,18 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   }),
   getAppFilesStorage: () => ({ delete: effects.deleteFile, deletePermanently: effects.deleteFile }),
 }));
-vi.mock('@server/services/cdn/invalidateRouterCdn', async importActual => ({
-  ...(await importActual<typeof import('@server/services/cdn/invalidateRouterCdn')>()),
+vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
   createCdnInvalidationBatch: () => ({ add: effects.cdnAdd, flush: effects.cdnFlush }),
 }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({ purgeUserPublishedArtifacts: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
+  purgeUserPublishedArtifacts: vi.fn(),
+}));
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: vi.fn() }));
-vi.mock('@server/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: vi.fn() }));
 vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: vi.fn() }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: effects.sendCompleteEmail }));
-vi.mock('@server/billing/cancelAccountSubscriptions', () => ({
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   cancelAccountSubscriptions: vi.fn(async () => ({ canceled: [], failed: [] })),
   readAccountSubscriptionCustomerIds: vi.fn(async () => []),
   SINGLE_USER_CANCEL_BUDGET_MS: 1000,
@@ -226,6 +229,7 @@ describe('permanent personal-content purge', () => {
       'UserUsagePatternSignals',
       'AdminUserNote',
       'AdminUserNoteRevision',
+      'FeedbackNote',
     ]) {
       await collection(modelName).insertOne({ userId: ownerId, body: 'private account note' });
     }
@@ -260,6 +264,7 @@ describe('permanent personal-content purge', () => {
       'UserUsagePatternSignals',
       'AdminUserNote',
       'AdminUserNoteRevision',
+      'FeedbackNote',
     ]) {
       expect(await collection(modelName).countDocuments({ userId: ownerId })).toBe(0);
     }
@@ -433,5 +438,38 @@ describe('permanent personal-content purge', () => {
     expect(effects.deleteGenerated).not.toHaveBeenCalled();
     expect(effects.cdnAdd).not.toHaveBeenCalled();
     expect(await collection('Quest').findOne({ sessionId: String(survivingId) })).not.toBeNull();
+  });
+  it('keeps the permanent purge anchor when AI cleanup fails and retries the cleanup', async () => {
+    const purgeStartedAt = new Date();
+    await collection('User').insertOne({
+      _id: new mongoose.Types.ObjectId(ownerId),
+      username: 'reporter',
+      email: 'reporter@example.test',
+      deletion: { purgeStartedAt },
+    });
+    const report = await FeedbackModel.create({ userId: ownerId, username: 'Reporter', status: 'New' });
+    await FeedbackAiModel.create({
+      feedbackId: report.id,
+      inputHash: 'hash',
+      model: 'test-embedding',
+      vector: [1],
+      similar: [],
+      reportCreatedAt: report.createdAt,
+      expiresAt: new Date(Date.now() + 86400000),
+    });
+    const failure = vi.spyOn(FeedbackAiModel, 'deleteMany').mockImplementationOnce(() => {
+      throw new Error('AI cleanup failed');
+    });
+    try {
+      await expect(purgeAccountContent(ownerId, { assertLease, logger })).rejects.toThrow('AI cleanup failed');
+    } finally {
+      failure.mockRestore();
+    }
+    const anchor: unknown = await collection('User').findOne({ _id: new mongoose.Types.ObjectId(ownerId) });
+    expect(anchor).toMatchObject({ deletion: { purgeStartedAt } });
+    expect(await FeedbackAiModel.countDocuments()).toBe(1);
+    await purgeAccountContent(ownerId, { assertLease, logger });
+    expect(await FeedbackAiModel.countDocuments()).toBe(0);
+    expect(await collection('User').countDocuments({ _id: new mongoose.Types.ObjectId(ownerId) })).toBe(1);
   });
 });

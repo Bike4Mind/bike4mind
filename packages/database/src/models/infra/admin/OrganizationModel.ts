@@ -165,6 +165,7 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     temperature: { type: Number, min: 0, max: 2 },
     maxTokens: { type: Number, min: 1, max: 200000 },
     maxCreditsPerMember: { type: Number, required: false },
+    serviceAccountUserId: { type: String, required: false },
     redactPushContent: { type: Boolean, default: false },
   },
   {
@@ -394,17 +395,23 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    *
    * The `$expr` capacity guard (`$size users + 1 < seats`: owner + members must leave room for one
    * more, the same owner-inclusive accounting `addMember`/`validateSeatChange` use, #1423) is
-   * evaluated inside the atomic match, so the fit check can't race the write.
+   * evaluated inside the atomic match, so the fit check can't race the write. Organization invite
+   * accept (sharingService/accept.ts) also joins through here; a share-link accept passes
+   * `reservedSeats` so seats promised to outstanding named invites stay free.
    * Returns the PRE-image ({ new: false }); null means already a member, org gone, OR at capacity -
    * the caller re-reads to tell those apart.
    */
-  async addMemberIfUnderCeiling(organizationId: string, member: IUserShare): Promise<IOrganizationDocument | null> {
+  async addMemberIfUnderCeiling(
+    organizationId: string,
+    member: IUserShare,
+    reservedSeats = 0
+  ): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
         _id: organizationId,
         deletedAt: null,
         'users.userId': { $ne: member.userId },
-        $expr: { $lt: [{ $add: [{ $size: '$users' }, 1] }, '$seats'] },
+        $expr: { $lt: [{ $add: [{ $size: '$users' }, 1, Math.max(0, reservedSeats)] }, '$seats'] },
       },
       [
         {
@@ -601,6 +608,47 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
           users: without('users', '$$this.userId'),
           userDetails: without('userDetails', '$$this.id'),
           adminUserIds: without('adminUserIds', '$$this'),
+        },
+      },
+    ]);
+  }
+
+  /**
+   * Pipelines for the same reasons as `removeMember`: a stored `null` breaks `$addToSet`/`$pull`, and ids
+   * compare via `$toString` so a legacy ObjectId entry still matches. One targeted write, so two owners'
+   * concurrent edits of different managers both survive (the full-replace PUT /admins would drop one).
+   * The filter re-checks that the appointee's row confers membership (MEMBER_PERMISSIONS, as
+   * `orgMembershipFilter`), so a row downgraded after the caller's read refuses the appointment.
+   */
+  async addAdmin(organizationId: string, userId: string): Promise<boolean> {
+    const current = { $ifNull: ['$adminUserIds', []] };
+    const filter = { _id: organizationId, users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } };
+    const result = await this.organizationModel.updateOne(filter, [
+      {
+        $set: {
+          adminUserIds: {
+            $cond: [
+              { $in: [userId, { $map: { input: current, in: { $toString: '$$this' } } }] },
+              current,
+              { $concatArrays: [current, [userId]] },
+            ],
+          },
+        },
+      },
+    ]);
+    return result.matchedCount > 0;
+  }
+
+  async removeAdmin(organizationId: string, userId: string): Promise<void> {
+    await this.organizationModel.updateOne({ _id: organizationId }, [
+      {
+        $set: {
+          adminUserIds: {
+            $filter: {
+              input: { $ifNull: ['$adminUserIds', []] },
+              cond: { $ne: [{ $toString: '$$this' }, userId] },
+            },
+          },
         },
       },
     ]);

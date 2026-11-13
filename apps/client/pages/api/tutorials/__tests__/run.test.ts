@@ -15,15 +15,15 @@ vi.mock('@server/middlewares/baseApi', async () => {
   const { makeChain } = await import('./chain');
   return { baseApi: (config?: unknown) => makeChain(config) };
 });
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: async () => 10 }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: async () => 10 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getSettingByName: async () => state.switchOn,
 }));
-vi.mock('@server/entitlements', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
   userHasEntitlement: async (user: { entitlements?: string[] }, key: string) => !!user.entitlements?.includes(key),
 }));
 vi.mock('@server/tutorials/registry', async () => {
@@ -41,7 +41,7 @@ vi.mock('@server/tutorials/models', async importOriginal => ({
     Progress: {},
     Override: { find: () => ({ lean: async () => [] }) },
     OverrideChange: {},
-    Draft: {},
+    Draft: { find: () => ({ lean: async () => [] }) },
   }),
 }));
 vi.mock('@server/tutorials/progressStore', () => ({

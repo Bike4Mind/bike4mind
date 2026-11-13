@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { basename, sep } from 'node:path';
 import type { ChatApprovalAnswer } from '@shared/chat';
-import type { ApprovalAlways } from './types';
+import type { ApprovalAlways, ApprovalPart } from './types';
 
 /** The `optionId` of a question answer that was closed rather than skipped. */
 export const QUESTION_CANCELLED = 'cancelled';
@@ -65,6 +65,31 @@ export function patternMatches(pattern: string, command: string): boolean {
   return new RegExp(`^${source}$`, 's').test(command);
 }
 
+/**
+ * Whether remembered `patterns` (see ApprovalGate.allowedPatterns) cover one sub-command. Never one the
+ * scan could not normalise, nor an inline or stdin script over a tainted reply or with a reason to ask:
+ * a prefix would cover whatever code comes next.
+ */
+export function partAllowed(
+  patterns: readonly AllowedPattern[],
+  part: Pick<ApprovalPart, 'text' | 'coverable' | 'opaque' | 'ask'>,
+  tainted = false
+): boolean {
+  if (!part.coverable || (part.opaque && tainted)) return false;
+  const kinds = part.ask?.kinds ?? [];
+  return patterns.some(
+    ({ pattern, askedOver }) => kinds.every(kind => askedOver.has(kind)) && patternMatches(pattern, part.text)
+  );
+}
+
+/** A remembered shell pattern, and the reasons to ask (see PartAskKind) the card it was allowed on gave for it. */
+export interface AllowedPattern {
+  pattern: string;
+  askedOver: ReadonlySet<string>;
+}
+
+const NOTHING_ASKED: ReadonlySet<string> = new Set();
+
 const TOOLCHAIN_EXECUTABLES = new Set(['vitest', 'jest', 'tsc', 'eslint', 'prettier', 'turbo']);
 const PACKAGE_RUNNERS = new Set(['pnpm', 'npm', 'yarn', 'bun']);
 const EXEC_SUBCOMMANDS = new Set(['exec', 'x', 'dlx']);
@@ -104,6 +129,8 @@ interface StandingShell {
   patterns: Set<string>;
   /** The patterns answered on a card that said the reply had read untrusted content. */
   overTaint: Set<string>;
+  /** Pattern -> the reasons its part asked on the card it was allowed on. */
+  askedOver: Map<string, Set<string>>;
   directories: Set<string>;
 }
 
@@ -121,6 +148,8 @@ export interface ApprovalRequestOptions {
    * redirect, which is an instruction about one call, from ever becoming a policy.
    */
   rememberable?: readonly string[];
+  /** The card asked about only some of the call's parts: an 'always' keeps their patterns, never the whole call. */
+  partial?: boolean;
   /** A question card, which a new message closes via cancelQuestions rather than leaving live. */
   question?: boolean;
   /** The card said the reply had read untrusted content; recorded on an 'always' as overTaint. */
@@ -164,6 +193,9 @@ export class ApprovalGate {
   /** sessionId -> exact approval key -> the shell patterns and directories it allowed. */
   private readonly standingShell = new Map<string, Map<string, StandingShell>>();
 
+  /** sessionId -> the session that spawned it; see setParent. */
+  private readonly parents = new Map<string, string>();
+
   constructor(private readonly listener?: ApprovalGateListener) {}
 
   /**
@@ -197,27 +229,60 @@ export class ApprovalGate {
   }
 
   /**
-   * Whether every sub-command of this script has been allowed before. Over a tainted reply only
+   * Whether every sub-command of this script has been allowed before, here or in a session that spawned
+   * this one. Over a tainted reply only
    * patterns answered over taint count, never an unbounded runner pattern such as `node *` or
    * `pnpm exec -- *`, and never an inline or stdin script.
    */
   coversCommands(sessionId: string, always: ApprovalAlways, tainted = false): boolean {
-    const standing = this.standingShell.get(sessionId);
-    if (!standing || always.commands.length === 0) return false;
-    const own = [...standing.values()]
-      .flatMap(entry => [...(tainted ? entry.overTaint : entry.patterns)])
-      .filter(entry => entry.startsWith(`${always.namespace}\x00`))
-      .map(entry => entry.slice(always.namespace.length + 1));
-    return always.commands.every(
-      ({ text, coverable, opaque }) =>
-        coverable && !(tainted && opaque) && own.some(pattern => patternMatches(pattern, text))
-    );
+    if (always.commands.length === 0) return false;
+    const own = this.allowedPatterns(sessionId, always.namespace, tainted);
+    return own.length > 0 && always.commands.every(command => partAllowed(own, command, tainted));
+  }
+
+  /**
+   * A spawned session runs what the sessions that started it allowed in their chats. Set at each turn's start
+   * rather than read from disk: a parent can hold an allowance only after running a turn in this process.
+   */
+  setParent(sessionId: string, parentId: string | undefined): void {
+    if (parentId && parentId !== sessionId) this.parents.set(sessionId, parentId);
+    else this.parents.delete(sessionId);
+  }
+
+  /** This session and the ones that spawned it, nearest first. */
+  private lineage(sessionId: string): string[] {
+    const chain = [sessionId];
+    for (let parent = this.parents.get(sessionId); parent && !chain.includes(parent);) {
+      chain.push(parent);
+      parent = this.parents.get(parent);
+    }
+    return chain;
+  }
+
+  /** The shell patterns "Allow in this chat" gave for one tool, in this session or one that spawned it. */
+  allowedPatterns(sessionId: string, namespace: string, tainted = false): AllowedPattern[] {
+    const prefix = `${namespace}\x00`;
+    const patterns: AllowedPattern[] = [];
+    for (const id of this.lineage(sessionId)) {
+      for (const entry of this.standingShell.get(id)?.values() ?? []) {
+        for (const stored of tainted ? entry.overTaint : entry.patterns) {
+          if (!stored.startsWith(prefix)) continue;
+          patterns.push({
+            pattern: stored.slice(prefix.length),
+            askedOver: entry.askedOver.get(stored) ?? NOTHING_ASKED,
+          });
+        }
+      }
+    }
+    return patterns;
   }
 
   /** The directories among these that the user has not said "always" to. */
   uncoveredDirectories(sessionId: string, directories: readonly string[]): string[] {
-    const standing = this.standingShell.get(sessionId);
-    const allowedDirectories = standing ? [...standing.values()].flatMap(entry => [...entry.directories]) : [];
+    if (directories.length === 0) return [];
+    const allowedDirectories = this.lineage(sessionId).flatMap(id =>
+      [...(this.standingShell.get(id)?.values() ?? [])].flatMap(entry => [...entry.directories])
+    );
     return directories.filter(directory => !allowedDirectories.some(allowed => withinDirectory(allowed, directory)));
   }
 
@@ -255,7 +320,9 @@ export class ApprovalGate {
           answer.decision === 'always' &&
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
         if (keep) {
-          this.remember(sessionId, standingKey(key, answer.optionId), answer, options.tainted === true);
+          if (!options.partial) {
+            this.remember(sessionId, standingKey(key, answer.optionId), answer, options.tainted === true);
+          }
           if (options.always) this.rememberShell(sessionId, key, options.always, options.tainted === true);
         }
         if (announced) this.listener?.settled(sessionId);
@@ -326,6 +393,7 @@ export class ApprovalGate {
   forgetSession(sessionId: string): void {
     this.standing.delete(sessionId);
     this.standingShell.delete(sessionId);
+    this.parents.delete(sessionId);
     for (const [approvalId, entry] of this.pending) {
       if (entry.sessionId === sessionId) {
         entry.settle({ decision: 'deny' }, 'conversation-deleted');
@@ -339,6 +407,7 @@ export class ApprovalGate {
     this.pending.clear();
     this.standing.clear();
     this.standingShell.clear();
+    this.parents.clear();
   }
 
   private rememberShell(sessionId: string, key: string, always: ApprovalAlways, overTaint: boolean): void {
@@ -346,11 +415,17 @@ export class ApprovalGate {
     const standing = byKey.get(key) ?? {
       patterns: new Set(),
       overTaint: new Set(),
+      askedOver: new Map(),
       directories: new Set(),
     };
-    for (const { pattern } of always.commands) {
+    for (const { pattern, ask } of always.commands) {
       const entry = `${always.namespace}\x00${pattern}`;
       standing.patterns.add(entry);
+      if (ask) {
+        const over = standing.askedOver.get(entry) ?? new Set<string>();
+        for (const kind of ask.kinds) over.add(kind);
+        standing.askedOver.set(entry, over);
+      }
       if (overTaint && hasBoundedTaintPrefix(pattern)) standing.overTaint.add(entry);
     }
     for (const directory of always.directories) standing.directories.add(directory);

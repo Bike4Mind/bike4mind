@@ -8,7 +8,7 @@ import {
   selfUserProfileResponseSchema,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
-import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
+import { withSafeOrganization } from '@bike4mind/server-utils/utils/toSafeOrganizationSubdocument';
 import { Request } from 'express';
 
 function toPublicProfile(user: IUserDocument, isColleague: boolean): PublicUserProfile {

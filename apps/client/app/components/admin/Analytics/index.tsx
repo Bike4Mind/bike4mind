@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import type { ActivationFunnel } from '@client/app/utils/activationFunnel';
 import { getErrorMessage } from '@client/app/utils/error';
-import type { UserFunnelStep } from '@client/app/utils/adminUsersFilter';
+import type { UserFunnelStep } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import type {
   AnalyticsAccounts,
   AnalyticsOverview,
@@ -23,6 +23,7 @@ import {
   StatusChip,
   useAdminListUrlState,
 } from '../shared';
+import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import { ADMIN_ORGANIZATIONS_TAB_SLUG, adminSearchForTab, type AdminSearch } from '../adminTabParams';
 import { adminTabToSlug } from '../adminTabSlugs';
 import { AdminTab } from '../adminSidebarConfig';
@@ -264,7 +265,7 @@ const AnalyticsTab = () => {
   const dayCount = (count: number) => `${count} ${count === 1 ? 'day' : 'days'}`;
 
   return (
-    <Stack gap={2.5} sx={{ p: { xs: 2, md: 4 }, minWidth: 0 }} data-testid="analytics-page">
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="analytics-page">
       <AdminPageHeader
         title="Analytics"
         description="Who uses Bike4Mind, how often, and whether they come back. UTC."

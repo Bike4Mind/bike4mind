@@ -12,7 +12,7 @@ const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, 
 const assertCliSessionAllowedMock = vi.hoisted(() =>
   vi.fn(async (_user: unknown, _sid?: string, _options?: { requireApiAccess?: boolean }) => undefined)
 );
-vi.mock('@server/utils/apiKeyAccessGate', async () => {
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', async () => {
   const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
   const message = 'API keys require an active paid subscription';
   return {
@@ -48,7 +48,7 @@ vi.mock('@bike4mind/services', async importOriginal => ({
   // Real kill-switch + token-type comparisons so the tests exercise actual enforcement (not stubs).
   isTokenVersionCurrent: (a?: number, b?: number) => (a ?? 0) === (b ?? 0),
   isTokenTypeAcceptable: (t: unknown, expected: string) => t === undefined || t === expected,
-  userApiKeyService: { validateUserApiKey: vi.fn(), validateUserApiKeyById: vi.fn() },
+  userApiKeyService: { validateUserApiKey: vi.fn(), validateUserApiKeyById: vi.fn(), recordUserApiKeyUse: vi.fn() },
   cacheService: {
     get: vi.fn(async ({ key }: { key: string }) => {
       const entry = cacheStore.get(key);
@@ -682,6 +682,48 @@ describe('verifyApiKey scope gate', () => {
   });
 });
 
+describe('verifyApiKey exchange keys', () => {
+  const exchangeKey = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'k1',
+    scopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ],
+    rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    oauthExchangeClientId: 'client-1',
+  };
+
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_somekey');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+  });
+
+  it('refuses an exchange key by default', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+    const rejection = verifyApiKey({});
+    await expect(rejection).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(rejection).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('admits an exchange key when the caller allows them', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+    await expect(verifyApiKey({}, { allowExchangeKeys: true })).resolves.toMatchObject({
+      keyId: 'k1',
+      oauthExchangeClientId: 'client-1',
+    });
+  });
+
+  it('leaves a personal key with the same scopes unchanged either way', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...exchangeKey,
+      oauthExchangeClientId: undefined,
+    });
+    await expect(verifyApiKey({})).resolves.toMatchObject({ keyId: 'k1' });
+    await expect(verifyApiKey({}, { allowExchangeKeys: true })).resolves.toMatchObject({ keyId: 'k1' });
+  });
+});
+
 describe('rate-limit errors carry their status and retry window', () => {
   beforeEach(() => {
     cacheStore.clear();
@@ -919,5 +961,50 @@ describe('verifyJwtToken paid-only switch for CLI sessions', () => {
       statusCode: 403,
       message: 'The CLI and desktop app require an active paid subscription',
     });
+  });
+});
+
+describe('verifyApiKey (use recording)', () => {
+  const validKey = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'k1',
+    scopes: [ApiKeyScope.AI_GENERATE],
+    rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+  };
+
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_key');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(userApiKeyService.recordUserApiKeyUse).mockReset();
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+  });
+
+  it('does not record use for a refused exchange key', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...validKey,
+      oauthExchangeClientId: 'client-1',
+    });
+    await expect(verifyApiKey({})).rejects.toThrow(/cannot be used for this endpoint/);
+    expect(userApiKeyService.recordUserApiKeyUse).not.toHaveBeenCalled();
+    expect(vi.mocked(userApiKeyService.validateUserApiKey).mock.calls[0][2]).toEqual({ recordUse: false });
+  });
+
+  it('records use for an exchange key the caller allows', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...validKey,
+      oauthExchangeClientId: 'client-1',
+    });
+    await verifyApiKey({}, { allowExchangeKeys: true });
+    expect(userApiKeyService.recordUserApiKeyUse).toHaveBeenCalledWith('k1', expect.anything());
+  });
+
+  it('records use for an ordinary key, unless the caller opts out', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(validKey);
+    await verifyApiKey({});
+    expect(userApiKeyService.recordUserApiKeyUse).toHaveBeenCalledTimes(1);
+    await verifyApiKey({}, { recordUse: false });
+    expect(userApiKeyService.recordUserApiKeyUse).toHaveBeenCalledTimes(1);
   });
 });

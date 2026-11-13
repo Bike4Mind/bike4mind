@@ -1,6 +1,12 @@
 import type { Request } from 'express';
 import jwt from 'jsonwebtoken';
-import { AuthEvents, type AuthSessionCreatedVia, type AuthStrategy, type IUserDocument } from '@bike4mind/common';
+import {
+  AuthEvents,
+  MfaEnrollmentEvents,
+  type AuthSessionCreatedVia,
+  type AuthStrategy,
+  type IUserDocument,
+} from '@bike4mind/common';
 import { passkeyCredentialRepository, type ITrustedDeviceDocument } from '@bike4mind/database';
 import { mfaService } from '@bike4mind/services';
 import { readEnforceMfa } from '@bike4mind/server-utils/auth/mfaEnforcement';
@@ -9,6 +15,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { recordMfaEnrollmentEvent } from '@server/auth/mfaEnrollmentFunnel';
 
 // Re-exported so existing importers (mfa/status, mfa/disable) keep one import site.
 export { readEnforceMfa };
@@ -59,6 +66,11 @@ export async function resolveSecondFactor(
   }
 
   if (await readEnforceMfa()) {
+    await recordMfaEnrollmentEvent(user.id, MfaEnrollmentEvents.REQUIRED, {
+      surface: 'signin',
+      source: origin.createdVia,
+      strategy: origin.strategy,
+    });
     return { kind: 'enroll', mfaToken: signMfaPendingToken(user, origin) };
   }
   return { kind: 'satisfied', trustedDevice: null };

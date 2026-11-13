@@ -9,7 +9,7 @@ import {
 
 /**
  * The `/login?error=` code a redirect-based sign-in (OAuth callback) sends a blocked account to.
- * Must stay in sync with apps/client/app/utils/loginErrorMessages.ts, which renders the notice.
+ * Must stay in sync with packages/server-utils/src/app/utils/loginErrorMessages.ts, which renders the notice.
  */
 const BLOCKED_SIGN_IN_ERROR_CODES: Record<AccountBlockReason, string> = {
   banned: 'account_suspended',

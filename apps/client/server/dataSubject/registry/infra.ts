@@ -2,12 +2,44 @@ import type { DataHolderRegistry } from '../types';
 import { AUDIT_LOG, EMAIL_SUPPRESSION, expiresAfterTtl } from './retention';
 
 export const infraHolders = {
+  // A frozen evaluation set of accounts for measuring abuse detection. Account deletion
+  // (abuseEvalSetRepository.removeUser) pulls the person's own example, with its verdicts, from every set.
+  // Campaign keys are opaque hashes, so no other example names the person. The admin references below
+  // are classified for export; deletion does not rewrite them.
+  AbuseEvalSet: {
+    kind: 'holder',
+    references: [
+      { path: 'examples.userId', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'createdBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'examples.verdicts.reviewerId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'runs.ranBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
   // Advisory model judgment of a shadow detection, kept for as long as the detection.
   AbuseAssessment: {
     kind: 'viaParent',
     parent: 'ShadowDetection',
     foreignKey: 'detectionId',
     attribution: [{ path: 'requestedBy', matchBy: 'userId', action: 'anonymize' }],
+  },
+  // Advisory model verdict on an admin queue item. `entityId` is that item (a detection, a ticket), not a
+  // person, and evidence is pseudonymised before it is stored; the deciding admin is the only reference.
+  // `overrideReason` is the admin's free text and is not scanned.
+  AdminAiSuggestion: {
+    kind: 'holder',
+    references: [{ path: 'decidedBy.userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['decidedBy.name'] }],
+  },
+  AdminAiAttempt: {
+    kind: 'noUserData',
+    note: 'Platform AI call accounting and outcome metadata; suggestionId links a suggestion, not a user account.',
+  },
+  AdminAiClass: {
+    kind: 'noUserData',
+    note: 'Operator-maintained action-class modes and aggregate replay evidence; replayArtifact is free text and is not scanned.',
+  },
+  AdminMorningBrief: {
+    kind: 'noUserData',
+    note: 'Environment/day operational counts, alarm names, aggregate AI activity and admin page links; no user references or source queue content are stored.',
   },
   // An admin's request for a second admin's sign-off on a privileged action, kept with the audit trail.
   // `summary` and `paramsJson` (which may name the target account) are free text and not scanned.
@@ -23,6 +55,14 @@ export const infraHolders = {
   AdminAuditAlertState: {
     kind: 'holder',
     references: [{ path: 'openBursts.actorUserId', matchBy: 'userId', action: 'pullFromArray' }],
+  },
+  OrganizationAuditEvent: {
+    kind: 'holder',
+    references: [
+      { path: 'actorUserId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      { path: 'targetId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG, where: { action: 'member.added' } },
+      { path: 'targetId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG, where: { action: 'member.removed' } },
+    ],
   },
   // Append-only: the model rejects every update, so the entry cannot be anonymized in place. Free-text `summary`,
   // `changes` and `details` are not scanned for the person.
@@ -113,12 +153,17 @@ export const infraHolders = {
     references: [
       { path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['userName'] },
       // Free-form context on admin and membership counters.
+      { path: 'metadata.userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'metadata.targetUserId', matchBy: 'userId', action: 'anonymize' },
       { path: 'metadata.memberEmail', matchBy: 'email', action: 'anonymize' },
       { path: 'metadata.email', matchBy: 'email', action: 'anonymize' },
     ],
   },
   Counters: { kind: 'noUserData', note: 'Platform-wide named counters.' },
+  DlqFailure: {
+    kind: 'noUserData',
+    note: 'Queue failure metadata keyed by SQS message ID, not a user reference. Thrown error text may contain incidental identifiers and expires after 15 days.',
+  },
   // `messageBody` is the replayed queue message and may carry user content; it is not scanned.
   DlqReplayLog: {
     kind: 'holder',
@@ -291,6 +336,7 @@ export const infraHolders = {
   // anonymized here. Deleting the person's personal organizations (the `personal` flag, which
   // `purgeAccountContent` filters on) is deferred to the erasure flow.
   // `userDetails.email` and `.name` are removed with the element that `userDetails.id` pulls.
+  // `serviceAccountUserId` names the org's system service account, never a person.
   Organization: {
     kind: 'holder',
     references: [
@@ -299,7 +345,13 @@ export const infraHolders = {
       { path: 'adminUserIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'userDetails.id', matchBy: 'userId', action: 'pullFromArray' },
     ],
-    unrelatedPaths: ['userDetails.email', 'maxCreditsPerMember', 'signupGrantUnlockCount', 'signupInviteBonusCount'],
+    unrelatedPaths: [
+      'userDetails.email',
+      'maxCreditsPerMember',
+      'signupGrantUnlockCount',
+      'signupInviteBonusCount',
+      'serviceAccountUserId',
+    ],
   },
   OverwatchProduct: { kind: 'noUserData', note: 'Tracked product catalogue entry.' },
   // The event `userId` is an HMAC of the Bike4Mind user id under a server-side salt (`pseudonymizeUserId`), not the id.

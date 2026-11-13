@@ -135,13 +135,15 @@ const DETAILED_RUN = {
 function call(options: {
   method: 'GET' | 'POST';
   isAdmin?: boolean;
+  adminPermissions?: string[];
   // string[] covers a repeated query parameter, which is a request the route rejects.
   query?: Record<string, string | string[]>;
 }) {
   const { req, res } = createMocks({ method: options.method, query: options.query });
-  (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+  (req as unknown as { user: { isAdmin: boolean; id: string; adminPermissions?: string[] } }).user = {
     isAdmin: options.isAdmin ?? true,
     id: 'admin-1',
+    ...(options.adminPermissions ? { adminPermissions: options.adminPermissions } : {}),
   };
   return { run: () => handler(req as never, res as never), res };
 }
@@ -171,6 +173,12 @@ describe('/api/admin/model-discovery', () => {
   it.each(['GET', 'POST'] as const)('rejects a non-admin %s', async method => {
     const { run } = call({ method, isAdmin: false });
     await expect(run()).rejects.toThrow(/missing permission/i);
+  });
+
+  it('refuses Run now to a delegate holding settings:manage', async () => {
+    const { run } = call({ method: 'POST', isAdmin: false, adminPermissions: ['settings:manage', 'support:read'] });
+    await expect(run()).rejects.toMatchObject({ statusCode: 403 });
+    expect(getSettingsValue).not.toHaveBeenCalled();
   });
 
   it('rejects a non-admin asking for one run by id', async () => {
@@ -287,6 +295,8 @@ describe('/api/admin/model-discovery', () => {
             detail: 'openai publishes in 2/out 12 $/MTok and litellm in 8/out 24 $/MTok disagree beyond 10%',
           },
         ],
+        // Absent on the document too: a run from before the field still reads as an array.
+        longContextGaps: [],
         priceSkips: [{ modelId: 'm1', reason: 'unchanged' }],
         lifecycleTransitions: [
           { modelId: 'm4', from: 'active', to: 'deprecated', signal: 'absence', autoApplied: false },

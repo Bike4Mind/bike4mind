@@ -1,3 +1,4 @@
+import type { NewSessionDefaults } from './sessionDefaults';
 import type { RolePolicy, TaskAction } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
@@ -155,6 +156,7 @@ import type { LocalHistoryResult, LocalHistoryState } from './history';
  */
 export const IPC_CHANNELS = {
   getAppInfo: 'app:get-info',
+  setTheme: 'app:set-theme',
   authGetState: 'auth:get-state',
   authSignIn: 'auth:sign-in',
   authCancelSignIn: 'auth:cancel-sign-in',
@@ -211,8 +213,10 @@ export const IPC_CHANNELS = {
   chatSetApprovalMode: 'chat:set-approval-mode',
   chatSetSessionArchived: 'chat:set-session-archived',
   chatExportSession: 'chat:export-session',
+  chatExportLocalData: 'chat:export-local-data',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
+  chatDraftDefaults: 'chat:draft-defaults',
   chatCreateCodeSession: 'chat:create-code-session',
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
@@ -257,6 +261,8 @@ export const IPC_CHANNELS = {
   chatAddAttachments: 'chat:add-attachments',
   chatReadAttachment: 'chat:read-attachment',
   chatDiscardAttachment: 'chat:discard-attachment',
+  chatCopyDraftAttachments: 'chat:copy-draft-attachments',
+  chatDiscardDraftAttachments: 'chat:discard-draft-attachments',
   chatImageAction: 'chat:image-action',
   chatAttachImage: 'chat:attach-image',
   chatListArtifacts: 'chat:list-artifacts',
@@ -689,6 +695,7 @@ export type CreateCodeSessionIpcResult = ({ ok: true } & CreatedSession) | { ok:
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
 export interface DesktopApi {
   getAppInfo(): Promise<AppInfo>;
+  setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
   update: {
     getState(): Promise<UpdateState>;
     /** Resolves when the check finishes; the OUTCOME arrives on onStateChanged. */
@@ -768,7 +775,7 @@ export interface DesktopApi {
     getBilling(): Promise<AccountBilling>;
     subscribePlan(priceId: string): Promise<SubscribePlanResult>;
     /** Resolves when the payment window closes, not as proof of payment. */
-    purchaseCredits(packageId: string): Promise<SubscribePlanResult>;
+    purchaseCredits(packageId: string, acceptedTerms?: boolean): Promise<SubscribePlanResult>;
     sendFeedback(content: string): Promise<FeedbackSubmitResult>;
   };
   usage: {
@@ -853,9 +860,12 @@ export interface DesktopApi {
     setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
     /** Save a conversation as Markdown or JSON, by the extension picked in the save dialog. Rejects on a write failure. */
     exportSession(sessionId: string): Promise<ChatSessionExportResult>;
+    /** Export this account's local conversations, their files, and project memories into a selected folder. */
+    exportLocalData(): Promise<ChatSessionExportResult>;
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(request?: CreateSessionRequest): Promise<CreatedSession>;
+    defaultsForNewSession(): Promise<NewSessionDefaults>;
     /**
      * Start a Code session, creating or adopting its worktree first when one is asked for.
      * A request with no `directory` creates an UNBOUND session, which the chip row then binds.
@@ -982,6 +992,8 @@ export interface DesktopApi {
     readAttachment(sessionId: string, attachmentId: string, mediaType: string): Promise<string | null>;
     /** Throw away an attachment the user removed before sending. Unknown ids are ignored. */
     discardAttachment(sessionId: string, attachmentId: string): Promise<void>;
+    copyDraftAttachments(draftId: string, sessionId: string, attachmentIds: string[]): Promise<void>;
+    discardDraftAttachments(draftId: string): Promise<void>;
     /** One image context menu item, run in main against a ref main resolves itself. Never rejects. */
     imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
     /** Add a thread image to this session's draft, through the same intake as a paste. */

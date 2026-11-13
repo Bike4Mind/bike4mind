@@ -3,7 +3,7 @@
  * failure mapping shared by every internal consumer. Each consumer passes its own cache-key prefix
  * and limits, so budgets, call caps and concurrency never pool across features. Consumers:
  * - apps/client/server/security/abuseAssessment/abuseAssessment.ts (prefix 'abuseAssessment')
- * - apps/client/server/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts
+ * - apps/workers/src/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts
  */
 
 import { randomUUID } from 'node:crypto';
@@ -55,7 +55,7 @@ export type PlatformDecisionFailureCode =
 /** Per consumer: `keyPrefix` namespaces its cache keys, so its budget and caps are its own. */
 export type PlatformDecisionLimits = { keyPrefix: string; dailyBudgetUsd: number; maxCallsPerDay: number };
 
-const toMicroUsd = (usd: number) => Math.ceil(usd * 1_000_000);
+export const toMicroUsd = (usd: number) => Math.ceil(usd * 1_000_000);
 
 /**
  * Platform keys only, and a call cap and USD budget per fixed 24h window. The budget is metered at each

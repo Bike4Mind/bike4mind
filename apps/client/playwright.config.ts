@@ -97,7 +97,8 @@ const specProjects = [
   {
     name: 'credits',
     setupMatch: /(?:^|\/)credits\.setup\.ts$/,
-    testMatch: /(?:^|\/)credits\.spec\.ts$/,
+    // free-tier-limits rides here for the admin token from core setup; it mints its own free accounts.
+    testMatch: /(?:^|\/)(?:credits|free-tier-limits)\.spec\.ts$/,
     auth: './e2e/.auth/credits-user.json',
   },
   // Byte-fidelity suite: opt-in via EXPORT_BYTES_RUN. Three tests that each wait out an async S3
@@ -221,11 +222,20 @@ export default defineConfig({
     },
     // Referral invites: kept out of `unauthenticated` (the core deploy-gate run) because each run
     // creates a real signup and the per-IP/ASN signup caps are not skipped under E2E
-    // (server/auth/signupNetworkLimits.ts). Full suite + manual run.
+    // (packages/server-utils/src/auth/signupNetworkLimits.ts). Full suite + manual run.
     {
       name: 'referrals',
       use: { ...devices['Desktop Chrome'] },
       testMatch: [/(?:^|\/)referrals\.spec\.ts$/],
+      dependencies: ['setup-core'],
+    },
+    // Launch-readiness A6.1: the signup leg on a short phone screen over a throttled link. Each run is
+    // a real signup, so like referrals it stays out of the `unauthenticated` deploy gate. Chromium
+    // only: the throttle goes through CDP. The spec sets the 375x667 viewport itself.
+    {
+      name: 'launch-readiness',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: [/(?:^|\/)launch-readiness-[\w-]+\.spec\.ts$/],
       dependencies: ['setup-core'],
     },
     // WebSocket token enforcement: mints its own throwaway users (revoking a token kills every

@@ -271,6 +271,19 @@ describe('analytics URL state', () => {
 });
 
 describe('AnalyticsTab', () => {
+  it('leaves padding to the shell and opens with the page header at the shared region gap', async () => {
+    await renderPage('/admin?tab=analytics');
+    const page = await screen.findByTestId('analytics-page');
+    const style = getComputedStyle(page);
+    for (const padding of [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]) {
+      expect(padding).toBe('0');
+    }
+    expect(page).toHaveStyle({ gap: '24px', minWidth: 0 });
+    expect(page.firstElementChild).toBe(screen.getByTestId('admin-page-header'));
+    expect(within(page).getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(within(page).getByRole('heading', { level: 1 })).toHaveTextContent('Analytics');
+  });
+
   it('requests the view a deep link describes', async () => {
     await renderPage('/admin?tab=analytics&range=90d&compare=off&signups=all');
     await screen.findByText('Active users (MAU)');

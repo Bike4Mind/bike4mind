@@ -41,7 +41,7 @@ vi.mock('@server/dataLakes/analyzeBatchTaxonomy', () => ({
   analyzeBatchTaxonomy: h.analyzeBatchTaxonomy,
   claimBatchForAnalysis: h.claimBatchForAnalysis,
 }));
-vi.mock('@server/dataLakes/serializeLakeClaim', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/serializeLakeClaim', () => ({
   serializeLakeClaim: async <T extends { lake: { id: string } }>(claim: () => Promise<T>) => {
     h.tx.push('enter');
     try {
@@ -71,7 +71,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 // Real toAccessContext pulls in entitlements/subscription lookups that are out of scope here;
 // stub it to the caller identity, same shape the route previously built inline.
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertRequestCanAfford: h.assertRequestCanAfford }));
 
 import handler from '../reanalyze-taxonomy';

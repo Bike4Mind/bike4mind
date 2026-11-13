@@ -26,7 +26,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: mocks.csrf }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: mocks.rate }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: mocks.rate }));
 vi.mock('@server/credits/activityUnlock', () => ({ unlockSignupGrantFromActivity: mocks.eligibility }));
 vi.mock('@server/credits/orgInviteBonus', () => ({ retryOrgInviteBonus: mocks.bonus }));
 await import('../signup-grant-eligibility');

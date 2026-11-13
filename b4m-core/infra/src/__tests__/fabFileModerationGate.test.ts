@@ -145,7 +145,7 @@ const ALLOWLIST: Record<string, string> = {
     'the moderation scanner itself (objectCreated) — produces moderationStatus, does not consume it',
   'apps/client/server/s3/moderationScan.ts':
     'the moderation scanner wiring shared by objectCreated and the on-demand scan route - downloads bytes to RUN the scan and PRODUCE moderationStatus, never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
-  'apps/client/server/s3/knowledgeModerationDeps.ts':
+  'packages/server-utils/src/s3/knowledgeModerationDeps.ts':
     'the moderation scanner wiring - downloads bytes to RUN the scan and PRODUCE moderationStatus (its closures are handed to moderateImportedKnowledgeFiles / the rescue sweep), never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
 
   // --- The reviewer's own view of a blocked upload: the point is to see the image the scanner
@@ -182,7 +182,7 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/files/createFabFileURL.ts':
     'DI passthrough to fabFileService.createFabFileByUrl -> createFabFile (create.ts), which skips minting fileUrl for images at creation time (root-cause fix, commit 63cc8f9d3e)',
-  'apps/client/server/dataLakes/proposalAdmissionDeps.ts':
+  'packages/server-utils/src/dataLakes/proposalAdmissionDeps.ts':
     'DI passthrough to fabFileService.createFabFileByUrl -> createFabFile (create.ts:175 withholds fileUrl for image/* at creation time); the adapter only forwards the mode createFabFile asks for, and never reads an existing FabFile',
   'apps/client/pages/api/notebooks/export.ts':
     'DI passthrough — fileStorageService adapter consumed by already-gated notebookExportService.exportKnowledge/processImages (both import isImageServeable)',

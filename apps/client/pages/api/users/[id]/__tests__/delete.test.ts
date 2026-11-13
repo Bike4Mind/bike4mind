@@ -61,6 +61,8 @@ vi.mock('@bike4mind/services', () => ({
   userService: { adminDeleteUser: (...a: unknown[]) => mockAdminDeleteUser(...a) },
 }));
 vi.mock('@bike4mind/database', () => ({
+  deleteFeedbackAiForUser: vi.fn().mockResolvedValue(undefined),
+  FeedbackNoteModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
   erasureRecordRepository: { record: mockRecordErasure },
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   userRepository: {
@@ -85,8 +87,8 @@ vi.mock('@server/services/purgeDeletedUserData', () => ({
   readUserIntegrationGrants: (...a: unknown[]) => mockReadGrants(...a),
 }));
 
-vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/cancelAccountSubscriptions')>()),
   cancelAccountSubscriptions: (...a: unknown[]) => mockCancelSubscriptions(...a),
 }));
 

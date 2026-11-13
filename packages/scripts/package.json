@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.101",
+  "version": "0.1.102",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -13,10 +13,12 @@
     "./help/ingestHelpDatalake": "./help/ingestHelpDatalake.ts"
   },
   "scripts": {
+    "feedback-notes:scrub": "tsx src/scrubLegacyFeedbackNotes.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "typecheck:native": "tsgo --noEmit --types node",
     "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "premigrate": "node ../../apps/client/scripts/generate-premium-glue.mjs > /dev/null",
     "migrate": "tsx migrate/index.ts",
     "datalake:check-slug-dupes": "tsx migrate/check-datalake-slug-dupes.ts",
     "users:check-email-case-dupes": "tsx migrate/check-user-email-case-dupes.ts",

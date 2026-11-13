@@ -23,7 +23,7 @@ import { SettingsDraftProvider } from './SettingsDraftProvider';
 import { STRUCTURED_SETTINGS } from './schemaSettingForm';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-type Key = 'abuseAssessmentConfig' | 'autoContainmentConfig' | 'usagePatternSignalsConfig';
+type Key = 'abuseAssessmentConfig' | 'adminAiConfig' | 'autoContainmentConfig' | 'usagePatternSignalsConfig';
 
 const renderField = (key: Key, storedValue: unknown = settingsMap[key].defaultValue, staged = false) => {
   const field = (
@@ -108,6 +108,7 @@ describe('AdminSchemaSettingField', () => {
       regularCadence: 25,
       creditPolling: 40,
       quickApiKey: 25,
+      scriptedGrantDrain: 50,
     });
   });
 
@@ -283,5 +284,57 @@ describe('AdminSchemaSettingField', () => {
     renderField('abuseAssessmentConfig', JSON.stringify({ dailyBudgetUsd: 3 }));
     expect((byId('admin-setting-abuseAssessmentConfig-dailyBudgetUsd-input') as HTMLInputElement).value).toBe('3');
     expect(byId('admin-setting-abuseAssessmentConfig-error')).toHaveTextContent('Server refused the value');
+  });
+
+  describe('adminAiConfig', () => {
+    const mode = (feature: string) => `admin-setting-adminAiConfig-features.${feature}.mode-input`;
+
+    it('renders each feature as a nested group with mode off by default', () => {
+      renderField('adminAiConfig');
+      const group = byId('admin-setting-adminAiConfig-features.feedbackTriage-group');
+      expect(group.tagName).toBe('FIELDSET');
+      expect(within(group).getByText('Feedback triage')).toBeInTheDocument();
+      expect(byId(mode('abuseAssessment'))).toHaveTextContent('off');
+      expect((byId('admin-setting-adminAiConfig-monthlyCapUsd-input') as HTMLInputElement).value).toBe('0');
+    });
+
+    it('edits a nested feature and resets it to its default', () => {
+      renderField('adminAiConfig');
+      const budget = 'admin-setting-adminAiConfig-features.dlqTriage.dailyBudgetUsd';
+      type(`${budget}-input`, '2');
+      expect((byId(`${budget}-input`) as HTMLInputElement).value).toBe('2');
+      fireEvent.click(byId(`${budget}-reset-btn`));
+      expect((byId(`${budget}-input`) as HTMLInputElement).value).toBe('0');
+    });
+
+    it('confirms moving a feature to act and raising the monthly cap from 0', () => {
+      renderField('adminAiConfig');
+      pick(mode('domainHold'), 'act');
+      type('admin-setting-adminAiConfig-monthlyCapUsd-input', '25');
+
+      fireEvent.click(byId('admin-setting-adminAiConfig-save-btn'));
+      expect(mutate).not.toHaveBeenCalled();
+      const dialog = byId('admin-setting-adminAiConfig-confirm-dialog');
+      expect(dialog).toHaveTextContent('Mode act lets domainHold apply');
+      expect(dialog).toHaveTextContent('A monthly cap above $0');
+
+      fireEvent.click(byId('admin-setting-adminAiConfig-confirm-save-btn'));
+      const saved = mutate.mock.calls[0][0].value;
+      expect(saved.monthlyCapUsd).toBe(25);
+      expect(saved.features.domainHold.mode).toBe('act');
+      expect(saved.features.abuseAssessment.mode).toBe('off');
+    });
+
+    it('saves without a confirm when act and the cap are already stored', () => {
+      const stored = settingsMap.adminAiConfig.defaultValue;
+      renderField('adminAiConfig', {
+        ...stored,
+        monthlyCapUsd: 10,
+        features: { ...stored.features, domainHold: { ...stored.features.domainHold, mode: 'act' } },
+      });
+      type('admin-setting-adminAiConfig-monthlyCapUsd-input', '20');
+      fireEvent.click(byId('admin-setting-adminAiConfig-save-btn'));
+      expect(mutate).toHaveBeenCalled();
+    });
   });
 });

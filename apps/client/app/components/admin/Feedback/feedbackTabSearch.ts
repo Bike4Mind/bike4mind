@@ -1,6 +1,11 @@
 import {
   FEEDBACK_ID_PARAM,
   FEEDBACK_SUBJECTS,
+  FEEDBACK_AI_AREAS,
+  FEEDBACK_AI_SEVERITIES,
+  type FeedbackAiLabels,
+  FEEDBACK_RESOLUTIONS,
+  type FeedbackResolution,
   FeedbackStatus,
   FeedbackType,
   type FeedbackSubject,
@@ -12,6 +17,7 @@ import {
   FEEDBACK_STATUS_ORDER,
   FEEDBACK_TYPE_ORDER,
 } from './constants';
+import { FEEDBACK_RECEIVED_WINDOWS, type FeedbackReceivedWindow } from './feedbackTrends';
 
 /**
  * The Feedback tab's `/admin` search params and their coercion. Pure and React-free: adminTabParams.ts
@@ -22,19 +28,27 @@ import {
  */
 
 export const FEEDBACK_STATUS_PARAM = 'feedbackStatus';
+export const FEEDBACK_AREA_PARAM = 'feedbackArea';
+export const FEEDBACK_SEVERITY_PARAM = 'feedbackSeverity';
 export const FEEDBACK_SUBJECT_PARAM = 'feedbackSubject';
+export const FEEDBACK_RESOLUTION_PARAM = 'feedbackResolution';
 export const FEEDBACK_TYPE_PARAM = 'feedbackType';
 export const FEEDBACK_ORG_PARAM = 'feedbackOrg';
+export const FEEDBACK_RECEIVED_PARAM = 'feedbackReceived';
 export const FEEDBACK_ORDER_PARAM = 'feedbackOrder';
 export const FEEDBACK_PAGE_PARAM = 'feedbackPage';
 export const FEEDBACK_LIMIT_PARAM = 'feedbackLimit';
 
 /** The params that describe the list view; `feedbackId` (the pinned report) is separate. */
 const FEEDBACK_VIEW_PARAMS = [
+  FEEDBACK_AREA_PARAM,
+  FEEDBACK_SEVERITY_PARAM,
   FEEDBACK_STATUS_PARAM,
   FEEDBACK_SUBJECT_PARAM,
+  FEEDBACK_RESOLUTION_PARAM,
   FEEDBACK_TYPE_PARAM,
   FEEDBACK_ORG_PARAM,
+  FEEDBACK_RECEIVED_PARAM,
   FEEDBACK_ORDER_PARAM,
   FEEDBACK_PAGE_PARAM,
   FEEDBACK_LIMIT_PARAM,
@@ -51,10 +65,14 @@ const FEEDBACK_ORDERS = ['asc', 'desc'] as const;
 type FeedbackOrder = (typeof FEEDBACK_ORDERS)[number];
 
 export type FeedbackSearch = {
+  [FEEDBACK_AREA_PARAM]?: FeedbackAiLabels['area'];
+  [FEEDBACK_SEVERITY_PARAM]?: FeedbackAiLabels['severity'];
   [FEEDBACK_STATUS_PARAM]?: string;
   [FEEDBACK_SUBJECT_PARAM]?: FeedbackSubject;
+  [FEEDBACK_RESOLUTION_PARAM]?: FeedbackResolution;
   [FEEDBACK_TYPE_PARAM]?: FeedbackType[];
   [FEEDBACK_ORG_PARAM]?: string[];
+  [FEEDBACK_RECEIVED_PARAM]?: FeedbackReceivedWindow;
   [FEEDBACK_ORDER_PARAM]?: FeedbackOrder;
   [FEEDBACK_PAGE_PARAM]?: number;
   [FEEDBACK_LIMIT_PARAM]?: number;
@@ -62,13 +80,18 @@ export type FeedbackSearch = {
 };
 
 export type FeedbackView = {
+  area?: FeedbackAiLabels['area'];
+  severity?: FeedbackAiLabels['severity'];
   statusFilters: Record<FeedbackStatus, boolean>;
   /** Undefined is every subject. */
   subject: FeedbackSubject | undefined;
+  resolution?: FeedbackResolution;
   /** Report types in severity order; empty is every type. */
   types: FeedbackType[];
   /** Organization names; empty is every organization. */
   organizations: string[];
+  /** Undefined is any age. */
+  received: FeedbackReceivedWindow | undefined;
   sortAscending: boolean;
   page: number;
   limit: number;
@@ -88,6 +111,7 @@ export const DEFAULT_FEEDBACK_VIEW: FeedbackView = {
   subject: undefined,
   types: [],
   organizations: [],
+  received: undefined,
   sortAscending: false,
   page: 1,
   limit: FEEDBACK_DEFAULT_PAGE_SIZE,
@@ -132,10 +156,14 @@ const parseOrder = oneOf(FEEDBACK_ORDERS);
 export const FEEDBACK_SEARCH_PARSERS: {
   readonly [K in keyof FeedbackSearch]-?: (value: unknown) => FeedbackSearch[K];
 } = {
+  [FEEDBACK_AREA_PARAM]: oneOf(FEEDBACK_AI_AREAS),
+  [FEEDBACK_SEVERITY_PARAM]: oneOf(FEEDBACK_AI_SEVERITIES),
   [FEEDBACK_STATUS_PARAM]: parseStatus,
   [FEEDBACK_SUBJECT_PARAM]: oneOf(FEEDBACK_SUBJECTS),
+  [FEEDBACK_RESOLUTION_PARAM]: oneOf(FEEDBACK_RESOLUTIONS),
   [FEEDBACK_TYPE_PARAM]: parseTypes,
   [FEEDBACK_ORG_PARAM]: parseStringList,
+  [FEEDBACK_RECEIVED_PARAM]: oneOf(FEEDBACK_RECEIVED_WINDOWS),
   [FEEDBACK_ORDER_PARAM]: parseOrder,
   [FEEDBACK_PAGE_PARAM]: parsePage,
   [FEEDBACK_LIMIT_PARAM]: parseLimit,
@@ -144,12 +172,17 @@ export const FEEDBACK_SEARCH_PARSERS: {
 
 /** The list view a URL describes; a missing or invalid param means its default. */
 export function feedbackViewFromSearch(search: Record<string, unknown>): FeedbackView {
-  const statuses = decodeStatuses(search[FEEDBACK_STATUS_PARAM]);
+  const resolution = FEEDBACK_SEARCH_PARSERS[FEEDBACK_RESOLUTION_PARAM](search[FEEDBACK_RESOLUTION_PARAM]);
+  const statuses = resolution ? [FeedbackStatus.Closed] : decodeStatuses(search[FEEDBACK_STATUS_PARAM]);
   return {
     statusFilters: statuses ? toStatusFilters(statuses) : DEFAULT_FEEDBACK_VIEW.statusFilters,
+    area: FEEDBACK_SEARCH_PARSERS[FEEDBACK_AREA_PARAM](search[FEEDBACK_AREA_PARAM]),
+    severity: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SEVERITY_PARAM](search[FEEDBACK_SEVERITY_PARAM]),
     subject: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SUBJECT_PARAM](search[FEEDBACK_SUBJECT_PARAM]),
+    resolution,
     types: parseTypes(search[FEEDBACK_TYPE_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.types,
     organizations: parseStringList(search[FEEDBACK_ORG_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.organizations,
+    received: FEEDBACK_SEARCH_PARSERS[FEEDBACK_RECEIVED_PARAM](search[FEEDBACK_RECEIVED_PARAM]),
     sortAscending: search[FEEDBACK_ORDER_PARAM] === 'asc',
     page: parsePage(search[FEEDBACK_PAGE_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.page,
     limit: parseLimit(search[FEEDBACK_LIMIT_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.limit,
@@ -167,9 +200,13 @@ export function feedbackViewToSearch(view: FeedbackView): {
   const defaultStatuses = encodeStatuses(checkedStatuses(DEFAULT_FEEDBACK_VIEW.statusFilters));
   return {
     [FEEDBACK_STATUS_PARAM]: statuses === defaultStatuses ? undefined : statuses,
+    [FEEDBACK_AREA_PARAM]: view.area,
+    [FEEDBACK_SEVERITY_PARAM]: view.severity,
     [FEEDBACK_SUBJECT_PARAM]: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SUBJECT_PARAM](view.subject),
+    [FEEDBACK_RESOLUTION_PARAM]: view.resolution,
     [FEEDBACK_TYPE_PARAM]: parseTypes(view.types),
     [FEEDBACK_ORG_PARAM]: parseStringList(view.organizations),
+    [FEEDBACK_RECEIVED_PARAM]: FEEDBACK_SEARCH_PARSERS[FEEDBACK_RECEIVED_PARAM](view.received),
     [FEEDBACK_ORDER_PARAM]: view.sortAscending ? 'asc' : undefined,
     [FEEDBACK_PAGE_PARAM]: view.page === DEFAULT_FEEDBACK_VIEW.page ? undefined : parsePage(view.page),
     [FEEDBACK_LIMIT_PARAM]: view.limit === DEFAULT_FEEDBACK_VIEW.limit ? undefined : parseLimit(view.limit),

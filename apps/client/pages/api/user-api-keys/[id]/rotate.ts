@@ -2,16 +2,21 @@ import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { organizationRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
-import { UserApiKeyEvents } from '@bike4mind/common';
+import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { isApiKeyScopeOffered } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
+import { requireStepUp } from '@server/auth/stepUp';
 import { notifyApiKeyRotationReown } from '@server/utils/apiKeyRotationNotifier';
-import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
+import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
     const userId = req.user?.id;
+    assertNotOrgServiceAccount(req.user);
     const keyId = req.query.id;
 
     if (!keyId) throw new BadRequestError('Invalid key ID');
@@ -21,6 +26,14 @@ const handler = baseApi().post(
       db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository },
     });
     if (!apiKey) throw new NotFoundError('API key not found');
+    // Rotating hands back a fresh secret, and an org admin's rotation re-owns the key, so a
+    // persona-mint key is held to the same bar as minting one.
+    if (apiKey.scopes?.includes(ApiKeyScope.PERSONAS_MINT)) {
+      if (!isApiKeyScopeOffered(ApiKeyScope.PERSONAS_MINT, await resolveApiKeyScopeAccess(req))) {
+        throw new ForbiddenError('Only admins and developers can rotate a persona-mint key');
+      }
+      await requireStepUp(req);
+    }
     await assertApiKeyAccessAllowed(
       req.user,
       {

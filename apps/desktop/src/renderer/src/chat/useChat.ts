@@ -38,6 +38,7 @@ import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 
 const LIVE_FLUSH_FALLBACK_MS = 100;
+const MAX_SETTLED_REREADS = 3;
 
 export interface SessionsController {
   sessions: ChatSessionSummary[];
@@ -520,7 +521,8 @@ export interface ConversationController {
   notice: string | null;
   dismissNotice: () => void;
   /** False when main refused the turn; the text is already back in the composer. */
-  send: (text: string, attachments?: readonly ChatAttachment[]) => Promise<boolean>;
+  /** `notes` reach the model with this turn and are never drawn; see SendMessageRequest.notes. */
+  send: (text: string, attachments?: readonly ChatAttachment[], notes?: readonly string[]) => Promise<boolean>;
   /** Device-local: move a conversation whose model is not installed to the one a send would use. */
   settleLocalModel: () => Promise<void>;
   stop: () => void;
@@ -675,6 +677,7 @@ export function useConversation(
     }
 
     let current = true;
+    let settledRereads = 0;
     const load = (): void => {
       const read: SessionRead = { sessionId, stale: false };
       openRead.current = read;
@@ -706,7 +709,11 @@ export function useConversation(
           // extend it. One that settled while this read was in flight is stale: read again
           // rather than put back a turn the 'done' already closed.
           const live = loaded?.replyInFlight;
-          if (live && settledReplies.current.has(live.messageId)) return load();
+          // Bounded so an id wrongly left settled shows the live copy instead of blanking the thread in a read loop.
+          if (live && settledReplies.current.has(live.messageId) && settledRereads < MAX_SETTLED_REREADS) {
+            settledRereads++;
+            return load();
+          }
           openRead.current = null;
           setSession(loaded);
           setMessages(loaded?.messages ?? []);
@@ -888,6 +895,8 @@ export function useConversation(
       // Anything that is not a live event may depend on, or replace, what is still queued.
       flushLive();
 
+      // A resumed reply keeps its id, so its run is live again and must not read as settled.
+      if (event.type === 'start') settledReplies.current.delete(event.messageId);
       if (event.type === 'done' || event.type === 'error') {
         settledReplies.current.add(event.messageId);
         // Counted before the session filter below, and deliberately: a reply running in a
@@ -1022,7 +1031,11 @@ export function useConversation(
 
   const sessionProject = session?.project;
   const send = useCallback(
-    async (text: string, attachments: readonly ChatAttachment[] = []): Promise<boolean> => {
+    async (
+      text: string,
+      attachments: readonly ChatAttachment[] = [],
+      notes: readonly string[] = []
+    ): Promise<boolean> => {
       if (!sessionId) return true;
       const prompt = text.trim();
       // An attachment on its own is a turn; only a turn with neither is not.
@@ -1051,6 +1064,7 @@ export function useConversation(
             content: prompt,
             createdAt: new Date().toISOString(),
             ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+            ...(notes.length > 0 ? { notes: [...notes] } : {}),
           }
         : null;
       if (optimistic) setMessages(current => [...current, optimistic]);
@@ -1065,6 +1079,7 @@ export function useConversation(
           sessionId,
           text: prompt,
           ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+          ...(notes.length > 0 ? { notes: [...notes] } : {}),
         })
         .finally(() => {
           if (!goingOut) return;

@@ -7,13 +7,17 @@ import { SETTING_TABS, settingsMap, type SettingKey } from '@bike4mind/common';
 // Read at render time, so a test can seed the stored platform rows.
 let serverSettings: { settingName: string; settingValue: unknown }[] = [];
 let serverConfig: { hiddenAdminSettingKeys?: string[] } | undefined = { hiddenAdminSettingKeys: [] };
+let isLoading = false;
+let isError = false;
+const refetchSettings = vi.fn();
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useSettingsFromServer: () => ({ data: serverSettings, isLoading: false }),
+  useSettingsFromServer: () => ({ data: serverSettings, isLoading, isError, refetch: refetchSettings }),
   useConfig: () => ({ data: serverConfig }),
 }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('./EmbeddingProviderLimits', () => ({ EmbeddingProviderLimits: () => null }));
 vi.mock('./AdminOperationsModelSetting', () => ({ AdminOperationsModelSetting: () => null }));
+vi.mock('./AdminSchemaSettingField', () => ({ default: () => null }));
 vi.mock('./AdminTurnstileStatusNotice', () => ({
   AdminTurnstileStatusNotice: ({ enabled }: { enabled: boolean }) => (
     <div data-testid="admin-turnstile-notice" data-enabled={String(enabled)} />
@@ -100,6 +104,9 @@ const renderAiTab = () => renderTab(aiTab);
 const renderSecurityTab = () => renderTab(securityTab);
 
 beforeEach(() => {
+  isLoading = false;
+  isError = false;
+  refetchSettings.mockReset();
   serverSettings = [];
   serverConfig = { hiddenAdminSettingKeys: [] };
   router.search = {};
@@ -107,6 +114,38 @@ beforeEach(() => {
 });
 
 describe('AdminSettingsTab URL state', () => {
+  it('starts with the page header and keeps text labels on every section tab', () => {
+    renderSettings();
+    expect(screen.getByTestId('admin-settings-page').firstElementChild).toBe(screen.getByTestId('admin-page-header'));
+    for (const tab of Object.values(SETTING_TABS)) {
+      expect(screen.getByTestId(`admin-settings-section-tab-${tab.id}`)).toHaveTextContent(tab.name);
+      expect(screen.getByTestId(`admin-settings-section-tab-${tab.id}`).querySelector('svg')).toBeNull();
+    }
+  });
+
+  it('keeps the page header visible while settings load', () => {
+    isLoading = true;
+    renderSettings();
+    expect(screen.getByTestId('admin-settings-page').firstElementChild).toBe(screen.getByTestId('admin-page-header'));
+    expect(screen.getByText('Loading settings')).toBeInTheDocument();
+  });
+
+  it('shows an inline error with a retry action', () => {
+    isError = true;
+    renderSettings();
+    expect(screen.getByText('Could not load settings.')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(refetchSettings).toHaveBeenCalledOnce();
+  });
+
+  it('offers to clear a search with no matches', () => {
+    router.search = { tab: 'admin-settings', q: 'zzzz-no-setting-matches' };
+    renderSettings();
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No settings match these filters');
+    fireEvent.click(screen.getByTestId('admin-settings-clear-filters-btn'));
+    expect(screen.getByTestId('admin-settings-search-input')).toHaveValue('');
+  });
+
   it('focuses the real settings search with /', () => {
     render(
       <CssVarsProvider theme={appTheme}>

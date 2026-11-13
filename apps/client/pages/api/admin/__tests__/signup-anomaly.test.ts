@@ -18,7 +18,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/users/signupAnomaly', () => ({ getSignupAnomalySnapshot: mocks.snapshot }));
+vi.mock('@bike4mind/server-utils/users/signupAnomaly', () => ({ getSignupAnomalySnapshot: mocks.snapshot }));
 import handler from '../signup-anomaly';
 
 describe('signup anomaly route', () => {

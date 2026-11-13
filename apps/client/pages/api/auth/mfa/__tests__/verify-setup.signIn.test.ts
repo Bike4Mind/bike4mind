@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   issueBrowserSession: vi.fn(),
   logAuthAudit: vi.fn(),
   logSecondFactorSignIn: vi.fn(),
+  recordForcedEnrollmentStep: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -36,6 +37,8 @@ vi.mock('@server/auth/signInSecondFactor', () => ({
   readSignInOrigin: (user: { mfaSignIn?: unknown } | undefined) => user?.mfaSignIn,
   logSecondFactorSignIn: mocks.logSecondFactorSignIn,
 }));
+
+vi.mock('@server/auth/mfaEnrollmentFunnel', () => ({ recordForcedEnrollmentStep: mocks.recordForcedEnrollmentStep }));
 
 import handler from '../verify-setup';
 
@@ -66,6 +69,7 @@ describe('POST /api/auth/mfa/verify-setup - emergency sign-in', () => {
 
     expect(res._getStatusCode()).toBe(403);
     expect(mocks.verifyMFASetup).not.toHaveBeenCalled();
+    expect(mocks.recordForcedEnrollmentStep).not.toHaveBeenCalled();
     expect(mocks.issueBrowserSession).not.toHaveBeenCalled();
   });
 });
@@ -90,6 +94,12 @@ describe('POST /api/auth/mfa/verify-setup - sign-in audit', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.logAuthAudit).toHaveBeenCalledWith(expect.anything(), { userId: 'u1', event: 'mfa_enrolled' });
+    // Judged on the user as read before enrolling, not on the enrolled result.
+    expect(mocks.recordForcedEnrollmentStep).toHaveBeenCalledWith(
+      expect.anything(),
+      { id: 'u1', mfa: { totpEnabled: true } },
+      'mfa_enrollment_completed'
+    );
     expect(mocks.logSecondFactorSignIn).not.toHaveBeenCalled();
     expect(mocks.issueBrowserSession).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'u1', {
       createdVia: 'mfa-setup',

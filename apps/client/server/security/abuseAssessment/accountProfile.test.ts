@@ -1,0 +1,277 @@
+import { abuseAssessmentAccountProfileSchema } from '@bike4mind/common';
+import type { UserAccountRiskProfile, UserSignupLinkCandidate } from '@bike4mind/database';
+import { describe, expect, it, vi } from 'vitest';
+
+const settingsMocks = vi.hoisted(() => ({ getSettingsMap: vi.fn(), getSettingsValue: vi.fn() }));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: settingsMocks.getSettingsMap,
+  getSettingsValue: settingsMocks.getSettingsValue,
+}));
+
+import {
+  LINK_CANDIDATE_LIMIT,
+  buildAccountProfile,
+  liveDeps,
+  loadAccountProfiles,
+  type AccountProfileDeps,
+} from './accountProfile';
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const SIGNUP = new Date('2026-11-01T10:00:00Z');
+// The start of the 30-day spend read, for a profile built a day after signup.
+const SPEND_SINCE = new Date('2026-10-03T00:00:00Z');
+
+// The shape of a confirmed signup-farm account: VPN egress, plus-addressed webmail with a random tag,
+// two-factor within minutes, the grant drained on one expensive model within the hour.
+const farmAccount = (overrides: Partial<UserAccountRiskProfile> = {}): UserAccountRiskProfile => ({
+  id: '65f0000000000000000000a1',
+  createdAt: SIGNUP,
+  email: 'jordan+x7k2q9r8@outlook.com',
+  signupMethod: 'otc',
+  signupIp: '198.51.100.4',
+  signupJa4: null,
+  signupAsnKnown: true,
+  signupAsn: 64500,
+  signupDatacenter: false,
+  signupWafAnonIp: true,
+  totpEnabled: true,
+  mfaSetupAt: new Date(SIGNUP.getTime() + 4 * MINUTE_MS),
+  ...overrides,
+});
+
+const candidate = (overrides: Partial<UserSignupLinkCandidate>): UserSignupLinkCandidate => ({
+  id: '65f0000000000000000000b1',
+  name: null,
+  email: 'someone@gmail.com',
+  createdAt: new Date(SIGNUP.getTime() - 2 * HOUR_MS),
+  isBanned: false,
+  disputePending: false,
+  moderation: null,
+  signupIp: null,
+  signupJa4: null,
+  ...overrides,
+});
+
+const spend = {
+  firstSpendAt: new Date(SIGNUP.getTime() + 12 * MINUTE_MS),
+  totalCredits: 1000,
+  byModel: [
+    { model: 'claude-opus-4-5', credits: 970, events: 11 },
+    { model: null, credits: 30, events: 3 },
+  ],
+};
+
+describe('buildAccountProfile', () => {
+  it('reduces a farm-shaped account to flags, minutes and counts', () => {
+    const profile = buildAccountProfile({
+      spendSince: SPEND_SINCE,
+      account: farmAccount(),
+      spend,
+      links: {
+        windowHours: 72,
+        truncated: false,
+        isBlocked: account => account.isBanned,
+        candidates: [
+          candidate({ id: 'b1', email: 'jordan+p3m8z1@outlook.com', isBanned: true }),
+          candidate({ id: 'b2', signupIp: '198.51.100.4' }),
+          // Outside the window: not counted.
+          candidate({ id: 'b3', signupIp: '198.51.100.4', createdAt: new Date(SIGNUP.getTime() - 100 * HOUR_MS) }),
+          // Shares nothing: not counted.
+          candidate({ id: 'b4' }),
+        ],
+      },
+    });
+
+    expect(profile).toEqual({
+      signupMethod: 'otc',
+      signupNetwork: { asnKnown: true, hosting: true, datacenter: false, anonymousIp: true, ja4Present: false },
+      email: { plusAddressed: true, randomLookingPlusTag: true, generatedLocalPart: false, consumerMailDomain: true },
+      minutesToTwoFactor: 4,
+      minutesToFirstSpend: 12,
+      spend: {
+        totalCredits: 1000,
+        byModel: [
+          { model: 'claude-opus-4-5', creditShare: 0.97, events: 11, creditsPerEvent: 88.18 },
+          { model: null, creditShare: 0.03, events: 3, creditsPerEvent: 10 },
+        ],
+      },
+      linkedAccounts: {
+        windowHours: 72,
+        total: 2,
+        blocked: 1,
+        sharedSignupIp: 1,
+        sharedJa4: 0,
+        sharedMailbox: 1,
+        sharedMailDomain: 0,
+        truncated: false,
+      },
+    });
+    // What leaves for the provider must satisfy the strict contract.
+    expect(abuseAssessmentAccountProfileSchema.parse(profile)).toEqual(profile);
+  });
+
+  it('carries no address, IP, fingerprint or account id', () => {
+    const profile = buildAccountProfile({
+      spendSince: SPEND_SINCE,
+      account: farmAccount({ signupJa4: 't13d1516h2_secret' }),
+      spend,
+      links: { windowHours: 72, truncated: false, isBlocked: () => false, candidates: [candidate({ id: 'b1' })] },
+    });
+    const serialized = JSON.stringify(profile);
+    for (const secret of ['jordan', 'outlook', '198.51.100.4', 't13d1516h2_secret', '65f0000000000000000000a1']) {
+      expect(serialized).not.toContain(secret);
+    }
+  });
+
+  it('leaves unknowns null: no two-factor, no spend, an unchecked network, unread links', () => {
+    expect(
+      buildAccountProfile({
+        spendSince: SPEND_SINCE,
+        account: farmAccount({
+          totpEnabled: false,
+          signupMethod: 'google',
+          signupDatacenter: null,
+          signupWafAnonIp: null,
+          email: null,
+        }),
+        spend: null,
+        links: null,
+      })
+    ).toEqual({
+      signupMethod: 'oauth',
+      signupNetwork: { asnKnown: true, hosting: null, datacenter: null, anonymousIp: null, ja4Present: false },
+      email: null,
+      minutesToTwoFactor: null,
+      minutesToFirstSpend: null,
+      spend: null,
+      linkedAccounts: null,
+    });
+  });
+
+  it('leaves the first spend unknown for an account older than the spend read', () => {
+    const profile = buildAccountProfile({
+      spendSince: SPEND_SINCE,
+      account: farmAccount({ createdAt: new Date('2026-09-01T00:00:00Z') }),
+      spend,
+      links: null,
+    });
+    expect(profile.minutesToFirstSpend).toBeNull();
+  });
+
+  it('does not link accounts that share only a JA4', () => {
+    const profile = buildAccountProfile({
+      spendSince: SPEND_SINCE,
+      account: farmAccount({ signupJa4: 't13d1516h2_a' }),
+      spend: null,
+      links: {
+        windowHours: 72,
+        truncated: false,
+        isBlocked: () => false,
+        candidates: [
+          candidate({ id: 'b1', signupJa4: 't13d1516h2_a' }),
+          candidate({ id: 'b2', signupJa4: 't13d1516h2_a', signupIp: '198.51.100.4' }),
+        ],
+      },
+    });
+    expect(profile.linkedAccounts).toMatchObject({ total: 1, sharedSignupIp: 1, sharedJa4: 1 });
+  });
+
+  it('reads a residential signup as not hosting', () => {
+    const profile = buildAccountProfile({
+      spendSince: SPEND_SINCE,
+      account: farmAccount({ signupDatacenter: false, signupWafAnonIp: false }),
+      spend: null,
+      links: null,
+    });
+    expect(profile.signupNetwork.hosting).toBe(false);
+  });
+});
+
+describe('loadAccountProfiles', () => {
+  const deps = (overrides: Partial<AccountProfileDeps> = {}): AccountProfileDeps => ({
+    findAccountRiskProfiles: vi.fn().mockResolvedValue([farmAccount()]),
+    spendProfileByUsers: vi.fn().mockResolvedValue({ '65f0000000000000000000a1': spend }),
+    findSignupLinkCandidates: vi.fn().mockResolvedValue([]),
+    loadLinkWindowHours: vi.fn().mockResolvedValue(72),
+    isBlocked: () => false,
+    now: () => new Date('2026-11-02T00:00:00Z'),
+    ...overrides,
+  });
+
+  it('searches the strong-link window around signup by IP, mailbox and company domain', async () => {
+    const d = deps();
+    const profiles = await loadAccountProfiles(['65f0000000000000000000a1'], d);
+    expect(d.findSignupLinkCandidates).toHaveBeenCalledWith({
+      excludeIds: ['65f0000000000000000000a1'],
+      from: new Date(SIGNUP.getTime() - 72 * HOUR_MS),
+      to: new Date(SIGNUP.getTime() + 72 * HOUR_MS),
+      ip: '198.51.100.4',
+      ja4: null,
+      mailbox: { local: 'jordan', domains: ['outlook.com'], ignoreDots: false },
+      // Webmail: a shared domain links nothing.
+      mailDomain: null,
+      limit: LINK_CANDIDATE_LIMIT,
+    });
+    expect(profiles.get('65f0000000000000000000a1')?.minutesToFirstSpend).toBe(12);
+  });
+
+  it('never searches by JA4 alone', async () => {
+    const d = deps({
+      findAccountRiskProfiles: vi.fn().mockResolvedValue([farmAccount({ signupJa4: 't13d1516h2_a' })]),
+    });
+    await loadAccountProfiles(['65f0000000000000000000a1'], d);
+    expect(d.findSignupLinkCandidates).toHaveBeenCalledWith(expect.objectContaining({ ja4: null }));
+  });
+
+  it('marks a full candidate page as truncated', async () => {
+    const full = Array.from({ length: LINK_CANDIDATE_LIMIT }, (_, index) =>
+      candidate({ id: `c${index}`, signupIp: '198.51.100.4' })
+    );
+    const profiles = await loadAccountProfiles(
+      ['65f0000000000000000000a1'],
+      deps({ findSignupLinkCandidates: vi.fn().mockResolvedValue(full) })
+    );
+    expect(profiles.get('65f0000000000000000000a1')?.linkedAccounts).toMatchObject({
+      total: LINK_CANDIDATE_LIMIT,
+      truncated: true,
+    });
+  });
+
+  it('keeps the rest of the profile when the linked-account read fails', async () => {
+    const profiles = await loadAccountProfiles(
+      ['65f0000000000000000000a1'],
+      deps({ findSignupLinkCandidates: vi.fn().mockRejectedValue(new Error('timeout')) })
+    );
+    expect(profiles.get('65f0000000000000000000a1')).toMatchObject({ linkedAccounts: null, minutesToTwoFactor: 4 });
+  });
+});
+
+describe('spend model ids', () => {
+  it("replaces a model id the contract would reject with 'other'", () => {
+    const profile = buildAccountProfile({
+      spendSince: SPEND_SINCE,
+      account: farmAccount(),
+      spend: {
+        firstSpendAt: spend.firstSpendAt,
+        totalCredits: 100,
+        byModel: [{ model: 'bad model id', credits: 100, events: 2 }],
+      },
+      links: null,
+    });
+    expect(profile.spend?.byModel[0].model).toBe('other');
+    expect(abuseAssessmentAccountProfileSchema.safeParse(profile).success).toBe(true);
+  });
+});
+
+describe('liveDeps.loadLinkWindowHours', () => {
+  it.each([
+    [0, 72],
+    [24, 24],
+  ])('reads strongLinkWindowHours %i as %i hours', async (configured, expected) => {
+    settingsMocks.getSettingsMap.mockResolvedValue({});
+    settingsMocks.getSettingsValue.mockReturnValue({ strongLinkWindowHours: configured });
+    await expect(liveDeps.loadLinkWindowHours()).resolves.toBe(expected);
+  });
+});

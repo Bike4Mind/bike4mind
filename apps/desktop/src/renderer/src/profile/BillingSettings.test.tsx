@@ -109,6 +109,37 @@ describe('personal Billing settings', () => {
     expect(element('billing-balance')?.textContent).toContain('25,000');
   });
 
+  it('requires the terms checkbox before buying credits when the server asks for consent', async () => {
+    const openExternal = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('b4m', {
+      account: { getBilling, getCredits, subscribePlan, purchaseCredits },
+      shell: { openExternal },
+    });
+    getBilling.mockResolvedValue({
+      ...billing,
+      termsConsentRequired: true,
+      termsUrl: 'https://site.example/terms-of-service',
+    });
+    await render();
+    expect(button('billing-top-up-btn').disabled).toBe(true);
+
+    await click('billing-terms-link');
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://site.example/terms-of-service');
+    expect(button('billing-top-up-btn').disabled).toBe(true);
+
+    const checkbox = host.querySelector<HTMLInputElement>('[data-testid="billing-terms-checkbox"] input');
+    await act(async () => checkbox!.click());
+    expect(button('billing-top-up-btn').disabled).toBe(false);
+    await click('billing-top-up-btn');
+    expect(purchaseCredits).toHaveBeenCalledExactlyOnceWith('package_25k', true);
+  });
+
+  it('shows no terms checkbox when the server does not ask for consent', async () => {
+    await render();
+    expect(element('billing-terms-checkbox')).toBeNull();
+    expect(button('billing-top-up-btn').disabled).toBe(false);
+  });
+
   it('reports payment-window failures', async () => {
     purchaseCredits.mockResolvedValue({ ok: false, error: 'Payment unavailable' });
     await render();

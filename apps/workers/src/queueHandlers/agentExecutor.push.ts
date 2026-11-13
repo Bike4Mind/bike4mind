@@ -13,7 +13,7 @@ import {
   publishPushNotification,
   sessionDeepLink,
   truncateForPush,
-} from '@server/utils/pushNotifications';
+} from '@bike4mind/server-utils/utils/pushNotifications';
 
 /**
  * Agent-run push notifications (`agent_completed` / `agent_failed`), published from the run's terminal

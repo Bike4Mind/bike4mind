@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { BackgroundProcessInfo } from '@shared/chat';
@@ -33,7 +33,9 @@ import {
   capOutputMiddle,
   optionalNumber,
   requireString,
+  type ApprovalPart,
   type ApprovalPrompt,
+  type PartAskKind,
   type ToolContext,
   type ToolDefinition,
 } from './types';
@@ -447,6 +449,31 @@ function readsSecret(scan: ShellScan, protectedPaths: readonly string[]): boolea
   );
 }
 
+/** Why one part of a script needs a decision of its own, or undefined when the mode may decide it. */
+async function partAsk(entry: ShellScan['commands'][number]): Promise<ApprovalPart['ask']> {
+  const reasons: string[] = [];
+  const kinds: PartAskKind[] = [];
+  if (entry.unread) {
+    reasons.push('Desktop cannot follow what this part runs or where it acts.');
+    kinds.push('unread');
+  }
+  const target = entry.outbound?.target;
+  if (entry.outbound && !(target && (await writesOwnRepository(target).catch(() => false)))) {
+    reasons.push(`Can send data off this computer (${entry.outbound.reason}).`);
+    kinds.push('outbound');
+  }
+  if (entry.envFiles?.length) {
+    reasons.push(`Reads ${entry.envFiles.join(', ')}, which usually holds secrets.`);
+    kinds.push('env');
+  }
+  if (entry.gitUnlisted) {
+    reasons.push(`Runs git in a form Desktop does not list as safe (${entry.gitUnlisted}).`);
+    kinds.push('gitUnlisted');
+  }
+  if (kinds.length === 0) return undefined;
+  return { mode: entry.unread || entry.gitUnlisted ? 'full' : 'auto', reason: reasons.join(' '), kinds };
+}
+
 /**
  * The prompt for a shell command, shared by bash_execute and bash_background.
  *
@@ -508,6 +535,29 @@ export async function shellApproval(
   const named = unreachable.filter(
     place => place !== UNNAMED_DISTRO && place !== SYSTEM_DISTRO && place !== WSL_MANAGEMENT
   );
+  // An `.env` read by redirect belongs to no one part.
+  const partEnvFiles = new Set(scan.commands.flatMap(entry => entry.envFiles ?? []));
+  const envScript = scan.envFiles.some(path => !partEnvFiles.has(path));
+  // A push or gh write to the folder's own origin still says so on the card, but does not stop
+  // auto mode; a reply that has read untrusted content asks anyway, as these are never contained.
+  const parts = await Promise.all(scan.commands.map(entry => partAsk(entry)));
+  const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
+  const scriptAsks =
+    envScript ||
+    !!script ||
+    scriptCheckFailed ||
+    !!gitProgram ||
+    scan.gitPathUnplaced === true ||
+    scan.remoteTree === true ||
+    unreachable.length > 0 ||
+    touchesProtected ||
+    secret ||
+    scan.unreadScript === true ||
+    writesWhileUnresolved;
+  const scriptAsksInFull =
+    (touchesProtected && !scan.readOnly) || scan.unreadScript === true || secret || writesWhileUnresolved;
+  // A part that sets the environment changes what every later part runs, so none is decided alone.
+  const byPart = !scriptAsks && !scriptAsksInFull && !scan.setsEnvironment;
   const reasons = [
     ...(scriptCheckFailed
       ? ['Could not check whether it runs code written in this session, so it is asked each time.']
@@ -523,12 +573,18 @@ export async function shellApproval(
       ? ['Runs git in a repository whose .git or .husky folder was changed in this session.']
       : []),
     ...(gitProgram ? [`Sets ${gitProgram}, which makes git run a program.`] : []),
+    ...(scan.gitPathUnplaced
+      ? ['Puts a folder on PATH that Desktop cannot place, where git may find a program to run for a git command.']
+      : []),
     ...(scan.remoteTree ? ['Clones a repository from another computer, whose files cannot be checked first.'] : []),
     ...(touchesProtected || secret
       ? ['Reaches a location Desktop protects, such as its own data or permission and hook settings.']
       : []),
     ...(scan.unread
       ? ['Runs a program or builds a path that Desktop cannot follow, so where it acts cannot be checked.']
+      : []),
+    ...(gitUnlisted.length > 0
+      ? [`Runs git in a form Desktop does not list as safe (${gitUnlisted.join(', ')}).`]
       : []),
     ...(writesWhileUnresolved
       ? ['May write while Desktop cannot resolve a protected folder, so where it writes cannot be checked.']
@@ -546,28 +602,12 @@ export async function shellApproval(
       ? ['Runs wsl with an option that manages WSL itself, such as --shutdown or --unregister.']
       : []),
   ];
-  // A push or gh write to the folder's own origin still says so on the card, but does not stop
-  // auto mode; a reply that has read untrusted content asks anyway, as these are never contained.
-  const ownRepository = await Promise.all(
-    scan.sends.map(({ target }) => (target ? writesOwnRepository(target).catch(() => false) : false))
-  );
   // A worktree session reading its own main checkout (`git -C <main> status`, `ls <main>/x`) is
   // not reaching outside the project, so it does not need that folder granted first.
   const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
   const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
-  const asks =
-    scan.envFiles.length > 0 ||
-    ownRepository.includes(false) ||
-    !!script ||
-    scriptCheckFailed ||
-    !!gitProgram ||
-    scan.remoteTree === true ||
-    unreachable.length > 0 ||
-    touchesProtected ||
-    secret ||
-    scan.unread === true ||
-    writesWhileUnresolved;
-  const asksInFull = (touchesProtected && !scan.readOnly) || scan.unread === true || secret || writesWhileUnresolved;
+  const asks = scriptAsks || parts.some(ask => ask !== undefined);
+  const asksInFull = scriptAsksInFull || parts.some(ask => ask?.mode === 'full');
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
@@ -579,15 +619,21 @@ export async function shellApproval(
     ...(asksInFull ? { askInFull: true as const } : {}),
     ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
     ...(scan.contained ? { contained: true as const } : {}),
+    ...(byPart ? { byPart: true as const } : {}),
     always: {
       namespace: tool,
-      commands: scan.commands.map(({ text, always, coverable, words, opaque }) => ({
-        text,
-        pattern: always,
-        coverable,
-        words,
-        ...(opaque ? { opaque } : {}),
-      })),
+      commands: scan.commands.map(({ text, always, coverable, words, opaque, expanded }, index) => {
+        const ask = byPart ? parts[index] : undefined;
+        return {
+          text,
+          pattern: always,
+          coverable,
+          words,
+          ...(expanded ? { expanded } : {}),
+          ...(opaque ? { opaque } : {}),
+          ...(ask ? { ask } : {}),
+        };
+      }),
       directories: [...new Set([...directories, ...outside])],
       paths: scan.paths ?? [],
       ...(scan.globFolders ? { globFolders: scan.globFolders } : {}),
@@ -788,6 +834,8 @@ export const bashExecute: ToolDefinition = {
  * the main checkout's side is outside it, so a forged `.git` file cannot widen what reads go unasked.
  */
 export async function mainCheckoutOf(directory: string): Promise<string | null> {
+  // A linked worktree's `.git` is a plain file; a symlink would borrow another folder's links.
+  if ((await lstat(join(directory, '.git')).catch(() => null))?.isSymbolicLink()) return null;
   const pointer = await readFile(join(directory, '.git'), 'utf8').catch(() => null);
   const gitdir = pointer === null ? undefined : /^gitdir: (.+)$/m.exec(pointer)?.[1]?.trim();
   if (!gitdir) return null;

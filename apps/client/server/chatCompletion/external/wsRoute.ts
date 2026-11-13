@@ -1,5 +1,5 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
-import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
+import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
 import { actorScopeForKey } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express } from 'express';
 import {
@@ -44,7 +44,7 @@ import { cliCompletionErrorFields, sanitizeErrorMessage } from '@server/utils/er
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
-import { getUserEntitlements } from '@server/entitlements';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
 import { httpErrorToResponse } from '@server/middlewares/errorHandler';
 import {
   admitApiKeyCompletion,
@@ -53,7 +53,7 @@ import {
 } from '@server/utils/untrustedCompletionQuota';
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
-import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
+import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 
 /**
  * CLI completions with WebSocket response streaming (`/api/ai/v1/ws-completions`), served by
@@ -77,6 +77,8 @@ import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 const WS_COMPLETIONS_ENDPOINT = '/api/ai/v1/ws-completions';
 
 const WsCompletionRequestSchema = CompletionRequestSchema.extend({
+  // Run attribution is only verified and forwarded on the SSE route; refuse it here rather than drop it silently.
+  run: z.never().optional(),
   requestId: z.uuid(),
   connectionId: z.string().optional(),
 });
@@ -128,10 +130,10 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
 
       // Authenticate - API key first, then JWT (mirrors the SSE route).
       try {
-        apiKeyInfo = await verifyApiKey(headers);
+        apiKeyInfo = await verifyApiKey(headers, { allowExchangeKeys: true });
         userId = apiKeyInfo.userId;
         logger.info('[CLI_WS_HTTP] Authenticated via API key', { keyId: apiKeyInfo.keyId });
-        logApiKeyUsageOnResponse({
+        await logApiKeyUsageOnResponse({
           req,
           res,
           apiKey: apiKeyInfo,

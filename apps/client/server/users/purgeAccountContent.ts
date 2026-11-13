@@ -14,23 +14,25 @@ import {
   hideDeletedAuthorAnnotations,
   integrationRequestRepository,
   memoryPrincipalKeyRepository,
+  abuseEvalSetRepository,
   shadowDetectionRepository,
   campaignWatchRepository,
   withTransaction,
+  deleteFeedbackAiForUser,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { getGeneratedImageStorage, getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { publishThumbnailPrefix } from '@bike4mind/server-utils/utils/publishThumbnails';
-import { buildPublishS3KeyPrefix } from '@server/services/publish/paths';
+import { buildPublishS3KeyPrefix } from '@bike4mind/server-utils/services/publish/paths';
 import { withdrawAuthorListings } from '@bike4mind/server-utils/skillMarket/market';
-import { retainDeletedSignupTraces } from '@server/auth/signupNetworkLimits';
-import { purgeUserPublishedArtifacts } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { retainDeletedSignupTraces } from '@bike4mind/server-utils/auth/signupNetworkLimits';
+import { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import {
   type CdnInvalidationBatch,
   createCdnInvalidationBatch,
   generatedCdnPath,
-} from '@server/services/cdn/invalidateRouterCdn';
+} from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 
 type PurgeOptions = { logger: Pick<Logger, 'info' | 'warn' | 'error'>; assertLease: () => Promise<void> };
 const BATCH_SIZE = 100;
@@ -56,7 +58,10 @@ function collectionFor(modelName: string) {
   return database.collection<PurgeRecord>(mongoose.model<Record<string, unknown>>(modelName).collection.name);
 }
 
-const ownerFilter = (userId: string) => ({ userId: { $in: [userId, new mongoose.Types.ObjectId(userId)] } });
+const ownerFilter = (userId: string) => {
+  const objectId = new mongoose.Types.ObjectId(userId);
+  return { userId: { $in: [userId, objectId.toHexString(), objectId] } };
+};
 const personalFilter = (userId: string, personalOrganizationIds: readonly string[]) => ({
   $or: [
     { ...ownerFilter(userId), organizationId: { $in: [null, ''] } },
@@ -468,6 +473,7 @@ async function purgePersonalMemory(
  */
 export async function purgeAccountContent(userId: string, { logger, assertLease }: PurgeOptions): Promise<void> {
   await assertLease();
+  await deleteFeedbackAiForUser(userId, { assertLease });
   const workspaces = await collectionFor('Organization')
     .find({ ...ownerFilter(userId), personal: true }, { projection: { _id: 1 } })
     .toArray();
@@ -535,6 +541,7 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
     'UserUsagePatternSignals',
     'AdminUserNote',
     'AdminUserNoteRevision',
+    'FeedbackNote',
   ]) {
     await assertLease();
     await collectionFor(model).deleteMany(ownerFilter(userId));
@@ -581,5 +588,6 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
   await authEventRepository.deleteAllForUser(userId);
   await shadowDetectionRepository.removeUser(userId);
   await campaignWatchRepository.removeUser(userId);
+  await abuseEvalSetRepository.removeUser(userId);
   logger.info(`[AccountDeletion] Purged personal content for user ${userId}`);
 }

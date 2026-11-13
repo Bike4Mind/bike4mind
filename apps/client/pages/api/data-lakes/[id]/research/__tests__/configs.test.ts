@@ -54,7 +54,7 @@ vi.mock('@server/dataLakes/assertLakeResearchManage', () => ({
   assertLakeResearchManage: h.assertLakeResearchManage,
 }));
 
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async () => ({ userId: 'user-1', isAdmin: false })),
 }));
 
@@ -127,12 +127,28 @@ describe('/api/data-lakes/[id]/research/configs', () => {
       expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject(tiers);
     });
 
-    it('does not pass trustedDomains from a request body on to the service', async () => {
+    it('round-trips trustedDomains, autoAdmitTrusted and maxAutoAdmits to the service', async () => {
+      const auto = { trustedDomains: ['t.example'], autoAdmitTrusted: true, maxAutoAdmits: 4 };
       const { res } = makeRes();
-      await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', trustedDomains: ['t.example'] }), res);
-      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, { trustedDomains: ['t.example'] }), res);
-      expect(h.createResearchConfig.mock.calls[0][3]).not.toHaveProperty('trustedDomains');
-      expect(h.updateResearchConfig.mock.calls[0][4]).not.toHaveProperty('trustedDomains');
+      await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', ...auto }), res);
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, auto), res);
+      expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject(auto);
+      expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject(auto);
+    });
+
+    it('returns the auto-admit levers on a listed configuration', async () => {
+      const stored = { ...savedConfig, trustedDomains: ['t.example'], autoAdmitTrusted: true, maxAutoAdmits: 4 };
+      h.listResearchConfigs.mockResolvedValue([stored]);
+      const { res, json } = makeRes();
+      await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+      expect(json).toHaveBeenCalledWith({ data: [stored], pendingProposals: 7 });
+    });
+
+    it('rejects an auto-admit flag of the wrong type', async () => {
+      const { res } = makeRes();
+      await expect(
+        call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', autoAdmitTrusted: 'yes' }), res)
+      ).rejects.toThrow();
     });
 
     it('still accepts a legacy allowedDomains body from a tab opened before the tiers', async () => {

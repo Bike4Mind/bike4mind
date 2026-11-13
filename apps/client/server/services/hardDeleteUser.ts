@@ -1,18 +1,24 @@
-import { erasureRecordRepository, userRepository, withTransaction } from '@bike4mind/database';
+import {
+  deleteFeedbackAiForUser,
+  FeedbackNoteModel,
+  erasureRecordRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import type { IUserDocument, IUserRepository } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { erasureIdHash, erasureKeyId, erasurePseudonym } from '@bike4mind/server-utils/privacy/erasureHash';
 import { emitBillingEvent } from '@bike4mind/server-utils/analytics/signupEvents';
-import { wholeDaysBetween } from '@server/analytics/billingEventDetails';
-import { resolveUserType } from '@server/analytics/resolveUserType';
+import { wholeDaysBetween } from '@bike4mind/server-utils/analytics/billingEventDetails';
+import { resolveUserType } from '@bike4mind/server-utils/analytics/resolveUserType';
 import {
   cancelAccountSubscriptions,
   SINGLE_USER_CANCEL_BUDGET_MS,
   NO_SUBSCRIPTIONS_CANCELED,
   readAccountSubscriptionCustomerIds,
   type AccountSubscriptionCancellation,
-} from '@server/billing/cancelAccountSubscriptions';
+} from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 import {
   purgeDeletedUserData,
   readUserIntegrationGrants,
@@ -109,9 +115,11 @@ export async function hardDeleteUser<T>(
         subscriptionCancellation = cancellation;
         let result: Awaited<ReturnType<typeof userRepository.delete>>;
         try {
-          result = await withTransaction(async () => {
+          result = await withTransaction(async session => {
             await context.assertInTransaction?.();
+            await deleteFeedbackAiForUser(id, { session });
             const deleted = await userRepository.delete(id);
+            await FeedbackNoteModel.deleteMany({ userId: id.toLowerCase() });
             // A throw aborts the delete: an erasure with no record could not be repeated after a restore.
             await erasureRecordRepository.record({
               idHash: erasureIdHash(id),

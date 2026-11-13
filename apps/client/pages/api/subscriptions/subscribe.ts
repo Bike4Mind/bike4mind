@@ -11,7 +11,7 @@ import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/in
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { checkoutAcquisitionMetadata } from '@bike4mind/server-utils/analytics/acquisition';
-import { recordCheckoutVisit } from '@server/analytics/billingEventDetails';
+import { recordCheckoutVisit } from '@bike4mind/server-utils/analytics/billingEventDetails';
 import { readVisitId } from '@server/analytics/visitSession';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
 import { termsConsentSessionParams } from '@server/integrations/stripe/termsConsent';

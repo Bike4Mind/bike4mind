@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IDataLakeDocument, IDataLakeResearchConfigDocument } from '@bike4mind/common';
 import {
+  RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
+  RESEARCH_MAX_AUTO_ADMITS_LIMIT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
   RESEARCH_CONFIG_NAME_MAX_CHARS,
@@ -44,6 +46,8 @@ const storedConfig = (overrides: Partial<IDataLakeResearchConfigDocument> = {}) 
     trustedDomains: [],
     reviewDomains: ['example.com'],
     unlistedSources: 'drop',
+    autoAdmitTrusted: false,
+    maxAutoAdmits: RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
     allowedDomains: ['example.com'],
     blockedDomains: [],
     minRelevance: 0.6,
@@ -628,6 +632,107 @@ describe('research config source tiers', () => {
       LAKE_ID,
       expect.objectContaining({ reviewDomains: ['new.example'], allowedDomains: ['new.example'] })
     );
+  });
+});
+
+describe('research config auto-admit', () => {
+  const stored = (overrides: Partial<IDataLakeResearchConfigDocument> = {}) =>
+    storedConfig({ trustedDomains: ['example.com'], unlistedSources: 'review', ...overrides });
+  const update = (existing: IDataLakeResearchConfigDocument, input: Parameters<typeof updateResearchConfig>[4]) => {
+    const made = makeAdapters({ findByIdInLake: vi.fn(async () => existing) });
+    return { ...made, run: () => updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, input, made.adapters) };
+  };
+
+  it('stores the opt-in and clamps the cap, defaulting to off', async () => {
+    const { adapters, repo } = makeAdapters();
+    await createResearchConfig(lake(), actor(), NO_GRANTS, { name: 'n', query: 'q' }, adapters);
+    expect(repo.createConfig.mock.calls[0][0]).toMatchObject({
+      autoAdmitTrusted: false,
+      maxAutoAdmits: RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
+    });
+    await createResearchConfig(
+      lake(),
+      actor(),
+      NO_GRANTS,
+      { name: 'n', query: 'q', trustedDomains: ['example.com'], autoAdmitTrusted: true, maxAutoAdmits: 9_999 },
+      adapters
+    );
+    expect(repo.createConfig.mock.calls[1][0]).toMatchObject({
+      autoAdmitTrusted: true,
+      maxAutoAdmits: RESEARCH_MAX_AUTO_ADMITS_LIMIT,
+    });
+  });
+
+  it.each(['com', 'github.io', 'co.uk'])('refuses the public suffix %s as a trusted site while on', async entry => {
+    const { adapters } = makeAdapters();
+    await expect(
+      createResearchConfig(
+        lake(),
+        actor(),
+        NO_GRANTS,
+        { name: 'n', query: 'q', trustedDomains: [entry], autoAdmitTrusted: true },
+        adapters
+      )
+    ).rejects.toThrow(new RegExp(entry.replace('.', '\\.')));
+  });
+
+  it('saves the same list while auto-admit is off', async () => {
+    const { adapters, repo } = makeAdapters();
+    await createResearchConfig(
+      lake(),
+      actor(),
+      NO_GRANTS,
+      { name: 'n', query: 'q', trustedDomains: ['com'], autoAdmitTrusted: false },
+      adapters
+    );
+    expect(repo.createConfig.mock.calls[0][0].trustedDomains).toEqual(['com']);
+  });
+
+  it('refuses a toggle-only edit that would enable a stored public suffix', async () => {
+    const { run, repo } = update(stored({ trustedDomains: ['com'] }), { autoAdmitTrusted: true });
+    await expect(run()).rejects.toThrow(/"com"/);
+    expect(repo.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('records an auto-admit entry alongside the update when it flips on', async () => {
+    const { run, record } = update(stored(), { autoAdmitTrusted: true });
+    await run();
+    expect(record.mock.calls[0][0].changes).toEqual([
+      { field: 'researchConfig', kind: 'literal', after: 'updated: Weekly sweep' },
+      { field: 'researchConfig', kind: 'literal', after: 'auto-admit on: Weekly sweep' },
+    ]);
+  });
+
+  it('records an auto-admit off entry when it flips off', async () => {
+    const { run, record } = update(stored({ autoAdmitTrusted: true }), { autoAdmitTrusted: false });
+    await run();
+    expect(record.mock.calls[0][0].changes[1]).toMatchObject({ after: 'auto-admit off: Weekly sweep' });
+  });
+
+  it('records the entries added and removed when the trusted list changes', async () => {
+    const { run, record } = update(stored(), { trustedDomains: ['example.org'] });
+    await run();
+    expect(record.mock.calls[0][0].changes[1]).toMatchObject({
+      after: 'trusted sites added example.org; removed example.com: Weekly sweep',
+    });
+  });
+
+  it('records nothing for a no-op resubmit', async () => {
+    const { run, record } = update(
+      stored({ autoAdmitTrusted: true, maxAutoAdmits: RESEARCH_MAX_AUTO_ADMITS_DEFAULT }),
+      {
+        autoAdmitTrusted: true,
+        trustedDomains: ['example.com'],
+      }
+    );
+    await run();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('counts a cap change as an edit', async () => {
+    const { run, record } = update(stored({ autoAdmitTrusted: true }), { maxAutoAdmits: 7 });
+    await run();
+    expect(record).toHaveBeenCalledTimes(1);
   });
 });
 

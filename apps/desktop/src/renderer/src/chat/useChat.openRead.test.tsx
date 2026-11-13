@@ -297,3 +297,57 @@ describe('a save for another chat while a chat is opening', () => {
     expect(conversation.session?.approvalMode).toBe('ask');
   });
 });
+
+describe('a reply settled before the chat is opened', () => {
+  let emit: (event: ChatStreamEvent) => void = () => {};
+  const prompt = { id: 'p', role: 'user', content: 'please resume' } as never;
+  const running = (messageId: string) =>
+    sessionFor('s1', { messages: [prompt], replyInFlight: { messageId, startedAt: 10 } });
+  const readsOf = (id: string) => getSession.mock.calls.filter(([read]) => read === id).length;
+
+  beforeEach(() => {
+    window.b4m.chat.onStreamEvent = listener => {
+      emit = listener;
+      return () => {};
+    };
+  });
+
+  it('opens a resumed run that kept the settled id', async () => {
+    getSession.mockImplementation(async id => (id === 's1' ? running('x') : sessionFor(id)));
+    await act(async () => root.render(<Harness id="s2" />));
+    await act(async () => {
+      emit({ type: 'done', sessionId: 's1', messageId: 'x', content: '' });
+      emit({ type: 'start', sessionId: 's1', messageId: 'x' });
+    });
+    await act(async () => root.render(<Harness id="s1" />));
+    expect(conversation.session?.id).toBe('s1');
+    expect(conversation.messages[0]).toEqual(prompt);
+    expect(conversation.streaming).toBe(true);
+    expect(readsOf('s1')).toBe(1);
+  });
+
+  it('stops re-reading and opens the chat when the live copy keeps naming a settled reply', async () => {
+    getSession.mockImplementation(async id => (id === 's1' ? running('x') : sessionFor(id)));
+    await act(async () => root.render(<Harness id="s2" />));
+    await act(async () => emit({ type: 'error', sessionId: 's1', messageId: 'x', message: 'boom' }));
+    await act(async () => root.render(<Harness id="s1" />));
+    expect(conversation.session?.id).toBe('s1');
+    expect(conversation.messages[0]).toEqual(prompt);
+    expect(conversation.streaming).toBe(true);
+    expect(conversation.turn?.startedAt).toBe(10);
+    expect(readsOf('s1')).toBe(4);
+  });
+
+  it('reads once more when the reply settles while the opening read is in flight', async () => {
+    let answerFirst: (session: ChatSession) => void = () => {};
+    getSession.mockImplementationOnce(() => new Promise<ChatSession>(done => (answerFirst = done)));
+    getSession.mockResolvedValue(sessionFor('s1', { messages: [prompt] }));
+    await act(async () => root.render(<Harness id="s1" />));
+    await act(async () => emit({ type: 'done', sessionId: 's1', messageId: 'x', content: '' }));
+    await act(async () => answerFirst(running('x')));
+    expect(getSession).toHaveBeenCalledTimes(2);
+    expect(conversation.session?.id).toBe('s1');
+    expect(conversation.streaming).toBe(false);
+    expect(conversation.turn).toBeNull();
+  });
+});

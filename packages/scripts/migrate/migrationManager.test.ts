@@ -36,6 +36,7 @@ interface FakeMigrationFile {
   name: string;
   up: (ctx?: { startedAt: Date }) => Promise<void | { incomplete: true; reason: string }>;
   down: () => Promise<void>;
+  failClosed?: boolean;
 }
 
 let fakeAvailableMigrations: FakeMigrationFile[] = [];
@@ -155,6 +156,48 @@ describe('MigrationManager - applied-set selection (M0)', () => {
 
     expect(m2.up).toHaveBeenCalledOnce();
     expect(migrationDocs.map(d => d.id)).toEqual([2]);
+  });
+
+  it('up() leaves a failing fail-closed migration pending, runs the later ones, then fails the run', async () => {
+    const m1 = migration(1);
+    const gated = { ...migration(2), failClosed: true };
+    const m3 = migration(3);
+    (gated.up as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('refusing to run'));
+    fakeAvailableMigrations = [m1, gated, m3];
+
+    const run = new MigrationManager(new Logger()).up(null);
+
+    await expect(run).rejects.toThrow(/Fail-closed migration\(s\) left pending: 2\b/);
+    await expect(run).rejects.toBeInstanceOf(AggregateError);
+    expect(m3.up).toHaveBeenCalledOnce();
+    expect(migrationDocs.map(d => d.id)).toEqual([1, 3]);
+  });
+
+  it('up() stops at the first failure of a migration that is not fail-closed', async () => {
+    const m1 = migration(1);
+    const m2 = migration(2);
+    const m3 = migration(3);
+    const failure = new Error('boom');
+    (m2.up as ReturnType<typeof vi.fn>).mockRejectedValue(failure);
+    fakeAvailableMigrations = [m1, m2, m3];
+
+    await expect(new MigrationManager(new Logger()).up(null)).rejects.toBe(failure);
+    expect(m3.up).not.toHaveBeenCalled();
+    expect(migrationDocs.map(d => d.id)).toEqual([1]);
+  });
+
+  it('up() still stops on a later ordinary failure after holding a fail-closed one', async () => {
+    const gated = { ...migration(1), failClosed: true };
+    const m2 = migration(2);
+    const m3 = migration(3);
+    const failure = new Error('boom');
+    (gated.up as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('refusing to run'));
+    (m2.up as ReturnType<typeof vi.fn>).mockRejectedValue(failure);
+    fakeAvailableMigrations = [gated, m2, m3];
+
+    await expect(new MigrationManager(new Logger()).up(null)).rejects.toBe(failure);
+    expect(m3.up).not.toHaveBeenCalled();
+    expect(migrationDocs).toHaveLength(0);
   });
 
   it('up() runs nothing when every migration is already applied, regardless of id order', async () => {

@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
@@ -9,7 +10,7 @@ const TranscribeRequestSchema = z.object({
   fileKey: z.string().min(1),
 });
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE], grandfatherLegacyKeys: true }).post(
   asyncHandler<unknown, speechToTextService.TranscriptionResult>(async (req, res) => {
     const parsed = TranscribeRequestSchema.safeParse(req.body);
     if (!parsed.success) {

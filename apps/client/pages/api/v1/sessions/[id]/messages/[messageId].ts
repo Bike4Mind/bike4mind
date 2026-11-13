@@ -15,7 +15,8 @@ import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/err
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { respond } from '@server/utils/respond';
-import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
+import { purgeDeletedMessageMedia } from '@server/sessions/purgeDeletedMessageMedia';
 
 // Reading history is not a metered action; only the per-minute burst limit applies.
 const getHandler = nextRouteForContract(getSessionMessageContract, { exemptReadsFromDailyRateLimit: true }).get(
@@ -157,6 +158,8 @@ const deleteHandler = nextRouteForContract(deleteSessionMessageContract).delete(
       messageId: deleted.id,
     });
   }
+  // Outside the transaction: Mongoose would otherwise enlist the retention reads in it.
+  await purgeDeletedMessageMedia(deleted, { logger: req.logger });
   return res.json({ msg: 'Message deleted' });
 });
 

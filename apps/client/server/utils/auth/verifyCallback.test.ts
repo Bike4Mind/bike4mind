@@ -89,7 +89,6 @@ vi.mock('@bike4mind/services', async importOriginal => {
       resolveRegistrationInvite: actual.userService.resolveRegistrationInvite,
       claimRegistrationInvite: actual.userService.claimRegistrationInvite,
       redeemRegistrationInvite: actual.userService.redeemRegistrationInvite,
-      referralInviteCredits: actual.userService.referralInviteCredits,
     },
     creditService: { addCredits: (...args: unknown[]) => mockAddCredits(...args) },
     organizationService: {
@@ -122,7 +121,7 @@ vi.mock('./openRegistration', () => ({
 
 const mockIsSignupNetworkOverLimit = vi.fn();
 const mockCreateSignupRiskCollector = vi.fn();
-vi.mock('@server/auth/signupNetworkLimits', () => ({
+vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({
   isSignupNetworkOverLimit: (...args: unknown[]) => mockIsSignupNetworkOverLimit(...args),
   createSignupRiskCollector: (...args: unknown[]) => mockCreateSignupRiskCollector(...args),
 }));
@@ -1771,6 +1770,24 @@ describe('OAuth signup with an invite code carried through state', () => {
     );
   });
 
+  it('enrolls the default signup grant for a referral, ignoring the invite total and ReferralCreditsAmount', async () => {
+    const settings: Record<string, string> = {
+      signupGrantInitialCredits: '12',
+      signupGrantDripCap: '28',
+      ReferralCreditsAmount: '5000',
+    };
+    mockFindSetting.mockImplementation(async (name: string) =>
+      settings[name] === undefined ? null : { settingValue: settings[name] }
+    );
+    mockFindInviteByCode.mockResolvedValue(referral({ startingCredits: 750 }));
+
+    const { err } = await runSelfServe();
+
+    expect(err).toBeNull();
+    expect(mockCreate.mock.calls[0][0].signupGrant).toMatchObject({ signupCredits: 12, unlockCredits: 28 });
+    expect(mockFindSetting).not.toHaveBeenCalledWith('ReferralCreditsAmount');
+  });
+
   it.each([
     ['issued to another email', referral({ email: 'someone@example.com' })],
     ['already used', referral({ used: new Date() })],
@@ -1809,21 +1826,6 @@ describe('OAuth signup with an invite code carried through state', () => {
     expect(err).toBeNull();
     expect(user).toBeDefined();
     expect(mockClaimInvite).toHaveBeenCalledWith('invite-1', expect.any(Date));
-    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('signupInvite');
-    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('referredByUserId');
-    expect(mockUpdateInvite).not.toHaveBeenCalled();
-  });
-
-  it('completes the login uninvited when resolving referral credits fails', async () => {
-    mockFindInviteByCode.mockResolvedValue(referral());
-    mockFindSetting.mockRejectedValueOnce(new Error('referral setting unavailable'));
-
-    const { err, user } = await runSelfServe();
-
-    expect(err).toBeNull();
-    expect(user).toBeDefined();
-    expect(mockFindSetting).toHaveBeenCalledWith('ReferralCreditsAmount');
-    expect(mockClaimInvite).not.toHaveBeenCalled();
     expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('signupInvite');
     expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('referredByUserId');
     expect(mockUpdateInvite).not.toHaveBeenCalled();

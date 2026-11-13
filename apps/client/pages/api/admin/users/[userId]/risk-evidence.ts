@@ -1,13 +1,14 @@
 import { userRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
+  MODERATION_PAGE_READ,
   adminRiskEvidenceViewSchema,
   riskEvidenceRefreshStateSchema,
   riskEvidenceSummarySchema,
   type AdminRiskEvidenceView,
 } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin, NotFoundError } from '@server/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, NotFoundError } from '@server/utils/errors';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 
@@ -15,9 +16,11 @@ const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
  * The signup risk score beside the shadow-only behavioral evidence, with its observation window,
  * per-fact provenance and missing reasons, and the last refresh failure. Read-only.
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: MODERATION_PAGE_READ },
+}).get(async (req, res) => {
   const { userId } = req.query;
   if (typeof userId !== 'string' || !OBJECT_ID_PATTERN.test(userId)) throw new BadRequestError('Invalid user id');
 

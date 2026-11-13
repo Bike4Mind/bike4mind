@@ -19,12 +19,12 @@ import {
   PUBLIC_DEFAULT_SORT_FIELD,
   PUBLIC_USER_LIST_PROJECTION,
   PUBLIC_USER_SORT_FIELDS,
-} from '@client/app/utils/adminUserProjection';
-import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
+} from '@bike4mind/server-utils/app/utils/adminUserProjection';
+import { withSafeOrganization } from '@bike4mind/server-utils/utils/toSafeOrganizationSubdocument';
 import { findSharedWorkspaceUserIds } from '@server/users/sharedWorkspaceUserIds';
 import { findPendingProjectInviteeIds } from '@server/users/pendingProjectInviteeIds';
 import { findPendingOrganizationInviteeIds } from '@server/users/pendingOrganizationInviteeIds';
-import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@server/users/signupAnomaly';
+import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@bike4mind/server-utils/users/signupAnomaly';
 import * as z from 'zod';
 import qs from 'qs';
 import { Request } from 'express';

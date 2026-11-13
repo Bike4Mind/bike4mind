@@ -4,7 +4,7 @@ const resolveRetrievalLakeScopeForUser = vi.fn();
 const lakeMembershipsFrom = vi.fn();
 const warnIfManyLakeMemberships = vi.fn();
 
-vi.mock('@server/dataLakes/resolveRetrievalLakeScope', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope', () => ({
   resolveRetrievalLakeScopeForUser: (...args: unknown[]) => resolveRetrievalLakeScopeForUser(...args),
 }));
 vi.mock('@bike4mind/services', () => ({

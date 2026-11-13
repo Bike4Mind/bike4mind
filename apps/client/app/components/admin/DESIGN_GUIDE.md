@@ -21,22 +21,22 @@ Defined once in `apps/client/app/utils/themes/admin.ts` and applied by the admin
 
 The admin is a **monochrome UI with one accent**. Ink and warm greys do the work; indigo marks focus, links and selection; status colors appear only inside status chips, banners and charts. If a screen reads as "colorful", something is wrong.
 
-| Token | Light | Dark | Use |
-|---|---|---|---|
-| `canvas` | `#F6F6F4` | `#141416` | Page and sidebar background |
-| `surface` | `#FFFFFF` | `#1E1E22` | Cards, tables, dialogs, active nav item |
-| `surfaceSubtle` | `#FAFAF8` | `#232328` | Table header, row hover |
-| `hover` | `#ECECE8` | `#2A2A30` | Hover on nav items, ghost buttons, chips |
-| `border` | `#E4E4DF` | `#2E2E34` | Card, table and sidebar edges; row dividers |
-| `borderStrong` | `#D9D9D4` | `#45454D` | Outlines of buttons, inputs, selects |
-| `ink` | `#18181B` | `#FAFAFA` | Headings, body text, primary button fill |
-| `inkSecondary` | `#3F3F46` | `#D4D4D8` | Nav labels, secondary text |
-| `inkMuted` | `#62626B` | `#B4B4BE` | Meta text, table headers, icons at rest |
-| `accent` | `#4F46E5` | `#A5B4FC` | Focus ring, checkbox, data bars |
-| `link` | `#3F3BC9` | `#A5B4FC` | Text links |
-| `selection` | `#F3F2FE` / `#C7C4F7` / `#2B27A3` | `#26244A` / `#4B47A8` / `#C7C4F7` | Selected row, set filter chip (fill / border / text) |
-| `danger` | `#B42318` | `#FCA5A5` | Destructive actions only |
-| `chartSeries` | 10 colors, see `utils/themes/admin.ts` | 10 colors | Categorical chart series beyond what `accent` steps can separate |
+| Token           | Light                                  | Dark                              | Use                                                              |
+| --------------- | -------------------------------------- | --------------------------------- | ---------------------------------------------------------------- |
+| `canvas`        | `#F6F6F4`                              | `#141416`                         | Page and sidebar background                                      |
+| `surface`       | `#FFFFFF`                              | `#1E1E22`                         | Cards, tables, dialogs, active nav item                          |
+| `surfaceSubtle` | `#FAFAF8`                              | `#232328`                         | Table header, row hover                                          |
+| `hover`         | `#ECECE8`                              | `#2A2A30`                         | Hover on nav items, ghost buttons, chips                         |
+| `border`        | `#E4E4DF`                              | `#2E2E34`                         | Card, table and sidebar edges; row dividers                      |
+| `borderStrong`  | `#D9D9D4`                              | `#45454D`                         | Outlines of buttons, inputs, selects                             |
+| `ink`           | `#18181B`                              | `#FAFAFA`                         | Headings, body text, primary button fill                         |
+| `inkSecondary`  | `#3F3F46`                              | `#D4D4D8`                         | Nav labels, secondary text                                       |
+| `inkMuted`      | `#62626B`                              | `#B4B4BE`                         | Meta text, table headers, icons at rest                          |
+| `accent`        | `#4F46E5`                              | `#A5B4FC`                         | Focus ring, checkbox, data bars                                  |
+| `link`          | `#3F3BC9`                              | `#A5B4FC`                         | Text links                                                       |
+| `selection`     | `#F3F2FE` / `#C7C4F7` / `#2B27A3`      | `#26244A` / `#4B47A8` / `#C7C4F7` | Selected row, set filter chip (fill / border / text)             |
+| `danger`        | `#B42318`                              | `#FCA5A5`                         | Destructive actions only                                         |
+| `chartSeries`   | 10 colors, see `utils/themes/admin.ts` | 10 colors                         | Categorical chart series beyond what `accent` steps can separate |
 
 **Using tokens.** Reference a token by its palette path, never by its hex: `sx={{ color: 'admin.inkMuted', bgcolor: 'admin.surface', borderColor: 'admin.border' }}`, a status tone as `'admin.status.bad.foreground'`, and in a raw CSS string `var(--joy-palette-admin-ink)`. That is what makes dark mode free. No hex, `rgb()`, `rgba()`, named colors, gradients or `white`/`black` in admin code, and no pixel sizes outside the scales below; a translucent overlay or shadow belongs in the skin, not in a page.
 
@@ -47,13 +47,13 @@ The admin is a **monochrome UI with one accent**. Ink and warm greys do the work
 
 **Mapping onto Joy.** Inside the admin, Joy's color props are remapped so existing code cannot leak off-palette color:
 
-| Joy `color` | Becomes | Notes |
-|---|---|---|
-| `primary` (solid) | `ink` fill, `canvas`-on-ink text | Dark theme inverts: light fill, dark text |
-| `primary` (plain, soft, outlined) | `ink` text, `borderStrong` outline, `hover` fill | Not blue |
-| `neutral` | Same as `primary` plain/outlined | |
-| `danger` | `danger` | Outlined opens a destructive flow; solid only for the final confirm |
-| `success`, `warning` | The `good` and `warn` status tones | Only on `Chip`, `Alert` and charts. On a `Button` or `IconButton` the skin renders them neutral, so don't pass them there |
+| Joy `color`                       | Becomes                                          | Notes                                                                                                                     |
+| --------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `primary` (solid)                 | `ink` fill, `canvas`-on-ink text                 | Dark theme inverts: light fill, dark text                                                                                 |
+| `primary` (plain, soft, outlined) | `ink` text, `borderStrong` outline, `hover` fill | Not blue                                                                                                                  |
+| `neutral`                         | Same as `primary` plain/outlined                 |                                                                                                                           |
+| `danger`                          | `danger`                                         | Outlined opens a destructive flow; solid only for the final confirm                                                       |
+| `success`, `warning`              | The `good` and `warn` status tones               | Only on `Chip`, `Alert` and charts. On a `Button` or `IconButton` the skin renders them neutral, so don't pass them there |
 
 Never use Joy's default blue, orange or yellow anywhere in the admin, and never color an icon by meaning alone (icons are `inkMuted` at rest, `ink` when active).
 
@@ -61,13 +61,13 @@ Never use Joy's default blue, orange or yellow anywhere in the admin, and never 
 
 Five tones with one meaning each, used everywhere. They differ in lightness as well as hue, and every chip also has a text label.
 
-| Tone | Means | Examples | Light fg / bg | Dark fg / bg |
-|---|---|---|---|---|
-| good | Healthy, allowed | Active, Verified, Success | `#166534` / `#E7F5EC` | `#BBF7D0` / `#14532D` |
-| info | New or neutral-notable | New, Pro | `#3730A3` / `#E8EEFF` | `#C7D2FE` / `#312E81` |
-| warn | Needs a look | Medium risk | `#8A4B00` / `#FFF1DE` | `#FED7AA` / `#7C2D12` |
-| bad | Blocked or failing | Suspended, High risk, Blocked sign-in | `#9F1C12` / `#FDECEA` | `#FECACA` / `#7F1D1D` |
-| neutral | Inactive, informational | Revoked, Free, Low risk | `#52525B` / `#F1F1EE` | `#E4E4E7` / `#3F3F46` |
+| Tone    | Means                   | Examples                              | Light fg / bg         | Dark fg / bg          |
+| ------- | ----------------------- | ------------------------------------- | --------------------- | --------------------- |
+| good    | Healthy, allowed        | Active, Verified, Success             | `#166534` / `#E7F5EC` | `#BBF7D0` / `#14532D` |
+| info    | New or neutral-notable  | New, Pro                              | `#3730A3` / `#E8EEFF` | `#C7D2FE` / `#312E81` |
+| warn    | Scan: needs a look      | Medium risk                           | `#8A4B00` / `#FFF1DE` | `#FED7AA` / `#7C2D12` |
+| bad     | Blocked or failing      | Suspended, High risk, Blocked sign-in | `#9F1C12` / `#FDECEA` | `#FECACA` / `#7F1D1D` |
+| neutral | Inactive, informational | Revoked, Free, Low risk               | `#52525B` / `#F1F1EE` | `#E4E4E7` / `#3F3F46` |
 
 Status chips are `StatusChip`: 22 px soft pills (12 / 500) with an optional 6 px dot in the same color, never a solid or outlined colored chip. A count of zero, an empty value or "not set" is **neutral**, not bad: red means something is wrong, not that a number is small, and green means healthy, not that a number exists ("0" and "0%" stay `ink`).
 
@@ -81,15 +81,15 @@ Charts read every color from the admin tokens (no hex in a chart config, and nev
 
 ### Type (Inter, IDs in JetBrains Mono)
 
-| Role | Size / weight | Color | Joy level |
-|---|---|---|---|
-| Page title | 24 / 600, -0.01em | `ink` | `h1`, via `AdminPageHeader` |
-| Dialog title | 18 / 600 | `ink` | `DialogTitle` |
-| Section and card title | 15 / 600 | `ink` | `h2` to `h4`, `title-lg`, `title-md` |
-| Body, table cell | 14 / 400 | `ink` | `body-md` |
-| Nav item, button | 13 to 14 / 500 | `inkSecondary` (nav), `ink` (button) | |
-| Meta, table header, nav section label | 12 / 500 | `inkMuted` | `body-xs` |
-| IDs, key prefixes, shortcut hints | mono 12 (hints 11) | `inkMuted` | |
+| Role                                  | Size / weight      | Color                                | Joy level                            |
+| ------------------------------------- | ------------------ | ------------------------------------ | ------------------------------------ |
+| Page title                            | 24 / 600, -0.01em  | `ink`                                | `h1`, via `AdminPageHeader`          |
+| Dialog title                          | 18 / 600           | `ink`                                | `DialogTitle`                        |
+| Section and card title                | 15 / 600           | `ink`                                | `h2` to `h4`, `title-lg`, `title-md` |
+| Body, table cell                      | 14 / 400           | `ink`                                | `body-md`                            |
+| Nav item, button                      | 13 to 14 / 500     | `inkSecondary` (nav), `ink` (button) |                                      |
+| Meta, table header, nav section label | 12 / 500           | `inkMuted`                           | `body-xs`                            |
+| IDs, key prefixes, shortcut hints     | mono 12 (hints 11) | `inkMuted`                           |                                      |
 
 There are only these seven levels. The skin maps every heading below `h1` to the section title, so a page title written as `h2` or `h3` silently renders at 15 px. No `fontSize` override on text. Headings are sentence case, never larger than the page title, never colored, carry no decorative icon or emoji, and are never followed by a help icon larger than 16 px.
 
@@ -97,16 +97,16 @@ There are only these seven levels. The skin maps every heading below `h1` to the
 
 4 px grid; one Joy spacing unit is 8 px.
 
-| Where | Value |
-|---|---|
-| Page gutter | 32 px sides, 16 on phones; see [Page frame](#page-frame) |
-| Between page regions | 24 px (`ADMIN_REGION_GAP`) |
-| Between cards in a region or grid | 16 px |
-| Between toolbar items, inside controls | 8 px |
+| Where                                                       | Value                                                           |
+| ----------------------------------------------------------- | --------------------------------------------------------------- |
+| Page gutter                                                 | 32 px sides, 16 on phones; see [Page frame](#page-frame)        |
+| Between page regions                                        | 24 px (`ADMIN_REGION_GAP`)                                      |
+| Between cards in a region or grid                           | 16 px                                                           |
+| Between toolbar items, inside controls                      | 8 px                                                            |
 | Card padding (`SectionCard`, `SettingsSection`, Joy `Card`) | 16 px; a card title bar is at least 50 px tall with 16 px sides |
-| Stat tile padding | 16 px sides, 14 px top and bottom |
-| Dialog padding | 24 px |
-| Empty, error and loading blocks | 24 px |
+| Stat tile padding                                           | 16 px sides, 14 px top and bottom                               |
+| Dialog padding                                              | 24 px                                                           |
+| Empty, error and loading blocks                             | 24 px                                                           |
 
 - Radius: 6 small controls, 8 buttons and inputs, 12 cards (`SectionCard`, `SettingsSection`, `StatStrip` and the `DataTable` surface alike), 16 dialogs.
 - Targets: at least 36 px on desktop, 44 px on touch.
@@ -189,14 +189,14 @@ Check every page at 1440, 768 and 375 px wide, in both themes. At every width:
 
 Every write in the admin falls into exactly one row. If an action does not fit, raise it in design review before building it.
 
-| Kind of action | Pattern | Reason | Recovery | Examples |
-|---|---|---|---|---|
-| Reversible, low-risk | Applies immediately | Not required | Undo toast (30 s) | Add a tag, add a note, revoke a single key |
-| Changes money or access | `ActionDialog` with preview | Required | Undo toast and Admin log entry | Adjust credits, change role, grant subscription, suspend |
-| Bulk | `BulkActionBar`, then `ActionDialog` with a dry run | Required | Undo toast for the whole batch | Contain, bulk suspend, bulk revoke keys |
-| Irreversible | `ActionDialog` with type-the-name confirm | Required | None, and the dialog says so | Delete user, data erasure |
-| Settings forms | Edit in place with a sticky `SaveBar` | Optional | Discard and a leave-page guard | Admin settings, org settings, model config |
-| Impersonation | `ActionDialog` with step-up MFA | Required | Time-boxed session and a visible banner | Log in as user |
+| Kind of action          | Pattern                                             | Reason       | Recovery                                | Examples                                                 |
+| ----------------------- | --------------------------------------------------- | ------------ | --------------------------------------- | -------------------------------------------------------- |
+| Reversible, low-risk    | Applies immediately                                 | Not required | Undo toast (30 s)                       | Add a tag, add a note, revoke a single key               |
+| Changes money or access | `ActionDialog` with preview                         | Required     | Undo toast and Admin log entry          | Adjust credits, change role, grant subscription, suspend |
+| Bulk                    | `BulkActionBar`, then `ActionDialog` with a dry run | Required     | Undo toast for the whole batch          | Contain, bulk suspend, bulk revoke keys                  |
+| Irreversible            | `ActionDialog` with type-the-name confirm           | Required     | None, and the dialog says so            | Delete user, data erasure                                |
+| Settings forms          | Edit in place with a sticky `SaveBar`               | Optional     | Discard and a leave-page guard          | Admin settings, org settings, model config               |
+| Impersonation           | `ActionDialog` with step-up MFA                     | Required     | Time-boxed session and a visible banner | Log in as user                                           |
 
 Do and don't:
 
@@ -232,38 +232,38 @@ Build new admin pages from these, imported from `apps/client/app/components/admi
 ### Cards
 
 - A card is one `surface` with a 1 px `border`, 12 px radius, 16 px padding and no shadow. Group facts in a `SectionCard` and form fields in a `SettingsSection`.
-- **No card in a card.** Inside a card, separate groups with a 15 / 600 subheading, a `border` hairline or 16 px of space, never another bordered or grey box. The only surfaces allowed inside a card are a `DataTable`, a chart, a code block and an `Alert`.
+- **No card in a card.** Inside a card, separate groups with a 15 / 600 subheading, a `border` hairline or 16 px of space, never another bordered or grey box. The only surfaces allowed inside a card are a `DataTable`, a chart, a code block and an `Alert`. A `DataTable` that is a card's body (`SectionCard` with `body="custom"`) passes `framed={false}`, so the card's edge is the table's edge and there is no border or radius inside it.
 - No tinted backgrounds or colored borders on a card to signal state; put a `StatusChip` or an `Alert` in it instead.
 - Key numbers go in one `StatStrip`, not in separate tiles. A stat value is `ink` (`valueColor` only when the value is itself a status, such as a risk level); tiles are never solid green, orange or pastel, and carry no decorative icon.
 
 ### Toolkit
 
-| Component | Job | Rules |
-|---|---|---|
-| `AdminPageHeader` | Title, count or meta, page actions | The page `h1`. Actions sit top-right and wrap below the title on small screens. A sub-view rendered under a page that already has a header passes `level="section"` and gets a section-title `h2`. |
-| `EntityHeader` | Identity of a user, org or key | IDs and emails have a copy button. Times are relative, with the exact UTC time on hover. |
-| `StatStrip` / `StatTile` | 3 to 5 key numbers | One card, tiles divided by hairlines. Label, value, comparison line. Optional `StatSparkline`, and an optional `help` control beside the label that defines the term (16 px icon). No decorative icons. |
-| `StatusChip` | A status | One of the five tones, always with a text label. |
-| `SectionCard` / `Fact` | A group of facts | Title, optional ghost action, a definition list of `Fact`s (`body="custom"` for a table or chart). No form inputs inside. |
-| `SettingsSection` | A group of settings fields | A plain card for a form; the page saves through `SaveBar`. |
-| `DataTable` | Every admin list | Sticky header, sortable columns, row selection, row actions, sideways scroll below `minWidth`, skeleton, empty and error states. Page sizes 25, 50, 100. Server paging is described in `shared/README.md`. |
-| `FilterBar` / `AdminSearchInput` | Narrowing a list | Every filter is kept in the URL (`useAdminListUrlState`). The Feedback and Email verification lists still keep their filters and page in local state; that is a known gap to move over later. Search first, then `FilterChip`s, 8 px apart on one line that wraps as a whole. No stacks of labelled selects, no native date inputs, no Apply button: a filter applies when picked. `AdminSearchInput` alone still goes in a row Stack; in a column it stretches to fill the height. |
-| `FilterChip` | One filter in a `FilterBar` | Dashed with just the label while unset; "Label: Value" in the `selection` tint with a remove button once set. Picking a value opens a menu. |
-| `ViewTabs` / `SavedViews` | Built-in and saved views above a list | The active tab is ink-filled. Each tab may carry a count. A view is its filters, so matching filters light its tab (`matchSavedView`). |
-| `SegmentedControl` | 2 to 4 mutually exclusive modes | Toggle buttons on a `hover` track, e.g. Group by None / Email domain. Not for filters with many values. |
-| `ToggleChipGroup` | A small multi-select filter | On the `SegmentedControl` track; "All" when nothing is narrowed, never an empty set. |
-| `InitialsAvatar` | The person in a table row | The photo when there is one, else initials on a tone that stays stable per user. |
-| `InlineBar` | A number's share of the largest in view | Decorative only: the number itself stays in the cell. |
-| `BulkActionBar` | Acting on a selection | Floats at the bottom. Offers "Select all N matching". Most destructive action last. |
-| `ActionDialog` | Any audited write | Verb-phrase title, before/after preview or dry run, then a reason. Commit button bottom-right. |
-| `ChangePreview` | The before/after inside an `ActionDialog` | Old value, new value and the signed delta. |
-| `AdminDialog` | An unaudited dialog, such as naming a saved view | The modal shell `ActionDialog` is built on: title, close button, focus trap. No reason field. |
-| `ReasonPicker` | Audit reasons | Preset chips per action type (`ADMIN_REASON_PRESETS`) plus free text (5 to 500 characters, the shared `adminActionReason` rule). |
-| `UndoToast` | Recovery | `useUndoToast()`. Bottom-center, 30 seconds, Undo plus a link to the audit entry. One at a time. |
-| `SaveBar` / `UnsavedChangesGuard` | Settings forms only | Sticky bottom bar: "3 unsaved changes", Discard, Save (Cmd+S); the guard catches navigation and unload. |
-| `EmptyState` / `ErrorState` / `LoadingState` / `UpdatingBar` | Nothing to show, a failure, a first load, a refetch | See [States](#states). |
-| `UserSelector` | Picking a user in a form or filter | Search-as-you-type over users. |
-| `Kbd` | A shortcut hint | Mono 11 on a key cap. |
+| Component                                                    | Job                                                 | Rules                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------ | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AdminPageHeader`                                            | Title, count or meta, page actions                  | The page `h1`. Actions sit top-right and wrap below the title on small screens. A sub-view rendered under a page that already has a header passes `level="section"` and gets a section-title `h2`.                                                                                                                                                                                                                                                                                  |
+| `EntityHeader`                                               | Identity of a user, org or key                      | IDs and emails have a copy button. Times are relative, with the exact UTC time on hover.                                                                                                                                                                                                                                                                                                                                                                                            |
+| `StatStrip` / `StatTile`                                     | 3 to 5 key numbers                                  | One card, tiles divided by hairlines. Label, value, comparison line. Optional `StatSparkline`, and an optional `help` control beside the label that defines the term (16 px icon). No decorative icons.                                                                                                                                                                                                                                                                             |
+| `StatusChip`                                                 | A status                                            | One of the five tones, always with a text label.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `SectionCard` / `Fact`                                       | A group of facts                                    | Title, optional ghost action, a definition list of `Fact`s (`body="custom"` for a table or chart). No form inputs inside.                                                                                                                                                                                                                                                                                                                                                           |
+| `SettingsSection`                                            | A group of settings fields                          | A plain card for a form; the page saves through `SaveBar`.                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `DataTable`                                                  | Every admin list                                    | Sticky header, sortable columns, row selection, row actions, sideways scroll below `minWidth`, skeleton, empty and error states. Page sizes 25, 50, 100. Server paging is described in `shared/README.md`.                                                                                                                                                                                                                                                                          |
+| `FilterBar` / `AdminSearchInput`                             | Narrowing a list                                    | Every filter is kept in the URL (`useAdminListUrlState`). The Feedback and Email verification lists still keep their filters and page in local state; that is a known gap to move over later. Search first, then `FilterChip`s, 8 px apart on one line that wraps as a whole. No stacks of labelled selects, no native date inputs, no Apply button: a filter applies when picked. `AdminSearchInput` alone still goes in a row Stack; in a column it stretches to fill the height. |
+| `FilterChip`                                                 | One filter in a `FilterBar`                         | Dashed with just the label while unset; "Label: Value" in the `selection` tint with a remove button once set. Picking a value opens a menu.                                                                                                                                                                                                                                                                                                                                         |
+| `ViewTabs` / `SavedViews`                                    | Built-in and saved views above a list               | The active tab is ink-filled. Each tab may carry a count. A view is its filters, so matching filters light its tab (`matchSavedView`).                                                                                                                                                                                                                                                                                                                                              |
+| `SegmentedControl`                                           | 2 to 4 mutually exclusive modes                     | Toggle buttons on a `hover` track, e.g. Group by None / Email domain. Not for filters with many values.                                                                                                                                                                                                                                                                                                                                                                             |
+| `ToggleChipGroup`                                            | A small multi-select filter                         | On the `SegmentedControl` track; "All" when nothing is narrowed, never an empty set.                                                                                                                                                                                                                                                                                                                                                                                                |
+| `InitialsAvatar`                                             | The person in a table row                           | The photo when there is one, else initials on a tone that stays stable per user.                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `InlineBar`                                                  | A number's share of the largest in view             | Decorative only: the number itself stays in the cell.                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `BulkActionBar`                                              | Acting on a selection                               | Floats at the bottom. Offers "Select all N matching". Most destructive action last.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `ActionDialog`                                               | Any audited write                                   | Verb-phrase title, before/after preview or dry run, then a reason. Commit button bottom-right.                                                                                                                                                                                                                                                                                                                                                                                      |
+| `ChangePreview`                                              | The before/after inside an `ActionDialog`           | Old value, new value and the signed delta.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `AdminDialog`                                                | An unaudited dialog, such as naming a saved view    | The modal shell `ActionDialog` is built on: title, close button, focus trap. No reason field.                                                                                                                                                                                                                                                                                                                                                                                       |
+| `ReasonPicker`                                               | Audit reasons                                       | Preset chips per action type (`ADMIN_REASON_PRESETS`) plus free text (5 to 500 characters, the shared `adminActionReason` rule).                                                                                                                                                                                                                                                                                                                                                    |
+| `UndoToast`                                                  | Recovery                                            | `useUndoToast()`. Bottom-center, 30 seconds, Undo plus a link to the audit entry. One at a time.                                                                                                                                                                                                                                                                                                                                                                                    |
+| `SaveBar` / `UnsavedChangesGuard`                            | Settings forms only                                 | Sticky bottom bar: "3 unsaved changes", Discard, Save (Cmd+S); the guard catches navigation and unload.                                                                                                                                                                                                                                                                                                                                                                             |
+| `EmptyState` / `ErrorState` / `LoadingState` / `UpdatingBar` | Nothing to show, a failure, a first load, a refetch | See [States](#states).                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `UserSelector`                                               | Picking a user in a form or filter                  | Search-as-you-type over users.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `Kbd`                                                        | A shortcut hint                                     | Mono 11 on a key cap.                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 ## 6. Writing
 
@@ -300,26 +300,27 @@ Definition of done for any admin UI:
 
 ### States
 
-| State | Use | Rules |
-|---|---|---|
-| First load of a table or cards | `DataTable` `loading`, or Joy `Skeleton` shaped like the cards | The header, filters and table frame stay in place; only the body is a placeholder. |
-| First load of an area with no known shape | `LoadingState` | A small spinner with a label ("Loading models"), inside that area. Never a bare `CircularProgress`, a bare "Loading..." line, or a spinner centered on a blank page. |
-| Refetch with data on screen | `UpdatingBar` | The data stays visible; the bar keeps its height so nothing shifts. It sits inside the region it refreshes (the top of the table or chart region), never as its own region in the page stack, because the reserved 20 px would add two region gaps. Where the region has no room for it, `placement="overlay"` floats it in the gap above the region without reserving height. |
-| Nothing exists yet | `EmptyState` | A title that says what is missing, an optional one-line description, and an `action` (required): the next step as a button ("Create rule"). It sits where the data would, never as a separate grey strip, dashed card or warning banner. |
-| Filters match nothing | `EmptyState` | "No users match these filters", with a "Clear filters" action. |
-| Request failed | `ErrorState` | The message in plain words and "Try again" (`onRetry`). Never an empty table with a toast as the only signal. |
-| No permission | `MissingPermissionState` / `AdminPermissionGate` (an area), `AdminPermissionAction` (a control) | "Missing permission: X", from the same `missingAdminPermissionMessage` the server answers with. An action stays visible, disabled, with the message on hover and focus; never hide it silently or let it answer 403. |
+| State                                     | Use                                                                                             | Rules                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| First load of a table or cards            | `DataTable` `loading`, or Joy `Skeleton` shaped like the cards                                  | The header, filters and table frame stay in place; only the body is a placeholder.                                                                                                                                                                                                                                                                                             |
+| First load of an area with no known shape | `LoadingState`                                                                                  | A small spinner with a label ("Loading models"), inside that area. Never a bare `CircularProgress`, a bare "Loading..." line, or a spinner centered on a blank page.                                                                                                                                                                                                           |
+| Refetch with data on screen               | `UpdatingBar`                                                                                   | The data stays visible; the bar keeps its height so nothing shifts. It sits inside the region it refreshes (the top of the table or chart region), never as its own region in the page stack, because the reserved 20 px would add two region gaps. Where the region has no room for it, `placement="overlay"` floats it in the gap above the region without reserving height. |
+| Nothing exists yet                        | `EmptyState`                                                                                    | A title that says what is missing, an optional one-line description, and an `action` (required): the next step as a button ("Create rule"). It sits where the data would, never as a separate grey strip, dashed card or warning banner.                                                                                                                                       |
+| Filters match nothing                     | `EmptyState`                                                                                    | "No users match these filters", with a "Clear filters" action.                                                                                                                                                                                                                                                                                                                 |
+| Request failed                            | `ErrorState`                                                                                    | The message in plain words and "Try again" (`onRetry`). Never an empty table with a toast as the only signal.                                                                                                                                                                                                                                                                  |
+| No permission                             | `MissingPermissionState` / `AdminPermissionGate` (an area), `AdminPermissionAction` (a control) | "Missing permission: X", from the same `missingAdminPermissionMessage` the server answers with. An action stays visible, disabled, with the message on hover and focus; never hide it silently or let it answer 403.                                                                                                                                                           |
 
 Shortcuts:
 
-| Key | Action |
-|---|---|
-| Cmd+K | Command palette (`AdminCommandPalette`): find any user, org or key, or run any action |
-| `/` | Focus search |
-| `x` | Select the focused row |
-| `c` | Adjust credits (user profile) |
-| `s` | Suspend (user profile) |
-| Cmd+S | Save (settings forms) |
+| Key       | Action                                                                                |
+| --------- | ------------------------------------------------------------------------------------- |
+| Cmd+K     | Command palette (`AdminCommandPalette`): find any user, org or key, or run any action |
+| `/`       | Focus search                                                                          |
+| `x`       | Select the focused row                                                                |
+| `a` / `o` | Accept / override the focused row's AI suggestion (tables that offer one)             |
+| `c`       | Adjust credits (user profile)                                                         |
+| `s`       | Suspend (user profile)                                                                |
+| Cmd+S     | Save (settings forms)                                                                 |
 
 ## 8. Admin assistant eval
 
@@ -340,3 +341,31 @@ A new admin tab or admin tool adds at least one question to `b4m-core/services/s
 An exceptional import needs an immediately preceding comment: `// admin-toolkit-allow YYYY-MM-DD -- concrete reason the toolkit cannot serve this use case`. Keep exceptions local to one import; do not disable the rule for a file or directory.
 
 Pre-toolkit imports are recorded in `eslint-rules/admin-joy-legacy.mjs` (file, component, date, justification), each pinned to its line and a SHA-256 text fingerprint in `eslint-rules/admin-joy-legacy-imports.mjs`, so an allowance cannot pass to another import. New imports fail even in legacy files, and a changed, moved or removed import raises a stale-exception error until it is re-justified or its entry deleted. Remove entries when migrating; never add new screens.
+
+## 10. AI suggestions
+
+An AI proposal is shown with `AiSuggestion` (`shared/AiSuggestion.tsx`), beside the admin's own control and never in its place. The admin decides; the AI only proposes. Reference host: Shadow detections (`ShadowDetectionsTab.tsx`, `ShadowDetectionAssessmentPanel.tsx`).
+
+- **Two variants.** `row` is a neutral `StatusChip` for a table cell: the AI mark, the proposal and a confidence word, with the percentage, an optional `note` (which record it is about) and the `A`/`O` hint in its tooltip. `detail` is for a record or dialog: proposal, confidence word (percentage on hover), up to three reasons (each a link when its evidence is an in-app path; any other href renders as plain text), model and age, then the actions.
+- **Neutral tone, always.** A suggestion is advisory, so it never uses `bad` or `good`, even when it proposes abuse. The verdict chip beside it keeps the real state.
+- **Confidence is a word.** High (>= 80%), Medium (>= 50%), Low (below). The raw percentage is secondary and lives in a tooltip. No probability, no word.
+- **No suggestion, no slot.** Pass `suggestion={null}` when AI is off, over budget, failed or forbidden (a 403): the component renders nothing. No empty box, no error banner, no "AI unavailable".
+- **Accept goes through the host's own write.** `onAccept` opens the host's `ActionDialog` prefilled: the proposed value and `ACCEPTED_AI_REASON` ("Accepted AI suggestion") via `initialReason`, still editable. Bump `formKey` to re-seed an already open dialog. The admin still confirms, so nothing is applied on a click.
+- **Override opens the manual control.** `onOverride` follows an optional "Why was the AI wrong?" pick (`AI_OVERRIDE_REASONS`) and receives it; the host opens its control with nothing preselected. A row's `O` key reaches the same picker: the host opens its record with `initialOverriding` on the detail suggestion. Shadow detections does not record the pick yet (see Recording decisions).
+- **Dismiss** hides the suggestion locally. **Done by AI** (`status: 'auto_applied'`) shows a chip and, with `onUndo`, an Undo.
+- **Keys.** Give `DataTable` `rowShortcuts` returning `a`/`o` only for rows with a suggestion and only when the admin holds the permission the host's write needs; otherwise return `{}` so the keys stay inert.
+- **Row coverage follows the host's data.** Shadow detections' row chip reads the per-user AI advisory, which keeps each open account's strongest abuse judgment from the last 24 hours, so an unreviewed detection can carry an assessment without a row chip or `A`/`O`. Its review dialog still shows the latest assessment.
+- **Bulk.** `AiSuggestionBulkAccept` accepts only pending High suggestions, behind an `ActionDialog` with a `ChangePreview`. It takes `reversible: true` as a literal, so an irreversible action cannot use it.
+
+### Recording decisions
+
+`onDecision` fires from the component only for Dismiss, and for Undo once `onUndo` resolves (a rejected revert is not reported). Accept and override are the host's to report: call `onDecision` with `accepted` or `overridden` after the host's own write lands, not when the button is clicked, because the admin can still cancel the dialog. Decisions are not stored yet; until the shared suggestion store exists, `onDecision` is a typed seam with no persistence behind it, and a dismissed suggestion returns on reload. Shadow detections does not wire `onDecision` yet.
+
+### Copy
+
+- Name the proposal as the value the admin would record ("Confirmed abuse"), not as a judgment of the person.
+- Reasons name the evidence ("Burst of signups from one network"), never the model process ("The model analyzed the signups").
+- Say "AI suggestion" or "AI advisory", never "AI verdict" or "AI decided".
+- Pair any AI statement that could prompt action with its limit: "Advisory only" or "review before acting".
+- The prefilled reason is exactly "Accepted AI suggestion"; admins add to it rather than replace it.
+- Use the confidence words above; do not invent others ("Very likely", "Certain").

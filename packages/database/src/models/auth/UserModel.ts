@@ -6,7 +6,9 @@ import {
   USER_RISK_SIGNAL_TYPES,
   VERIFIED_SLACK_IDENTITY_FILTER,
   canonicalizeEmail,
+  DEFAULT_STORAGE_LIMIT_MB,
 } from '@bike4mind/common';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
   ADMIN_PERMISSIONS,
   AuthStrategy,
@@ -344,6 +346,31 @@ export type UserSignupLinkFacts = {
   signupMethod: string;
   landingNotebookOwnerId: string | null;
 };
+
+/**
+ * The signup and two-factor facts an advisory abuse assessment reads per account
+ * (UserRepository.findAccountRiskProfiles). The caller reduces them to flags before anything leaves.
+ */
+export type UserAccountRiskProfile = {
+  id: string;
+  createdAt: Date | null;
+  email: string | null;
+  /** As findSignupLinkFacts reads it. */
+  signupMethod: string;
+  signupIp: string | null;
+  signupJa4: string | null;
+  signupAsnKnown: boolean;
+  /** The signup ASN when known (a positive number); null otherwise. */
+  signupAsn: number | null;
+  signupDatacenter: boolean | null;
+  signupWafAnonIp: boolean | null;
+  totpEnabled: boolean;
+  /** When TOTP setup began; enabling follows within the same setup flow. */
+  mfaSetupAt: Date | null;
+};
+
+/** An account that may share a signup trait with another (UserRepository.findSignupLinkCandidates). */
+export type UserSignupLinkCandidate = UserLinkState & { signupIp: string | null; signupJa4: string | null };
 
 /** An account as the payment-risk linked-account checks read it; the blocked fields match accountBlockReasons. */
 export type UserLinkState = {
@@ -886,6 +913,81 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return docs.map(d => String(d._id));
   }
 
+  /** Signup and two-factor facts per id; ids that are not users are absent. */
+  async findAccountRiskProfiles(ids: string[]): Promise<UserAccountRiskProfile[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select(
+        'createdAt email signupMeta.ip signupMeta.ja4 signupMeta.asn signupMeta.isDatacenter signupMeta.wafAnonIp ' +
+          'acquisition.signupMethod authProviders.strategy mfa.totpEnabled mfa.setupAt'
+      )
+      .lean();
+    return docs.map(doc => ({
+      id: String(doc._id),
+      createdAt: doc.createdAt ?? null,
+      email: doc.email ?? null,
+      signupMethod: doc.acquisition?.signupMethod ?? doc.authProviders?.[0]?.strategy ?? 'email',
+      signupIp: doc.signupMeta?.ip ?? null,
+      signupJa4: doc.signupMeta?.ja4 ?? null,
+      signupAsnKnown: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0,
+      signupAsn: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0 ? doc.signupMeta.asn : null,
+      signupDatacenter: doc.signupMeta?.isDatacenter ?? null,
+      signupWafAnonIp: doc.signupMeta?.wafAnonIp ?? null,
+      totpEnabled: doc.mfa?.totpEnabled === true,
+      mfaSetupAt: doc.mfa?.setupAt ?? null,
+    }));
+  }
+
+  /**
+   * Accounts created in [from, to] that share the signup IP, the signup JA4, a mailbox (any
+   * `+tag` of `mailbox.local` at any of `mailbox.domains`, dots ignored for Gmail) or a mail domain with the caller's account. Each
+   * criterion is optional; with none, nothing is read. Bounded by `limit` and the createdAt range.
+   */
+  async findSignupLinkCandidates(input: {
+    excludeIds: string[];
+    from: Date;
+    to: Date;
+    ip: string | null;
+    ja4: string | null;
+    mailbox: { local: string; domains: string[]; ignoreDots: boolean } | null;
+    mailDomain: string | null;
+    limit: number;
+  }): Promise<UserSignupLinkCandidate[]> {
+    const criteria: Record<string, unknown>[] = [];
+    if (input.ip) criteria.push({ 'signupMeta.ip': input.ip });
+    if (input.ja4) criteria.push({ 'signupMeta.ja4': input.ja4 });
+    if (input.mailbox) {
+      const local = [...input.mailbox.local].map(escapeRegExp).join(input.mailbox.ignoreDots ? '\\.?' : '');
+      const domains = input.mailbox.domains.map(escapeRegExp).join('|');
+      criteria.push({ email: { $regex: `^${local}(\\+[^@]*)?@(${domains})$`, $options: 'i' } });
+    }
+    if (input.mailDomain) criteria.push({ email: { $regex: `@${escapeRegExp(input.mailDomain)}$`, $options: 'i' } });
+    if (criteria.length === 0) return [];
+    const excluded = convertIds(input.excludeIds.filter(id => mongoose.Types.ObjectId.isValid(id)));
+    const docs = await this.model
+      .find({ createdAt: { $gte: input.from, $lte: input.to }, _id: { $nin: excluded }, $or: criteria })
+      .select(
+        'name email createdAt isBanned disputePending moderation.status signupMeta.ip signupMeta.ja4 currentCredits'
+      )
+      .limit(input.limit)
+      .maxTimeMS(2000)
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      name: d.name ?? null,
+      email: d.email ?? null,
+      createdAt: d.createdAt ?? null,
+      isBanned: d.isBanned ?? false,
+      disputePending: d.disputePending ?? false,
+      moderation: d.moderation?.status ? { status: d.moderation.status } : null,
+      signupIp: d.signupMeta?.ip ?? null,
+      signupJa4: d.signupMeta?.ja4 ?? null,
+      currentCredits: d.currentCredits ?? 0,
+    }));
+  }
+
   /** Who `ids` are and whether each is blocked, for the payment-risk linked-account checks. */
   async findLinkStatesByIds(ids: string[]): Promise<UserLinkState[]> {
     const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
@@ -1014,6 +1116,39 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       { _id: userId, currentStorageSize: counterFilter },
       { $set: { currentStorageSize: next } }
     );
+    return res.matchedCount === 1;
+  }
+
+  async setPlanStorageLimit(userId: string, planStorageLimitMb: number): Promise<boolean> {
+    if (!mongoose.isValidObjectId(userId)) return false;
+    const fieldMissing = (field: string) => ({ $eq: [{ $type: field }, 'missing'] });
+    const res = await this.model.updateOne({ _id: userId }, [
+      // A row without the override field (pre-backfill, or an OAuth signup) gets the override
+      // resolveUserStorageLimit would derive for it, since a defined plan limit retires that fallback.
+      {
+        $set: {
+          storageLimitOverride: {
+            $cond: [
+              fieldMissing('$storageLimitOverride'),
+              {
+                $cond: [
+                  { $in: ['$storageLimit', [null, DEFAULT_STORAGE_LIMIT_MB]] },
+                  null,
+                  { $cond: [fieldMissing('$storageLimit'), null, '$storageLimit'] },
+                ],
+              },
+              '$storageLimitOverride',
+            ],
+          },
+        },
+      },
+      {
+        $set: {
+          planStorageLimit: planStorageLimitMb,
+          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb] },
+        },
+      },
+    ]);
     return res.matchedCount === 1;
   }
 
@@ -1527,6 +1662,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // working password. Gates the SSO auto-link local-email-verified requirement in
     // verifyCallback.ts / okta/callback.ts.
     hasUsablePassword: { type: Boolean, default: false },
+    // toProviderEndUserId(_id): the identifier LLM providers receive for this account, stored so an
+    // admin can resolve a provider safety notice back to the account. Set on create; backfilled by
+    // migration 20260921241030. Hidden from reads like any other internal-only field.
+    providerEndUserId: { type: String, select: false },
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
     adminPermissions: { type: [String], enum: ADMIN_PERMISSIONS, default: [] },
@@ -1622,6 +1761,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
+    // An organization's service account (see IUser.serviceAccountOrganizationId). Set on insert only.
+    serviceAccountOrganizationId: { type: String },
     subscribedUntil: { type: String, default: null },
     systemFiles: { type: [SystemFileEntrySchema], default: [] },
     oauthCredentials: { type: Object, default: {} },
@@ -1911,6 +2052,13 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isSynthetic: { type: Boolean, required: false },
     // See IUser.isInternal. No default, like isSynthetic: absent reads as "not marked".
     isInternal: { type: Boolean, required: false },
+    // See IUser.isPersona. Written only by the persona mint route.
+    isPersona: { type: Boolean, required: false },
+    personaExpiresAt: { type: Date, required: false },
+    personaName: { type: String, required: false },
+    personaOwnerId: { type: String, required: false },
+    personaLoginCodeHash: { type: String, required: false },
+    personaLoginCodeExpiresAt: { type: Date, required: false },
     firstValueAt: { type: Date, required: false },
   },
   {
@@ -1957,8 +2105,25 @@ UserSchema.pre('save', function (next) {
   next();
 });
 
+// Derived from _id, so it never changes after create; insert paths that skip document middleware
+// (insertMany, bulkWrite) are covered by the backfill migration rather than this hook.
+UserSchema.pre('save', function (next) {
+  if (this.isNew && !this.providerEndUserId) this.providerEndUserId = toProviderEndUserId(String(this._id));
+  next();
+});
+
 // Stripe-customer resolution for business metrics.
 UserSchema.index({ stripeCustomerId: 1 }, { name: 'user_stripeCustomerId' });
+// Admin lookup of the account behind a provider safety notice. Partial so accounts created before the
+// backfill are not indexed as null. Explicit name so migration 20260921241030 and autoIndex agree.
+UserSchema.index(
+  { providerEndUserId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { providerEndUserId: { $type: 'string' } },
+    name: 'user_providerEndUserId',
+  }
+);
 
 // This will support the $or queries in findByUsernameOrEmail efficiently
 UserSchema.index({
@@ -2031,7 +2196,7 @@ UserSchema.index({ createdAt: 1 });
 // accounts created before signup network capture carry no signupMeta. Explicit name so migration
 // 20260921235973 and autoIndex agree - see the authProviders_strategy_id note above.
 UserSchema.index({ 'signupMeta.capturedAt': 1 }, { name: 'user_signupMeta_capturedAt', sparse: true });
-// Serves the linked-account lookup by signup IP (apps/client/server/billing/linkedAccounts.ts). Partial:
+// Serves the linked-account lookup by signup IP (packages/server-utils/src/billing/linkedAccounts.ts). Partial:
 // the signupIpRetention cron clears the IP, and older accounts never had one. Explicit name so migration
 // 20260921236600 and autoIndex agree.
 UserSchema.index(
@@ -2051,6 +2216,16 @@ UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
 UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
 UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+// The persona caps and expiry sweep read only persona accounts, a handful among all users.
+UserSchema.index(
+  { isPersona: 1, personaExpiresAt: 1 },
+  { partialFilterExpression: { isPersona: true }, name: 'user_isPersona_expiresAt' }
+);
+// Login-code redemption looks a persona up by the code's hash; only personas with a pending code carry one.
+UserSchema.index(
+  { personaLoginCodeHash: 1 },
+  { partialFilterExpression: { personaLoginCodeHash: { $type: 'string' } }, name: 'user_personaLoginCodeHash' }
+);
 UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
 // Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration
 // 20260921235956 byte-for-byte.
