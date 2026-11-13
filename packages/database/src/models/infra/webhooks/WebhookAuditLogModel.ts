@@ -215,15 +215,6 @@ class WebhookAuditLogRepository extends BaseRepository<IWebhookAuditLogDocument>
   /**
    * Add an action to an existing audit log.
    */
-  async addAction(
-    deliveryId: string,
-    action: { type: string; status: 'success' | 'failed'; details?: Record<string, unknown>; durationMs?: number }
-  ): Promise<IWebhookAuditLogDocument | null> {
-    const result = await this.model.findOneAndUpdate({ deliveryId }, { $push: { actions: action } }, { new: true });
-
-    return result?.toJSON() as IWebhookAuditLogDocument | null;
-  }
-
   /**
    * Find an audit log by delivery ID.
    */
