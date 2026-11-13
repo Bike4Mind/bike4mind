@@ -8,7 +8,7 @@ import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
-import { runsCheckedInFull } from './shellApproval.testHelper';
+import { runsCheckedInAuto, runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import { gitRefusesImplicitBare } from './shellWrites';
 import type { ToolContext } from './types';
@@ -410,7 +410,7 @@ describe('shell approval in a project with a large node_modules', () => {
       permissionSubject({ name: 'bash_execute', input: { command } }, prompt, context)
     ).catch(() => null);
     return {
-      auto: !prompt.askInAuto && (prompt.always?.directories ?? []).length === 0,
+      auto: runsCheckedInAuto(prompt) && (prompt.always?.directories ?? []).length === 0,
       full: runsCheckedInFull(prompt),
       allowed: subject !== null && rules.evaluate(subject).decision === 'allow',
     };

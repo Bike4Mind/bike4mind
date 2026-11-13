@@ -16,7 +16,7 @@ import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
-import { runsCheckedInFull } from './shellApproval.testHelper';
+import { runsCheckedInAuto, runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
@@ -690,8 +690,8 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     const covered = subject !== null && rules.evaluate(subject).decision === 'allow';
     return [
       covered,
-      !prompt.askInAuto,
-      !withSession.askInAuto && (withSession.always?.directories ?? []).length === 0,
+      runsCheckedInAuto(prompt),
+      runsCheckedInAuto(withSession) && (withSession.always?.directories ?? []).length === 0,
       runsCheckedInFull(prompt),
     ]
       .map(run => (run ? 'r' : 'a'))

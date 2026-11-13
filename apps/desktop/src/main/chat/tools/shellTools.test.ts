@@ -272,13 +272,39 @@ describe('bash_execute', () => {
     expect(first?.key).not.toBe(second?.key);
   });
 
-  it('derives what always-allow covers, and asks when the script does not parse', async () => {
+  it('derives what always-allow covers, and runs a script that does not parse as unchecked', async () => {
     const parsed = await bashExecute.approval?.({ command: 'git commit -m x && ls -la', cwd: root }, context);
     expect(parsed?.always?.commands.map(command => command.pattern)).toEqual(['git commit *', 'ls *']);
     expect(parsed?.askInAuto).toBeUndefined();
+    expect(parsed?.unchecked).toBeUndefined();
 
     const broken = await bashExecute.approval?.({ command: 'if then fi ((', cwd: root }, context);
-    expect(broken?.askInAuto).toBe(true);
+    expect(broken?.askInAuto).toBeUndefined();
+    expect(broken?.askInFull).toBeUndefined();
+    expect(broken?.unchecked).toBe(true);
+
+    const example = await bashExecute.approval?.({ command: 'cat .env.example; if then fi ((', cwd: root }, context);
+    expect(example?.askInAuto).toBeUndefined();
+  });
+
+  it.each([
+    ['names a .env file', 'cat .env; if then fi ((', null],
+    ['names a .env.local file', 'cat .env.local; if then fi ((', null],
+    ['names a .env file in upper case', 'cat .ENV; if then fi ((', null],
+    ['names the settings Desktop protects', 'cp a .claude/settings.json; if then fi ((', null],
+    ['runs outside the granted folders', 'if then fi ((', '/nonexistent-b4m-outside'],
+  ])('asks in auto mode before a script that does not parse and %s', async (_, command, outside) => {
+    const prompt = await bashExecute.approval?.({ command, cwd: outside ?? root }, context);
+    expect(prompt?.askInAuto).toBe(true);
+    expect(prompt?.unchecked).toBe(true);
+  });
+
+  it('asks in full access before a script that does not parse and names the settings Desktop protects', async () => {
+    const prompt = await bashExecute.approval?.(
+      { command: 'cp a .claude/settings.json; if then fi ((', cwd: root },
+      context
+    );
+    expect(prompt?.askInFull).toBe(true);
   });
 
   it.each(['cat .env', 'grep KEY .env.local', 'source .env', 'wc -l < .env'])(

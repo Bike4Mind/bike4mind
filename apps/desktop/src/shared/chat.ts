@@ -1227,8 +1227,10 @@ export type ChatSessionMode = 'chat' | 'code';
  *
  *  - 'ask'  every gated tool asks. The behaviour this client had before modes existed.
  *  - 'auto' everything runs unasked except a call with a named reason to stop: a shell
- *           command naming a path outside the granted folders (or one that does not parse), a
- *           read of a `.env` file, or the same call a third time in a row. Modelled on
+ *           command naming a path outside the granted folders, a read of a `.env` file, a
+ *           command that can send data out or writes permission settings, an outbound call
+ *           after the reply read untrusted content, or the same call a third time in a row. A
+ *           command the scan cannot follow or parse runs like any other. Modelled on
  *           opencode's permission defaults; see ChatService.autoApproves.
  *  - 'full' no gate at all for the filesystem and the shell. A command can then read any file
  *           this user can read and reach the internet with nobody looking. Chosen per

@@ -26,7 +26,7 @@ import {
 import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree } from './commandTree';
 import { protectionFor, secretPaths, type SandboxedCommand } from './sandbox';
-import { folderReaches, shellReachesProtected } from '../permissions/rules';
+import { folderReaches, namesRuleFile, shellReachesProtected } from '../permissions/rules';
 import { shownPath, wslLocation } from '../../wsl/wslPath';
 import {
   MAX_TOOL_OUTPUT_CHARS,
@@ -471,10 +471,9 @@ async function partAsk(entry: ShellScan['commands'][number]): Promise<ApprovalPa
     kinds.push('gitUnlisted');
   }
   if (kinds.length === 0) return undefined;
-  // A listed git form unread only because an earlier git command moved refs: the routine fetch-then-merge.
-  const refsMovedOnly = entry.refsMovedOnly === true && kinds.length === 1;
+  // What the scan cannot follow runs in 'auto' and 'full'; sending data out or reading secrets still stops 'auto'.
   return {
-    mode: (entry.unread && !entry.refsMovedOnly) || entry.gitUnlisted ? 'full' : refsMovedOnly ? 'ask' : 'auto',
+    mode: kinds.some(kind => kind === 'outbound' || kind === 'env') ? 'auto' : 'ask',
     reason: reasons.join(' '),
     kinds,
   };
@@ -522,7 +521,8 @@ export async function shellApproval(
   }
 
   const scan = await scanShell(command, startDirectory, context.roots).catch(() => null);
-  if (!scan) return unreadApproval(tool, command, detail, key, ungranted, [startDirectory, ...context.roots]);
+  if (!scan)
+    return unreadApproval(tool, command, detail, key, ungranted, directories, [startDirectory, ...context.roots]);
 
   // Recorded before the check, so a script written and run by this same command counts.
   for (const written of scan.writes) await recordSessionWrite(context, written);
@@ -548,6 +548,12 @@ export async function shellApproval(
   // auto mode; a reply that has read untrusted content asks anyway, as these are never contained.
   const parts = await Promise.all(scan.commands.map(entry => partAsk(entry)));
   const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
+  const unchecked =
+    scan.unread === true ||
+    scan.unreadScript === true ||
+    scan.commands.some(entry => entry.unread || entry.gitUnlisted);
+  // The scan cannot rule out a protected write in what it cannot follow, but the command's own words can name one.
+  const uncheckedSettingsWrite = unchecked && !scan.readOnly && namesRuleFile(command);
   const scriptAsks =
     envScript ||
     !!script ||
@@ -558,16 +564,17 @@ export async function shellApproval(
     unreachable.length > 0 ||
     touchesProtected ||
     secret ||
-    scan.unreadScript === true ||
+    uncheckedSettingsWrite ||
     writesWhileUnresolved;
   const scriptAsksInFull =
     (touchesProtected && !scan.readOnly) ||
-    scan.unreadScript === true ||
+    uncheckedSettingsWrite ||
     secret ||
     writesWhileUnresolved ||
     unreachable.length > 0;
   // A part that sets the environment changes what every later part runs, so none is decided alone.
-  const byPart = !scriptAsks && !scriptAsksInFull && !scan.setsEnvironment;
+  // A script unread as a whole has no part the scan can vouch for, so none is decided alone.
+  const byPart = !scriptAsks && !scriptAsksInFull && !scan.setsEnvironment && scan.unreadScript !== true;
   const reasons = [
     ...(scriptCheckFailed
       ? ['Could not check whether it runs code written in this session, so it is asked each time.']
@@ -618,10 +625,6 @@ export async function shellApproval(
   const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
   const asks = scriptAsks || parts.some(ask => ask !== undefined && ask.mode !== 'ask');
   const asksInFull = scriptAsksInFull || parts.some(ask => ask?.mode === 'full');
-  const unchecked =
-    scan.unread === true ||
-    scan.unreadScript === true ||
-    scan.commands.some(entry => entry.unread || entry.gitUnlisted);
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
@@ -664,9 +667,14 @@ export async function shellApproval(
 /** What `ungranted` holds for a command the scan could not read that may reach a WSL distro. */
 export const UNREAD_WSL_COMMAND = 'a WSL distro this command may reach, which the scan could not read';
 
+/** A `.env` file named in text the scan could not read, as envFiles.ts `isEnvFile` reads one: not `.env.example` or `.envrc`. */
+const NAMES_ENV_FILE = /\.env(?![\w-])(?!\.example(?![\w.]))/i;
+
 /**
- * The prompt for a command the scan could not read. It asks in auto and full mode, and when the command
- * may reach a WSL distro - it names wsl or a share, or runs in or beside a WSL folder - it also
+ * The prompt for a command the scan could not read. Auto and full mode run it unless its own text gives a
+ * reason to stop: auto asks when it names a `.env` file or the permission settings or runs outside the
+ * granted folders (`outside`), full when it names the permission settings. When the command may reach a
+ * WSL distro - it names wsl or a share, or runs in or beside a WSL folder - it asks in every mode and
  * carries `ungranted`, so no rule or saved answer covers it: what it reaches was never checked.
  */
 function unreadApproval(
@@ -675,20 +683,24 @@ function unreadApproval(
   detail: string,
   key: string,
   ungranted: readonly string[],
+  outside: readonly string[],
   places: readonly string[]
 ): ApprovalPrompt {
   const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
   const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
   // Not drawn on the card, which shows the command itself; the reason keeps the call off quick surfaces.
-  if (!mayReachDistro)
+  if (!mayReachDistro) {
+    const settings = namesRuleFile(command);
+    const asks = settings || outside.length > 0 || NAMES_ENV_FILE.test(command);
     return {
       detail,
       key,
-      askInAuto: true,
-      askInFull: true,
+      ...(asks ? { askInAuto: true as const } : {}),
+      ...(settings ? { askInFull: true as const } : {}),
       reasons: ['Could not read this command, so where it acts cannot be checked.'],
       unchecked: true,
     };
+  }
   const reason =
     'Could not read this command, so it may reach a WSL distro this project has no folder in. It asks each time.';
   return {

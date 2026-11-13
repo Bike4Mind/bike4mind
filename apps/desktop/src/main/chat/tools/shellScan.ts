@@ -8656,7 +8656,6 @@ export async function scanShell(
         }
       }
       const before = unreadOperands;
-      const firstInner = commands.length;
       let uncertain = false;
       unreadOwners++;
       try {
@@ -8669,9 +8668,6 @@ export async function scanShell(
       }
       if (unreadOperands > before) {
         const entry: ShellCommand = { text: node.text, always: node.text, coverable: false, words: node.text };
-        // Each refsMovedOnly part added exactly one unread, so equal counts mean nothing else in the body is unread.
-        const refsMoved = commands.slice(firstInner).filter(inner => inner.refsMovedOnly).length;
-        if (refsMoved === unreadOperands - before) entry.refsMovedOnly = true;
         commands.push(entry);
         claimUnread(before, entry);
       }

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { permissionSubject } from '../permissions/subject';
+import { runsCheckedInAuto } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import * as sessionScripts from './sessionScripts';
 import type { ApprovalPrompt, ToolContext } from './types';
@@ -63,10 +64,12 @@ describe('shellApproval per part', () => {
     ]);
   });
 
-  it('asks about only the unread part in both auto and full modes', async () => {
+  it('marks only the part whose operand it cannot read, which auto and full mode still run', async () => {
     const prompt = await approve('git status && rm "$TARGET"');
     expect(prompt.byPart).toBe(true);
-    expect(prompt.askInFull).toBe(true);
+    expect(prompt.askInAuto).toBeUndefined();
+    expect(prompt.askInFull).toBeUndefined();
+    expect(prompt.unchecked).toBe(true);
     expect(parts(prompt)).toEqual([
       { text: 'git status', coverable: true, kinds: [] },
       expect.objectContaining({ coverable: false, kinds: ['unread'] }),
@@ -106,7 +109,7 @@ describe('shellApproval per part', () => {
   describe('floors that hold for the whole script', () => {
     const whole = (prompt: ApprovalPrompt) => {
       expect(prompt.byPart).toBeUndefined();
-      expect(prompt.askInAuto).toBe(true);
+      expect(runsCheckedInAuto(prompt)).toBe(false);
       expect(prompt.always?.commands.every(command => command.ask === undefined)).toBe(true);
     };
 
