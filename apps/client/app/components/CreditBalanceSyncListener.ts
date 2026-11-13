@@ -14,6 +14,21 @@ import { useStreamingState } from '@client/app/hooks/useStreamingState';
 export const BALANCE_SYNC_DELAYS_MS = [1500, 5000] as const;
 
 /**
+ * Copy a billed-balance response into `currentUser.currentCredits`, where the composer chip and the Studio header
+ * read the personal balance. A missing or non-numeric balance is ignored.
+ */
+export function writeBilledBalance(balance: { currentCredits?: unknown } | null | undefined): void {
+  const { currentUser, setCurrentUser } = useUser.getState();
+  if (
+    currentUser &&
+    typeof balance?.currentCredits === 'number' &&
+    balance.currentCredits !== currentUser.currentCredits
+  ) {
+    setCurrentUser({ ...currentUser, currentCredits: balance.currentCredits });
+  }
+}
+
+/**
  * Pull the billed balance from the server and write it where the composer chip reads it:
  * `currentUser.currentCredits` for the personal account, the organization queries for a team
  * pool. Failures are swallowed; the `users` push and the next identify still apply.
@@ -34,14 +49,7 @@ export async function syncCreditBalance(queryClient: QueryClient, isStale?: () =
       staleTime: 0,
     });
     if (isStale?.()) return;
-    const { currentUser, setCurrentUser } = useUser.getState();
-    if (
-      currentUser &&
-      typeof balance?.currentCredits === 'number' &&
-      balance.currentCredits !== currentUser.currentCredits
-    ) {
-      setCurrentUser({ ...currentUser, currentCredits: balance.currentCredits });
-    }
+    writeBilledBalance(balance);
   } catch (error) {
     if (isStale?.() || isCancelledError(error)) return;
     console.warn('Credit balance sync failed:', error);

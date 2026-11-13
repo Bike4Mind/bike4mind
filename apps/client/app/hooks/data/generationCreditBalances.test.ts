@@ -1,8 +1,11 @@
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: {} }));
+const apiGet = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: apiGet } }));
 
+import type { IUserDocument } from '@bike4mind/database';
+import { useUser } from '@client/app/contexts/UserContext';
 import { CREDITS_BALANCE_KEY } from './credits';
 import { hasGenerationCreditSettlementChanged, invalidateGenerationCreditBalances } from './generationCreditBalances';
 
@@ -33,6 +36,22 @@ describe('invalidateGenerationCreditBalances', () => {
       expect(searchOrganizations).toHaveBeenCalledTimes(1);
     } finally {
       queryClient.clear();
+    }
+  });
+
+  it('writes the refreshed personal balance to the current user, fetching it when nothing holds it yet', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    useUser.getState().setCurrentUser({ id: 'user-1', currentCredits: 100 } as unknown as IUserDocument);
+    apiGet.mockResolvedValue({ data: { currentCredits: 52 } });
+
+    try {
+      await invalidateGenerationCreditBalances(queryClient);
+
+      expect(apiGet).toHaveBeenCalledWith('/api/credits/balance');
+      expect(useUser.getState().currentUser?.currentCredits).toBe(52);
+    } finally {
+      queryClient.clear();
+      useUser.getState().setCurrentUser(null);
     }
   });
 });
