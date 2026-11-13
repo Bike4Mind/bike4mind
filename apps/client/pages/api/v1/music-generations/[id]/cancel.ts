@@ -12,7 +12,9 @@ const handler = nextRouteForContract(cancelMusicGenerationContract, {
 }).post(async (req, res) => {
   const job = await findOwnGenerationJob(req.validatedParams.id, req.user.id, 'music');
   if (!job) throw new NotFoundError('Music generation not found');
-  return res.json(await toPublicGenerationJob(await cancelOwnGenerationJob(job), mapperDeps, MUSIC_GENERATION_PROJECTION));
+  return res.json(
+    await toPublicGenerationJob(await cancelOwnGenerationJob(job), mapperDeps, MUSIC_GENERATION_PROJECTION)
+  );
 });
 
 export const config = {

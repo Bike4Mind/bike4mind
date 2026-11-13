@@ -12,7 +12,9 @@ const handler = nextRouteForContract(cancelVideoGenerationContract, {
 }).post(async (req, res) => {
   const job = await findOwnGenerationJob(req.validatedParams.id, req.user.id, 'video');
   if (!job) throw new NotFoundError('Video generation not found');
-  return res.json(await toPublicGenerationJob(await cancelOwnGenerationJob(job), mapperDeps, VIDEO_GENERATION_PROJECTION));
+  return res.json(
+    await toPublicGenerationJob(await cancelOwnGenerationJob(job), mapperDeps, VIDEO_GENERATION_PROJECTION)
+  );
 });
 
 export const config = {

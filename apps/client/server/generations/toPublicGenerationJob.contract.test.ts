@@ -14,10 +14,14 @@ import {
   VIDEO_GENERATION_PROJECTION,
 } from './toPublicGenerationJob';
 
-const toPublicVideoGeneration = (job: IGenerationJobDocumentOf<'video'>, deps: JobMapperDeps): Promise<VideoGeneration> =>
-  toPublicGenerationJob(job, deps, VIDEO_GENERATION_PROJECTION);
-const toPublicMusicGeneration = (job: IGenerationJobDocumentOf<'music'>, deps: JobMapperDeps): Promise<MusicGeneration> =>
-  toPublicGenerationJob(job, deps, MUSIC_GENERATION_PROJECTION);
+const toPublicVideoGeneration = (
+  job: IGenerationJobDocumentOf<'video'>,
+  deps: JobMapperDeps
+): Promise<VideoGeneration> => toPublicGenerationJob(job, deps, VIDEO_GENERATION_PROJECTION);
+const toPublicMusicGeneration = (
+  job: IGenerationJobDocumentOf<'music'>,
+  deps: JobMapperDeps
+): Promise<MusicGeneration> => toPublicGenerationJob(job, deps, MUSIC_GENERATION_PROJECTION);
 
 // Byte-level pins for the public v1 video and music resources. A string snapshot (not an object one, which sorts
 // keys) also pins key order, so a projection change that reorders or renames a field fails here.

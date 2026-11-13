@@ -1,8 +1,4 @@
-import type {
-  GeneratedAssetLineageEntry,
-  GeneratedAssetMetadata,
-  IGenerationJobDocument,
-} from '@bike4mind/common';
+import type { GeneratedAssetLineageEntry, GeneratedAssetMetadata, IGenerationJobDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
@@ -14,7 +10,8 @@ export const FALLBACK_SAVE_BUDGET_MS = 10_000;
 export type OutputModerationVerdict = { blocked: false } | { blocked: true; reason: string };
 
 /** Where the bytes landed; a kind's job output spreads this next to its own fields. */
-export type StoredOutputLocation = { location: 'files'; s3Key: string; fileId: string } | { location: 'generated'; s3Key: string };
+export type StoredOutputLocation =
+  { location: 'files'; s3Key: string; fileId: string } | { location: 'generated'; s3Key: string };
 
 export type StoredOutput = { stored: true; location: StoredOutputLocation };
 export type StoreOutputResult = StoredOutput | { stored: false; reason: string };
@@ -80,7 +77,10 @@ export function storeGeneratedOutput(
   params: Omit<StoreOutputParams, 'moderate'>,
   deps: StoreOutputDeps
 ): Promise<StoredOutput>;
-export async function storeGeneratedOutput(params: StoreOutputParams, deps: StoreOutputDeps): Promise<StoreOutputResult> {
+export async function storeGeneratedOutput(
+  params: StoreOutputParams,
+  deps: StoreOutputDeps
+): Promise<StoreOutputResult> {
   const { job, noun, bytes, contentType, signal } = params;
   if (params.moderate) {
     const verdict = await params.moderate();

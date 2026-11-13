@@ -49,18 +49,37 @@ describe('storeGeneratedOutput', () => {
     expect(call).not.toHaveProperty('sessionId');
   });
 
+  it('treats a null or empty stored id as absent', async () => {
+    const deps = setup();
+    // A stored job document can carry null where the type says optional.
+    await storeGeneratedOutput(params({ questId: null as unknown as string, sessionId: '' }), deps);
+    const call = vi.mocked(deps.saveToFiles).mock.calls[0][0];
+    expect(call).not.toHaveProperty('questId');
+    expect(call).not.toHaveProperty('sessionId');
+  });
+
   it('falls back to the generated bucket when Files refuses the output', async () => {
-    const deps = setup({ saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })) });
+    const deps = setup({
+      saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })),
+    });
     const result = await storeGeneratedOutput(params(), deps);
 
     expect(result).toEqual({ stored: true, location: { location: 'generated', s3Key: 'generated-things/o1/j1.png' } });
-    expect(deps.logger.warn).toHaveBeenCalledWith('thing saved outside Files', { jobId: 'j1', reason: 'storage_limit' });
+    expect(deps.logger.warn).toHaveBeenCalledWith('thing saved outside Files', {
+      jobId: 'j1',
+      reason: 'storage_limit',
+    });
   });
 
   it('falls back on a throwing Files save under the fallback policy', async () => {
-    const deps = setup({ saveToFiles: vi.fn(async () => Promise.reject(new Error('down'))) });
+    const error = new Error('down');
+    const deps = setup({ saveToFiles: vi.fn(async () => Promise.reject(error)) });
     const result = await storeGeneratedOutput(params(), deps);
     expect(result).toMatchObject({ stored: true, location: { location: 'generated' } });
+    expect(deps.logger.warn).toHaveBeenCalledWith('thing save to Files threw; saving outside Files', {
+      jobId: 'j1',
+      error,
+    });
   });
 
   it('rethrows a throwing Files save under the rethrow policy, without touching the bucket', async () => {
