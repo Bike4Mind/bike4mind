@@ -43,7 +43,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
 }));
-vi.mock('@bike4mind/database', () => ({ systemPromptRepository: h.repo }));
+vi.mock('@bike4mind/database', () => ({
+  systemPromptRepository: h.repo,
+  SYSTEM_PROMPT_MAX_CONTENT_LENGTH: 50000,
+  SYSTEM_PROMPT_MAX_DESCRIPTION_LENGTH: 2000,
+}));
 vi.mock('@bike4mind/server-utils/utils/systemPrompts/defaults', () => ({ getDefaultSystemPrompts: h.defaults }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
@@ -265,6 +269,20 @@ describe('system prompt admin audit', () => {
     h.repo.findByPromptId.mockResolvedValue({ name: 'P', activeVersion: 1 });
     h.repo.saveToVersion.mockResolvedValue({ ok: true });
     const res = await call(saveVersion, 'POST', { version: 2, content: 'x'.repeat(50000) });
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('save-version accepts a description at exactly 2,000 characters', async () => {
+    h.repo.findByPromptId.mockResolvedValue({ name: 'P', activeVersion: 1 });
+    h.repo.saveToVersion.mockResolvedValue({ ok: true });
+    const res = await call(saveVersion, 'POST', { version: 2, content: 'ok', description: 'd'.repeat(2000) });
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('create-version accepts content and description at exactly their limits', async () => {
+    h.repo.findByPromptId.mockResolvedValue({ name: 'P', activeVersion: 1 });
+    h.repo.createNewVersion.mockResolvedValue({ version: 2, history: [] });
+    const res = await call(createVersion, 'POST', { content: 'x'.repeat(50000), description: 'd'.repeat(2000) });
     expect(res._getStatusCode()).toBe(200);
   });
 
