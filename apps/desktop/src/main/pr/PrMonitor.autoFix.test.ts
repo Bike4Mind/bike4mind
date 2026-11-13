@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatAutomaticOrigin } from '@shared/chat';
 import type { PrBinding } from '@shared/pullRequest';
-import { MAX_AUTO_FIX_ATTEMPTS } from './autoFix';
+import { DEFAULT_AUTO_FIX_ATTEMPTS } from '@shared/autoFixSetting';
 import { REF, TrackedMonitor, check, collector, fakeGithub, quietLogger, snapshot, tempStore } from './prTestSupport';
 
 const SESSION = 'session-1';
@@ -11,16 +11,20 @@ const bound: PrBinding = {
   boundAt: '',
   lastState: 'OPEN',
   autoFix: true,
-  autoFixMax: MAX_AUTO_FIX_ATTEMPTS,
+  autoFixMax: DEFAULT_AUTO_FIX_ATTEMPTS,
 };
 const failing = snapshot({ headSha: 'sha-bad', checks: [check('Build', 'fail')] });
 
-function setup({ busy = false, accept = true } = {}) {
+function setup({
+  busy = false,
+  accept = true,
+  attempts,
+}: { busy?: boolean; accept?: boolean; attempts?: number } = {}) {
   const store = tempStore();
   const fake = fakeGithub(failing);
   const out = collector();
   const started: { prompt: string; origin: ChatAutomaticOrigin }[] = [];
-  const state = { busy, accept, refuseAsBusy: true };
+  const state = { busy, accept, refuseAsBusy: true, attempts, attemptReads: 0 };
   const monitor = new TrackedMonitor({
     store,
     github: fake.github,
@@ -38,6 +42,14 @@ function setup({ busy = false, accept = true } = {}) {
     emit: out.emit,
     logger: quietLogger,
     batchWindowMs: 0,
+    ...(attempts === undefined
+      ? {}
+      : {
+          autoFixAttempts: async () => {
+            state.attemptReads++;
+            return state.attempts ?? DEFAULT_AUTO_FIX_ATTEMPTS;
+          },
+        }),
   });
   return { store, fake, out, monitor, started, state };
 }
@@ -113,7 +125,7 @@ describe('PrMonitor auto-fix', () => {
 
   it('keeps saying it gave up while checks run again', async () => {
     const { store, monitor, out, fake } = setup();
-    await store.set(SESSION, { ...bound, autoFixAttempts: MAX_AUTO_FIX_ATTEMPTS });
+    await store.set(SESSION, { ...bound, autoFixAttempts: DEFAULT_AUTO_FIX_ATTEMPTS });
     await monitor.refresh(SESSION);
     fake.answer(snapshot({ headSha: 'sha-next', checks: [check('Build', 'pending')] }));
     await monitor.refresh(SESSION);
@@ -122,10 +134,10 @@ describe('PrMonitor auto-fix', () => {
 
   it('says so in the bar when it gives up', async () => {
     const { store, monitor, started, out } = setup();
-    await store.set(SESSION, { ...bound, autoFixAttempts: MAX_AUTO_FIX_ATTEMPTS });
+    await store.set(SESSION, { ...bound, autoFixAttempts: DEFAULT_AUTO_FIX_ATTEMPTS });
     await monitor.refresh(SESSION);
     expect(started).toHaveLength(0);
-    expect(out.last().autoFix).toMatchObject({ status: 'exhausted', attempts: MAX_AUTO_FIX_ATTEMPTS });
+    expect(out.last().autoFix).toMatchObject({ status: 'exhausted', attempts: DEFAULT_AUTO_FIX_ATTEMPTS });
     expect(out.last().autoFix.note).toContain('gave up');
   });
 
@@ -141,9 +153,9 @@ describe('PrMonitor auto-fix', () => {
     await monitor.setOption(SESSION, 'autoFix', true);
     await monitor.idle();
     expect(started).toHaveLength(1);
-    expect(started[0].prompt).toContain(`Attempt 1 of ${MAX_AUTO_FIX_ATTEMPTS}`);
-    expect(await store.get(SESSION)).toMatchObject({ autoFixAttempts: 1, autoFixMax: MAX_AUTO_FIX_ATTEMPTS });
-    expect(out.last().autoFix.max).toBe(MAX_AUTO_FIX_ATTEMPTS);
+    expect(started[0].prompt).toContain(`Attempt 1 of ${DEFAULT_AUTO_FIX_ATTEMPTS}`);
+    expect(await store.get(SESSION)).toMatchObject({ autoFixAttempts: 1, autoFixMax: DEFAULT_AUTO_FIX_ATTEMPTS });
+    expect(out.last().autoFix.max).toBe(DEFAULT_AUTO_FIX_ATTEMPTS);
   });
 
   it('keeps a binding part-way through the old budget at three attempts', async () => {
@@ -175,9 +187,76 @@ describe('PrMonitor auto-fix', () => {
     expect(out.last().autoFix.max).toBe(5);
   });
 
+  it('grants the Settings value when the box is ticked, and reports it while auto-fix is off', async () => {
+    const { store, monitor, out, started } = setup({ attempts: 2 });
+    await store.set(SESSION, { ...bound, autoFix: false, autoFixAttempts: 0 });
+    await monitor.start();
+    await monitor.refresh(SESSION);
+    expect(out.last().autoFix).toMatchObject({ status: 'off', max: 2 });
+
+    await monitor.setOption(SESSION, 'autoFix', true);
+    await monitor.idle();
+    expect(started[0].prompt).toContain('Attempt 1 of 2');
+    expect(await store.get(SESSION)).toMatchObject({ autoFixAttempts: 1, autoFixMax: 2 });
+    expect(out.last().autoFix).toMatchObject({ attempts: 1, max: 2 });
+  });
+
+  it('reads the setting once per tick of the box, not per read', async () => {
+    const { store, monitor, state } = setup({ attempts: 2 });
+    await store.set(SESSION, { ...bound, autoFix: false });
+    await monitor.setOption(SESSION, 'autoFix', true);
+    await monitor.idle();
+    const reads = state.attemptReads;
+    await monitor.refresh(SESSION);
+    await monitor.refresh(SESSION);
+    expect(state.attemptReads).toBe(reads);
+  });
+
+  it('says how many a re-check would allow when it gives up', async () => {
+    const { store, monitor, out } = setup({ attempts: 2 });
+    await monitor.start();
+    await store.set(SESSION, { ...bound, autoFixMax: 2, autoFixAttempts: 2 });
+    await monitor.refresh(SESSION);
+    expect(out.last().autoFix.note).toBe('Auto-fix gave up after 2 attempts. Re-check the box to allow 2 more.');
+  });
+
+  it('raises PRs already on when the setting goes up, and resumes one that gave up', async () => {
+    const { store, monitor, out, started } = setup({ attempts: 2 });
+    await store.set(SESSION, { ...bound, autoFixMax: 2, autoFixAttempts: 2 });
+    await store.set('off', { ...bound, autoFix: false, autoFixMax: 2 });
+    await store.set('merged', { ...bound, lastState: 'MERGED', autoFixMax: 2 });
+    await monitor.refresh(SESSION);
+    expect(out.last().autoFix.status).toBe('exhausted');
+
+    await monitor.setAutoFixAttempts(4);
+    await monitor.idle();
+    expect((await store.get(SESSION))?.autoFixMax).toBe(4);
+    expect((await store.get('off'))?.autoFixMax).toBe(2);
+    expect((await store.get('merged'))?.autoFixMax).toBe(2);
+    expect(started).toHaveLength(1);
+    expect(started[0].prompt).toContain('Attempt 3 of 4');
+  });
+
+  it('raises a legacy binding too', async () => {
+    const { store, monitor } = setup({ attempts: 5 });
+    const { autoFixMax: _, ...legacy } = bound;
+    await store.set(SESSION, { ...legacy, autoFixAttempts: 1 });
+    await monitor.setAutoFixAttempts(4);
+    expect((await store.get(SESSION))?.autoFixMax).toBe(4);
+  });
+
+  it('leaves PRs already on at their budget when the setting goes down', async () => {
+    const { store, monitor, out } = setup({ attempts: 5 });
+    await store.set(SESSION, { ...bound, autoFixMax: 5, autoFixAttempts: 3 });
+    await monitor.setAutoFixAttempts(2);
+    expect(await store.get(SESSION)).toMatchObject({ autoFixMax: 5, autoFixAttempts: 3 });
+    await monitor.refresh(SESSION);
+    expect(out.last().autoFix).toMatchObject({ attempts: 4, max: 5 });
+  });
+
   it('stops when the box is unchecked, and re-checking refills the attempts', async () => {
     const { store, monitor, started, fake } = setup();
-    await store.set(SESSION, { ...bound, autoFix: false, autoFixAttempts: MAX_AUTO_FIX_ATTEMPTS });
+    await store.set(SESSION, { ...bound, autoFix: false, autoFixAttempts: DEFAULT_AUTO_FIX_ATTEMPTS });
     await monitor.refresh(SESSION);
     expect(fake.calls).toEqual(['snapshot']);
     expect(started).toHaveLength(0);

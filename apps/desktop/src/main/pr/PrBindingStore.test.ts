@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -25,7 +25,29 @@ describe('PrBindingStore auto-fix budget', () => {
     ['zero', 0],
     ['a negative number', -1],
     ['a fraction', 2.5],
+    ['more than Settings can grant', 21],
   ])('drops %s so the default applies', async (_label, autoFixMax) => {
     expect((await storeWith({ ...raw, autoFixMax }).get(SESSION))?.autoFixMax).toBeUndefined();
+  });
+});
+
+describe('PrBindingStore.updateEach', () => {
+  it('changes only the bindings it answers for, in one write', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'b4m-pr-')), 'pull-requests.json');
+    writeFileSync(path, JSON.stringify({ a: { ...raw, autoFixMax: 2 }, b: { ...raw, autoFix: false } }));
+    const store = new PrBindingStore(path);
+    const changed = await store.updateEach(binding => (binding.autoFix ? { ...binding, autoFixMax: 7 } : null));
+    expect(changed).toEqual(['a']);
+    const saved = JSON.parse(readFileSync(path, 'utf8')) as Record<string, { autoFixMax?: number }>;
+    expect(saved.a.autoFixMax).toBe(7);
+    expect(saved.b.autoFixMax).toBeUndefined();
+  });
+
+  it('writes nothing when nothing changes', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'b4m-pr-')), 'pull-requests.json');
+    const original = JSON.stringify({ a: raw });
+    writeFileSync(path, original);
+    expect(await new PrBindingStore(path).updateEach(() => null)).toEqual([]);
+    expect(readFileSync(path, 'utf8')).toBe(original);
   });
 });

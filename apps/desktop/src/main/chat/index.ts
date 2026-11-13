@@ -616,6 +616,7 @@ export function registerChat(
   // service only through `chat`, which is first called long after both exist.
   const pullRequests = registerPullRequests({
     path: join(userData, 'pull-requests.json'),
+    autoFixAttemptsPath: join(userData, 'auto-fix-attempts.json'),
     chat: () => service,
     store,
     logger,

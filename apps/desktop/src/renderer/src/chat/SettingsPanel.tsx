@@ -25,6 +25,7 @@ import { LocalHistorySettings } from './LocalHistorySettings';
 import type { ModelServerView } from '@shared/modelServers';
 import { ModelServersSettings, modelServersSummary, useModelServers } from './ModelServersSettings';
 import { WorktreesSettings } from './WorktreesSettings';
+import { AutoFixAttemptsSettings, autoFixAttemptsSummary, useAutoFixAttempts } from './AutoFixAttemptsSettings';
 import type { CuratedListSettings as CuratedListSettingsState } from '@shared/models';
 import { CuratedListSettings, curatedListSummary, useCuratedListSettings } from './CuratedListSettings';
 import { SettingsRow, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
@@ -35,6 +36,7 @@ import {
   DownloadIcon,
   FolderIcon,
   ModelsIcon,
+  PullRequestIcon,
   ServerIcon,
   ShieldIcon,
   SlidersIcon,
@@ -155,6 +157,22 @@ function worktreeEntry(enabled: boolean, toggle: () => void): ConfigEntry {
         }}
       />
     ),
+  };
+}
+
+function autoFixAttemptsEntry(
+  attempts: number | null,
+  onChange: (attempts: number) => void,
+  error: string | null
+): ConfigEntry {
+  return {
+    id: 'autofix-attempts',
+    icon: <PullRequestIcon />,
+    label: 'Auto-fix attempts',
+    summary: autoFixAttemptsSummary(attempts),
+    description:
+      'How many times auto-fix tries a pull request before it stops. Takes effect when you next turn auto-fix on. Raising it also applies where auto-fix is already on.',
+    control: <AutoFixAttemptsSettings attempts={attempts} onChange={onChange} error={error} />,
   };
 }
 
@@ -510,6 +528,7 @@ function useSettingsEntries(
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
   const [nestedSessions, toggleNestedSessions] = useNestedSessions();
   const [orchestratorSound, toggleOrchestratorSound] = useOrchestratorSound();
+  const [autoFixAttempts, setAutoFixAttempts, autoFixAttemptsError] = useAutoFixAttempts();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
@@ -519,6 +538,7 @@ function useSettingsEntries(
       appearanceEntry(mode, setMode, theme.palette.mode),
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
+      autoFixAttemptsEntry(autoFixAttempts, next => void setAutoFixAttempts(next), autoFixAttemptsError),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
       {
@@ -588,7 +608,7 @@ const GENERAL_GROUPS = [
   {
     id: 'conversations',
     label: 'Conversations & code',
-    entries: ['prompt-suggestions', 'worktree-default', 'orchestration-policy'],
+    entries: ['prompt-suggestions', 'worktree-default', 'autofix-attempts', 'orchestration-policy'],
   },
   { id: 'models', label: 'Models', entries: ['local-context', 'token-rate', 'curated-list'] },
   { id: 'data', label: 'Data & privacy', entries: ['local-history', 'local-data-export'] },

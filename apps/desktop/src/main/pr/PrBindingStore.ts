@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { MAX_AUTO_FIX_ATTEMPTS } from '@shared/autoFixSetting';
 import { isFinishedState, type PrBinding } from '@shared/pullRequest';
 
 /** Fingerprints kept per PR. Old ones only stop a re-trigger for a failure that cannot recur. */
@@ -19,8 +20,13 @@ function normalize(value: unknown): PrBinding | null {
     source: raw.source === 'manual' || raw.source === 'agent' || raw.source === 'branch' ? raw.source : 'shell',
     boundAt: typeof raw.boundAt === 'string' ? raw.boundAt : new Date(0).toISOString(),
     ...(Array.isArray(raw.autoFixHandled) ? { autoFixHandled: raw.autoFixHandled.slice(-MAX_HANDLED) } : {}),
-    // A damaged budget is dropped so the default applies; kept only when it is a whole positive count.
-    ...(typeof autoFixMax === 'number' && Number.isInteger(autoFixMax) && autoFixMax > 0 ? { autoFixMax } : {}),
+    // A damaged budget is dropped so the default applies; kept only when Settings could have granted it.
+    ...(typeof autoFixMax === 'number' &&
+    Number.isInteger(autoFixMax) &&
+    autoFixMax > 0 &&
+    autoFixMax <= MAX_AUTO_FIX_ATTEMPTS
+      ? { autoFixMax }
+      : {}),
     // Dropped when it is not a finished read, so a damaged one costs a single re-read, not a broken bar.
     ...(finalSnapshot && isFinishedState(finalSnapshot.state) && Array.isArray(finalSnapshot.checks)
       ? { finalSnapshot }
@@ -86,6 +92,23 @@ export class PrBindingStore {
     const next = change(current);
     await this.set(sessionId, next);
     return next;
+  }
+
+  /**
+   * One write for a change across every binding; `change` answers null to leave one as it is.
+   * Returns the sessions whose binding changed.
+   */
+  async updateEach(change: (binding: PrBinding) => PrBinding | null): Promise<string[]> {
+    const all = await this.all();
+    const changed: string[] = [];
+    for (const [sessionId, binding] of all) {
+      const next = change(binding);
+      if (!next) continue;
+      all.set(sessionId, next);
+      changed.push(sessionId);
+    }
+    if (changed.length > 0) await this.flush();
+    return changed;
   }
 
   private flush(): Promise<void> {

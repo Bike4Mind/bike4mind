@@ -29,7 +29,8 @@ import { GhError } from './gh';
 import type { PrBindingStore } from './PrBindingStore';
 import type { PrGithub } from './github';
 import { shouldAutoArchive } from './autoArchive';
-import { MAX_AUTO_FIX_ATTEMPTS, SHELL_TOOLS, autoFixBudget, planAutoFix } from './autoFix';
+import { DEFAULT_AUTO_FIX_ATTEMPTS, parseAutoFixAttempts } from '@shared/autoFixSetting';
+import { SHELL_TOOLS, autoFixBudget, planAutoFix } from './autoFix';
 import { desktopMergeReadiness } from './autoMerge';
 import { MAX_BATCH, mergeMethodFor } from './github';
 import { POLL_MS, alignToTick, pollDelay } from './pollSchedule';
@@ -114,6 +115,8 @@ export interface PrMonitorDeps {
   random?: () => number;
   /** How long a read waits for others to share its query, in ms. */
   batchWindowMs?: number;
+  /** The Settings attempt budget, read at start and on each tick of the box; the default without it. */
+  autoFixAttempts?: () => Promise<number>;
 }
 
 /** Reads that land within this long of each other go to GitHub as one query; see readTogether. */
@@ -179,6 +182,8 @@ export class PrMonitor {
   private readonly timers: PrTimers;
   /** What the sidebar was last told, per conversation; built on first use. */
   private sidebar: Map<string, PrSummary> | null = null;
+  /** The Settings budget as last read, so drawing a bar never waits on it. */
+  private autoFixLimit = DEFAULT_AUTO_FIX_ATTEMPTS;
 
   constructor(protected readonly deps: PrMonitorDeps) {
     this.timers = deps.timers ?? realTimers;
@@ -189,6 +194,7 @@ export class PrMonitor {
    * No read happens here: the first one is a full unopened interval away.
    */
   async start(): Promise<void> {
+    await this.readAutoFixLimit();
     const all = await this.deps.store.all();
     for (const [sessionId, binding] of all) {
       if (isFinishedState(binding.lastState) || !this.armed(binding)) continue;
@@ -395,13 +401,14 @@ export class PrMonitor {
     } else if (option === 'autoMerge') {
       result = await this.changeAutoMerge(sessionId, enabled);
     } else {
-      // Checking the box is fresh consent, so the attempt budget refills. What was already
-      // handled stays handled: the same failure or comment is never sent twice.
-      await this.deps.store.set(sessionId, {
-        ...binding,
+      // Checking the box is fresh consent, so the attempt budget refills to the current setting.
+      // What was already handled stays handled: the same failure or comment is never sent twice.
+      const limit = enabled ? await this.readAutoFixLimit() : 0;
+      await this.deps.store.update(sessionId, current => ({
+        ...current,
         autoFix: enabled,
-        ...(enabled ? { autoFixAttempts: 0, autoFixMax: MAX_AUTO_FIX_ATTEMPTS } : {}),
-      });
+        ...(enabled ? { autoFixAttempts: 0, autoFixMax: limit } : {}),
+      }));
       const live = this.entry(sessionId);
       live.autoFix = { status: enabled ? 'watching' : 'off' };
       // Threads are only read while auto-fix is on, so turning it on needs a read that has them.
@@ -410,6 +417,36 @@ export class PrMonitor {
     await this.schedule(sessionId);
     await this.publish(sessionId);
     return result;
+  }
+
+  private async readAutoFixLimit(): Promise<number> {
+    const read = this.deps.autoFixAttempts;
+    if (read) this.autoFixLimit = parseAutoFixAttempts(await read().catch(() => this.autoFixLimit));
+    return this.autoFixLimit;
+  }
+
+  /**
+   * A new Settings budget. Raising it raises every open PR with auto-fix on, so one that gave up
+   * carries on without a re-check. Lowering it leaves those PRs on the budget they were ticked
+   * for, so none is stopped under a count it already started on; each takes the lower value the
+   * next time its box is ticked. One store write however many PRs change.
+   */
+  async setAutoFixAttempts(attempts: number): Promise<void> {
+    const limit = parseAutoFixAttempts(attempts);
+    this.autoFixLimit = limit;
+    const raised = await this.deps.store.updateEach(binding =>
+      binding.autoFix && !binding.dismissed && !isFinishedState(binding.lastState) && autoFixBudget(binding) < limit
+        ? { ...binding, autoFixMax: limit }
+        : null
+    );
+    for (const sessionId of raised) {
+      const live = this.live.get(sessionId);
+      if (live?.autoFix?.status !== 'exhausted') continue;
+      live.autoFix = { status: 'watching' };
+      // Whatever it gave up on is still unhandled, so a read now picks it back up.
+      void this.read(sessionId);
+    }
+    for (const sessionId of new Set([...raised, ...this.onScreen.values()])) await this.publish(sessionId);
   }
 
   /**
@@ -879,7 +916,7 @@ export class PrMonitor {
     const budget = autoFixBudget(binding);
     const exhausted = {
       status: 'exhausted' as const,
-      note: `Auto-fix gave up after ${budget} attempts. Re-check the box to allow more.`,
+      note: `Auto-fix gave up after ${budget} attempts. Re-check the box to allow ${this.autoFixLimit} more.`,
     };
     const plan = planAutoFix(binding, snapshot, this.deps.chat.isBusy(sessionId));
     if (plan.kind === 'none') {
@@ -968,7 +1005,7 @@ export class PrMonitor {
       autoFix: {
         status: binding?.autoFix ? (live?.autoFix?.status ?? 'watching') : 'off',
         attempts: binding?.autoFixAttempts ?? 0,
-        max: binding?.autoFix ? autoFixBudget(binding) : MAX_AUTO_FIX_ATTEMPTS,
+        max: binding?.autoFix ? autoFixBudget(binding) : this.autoFixLimit,
         ...(binding?.autoFix && live?.autoFix?.note ? { note: live.autoFix.note } : {}),
         ...(binding?.autoFix && live?.autoFix?.status === 'started' && live.autoFix.conflicts
           ? { conflicts: true }

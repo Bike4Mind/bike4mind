@@ -19,6 +19,11 @@ vi.mock('./LocalContextSettings', () => ({
   localContextSummary: () => 'Auto',
   useLocalContextSetting: () => [null, () => undefined, null],
 }));
+vi.mock('./AutoFixAttemptsSettings', () => ({
+  AutoFixAttemptsSettings: () => null,
+  autoFixAttemptsSummary: () => 'Up to 5 attempts per pull request',
+  useAutoFixAttempts: () => [null, () => undefined, null],
+}));
 vi.mock('./ModelServersSettings', () => ({
   ModelServersSettings: () => null,
   modelServersSummary: () => 'Only this computer',
