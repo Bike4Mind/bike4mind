@@ -60,6 +60,7 @@ export async function assertOrganizationUserGrants(content: BoundContent, grants
     grants.map(grant => ({
       id: grant.userId,
       email: byId.get(grant.userId)?.email,
+      emailVerified: byId.get(grant.userId)?.emailVerified,
     }))
   );
 }
@@ -112,6 +113,44 @@ export async function assertProjectContentGrants(content: BoundContent, recipien
   for (const child of [...sessions, ...files]) await assertOrganizationUserGrants(child, grants);
 }
 
+const SHARING_KEYS = [
+  'users',
+  'groups',
+  'permissions',
+  'visibility',
+  'isGlobalRead',
+  'isGlobalWrite',
+  'sessionIds',
+  'fileIds',
+];
+// Operators that only remove or clear values; they can never widen a share, so they pass unchecked.
+const NARROWING_OPERATORS = new Set(['$pull', '$pullAll', '$pop', '$unset']);
+
+const touchesSharingKey = (changes: Record<string, unknown>): boolean =>
+  Object.keys(changes).some(key => SHARING_KEYS.some(field => key === field || key.startsWith(`${field}.`)));
+
+/**
+ * The fields an update sets: `$set` plus top-level plain keys, which Mongoose also applies as `$set`.
+ * Any other widening operator on a sharing key ($push, $addToSet, $rename, ...) is refused, since the
+ * policy check reads only set values.
+ */
+function readableSharingChanges(update: Record<string, unknown>): Record<string, unknown> {
+  const changes: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(update)) {
+    if (!key.startsWith('$')) changes[key] = value;
+    else if (key === '$set') Object.assign(changes, value);
+    else if (
+      !NARROWING_OPERATORS.has(key) &&
+      value &&
+      typeof value === 'object' &&
+      touchesSharingKey(value as Record<string, unknown>)
+    ) {
+      throw new ForbiddenError(`Sharing fields can only be changed with $set, not ${key}.`);
+    }
+  }
+  return changes;
+}
+
 // All grant writers, including project propagation, pass through these model boundaries.
 export function organizationContentPolicyPlugin(schema: Schema): void {
   schema.pre('save', async function () {
@@ -150,39 +189,42 @@ export function organizationContentPolicyPlugin(schema: Schema): void {
     }
   });
   schema.pre(['updateOne', 'findOneAndUpdate'], async function () {
-    const update = this.getUpdate();
-    if (!update || Array.isArray(update)) return;
-    const changes = (update.$set ?? update) as Record<string, unknown>;
-    const sharingKeys = [
-      'users',
-      'groups',
-      'permissions',
-      'visibility',
-      'isGlobalRead',
-      'isGlobalWrite',
-      'sessionIds',
-      'fileIds',
-    ];
-    if (!Object.keys(changes).some(key => sharingKeys.some(field => key === field || key.startsWith(`${field}.`))))
-      return;
+    const changes = sharingChangesOf(this.getUpdate());
+    if (!changes) return;
     const current = await this.model.findOne(this.getFilter()).lean<BoundContent>();
-    if (!current) return;
-    const next = { ...current };
-    for (const [key, value] of Object.entries(changes)) {
-      if (sharingKeys.includes(key)) Object.assign(next, { [key]: value });
-      else if (key.startsWith('permissions.')) {
-        next.permissions = { ...next.permissions, [key.slice('permissions.'.length)]: value };
-      }
-    }
-    await assertContentSharing(next, current);
-    if (changes.sessionIds !== undefined || changes.fileIds !== undefined) {
-      await assertProjectContentGrants(
-        {
-          sessionIds: next.sessionIds?.filter(id => !current.sessionIds?.includes(id)),
-          fileIds: next.fileIds?.filter(id => !current.fileIds?.includes(id)),
-        },
-        [...recipientIds(next), ...(next.userId ? [next.userId] : [])]
-      );
+    if (current) await assertSharingChange(current, changes);
+  });
+  schema.pre('updateMany', async function () {
+    const changes = sharingChangesOf(this.getUpdate());
+    if (!changes) return;
+    for (const current of await this.model.find(this.getFilter()).lean<BoundContent[]>()) {
+      await assertSharingChange(current, changes);
     }
   });
+}
+
+function sharingChangesOf(update: unknown): Record<string, unknown> | null {
+  if (!update || typeof update !== 'object' || Array.isArray(update)) return null;
+  const changes = readableSharingChanges(update as Record<string, unknown>);
+  return touchesSharingKey(changes) ? changes : null;
+}
+
+async function assertSharingChange(current: BoundContent, changes: Record<string, unknown>): Promise<void> {
+  const next = { ...current };
+  for (const [key, value] of Object.entries(changes)) {
+    if (SHARING_KEYS.includes(key)) Object.assign(next, { [key]: value });
+    else if (key.startsWith('permissions.')) {
+      next.permissions = { ...next.permissions, [key.slice('permissions.'.length)]: value };
+    }
+  }
+  await assertContentSharing(next, current);
+  if (changes.sessionIds !== undefined || changes.fileIds !== undefined) {
+    await assertProjectContentGrants(
+      {
+        sessionIds: next.sessionIds?.filter(id => !current.sessionIds?.includes(id)),
+        fileIds: next.fileIds?.filter(id => !current.fileIds?.includes(id)),
+      },
+      [...recipientIds(next), ...(next.userId ? [next.userId] : [])]
+    );
+  }
 }

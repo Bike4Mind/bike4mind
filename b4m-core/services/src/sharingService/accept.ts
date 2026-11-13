@@ -250,6 +250,7 @@ export const acceptInvite = async (
       if (!fabfile) {
         throw new NotFoundError('Fabfile not found');
       }
+      await assertContentInvitePolicy(fabfile, [user], db.organization, isLinkOnlyInvite(invite));
 
       const granted = permissionsInviterCanStillGrant(fabfile, invite, invitePermissions, inviter);
       await db.fabFiles.shareable.updateUserShares(fabfile.id, { add: [{ userId, permissions: granted }] });

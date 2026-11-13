@@ -289,6 +289,8 @@ export const createInvite = async (
       pending.map(email => ({
         id: resolvedUsers.find(user => user.email?.toLowerCase() === email.toLowerCase())?.id ?? '',
         email,
+        // The invite is addressed to this email; accept re-checks the redeeming account's verification.
+        emailVerified: true,
       })),
       db.organizations,
       namesNobody

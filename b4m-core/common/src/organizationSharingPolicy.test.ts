@@ -24,9 +24,18 @@ describe('organization sharing policy', () => {
     expect(organizationAllowsRecipient(org, { id })).toBe(true);
   });
   it('allows exact normalized external domains, not suffixes or subdomains', () => {
-    expect(organizationAllowsRecipient(org, { id: 'external', email: 'PERSON@PARTNER.EXAMPLE' })).toBe(true);
+    expect(
+      organizationAllowsRecipient(org, { id: 'external', email: 'PERSON@PARTNER.EXAMPLE', emailVerified: true })
+    ).toBe(true);
     for (const email of ['x@sub.partner.example', 'x@evilpartner.example', 'x@partner.example.evil', undefined]) {
-      expect(organizationAllowsRecipient(org, { id: 'external', email })).toBe(false);
+      expect(organizationAllowsRecipient(org, { id: 'external', email, emailVerified: true })).toBe(false);
+    }
+  });
+  it('requires a verified email for the domain exception', () => {
+    for (const emailVerified of [false, null, undefined]) {
+      expect(organizationAllowsRecipient(org, { id: 'external', email: 'x@partner.example', emailVerified })).toBe(
+        false
+      );
     }
   });
   it('validates and normalizes domain input', () => {

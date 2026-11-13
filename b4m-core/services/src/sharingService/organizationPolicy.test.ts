@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IOrganizationDocument } from '@bike4mind/common';
-import { assertContentInvitePolicy } from './organizationPolicy';
+import { assertContentInvitePolicy, assertContentPublicLinkPolicy } from './organizationPolicy';
 
 const org = {
   userId: 'owner',
@@ -26,13 +26,28 @@ describe('content invite policy', () => {
     await expect(
       assertContentInvitePolicy(
         { organizationId: 'org' },
-        [{ id: 'member' }, { id: '', email: 'x@partner.example' }],
+        [{ id: 'member' }, { id: '', email: 'x@partner.example', emailVerified: true }],
         organizations
       )
     ).resolves.toBeUndefined();
   });
   it('leaves legacy personal content unchanged', async () => {
     await expect(assertContentInvitePolicy({}, [{ id: 'outsider' }], organizations, true)).resolves.toBeUndefined();
+  });
+  it('refuses an unverified address at an approved domain', async () => {
+    await expect(
+      assertContentInvitePolicy(
+        { organizationId: 'org' },
+        [{ id: 'outsider', email: 'x@partner.example', emailVerified: false }],
+        organizations
+      )
+    ).rejects.toThrow('approved email domains');
+  });
+  it('applies the public-link rule to content made global', async () => {
+    await expect(assertContentPublicLinkPolicy({ organizationId: 'org' }, organizations)).rejects.toThrow(
+      'public links'
+    );
+    await expect(assertContentPublicLinkPolicy({}, organizations)).resolves.toBeUndefined();
   });
   it('refuses a missing content organization', async () => {
     await expect(

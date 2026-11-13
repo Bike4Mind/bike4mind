@@ -37,12 +37,16 @@ export function organizationSharingPolicy(org: {
   return { ...DEFAULT_ORGANIZATION_SHARING_POLICY, ...org.sharingPolicy };
 }
 
+/** The domain exception applies only when `emailVerified` is true; members pass on `id` alone. */
+export type OrganizationShareRecipient = { id: string; email?: string | null; emailVerified?: boolean | null };
+
 export function organizationAllowsRecipient(
   org: Pick<IOrganizationDocument, 'userId' | 'users' | 'sharingPolicy'>,
-  recipient: { id: string; email?: string | null }
+  recipient: OrganizationShareRecipient
 ): boolean {
   const policy = organizationSharingPolicy(org);
   if (policy.allowExternalSharing || isOrgMember({ id: recipient.id }, org)) return true;
+  if (recipient.emailVerified !== true) return false;
   const domain = recipient.email?.trim().toLowerCase().split('@');
   return domain?.length === 2 && policy.allowedDomains.includes(domain[1]);
 }

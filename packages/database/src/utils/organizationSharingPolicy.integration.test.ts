@@ -128,4 +128,41 @@ describe('persisted organization sharing boundary', () => {
     );
     expect((await Project.findById(project.id))?.sessionIds).toHaveLength(0);
   });
+  it('refuses a group grant from outside the organization', async () => {
+    const org = await seed();
+    const project = await Project.create({ name: 'bound', userId: 'owner', organizationId: org.id });
+    const foreignGroupId = new mongoose.Types.ObjectId().toString();
+    await expect(
+      Project.updateOne({ _id: project.id }, { $set: { groups: [{ groupId: foreignGroupId, permissions: ['read'] }] } })
+    ).rejects.toThrow('approved email domains');
+    expect((await Project.findById(project.id))?.groups).toHaveLength(0);
+  });
+  it('refuses widening operators on sharing fields and permits narrowing ones', async () => {
+    const org = await seed();
+    const project = await Project.create({ name: 'bound', userId: 'owner', organizationId: org.id });
+    await expect(
+      Project.updateOne({ _id: project.id }, { $push: { users: { userId: 'outsider', permissions: ['read'] } } })
+    ).rejects.toThrow('only be changed with $set');
+    await expect(
+      Project.findOneAndUpdate({ _id: project.id }, { $addToSet: { sessionIds: 'some-session' } })
+    ).rejects.toThrow('only be changed with $set');
+    await Project.collection.updateOne(
+      { _id: project._id },
+      { $set: { users: [{ userId: 'old-outsider', permissions: ['read'] }] } }
+    );
+    await Project.updateOne({ _id: project.id }, { $pull: { users: { userId: 'old-outsider' } } });
+    expect((await Project.findById(project.id))?.users).toHaveLength(0);
+  });
+  it('checks every document an updateMany reaches', async () => {
+    const org = await seed();
+    const base = { userId: 'owner', firstCreated: new Date(), lastUpdated: new Date() };
+    const bound = await Session.create({ ...base, name: 'bound', organizationId: org.id });
+    const personal = await Session.create({ ...base, name: 'personal' });
+    await expect(
+      Session.updateMany({ _id: { $in: [bound.id, personal.id] } }, { $set: { isGlobalRead: true } })
+    ).rejects.toThrow('public links');
+    expect((await Session.findById(bound.id))?.isGlobalRead).toBe(false);
+    await Session.updateMany({ _id: personal.id }, { $set: { isGlobalRead: true } });
+    expect((await Session.findById(personal.id))?.isGlobalRead).toBe(true);
+  });
 });

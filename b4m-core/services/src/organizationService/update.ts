@@ -34,10 +34,14 @@ interface UpdateAdapters {
 export const update = async (user: IUserDocument, params: UpdateParameters, adapters: UpdateAdapters) => {
   const { id, ...rest } = secureParameters(params, updateSchema);
 
-  let organization =
-    rest.sharingPolicy !== undefined
-      ? await adapters.db.organizations.findById(id)
-      : await adapters.db.organizations.shareable.findUpdateAccessById(user, id);
+  // A policy-only request is gated by isOrgOwnerOrCurrentAdmin below; any other field in the body keeps
+  // the findUpdateAccessById scope, so attaching sharingPolicy cannot widen who edits the profile.
+  const isPolicyOnly =
+    rest.sharingPolicy !== undefined &&
+    Object.entries(rest).every(([key, value]) => key === 'sharingPolicy' || value === undefined);
+  let organization = isPolicyOnly
+    ? await adapters.db.organizations.findById(id)
+    : await adapters.db.organizations.shareable.findUpdateAccessById(user, id);
   if (user.isAdmin) {
     organization = await adapters.db.organizations.findById(id);
   }

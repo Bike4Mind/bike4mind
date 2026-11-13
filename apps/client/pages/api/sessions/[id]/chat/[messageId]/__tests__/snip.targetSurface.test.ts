@@ -33,6 +33,7 @@ vi.mock('@bike4mind/services', () => ({ sessionService: { snipSession: h.snipSes
 vi.mock('@bike4mind/database', () => ({
   agentRepository: {},
   fabFileRepository: {},
+  organizationRepository: {},
   projectRepository: {},
   questRepository: {},
   sessionRepository: {},

@@ -1,6 +1,7 @@
 import {
   IChatHistoryItemRepository,
   IFabFileRepository,
+  IOrganizationRepository,
   ISessionRepository,
   IUserRepository,
   rebindPromptMetaSession,
@@ -12,6 +13,7 @@ import {
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { copyOrganizationId } from './copyOrganizationId';
 import { createSession, CreateSessionAdapters } from './create';
 import { resolveCopySurface, targetSurfaceSchema, type ResolveSurfaceAccess } from './surfaceTransition';
 
@@ -29,6 +31,7 @@ type SnipSessionAdapters = {
     users: Pick<IUserRepository, 'findById'>;
     sessions: Pick<ISessionRepository, 'findByIdAndUserId'>;
     fabFiles: IFabFileRepository;
+    organizations: Pick<IOrganizationRepository, 'findById'>;
     chatHistories: Pick<
       IChatHistoryItemRepository,
       'findBySessionIdAndId' | 'findAllBySessionIdAndGreaterThanOrEqualToTimestamp' | 'create'
@@ -60,7 +63,7 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
     stripSurfaceOwnedFields(
       {
         name: `Snip ${session.name}`,
-        organizationId: session.organizationId,
+        organizationId: await copyOrganizationId(session.organizationId, userId, db.organizations),
         knowledgeIds: session.knowledgeIds,
         tags: session.tags,
         summary: session.summary,

@@ -36,6 +36,11 @@ export async function publicationOrganizationIds(context: PublicationPolicyConte
   if (source?.sessionId) {
     const session = await sessionRepository.findById(source.sessionId);
     if (session?.organizationId) ids.add(session.organizationId);
+    // A session keeps the organizationId it was created with, so one added to an org-bound project
+    // later answers to that project's org through the project, as the artifact arm does.
+    for (const project of await projectRepository.findAllBySessionId(source.sessionId)) {
+      if (project.organizationId) ids.add(project.organizationId);
+    }
   }
   if (source?.fabFileId) {
     const file = await fabFileRepository.findById(source.fabFileId);
