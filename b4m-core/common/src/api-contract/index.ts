@@ -31,6 +31,7 @@ export {
   chunkFileContract,
   searchFilesContract,
   getFilesByIdsContract,
+  getFileLineageContract,
   bulkDeleteFilesContract,
 } from './contracts/files.contract';
 export { createEmbeddingsContract, listEmbeddingModelsContract } from './contracts/embeddings.contract';
