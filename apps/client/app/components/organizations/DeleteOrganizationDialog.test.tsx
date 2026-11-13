@@ -57,7 +57,7 @@ const renderDialog = (overrides: { canOpenBilling?: boolean } = {}) => {
   const onDeleted = vi.fn();
   const onOpenBilling = vi.fn();
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  const { unmount } = render(
     <QueryClientProvider client={queryClient}>
       <CssVarsProvider theme={appTheme}>
         <DeleteOrganizationDialog
@@ -71,7 +71,7 @@ const renderDialog = (overrides: { canOpenBilling?: boolean } = {}) => {
       </CssVarsProvider>
     </QueryClientProvider>
   );
-  return { onDeleted, onOpenBilling };
+  return { onDeleted, onOpenBilling, unmount };
 };
 
 const confirmButton = () => screen.getByTestId('delete-organization-confirm-btn') as HTMLButtonElement;
@@ -153,6 +153,29 @@ describe('DeleteOrganizationDialog', () => {
       'stays active until December 1, 2026'
     );
     expect(screen.queryByTestId('delete-organization-open-billing-btn')).toBeNull();
+  });
+
+  it('explains every blocking plan, and offers Billing only for one it can cancel', () => {
+    subs.value = {
+      data: [{ status: 'active', source: 'admin_grant', canceledAt: null, periodEndsAt: '2026-12-01T00:00:00.000Z' }],
+      isPending: false,
+      isError: false,
+    };
+    const { unmount } = renderDialog();
+    expect(screen.getByTestId('delete-organization-plan-blocking').textContent).toContain('Contact support');
+    expect(screen.queryByTestId('delete-organization-open-billing-btn')).toBeNull();
+    unmount();
+
+    subs.value = {
+      data: [subs.value.data[0], activeStripePlan],
+      isPending: false,
+      isError: false,
+    };
+    renderDialog();
+    const text = screen.getByTestId('delete-organization-plan-blocking').textContent;
+    expect(text).toContain('Contact support');
+    expect(text).toContain('Cancel it from Billing first');
+    expect(screen.getByTestId('delete-organization-open-billing-btn')).toBeTruthy();
   });
 
   it('offers no Billing button to a viewer the Billing tab refuses', () => {

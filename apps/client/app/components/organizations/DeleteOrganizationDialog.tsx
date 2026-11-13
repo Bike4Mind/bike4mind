@@ -102,6 +102,12 @@ const DeleteOrganizationDialog: FC<DeleteOrganizationDialogProps> = ({
   const subscriptions = subscriptionsQuery.data ?? [];
   const blocking = blockingSubscriptions(subscriptions);
   const stillBilled = unblockedBilledSubscriptions(subscriptions);
+  // Every blocking plan must end, so each gets its own line (a granted plan can sit beside a paid one).
+  const blockedMessages = [...new Set(blocking.map(blockedPlanMessage))];
+  // Billing can cancel only a paid plan that is not already canceled.
+  const cancellableInBilling = blocking.some(
+    sub => !sub.canceledAt && resolveSubscriptionSource(sub) !== SubscriptionSource.AdminGrant
+  );
 
   // `users` includes the billing owner (organizationService.getUsers appends them).
   const otherMembers = (users ?? []).filter(user => user.id !== organization.userId).length;
@@ -176,7 +182,7 @@ const DeleteOrganizationDialog: FC<DeleteOrganizationDialogProps> = ({
                 variant="soft"
                 data-testid="delete-organization-plan-blocking"
                 endDecorator={
-                  canOpenBilling && !blocking[0].canceledAt ? (
+                  canOpenBilling && cancellableInBilling ? (
                     <Button
                       size="sm"
                       variant="solid"
@@ -189,7 +195,11 @@ const DeleteOrganizationDialog: FC<DeleteOrganizationDialogProps> = ({
                   ) : undefined
                 }
               >
-                {blockedPlanMessage(blocking[0])}
+                <Stack spacing={1}>
+                  {blockedMessages.map(message => (
+                    <span key={message}>{message}</span>
+                  ))}
+                </Stack>
               </Alert>
             ) : stillBilled.length > 0 ? (
               <Alert color="warning" variant="soft" data-testid="delete-organization-plan-billed">
