@@ -428,6 +428,7 @@ export function DataTable<Row>({
                           data-row-id={id}
                           tabIndex={onRowActivate || selectable || rowShortcuts ? 0 : undefined}
                           aria-keyshortcuts={rowKeyShortcuts(row)}
+                          aria-current={activeRowId === id ? true : undefined}
                           aria-selected={selectable ? isSelected(id) : activeRowId === id}
                           data-testid={rowTestId?.(row) ?? `admin-table-row-${id}`}
                           onClick={event => onRowClick(event, row)}

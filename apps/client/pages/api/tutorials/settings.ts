@@ -1,6 +1,6 @@
 import { adminApi } from '@server/middlewares/adminApi';
-import { CORE_TUTORIAL_SETTING, isCoreAdmin } from '@server/tutorials/core';
-import { settingsRoute } from '@server/tutorials/routes';
+import { CORE_TUTORIAL_SETTING, isCoreAdmin } from '@bike4mind/server-utils/tutorials/core';
+import { settingsRoute } from '@bike4mind/server-utils/tutorials/routes/index';
 
 // adminApi admits delegated admins, so the full-admin check is the route's own.
 export default settingsRoute({

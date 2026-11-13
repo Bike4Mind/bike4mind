@@ -65,13 +65,13 @@ vi.mock('@server/rapidReply/generateRapidReply', () => ({
   generateRapidReply: vi.fn(),
   saveRapidReplyResult: vi.fn(),
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
 vi.mock('@bike4mind/services/llm', () => ({ ChatCompletionProcess: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: {} }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn(), SQSService: vi.fn() }));
 vi.mock('@bike4mind/llm-adapters', () => ({ buildApiKeyTable: vi.fn(), getAvailableModels: vi.fn() }));
-vi.mock('@server/auth/turnAuth', () => ({ requestTurnAuth: vi.fn() }));
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/auth/turnAuth', () => ({ requestTurnAuth: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: vi.fn(),
   getSharedTokenizer: vi.fn(),
 }));

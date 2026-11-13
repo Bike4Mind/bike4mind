@@ -26,6 +26,7 @@ import { registerTerminals } from './terminal';
 import { registerUsage } from './usage';
 import { registerAttention } from './attention';
 import { appWindows } from './windows';
+import { registerWatch } from './watch';
 import { registerWindowTheme } from './windowTheme';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
@@ -50,6 +51,8 @@ function buildAppInfo(): AppInfo {
 /** Set once chat is registered; closes the agent's hidden browsers. */
 let closeAgentBrowsers = (): void => undefined;
 let canCloseLastWindow = (): boolean => true;
+/** Set once the watch is registered; closes the mini Tavern. */
+let closeMiniTavern = (): void => undefined;
 
 function createWindow(): void {
   const window = new BrowserWindow({
@@ -82,6 +85,9 @@ function createWindow(): void {
     if (appWindows().length > 0) return;
     closeAgentBrowsers();
     closeDevLogWindow();
+    // macOS keeps running with no window, and the mini Tavern is how a watcher keeps an eye on it.
+    // Elsewhere the last window closing quits, which needs the mini window gone too.
+    if (process.platform !== 'darwin') closeMiniTavern();
   });
 
   attachDevLogShortcut(window.webContents);
@@ -161,16 +167,21 @@ void app.whenReady().then(async () => {
     localContext,
     modelSettings,
     capabilityLedger,
+    respondToApproval,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
     observeStream: event => {
       fleet.observe(event);
       loops.runner.observe(event);
+      watch.observeStream(event);
     },
     loopUnattended: sessionId => loops.runner.unattended(sessionId),
     loopMerge: (sessionId, prUrl) => loops.runner.merge(sessionId, prUrl),
-    observeSessionStatus: event => needsYou.observe(event),
+    observeSessionStatus: event => {
+      needsYou.observe(event);
+      watch.observeStatus(event);
+    },
     cancelModelPull: key => models.stop(key),
     pinnedProjectors: () => models.pinnedProjectors(),
     catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
@@ -186,6 +197,29 @@ void app.whenReady().then(async () => {
     listSessions: () => chat.listSessions(),
     sessionMessages: async sessionId => (await chat.getSession(sessionId))?.messages ?? [],
   });
+  // The menu-bar item and the mini Tavern: the same status feed and approval gate as above.
+  const watch = registerWatch({
+    sources: {
+      listSessions: () => chat.listSessions(),
+      sessionStatuses: () => chat.sessionStatuses(),
+      sessionMessages: async sessionId => (await chat.getSession(sessionId))?.messages ?? [],
+      resolveApproval: respondToApproval,
+    },
+    openSession: open => attention.openSession(open),
+    showApp: () => {
+      const window = appWindows()[0];
+      if (!window) return createWindow();
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    },
+    appIcon,
+    // quitState is declared below; this only runs on later window and quit events.
+    isQuitting: () => quitState === 'cleaning-up' || quitState === 'ready',
+    ...(rendererDevUrl ? { rendererDevUrl } : {}),
+  });
+  closeMiniTavern = () => watch.closeMini();
+  void watch.start();
   const chatScopeKeyOf = (state: Parameters<typeof sessionScopeForChat>[0]) => {
     const scope = sessionScopeForChat(state);
     return scope ? sessionScopeKey(scope) : null;
@@ -197,6 +231,7 @@ void app.whenReady().then(async () => {
     if (next === needsYouScope) return;
     needsYouScope = next;
     needsYou.scopeChanged();
+    watch.scopeChanged();
   });
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);

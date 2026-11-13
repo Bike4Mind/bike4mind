@@ -72,7 +72,7 @@ vi.mock('@bike4mind/services', () => ({ organizationService: { revokeAccess, rea
 
 const lakeConfigAuditPrincipal = vi.hoisted(() => vi.fn(() => undefined as unknown));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal }));
-vi.mock('@server/dataLakes/dataLakeScopes', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({
   DATA_LAKE_SHARE_SCOPES: ['datalake:share'],
   assertDataLakeShareScope: vi.fn(),
 }));

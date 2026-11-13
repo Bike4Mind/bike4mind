@@ -6,7 +6,7 @@ import type { ServerSubagentTracker } from '@bike4mind/services/llm';
 import { OPTI_SURFACE, OrchestrationDefaultsSchema, isShadowTier } from '@bike4mind/common';
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
 }));
 

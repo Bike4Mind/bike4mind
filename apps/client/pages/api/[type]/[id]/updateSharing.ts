@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sharingService } from '@bike4mind/services';
 import { sessionRepository, fabFileRepository } from '@bike4mind/database';
-import { browserFileStorage } from '@server/files/browserFileSigner';
+import { browserFileStorage } from '@bike4mind/server-utils/files/browserFileSigner';
 import { z } from 'zod';
 
 interface SharingParams {

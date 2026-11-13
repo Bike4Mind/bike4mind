@@ -1,3 +1,4 @@
+import type { NewSessionDefaults } from './sessionDefaults';
 import type { RolePolicy, TaskAction } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopApproveRequest, LoopApproveResult, LoopRunnerSettings, LoopRunnerState } from './loopRunner';
@@ -144,6 +145,7 @@ import type {
 } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
+import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnapshot } from './watch';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -216,6 +218,7 @@ export const IPC_CHANNELS = {
   chatExportLocalData: 'chat:export-local-data',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
+  chatDraftDefaults: 'chat:draft-defaults',
   chatCreateCodeSession: 'chat:create-code-session',
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
@@ -260,6 +263,8 @@ export const IPC_CHANNELS = {
   chatAddAttachments: 'chat:add-attachments',
   chatReadAttachment: 'chat:read-attachment',
   chatDiscardAttachment: 'chat:discard-attachment',
+  chatCopyDraftAttachments: 'chat:copy-draft-attachments',
+  chatDiscardDraftAttachments: 'chat:discard-draft-attachments',
   chatImageAction: 'chat:image-action',
   chatAttachImage: 'chat:attach-image',
   chatListArtifacts: 'chat:list-artifacts',
@@ -562,6 +567,18 @@ export const IPC_CHANNELS = {
   attentionOpen: 'attention:open',
   /** A notice clicked while no window was open, waiting for the window it reopened; see takePendingOpen. */
   attentionTakePendingOpen: 'attention:take-pending-open',
+  /** The menu-bar toggle, for Settings; see @shared/watch. */
+  watchGetPreferences: 'watch:get-preferences',
+  watchSetPreferences: 'watch:set-preferences',
+  /** main -> app windows push: a preference changed (e.g. hidden from the menu-bar item itself). */
+  watchPreferences: 'watch:preferences',
+  /** The mini Tavern window's own surface (preload/mini.ts); refused from any other window. */
+  watchGetSnapshot: 'watch:get-snapshot',
+  /** main -> mini Tavern push of the latest WatchSnapshot. */
+  watchSnapshot: 'watch:snapshot',
+  watchRespond: 'watch:respond',
+  watchFocusAgent: 'watch:focus-agent',
+  watchCloseMini: 'watch:close-mini',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -698,6 +715,21 @@ export type CreateCodeSessionIpcRequest = CreateCodeSessionRequest & CreateSessi
 export type CreateCodeSessionIpcResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
 
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
+/**
+ * Everything the mini Tavern window can reach, exposed as `window.b4mMini` by preload/mini.ts. Kept
+ * this narrow on purpose: the window floats over other apps all day, so it gets the watch snapshot
+ * and three actions, not the chat, auth or filesystem surface of `window.b4m`.
+ */
+export interface MiniTavernApi {
+  getSnapshot(): Promise<WatchSnapshot>;
+  onSnapshot(listener: (snapshot: WatchSnapshot) => void): () => void;
+  /** Approve once or deny a quick request; false when it was not answerable from here. */
+  respond(approvalId: string, decision: WatchDecision): Promise<boolean>;
+  /** Raise the main window on this agent, the way clicking its notification does. */
+  focusAgent(sessionId: string, rootId: string): Promise<void>;
+  close(): Promise<void>;
+}
+
 export interface DesktopApi {
   getAppInfo(): Promise<AppInfo>;
   setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
@@ -879,6 +911,7 @@ export interface DesktopApi {
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(request?: CreateSessionRequest): Promise<CreatedSession>;
+    defaultsForNewSession(): Promise<NewSessionDefaults>;
     /**
      * Start a Code session, creating or adopting its worktree first when one is asked for.
      * A request with no `directory` creates an UNBOUND session, which the chip row then binds.
@@ -1005,6 +1038,8 @@ export interface DesktopApi {
     readAttachment(sessionId: string, attachmentId: string, mediaType: string): Promise<string | null>;
     /** Throw away an attachment the user removed before sending. Unknown ids are ignored. */
     discardAttachment(sessionId: string, attachmentId: string): Promise<void>;
+    copyDraftAttachments(draftId: string, sessionId: string, attachmentIds: string[]): Promise<void>;
+    discardDraftAttachments(draftId: string): Promise<void>;
     /** One image context menu item, run in main against a ref main resolves itself. Never rejects. */
     imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
     /** Add a thread image to this session's draft, through the same intake as a paste. */
@@ -1386,6 +1421,12 @@ export interface DesktopApi {
      * the renderer is listening.
      */
     takePendingOpen(): Promise<AttentionOpenEvent | null>;
+  };
+  /** The menu-bar item's setting; the mini Tavern's bounds and visibility are main's to keep. */
+  watch: {
+    getPreferences(): Promise<WatchPreferences>;
+    setPreferences(patch: WatchPreferencesPatch): Promise<WatchPreferences>;
+    onPreferences(listener: (preferences: WatchPreferences) => void): () => void;
   };
   /**
    * The developer log window's own surface. Used by the `#/dev-logs` route and nothing else.

@@ -16,7 +16,10 @@ import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigA
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
-import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import {
+  assertDataLakeTagWriteScope,
+  assertDataLakeWriteScope,
+} from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { FILES_WRITE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
 import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';

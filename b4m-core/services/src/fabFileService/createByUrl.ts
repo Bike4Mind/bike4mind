@@ -15,6 +15,8 @@ import { fetchAndParseURL } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createFabFile, CreateFabFileAdapters } from './create';
 
+export { FinalUrlRejectedError } from './FinalUrlRejectedError';
+
 const createFabFileByUrlSchema = z.object({
   url: z
     .string()
@@ -114,6 +116,13 @@ type CreateFabFileByUrlAdapters = {
   checkDuplicate?: (contentHash: string) => Promise<IFabFileDocument | null>;
   /** Names the created file from the fetched title and stored mime type. Absent, the bare title. */
   nameFile?: (title: string, mimeType: string) => string;
+  /**
+   * Binds admission to the page the fetch ended on, after redirects and before anything is written.
+   * Throw (`FinalUrlRejectedError`) to refuse; the returned `trustedDomain` is stamped on the file's
+   * `sourceMetadata`. An adapter, not a schema field, because `secureParameters` strips unknown
+   * request keys and a caller-supplied value would defeat the check.
+   */
+  assertFinalUrl?: (finalUrl: string) => { trustedDomain: string };
 };
 
 export const createFabFileByUrl = async (
@@ -128,6 +137,7 @@ export const createFabFileByUrl = async (
     administeredOrgIds,
     checkDuplicate,
     nameFile,
+    assertFinalUrl,
   }: CreateFabFileByUrlAdapters
 ) => {
   const logger = new Logger();
@@ -135,7 +145,8 @@ export const createFabFileByUrl = async (
   const user = await db.users.findById(userId);
   if (!user) throw new BadRequestError('User not found');
 
-  const { textContent, mimeType, title } = await fetchAndParseURL(params.url, { logger });
+  const { textContent, mimeType, title, finalUrl } = await fetchAndParseURL(params.url, { logger });
+  const finalUrlStamp = assertFinalUrl?.(finalUrl);
 
   const fileSize = typeof textContent === 'string' ? Buffer.byteLength(textContent) : textContent.length;
   // A zero-length body is refused on BOTH arms: an empty extracted string (no readable text on the
@@ -194,7 +205,10 @@ export const createFabFileByUrl = async (
     {
       db,
       storage,
-      provenance,
+      provenance:
+        provenance && finalUrlStamp
+          ? { ...provenance, sourceMetadata: { ...provenance.sourceMetadata, ...finalUrlStamp } }
+          : provenance,
       administeredOrgIds,
       // mimeType comes from fetchAndParseURL's HTTP response, not the client; title is free-form
       // page text (a <title> or URL segment) and must not be able to outrank it.

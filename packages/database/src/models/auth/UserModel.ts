@@ -1760,7 +1760,11 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
     accountDataExportLease: {
       type: new Schema(
-        { id: { type: String, required: true }, expiresAt: { type: Date, required: true } },
+        {
+          id: { type: String, required: true },
+          jobId: { type: String, required: false },
+          expiresAt: { type: Date, required: true },
+        },
         { _id: false }
       ),
       required: false,
@@ -2061,6 +2065,13 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isSynthetic: { type: Boolean, required: false },
     // See IUser.isInternal. No default, like isSynthetic: absent reads as "not marked".
     isInternal: { type: Boolean, required: false },
+    // See IUser.isPersona. Written only by the persona mint route.
+    isPersona: { type: Boolean, required: false },
+    personaExpiresAt: { type: Date, required: false },
+    personaName: { type: String, required: false },
+    personaOwnerId: { type: String, required: false },
+    personaLoginCodeHash: { type: String, required: false },
+    personaLoginCodeExpiresAt: { type: Date, required: false },
     firstValueAt: { type: Date, required: false },
   },
   {
@@ -2210,7 +2221,7 @@ UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
 UserSchema.index({ 'notionConnect.status': 1 });
 // Admin users list: the Signed up, Last active and Credits sorts and the built-in view counts
-// (apps/client/server/admin/usersList/listAdminUsers.ts). The sort keys end in _id because
+// (packages/server-utils/src/admin/usersList/listAdminUsers.ts). The sort keys end in _id because
 // adminUsersSort adds an _id tiebreak, and a sort only uses an index whose key it prefixes; each
 // serves both directions. The flag and band indexes are partial/sparse so they stay small. Built
 // by the ensure-user-admin-list-indexes migration.
@@ -2218,6 +2229,16 @@ UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
 UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
 UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+// The persona caps and expiry sweep read only persona accounts, a handful among all users.
+UserSchema.index(
+  { isPersona: 1, personaExpiresAt: 1 },
+  { partialFilterExpression: { isPersona: true }, name: 'user_isPersona_expiresAt' }
+);
+// Login-code redemption looks a persona up by the code's hash; only personas with a pending code carry one.
+UserSchema.index(
+  { personaLoginCodeHash: 1 },
+  { partialFilterExpression: { personaLoginCodeHash: { $type: 'string' } }, name: 'user_personaLoginCodeHash' }
+);
 UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
 // Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration
 // 20260921235956 byte-for-byte.

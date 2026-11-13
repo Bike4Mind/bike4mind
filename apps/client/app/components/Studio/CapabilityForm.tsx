@@ -24,6 +24,7 @@ import {
   type CapabilityControl,
   type CapabilityField,
   type CapabilityOption,
+  type ChipsField,
   type ReferencesField,
   type TextField,
 } from './capabilityFields';
@@ -207,6 +208,54 @@ const ReferencesControl = ({ field, testId }: { field: ReferencesField; testId: 
   </FormControl>
 );
 
+// Diameter of a chip's swatch dot, in px.
+const CHIP_SWATCH_SIZE = 14;
+
+const ChipsControl = ({ field, testId }: { field: ChipsField; testId: string }) => (
+  <FormControl disabled={field.disabled}>
+    <FormLabel>{field.label}</FormLabel>
+    <Stack direction="row" gap={1} flexWrap="wrap" data-testid={`${testId}-chips`}>
+      {field.options.map(option => {
+        const selected = option.value === field.value;
+        return (
+          <Chip
+            key={option.value}
+            size="md"
+            variant={selected ? 'solid' : 'outlined'}
+            color={selected ? 'primary' : 'neutral'}
+            disabled={field.disabled || option.disabled}
+            onClick={() => field.onChange(selected ? null : option.value)}
+            startDecorator={
+              option.swatch && (
+                <Box
+                  aria-hidden
+                  sx={{
+                    width: CHIP_SWATCH_SIZE,
+                    height: CHIP_SWATCH_SIZE,
+                    borderRadius: '50%',
+                    border: '1px solid',
+                    borderColor: 'neutral.outlinedBorder',
+                    background: `linear-gradient(135deg, ${option.swatch.from}, ${option.swatch.to})`,
+                  }}
+                />
+              )
+            }
+            slotProps={{
+              action: {
+                'data-testid': `${testId}-${option.value}-chip`,
+                'aria-label': option.label,
+                'aria-pressed': selected,
+              },
+            }}
+          >
+            {option.label}
+          </Chip>
+        );
+      })}
+    </Stack>
+  </FormControl>
+);
+
 /** The reason a kept value does not fit the model, with its one-click fix. */
 const InvalidReason = ({ field, testId }: { field: CapabilityControl; testId: string }) => {
   if (field.invalidReason === undefined) return null;
@@ -285,6 +334,8 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
       return <AspectControl field={field} testId={testId} />;
     case 'references':
       return <ReferencesControl field={field} testId={testId} />;
+    case 'chips':
+      return <ChipsControl field={field} testId={testId} />;
     case 'range':
       return (
         <FormControl disabled={field.disabled} error={field.invalidReason !== undefined}>
@@ -355,8 +406,9 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
  * The Studio form for any modality: a model picker, the fields the selected model's capabilities produce, the credit
  * estimate and the submit button. Field test ids are `<prefix>-<id>` plus a per-kind suffix: `-input` (text),
  * `-toggle` and `-<value>-btn` (segmented), `-select`, `-slider` (range), `-switch`, `-note`, `-pick-btn` and
- * `-name` (image), `-<value>-btn` (aspect), `-add-btn`, `-file-<id>` and `-remove-<id>-btn` (references). A field
- * holding a value the model does not take adds `-invalid` and, with a fix, `-fix-btn`, and holds submit.
+ * `-name` (image), `-<value>-btn` (aspect), `-add-btn`, `-file-<id>` and `-remove-<id>-btn` (references), `-chips` and
+ * `-<value>-chip` (chips). A field holding a value the model does not take adds `-invalid` and, with a fix,
+ * `-fix-btn`, and holds submit.
  */
 const CapabilityForm = ({
   testIdPrefix,

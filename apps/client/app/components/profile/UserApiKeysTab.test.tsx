@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -54,6 +54,7 @@ const h = vi.hoisted(() => ({
     callbackSigningSecretCreatedAt: new Date('2026-03-01'),
   } as RotateCallbackSigningSecretResponse,
   hasOptiAccess: false,
+  scopeBypass: false,
   eligibility: { canCreate: true, message: null, refusedOrgIds: [] } as {
     canCreate: boolean;
     message: string | null;
@@ -66,7 +67,7 @@ vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAc
 vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
   useOverwatchAccess: () => true,
   useHearthEnabled: () => true,
-  useApiKeyScopeEntitlements: () => ({ bypass: false, entitlements: new Set<string>() }),
+  useApiKeyScopeEntitlements: () => ({ bypass: h.scopeBypass, entitlements: new Set<string>() }),
 }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
@@ -722,5 +723,44 @@ describe('UserApiKeysTab - API key trust gate', () => {
       expect(screen.getByTestId('api-keys-create-btn')).toBeDisabled();
       expect(screen.getByTestId('api-keys-gate-notice')).toHaveTextContent(switchRefusal.message);
     });
+  });
+});
+
+describe('UserApiKeysTab - personas:mint', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.scopeBypass = true;
+    h.eligibility = { canCreate: true, message: null, refusedOrgIds: [] };
+    h.createMutate.mockClear();
+  });
+  afterEach(() => {
+    h.scopeBypass = false;
+  });
+
+  const openModal = (preset?: 'full') => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    if (preset) fireEvent.click(screen.getByTestId(`api-key-preset-${preset}`).querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Persona bot' },
+    });
+  };
+  const minted = () => (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+
+  it('leaves personas:mint out of Full access for a user who may hold it', () => {
+    openModal('full');
+    expect(screen.getByTestId('api-key-scope-personas:mint')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect(minted()).toContain(ApiKeyScope.BOB_RUN);
+    expect(minted()).not.toContain(ApiKeyScope.PERSONAS_MINT);
+  });
+
+  it('grants personas:mint when it is ticked explicitly', () => {
+    openModal();
+    const chip = screen.getByTestId('api-key-scope-personas:mint');
+    fireEvent.click(chip.querySelector('button') ?? chip);
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect(minted()).toContain(ApiKeyScope.PERSONAS_MINT);
   });
 });

@@ -13,6 +13,7 @@ export const ADMIN_AUDIT_COVERAGE_EXEMPTIONS: Readonly<Record<string, string>> =
   // Reads, previews and dry runs sent as POST
   'POST /api/admin/abuse/bulk-preview': 'dry run: counts what a bulk action would touch, writes nothing',
   'POST /api/admin/users/bulk/preview': 'dry run: counts what a bulk action would touch, writes nothing',
+  'POST /api/admin/users/signup-verdicts': 'read: classifies a page of users; POST only to carry the id list',
   'POST /api/admin/email/jobs/preview-recipients': 'read: resolves the recipient list of a draft job',
   'POST /api/admin/email/jobs/[id]/check-status': 'bookkeeping: refreshes delivery status from the provider',
   'POST /api/admin/whats-new-highlights-preview': 'preview: renders highlights without saving them',

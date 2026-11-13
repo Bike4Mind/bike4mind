@@ -23,6 +23,8 @@ import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import {
   FEEDBACK_ID_PARAM,
   FEEDBACK_SUBJECTS,
+  FEEDBACK_AI_AREAS,
+  FEEDBACK_AI_SEVERITIES,
   FEEDBACK_RESOLUTIONS,
   FEEDBACK_RESOLUTION_LABELS,
 } from '@bike4mind/common';
@@ -67,6 +69,8 @@ import {
   toSubjectFilter,
 } from './constants';
 import { checkedStatuses, toStatusFilters } from './feedbackTabSearch';
+import { useFeedbackSelection } from './hooks/useFeedbackSelection';
+import FeedbackBulkActions from './FeedbackBulkActions';
 
 type FeedbackRow = IExtendedFeedbackDocument;
 
@@ -268,6 +272,8 @@ const FeedbackTab: React.FC = () => {
 
   const {
     filters,
+    setArea,
+    setSeverity,
     setSearchTerm,
     setStatusFilters,
     setSelectedOrganizations,
@@ -341,6 +347,12 @@ const FeedbackTab: React.FC = () => {
   // the row that opened the drawer. Ids are compared rather than put in a selector: a deep-linked
   // id is arbitrary text.
   const tableRegionRef = useRef<HTMLDivElement>(null);
+  const selectionScope = JSON.stringify({ filterParams, currentPage, itemsPerPage });
+  const selection = useFeedbackSelection({
+    pageIds: currentFeedback.map(row => row._id),
+    scopeKey: selectionScope,
+    total,
+  });
   const previousOpenId = useRef(openFeedbackId);
   useEffect(() => {
     const closedId = previousOpenId.current;
@@ -425,6 +437,8 @@ const FeedbackTab: React.FC = () => {
   }));
 
   const hasFilters =
+    filters.area !== undefined ||
+    filters.severity !== undefined ||
     filters.searchTerm.trim() !== '' ||
     statusNarrowed ||
     filters.subject !== undefined ||
@@ -544,6 +558,20 @@ const FeedbackTab: React.FC = () => {
           onChange={picked => setTypes(FEEDBACK_TYPE_ORDER.filter(type => picked.includes(type)))}
         />
         <FilterChip
+          id="feedback-area"
+          label="Area"
+          value={filters.area}
+          options={FEEDBACK_AI_AREAS.map(value => ({ value, label: value }))}
+          onChange={value => setArea(FEEDBACK_AI_AREAS.find(area => area === value))}
+        />
+        <FilterChip
+          id="feedback-severity"
+          label="Severity"
+          value={filters.severity}
+          options={FEEDBACK_AI_SEVERITIES.map(value => ({ value, label: value }))}
+          onChange={value => setSeverity(FEEDBACK_AI_SEVERITIES.find(severity => severity === value))}
+        />
+        <FilterChip
           id="feedback-resolution"
           label="Resolution"
           value={filters.resolution}
@@ -591,6 +619,8 @@ const FeedbackTab: React.FC = () => {
           rows={currentFeedback}
           columns={columns}
           getRowId={row => row._id}
+          selection={!loading && totalSettled ? selection.selection : undefined}
+          onSelectionChange={selection.setSelection}
           onRowActivate={row => openFeedback(row._id)}
           activeRowId={openFeedbackId}
           rowTestId={row => `feedback-row-${row._id}`}
@@ -637,6 +667,16 @@ const FeedbackTab: React.FC = () => {
           maxHeight="none"
         />
       </Stack>
+
+      <FeedbackBulkActions
+        key={`${selectionScope}:${JSON.stringify(selection.selection)}`}
+        selection={selection.selection}
+        filters={filterParams}
+        total={total}
+        disabled={loading || !totalSettled}
+        onSelectionChange={selection.setSelection}
+        onApplied={refreshFeedback}
+      />
 
       <ActionDialog
         open={openDeleteFeedbackModal}

@@ -19,7 +19,18 @@ vi.mock('@client/app/components/tutorial/admin/TutorialsSwitchCard', () => ({
   default: ({ apiBase }: { apiBase: string }) => <div data-testid="mock-switch-card">{apiBase}</div>,
 }));
 vi.mock('@client/app/components/tutorial/admin/TutorialModulesCard', () => ({
-  default: ({ apiBase }: { apiBase: string }) => <div data-testid="mock-modules-card">{apiBase}</div>,
+  default: ({ apiBase, owner }: { apiBase: string; owner: string }) => (
+    <div data-testid="mock-modules-card">
+      {apiBase} {owner}
+    </div>
+  ),
+}));
+vi.mock('@client/app/components/tutorial/admin/TutorialDraftsCard', () => ({
+  default: ({ apiBase, owner }: { apiBase: string; owner: string }) => (
+    <div data-testid="mock-drafts-card">
+      {apiBase} {owner}
+    </div>
+  ),
 }));
 
 import { TutorialsTab } from './TutorialsTab';
@@ -47,7 +58,8 @@ describe('TutorialsTab', () => {
     renderTab();
     expect(screen.getByTestId('tutorials-core-section')).toBeInTheDocument();
     expect(screen.getByTestId('mock-switch-card')).toHaveTextContent('/api/tutorials');
-    expect(screen.getByTestId('mock-modules-card')).toHaveTextContent('/api/tutorials');
+    expect(screen.getByTestId('mock-modules-card')).toHaveTextContent('/api/tutorials core');
+    expect(screen.getByTestId('mock-drafts-card')).toHaveTextContent('/api/tutorials core');
     expect(screen.queryByTestId('tutorials-owner-alpha')).not.toBeInTheDocument();
   });
 

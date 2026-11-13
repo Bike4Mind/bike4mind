@@ -1,6 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { IUserDocument } from '@bike4mind/common';
-import { BadRequestError, NotFoundError, hashEmailToken, secureParameters } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, NotFoundError, hashEmailToken, secureParameters } from '@bike4mind/utils';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { EMAIL_VERIFICATION_TOKEN_EXPIRY } from './sendEmailVerification';
@@ -37,6 +37,12 @@ export const requestEmailChange = async (
 
   if (!user) {
     throw new NotFoundError('User not found');
+  }
+
+  // A test persona's address is server-built and pre-verified; swapping it for a real one would
+  // turn a Turnstile-free persona into an ordinary account on whatever domain the caller proves.
+  if (user.isPersona) {
+    throw new ForbiddenError('A test persona cannot change its email address');
   }
 
   // Check if new email is same as current email

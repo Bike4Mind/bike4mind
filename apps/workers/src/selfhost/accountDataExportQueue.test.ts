@@ -54,3 +54,21 @@ it('stays off when the queue is not configured', async () => {
   expect(worker.registerQueueHandler).not.toHaveBeenCalled();
   expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('accountDataExportQueue not configured'));
 });
+
+it('acks a job the handler deferred behind a held lease, and runs its re-sent copy as a first receive', async () => {
+  const worker = { registerQueueHandler: vi.fn() };
+  await registerAccountDataExportQueue(worker, 'http://queue/accountDataExportQueue', logger);
+  const handler = worker.registerQueueHandler.mock.calls[0][2];
+  const context = { getRemainingTimeInMillis: () => 999999 } as Context;
+  dispatch.mockResolvedValue(undefined);
+
+  const deferred = { Records: [{ receiptHandle: 'r1', attributes: { ApproximateReceiveCount: '3' } }] };
+  await expect(handler(deferred as unknown as SQSEvent, context)).resolves.toBeUndefined();
+  const resent = { Records: [{ receiptHandle: 'r2', attributes: { ApproximateReceiveCount: '1' } }] };
+  await expect(handler(resent as unknown as SQSEvent, context)).resolves.toBeUndefined();
+  expect(dispatch).toHaveBeenCalledTimes(2);
+
+  const exhausted = { Records: [{ receiptHandle: 'r3', attributes: { ApproximateReceiveCount: '4' } }] };
+  await expect(handler(exhausted as unknown as SQSEvent, context)).rejects.toThrow('redrive did not retain');
+  expect(dispatch).toHaveBeenCalledTimes(2);
+});
