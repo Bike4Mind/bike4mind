@@ -422,9 +422,10 @@ describe('ChatService running a script written in the same session', () => {
 
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     expect(asked.approvalDetail).not.toContain('written in this session');
-    // A working directory below the command is not a reason, so a plain call stays quick.
+    // A working directory below the command is not a reason, but the one-line menu summary
+    // would hide it, so the call goes to the app card.
     expect(asked.approvalReasons).toBeUndefined();
-    expect(isQuickApproval(asked)).toBe(true);
+    expect(isQuickApproval(asked)).toBe(false);
   });
 
   it('asks again after an "always" on a run whose script check failed', async () => {
