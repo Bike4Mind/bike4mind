@@ -63,10 +63,10 @@ describe('shellApproval per part', () => {
     ]);
   });
 
-  it('asks about a part whose operand it cannot read in every mode, and only that part', async () => {
+  it('asks about a part whose operand it cannot read in auto mode, and only that part', async () => {
     const prompt = await approve('git status && rm "$TARGET"');
     expect(prompt.byPart).toBe(true);
-    expect(prompt.askInFull).toBe(true);
+    expect(prompt.askInFull).toBeUndefined();
     expect(parts(prompt)).toEqual([
       { text: 'git status', coverable: true, kinds: [] },
       expect.objectContaining({ coverable: false, kinds: ['unread'] }),

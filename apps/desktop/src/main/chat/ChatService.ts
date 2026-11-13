@@ -8990,8 +8990,7 @@ interface PartDecision {
 
 /** Whether the conversation's mode runs this part unasked. */
 function modeCovers(mode: ChatApprovalMode, part: ApprovalPart): boolean {
-  if (mode === 'full') return part.ask?.mode !== 'full';
-  return mode === 'auto' && part.ask === undefined;
+  return mode === 'full' || (mode === 'auto' && part.ask === undefined);
 }
 
 /**
@@ -9050,11 +9049,9 @@ function narrowToParts(prompt: ApprovalPrompt, subject: PermissionSubject, parts
   const always = prompt.always as ApprovalAlways;
   const kept = new Set(parts.uncovered);
   const commands = subject.shell?.commands.filter((_, index) => kept.has(always.commands[index] as ApprovalPart));
-  const { askInFull: _full, ...rest } = prompt;
   return {
     prompt: {
-      ...rest,
-      ...(parts.uncovered.some(part => part.ask?.mode === 'full') ? { askInFull: true as const } : {}),
+      ...prompt,
       always: { ...always, commands: parts.uncovered, directories: parts.directories },
     },
     subject: subject.shell

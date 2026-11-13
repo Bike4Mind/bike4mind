@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -319,6 +320,89 @@ describe('ChatService approval modes', () => {
 
       expect((await awaitStatus('done')).name).toBe('session_spawn');
       expect((await service.listSessions()).some(entry => entry.origin)).toBe(false);
+    });
+  });
+
+  /**
+   * Full access asks only about credits, irreversible calls, signed-in browser pages and what the scan sees
+   * reach a protected location. A command the scan cannot follow, or a git form it does not list, asks in
+   * auto alone.
+   */
+  describe('what full access still asks about', () => {
+    const git = (cwd: string, ...args: string[]): void => {
+      execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], {
+        cwd,
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'test',
+          GIT_AUTHOR_EMAIL: 'test@example.invalid',
+          GIT_COMMITTER_NAME: 'test',
+          GIT_COMMITTER_EMAIL: 'test@example.invalid',
+        },
+        stdio: 'pipe',
+      });
+    };
+
+    beforeEach(async () => {
+      const origin = await realpath(await mkdtemp(join(tmpdir(), 'b4m-mode-origin-')));
+      git(root, 'init', '-q', '-b', 'main');
+      git(root, 'add', 'notes.txt');
+      git(root, 'commit', '-qm', 'notes');
+      git(origin, 'clone', '-q', '--bare', root, '.');
+      git(root, 'remote', 'add', 'origin', origin);
+      git(root, 'fetch', '-q', 'origin');
+    });
+
+    const routine = [
+      'git fetch origin main && git merge --ff-only origin/main',
+      'git fetch origin main && git rebase origin/main',
+      'git fetch origin main && git reset --hard origin/main',
+      'git show --format= HEAD',
+      'git status --frobnicate',
+    ];
+
+    it.each(routine)('runs %s in full access', async command => {
+      await startTurn('full');
+      streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
+      streams[0].write(frame('[DONE]'));
+
+      await vi.waitUntil(() => calls('done')[0] ?? calls('error')[0], { timeout: 10_000, interval: 10 });
+      expect(calls('awaiting-approval')).toHaveLength(0);
+    });
+
+    it.each(routine)('asks before %s in approve for me', async command => {
+      await startTurn('auto');
+      streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
+      streams[0].write(frame('[DONE]'));
+
+      await awaitStatus('awaiting-approval');
+      expect(calls('done')).toHaveLength(0);
+    });
+
+    it('asks before a command that writes .claude/settings.json in full access', async () => {
+      await startTurn('full');
+      streams[0].write(toolTurn('c1', 'bash_execute', { command: 'cp notes.txt .claude/settings.json', cwd: root }));
+      streams[0].write(frame('[DONE]'));
+
+      const asked = await awaitStatus('awaiting-approval');
+      expect(asked.approvalDetail).toContain('Reaches a location Desktop protects');
+      expect(calls('done')).toHaveLength(0);
+    });
+
+    it('asks before deleting a conversation, which cannot be undone, in full access', async () => {
+      const created = await service.createCodeSession({ directory: root, branch: '', workspace: false });
+      const other = await service.createCodeSession({ directory: root, branch: '', workspace: false });
+      if (!created.ok || !other.ok) throw new Error('could not create the sessions');
+      await service.setApprovalMode(created.session.id, 'full');
+      await service.send(created.session.id, 'go');
+      await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+
+      streams[0].write(toolTurn('d1', 'session_delete', { session_id: other.session.id }));
+      streams[0].write(frame('[DONE]'));
+
+      const asked = await awaitStatus('awaiting-approval');
+      expect(asked.approvalIrreversible).toBe(true);
+      expect(await store.get(other.session.id)).not.toBeNull();
     });
   });
 

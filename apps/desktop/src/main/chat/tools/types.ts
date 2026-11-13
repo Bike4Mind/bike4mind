@@ -743,7 +743,7 @@ export interface ApprovalPrompt {
    */
   askInFull?: true;
   /**
-   * `askInAuto` and `askInFull` come only from parts that say so in `always.commands[].ask`, with no reason
+   * `askInAuto` comes only from parts that say so in `always.commands[].ask`, with no reason
    * that holds for the whole script: each part is then decided on its own, and only the undecided ones ask.
    */
   byPart?: true;
@@ -766,11 +766,8 @@ export interface ApprovalPart {
   words?: string;
   expanded?: string;
   opaque?: string;
-  /**
-   * Why this part needs a decision even where commands run unasked: 'auto' asks in auto mode, 'full' in
-   * every mode. Only set on a prompt with `byPart`.
-   */
-  ask?: { mode: 'auto' | 'full'; reason: string; kinds: readonly PartAskKind[] };
+  /** Why this part asks in auto mode; full mode runs it. Only set on a prompt with `byPart`. */
+  ask?: { reason: string; kinds: readonly PartAskKind[] };
 }
 
 /** What makes a part ask: an "Allow in this chat" covers it only when given over every one of these. */
