@@ -18,6 +18,9 @@ const GRANDFATHERED_ROUTES = [
   'models.ts',
   'sessions/[id]/chat/index.ts',
   'sessions/index.ts',
+  'skills/[id]/index.ts',
+  'skills/[id]/share.ts',
+  'skills/index.ts',
   'users/[id]/index.ts',
 ];
 
