@@ -1,20 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
-import { Notification, app, ipcMain, powerMonitor, powerSaveBlocker } from 'electron';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { BrowserWindow, Notification, app, dialog, ipcMain, powerMonitor, powerSaveBlocker } from 'electron';
 import { z } from 'zod';
-import { BadRequestError } from '@bike4mind/common';
-import {
-  UNSURE_PREFIX,
-  validateLoopBudget,
-  validateLoopGoal,
-  validateLoopMaxConcurrent,
-  validateLoopModel,
-  validateLoopName,
-  validateLoopStageConfig,
-  validateLoopStages,
-} from '@bike4mind/common/loops';
+import { BadRequestError, startOfUtcDay } from '@bike4mind/common';
+import { UNSURE_PREFIX } from '@bike4mind/common/loops';
 import { IPC_CHANNELS } from '@shared/ipc';
 import {
   answerLocalEventSchema,
@@ -24,10 +15,8 @@ import {
   setLocalLoopStatusSchema,
   updateLocalLoopSchema,
   updateLocalTicketSchema,
-  type CreateLocalLoopRequest,
   type LocalLoop,
   type LocalLoopDetail,
-  type LocalLoopStageConfig,
   type LocalLoopsResult,
   type LocalLoopSummary,
 } from '@shared/localLoops';
@@ -45,47 +34,16 @@ import { repoSlug } from '../guards';
 import type { LoopPolicyStore } from '../LoopPolicyStore';
 import type { LoopRunner } from '../LoopRunner';
 import { originOf } from '../index';
+import { checkedFields } from './fields';
 import { LocalLoopScheduler } from './LocalLoopScheduler';
 import { applyTicketPatch, LocalLoopStore } from './LocalLoopStore';
 import { createTicket, updateTicket } from './ticketTools';
 
 const ALL_LOOPS_CAP = 'allLoopsCap';
+const CLOUD_SPENT = 'cloudLoopsSpent';
 const BUDGET_PATH = '/api/loops/budget';
-
-/** The stage overrides a Desktop loop keeps: no `runner` (every stage runs here), tools or repo hint. */
-function stageConfigOf(value: unknown, stages: string[]): LocalLoopStageConfig[] {
-  return (validateLoopStageConfig(value ?? [], stages) ?? []).map(
-    ({ runner: _runner, tools: _tools, repoHint: _repoHint, ...entry }) => entry
-  );
-}
-
-function checkedFields(request: Partial<CreateLocalLoopRequest>, current?: LocalLoop): Partial<LocalLoop> {
-  const stages = request.stages !== undefined ? validateLoopStages(request.stages) : current?.stages;
-  if (
-    request.directory !== undefined &&
-    !(isAbsolute(request.directory) && existsSync(join(request.directory, '.git')))
-  )
-    throw new BadRequestError('Pick a local git checkout.');
-  return {
-    ...(request.name !== undefined && { name: validateLoopName(request.name) }),
-    ...(request.goal !== undefined && { goal: validateLoopGoal(request.goal) }),
-    ...(stages && { stages }),
-    ...((request.stageConfig !== undefined || request.stages !== undefined) && {
-      stageConfig: stageConfigOf(request.stageConfig ?? current?.stageConfig, stages ?? []),
-    }),
-    ...(request.model !== undefined && { model: validateLoopModel(request.model) }),
-    ...(request.escalationModel !== undefined && { escalationModel: validateLoopModel(request.escalationModel) }),
-    ...(request.fallbackModel !== undefined && { fallbackModel: validateLoopModel(request.fallbackModel) }),
-    ...(request.maxConcurrent !== undefined && { maxConcurrent: validateLoopMaxConcurrent(request.maxConcurrent) }),
-    ...(request.budgetCreditsPerDay !== undefined && {
-      budgetCreditsPerDay: validateLoopBudget(request.budgetCreditsPerDay),
-    }),
-    ...(request.p2RunsPerDay !== undefined && { p2RunsPerDay: request.p2RunsPerDay }),
-    ...(request.directory !== undefined && { directory: request.directory }),
-    ...(request.approvalMode !== undefined && { approvalMode: request.approvalMode }),
-    ...(request.mirror !== undefined && { mirror: request.mirror }),
-  };
-}
+/** How old the cached web-loop spend may get before a tick refetches it (ms). */
+const BUDGET_TTL_MS = 5 * 60_000;
 
 /**
  * Desktop-owned loops: the store, the scheduler, and the `localLoops:*` IPC. Call after registerChat and
@@ -139,6 +97,12 @@ export function registerLocalLoops(
     },
     otherLanes: () => runner.busy,
     allLoopsCap: () => store.setting<number | null>(ALL_LOOPS_CAP) ?? undefined,
+    cloudLoopsSpentToday: now => {
+      if (Date.now() - budgetRefreshedAt > BUDGET_TTL_MS) void refreshBudget();
+      const cached = store.setting<{ day: string; credits: number }>(CLOUD_SPENT);
+      // Offline keeps the last value for the same UTC day; a new day starts at 0.
+      return cached?.day === startOfUtcDay(now).toISOString() ? cached.credits : 0;
+    },
     gh: runGh,
     github: new PrGithub(runGh),
     powerSaveBlocker,
@@ -150,12 +114,17 @@ export function registerLocalLoops(
     logger,
   });
 
-  /** The all-loops budget, cached so an offline Desktop keeps the last known value. */
+  /** The all-loops budget and today's web-loop spend, cached so an offline Desktop keeps the last known values. */
+  let budgetRefreshedAt = 0;
   const refreshBudget = async () => {
     const api = auth.getApiClient();
     if (!api || !currentScope) return;
-    const body = await api.get<{ effectiveCap?: number | null }>(BUDGET_PATH).catch(() => null);
-    if (body) store.setSetting(ALL_LOOPS_CAP, body.effectiveCap ?? null);
+    budgetRefreshedAt = Date.now();
+    const body = await api.get<{ effectiveCap?: number | null; creditsToday?: number }>(BUDGET_PATH).catch(() => null);
+    if (!body) return;
+    store.setSetting(ALL_LOOPS_CAP, body.effectiveCap ?? null);
+    if (typeof body.creditsToday === 'number')
+      store.setSetting(CLOUD_SPENT, { day: startOfUtcDay(new Date()).toISOString(), credits: body.creditsToday });
   };
 
   const follow = () => {
@@ -204,6 +173,21 @@ export function registerLocalLoops(
       }
     });
 
+  // Folders the owner chose in the native picker this run; create/update take a directory only from here.
+  const pickedFolders = new Set<string>();
+  ipcMain.handle(
+    IPC_CHANNELS.localLoopsPickFolder,
+    async (event): Promise<LocalLoopsResult<{ directory: string } | null>> => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const options = { title: 'Folder for this loop', properties: ['openDirectory' as const] };
+      const picked = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+      const directory = picked.filePaths[0];
+      if (picked.canceled || !directory) return { ok: true, value: null };
+      if (!existsSync(join(directory, '.git'))) return { ok: false, error: 'Pick a local git checkout.' };
+      pickedFolders.add(directory);
+      return { ok: true, value: { directory } };
+    }
+  );
   handle(IPC_CHANNELS.localLoopsList, () => summaries());
   const idOf = (input: unknown) => z.string().min(1).parse(input);
   handle(IPC_CHANNELS.localLoopsGet, input => detail(idOf(input)));
@@ -221,7 +205,10 @@ export function registerLocalLoops(
       errorStreak: 0,
       createdAt: now,
       updatedAt: now,
-      ...(checkedFields(request) as Pick<LocalLoop, 'name' | 'goal' | 'stages' | 'model' | 'directory'>),
+      ...(checkedFields(request, undefined, pickedFolders) as Pick<
+        LocalLoop,
+        'name' | 'goal' | 'stages' | 'model' | 'directory'
+      >),
     };
     const repo = repoSlug(await originOf(loop.directory));
     store.putLoop({ ...loop, ...(repo ? { repo } : {}) });
@@ -233,7 +220,7 @@ export function registerLocalLoops(
     // Resolved before the read, so the write below cannot undo what the scheduler stored meanwhile.
     const repo = request.directory !== undefined ? repoSlug(await originOf(request.directory)) : undefined;
     const current = loopOf(id);
-    const next = { ...current, ...checkedFields(request, current), updatedAt: new Date().toISOString() };
+    const next = { ...current, ...checkedFields(request, current, pickedFolders), updatedAt: new Date().toISOString() };
     if (request.directory !== undefined) {
       if (repo) next.repo = repo;
       else delete next.repo;
@@ -274,7 +261,7 @@ export function registerLocalLoops(
     scheduler.poke();
     return ticket;
   });
-  handle(IPC_CHANNELS.localLoopsUpdateTicket, input => {
+  handle(IPC_CHANNELS.localLoopsUpdateTicket, async input => {
     const { id, delete: remove, ...fields } = updateLocalTicketSchema.parse(input);
     const ticket = store.ticket(id);
     if (!ticket) throw new BadRequestError('Ticket not found.');
@@ -284,6 +271,8 @@ export function registerLocalLoops(
       return null;
     }
     const updated = store.transaction(() => updateTicket(store, loopOf(ticket.loopId), ticket, fields, 'owner'));
+    // Closed, blocked or reopened by the owner while a run works it: that run stops, uncounted.
+    if (ticket.status === 'in_progress' && updated.status !== 'in_progress') await scheduler.stopTicketRun(id);
     scheduler.poke();
     return updated;
   });
@@ -346,4 +335,5 @@ const LOCAL_LOOP_HANDLERS = [
   IPC_CHANNELS.localLoopsAnswerEvent,
   IPC_CHANNELS.localLoopsGetBudget,
   IPC_CHANNELS.localLoopsSetBudget,
+  IPC_CHANNELS.localLoopsPickFolder,
 ];

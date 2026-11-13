@@ -106,4 +106,15 @@ describe('loop ticket tools', () => {
       prioritySetBy: 'owner',
     });
   });
+
+  it('refuses an owner stage move of a running ticket but still takes its priority', () => {
+    const { store, loop } = setup();
+    const ticket = store.putTicket({ ...createTicket(store, loop, { title: 'a' }, 'owner'), status: 'in_progress' });
+    expect(() => updateTicket(store, loop, ticket, { stage: 'doing' }, 'owner')).toThrow(/^Running - pause/);
+    expect(updateTicket(store, loop, ticket, { priority: 'p1' }, 'owner')).toMatchObject({
+      priority: 'p1',
+      stage: 'todo',
+      status: 'in_progress',
+    });
+  });
 });

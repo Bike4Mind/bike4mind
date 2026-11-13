@@ -71,6 +71,11 @@ export interface LocalSchedulerDeps {
   otherLanes(): number;
   /** The owner's all-loops daily budget, last fetched from the server; undefined when unknown or unset. */
   allLoopsCap(): number | undefined;
+  /**
+   * Credits the owner's web loops spent today, last fetched from the server; they count toward the all-loops cap.
+   * The server's count holds only server loop runs (local runs send no loop-run header), so nothing is counted twice.
+   */
+  cloudLoopsSpentToday(now: Date): number;
   gh: GhRunner;
   github: LoopMergeGithub;
   smoke?: SmokeDeps;
@@ -316,7 +321,7 @@ export class LocalLoopScheduler {
       const mine = [...this.lanes.values()].filter(lane => lane.run.loopId === loop.id);
       const spend = {
         loop: store.spentToday(loop.id, now),
-        allLoops: store.spentTodayAllLoops(now),
+        allLoops: store.spentTodayAllLoops(now) + this.deps.cloudLoopsSpentToday(now),
         ...(allLoopsCap ? { allLoopsCap } : {}),
       };
       const headroom = Math.min(
@@ -694,18 +699,20 @@ export class LocalLoopScheduler {
       if (!loop) return;
       const failed = ended.outcome === 'failed';
       const errorStreak = failed ? loop.errorStreak + 1 : 0;
+      const streakError =
+        errorStreak >= ERROR_STREAK_LIMIT
+          ? `${errorStreak} runs in a row failed; last: ${ended.reason ?? 'unknown'}`
+          : undefined;
       loop = {
         ...loop,
         errorStreak,
         ...(ended.answer && run.kind === 'ticket' ? { memory: parseLoopMemory(ended.answer, loop.memory) } : {}),
-        ...(errorStreak >= ERROR_STREAK_LIMIT && {
-          status: 'error' as const,
-          error: `${errorStreak} runs in a row failed; last: ${ended.reason ?? 'unknown'}`,
-        }),
+        // The owner's pause wins: a paused loop stays paused and only gets the error event.
+        ...(streakError && loop.status === 'live' && { status: 'error' as const, error: streakError }),
         updatedAt: now.toISOString(),
       };
       store.putLoop(loop);
-      if (errorStreak === ERROR_STREAK_LIMIT) this.raise(loop, { kind: 'error', runId: run.id, reason: loop.error! });
+      if (errorStreak === ERROR_STREAK_LIMIT) this.raise(loop, { kind: 'error', runId: run.id, reason: streakError! });
 
       if (run.kind === 'triage') {
         // As the server's defaultUntriaged, and only for a run that ended on its own (not a quit or a cap).
@@ -763,6 +770,15 @@ export class LocalLoopScheduler {
   private async waitIdle(sessionId: string): Promise<void> {
     const deadline = this.now() + 10_000;
     while (this.deps.chat.isSessionBusy(sessionId) && this.now() < deadline) await this.sleep(100);
+  }
+
+  /**
+   * The owner closed, blocked or reopened a running ticket: stop its run, uncounted. endRun leaves the ticket where
+   * the owner put it, since it is no longer in progress.
+   */
+  async stopTicketRun(ticketId: string): Promise<void> {
+    const lane = [...this.lanes.values()].find(candidate => candidate.run.ticketId === ticketId);
+    if (lane) await this.finish(lane, { stopReason: 'requeued', reason: 'Stopped by the owner' });
   }
 
   /** Quit or account switch: stop every run now; their tickets go back uncounted. */

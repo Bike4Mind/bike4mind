@@ -111,6 +111,7 @@ const api: DesktopApi = {
     answerEvent: (request: AnswerLocalEventRequest) => ipcRenderer.invoke(IPC_CHANNELS.localLoopsAnswerEvent, request),
     getBudget: () => ipcRenderer.invoke(IPC_CHANNELS.localLoopsGetBudget),
     setBudget: (dailyCredits: number | null) => ipcRenderer.invoke(IPC_CHANNELS.localLoopsSetBudget, { dailyCredits }),
+    pickFolder: () => ipcRenderer.invoke(IPC_CHANNELS.localLoopsPickFolder),
     onChanged: listener => {
       const handler = (_event: unknown, change: { loopIds: string[] }) => listener(change);
       ipcRenderer.on(IPC_CHANNELS.localLoopsChanged, handler);

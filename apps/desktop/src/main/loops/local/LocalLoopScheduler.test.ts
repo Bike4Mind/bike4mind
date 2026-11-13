@@ -8,7 +8,7 @@ import type { MachineSample } from '../budget';
 import { LocalLoopScheduler, SCHEDULER_MS } from './LocalLoopScheduler';
 import { LocalLoopStore } from './LocalLoopStore';
 import { testLoop } from './testLoop';
-import { createTicket } from './ticketTools';
+import { createTicket, updateTicket } from './ticketTools';
 
 const GB = 1024 ** 3;
 const sample: MachineSample = {
@@ -63,6 +63,7 @@ describe('LocalLoopScheduler', () => {
   let chat: ReturnType<typeof fakeChat>;
   let scheduler: LocalLoopScheduler;
   let otherLanes: number;
+  let cloudSpent: number;
   let alerts: string[];
   const blocker = { start: vi.fn(() => 7), stop: vi.fn() };
 
@@ -90,6 +91,7 @@ describe('LocalLoopScheduler', () => {
     store = new LocalLoopStore(join(mkdtempSync(join(tmpdir(), 'b4m-sched-')), 'l.sqlite'), () => 'scope');
     chat = fakeChat();
     otherLanes = 0;
+    cloudSpent = 0;
     alerts = [];
     blocker.start.mockClear();
     blocker.stop.mockClear();
@@ -100,6 +102,7 @@ describe('LocalLoopScheduler', () => {
       machine: async () => ({ sample, settings: { runOnBattery: false } }),
       otherLanes: () => otherLanes,
       allLoopsCap: () => undefined,
+      cloudLoopsSpentToday: () => cloudSpent,
       gh: vi.fn(),
       github: { snapshot: vi.fn(), merge: vi.fn(), enqueue: vi.fn() },
       powerSaveBlocker: blocker,
@@ -207,6 +210,18 @@ describe('LocalLoopScheduler', () => {
     store.putLoop(testLoop({ id: 'loop-2' }));
     spent(50, 'loop-2');
     ticket('a');
+    const capped = new LocalLoopScheduler({ ...schedulerDeps(), allLoopsCap: () => 50 });
+    capped.start();
+    await settle();
+    expect(chat.turns).toEqual([]);
+    expect(store.loop('loop-1')?.capReason).toBe('all_loops');
+    capped.stop();
+  });
+
+  it('counts the web loops spent today toward the all-loops budget', async () => {
+    make();
+    ticket('a');
+    cloudSpent = 50;
     const capped = new LocalLoopScheduler({ ...schedulerDeps(), allLoopsCap: () => 50 });
     capped.start();
     await settle();
@@ -355,6 +370,39 @@ describe('LocalLoopScheduler', () => {
     expect(chat.turns).toHaveLength(3);
   });
 
+  it('keeps an owner-paused loop paused when its runs keep failing, and still reports the error', async () => {
+    make();
+    for (const title of ['a', 'b', 'c']) ticket(title);
+    scheduler.start();
+    for (let i = 0; i < 2; i++) {
+      await settle();
+      scheduler.observe({ type: 'error', sessionId: chat.turns[i].sessionId, messageId: 'm', message: 'boom' });
+    }
+    await settle();
+    // The third run is working when the owner pauses; it fails after.
+    store.putLoop({ ...store.loop('loop-1')!, status: 'paused' });
+    scheduler.observe({ type: 'error', sessionId: chat.turns[2].sessionId, messageId: 'm', message: 'boom' });
+    await settle();
+    expect(store.loop('loop-1')).toMatchObject({ status: 'paused', errorStreak: 3 });
+    expect(store.loop('loop-1')?.error).toBeUndefined();
+    expect(store.events('loop-1').map(event => event.kind)).toContain('error');
+  });
+
+  it('stops the run of a ticket the owner closed, uncounted, and leaves the ticket closed', async () => {
+    make();
+    const t = ticket('a');
+    scheduler.start();
+    await settle();
+    const sessionId = chat.turns[0].sessionId;
+    updateTicket(store, store.loop('loop-1')!, store.ticket(t.id)!, { status: 'closed' }, 'owner');
+    await scheduler.stopTicketRun(t.id);
+    await settle();
+    expect(chat.stopped).toEqual([sessionId]);
+    expect(store.runs('loop-1')[0]).toMatchObject({ stopReason: 'requeued', reason: 'Stopped by the owner' });
+    expect(store.ticket(t.id)).toMatchObject({ status: 'closed', runCount: 0 });
+    expect(scheduler.busy).toBe(0);
+  });
+
   it('lets a run ask the owner, parks the ticket, and shows the answer to its next run', async () => {
     make();
     const t = ticket('a');
@@ -491,6 +539,7 @@ describe('LocalLoopScheduler', () => {
       machine: async () => ({ sample, settings: { runOnBattery: false } }),
       otherLanes: () => otherLanes,
       allLoopsCap: () => undefined,
+      cloudLoopsSpentToday: () => cloudSpent,
       gh: vi.fn(),
       github: { snapshot: vi.fn(), merge: vi.fn(), enqueue: vi.fn() },
       powerSaveBlocker: blocker,

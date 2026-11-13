@@ -411,6 +411,8 @@ export const IPC_CHANNELS = {
   localLoopsAnswerEvent: 'localloops:answer-event',
   localLoopsGetBudget: 'localloops:get-budget',
   localLoopsSetBudget: 'localloops:set-budget',
+  /** Native folder picker for a loop's checkout; create/update accept only a folder picked here. */
+  localLoopsPickFolder: 'localloops:pick-folder',
   /** main -> renderer push: these loops changed; refetch them. */
   localLoopsChanged: 'localloops:changed',
   modelsGetStatus: 'models:get-status',
@@ -800,6 +802,8 @@ export interface DesktopApi {
     answerEvent(request: AnswerLocalEventRequest): Promise<LocalLoopsResult<LocalLoopDetail>>;
     getBudget(): Promise<LocalLoopsResult<{ dailyCredits: number | null }>>;
     setBudget(dailyCredits: number | null): Promise<LocalLoopsResult<{ dailyCredits: number | null }>>;
+    /** null: the owner cancelled. */
+    pickFolder(): Promise<LocalLoopsResult<{ directory: string } | null>>;
     onChanged(listener: (change: { loopIds: string[] }) => void): () => void;
   };
   /** The Models screen. `serverId` picks a saved model server; omitted means this computer. */

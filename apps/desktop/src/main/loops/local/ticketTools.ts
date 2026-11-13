@@ -167,6 +167,14 @@ export function updateTicket(
 ): LocalTicket {
   if (params.status !== undefined && !['open', 'blocked', 'closed'].includes(params.status as string))
     throw new BadRequestError('status must be one of: open, blocked, closed');
+  // The run would advance or block it from the stage it started in; close or block it instead to stop the run.
+  if (
+    by === 'owner' &&
+    existing.status === 'in_progress' &&
+    params.stage !== undefined &&
+    params.stage !== existing.stage
+  )
+    throw new BadRequestError('Running - pause the loop or wait for the run to end.');
   const deps = dependencies(store, loop.id, params.dependencies, existing.id);
   const patch: WorkItemPatch = {
     ...(params.title !== undefined && { title: title(params.title) }),
