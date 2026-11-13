@@ -192,8 +192,20 @@ export interface ChatToolCall {
    * against it however the user answered an earlier identical call.
    */
   approvalIrreversible?: boolean;
+  /**
+   * Set with `approvalId` when the gate gave reasons for asking (a shell call that runs a script
+   * written in this session, reaches a protected location, reads a secret, ...). Each is already a
+   * paragraph of `approvalDetail` below the command; kept apart so a surface showing only the
+   * first line knows it would drop them.
+   */
+  approvalReasons?: string[];
   /** Set with `approvalId` when main will honour only an allow-once, so the card offers no "always". */
   approvalOnceOnly?: boolean;
+  /**
+   * Set with `approvalId` when the gate asks about this call in every mode: it acts as the signed-in
+   * user (`askInFull`) or spends credits. Only the full app card may answer it, never the menu bar.
+   */
+  approvalInAppOnly?: boolean;
   /**
    * Set with `approvalId` when what is being allowed is unusually broad - a request for the whole
    * home folder or a system directory. Drawn on the card as a warning; it never blocks the answer.

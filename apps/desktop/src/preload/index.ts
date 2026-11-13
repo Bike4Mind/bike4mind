@@ -26,6 +26,7 @@ import type { CookieImportRequest, CookieImportState } from '@shared/browserCook
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
 import type { LoopApproveRequest, LoopRunnerSettings, LoopRunnerState } from '@shared/loopRunner';
+import type { WatchPreferences, WatchPreferencesPatch } from '@shared/watch';
 import type { GenerationSettings } from '@shared/generation';
 import type { ModelSettings } from '@shared/modelSettings';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
@@ -574,6 +575,15 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.attentionOpen, handler);
     },
     takePendingOpen: () => ipcRenderer.invoke(IPC_CHANNELS.attentionTakePendingOpen),
+  },
+  watch: {
+    getPreferences: () => ipcRenderer.invoke(IPC_CHANNELS.watchGetPreferences),
+    setPreferences: (patch: WatchPreferencesPatch) => ipcRenderer.invoke(IPC_CHANNELS.watchSetPreferences, patch),
+    onPreferences: listener => {
+      const handler = (_event: unknown, preferences: WatchPreferences) => listener(preferences);
+      ipcRenderer.on(IPC_CHANNELS.watchPreferences, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.watchPreferences, handler);
+    },
   },
   devLog: {
     getSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.devLogGetSnapshot),

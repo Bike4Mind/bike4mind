@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatModelOption, ChatStreamEvent } from '@shared/chat';
+import { isQuickApproval } from '@shared/watch';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { MediaStore } from './media/MediaStore';
@@ -274,6 +275,14 @@ describe('ChatService agent browser', () => {
   it('asks before running a script on a site that is not local, in full access', async () => {
     pageUrl = 'https://app.example.com/inbox';
     expect(await evaluateInFullAccess(await codeSession())).toBe(true);
+  });
+
+  it('keeps the card for a script on a non-local site to the app, never a watch quick approval', async () => {
+    pageUrl = 'https://app.example.com/inbox';
+    await evaluateInFullAccess(await codeSession());
+    const card = events.find(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval');
+    expect(card && 'call' in card ? card.call : undefined).toMatchObject({ approvalInAppOnly: true });
+    expect(card && 'call' in card && isQuickApproval(card.call)).toBe(false);
   });
 
   /**
