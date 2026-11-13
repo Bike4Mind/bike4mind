@@ -18,6 +18,7 @@ on:
       # The Dockerfile copies all of apps/ and turbo-builds every app but the client too.
       - 'apps/**'
       - '!apps/ios/**'
+      - '!apps/android/**'
       - 'catalog/**'
       - 'b4m-core/**'
       - 'packages/**'
@@ -56,6 +57,7 @@ on:
       # The Dockerfile copies all of apps/ and turbo-builds every app but the client too.
       - 'apps/**'
       - '!apps/ios/**'
+      - '!apps/android/**'
       - 'catalog/**'
       - 'b4m-core/**'
       - 'packages/**'

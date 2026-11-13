@@ -38,7 +38,7 @@ const profile: UserAccountRiskProfile = {
   signupAsn: 64500,
   signupDatacenter: false,
   signupWafAnonIp: false,
-  totpEnabled: false,
+  mfaEnabled: false,
   mfaSetupAt: null,
 };
 const candidate = (id: string, overrides: Partial<UserSignupLinkCandidate> = {}): UserSignupLinkCandidate => ({
@@ -112,9 +112,9 @@ describe('farm signal: authenticator 2FA soon after signup', () => {
 
   it('reads TOTP setup time only when TOTP is enabled', async () => {
     const setup = new Date(signupAt.getTime() + 2 * MINUTE_MS);
-    const enrolled = { ...profile, totpEnabled: true, mfaSetupAt: setup };
+    const enrolled = { ...profile, mfaEnabled: true, mfaSetupAt: setup };
     expect((await load({ findAccountRiskProfiles: async () => [enrolled] }))?.minutesToAuthenticator).toBe(2);
-    const abandoned = { ...profile, totpEnabled: false, mfaSetupAt: setup };
+    const abandoned = { ...profile, mfaEnabled: false, mfaSetupAt: setup };
     expect((await load({ findAccountRiskProfiles: async () => [abandoned] }))?.minutesToAuthenticator).toBeNull();
   });
 });

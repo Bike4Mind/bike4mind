@@ -3,6 +3,7 @@ import { IBaseRepository } from './BaseTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { IModelConfig } from './ModelConfigTypes';
 import type { OrgModelPolicy } from '../../schemas/orgModelPolicy';
+import type { OrganizationSharingPolicy } from '../../organizationSharingPolicy';
 
 export interface IUserDetails {
   id: string;
@@ -90,6 +91,7 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    */
   modelPolicy?: OrgModelPolicy | null;
 
+  sharingPolicy?: OrganizationSharingPolicy;
   mfaPolicy?: {
     required: boolean;
     graceEndsAt: Date | null;

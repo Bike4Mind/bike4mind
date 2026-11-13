@@ -122,7 +122,7 @@ export function isUnpricedTextModel(model: ModelInfo): boolean {
  * The single model-admission rule for every model-selection path: chat primary (ChatCompletionInvoke),
  * client and automatic fallbacks, the deprecated-id remap (ChatCompletionProcess), executeCompletion
  * (cliCompletions), the agent executor, and the routes metered by
- * apps/client/server/billing/meterPlatformCompletion.ts. A model with no config entry is admitted;
+ * packages/server-utils/src/billing/meterPlatformCompletion.ts. A model with no config entry is admitted;
  * entitlements are resolved lazily, only when they can change the outcome. A failed read yields [] for the
  * config gate; the free-tier gate answers it with a retryable ServiceUnavailableError, not an upgrade prompt.
  */

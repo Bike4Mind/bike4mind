@@ -1,4 +1,4 @@
-import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import {
   synthesizeSpeechContract,

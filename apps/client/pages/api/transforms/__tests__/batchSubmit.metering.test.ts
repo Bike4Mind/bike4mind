@@ -46,7 +46,7 @@ vi.mock('@anthropic-ai/sdk', () => ({
     messages = { batches: { cancel: m.cancel } };
   },
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async (...args: unknown[]) => {
     m.admissionArgs(...args);
     return {

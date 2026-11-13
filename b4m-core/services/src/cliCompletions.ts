@@ -569,7 +569,7 @@ export function withholdReasoningFromFrame(
 }
 
 /**
- * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
+ * Shared LLM completion logic for the SSE and embed completion routes.
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, options, db, logger, onChunk, apiKeyInfo } = params;

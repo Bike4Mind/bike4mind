@@ -190,6 +190,9 @@ vi.mock('@bike4mind/common', async () => {
     CONVERGENCE_ORIGIN: actual.CONVERGENCE_ORIGIN,
     provenancePayloadShape: actual.provenancePayloadShape,
     shouldHaltConvergence: actual.shouldHaltConvergence,
+    // Real: the password-protected verdict must recognise the exception shape pdf.js throws.
+    isPasswordProtectedPdfError: actual.isPasswordProtectedPdfError,
+    PASSWORD_PROTECTED_PDF_MESSAGE: actual.PASSWORD_PROTECTED_PDF_MESSAGE,
   };
 });
 vi.mock('@bike4mind/utils', () => ({ BadRequestError: class BadRequestError extends Error {} }));
@@ -205,6 +208,7 @@ vi.mock('sst', () => ({
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
+import { PASSWORD_PROTECTED_PDF_MESSAGE } from '@bike4mind/common';
 import { dispatch } from './fabFileChunk';
 import { ChunkClaimLostError, NotFoundError } from '@bike4mind/common';
 
@@ -354,6 +358,56 @@ describe('fabFileChunk handler - retry gating (#1412)', () => {
     expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['uploaded', 'pending'], 'chunking');
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'chunkedFiles');
     expect(h.incrementCounters).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileChunk handler - password-protected PDF', () => {
+  // The shape pdf.js (through unpdf) throws: an Error named PasswordException carrying a
+  // PasswordResponses code (1 = NEED_PASSWORD).
+  const passwordException = () => Object.assign(new Error('No password given'), { name: 'PasswordException', code: 1 });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+    h.incrementCounters.mockResolvedValue({
+      failedFiles: 1,
+      processingFailedFiles: 1,
+      vectorizedFiles: 0,
+      totalFiles: 3,
+    });
+    h.completedBatchStatus.mockReturnValue(undefined);
+    // A non-final delivery: an ordinary failure here would defer and rethrow.
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+    h.chunkFabfile.mockRejectedValue(passwordException());
+  });
+
+  it('fails the file on the first delivery with the user-facing message, warns, and does not throw', async () => {
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', PASSWORD_PROTECTED_PDF_MESSAGE);
+    expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', PASSWORD_PROTECTED_PDF_MESSAGE);
+    expect(h.sendToClient).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ chunkStatus: 'failed', failedMessage: PASSWORD_PROTECTED_PDF_MESSAGE })
+    );
+    const logger = mockLogger as unknown as { warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> };
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('password-protected'));
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', chunkClaimedAt: expect.any(Date) },
+      { $set: { isChunking: false } }
+    );
+  });
+
+  it('still defers and rethrows an unrelated chunking error', async () => {
+    h.chunkFabfile.mockRejectedValue(new Error(CHUNK_ERR));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
   });
 });
 

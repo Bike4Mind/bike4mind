@@ -11,7 +11,7 @@ import {
   isCreditsEnforced,
   reserveCompletionCredits,
   resolveShadowSubstitute,
-} from '@server/billing/meterPlatformCompletion';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { ANTHROPIC_BATCH_RATE, batchHoldModel } from '@server/billing/anthropicBatchPricing';
 import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import Anthropic from '@anthropic-ai/sdk';

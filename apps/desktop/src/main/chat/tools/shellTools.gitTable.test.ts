@@ -7,6 +7,7 @@ import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
+import { runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
@@ -322,7 +323,7 @@ describe('shell approval of common agent git commands', () => {
       covered,
       !prompt.askInAuto,
       !withSession.askInAuto && (withSession.always?.directories ?? []).length === 0,
-      !prompt.askInFull,
+      runsCheckedInFull(prompt),
     ]
       .map(run => (run ? 'r' : 'a'))
       .join('');

@@ -16,7 +16,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/dataLakes', async () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/index', async () => ({
   adminBypassLakeIds: mockAdminBypass,
   resolveAccessibleLakes: mockResolveAccessibleLakes,
   queryDataLakeArticles: mockQueryDataLakeArticles,

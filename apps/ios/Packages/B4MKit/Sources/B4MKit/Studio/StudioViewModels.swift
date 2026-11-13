@@ -43,6 +43,8 @@ public final class StudioCreateViewModel {
   public private(set) var paramsNote: String?
   public private(set) var isSubmitting = false
   public var error: StudioSubmitError?
+  /// Images attached as video frames, reference or style. Shown and sent only while the kind is video.
+  public private(set) var inputs: [StudioInput] = []
 
   @ObservationIgnored private var selectedModelIDs: [GenerationKind: String] = [:]
   @ObservationIgnored private let api: any StudioAPI
@@ -53,7 +55,64 @@ public final class StudioCreateViewModel {
     self.tracker = tracker
   }
 
-  public var availableModels: [GenerationModel] { models[kind] ?? [] }
+  /// The models for the kind. Video narrows to what the request needs: text-to-video models while nothing is
+  /// attached, and models that accept every attached role (and that many files of it) otherwise.
+  public var availableModels: [GenerationModel] {
+    let list = models[kind] ?? []
+    guard kind == .video else { return list }
+    return list.filter { Self.accepts($0, inputs: videoInputs) }
+  }
+
+  public var videoInputs: [StudioInput] { kind == .video ? inputs : [] }
+
+  static func accepts(_ model: GenerationModel, inputs: [StudioInput]) -> Bool {
+    guard case .video(let capabilities)? = model.capabilities else { return inputs.isEmpty }
+    if inputs.isEmpty { return capabilities.modes.contains("text_to_video") }
+    guard capabilities.modes.contains("image_to_video") else { return false }
+    return VideoInputRole.allCases.allSatisfy { role in
+      let count = inputs.filter { $0.role == role }.count
+      return count == 0 || (capabilities.inputRoles[role.rawValue] ?? 0) >= count
+    }
+  }
+
+  /// Why the attached images cannot be sent yet, or nil when they can.
+  public var inputIssue: String? {
+    let attached = videoInputs
+    guard !attached.isEmpty else { return nil }
+    if !attached.contains(where: { $0.role == .firstFrame }) {
+      return "Add a start frame: the video needs an image to begin from."
+    }
+    if availableModels.isEmpty {
+      return "No video model accepts this combination of images. Remove one to continue."
+    }
+    return nil
+  }
+
+  /// Applies "Turn into...": switches kind, attaches the material and prefills the prompt. A prompt the person
+  /// already typed is kept unless the seed brings one.
+  public func apply(_ seed: StudioSeed) async {
+    kind = seed.kind
+    inputs = seed.inputs
+    await loadModels()
+    if !seed.prompt.isEmpty { prompt = seed.prompt }
+    if !seed.params.isEmpty { paramsByKind[kind] = seed.params }
+    reconcileModelWithInputs()
+  }
+
+  public func remove(input: StudioInput) {
+    inputs.removeAll { $0.id == input.id }
+    reconcileModelWithInputs()
+  }
+
+  /// A selection that no longer fits the attachments falls back to the first model that does, naming the change.
+  private func reconcileModelWithInputs() {
+    guard kind == .video, let previous = selectedModelIDs[kind] else { return }
+    let list = availableModels
+    guard !list.contains(where: { $0.id == previous }), let first = list.first else { return }
+    select(model: first)
+    let name = first.name
+    paramsNote = [paramsNote, "Switched to \(name), which takes these images."].compactMap { $0 }.joined(separator: " ")
+  }
 
   public var selectedModel: GenerationModel? {
     let list = availableModels
@@ -132,7 +191,7 @@ public final class StudioCreateViewModel {
 
   public var canSubmit: Bool {
     !isSubmitting && selectedModel != nil && !trimmedPrompt.isEmpty
-      && trimmedPrompt.count <= Self.maximumPromptLength
+      && trimmedPrompt.count <= Self.maximumPromptLength && inputIssue == nil
   }
 
   /// Loads the model list for the current kind once. A failed load falls back to a known model where one exists,
@@ -157,9 +216,12 @@ public final class StudioCreateViewModel {
     defer { isSubmitting = false }
     do {
       let handle = try await api.generate(
-        GenerationRequest(kind: kind, prompt: trimmedPrompt, modelID: model.id, params: params))
+        GenerationRequest(
+          kind: kind, prompt: trimmedPrompt, modelID: model.id, params: params,
+          inputs: videoInputs.map { GenerationInput(role: $0.role.rawValue, fileID: $0.item.id) }))
       tracker.track(handle)
       prompt = ""
+      if kind == .video { inputs = [] }
       return true
     } catch {
       self.error = StudioSubmitError(error)

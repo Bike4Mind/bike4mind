@@ -1,4 +1,4 @@
-import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { randomUUID } from 'crypto';
 import {
   DEFAULT_MUSIC_MODEL_ID,
@@ -13,7 +13,10 @@ import {
 import { adminSettingsRepository, apiKeyRepository, cacheRepository, usageEventRepository } from '@bike4mind/database';
 import { apiKeyService, estimateMusicCredits, ProviderBusyError, runElevenLabsWithCapacity } from '@bike4mind/services';
 import { aiMusicService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { reserveRequestCredits, resolveRequestBillingOrgId } from '@server/billing/reserveRequestCredits';
+import {
+  reserveRequestCredits,
+  resolveRequestBillingOrgId,
+} from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
 import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';

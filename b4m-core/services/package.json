@@ -40,6 +40,16 @@
         "default": "./dist/dataLakeService/lakeGateWideningRule.cjs"
       }
     },
+    "./notebookMirror": {
+      "import": {
+        "types": "./dist/notebookExportService/mirror.d.mts",
+        "default": "./dist/notebookExportService/mirror.mjs"
+      },
+      "require": {
+        "types": "./dist/notebookExportService/mirror.d.cts",
+        "default": "./dist/notebookExportService/mirror.cjs"
+      }
+    },
     "./evals/lakeRag": {
       "import": {
         "types": "./dist/llm/evals/lakeRag/index.d.mts",

@@ -25,6 +25,15 @@ describe('approval mode copy', () => {
     expect(full.description).toMatch(/without asking/i);
   });
 
+  it('names the opaque-command floor and bounded Git exceptions in full access', () => {
+    const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
+    expect(notes).toMatch(/"Full access" asks before spending credits/);
+    expect(notes).toMatch(/cannot be undone/i);
+    expect(notes).toMatch(/browser page you are signed in to/i);
+    expect(notes).toMatch(/permission and hook settings/i);
+    expect(notes).toMatch(/asks when Desktop cannot follow a command or its operands/i);
+  });
+
   it('does not promise that approve-for-me checks everything', () => {
     expect(approvalModeOption('auto').description).toMatch(/everything except/i);
     expect(approvalModeOption('auto').description).toMatch(/outside this project/i);

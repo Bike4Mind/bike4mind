@@ -18,6 +18,7 @@ private struct GalleryContent: View {
   /// Pushed with `navigationDestination(item:)`: the shell's stack is bound to a typed `SessionsDestination`
   /// path, so a `NavigationLink(value: MediaItem)` has nowhere to go and silently does nothing.
   @State private var openItem: MediaItem?
+  @State private var turnInto: TurnIntoRequest?
   @Environment(AppServices.self) private var services
   private let tracker: GenerationTracker
 
@@ -48,10 +49,21 @@ private struct GalleryContent: View {
       .toolbar { ToolbarItem(placement: .principal) { filter } }
       .navigationDestination(item: $openItem) { item in
         MediaDetailView(item: item, api: services.media)
-          .environment(\.studioEdit, StudioEditContext(api: services.studio, media: services.media, tracker: tracker))
+          .environment(\.studioEdit, editContext)
       }
+      .turnIntoFlow(request: $turnInto, context: editContext)
       .task { await model.load() }
       .refreshable { await model.refresh() }
+  }
+
+  private var editContext: StudioEditContext {
+    StudioEditContext(
+      api: services.studio, media: services.media, tracker: tracker, frames: services.frameUploader,
+      currentInputs: { create.videoInputs },
+      apply: { seed in
+        openItem = nil
+        Task { await create.apply(seed) }
+      })
   }
 
   private var filter: some View {
@@ -110,6 +122,9 @@ private struct GalleryContent: View {
             MediaCell(item: item)
           }
           .buttonStyle(.plain)
+          .contextMenu {
+            TurnIntoButtons(item: item) { turnInto = $0 }
+          }
           .task { await model.loadMoreIfNeeded(currentItem: item) }
           .accessibilityIdentifier("media-cell-\(item.id)")
         }

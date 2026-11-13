@@ -61,7 +61,7 @@ import {
   scopedSettingsRepository,
   embedConversationRepository,
 } from '@bike4mind/database';
-import { verifyEmbedApiKey, type ApiKeyInfo } from '@server/cli/auth';
+import { verifyEmbedApiKey, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { extractBearer, resolveEmbedSessionToken } from '@server/embed/resolveEmbedSessionToken';
 import { reauthorizeIdentifiedSession } from '@server/embed/identifiedEmbedUser';

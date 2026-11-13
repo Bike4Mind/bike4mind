@@ -62,7 +62,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitApiKeyCompletion: mockAdmitApiKeyCompletion }));
 
-vi.mock('@server/managers/sessionCrud', () => ({ pinFilesToSessionKnowledge: mockPinFiles }));
+vi.mock('@bike4mind/server-utils/managers/sessionCrud', () => ({ pinFilesToSessionKnowledge: mockPinFiles }));
 
 vi.mock('@bike4mind/server-utils/utils/settleStrandedQuests', () => ({
   settleStrandedQuests: mockSettleStrandedQuests,

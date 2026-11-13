@@ -53,7 +53,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
       let loginBody: unknown;
       try {
-        if (!freshUser.mfa || !freshUser.mfa.totpEnabled) {
+        if (!mfaService.userHasMFAConfigured(freshUser)) {
           return res.status(400).json({ error: 'MFA is not enabled for this user.' });
         }
 
