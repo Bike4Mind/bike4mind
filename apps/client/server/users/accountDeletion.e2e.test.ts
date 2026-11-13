@@ -387,10 +387,15 @@ describe('requestAdminErasure', () => {
     expect(h.audit).not.toHaveBeenCalled();
   });
 
-  it('refuses an organization owner with the transfer code and changes nothing', async () => {
+  it('refuses an owner of an organization with other members with the transfer code and changes nothing', async () => {
     const targetId = await seedAccount();
     const adminId = await seedAccount();
-    const org = await Organization.create({ name: 'Acme', userId: targetId, personal: false });
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: targetId,
+      personal: false,
+      users: [{ userId: new mongoose.Types.ObjectId().toString(), permissions: ['read'] }],
+    });
 
     await expect(requestAdminErasure(requestFor(adminId), targetId)).rejects.toMatchObject({
       statusCode: 409,
