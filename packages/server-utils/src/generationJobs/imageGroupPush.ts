@@ -18,10 +18,12 @@ export type ImageGroupPushDeps = {
 
 const PUSH_BODY_MAX_CHARS = 160;
 
-const titleOf = ({ readyCount, members }: GroupCompletion): string => {
-  if (members.length === 1) return 'Image ready';
-  if (readyCount === members.length) return `${readyCount} images ready`;
-  return `${readyCount} of ${members.length} images ready`;
+// Takes the user cancelled are left out of the count: they were not asked for any more.
+const titleOf = ({ readyCount, members, cancelledCount }: GroupCompletion): string => {
+  const wanted = members.length - cancelledCount;
+  if (wanted === 1) return 'Image ready';
+  if (readyCount === wanted) return `${readyCount} images ready`;
+  return `${readyCount} of ${wanted} images ready`;
 };
 
 const bodyOf = ({ anchor, readyCount }: GroupCompletion): string => {

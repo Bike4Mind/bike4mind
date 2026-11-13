@@ -9,7 +9,12 @@ import {
   type ImageModels as ImageModelId,
   type StorageLimitErrorInfo,
 } from '@bike4mind/common';
-import { createImageProviderRegistry, type ImageProvider } from '@bike4mind/utils/imageProviders';
+import {
+  createImageProviderRegistry,
+  LocalImageProvider,
+  TestImageProvider,
+  type ImageProvider,
+} from '@bike4mind/utils/imageProviders';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from '../generationJobs/__test__/inMemoryGenerationJobRepository';
 import { GenerationJobEngine } from '../generationJobs/engine';
@@ -203,6 +208,33 @@ describe('createImageJobs', () => {
       expect(await run(deps, validRequest)).toMatchObject({ ok: false, status: 422, code: 'model_unavailable' });
       expect(holdCredits).not.toHaveBeenCalled();
       expect(repository.jobs.size).toBe(0);
+    });
+
+    it('serves a runtime-discovered local checkpoint through the local provider', async () => {
+      const { deps } = makeDeps({ providers: createImageProviderRegistry([openAiProvider, new LocalImageProvider()]) });
+      const result = await run(deps, {
+        model: 'local-image/sdxl_base.safetensors',
+        mode: 'generate',
+        prompt: 'a kite',
+      });
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      expect(result.jobs[0].payload).toMatchObject({ providerId: 'local' });
+    });
+
+    it('refuses a local checkpoint with 422 model_unavailable when the local provider is not registered', async () => {
+      const { deps } = makeDeps();
+      expect(
+        await run(deps, { model: 'local-image/sdxl_base.safetensors', mode: 'generate', prompt: 'a kite' })
+      ).toMatchObject({ ok: false, status: 422, code: 'model_unavailable' });
+    });
+
+    it('serves test-image only when the test provider is registered', async () => {
+      const request = { model: 'test-image', mode: 'generate', prompt: 'a kite' };
+      expect(await run(makeDeps().deps, request)).toMatchObject({ ok: false, code: 'model_unavailable' });
+      const { deps } = makeDeps({ providers: createImageProviderRegistry([openAiProvider, new TestImageProvider()]) });
+      const result = await run(deps, request);
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      expect(result.jobs[0].payload).toMatchObject({ providerId: 'test' });
     });
 
     it('refuses model_unavailable when no API key is configured', async () => {

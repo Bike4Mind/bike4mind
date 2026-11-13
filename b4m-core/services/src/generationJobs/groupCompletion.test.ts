@@ -120,4 +120,16 @@ describe('announceGroupCompletion', () => {
     expect(await t.announce(job)).toBe('all_cancelled');
     expect(studio.deliver).not.toHaveBeenCalled();
   });
+
+  it('delivers on no channel when another finisher already claimed the group', async () => {
+    const push = subscriber('push', () => true);
+    const slack = subscriber('slack', () => true);
+    const t = setup([push, slack]);
+    const [job] = await t.createGroup(['succeeded']);
+    await t.repository.claimGroupCompletionNotice(job.id, NOW);
+
+    expect(await t.announce(job)).toBe('already_announced');
+    expect(push.deliver).not.toHaveBeenCalled();
+    expect(slack.deliver).not.toHaveBeenCalled();
+  });
 });

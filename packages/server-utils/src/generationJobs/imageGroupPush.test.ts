@@ -33,7 +33,7 @@ const completion = (states: string[], overrides: JobOverrides = {}): GroupComple
     anchor: members[0],
     readyCount: states.filter(state => state === 'succeeded').length,
     failedCount: states.filter(state => state === 'failed').length,
-    cancelledCount: 0,
+    cancelledCount: states.filter(state => state === 'cancelled').length,
     completedAt: new Date(),
   };
 };
@@ -105,6 +105,8 @@ describe('imageGroupPushSubscriber.deliver', () => {
     [['succeeded'], 'Image ready'],
     [['succeeded', 'succeeded', 'succeeded'], '3 images ready'],
     [['succeeded', 'failed', 'succeeded'], '2 of 3 images ready'],
+    [['succeeded', 'cancelled', 'succeeded'], '2 images ready'],
+    [['succeeded', 'cancelled', 'failed'], '1 of 2 images ready'],
   ])('titles %j as %s', async (states, title) => {
     await deliver(completion(states));
     expect(deps.publish).toHaveBeenCalledWith(

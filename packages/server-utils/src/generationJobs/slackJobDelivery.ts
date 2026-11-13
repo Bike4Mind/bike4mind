@@ -5,7 +5,6 @@ import {
   type GenerationJobErrorCode,
   type IGenerationJobDocument,
   type IGenerationJobDocumentOf,
-  type ImageJobOutput,
   type VideoJobOutput,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
@@ -100,6 +99,8 @@ type OutputPost = {
   /** Rides on the upload, or prefixes the link message when the output goes out as a link. */
   comment?: string;
   linkLabel: string;
+  /** The moderation wait, when the caller already ran it (a batch waits for all its images at once). */
+  scan?: PromiseSettledResult<SignedOutput>;
 };
 
 /**
@@ -115,7 +116,8 @@ const postOutput = async (
 ): Promise<boolean> => {
   const { jobId, output, medium } = item;
   try {
-    const signed = await waitUntilServeable(output, deps);
+    if (item.scan?.status === 'rejected') throw item.scan.reason;
+    const signed = item.scan?.status === 'fulfilled' ? item.scan.value : await waitUntilServeable(output, deps);
     if (signed.availability !== 'ready') {
       deps.logger.warn(`slack ${medium} delivery skipped: the output is not serveable`, {
         jobId,
@@ -269,15 +271,18 @@ export async function deliverImageGroupToSlack(completion: GroupCompletion, deps
     return;
   }
 
+  const ready = members.flatMap(member =>
+    member.kind === 'image' && member.state === 'succeeded' && member.payload.output
+      ? [{ member, output: member.payload.output }]
+      : []
+  );
+  // Each image may wait out its moderation scan; waiting for the batch in parallel keeps "make N" within one wait.
+  const scans = await Promise.allSettled(ready.map(({ output }) => waitUntilServeable(output, deps)));
+
   let posted = 0;
-  let notPosted = 0;
-  for (const member of members) {
-    if (member.kind !== 'image' || member.state !== 'succeeded') continue;
-    const output: ImageJobOutput | undefined = member.payload.output;
-    if (!output) {
-      notPosted++;
-      continue;
-    }
+  // A succeeded take with no stored output cannot be posted either.
+  let notPosted = readyCount - ready.length;
+  for (const [index, { member, output }] of ready.entries()) {
     const delivered = await postOutput(
       {
         jobId: member.id,
@@ -287,6 +292,7 @@ export async function deliverImageGroupToSlack(completion: GroupCompletion, deps
         filename: `image-${member.id}.${IMAGE_EXTENSIONS[output.contentType] ?? 'png'}`,
         ...(posted === 0 && { comment: readyCount > 1 ? 'Your images are ready.' : 'Your image is ready.' }),
         linkLabel: 'View image',
+        scan: scans[index],
       },
       target,
       client,
