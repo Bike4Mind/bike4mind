@@ -6,6 +6,7 @@ import { useAdminTools } from '@client/app/hooks/useAdminTools';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useGetSkills } from '@client/app/hooks/data/skills';
 import { marketStatusBadge } from '@client/app/components/SkillMarket/MarketStatusBadge';
+import OrganizationLibraryPicker from '@client/app/components/organizations/OrganizationLibraryPicker';
 
 interface SlashCommandSuggestionsProps {
   input: string;
@@ -96,16 +97,19 @@ export const SlashCommandSuggestions: React.FC<SlashCommandSuggestionsProps> = (
   };
 
   return (
-    <CommandSuggestions
-      suggestions={availableCommands}
-      input={input}
-      onSelectSuggestion={onSelectSuggestion}
-      onVisibilityChange={onVisibilityChange}
-      shouldShow={shouldShow}
-      filterFn={filterFn}
-      title={<CommandSuggestionsHeader title="Quick Actions" />}
-      maxWidth="400px"
-      variant="default"
-    />
+    <>
+      {input === '/' && <OrganizationLibraryPicker kind="skill" />}
+      <CommandSuggestions
+        suggestions={availableCommands}
+        input={input}
+        onSelectSuggestion={onSelectSuggestion}
+        onVisibilityChange={onVisibilityChange}
+        shouldShow={shouldShow}
+        filterFn={filterFn}
+        title={<CommandSuggestionsHeader title="Quick Actions" />}
+        maxWidth="400px"
+        variant="default"
+      />
+    </>
   );
 };

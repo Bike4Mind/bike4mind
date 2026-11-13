@@ -57,3 +57,6 @@ jobs:
 
       - name: Build
         run: make build
+
+      - name: Lint
+        run: make lint

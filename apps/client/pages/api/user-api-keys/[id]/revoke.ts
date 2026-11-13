@@ -7,7 +7,7 @@ import { notifyApiKeyOrgRevoke } from '@server/utils/apiKeyRotationNotifier';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
-import { UserApiKeyEvents } from '@bike4mind/common';
+import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
@@ -15,7 +15,10 @@ import { z } from 'zod';
 // Same bound as the org member-key revoke route, since the reason lands in the same strict audit row.
 const RevokeUserApiKeyBodySchema = z.object({ reason: z.string().trim().max(500).optional() }).optional();
 
-const handler = baseApi().post(
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.API_KEYS_MANAGE, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
     const userId = req.user?.id;
     assertNotOrgServiceAccount(req.user);

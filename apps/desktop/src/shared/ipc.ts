@@ -558,6 +558,9 @@ export const IPC_CHANNELS = {
   prDismiss: 'pr:dismiss',
   prRefresh: 'pr:refresh',
   prSetOption: 'pr:set-option',
+  /** The Settings auto-fix attempt budget; main validates it, see @shared/autoFixSetting. */
+  prGetAutoFixAttempts: 'pr:get-auto-fix-attempts',
+  prSetAutoFixAttempts: 'pr:set-auto-fix-attempts',
   /** main -> renderer push; one conversation's bar changed. */
   prStateChanged: 'pr:state-changed',
   /** The sidebar's PR icons. The read is of stored state only and never reaches GitHub. */
@@ -1410,6 +1413,9 @@ export interface DesktopApi {
      * only; see PrBinding.
      */
     setOption(sessionId: string, option: PrOption, enabled: boolean): Promise<PrActionResult>;
+    getAutoFixAttempts(): Promise<number>;
+    /** Answers with what was saved: anything out of range lands as the default. */
+    setAutoFixAttempts(attempts: number): Promise<number>;
     onStateChanged(listener: (state: PrBarState) => void): () => void;
     /** Every conversation's PR icon for the sidebar, from what main already knows. */
     getSummaries(): Promise<PrSummaryEvent[]>;
