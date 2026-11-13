@@ -348,7 +348,7 @@ describe('completeAccountDeletion for an admin data subject erasure', () => {
   it('snapshots the scope before the purge and stores it under the lease', async () => {
     await expect(complete()).resolves.toEqual({ deleted: true });
 
-    expect(h.order.slice(0, 3)).toEqual(['plan', 'files', 'content']);
+    expect(h.order.slice(0, 4)).toEqual(['plan', 'orgs', 'files', 'content']);
     expect(h.collections.mock.calls[0]).toEqual([expect.any(Function)]);
     expect(h.updateOne).toHaveBeenCalledWith(
       expect.objectContaining({ _id: USER_ID, 'deletion.purgeLeaseId': expect.any(String) }),
@@ -363,7 +363,7 @@ describe('completeAccountDeletion for an admin data subject erasure', () => {
 
     await complete();
 
-    expect(h.order[0]).toBe('files');
+    expect(h.order[0]).toBe('orgs');
     expect(h.collections).toHaveBeenCalledTimes(1);
     expect(h.collections.mock.calls[0]).toEqual([]);
     expect(h.updateOne).not.toHaveBeenCalled();
