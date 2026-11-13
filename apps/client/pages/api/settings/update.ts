@@ -11,6 +11,7 @@ import {
   MIN_PRICE_PER_CREDIT_USD,
   partitionDomainList,
   partitionEmailList,
+  FULL_ADMIN_SETTING_KEYS,
   isFullAdmin,
   isRegisteredSettingKey,
   resolveSettingDefinition,
@@ -45,21 +46,6 @@ import { validateAdminAiConfigPromotion } from '@server/admin/ai/readiness';
 // One-time guard so a self-host install running without a configured key logs the
 // plaintext-at-rest degradation once, rather than silently or on every write.
 let warnedSelfHostPlaintext = false;
-
-// These settings constrain delegated admins themselves, so settings:manage alone must not loosen them.
-export const FULL_ADMIN_SETTING_KEYS = new Set([
-  'AdminApprovalsEnabled',
-  'AdminApprovalBulkUserThreshold',
-  'AdminApprovalCreditThreshold',
-  'AdminApprovalExpiryHours',
-  'AdminAuditCriticalGrantCredits',
-  'AdminAuditDailyGrantCredits',
-  'SlackSecurityAlertsWebhookUrl',
-  'enforceMFA',
-  'allowTrustedDevices',
-  // Sets how large a signup grant may be while the signup assessment policy is off (checkSignupGrantSave).
-  'signupGrantUnprotectedMaxCredits',
-]);
 
 // The stored settings checkSignupGrantSave reads. This route is the admin write path the check guards;
 // migrations also write some of these keys, without the check.
