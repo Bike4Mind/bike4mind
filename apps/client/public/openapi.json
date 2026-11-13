@@ -12606,7 +12606,7 @@
                 },
                 "provider_label": {
                   "type": "string",
-                  "description": "The provider as shown to people (`Google`, `Black Forest Labs`), where `provider` is the id. Display text. Always sent by current servers."
+                  "description": "The provider as shown to people (`Google`, `ElevenLabs`), where `provider` is the id. Display text. Always sent by current servers."
                 },
                 "blurb": {
                   "type": "string",

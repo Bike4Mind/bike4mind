@@ -148,7 +148,7 @@ export const PublicMusicModelSchema = z.object({
     .string()
     .optional()
     .describe(
-      'The provider as shown to people (`Google`, `Black Forest Labs`), where `provider` is the id. Display text. Always sent by current servers.'
+      'The provider as shown to people (`Google`, `ElevenLabs`), where `provider` is the id. Display text. Always sent by current servers.'
     ),
   blurb: z
     .string()

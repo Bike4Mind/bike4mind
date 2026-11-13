@@ -6697,7 +6697,7 @@ export interface components {
         object: 'music_model';
         display_name: string;
         provider: string;
-        /** @description The provider as shown to people (`Google`, `Black Forest Labs`), where `provider` is the id. Display text. Always sent by current servers. */
+        /** @description The provider as shown to people (`Google`, `ElevenLabs`), where `provider` is the id. Display text. Always sent by current servers. */
         provider_label?: string;
         /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Always sent by current servers. */
         blurb?: string;
