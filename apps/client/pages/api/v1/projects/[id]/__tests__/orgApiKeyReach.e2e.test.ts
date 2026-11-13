@@ -9,7 +9,8 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../../packages/database/src/__test__/createMongoServer';
-import { FabFile, Project, Session, User } from '@bike4mind/database';
+import { FabFile, Project, Session, User, fabFileRepository, sessionRepository } from '@bike4mind/database';
+import ability from '@bike4mind/server-utils/auth/ability';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -22,21 +23,38 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 vi.mock('@server/middlewares/baseApi', () => {
   type Mw = (req: unknown, res: unknown, next: () => void) => unknown;
-  const compose =
-    (...handlers: Mw[]) =>
-    async (req: unknown, res: unknown) => {
-      for (const handler of handlers) {
-        let advanced = false;
-        await handler(req, res, () => {
-          advanced = true;
-        });
-        if (!advanced) return;
-      }
-    };
+  const compose = (handlers: Mw[]) => async (req: unknown, res: unknown) => {
+    for (const handler of handlers) {
+      let advanced = false;
+      await handler(req, res, () => {
+        advanced = true;
+      });
+      if (!advanced) return;
+    }
+  };
+  // Chainable like next-connect (the legacy routes chain .get().post()), dispatching on req.method.
+  const router = () => {
+    const routes = new Map<string, (req: unknown, res: unknown) => Promise<void>>();
+    const route = (req: { method?: string }, res: unknown) => routes.get(req.method ?? 'GET')?.(req, res);
+    const on =
+      (method: string) =>
+      (...handlers: Mw[]) => {
+        routes.set(method, compose(handlers));
+        return route;
+      };
+    return Object.assign(route, {
+      use: () => route,
+      get: on('GET'),
+      post: on('POST'),
+      patch: on('PATCH'),
+      put: on('PUT'),
+      delete: on('DELETE'),
+    });
+  };
   return {
     methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { end: () => void } }) =>
       res.status(405).end(),
-    baseApi: () => ({ use: () => undefined, get: compose, post: compose, patch: compose, delete: compose }),
+    baseApi: router,
   };
 });
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
@@ -58,6 +76,8 @@ let filesHandler: any;
 let sessionsHandler: any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let listCreateHandler: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let legacyListHandler: any;
 
 beforeAll(async () => {
   mongoServer = await createMongoServer();
@@ -66,6 +86,7 @@ beforeAll(async () => {
   filesHandler = (await import('../files/index')).default;
   sessionsHandler = (await import('../sessions/index')).default;
   listCreateHandler = (await import('../../index')).default;
+  legacyListHandler = (await import('../../../../projects/index')).default;
 });
 
 beforeEach(async () => {
@@ -259,5 +280,60 @@ describe('POST /api/v1/projects for an org-owned key', () => {
       })
     ).rejects.toMatchObject({ statusCode: 400 });
     expect(await Project.countDocuments({ name: 'Smuggle' })).toBe(0);
+  });
+});
+
+/** A member's shared project carrying one shared and one personal item of each kind. */
+async function seedMixedProject(memberId: string, name: string) {
+  const sharedFile = await file(memberId, `${name}-shared.txt`, groupShare(SHARED_GROUP));
+  const personalFile = await file(memberId, `${name}-personal.txt`);
+  const sharedNotebook = await notebook(memberId, groupShare(SHARED_GROUP));
+  const personalNotebook = await notebook(memberId);
+  await Project.create({
+    name,
+    userId: memberId,
+    fileIds: [String(sharedFile.id), String(personalFile.id)],
+    sessionIds: [String(sharedNotebook.id), String(personalNotebook.id)],
+    ...groupShare(SHARED_GROUP),
+  });
+  return { sharedFileId: String(sharedFile.id), sharedNotebookId: String(sharedNotebook.id) };
+}
+
+describe('project lists for an org-owned key', () => {
+  it('GET /api/v1/projects omits personal items, with one item query per repository for the page', async () => {
+    const { memberId, serviceAccountId } = await seedAccounts();
+    const first = await seedMixedProject(memberId, 'First');
+    const second = await seedMixedProject(memberId, 'Second');
+    const fileLookups = vi.spyOn(fabFileRepository.shareable, 'findAllAccessibleByIds');
+    const sessionLookups = vi.spyOn(sessionRepository.shareable, 'findAllAccessibleByIds');
+
+    const res = await call(listCreateHandler, orgKeyUser(serviceAccountId, [SHARED_GROUP]), {});
+
+    expect(res._getStatusCode()).toBe(200);
+    const rows: { file_ids: string[]; session_ids: string[] }[] = res._getJSONData().data;
+    expect(rows.map(row => row.file_ids).sort()).toEqual([[first.sharedFileId], [second.sharedFileId]].sort());
+    expect(rows.map(row => row.session_ids).sort()).toEqual(
+      [[first.sharedNotebookId], [second.sharedNotebookId]].sort()
+    );
+    expect(fileLookups).toHaveBeenCalledTimes(1);
+    expect(sessionLookups).toHaveBeenCalledTimes(1);
+    fileLookups.mockRestore();
+    sessionLookups.mockRestore();
+  });
+
+  it("GET /api/projects lists the shared project without a member's personal item ids", async () => {
+    const { memberId, serviceAccountId } = await seedAccounts();
+    const shared = await seedMixedProject(memberId, 'Legacy');
+    const keyUser = orgKeyUser(serviceAccountId, [SHARED_GROUP]);
+
+    const { req, res } = createMocks({ method: 'GET', query: {} });
+    Object.assign(req, { user: keyUser, logger, ability: ability(keyUser as never) });
+    await legacyListHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    const rows: { name: string; fileIds: string[]; sessionIds: string[] }[] = res._getJSONData().data;
+    expect(rows.map(row => row.name)).toEqual(['Legacy']);
+    expect(rows[0].fileIds).toEqual([shared.sharedFileId]);
+    expect(rows[0].sessionIds).toEqual([shared.sharedNotebookId]);
   });
 });

@@ -30,17 +30,65 @@ export async function projectItemIdsReadableBy(
   return ids.filter(id => readableIds.has(id));
 }
 
-/**
- * toPublicProject for `user`: its `session_ids` / `file_ids` list only the items the caller may read
- * (projectItemIdsReadableBy), so the project payload never names an item the item lists hide.
- */
-export async function toPublicProjectFor(user: ProjectReader, project: PublicProjectSource): Promise<ProjectResource> {
-  if (!isOrgServiceAccount(user)) return toPublicProject(project);
-  const [sessionIds, fileIds] = await Promise.all([
-    projectItemIdsReadableBy(user, (project.sessionIds ?? []).map(String), sessionRepository),
-    projectItemIdsReadableBy(user, (project.fileIds ?? []).map(String), fabFileRepository),
+type ProjectItems = { sessionIds?: readonly unknown[] | null; fileIds?: readonly unknown[] | null };
+type ReadableItemSets = { sessions: ReadonlySet<string>; files: ReadonlySet<string> };
+
+const idsOf = (projects: readonly ProjectItems[], key: keyof ProjectItems): string[] => [
+  ...new Set(projects.flatMap(project => (project[key] ?? []).map(String))),
+];
+
+/** The readable item ids across a page of projects: one query per item repository, not per project. */
+async function readableItemSetsFor(user: ProjectReader, projects: readonly ProjectItems[]): Promise<ReadableItemSets> {
+  const [sessions, files] = await Promise.all([
+    projectItemIdsReadableBy(user, idsOf(projects, 'sessionIds'), sessionRepository),
+    projectItemIdsReadableBy(user, idsOf(projects, 'fileIds'), fabFileRepository),
   ]);
-  return toPublicProject({ ...pickPublic(project), sessionIds, fileIds });
+  return { sessions: new Set(sessions), files: new Set(files) };
+}
+
+const keepReadable = (ids: readonly unknown[] | null | undefined, readable: ReadonlySet<string>): string[] =>
+  (ids ?? []).map(String).filter(id => readable.has(id));
+
+/**
+ * A page of project rows for `user` with `sessionIds` / `fileIds` cut to the items the caller may
+ * read (projectItemIdsReadableBy). For routes that return the stored row shape (GET /api/projects);
+ * rows must be plain objects, since each is spread.
+ */
+export async function withReadableProjectItems<T extends ProjectItems>(
+  user: ProjectReader,
+  projects: readonly T[]
+): Promise<T[]> {
+  if (!isOrgServiceAccount(user)) return [...projects];
+  const readable = await readableItemSetsFor(user, projects);
+  return projects.map(project => ({
+    ...project,
+    sessionIds: keepReadable(project.sessionIds, readable.sessions),
+    fileIds: keepReadable(project.fileIds, readable.files),
+  }));
+}
+
+/**
+ * toPublicProject for `user`, over a page: `session_ids` / `file_ids` list only the items the caller
+ * may read, so the project payload never names an item the item lists hide.
+ */
+export async function toPublicProjectsFor(
+  user: ProjectReader,
+  projects: readonly PublicProjectSource[]
+): Promise<ProjectResource[]> {
+  if (!isOrgServiceAccount(user)) return projects.map(toPublicProject);
+  const readable = await readableItemSetsFor(user, projects);
+  return projects.map(project =>
+    toPublicProject({
+      ...pickPublic(project),
+      sessionIds: keepReadable(project.sessionIds, readable.sessions),
+      fileIds: keepReadable(project.fileIds, readable.files),
+    })
+  );
+}
+
+export async function toPublicProjectFor(user: ProjectReader, project: PublicProjectSource): Promise<ProjectResource> {
+  const [resource] = await toPublicProjectsFor(user, [project]);
+  return resource;
 }
 
 const pickPublic = (project: PublicProjectSource): PublicProjectSource => ({
