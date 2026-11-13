@@ -4,6 +4,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   agentRepository,
   fabFileRepository,
+  organizationRepository,
   projectRepository,
   questRepository,
   Session,
@@ -43,6 +44,7 @@ const handler = nextRouteForContract(sessionCloneContract, {
           users: userRepository,
           projects: projectRepository,
           fabFiles: fabFileRepository,
+          organizations: organizationRepository,
           agents: agentRepository,
         },
         // Lets the lake-tag derivation intersect against the CALLER's reachable lakes, instead of
@@ -56,7 +58,7 @@ const handler = nextRouteForContract(sessionCloneContract, {
         // handful of reads inside the transaction this route opens. That is the intended trade - the
         // alternative is persisting an unreachable scope, which is permanent once non-empty.
         resolveLakeAccess: async () =>
-          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
+          (await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
         resolveSurfaceAccess: copySurfaceAccessForRequest(req),
         workspaceSessionSettings: premiumWorkspaceSessionSettings,
       }

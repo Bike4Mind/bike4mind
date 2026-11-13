@@ -309,18 +309,18 @@ export const sessionSpawn: ToolDefinition = {
   },
 };
 
-/** session_spawn as declared to a session with Orchestrate in effect; same parameters, other contract. */
-export const delegatedSpawnSchema: ToolSchema = {
+/**
+ * session_spawn as declared to a session with Orchestrate in effect; same parameters, other
+ * contract. `modelHint` is modelRequestHint's text: without one, requested_model_id is left out.
+ */
+export const delegatedSpawnSchema = (modelHint: string | null): ToolSchema => ({
   ...sessionSpawn.schema,
   parameters: {
     ...sessionSpawn.schema.parameters,
     properties: {
       ...sessionSpawn.schema.parameters.properties,
       role: { type: 'string', enum: ['implementation', 'exploration', 'review'] },
-      requested_model_id: {
-        type: 'string',
-        description: 'Request within user policy; never grants model or spending permission.',
-      },
+      ...(modelHint ? { requested_model_id: { type: 'string', description: modelHint } } : {}),
       contract: z.toJSONSchema(taskContractSchema, { unrepresentable: 'any' }),
       model_requirements: z.toJSONSchema(workerRequirementsSchema),
     },
@@ -333,7 +333,7 @@ export const delegatedSpawnSchema: ToolSchema = {
     'A started session runs on its own, does not report into your turn, and tells this ' +
     'conversation when it finishes. It cannot see anything said here, so the prompt has to ' +
     'carry the whole task. Each one costs credits: never start several variations of one task.',
-};
+});
 
 export const QUEST_COMPLETE_TOOL_NAME = 'quest_complete';
 
@@ -607,7 +607,7 @@ export const taskReport: ToolDefinition = {
   schema: {
     name: 'task_report',
     description:
-      'Report acceptance evidence, a block, or a disproven assumption with the smallest escalation decision. Completion requires parent assessment. Never grants permissions or spending.',
+      "Report acceptance evidence, a block, or a disproven assumption with the smallest escalation decision. A completed report needs, for each acceptance criterion in the brief, a verification entry whose criterion is that criterion's exact text (outcome passed only if it really passed), or the criterion listed in unmetCriteria; otherwise it is rejected. Extra checks such as lint or typecheck may be added under their own labels but count toward no criterion. Completion requires parent assessment. Never grants permissions or spending.",
     parameters: {
       type: 'object',
       properties: { report: z.toJSONSchema(taskReportSchema, { unrepresentable: 'any' }) },

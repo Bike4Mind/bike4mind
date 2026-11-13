@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * winning over the lake defaults. Without a lake, the resolver path must not run at all.
  */
 const h = vi.hoisted(() => ({
+  adminSettings: {},
   createSession: vi.fn(),
   assertLakeAccess: vi.fn(),
   toAccessContext: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
 vi.mock('@server/middlewares/baseApi', () => ({ methodNotAllowedHandler: () => () => undefined }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  adminSettingsRepository: h.adminSettings,
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
     listActiveByLakes: vi.fn().mockResolvedValue([]),
@@ -58,10 +60,10 @@ vi.mock('@bike4mind/database', () => ({
   User: { findByIdAndUpdate: h.findByIdAndUpdate },
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
-vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: h.createAttachmentLakeAccess,
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/services', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
   return {
@@ -100,7 +102,11 @@ describe('POST /api/sessions/create - lake-derived session defaults', () => {
 
     await run(post({ name: 'New Notebook', dataLakeId: 'acme' }), res);
 
-    expect(h.assertLakeAccess).toHaveBeenCalledWith('acme', expect.anything(), expect.anything());
+    expect(h.assertLakeAccess).toHaveBeenCalledWith(
+      'acme',
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ settings: h.adminSettings }) })
+    );
     expect(paramsOf()).toMatchObject({
       name: 'New Notebook',
       forceKnowledgeRetrieval: true,

@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_WRITE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
@@ -11,7 +11,7 @@ import {
 import { NotFoundError } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 
 // A single guarded status write, no AI/OpenAI spend involved (unlike apply/reanalyze) - a
 // generous hourly cap is enough to bound abuse, no shared daily-cap machinery needed.

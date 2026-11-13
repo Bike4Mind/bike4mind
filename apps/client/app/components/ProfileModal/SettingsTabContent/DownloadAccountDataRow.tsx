@@ -5,10 +5,23 @@ import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyle
 import { useRequestAccountDataExport } from '@client/app/hooks/data/user';
 import { getErrorMessage } from '@client/app/utils/error';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
+import { useEffect } from 'react';
+import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 
 /** Settings "Danger zone": request a zip of the account's data, emailed as a 24-hour download link. */
 export default function DownloadAccountDataRow() {
   const requestExport = useRequestAccountDataExport();
+  const { subscribeToAction } = useWebsocket();
+
+  useEffect(
+    () =>
+      subscribeToAction('account_data_export_ready', async message => {
+        if (message.action !== 'account_data_export_ready') return;
+        if (message.exportJobId !== requestExport.data?.exportJobId) return;
+        toast.success('Your account archive is ready. Check your email for the download link.');
+      }),
+    [requestExport.data?.exportJobId, subscribeToAction]
+  );
 
   const handleRequest = () =>
     requestExport.mutate(undefined, {

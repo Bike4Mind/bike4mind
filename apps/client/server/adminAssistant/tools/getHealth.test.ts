@@ -70,12 +70,12 @@ describe('getHealthTool', () => {
   });
 
   it('reports a never-checked integration with a null lastCheckedAt', async () => {
-    getHealthSummary.mockResolvedValue([summary({ status: 'unhealthy', lastCheckedAt: new Date(0), latencyMs: 0 })]);
+    getHealthSummary.mockResolvedValue([summary({ status: 'no_data', lastCheckedAt: null, latencyMs: 0 })]);
 
     const result = await runTool({});
 
     expect(result.data.integrations[0]).toMatchObject({
-      status: 'unhealthy',
+      status: 'no_data',
       lastCheckedAt: null,
       neverChecked: true,
     });

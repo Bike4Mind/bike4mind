@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CREDITS_PAGE_READ } from '@bike4mind/common';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => handlers[req.method ?? 'GET']?.(req, res), {
       use: () => chain,
@@ -14,7 +14,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockList = vi.fn();
 vi.mock('@server/admin/subscriptionsList/listAdminSubscriptions', () => ({
@@ -43,12 +43,8 @@ describe('GET /api/admin/subscriptions', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: CREDITS_PAGE_READ },
     });
-  });
-
-  it('refuses a non-admin before reading anything', async () => {
-    await expect(call({}, { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
-    expect(mockList).not.toHaveBeenCalled();
   });
 
   it('applies the defaults and sets no-store caching', async () => {

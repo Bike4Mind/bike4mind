@@ -287,13 +287,14 @@ describe('public settings projection (M2.5 security boundary)', () => {
         'pricePerCredit',
         'MaxFileSize',
         'defaultEmbeddingModel',
-        // ReferralModal and useSystemPromptFiles() both read these by name with no
-        // admin guard - carry no secret, but were missed by the initial opt-in pass.
-        'ReferralCreditsAmount',
+        // useSystemPromptFiles() reads this by name with no admin guard - carries no
+        // secret, but was missed by the initial opt-in pass.
         'SystemFiles',
         // The Desktop app follows these rather than deciding deferral itself.
         'EnableDeferredToolLoading',
         'DeferredToolStartSetMaxTokens',
+        // The credit purchase button gates on it.
+        'requireCheckoutTermsConsent',
       ]) {
         expect(keys.has(k)).toBe(true);
       }
@@ -939,8 +940,9 @@ describe('Credits System group', () => {
       expect(settingsMap[key].schema.safeParse('2500').success).toBe(true);
     });
 
-    it('is indexed in the Credits group with an order no sibling reuses', () => {
-      expect(API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.key)).toContain(key);
+    // Edited in the Invite Center Schedule section, so it is outside the Credits group.
+    it('is not indexed in the Credits group, whose orders stay unique', () => {
+      expect(API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.key)).not.toContain(key);
       const orders = API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.order);
       expect(new Set(orders).size).toBe(orders.length);
     });
@@ -1529,6 +1531,9 @@ describe('spend monitor settings', () => {
     spendMonitorAccountSpikeRatio: 10,
     spendMonitorAccountSpikeFloorCredits: 1000,
     spendMonitorAccountCeilingCredits: 5000,
+    spendMonitorPaidAccountSpikeFloorCredits: 20_000,
+    spendMonitorPaidAccountCeilingCredits: 40_000,
+    spendMonitorPaidAccountMinAgeDays: 7,
     spendMonitorTrustedAccountSpikeFloorCredits: 20_000,
     spendMonitorTrustedAccountCeilingCredits: 40_000,
   } as const;
@@ -1545,11 +1550,20 @@ describe('spend monitor settings', () => {
     'spendMonitorPlatformCostFloorUsd',
     'spendMonitorAccountSpikeFloorCredits',
     'spendMonitorAccountCeilingCredits',
+    'spendMonitorPaidAccountSpikeFloorCredits',
+    'spendMonitorPaidAccountCeilingCredits',
     'spendMonitorTrustedAccountSpikeFloorCredits',
     'spendMonitorTrustedAccountCeilingCredits',
   ] as const)('%s rejects 0 and accepts 1', key => {
     expect(settingsMap[key].schema.safeParse(0).success).toBe(false);
     expect(settingsMap[key].schema.parse(1)).toBe(1);
+  });
+
+  it('allows a zero paid-account minimum age and rejects negative or fractional days', () => {
+    const schema = settingsMap.spendMonitorPaidAccountMinAgeDays.schema;
+    expect(schema.parse(0)).toBe(0);
+    expect(schema.safeParse(-1).success).toBe(false);
+    expect(schema.safeParse(0.5).success).toBe(false);
   });
 
   it.each(['spendMonitorTrustedEmailDomains', 'spendMonitorTrustedAccountIds'] as const)(
@@ -1648,10 +1662,40 @@ describe('broadcastSafeSettingKeys', () => {
   });
 
   it('keeps the non-sensitive settings clients render live', () => {
-    expect(broadcastSafeSettingKeys()).toEqual(expect.arrayContaining(['EnableQuestMaster', 'EnableArtifacts']));
+    expect(broadcastSafeSettingKeys()).toEqual(
+      expect.arrayContaining(['EnableQuestMaster', 'EnableArtifacts', 'modelListRevision', 'modelAccessRevision'])
+    );
   });
 
   it('never admits a setting name with no definition', () => {
     expect(broadcastSafeSettingKeys()).not.toContain('someRemovedSettingName');
+  });
+});
+
+describe('changesCustomerPrice', () => {
+  // Pinned, not derived: gaining or losing a confirmation step has to be a deliberate edit here.
+  // The admin-setting rows of the "Changes customer price" column in docs/pricing-settings-inventory.md.
+  const EXPECTED = [
+    'HardwareComputeCreditsPerUsd',
+    'SimulatorComputeCreditsPerRound',
+    'billOperationalUsage',
+    'enforceCredits',
+    'pricePerCredit',
+    'teamPlanCreditsPerSeat',
+    'teamPlanMinSeats',
+  ];
+
+  it('tags exactly the admin settings that change what a customer pays', () => {
+    const tagged = Object.values(settingsMap)
+      .filter(definition => definition.changesCustomerPrice)
+      .map(definition => definition.key)
+      .sort();
+    expect(tagged).toEqual(EXPECTED);
+  });
+
+  it('leaves free grants and spend caps untagged, which decide platform cost rather than a bill', () => {
+    expect(settingsMap.freeTierDailySystemCostCapUsd.changesCustomerPrice).toBeUndefined();
+    expect(settingsMap.lowCreditsThreshold.changesCustomerPrice).toBeUndefined();
+    expect(settingsMap.teamPlanMaxSeats.changesCustomerPrice).toBeUndefined();
   });
 });

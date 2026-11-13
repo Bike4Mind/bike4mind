@@ -75,9 +75,11 @@ vi.mock('@bike4mind/services', () => ({
   meterCompletionBackend: (llm: unknown) => llm,
   sessionService: { deleteSessionMessage: mockDeleteSessionMessage },
 }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({ unpublishUserArtifactsBySource: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: vi.fn(),
+}));
 vi.mock('@bike4mind/utils', () => ({ computeCosineSimilarity: () => 0, getSettingsByNames: vi.fn() }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createRequestCompletionMeter: vi.fn(),
   isCreditsEnforced: async () => false,
   reserveCompletionCredits: vi.fn(),

@@ -282,6 +282,22 @@ describe('adminUpdateUser — audited credit adjustments', () => {
     });
   });
 
+  it('reports the committed delta after a deduction is clamped against a changed live balance', async () => {
+    const { adapters, target, incrementCredits, createTransaction } = makeAdapters(500);
+    target.currentCredits = 40;
+
+    const result = await adminUpdateUser(
+      ADMIN_ID,
+      { id: TARGET_ID, creditDelta: -100, creditReason: 'Correct balance' },
+      adapters
+    );
+
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -40);
+    expect(target.currentCredits).toBe(0);
+    expect(createTransaction.mock.calls[0][1].credits).toBe(-40);
+    expect(result.creditAdjustment?.credits).toBe(-40);
+  });
+
   it('links a grant to the ledger row it wrote', async () => {
     const { adapters, createTransaction } = makeAdapters(100);
     createTransaction.mockResolvedValueOnce({ id: 'tx-grant' });
@@ -589,6 +605,24 @@ describe('adminUpdateUser - email changes', () => {
 describe('adminUpdateUser - API key deactivation on entering a blocked state', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('clears the suspension category when reinstating an account', async () => {
+    const { adapters, target, update } = makeAdapters(100);
+    Object.assign(target, { isBanned: true, suspensionReasonCategory: 'payment_fraud' });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: false }, adapters);
+
+    expect(update.mock.calls[0][0]).toHaveProperty('suspensionReasonCategory', null);
+  });
+
+  it('omits the suspension category when the patch does not change the ban state', async () => {
+    const { adapters, target, update } = makeAdapters(100);
+    Object.assign(target, { isBanned: true, suspensionReasonCategory: 'payment_fraud' });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, tags: ['reviewed'] }, adapters);
+
+    expect(update.mock.calls[0][0]).not.toHaveProperty('suspensionReasonCategory');
+  });
+
   it.each([
     ['ban', {}, { isBanned: true }],
     ['dispute', {}, { disputePending: true }],
@@ -794,5 +828,51 @@ describe('adminUpdateUser storage overrides', () => {
 
   it.each([-1, Infinity, NaN, 1_000_000_001])('rejects invalid overrides: %s', value => {
     expect(adminUpdateUserSchema.safeParse({ id: TARGET_ID, storageLimitOverride: value }).success).toBe(false);
+  });
+});
+
+describe('adminUpdateUser - users:moderate delegate', () => {
+  const MODERATOR_ID = 'moderator-1';
+  const withActor = (actor: Record<string, unknown>) => {
+    const made = makeAdapters(100);
+    const findById = made.adapters.db.users.findById;
+    made.adapters.db.users.findById = vi.fn(async (id: string) =>
+      id === MODERATOR_ID ? { id: MODERATOR_ID, ...actor } : findById(id)
+    );
+    return made;
+  };
+
+  it('lets a users:moderate delegate suspend', async () => {
+    const { adapters, update } = withActor({ isAdmin: false, adminPermissions: ['users:moderate'] });
+    await adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true }, adapters);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: TARGET_ID, isBanned: true }));
+  });
+
+  it.each([{ isAdmin: true }, { adminPermissions: ['support:read'] }])(
+    'refuses an admin-access target at the service boundary: %j',
+    async targetAccess => {
+      const { adapters, target, update } = withActor({ isAdmin: false, adminPermissions: ['users:moderate'] });
+      Object.assign(target, targetAccess);
+      await expect(adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true }, adapters)).rejects.toThrow(
+        'Only full administrators can suspend or restrict users with admin access'
+      );
+      expect(update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a delegate any field outside moderation', async () => {
+    const { adapters, update, incrementCredits } = withActor({ isAdmin: false, adminPermissions: ['users:moderate'] });
+    await expect(
+      adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true, currentCredits: 0 }, adapters)
+    ).rejects.toThrow('Unauthorized');
+    expect(update).not.toHaveBeenCalled();
+    expect(incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegate without users:moderate', async () => {
+    const { adapters } = withActor({ isAdmin: false, adminPermissions: ['support:read'] });
+    await expect(adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true }, adapters)).rejects.toThrow(
+      'Unauthorized'
+    );
   });
 });

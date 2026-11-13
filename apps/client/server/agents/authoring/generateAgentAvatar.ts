@@ -1,8 +1,8 @@
 import { randomUUID } from 'crypto';
 import { estimateImageCredits } from '@bike4mind/services/imageCost';
-import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import { reserveRequestCredits } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import { usdToCreditsStochastic } from '@bike4mind/common';
-import { assertMediaModelAdmission } from '@server/billing/assertMediaModelAdmission';
+import { assertMediaModelAdmission } from '@bike4mind/server-utils/billing/assertMediaModelAdmission';
 import type { Logger } from '@bike4mind/observability';
 import { agentRepository } from '@bike4mind/database';
 import { ImageModels, isGPTImageModel, IAgent, ModelInfo, UNKNOWN_MODEL_ERROR_CODE } from '@bike4mind/common';
@@ -15,7 +15,7 @@ import {
 } from '@bike4mind/utils';
 import { RekognitionImageModerationService, ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { apiKeyService, fabFilesService, type CompletionMeter, meterCompletionBackend } from '@bike4mind/services';
+import { apiKeyService, type CompletionMeter, meterCompletionBackend } from '@bike4mind/services';
 import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
@@ -125,7 +125,7 @@ export async function generateAgentAvatar(
 ): Promise<{ portraitUrl: string; generationPrompt: string }> {
   const userId = user.id;
   // Get operations model for text generation (LLM for prompt generation)
-  const operationsModel = await OperationsModelService.getOperationsModel();
+  const operationsModel = await OperationsModelService.getOperationsModel({ endUserId: userId });
   const { modelId, llm: rawLlm } = operationsModel;
 
   if (!rawLlm) {
@@ -219,7 +219,7 @@ export async function generateAgentAvatar(
   }
 
   let cleanPrompt = generatedPrompt.trim();
-  imageLogger.info(`Generated visual prompt: ${cleanPrompt.substring(0, 100)}...`);
+  imageLogger.info(`Generated visual prompt (${cleanPrompt.length} chars)`);
 
   // Handle prompt length limits for different models
   if (imageModelId === ImageModels.GPT_IMAGE_1 && cleanPrompt.length > 1000) {
@@ -388,7 +388,7 @@ export async function generateAgentAvatar(
     }
     // The version the up-front 'clean' below covers, so this upload's own S3 event does not send it
     // back to pending (recordLandedObject). Unknown only costs that one rescan.
-    const { normalizeETag } = await import('@server/s3/moderationScan');
+    const { normalizeETag } = await import('@bike4mind/server-utils/s3/moderationScan');
     const moderationETag = await getFilesStorage()
       .getMetadata(uploadedPath)
       .then(head => normalizeETag(head.etag))
@@ -405,8 +405,6 @@ export async function generateAgentAvatar(
     const fabFileData = {
       fileName,
       filePath: uploadedPath, // This is just the filename
-      fileUrl: uploadedUrl, // This is the full signed URL
-      fileUrlExpireAt: fabFilesService.signedUrlExpiresAt(uploadedUrl, 3600),
       mimeType: 'image/png',
       fileSize: imageBuffer.length,
       type: KnowledgeType.FILE, // Images are stored as FILE type

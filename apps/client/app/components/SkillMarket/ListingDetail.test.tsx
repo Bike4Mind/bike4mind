@@ -1,6 +1,7 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ListingDetail as ListingDetailData } from '@client/app/hooks/data/skillMarket';
@@ -179,5 +180,71 @@ describe('ListingDetail "Use in Claude Code"', () => {
       pluginName: 'hello-team-abc123',
       skillName: 'Hello Team',
     });
+  });
+});
+
+describe('ListingDetail review chip', () => {
+  const reviewed = (selfApproved?: boolean) => {
+    const base = makeData();
+    return makeData({
+      listing: { ...base.listing, autoChecked: false },
+      version: { ...base.version!, ...(selfApproved === undefined ? {} : { selfApproved }) },
+    });
+  };
+
+  it('says a person reviewed a version approved by someone else', () => {
+    renderListing(reviewed(false));
+    expect(screen.getByText('Reviewed by a person')).toBeInTheDocument();
+    expect(screen.queryByText('Self-approved by the author')).not.toBeInTheDocument();
+  });
+
+  it('says self-approved when the author approved their own version', () => {
+    renderListing(reviewed(true));
+    expect(screen.getByText('Self-approved by the author')).toBeInTheDocument();
+    expect(screen.queryByText('Reviewed by a person')).not.toBeInTheDocument();
+  });
+});
+
+describe('ListingDetail scan tier chip', () => {
+  it('labels the tier as a scan result for the author of a person-approved version', () => {
+    const base = makeData();
+    renderListing(
+      makeData({
+        listing: { ...base.listing, autoChecked: false, riskTier: 'review' },
+        version: { ...base.version!, reviewStatus: 'approved' },
+        viewer: { ...base.viewer, isAuthor: true },
+      })
+    );
+    expect(screen.getByText('Reviewed by a person')).toBeInTheDocument();
+    expect(screen.getByTestId('market-tier-review')).toHaveTextContent('Scan: needs a look');
+  });
+});
+
+describe('ListingDetail report dialog Escape handling', () => {
+  const openReportDialog = async (user: ReturnType<typeof userEvent.setup>) => {
+    renderListing(makeData());
+    await user.click(screen.getByTestId('market-report-btn'));
+    expect(screen.getByTestId('market-report-dialog')).toBeInTheDocument();
+  };
+
+  it('closes only the open reason list, then the dialog on a second Escape', async () => {
+    const user = userEvent.setup();
+    await openReportDialog(user);
+    await user.click(screen.getByTestId('market-report-reason'));
+    expect(screen.getByTestId('market-report-reason')).toHaveAttribute('aria-expanded', 'true');
+
+    await user.keyboard('{Escape}');
+    expect(screen.getByTestId('market-report-reason')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByTestId('market-report-dialog')).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByTestId('market-report-dialog')).not.toBeInTheDocument());
+  });
+
+  it('closes the dialog on Escape when the reason list is closed', async () => {
+    const user = userEvent.setup();
+    await openReportDialog(user);
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByTestId('market-report-dialog')).not.toBeInTheDocument());
   });
 });

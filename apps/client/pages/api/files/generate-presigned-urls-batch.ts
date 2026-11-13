@@ -26,7 +26,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeTagWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import {
   checkStorageLimitForOwner,
   getSettingsMap,
@@ -39,7 +39,7 @@ import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Request } from 'express';
 import { Resource } from 'sst';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 import { FILES_WRITE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 

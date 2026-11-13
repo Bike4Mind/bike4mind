@@ -127,6 +127,17 @@ describe('refreshPublishedFromSource', () => {
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body).toBe('export default () => <div/>;');
   });
 
+  it('uploads non-react source content raw and untrimmed, flagged for the server render', async () => {
+    wirePipeline();
+    mockGet.mockResolvedValue({
+      data: { artifact: { type: 'html', title: 'T' }, content: { content: '\n<h1>x</h1>\n' } },
+    });
+    await refreshPublishedFromSource(row());
+
+    expect(uploadUrlBody().source).toEqual({ kind: 'bundle', artifactId: 'artifact_html_x_1_0', artifactType: 'html' });
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body).toBe('\n<h1>x</h1>\n');
+  });
+
   it('refuses a row with no source artifact before touching the network', async () => {
     await expect(refreshPublishedFromSource(row({ source: { kind: 'bundle' } }))).rejects.toThrow(
       /no source artifact/i
@@ -137,6 +148,12 @@ describe('refreshPublishedFromSource', () => {
   it('refuses an empty source rather than publishing a blank version over a good one', async () => {
     mockGet.mockResolvedValue({ data: { artifact: { type: 'html', title: 'T' }, content: { content: '   ' } } });
     await expect(refreshPublishedFromSource(row())).rejects.toThrow(/no content/i);
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('refuses a source whose type finalize cannot render', async () => {
+    mockGet.mockResolvedValue({ data: { artifact: { type: 'not-a-type' }, content: { content: '<h1>x</h1>' } } });
+    await expect(refreshPublishedFromSource(row())).rejects.toThrow(/could not be read/i);
     expect(mockPost).not.toHaveBeenCalled();
   });
 
@@ -208,9 +225,11 @@ describe('refreshPublishedFromSource - multi-file react', () => {
     expect(mockPost).not.toHaveBeenCalled();
   });
 
-  it('fails when the entry is no longer linked to a chat session', async () => {
+  it('explains that the source chat may be unavailable or inaccessible', async () => {
     wireMultiFile({ Stopwatch: { id: 'sw-2', content: 'x' } }, '');
-    await expect(refreshPublishedFromSource(multiRow())).rejects.toThrow('no longer linked to a chat');
+    await expect(refreshPublishedFromSource(multiRow())).rejects.toThrow(
+      'The source chat is unavailable or you do not have access to it'
+    );
     expect(mockPost).not.toHaveBeenCalled();
   });
 });

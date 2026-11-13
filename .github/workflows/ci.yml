@@ -15,10 +15,6 @@ on:
     # the per-PR (merge-base) diff and skips the build/test legs on non-deployable
     # changes, while still reporting the required CI Complete/Run Tests checks (a
     # paths-ignore-skipped workflow never reports them and hangs the PR).
-  # A queue entry re-proves integration only (build, typecheck, tests). Jobs that
-  # check the PR's own diff already passed on the PR head and skip on merge_group.
-  merge_group:
-    branches: [main]
 
 env:
   NODE_VERSION: '24'
@@ -26,7 +22,7 @@ env:
 # Cancel superseded runs for the same PR so outdated commits stop holding scarce
 # ubuntu-latest-m runner slots — the dominant CI-queue bottleneck under heavy PR
 # concurrency (jobs were waiting ~15 min for a runner while executing in ~3 min).
-# PR-only: pushes to main and merge_group runs are NEVER cancelled.
+# PR-only: pushes to main are NEVER cancelled.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -41,14 +37,21 @@ jobs:
   # Cheap, always runs, so the required checks always have a status to
   # report. Logic + the default exclude list live in the local composite
   # action. Fails open on all three.
+  #
+  # A draft PR reports `deployable` and `docs-changed` as 'false', so it takes the
+  # same skip path as a non-deployable change: the build, test and docs legs skip
+  # (published-dts too, through its `needs: core-build`), and Run Tests / CI
+  # Complete still report green. Marking it ready fires `ready_for_review`, which
+  # re-runs the whole workflow on the real signals. The secret and leak-shape scans
+  # are ungated and still run on drafts.
   changes:
     # Root of the whole DAG.
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     outputs:
-      deployable: ${{ steps.filter.outputs.deployable }}
-      docs-changed: ${{ steps.filter.outputs.docs-changed }}
+      deployable: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.deployable }}
+      docs-changed: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.docs-changed }}
       published-changed: ${{ steps.filter.outputs.published-changed }}
     steps:
       - uses: actions/checkout@v6
@@ -59,15 +62,15 @@ jobs:
         uses: ./.github/actions/changes-filter
 
   # Build the core packages once and publish their dist/ as an artifact. The
-  # three gating jobs below (typecheck, lint, test) each restore this artifact
-  # instead of rebuilding, then run in parallel — cutting wall clock from the
+  # gating jobs below (lint, the test shards - one of which also carries the
+  # typecheck) each restore this artifact instead of rebuilding, then run in parallel, cutting wall clock from the
   # old sequential ~14 min (typecheck + lint + test in one runner) to ~max of
   # the three legs (~10 min). The repo-boundary checks run beside it in
   # `repo-guards`, not before the build, so they stay off the path every test leg waits on.
   core-build:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Core Build
     timeout-minutes: 15
     permissions:
@@ -108,7 +111,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
@@ -145,7 +148,7 @@ jobs:
   # parallel and still gate merges through `CI Complete`.
   repo-guards:
     needs: changes
-    if: needs.changes.outputs.deployable == 'true' && github.event_name != 'merge_group'
+    if: needs.changes.outputs.deployable == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Repo Guards
     timeout-minutes: 10
@@ -178,7 +181,7 @@ jobs:
       - name: Resolve base for the ASCII checks
         id: ascii-base
         env:
-          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: echo "base=$(bash scripts/resolve-guard-base.sh)" >> "$GITHUB_OUTPUT"
 
@@ -194,6 +197,17 @@ jobs:
         run: bash scripts/check-no-smart-punctuation.sh --changed "$SMART_PUNCTUATION_BASE"
         env:
           SMART_PUNCTUATION_BASE: ${{ steps.ascii-base.outputs.base }}
+
+      # Added core migrations must carry a generator-made id (fresh UTC timestamp), so two PRs
+      # cannot pick the same one. PR-only: the PR head gives the real fork point, and on push the
+      # squash commit would make a long-lived PR's id look stale after it already passed here.
+      # The whole-directory uniqueness test in packages/scripts still runs on push.
+      - name: Check added core migration ids are generated
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-migration-ids.mjs --base "$MIGRATION_IDS_BASE" --head "$MIGRATION_IDS_HEAD"
+        env:
+          MIGRATION_IDS_BASE: ${{ steps.ascii-base.outputs.base }}
+          MIGRATION_IDS_HEAD: ${{ github.event.pull_request.head.sha }}
 
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
@@ -255,7 +269,6 @@ jobs:
   # (docs, `**/*.md`, `**/.env.example`, docs-site/) skips repo-guards, and those are exactly the
   # paths a pasted credential lands in. checkSecretScanJobWired.test.ts pins this.
   secret-scan:
-    if: github.event_name != 'merge_group'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Secret Scan
     timeout-minutes: 10
@@ -271,7 +284,7 @@ jobs:
       - name: Resolve base for the range scan
         id: base
         env:
-          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: echo "base=$(bash scripts/resolve-guard-base.sh)" >> "$GITHUB_OUTPUT"
 
@@ -313,7 +326,6 @@ jobs:
   # The restricted-term list is not available here (it is a git-ignored local file), so that rule
   # is skipped and the Restricted Terms workflow remains the authority for it.
   leak-shapes:
-    if: github.event_name != 'merge_group'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Leak Shapes
     timeout-minutes: 10
@@ -329,7 +341,7 @@ jobs:
       - name: Resolve base for the leak-shapes check
         id: base
         env:
-          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: echo "base=$(bash scripts/resolve-guard-base.sh)" >> "$GITHUB_OUTPUT"
 
@@ -338,85 +350,8 @@ jobs:
         env:
           LEAK_SHAPES_BASE: ${{ steps.base.outputs.base }}
 
-  typecheck:
-    needs: core-build
-    # Light tier (RUNNER_LABEL): tsgo (native TS) is fast and low-memory and runs
-    # against the prebuilt core artifact, so this leg is I/O-bound, not CPU/memory-bound.
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: Type Check
-    timeout-minutes: 15
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-          fetch-depth: 1
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
-
-      - name: Cache pnpm dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.pnpm-store
-            node_modules
-            */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --recursive
-
-      - name: Download core build artifacts
-        id: download-core
-        uses: actions/download-artifact@v7
-        with:
-          name: core-build-${{ needs.core-build.outputs.core-content-hash }}
-          # Artifact paths are relative to the repo root (the common ancestor of
-          # b4m-core/*/dist and packages/database/dist).
-          path: .
-        continue-on-error: true
-
-      - name: Build bike4mind core packages (fallback)
-        if: steps.download-core.outcome == 'failure'
-        run: pnpm core:build
-
-      - name: Run premium glue codegen
-        run: pnpm --filter @bike4mind/client run codegen
-
-      - name: Generate SST types
-        run: bash scripts/ci-sst-install.sh
-        env:
-          CI: 'true'
-
-      # Fast typecheck: tsgo (TypeScript 7.0 native) runs first per package; on any
-      # failure it falls back to classic tsc, the authoritative gate. All packages
-      # are currently tsgo-clean, so tsc only runs if tsgo regresses or diverges.
-      # See typecheck-report.md.
-      - name: Type check (tsgo, tsc fallback)
-        run: pnpm -w typecheck:fast && pnpm --recursive typecheck:fast
-
-      # The root /infra SST files are excluded from the root tsconfig and have no
-      # package.json, so neither -w nor --recursive covers them. Typecheck them
-      # explicitly here (after SST types are generated above) so infra type errors
-      # gate PRs instead of surfacing at deploy time. See #9155.
-      - name: Type check infra (SST)
-        run: pnpm typecheck:infra
-
   lint:
     needs: core-build
-    if: github.event_name != 'merge_group'
     # MEDIUM, not the 2-core tier: typed linting (b4m/no-raw-entity-response) holds the client
     # TypeScript program, so ESLint needs 3-4 GB of heap - past Node's RAM-derived default on a
     # 2-core runner. The heap is pinned in the root lint:* scripts, not inherited from the runner.
@@ -449,7 +384,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
@@ -491,7 +426,7 @@ jobs:
   # core-build artifact nor SST types - it depends on `changes` directly.
   openapi:
     needs: changes
-    if: needs.changes.outputs.deployable == 'true' && github.event_name != 'merge_group'
+    if: needs.changes.outputs.deployable == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: OpenAPI Spec
     timeout-minutes: 10
@@ -521,7 +456,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
@@ -549,26 +484,29 @@ jobs:
   #     legs tile the file set EXACTLY for any count - no hand-maintained bucket
   #     lists, and a newly added test file cannot land in two legs or in none. The
   #     leg count is pinned by checkClientTestShards.test.ts.
-  #   - client-integration: the SAME package and filter as `client`, selected onto
-  #     its real-Mongo `*.e2e.test.ts` files by a different script, as one unsharded
-  #     leg on two workers. apps/client therefore appears in two lanes; they are
-  #     disjoint by construction (the unit lane excludes exactly the glob the
-  #     integration lane includes), so nothing runs twice and nothing is dropped.
-  #   - workers-server-utils-integration: the same real-Mongo split for apps/workers
-  #     and packages/server-utils, combined because each holds only a few files.
-  #   - services: by far the heaviest remaining package (test-file count and
-  #     Mongo-backed setup cost), alone so it doesn't drag down a shared bucket.
-  #   - cli-desktop-workers, data: hand-grouped buckets of the next-heaviest packages. Their
-  #     packages run one at a time (see the workspace-concurrency note on the test
-  #     step), each with the whole runner's worker pool.
+  #   - Integration lanes: a leg's `integration-filter` runs those packages' real-Mongo
+  #     `*.e2e.test.ts` files (their `test:integration` script) on two workers, as a
+  #     second step after the leg's own unit run. apps/client, apps/workers and
+  #     packages/server-utils therefore each appear in two lanes; they are disjoint by
+  #     construction (the unit lane excludes exactly the glob the integration lane
+  #     includes), so nothing runs twice and nothing is dropped. The integration lanes
+  #     ride on short unit legs instead of their own runners because each runner pays
+  #     ~2-3 min of fixed setup and runner slots are the queue's bottleneck.
+  #   - services-workers-integration: services, by far the heaviest remaining package
+  #     (test-file count and Mongo-backed setup cost), plus the apps/workers and
+  #     packages/server-utils integration lane.
+  #   - data-client-integration, cli-desktop-workers: hand-grouped buckets of the
+  #     next-heaviest packages, the first also carrying the apps/client integration lane
+  #     and the second the workspace typecheck. Their packages run one at a time (see the
+  #     workspace-concurrency note on the test step), each with the whole runner's pool.
   #   - misc: a NEGATION catch-all (every non-client package minus the ones
   #     explicitly placed above) instead of an explicit include list. This makes
   #     bucket coverage complete by construction: a package with a `test` script
-  #     that isn't named in services/cli-desktop-workers/data always lands in misc, so it
+  #     that isn't named in a `filter` of the buckets above always lands in misc, so it
   #     can never be silently dropped from the matrix. Moving a package into one
   #     of the named buckets requires adding it there AND excluding it here, or it
-  #     will run twice; there's no automated guard against that, so update both
-  #     when rebalancing.
+  #     will run twice; checkClientTestShards.test.ts fails the build when the misc
+  #     exclusions and the other unit buckets' filters disagree.
   # The `test` job below aggregates these shards into the required "Run Tests"
   # status check.
   test-shards:
@@ -577,13 +515,10 @@ jobs:
     # deploy's HEAVY tier so raising HEAVY (e.g. to ubuntu-latest-l for the deploy runner)
     # does not drag the test-shard fan-out onto the larger, pricier runner. MEDIUM is the
     # 4-core tier for jobs that build core or run a full-pool test suite; the plain
-    # RUNNER_LABEL default is the 2-core tier for API, guard and shell-only jobs, and also
-    # carries typecheck and the `tier: light` legs here (the 2-worker integration lanes).
-    # Size full-pool worker budgets for 4 cores. On merge_group events every job prefers the
-    # matching *_QUEUE variable, so the queue can run on a separately capped pool; an unset
-    # *_QUEUE variable falls through to the PR label. The isolation is only as real as the
-    # variable: a *_QUEUE label equal to its PR label shares the PR pool.
-    runs-on: ${{ matrix.shard.tier == 'light' && (github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m') || (github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m') }}
+    # RUNNER_LABEL default is the 2-core tier for API, guard and shell-only jobs, and for any
+    # leg here marked `tier: light` (none today: the integration lanes ride medium legs).
+    # Size full-pool worker budgets for 4 cores.
+    runs-on: ${{ matrix.shard.tier == 'light' && (vars.RUNNER_LABEL || 'ubuntu-latest-m') || (vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m') }}
     name: Run Tests (${{ matrix.shard.name }})
     # Hard ceiling, not a budget: it costs nothing when a shard finishes early, and its only
     # job is to kill a genuine hang. It was 20, which the client shard's own runtime drifted
@@ -647,43 +582,41 @@ jobs:
             args: '--shard=3/3'
             mongod: 'skip'
             sst: 'skip'
-          # The real-Mongo suites (`*.e2e.test.ts`), split off their packages' unit lanes. Each
-          # file boots a mongod, and inline they pushed the unit job past `timeout-minutes` even on
-          # runs where the suite itself passed. The `script` below is what selects the lane (see
-          # each package's vitest.config.mts). Capped workers: these contend for mongod ports, and
-          # createMongoServer's retry loop is the documented flake when too many start at once.
-          # That cap is also why these legs ride the light tier.
-          - name: client-integration
-            tier: light
-            filter: '--filter @bike4mind/client'
-            workers: '2'
-            script: 'test:integration'
-          # apps/workers and packages/server-utils hold only a few integration files each, so they
-          # share one leg. Their unit lanes run in cli-desktop-workers and misc below.
-          - name: workers-server-utils-integration
-            tier: light
-            filter: '--filter @bike4mind/workers --filter @bike4mind/server-utils'
-            workers: '2'
-            script: 'test:integration'
-          - name: services
+          # `integration-filter` names the packages whose real-Mongo suites (`*.e2e.test.ts`, the
+          # `test:integration` script; see each package's vitest.config.mts) this leg also runs, in
+          # the "Run integration lane" step after its unit run. They were split off the unit lanes
+          # because each file boots a mongod, and inline they pushed the unit job past
+          # `timeout-minutes`. That step caps itself at two workers: these suites contend for
+          # mongod ports, and createMongoServer's retry loop is the documented flake when too many
+          # start at once. Same bare-token rule as `filter`.
+          #
+          # apps/workers and packages/server-utils hold only a few integration files each; their
+          # unit lanes run in cli-desktop-workers and misc below.
+          - name: services-workers-integration
             tier: medium
             filter: '--filter @bike4mind/services'
             workers: ''
+            integration-filter: '--filter @bike4mind/workers --filter @bike4mind/server-utils'
           # The buckets below hold several packages, but the step runs them one at a time, so
           # each still owns the runner and needs no per-package cap.
           # apps/desktop and apps/workers (~145s and ~90s) ride here rather than in `misc`, which
           # otherwise ran ~10 minutes serially and would be the matrix's longest leg once the client
           # shards got faster. This leg was ~90s on its own.
+          # `typecheck: 'true'` also runs the workspace and infra typecheck here (the steps at the
+          # end of this job), so it shares this leg's install, core restore, codegen and SST types
+          # instead of paying for its own runner. Exactly one leg may set it.
           - name: cli-desktop-workers
             tier: medium
             filter: '--filter @bike4mind/cli --filter @bike4mind/slack --filter @bike4mind/voice --filter @bike4mind/desktop --filter @bike4mind/workers'
             workers: ''
-          - name: data
+            typecheck: 'true'
+          - name: data-client-integration
             tier: medium
             filter: '--filter @bike4mind/common --filter @bike4mind/database --filter @bike4mind/db-core --filter @bike4mind/core'
             workers: ''
             # packages/database's ~160 suites each boot a mongod; see TMPDIR on the test step.
             tmpfs: 'true'
+            integration-filter: '--filter @bike4mind/client'
           # The catch-all: every workspace package the buckets above do not name. A `filter`
           # value reaches the step as an env var and is split on whitespace into argv, so the
           # tokens here must be BARE. Quotes around a pattern are not shell quoting at this
@@ -717,7 +650,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
@@ -747,9 +680,11 @@ jobs:
         continue-on-error: true
 
       - name: Run premium glue codegen
+        id: codegen
         run: pnpm --filter @bike4mind/client run codegen
 
       - name: Generate SST types
+        id: sst-types
         if: matrix.shard.sst != 'skip'
         run: bash scripts/ci-sst-install.sh
         env:
@@ -758,12 +693,15 @@ jobs:
       # Persist the downloaded mongod binary across runs so the pre-warm below is usually a
       # no-op restore. restore-keys lets a lockfile bump reuse the prior binary (the pre-warm
       # then tops up any new version) instead of a cold download every time.
+      # Every cache key here hashes the root lockfile only: `**/pnpm-lock.yaml` walks the installed
+      # node_modules (~14s per evaluation, paid again by each Post step) and matches lockfiles that
+      # dependencies ship, so the key drifted after install and never hit. ciCacheKeys.test.ts.
       - name: Cache mongodb-memory-server binary
         if: matrix.shard.mongod != 'skip'
         uses: actions/cache@v5
         with:
           path: ~/.cache/mongodb-binaries
-          key: ${{ runner.os }}-mongodb-binaries-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-mongodb-binaries-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-mongodb-binaries-
 
@@ -779,32 +717,55 @@ jobs:
           pnpm --filter @bike4mind/database exec node -e
           "require('mongodb-memory-server').MongoBinary.getPath({}).then(p => console.log('mongod binary ready:', p)).catch(e => console.warn('prewarm skipped:', e.message))"
 
+      # Turborepo's local cache of this leg's passing package test tasks: a package whose hash
+      # (its inputs plus .turbo/test-context, see scripts/turbo-test-cache.mjs) matches a cached
+      # pass is skipped. Read-only here; only push-to-main runs save (the save
+      # step below), so a pull_request run can never put a result where another ref reads it -
+      # GitHub scopes a PR's caches to that PR anyway, and main reads only main's.
+      # `restore-keys` takes the newest save for this leg; the run attempt keeps a re-run's save
+      # from colliding with the first attempt's key.
+      - name: Restore turbo test cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .turbo/cache
+          key: turbo-test-v1-${{ runner.os }}-${{ matrix.shard.name }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: |
+            turbo-test-v1-${{ runner.os }}-${{ matrix.shard.name }}-
+
       # Paired with "Report shard duration" at the end of this job. Set before the test steps
       # rather than derived from the job's own start so the number is test runtime, not
       # test runtime plus install and core-build restore.
       - name: Mark shard start
         run: echo "SHARD_START_SECONDS=$(date +%s)" >> "$GITHUB_ENV"
 
-      # `matrix.shard.script` is unset on every shard but the two integration ones, and an unset
-      # matrix value is the empty string here, so `||` falls back to the unit `test` script.
-      # `matrix.shard.args` is likewise set only on the three client unit legs, where it carries
-      # `--shard=i/3` - deliberately with no `--` separator before it, see the matrix
-      # entries above for why that is load-bearing.
+      # The unit `test` script; the real-Mongo `test:integration` lanes run in their own step
+      # below. `matrix.shard.args` is set only on the three client unit legs, where it carries
+      # `--shard=i/3`. It reaches vitest through turbo's own `--` (turbo then runs
+      # `pnpm run test --shard=i/3`, with no separator), never through a pnpm `--`: see the
+      # matrix entries above for why that is load-bearing. Turbo hashes the args, so each shard
+      # index has its own cache entry, and the file set it covers is a function of the hashed inputs.
+      #
+      # `--only`: the full graph would also run every dependency's `build`, which core-build's
+      # artifact already covers; the context file carries the dependency hashes --only drops.
+      # `--env-mode=loose` hands the suites the job's whole env, as pnpm did.
+      # `--continue=always` runs every package even after a failure, so the log names every
+      # failing package and the passing ones are cached for the re-run.
       - name: Run Tests (${{ matrix.shard.name }})
         env:
           CI: true
+          TURBO_TELEMETRY_DISABLED: '1'
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
           # mongod data on tmpfs for the real-Mongo lane. Every file boots a mongod that creates
           # ~200 collections plus their indexes on connect, which is fsync-bound: on a slow runner
           # disk that phase alone ran 5x long while CPU-bound import time did not move, and the
           # lane's timeouts followed it. mongodb-memory-server puts dbPath under os.tmpdir().
-          # Scoped to these legs (the integration lanes plus `tmpfs: 'true'`, the data leg's
-          # packages/database suites) because unit suites write and exec scripts under the tmpdir,
-          # and an empty value falls back to /tmp.
-          TMPDIR: ${{ (matrix.shard.script == 'test:integration' || matrix.shard.tmpfs == 'true') && '/dev/shm' || '' }}
+          # Scoped to the real-Mongo runs (the integration lane step below, plus `tmpfs: 'true'`,
+          # the data leg's packages/database suites) because unit suites write and exec scripts
+          # under the tmpdir, and an empty value falls back to /tmp.
+          TMPDIR: ${{ matrix.shard.tmpfs == 'true' && '/dev/shm' || '' }}
           SHARD_NAME: ${{ matrix.shard.name }}
           SHARD_FILTER: ${{ matrix.shard.filter }}
-          SHARD_SCRIPT: ${{ matrix.shard.script || 'test' }}
+          SHARD_SCRIPT: 'test'
           SHARD_ARGS: ${{ matrix.shard.args }}
         run: |
           # Split each env var on whitespace into a real argv array, so every token arrives at
@@ -829,16 +790,48 @@ jobs:
 
           # One package at a time: vitest sizes each package's pool to the whole runner, so N
           # concurrent packages meant N pools (and N sets of mongods) on the same cores, and a
-          # per-package cap cannot fix that because pnpm runs dependents last - the heaviest
+          # per-package cap cannot fix that because the scheduler runs dependents last - the heaviest
           # packages (database, scripts) ended up alone on a pool capped at a quarter of the box.
           # Serial with full pools measured faster on the data and misc legs, with no
           # oversubscription by construction. vitestWorkerBudget.test.ts pins this.
-          pnpm --recursive --workspace-concurrency=1 "${filter_args[@]}" "$SHARD_SCRIPT" "${script_args[@]}"
+          node scripts/turbo-test-cache.mjs context "$SHARD_SCRIPT" "${filter_args[@]}"
+          status=0
+          pnpm exec turbo run "$SHARD_SCRIPT" "${filter_args[@]}" --only --concurrency=1 --continue=always --env-mode=loose --ui=stream --cache-dir=.turbo/cache --summarize --output-logs=new-only -- "${script_args[@]}" || status=$?
+          node scripts/turbo-test-cache.mjs report .turbo/runs
+          exit "$status"
+
+      # The leg's real-Mongo lane, from `integration-filter` (see the matrix). A step of its own
+      # so its log and timing stay apart from the unit run; `!cancelled()` so a red unit run still
+      # reports this lane, gated on codegen so a broken setup does not pile a second failure on.
+      # Same empty-match guard and one-package-at-a-time rule as the step above.
+      - name: Run integration lane (${{ matrix.shard.name }})
+        if: ${{ !cancelled() && matrix.shard.integration-filter && steps.codegen.outcome == 'success' }}
+        env:
+          CI: true
+          TURBO_TELEMETRY_DISABLED: '1'
+          VITEST_MAX_WORKERS: '2'
+          TMPDIR: /dev/shm
+          SHARD_NAME: ${{ matrix.shard.name }}
+          SHARD_FILTER: ${{ matrix.shard.integration-filter }}
+          SHARD_SCRIPT: 'test:integration'
+        run: |
+          read -ra filter_args <<< "$SHARD_FILTER"
+          matched=$(pnpm --recursive "${filter_args[@]}" ls --depth -1 --parseable | grep -cvxF "$PWD" || true)
+          echo "${SHARD_NAME} integration lane matches ${matched} package(s)"
+          if [ "$matched" -eq 0 ]; then
+            echo "::error title=Empty test shard::The ${SHARD_NAME} leg's integration-filter matches no workspace package, so it would run no tests. Check the --filter tokens in the matrix."
+            exit 1
+          fi
+          node scripts/turbo-test-cache.mjs context "$SHARD_SCRIPT" "${filter_args[@]}"
+          status=0
+          pnpm exec turbo run "$SHARD_SCRIPT" "${filter_args[@]}" --only --concurrency=1 --continue=always --env-mode=loose --ui=stream --cache-dir=.turbo/cache --summarize --output-logs=new-only || status=$?
+          node scripts/turbo-test-cache.mjs report .turbo/runs
+          exit "$status"
 
       # The scheduler suite is a unit test, so it runs under `test` (the integration lane collects
       # only *.e2e.test.ts). It sets TZ itself at runtime; this step's TZ is for the retention file.
       - name: Verify telemetry retention and worker scheduling across DST
-        if: matrix.shard.name == 'workers-server-utils-integration'
+        if: matrix.shard.name == 'services-workers-integration'
         env:
           TZ: America/New_York
           VITEST_MAX_WORKERS: '2'
@@ -878,6 +871,18 @@ jobs:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
 
+      # `*.repo.test.*` files: tests that scan the whole repo (`git grep`, walks of other packages'
+      # sources). They run here, outside turbo and never cached, so the package's own `test` hash
+      # can stay scoped to its inputs and skip on a new commit that leaves them unchanged. Pinned
+      # to misc so it runs once; scripts/__tests__/turbo-test-cache.test.mjs pins the command and
+      # the naming.
+      - name: Run repo-scan tests
+        if: ${{ !cancelled() && matrix.shard.name == 'misc' && steps.codegen.outcome == 'success' }}
+        run: pnpm --recursive --if-present run test:repo
+        env:
+          CI: true
+          VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
+
       # Reports, never fails. Before this, the only signal that a shard's runtime had crept was
       # a PR going red for no reason once the creep crossed `timeout-minutes` (#2015) - by which
       # point the information arrives as a broken build rather than as a trend. A duration on
@@ -899,6 +904,45 @@ jobs:
             echo "::warning title=Slow test shard::${summary} - over its ${SHARD_SOFT_BUDGET_SECONDS}s soft budget. Not a failure: split or speed up the shard before it reaches the job timeout."
           fi
 
+      # Trusted refs only: a pull_request run restores but never saves (see the restore step).
+      # Saved even when a package failed - turbo caches passing tasks only, so a re-run of a
+      # flaky main run re-runs just the failed package. Pruned first to the entries this
+      # job's runs used, so the cache holds the leg's current state and does not grow per save.
+      - name: Prune turbo test cache
+        id: prune-turbo-cache
+        if: ${{ !cancelled() && github.event_name == 'push' && hashFiles('.turbo/runs/*.json') != '' }}
+        run: node scripts/turbo-test-cache.mjs prune .turbo/runs .turbo/cache
+
+      - name: Save turbo test cache
+        if: ${{ !cancelled() && steps.prune-turbo-cache.outcome == 'success' }}
+        uses: actions/cache/save@v5
+        with:
+          path: .turbo/cache
+          key: turbo-test-v1-${{ runner.os }}-${{ matrix.shard.name }}-${{ github.sha }}-${{ github.run_attempt }}
+
+      # The workspace typecheck, carried by the one leg with `typecheck: 'true'` instead of its own
+      # runner, which would repeat this job's install, core restore, codegen and SST types. After
+      # the duration report so the shard's number stays test runtime. `!cancelled()` so a test
+      # failure still reports the typecheck; gated on the SST types it reads, whose success also
+      # means every setup step before it passed. A failure here fails this leg, so it reddens
+      # Run Tests and CI Complete like any shard failure.
+      #
+      # Fast typecheck: tsgo (TypeScript 7.0 native) runs first per package; on any
+      # failure it falls back to classic tsc, the authoritative gate. All packages
+      # are currently tsgo-clean, so tsc only runs if tsgo regresses or diverges.
+      # See typecheck-report.md.
+      - name: Type check (tsgo, tsc fallback)
+        if: ${{ !cancelled() && matrix.shard.typecheck == 'true' && steps.sst-types.outcome == 'success' }}
+        run: pnpm -w typecheck:fast && pnpm --recursive typecheck:fast
+
+      # The root /infra SST files are excluded from the root tsconfig and have no
+      # package.json, so neither -w nor --recursive covers them. Typecheck them
+      # explicitly here (after SST types are generated above) so infra type errors
+      # gate PRs instead of surfacing at deploy time. See #9155.
+      - name: Type check infra (SST)
+        if: ${{ !cancelled() && matrix.shard.typecheck == 'true' && steps.sst-types.outcome == 'success' }}
+        run: pnpm typecheck:infra
+
   # Aggregate gate for the sharded test matrix. Branch protection requires a
   # status check literally named "Run Tests"; the matrix above reports per-shard
   # names ("Run Tests (client 1/3)", …), so this job re-exposes the exact required
@@ -915,7 +959,7 @@ jobs:
     # Keep the block scalar: a bare `if: !cancelled() && ...` is a YAML tag indicator.
     if: |
       !cancelled() && needs.changes.outputs.deployable == 'true'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     steps:
@@ -941,7 +985,6 @@ jobs:
   cli-e2e:
     name: CLI e2e harness
     needs: core-build
-    if: github.event_name != 'merge_group'
     # Standard runner: builds the CLI and runs the bundle-baseline harness — a
     # light, I/O-bound leg. Off the capped ubuntu-latest-m pool to free a slot.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
@@ -971,7 +1014,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
@@ -1053,7 +1096,7 @@ jobs:
       !cancelled() &&
       needs.changes.outputs.docs-changed == 'true' &&
       needs.core-build.result != 'failure'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -1080,7 +1123,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
@@ -1127,7 +1170,7 @@ jobs:
     name: Published Declarations
     needs: [changes, core-build]
     if: needs.changes.outputs.published-changed == 'true'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -1155,7 +1198,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
@@ -1199,13 +1242,13 @@ jobs:
 
   # Pre-merge sensitive-term scan: a private workflow scans docs-site PRs and posts a `docs/sensitive-scan`
   # commit status on the PR head. This job turns that status into a gate through `ci-complete`, since a
-  # required status that only some PRs ever receive would block every other PR. Merge queue runs skip it
+  # required status that only some PRs ever receive would block every other PR. Push runs skip it
   # (the PR head was already gated). Fails closed if the status never arrives.
   docs-scan-gate:
     name: Docs Sensitive Scan
     needs: changes
     if: needs.changes.outputs.docs-changed == 'true' && github.event_name == 'pull_request'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -1243,12 +1286,13 @@ jobs:
   # of this repo to the internal deployer, so there is no deploy to gate; this
   # job re-exposes one stable check that turns red if any CI leg failed.
   #
-  # Red when ANY CI leg (changes/core-build/repo-guards/secret-scan/typecheck/lint/test-shards/cli-e2e/help-docs/
+  # Red when ANY CI leg (changes/core-build/repo-guards/secret-scan/lint/test-shards/cli-e2e/help-docs/
   # verify-docs-build/docs-scan-gate/published-dts)
   # genuinely FAILED. Green when everything succeeded OR was legitimately
   # skipped (a non-deployable change skips core-build..cli-e2e and repo-guards, and a skipped
-  # required check counts as passing). This surfaces typecheck/lint/cli-e2e
-  # failures (none of which are individually required checks) through the one
+  # required check counts as passing). This surfaces lint/cli-e2e failures, and the
+  # typecheck that runs inside the cli-desktop-workers shard (none of which are
+  # individually required checks) through the one
   # required "CI Complete" check instead of letting them pass silently.
   #
   # `!cancelled()` rather than `always()`: in a run cancelled by cancel-in-progress the unfinished
@@ -1272,7 +1316,6 @@ jobs:
       - repo-guards
       - secret-scan
       - leak-shapes
-      - typecheck
       - lint
       - openapi
       - test-shards
@@ -1282,7 +1325,7 @@ jobs:
       - docs-scan-gate
       - published-dts
     if: ${{ !cancelled() }}
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     steps:
@@ -1293,7 +1336,6 @@ jobs:
           REPO_GUARDS: ${{ needs.repo-guards.result }}
           SECRET_SCAN: ${{ needs.secret-scan.result }}
           LEAK_SHAPES: ${{ needs.leak-shapes.result }}
-          TYPECHECK: ${{ needs.typecheck.result }}
           LINT: ${{ needs.lint.result }}
           OPENAPI: ${{ needs.openapi.result }}
           DEPLOYABLE: ${{ needs.changes.outputs.deployable }}
@@ -1304,15 +1346,15 @@ jobs:
           DOCS_SCAN: ${{ needs.docs-scan-gate.result }}
           PUBLISHED_DTS: ${{ needs.published-dts.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD repo-guards=$REPO_GUARDS secret-scan=$SECRET_SCAN leak-shapes=$LEAK_SHAPES typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test-shards=$TEST_SHARDS cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS docs-scan=$DOCS_SCAN published-dts=$PUBLISHED_DTS"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD repo-guards=$REPO_GUARDS secret-scan=$SECRET_SCAN leak-shapes=$LEAK_SHAPES lint=$LINT openapi=$OPENAPI test-shards=$TEST_SHARDS cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS docs-scan=$DOCS_SCAN published-dts=$PUBLISHED_DTS"
           # Same rule as the `test` aggregator: on a deployable run every shard must succeed.
           if [ "$DEPLOYABLE" = "true" ] && [ "$TEST_SHARDS" != "success" ]; then
             echo "::error::Test shards did not all pass; failing the required check."
             exit 1
           fi
           # A CI leg that genuinely failed flips the check red. Skipped
-          # (non-deployable change, or a PR-only job on merge_group) is treated as passing.
-          for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$SECRET_SCAN" "$LEAK_SHAPES" "$TYPECHECK" "$LINT" "$OPENAPI" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
+          # (non-deployable change, or a PR-only job on a push run) is treated as passing.
+          for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$SECRET_SCAN" "$LEAK_SHAPES" "$LINT" "$OPENAPI" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."
               exit 1

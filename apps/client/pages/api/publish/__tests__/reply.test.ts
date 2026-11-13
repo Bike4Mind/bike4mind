@@ -32,6 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  projectRepository: { findAllBySessionId: async () => [] },
   Quest: {
     findOne: (filter: unknown) => {
       dbMocks.questFindOne(filter);
@@ -39,6 +40,7 @@ vi.mock('@bike4mind/database', () => ({
     },
   },
   Session: { findById: () => ({ select: () => ({ lean: dbMocks.sessionLean }) }) },
+  sessionRepository: { findById: () => dbMocks.sessionLean() },
   PublishedArtifact: {
     findOne: (filter: unknown) => {
       dbMocks.publishedFindOne(filter);
@@ -53,7 +55,7 @@ vi.mock('@server/services/publish', () => ({
 }));
 // The real settlePublication runs; its own collaborators are stubbed here.
 vi.mock('@server/services/publish/checkPublishQuota', () => ({ checkPublishQuota: dbMocks.checkPublishQuota }));
-vi.mock('@server/services/publish/invalidatePublishCdn', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/invalidatePublishCdn', () => ({
   invalidatePublishCdn: dbMocks.invalidatePublishCdn,
   toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
 }));
@@ -61,7 +63,7 @@ vi.mock('@server/services/publish/restrictDuplicatePublications', () => ({
   restrictDuplicatePublications: dbMocks.restrictDuplicatePublications,
 }));
 vi.mock('@server/services/publish/publishRateLimit', () => ({ consumePublishAction: dbMocks.consumePublishAction }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: dbMocks.unpublish,
 }));
 

@@ -13,6 +13,7 @@ import {
   Option,
   Select,
   Stack,
+  Switch,
   Textarea,
   ToggleButtonGroup,
   Typography,
@@ -26,6 +27,7 @@ import type {
   ResearchScheduleCadence,
   ResearchScheduleOutcome,
   ResearchScheduleSkipReason,
+  ResearchUnlistedSources,
 } from '@bike4mind/common';
 import {
   isResearchRunInFlight,
@@ -33,6 +35,8 @@ import {
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
   RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
+  RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
+  RESEARCH_MAX_AUTO_ADMITS_LIMIT,
   RESEARCH_MAX_PROPOSALS_DEFAULT,
   RESEARCH_MAX_PROPOSALS_LIMIT,
   RESEARCH_MAX_RESULTS_DEFAULT,
@@ -45,6 +49,8 @@ import {
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
   RESEARCH_SCHEDULE_CADENCES,
+  normalizeDomainEntry,
+  upgradeLegacyResearchLevers,
 } from '@bike4mind/common';
 import type { ResearchConfigInput } from '@client/app/hooks/data/dataLakes';
 import type { ResearchModelOption } from '@client/app/utils/researchJudgeModels';
@@ -87,7 +93,11 @@ interface ConfigDraft {
   recencyDays: string;
   minRelevance: string;
   costCeilingUsd: string;
-  allowedDomains: string;
+  trustedDomains: string;
+  autoAdmitTrusted: boolean;
+  maxAutoAdmits: string;
+  reviewDomains: string;
+  unlistedSources: ResearchUnlistedSources;
   blockedDomains: string;
   proposedTags: string;
   cadence: ResearchScheduleCadence;
@@ -129,30 +139,44 @@ const emptyDraft = (): ConfigDraft => ({
   recencyDays: '',
   minRelevance: String(RESEARCH_MIN_RELEVANCE_DEFAULT),
   costCeilingUsd: microUsdToUsdInput(RESEARCH_COST_CEILING_MICRO_USD_DEFAULT),
-  allowedDomains: '',
+  trustedDomains: '',
+  autoAdmitTrusted: false,
+  maxAutoAdmits: String(RESEARCH_MAX_AUTO_ADMITS_DEFAULT),
+  reviewDomains: '',
+  unlistedSources: 'review',
   blockedDomains: '',
   proposedTags: '',
   cadence: 'off',
   reviewBacklogLimit: String(RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
 
-const draftFromConfig = (config: IDataLakeResearchConfigDocument): ConfigDraft => ({
-  name: config.name,
-  query: config.query,
-  model: config.model ?? '',
-  maxResults: String(config.maxResults),
-  maxProposals: String(config.maxProposals),
-  recencyDays: config.recencyDays == null ? '' : String(config.recencyDays),
-  minRelevance: String(config.minRelevance),
-  costCeilingUsd: microUsdToUsdDraftInput(config.costCeilingMicroUsd),
-  allowedDomains: config.allowedDomains.join('\n'),
-  blockedDomains: config.blockedDomains.join('\n'),
-  proposedTags: config.proposedTags.join(', '),
-  // A config saved before this feature carries neither field on the wire - read that as off/default
-  // rather than leaving the form blank.
-  cadence: config.cadence ?? 'off',
-  reviewBacklogLimit: String(config.reviewBacklogLimit ?? RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
-});
+const draftFromConfig = (config: IDataLakeResearchConfigDocument): ConfigDraft => {
+  // A response from a server that predates the tiers carries only `allowedDomains`; the upgrader
+  // applies the same mapping the migration does, so the form shows the restriction that is in force.
+  const { trustedDomains, reviewDomains, unlistedSources, autoAdmitTrusted, maxAutoAdmits } =
+    upgradeLegacyResearchLevers(config);
+  return {
+    name: config.name,
+    query: config.query,
+    model: config.model ?? '',
+    maxResults: String(config.maxResults),
+    maxProposals: String(config.maxProposals),
+    recencyDays: config.recencyDays == null ? '' : String(config.recencyDays),
+    minRelevance: String(config.minRelevance),
+    costCeilingUsd: microUsdToUsdDraftInput(config.costCeilingMicroUsd),
+    trustedDomains: trustedDomains.join('\n'),
+    autoAdmitTrusted,
+    maxAutoAdmits: String(maxAutoAdmits),
+    reviewDomains: reviewDomains.join('\n'),
+    unlistedSources,
+    blockedDomains: config.blockedDomains.join('\n'),
+    proposedTags: config.proposedTags.join(', '),
+    // A config saved before this feature carries neither field on the wire - read that as off/default
+    // rather than leaving the form blank.
+    cadence: config.cadence ?? 'off',
+    reviewBacklogLimit: String(config.reviewBacklogLimit ?? RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
+  };
+};
 
 const parseList = (value: string): string[] =>
   value
@@ -236,6 +260,14 @@ const validateDraft = (draft: ConfigDraft): DraftErrors => {
       integer: false,
       message: `Enter an amount above $0 and up to $${microUsdToUsdInput(RESEARCH_COST_CEILING_MICRO_USD_LIMIT)}.`,
     }),
+    maxAutoAdmits: draft.autoAdmitTrusted
+      ? rangeError(draft.maxAutoAdmits, {
+          min: 1,
+          max: RESEARCH_MAX_AUTO_ADMITS_LIMIT,
+          integer: true,
+          message: `Enter a whole number from 1 to ${RESEARCH_MAX_AUTO_ADMITS_LIMIT}.`,
+        })
+      : undefined,
     reviewBacklogLimit: rangeError(draft.reviewBacklogLimit, {
       min: 1,
       max: RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
@@ -243,7 +275,37 @@ const validateDraft = (draft: ConfigDraft): DraftErrors => {
       message: `Enter a whole number from 1 to ${RESEARCH_REVIEW_BACKLOG_LIMIT_MAX}.`,
     }),
   };
+  // Ignoring other sites with nothing listed would ignore every result.
+  if (draft.unlistedSources === 'drop' && parseList(draft.reviewDomains).length === 0) {
+    errors.unlistedSources = 'List at least one site to review, or send other sites to review.';
+  }
   return Object.fromEntries(Object.entries(errors).filter(([, message]) => message)) as DraftErrors;
+};
+
+const STOPS_NOW_NOTICE = 'Saved. Runs in progress stop adding results from removed or disabled sites now.';
+const NEXT_RUN_NOTICE = 'Saved. This applies from the next run.';
+
+/** What a save changes about auto-admit, split by when it takes effect on a run already in progress. */
+const autoAdmitTimingNotice = (before: ConfigDraft, after: ResearchConfigInput): string | null => {
+  const sites = (list: string[]) => new Set(list.map(normalizeDomainEntry));
+  const added = (previous: Set<string>, next: Set<string>) => [...next].some(site => !previous.has(site));
+  const wasOn = before.autoAdmitTrusted && parseList(before.trustedDomains).length > 0;
+  const nowOn = after.autoAdmitTrusted;
+  const oldTrusted = sites(parseList(before.trustedDomains));
+  const newTrusted = sites(after.trustedDomains ?? []);
+  // Only narrowing changes reach a running run: off, a removed trusted site, or a site newly
+  // blocked or sent to review.
+  const stopsNow =
+    wasOn &&
+    (!nowOn ||
+      added(newTrusted, oldTrusted) ||
+      added(sites(parseList(before.blockedDomains)), sites(after.blockedDomains ?? [])) ||
+      added(sites(parseList(before.reviewDomains)), sites(after.reviewDomains ?? [])));
+  const startsLater =
+    nowOn && (!wasOn || added(oldTrusted, newTrusted) || parseNumber(before.maxAutoAdmits, 0) !== after.maxAutoAdmits);
+  if (stopsNow && startsLater) return `${STOPS_NOW_NOTICE} ${NEXT_RUN_NOTICE.replace('Saved. ', '')}`;
+  if (stopsNow) return STOPS_NOW_NOTICE;
+  return startsLater ? NEXT_RUN_NOTICE : null;
 };
 
 const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
@@ -257,12 +319,26 @@ const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
   costCeilingMicroUsd: Math.round(
     parseNumber(draft.costCeilingUsd, RESEARCH_COST_CEILING_MICRO_USD_DEFAULT / 1_000_000) * 1_000_000
   ),
-  allowedDomains: parseList(draft.allowedDomains),
+  trustedDomains: parseList(draft.trustedDomains),
+  // An empty trusted list leaves nothing to trust, so the switch cannot be on with it.
+  autoAdmitTrusted: draft.autoAdmitTrusted && parseList(draft.trustedDomains).length > 0,
+  maxAutoAdmits: parseNumber(draft.maxAutoAdmits, RESEARCH_MAX_AUTO_ADMITS_DEFAULT),
+  reviewDomains: parseList(draft.reviewDomains),
+  unlistedSources: draft.unlistedSources,
   blockedDomains: parseList(draft.blockedDomains),
   proposedTags: parseList(draft.proposedTags),
   cadence: draft.cadence,
   reviewBacklogLimit: parseNumber(draft.reviewBacklogLimit, RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
+
+/** The proposal limit also bounds auto-admits (they are proposals first), so the lower number wins. */
+const autoAdmitCapHint = (cap: string, proposalLimit: string): string => {
+  const capValue = parseNumber(cap, RESEARCH_MAX_AUTO_ADMITS_DEFAULT);
+  const limitValue = parseNumber(proposalLimit, RESEARCH_MAX_PROPOSALS_DEFAULT);
+  return capValue > limitValue
+    ? `Up to ${limitValue} per run; the proposal limit applies.`
+    : `Up to ${capValue} per run.`;
+};
 
 const PRESET_LABEL: Record<ResearchPresetId, string> = {
   quick: 'Quick',
@@ -328,7 +404,11 @@ const hasNonPresetLeverSet = (draft: ConfigDraft): boolean => {
   const pick = ({
     recencyDays,
     minRelevance,
-    allowedDomains,
+    trustedDomains,
+    autoAdmitTrusted,
+    maxAutoAdmits,
+    reviewDomains,
+    unlistedSources,
     blockedDomains,
     proposedTags,
     reviewBacklogLimit,
@@ -337,7 +417,11 @@ const hasNonPresetLeverSet = (draft: ConfigDraft): boolean => {
     JSON.stringify([
       recencyDays,
       minRelevance,
-      allowedDomains,
+      trustedDomains,
+      autoAdmitTrusted,
+      autoAdmitTrusted ? maxAutoAdmits : null,
+      reviewDomains,
+      unlistedSources,
       blockedDomains,
       proposedTags,
       // Only rendered with a schedule, so it cannot be the reason to unfold an unscheduled config.
@@ -480,7 +564,10 @@ const runStateLabel = (run: IDataLakeResearchRunDocument): keyof typeof RUN_STAT
  * new drop bucket to the shared type fails THIS file to compile rather than silently vanishing from
  * the only place a manager can see it.
  */
-const DROP_REASON_LABEL: Record<Exclude<keyof ResearchRunTotals, 'searchHits' | 'proposed'>, string> = {
+const DROP_REASON_LABEL: Record<
+  Exclude<keyof ResearchRunTotals, 'searchHits' | 'proposed' | 'autoAdmitted' | 'autoAdmitSkipped'>,
+  string
+> = {
   filteredBySource: 'blocked by source rules',
   belowRelevance: 'below the relevance floor',
   judgeFailed: 'could not be judged (the model call failed)',
@@ -511,6 +598,9 @@ const runConfigLabel = (
 const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
   const { totals } = run;
   const parts: string[] = [`${totals.searchHits} found`, `${totals.proposed} proposed`];
+  // Sub-counts of "proposed", not drops: the rule's own result, shown so a manager sees what it did.
+  if (totals.autoAdmitted > 0) parts.push(`${totals.autoAdmitted} added automatically`);
+  if (totals.autoAdmitSkipped > 0) parts.push(`${totals.autoAdmitSkipped} trusted, not added automatically`);
   for (const [key, label] of Object.entries(DROP_REASON_LABEL)) {
     const count = totals[key as keyof ResearchRunTotals];
     if (count > 0) parts.push(`${count} ${label}`);
@@ -525,7 +615,10 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
  * placed here or excluded.
  */
 const JUDGED_BUCKETS: Record<
-  Exclude<keyof ResearchRunTotals, 'searchHits' | 'filteredBySource' | 'judgeFailed' | 'notJudged'>,
+  Exclude<
+    keyof ResearchRunTotals,
+    'searchHits' | 'filteredBySource' | 'judgeFailed' | 'notJudged' | 'autoAdmitted' | 'autoAdmitSkipped'
+  >,
   true
 > = {
   belowRelevance: true,
@@ -581,6 +674,7 @@ export function DataLakeResearchPanel({
   const [draft, setDraft] = useState<ConfigDraft>(emptyDraft);
   const [draftBaseline, setDraftBaseline] = useState<ConfigDraft>(emptyDraft);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
   // Bumped each time the form opens, so a save settling late can tell whether its own session is still
   // the one on screen. `editingId` cannot: every create is '', and re-editing a row reuses its id.
   const formSession = useRef(0);
@@ -617,6 +711,7 @@ export function DataLakeResearchPanel({
   };
 
   const openCreate = () => {
+    setSaveNotice(null);
     setDraft(emptyDraft());
     setDraftBaseline(emptyDraft());
     setAdvancedOpen(false);
@@ -624,6 +719,7 @@ export function DataLakeResearchPanel({
     formSession.current += 1;
   };
   const openEdit = (config: IDataLakeResearchConfigDocument) => {
+    setSaveNotice(null);
     const loaded = draftFromConfig(config);
     setDraft(loaded);
     setDraftBaseline(loaded);
@@ -645,8 +741,11 @@ export function DataLakeResearchPanel({
       // The mutation toasts its own refusal; staying open keeps the draft for a retry.
       return;
     }
-    // Only close the form this save came from: it may have been cancelled, or another opened, meanwhile.
-    if (formSession.current === session) closeForm();
+    // Only touch the form this save came from: it may have been cancelled, or another opened, meanwhile.
+    if (formSession.current === session) {
+      setSaveNotice(submittedId ? autoAdmitTimingNotice(draftBaseline, input) : null);
+      closeForm();
+    }
   };
 
   if (isLoading) {
@@ -687,9 +786,15 @@ export function DataLakeResearchPanel({
 
   return (
     <Stack spacing={2} data-testid="datalake-research-panel">
+      {saveNotice && (
+        <Alert color="success" size="sm" data-testid="datalake-research-save-timing-notice">
+          {saveNotice}
+        </Alert>
+      )}
       <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-help">
-        A research run searches the web with the settings below and puts what it finds in the Proposals queue. Nothing
-        reaches this lake until you approve it.
+        A research run searches the web with the settings below and puts what it finds in the Proposals queue. Results
+        wait there for your approval, unless a site you list as trusted is set to be added automatically. Nothing is
+        ever added because of a relevance score.
       </Typography>
 
       {!configs?.length && !formOpen && (
@@ -728,6 +833,11 @@ export function DataLakeResearchPanel({
               <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap' }} data-testid="datalake-research-config-query">
                 {config.query}
               </Typography>
+              {config.autoAdmitTrusted === true && (
+                <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-auto-admit">
+                  {`Adds trusted results automatically, up to ${config.maxAutoAdmits ?? RESEARCH_MAX_AUTO_ADMITS_DEFAULT} per run`}
+                </Typography>
+              )}
               <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-model">
                 {`Model: ${config.model ? (modelLabelById.get(config.model) ?? config.model) : defaultModelLabel}`}
               </Typography>
@@ -1083,15 +1193,32 @@ export function DataLakeResearchPanel({
 
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
                 <FormControl size="sm" sx={{ flex: 1 }}>
-                  <FormLabel>Only these sites</FormLabel>
+                  <FormLabel>Trusted sites</FormLabel>
                   <Textarea
                     minRows={2}
                     placeholder="example.com"
-                    value={draft.allowedDomains}
-                    onChange={e => setField('allowedDomains')(e.target.value)}
-                    slotProps={{ textarea: { 'data-testid': 'datalake-research-allowed-input' } }}
+                    value={draft.trustedDomains}
+                    onChange={e => setField('trustedDomains')(e.target.value)}
+                    slotProps={{ textarea: { 'data-testid': 'datalake-research-trusted-input' } }}
                   />
-                  <FormHelperText>One per line, subdomains included. Leave blank to allow any site.</FormHelperText>
+                  <FormHelperText>
+                    One per line, subdomains included. List only sites whose content you control or vouch for, never
+                    hosts where anyone can publish.
+                  </FormHelperText>
+                </FormControl>
+
+                <FormControl size="sm" sx={{ flex: 1 }}>
+                  <FormLabel>Sites to review</FormLabel>
+                  <Textarea
+                    minRows={2}
+                    placeholder="example.com"
+                    value={draft.reviewDomains}
+                    onChange={e => setField('reviewDomains')(e.target.value)}
+                    slotProps={{ textarea: { 'data-testid': 'datalake-research-review-input' } }}
+                  />
+                  <FormHelperText>
+                    One per line, subdomains included. This only narrows results when other sites are ignored.
+                  </FormHelperText>
                 </FormControl>
 
                 <FormControl size="sm" sx={{ flex: 1 }}>
@@ -1103,9 +1230,64 @@ export function DataLakeResearchPanel({
                     onChange={e => setField('blockedDomains')(e.target.value)}
                     slotProps={{ textarea: { 'data-testid': 'datalake-research-blocked-input' } }}
                   />
-                  <FormHelperText>One per line, subdomains included. Wins over the allow list.</FormHelperText>
+                  <FormHelperText>One per line, subdomains included. Wins over every other setting.</FormHelperText>
                 </FormControl>
               </Stack>
+
+              <FormControl size="sm" error={!!errors.maxAutoAdmits}>
+                <Switch
+                  checked={draft.autoAdmitTrusted && parseList(draft.trustedDomains).length > 0}
+                  disabled={parseList(draft.trustedDomains).length === 0}
+                  onChange={e => setDraft(prev => ({ ...prev, autoAdmitTrusted: e.target.checked }))}
+                  endDecorator="Add trusted results automatically"
+                  slotProps={{ input: { 'data-testid': 'datalake-research-auto-admit-toggle' } }}
+                />
+                <FormHelperText>
+                  A first-time result from a trusted site joins the lake without your approval. Anything you declined
+                  before, and every other site, still waits for review. Pages are checked again after the fetch, and the
+                  lake owner is recorded as the owner of the file.
+                </FormHelperText>
+                <FormHelperText data-testid="datalake-research-auto-admit-timing-help">
+                  Turning this off, or removing a trusted site, stops a run already in progress from adding more.
+                  Turning it on, adding sites or changing the limit applies from the next run.
+                </FormHelperText>
+              </FormControl>
+
+              {draft.autoAdmitTrusted && parseList(draft.trustedDomains).length > 0 && (
+                <FormControl size="sm" error={!!errors.maxAutoAdmits}>
+                  <FormLabel>Added automatically per run</FormLabel>
+                  <Input
+                    type="number"
+                    value={draft.maxAutoAdmits}
+                    onChange={e => setField('maxAutoAdmits')(e.target.value)}
+                    slotProps={{
+                      input: {
+                        'data-testid': 'datalake-research-auto-admit-cap',
+                        min: 1,
+                        max: RESEARCH_MAX_AUTO_ADMITS_LIMIT,
+                      },
+                    }}
+                  />
+                  <FormHelperText>
+                    {errors.maxAutoAdmits ?? autoAdmitCapHint(draft.maxAutoAdmits, draft.maxProposals)}
+                  </FormHelperText>
+                </FormControl>
+              )}
+
+              <FormControl size="sm" error={!!errors.unlistedSources}>
+                <FormLabel>Other sites</FormLabel>
+                <Select
+                  value={draft.unlistedSources}
+                  onChange={(_e, value) => setDraft(prev => ({ ...prev, unlistedSources: value ?? 'review' }))}
+                  slotProps={{ button: { 'data-testid': 'datalake-research-unlisted-select' } }}
+                >
+                  <Option value="review">Send to review</Option>
+                  <Option value="drop">Ignore</Option>
+                </Select>
+                <FormHelperText data-testid={errors.unlistedSources ? 'datalake-research-unlisted-error' : undefined}>
+                  {errors.unlistedSources ?? 'What happens to a result from a site that is not in the lists above.'}
+                </FormHelperText>
+              </FormControl>
 
               <FormControl size="sm">
                 <FormLabel>Tags to propose</FormLabel>

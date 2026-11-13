@@ -38,7 +38,7 @@ import {
   resolveShadowSubstitute,
   settleCompletion,
   type CompletionUsage,
-} from '@server/billing/meterPlatformCompletion';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 /** Max tokens for the LLM response */
 const MAX_RESPONSE_TOKENS = 1000;
@@ -131,7 +131,7 @@ const handler = baseApi()
           throw new BadRequestError('User not authenticated');
         }
 
-        req.logger.info(`[HelpChat] Question received: "${question.slice(0, 50)}..."`);
+        req.logger.info('[HelpChat] Question received', { questionLength: question.length });
 
         // Get API keys early - needed for both embedding query and LLM call
         const dbAdapters = {

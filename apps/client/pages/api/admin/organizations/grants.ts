@@ -1,6 +1,5 @@
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { ApiKeyScope, passthroughField } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { ApiKeyScope, passthroughField, CREDITS_PAGE_READ } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
@@ -27,12 +26,8 @@ const grantsResponseSchema = z.object({
  * Returns the set of active admin-granted Subscriptions, scoped to Organizations.
  * Used by the admin UI to render a "Granted" badge on org rows.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { GET: CREDITS_PAGE_READ } }).get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     // Bound the result set. 500 admin-granted orgs is far past the design
     // intent; add pagination if that ever becomes a real number.
     const GRANTS_LIMIT = 500;

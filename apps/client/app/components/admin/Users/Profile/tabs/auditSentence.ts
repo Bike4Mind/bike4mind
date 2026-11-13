@@ -32,12 +32,16 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.api_key_trust.revoked': 'Revoked API key trust',
   'user.new_account_spend_cap.lifted': 'Lifted the new-account spend cap',
   'user.new_account_spend_cap.restored': 'Restored the new-account spend cap',
+  'user.file_embedding_window.reset': 'Reset the file indexing window',
   'user.internal.marked': 'Marked as an internal account',
   'user.internal.unmarked': 'Stopped marking as an internal account',
   'user.role.admin_granted': 'Granted the Super Admin role',
   'user.role.admin_revoked': 'Revoked the Super Admin role',
   'user.storage.recalculated': 'Recalculated storage',
   'user.created': 'Created the account',
+  'user.persona.created': 'Created the test persona',
+  'user.persona.deleted': 'Deleted the test persona',
+  'user.persona.expired': 'Disabled the expired test persona',
   'user.credits.grant_blocked': 'Blocked signup credit grants and rewards',
   'user.credits.grant_unblocked': 'Resumed signup credit grants and rewards',
 };
@@ -46,6 +50,7 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   isBanned: 'Suspended',
   isModerated: 'Restricted',
   tags: 'Tags',
+  adminPermissions: 'Admin permissions',
   emailVerified: 'Email verified',
   currentCredits: 'Credits',
   isAdmin: 'Super Admin',
@@ -83,7 +88,7 @@ export const formatAuditValue = (value: unknown): string => {
   return JSON.stringify(value);
 };
 
-const tagSentence = (before: unknown, after: unknown): string => {
+const listSentence = (label: string, before: unknown, after: unknown): string => {
   const previous = asStrings(before);
   const next = asStrings(after);
   const added = next.filter(tag => !previous.includes(tag));
@@ -92,7 +97,7 @@ const tagSentence = (before: unknown, after: unknown): string => {
     added.length > 0 && `added ${added.join(', ')}`,
     removed.length > 0 && `removed ${removed.join(', ')}`,
   ].filter(Boolean);
-  return parts.length > 0 ? `Tags: ${parts.join('; ')}` : 'Changed tags';
+  return parts.length > 0 ? `${label}: ${parts.join('; ')}` : `Changed ${label.toLowerCase()}`;
 };
 
 const changeSentence = ({ field, before, after }: AuditChange): string => {
@@ -104,7 +109,8 @@ const changeSentence = ({ field, before, after }: AuditChange): string => {
     case 'emailVerified':
       return after ? 'Marked email verified' : 'Marked email unverified';
     case 'tags':
-      return tagSentence(before, after);
+    case 'adminPermissions':
+      return listSentence(fieldLabel(field), before, after);
     case 'pendingEmail':
       return `Requested an email change to ${formatAuditValue(after)}`;
     case 'currentCredits': {
@@ -129,6 +135,8 @@ const orgMembershipSentence = (entry: AuditEntry): string | null => {
       return `Added to ${org}`;
     case 'org.member.removed':
       return `Removed from ${org}`;
+    case 'org.member.content_reassigned':
+      return `Transferred content in ${org}`;
     case 'org.member.role_changed': {
       const after = entry.changes?.find(change => change.field === 'role')?.after;
       if (after === 'manager') return `Made a manager of ${org}`;
@@ -208,6 +216,8 @@ export const auditUndo = (
     patch: {
       ...Object.fromEntries(changes.map(change => [change.field, change.before ?? defaultFor(change.field)])),
       ...(touchesStatus && reason && { statusChangeReason: undoAdminReason(reason) }),
+      // Undoing a suspend entry removes the detection grades that suspend recorded (see SuspendDialog).
+      ...(changes.some(change => change.field === 'isBanned' && change.after === true) && { undoSuspension: true }),
     },
     redo: {
       ...Object.fromEntries(changes.map(change => [change.field, change.after])),

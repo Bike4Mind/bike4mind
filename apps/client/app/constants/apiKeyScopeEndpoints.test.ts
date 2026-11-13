@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import { ApiKeyScope, CONTRACTS } from '@bike4mind/common';
-import * as dataLakeScopes from '@server/dataLakes/dataLakeScopes';
+import * as dataLakeScopes from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import {
   CLIENT_DIR,
   HAND_HELPERS,
@@ -11,6 +11,7 @@ import {
   OFF_PAGES_ROUTES,
   PAGES_DIR,
   SCOPE_MODULES,
+  admitsNoApiKey,
   doorsIn,
   gatesForRoute,
   gatesIn,
@@ -36,7 +37,7 @@ import { DERIVED_API_KEY_SCOPE_ENDPOINTS } from '@bike4mind/server-utils/app/con
 
 // Only the gate lists are needed; keep dataLakeScopes from loading the services graph.
 vi.mock('@bike4mind/services', () => ({}));
-vi.mock('@server/auth/turnAuth', () => ({}));
+vi.mock('@bike4mind/server-utils/auth/turnAuth', () => ({}));
 
 /**
  * Every endpoint a scope lists must be gated by a check that admits it and nothing that makes the
@@ -226,7 +227,7 @@ describe('the gate rule itself', () => {
   });
 
   it('counts neither an import, a non-throwing probe, nor a scope array that enforces nothing', () => {
-    const imported = "import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';\n";
+    const imported = "import { DATA_LAKE_SHARE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';\n";
     expect(gatesIn(stripComments(imported), HELPERS)).toEqual([]);
     expect(HELPERS.has('holdsDataLakeReadScope')).toBe(false);
     const payload =
@@ -237,6 +238,14 @@ describe('the gate rule itself', () => {
   it('refuses to read an all-of alsoRequiredScopes gate as an any-of one', () => {
     const code = 'baseApi({ requiredScopes: [ApiKeyScope.ADMIN], alsoRequiredScopes: [ApiKeyScope.READ_FILES] })';
     expect(() => gatesIn(code, HELPERS)).toThrow(/all-of/);
+  });
+
+  it('opens no scope on a jwtOnly route, whatever requiredScopes it also declares', () => {
+    expect(admitsNoApiKey("baseApi({ auth: 'jwtOnly', requiredScopes: FILES_READ_SCOPES }).get(")).toBe(true);
+    expect(admitsNoApiKey('baseApi({ requiredScopes: FILES_READ_SCOPES }).get(')).toBe(false);
+    // One key-accepting handler in the file is enough to keep its scopes in the catalogue.
+    expect(admitsNoApiKey("baseApi({ auth: 'jwtOnly' }).get(a); baseApi().post(b);")).toBe(false);
+    expect(admitsNoApiKey('export default handler;')).toBe(false);
   });
 
   it('resolves a scope list declared in the route file itself', () => {

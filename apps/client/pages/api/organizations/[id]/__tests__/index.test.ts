@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+const audit = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({ recordOrganizationAuditEvent: audit }));
 
 /**
  * GET/PUT /api/organizations/[id] are access-gated to org members already; this test
@@ -134,6 +136,25 @@ describe('GET /api/organizations/[id] - safe serialization', () => {
 describe('PUT /api/organizations/[id] - URL id wins', () => {
   beforeEach(() => update.mockClear());
 
+  it('awaits policy audit persistence inside the transaction', async () => {
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    req.body = { sharingPolicy: { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: [] } };
+    await mockRefs.putHandler!(req, res);
+    expect(audit).toHaveBeenCalledWith({ organizationId: 'org1', actorUserId: 'owner1', action: 'policy.updated' });
+    expect(credits.withTransaction).toHaveBeenCalled();
+    audit.mockRejectedValueOnce(new Error('audit unavailable'));
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow('audit unavailable');
+  });
+
+  it('attributes policy audit to the real impersonating administrator', async () => {
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    Object.assign(req.user, { impersonatedBy: 'real-admin' });
+    req.body = { sharingPolicy: { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: [] } };
+    await mockRefs.putHandler!(req, res);
+    expect(audit).toHaveBeenCalledWith({ organizationId: 'org1', actorUserId: 'real-admin', action: 'policy.updated' });
+    expect(update.mock.calls.at(-1)?.[0]).toMatchObject({ id: 'owner1' });
+  });
+
   it('takes the org id from the URL, not from any id field in the body', async () => {
     const { req, res } = mocks({ id: 'caller', isAdmin: true }, 'PUT');
     (req as any).body = { id: 'from-body', name: 'renamed' };
@@ -237,15 +258,18 @@ describe('PUT /api/organizations/[id] - admin credit edit', () => {
     expect(update).toHaveBeenCalledTimes(1);
   });
 
-  it.each([null, '', '  ', '1,000'])('rejects currentCredits %j and writes nothing', async currentCredits => {
-    const { req, res } = putAsAdmin({ currentCredits, creditReason: 'goodwill grant' });
-    await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ name: 'ZodError' });
-    expect(credits.withTransaction).not.toHaveBeenCalled();
-    expect(credits.addCreditsWithLedgerRow).not.toHaveBeenCalled();
-    expect(credits.subtractCreditsWithLedgerRow).not.toHaveBeenCalled();
-    expect(credits.recordAdminAction).not.toHaveBeenCalled();
-    expect(update).not.toHaveBeenCalled();
-  });
+  it.each([null, '', '  ', '1,000', 100.5, '100.5'])(
+    'rejects currentCredits %j and writes nothing',
+    async currentCredits => {
+      const { req, res } = putAsAdmin({ currentCredits, creditReason: 'goodwill grant' });
+      await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ name: 'ZodError' });
+      expect(credits.withTransaction).not.toHaveBeenCalled();
+      expect(credits.addCreditsWithLedgerRow).not.toHaveBeenCalled();
+      expect(credits.subtractCreditsWithLedgerRow).not.toHaveBeenCalled();
+      expect(credits.recordAdminAction).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+    }
+  );
 
   it('rejects a negative balance and writes nothing', async () => {
     const { req, res } = putAsAdmin({ currentCredits: -5, creditReason: 'goodwill grant' });

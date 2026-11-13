@@ -1,5 +1,5 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import {
@@ -38,8 +38,8 @@ import {
   lakeAccessEventRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
-import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
-import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
+import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
@@ -48,7 +48,7 @@ import { Logger } from '@bike4mind/observability';
 // Register global error handlers for enhanced observability of network errors
 registerLambdaErrorHandlers();
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { getUserEntitlements } from '@server/entitlements';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { z } from 'zod';
@@ -61,7 +61,7 @@ import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
-import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
+import { summarizeSession, contextSummarizeSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { accessibleBy } from '@casl/mongoose';
 import { isTerminalCreditRefusal, IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
 import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
@@ -78,18 +78,21 @@ import {
 } from '@bike4mind/slack';
 import { cancelPendingActionOnQuest } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
-import { getSharedTokenizer, publishTelemetryAlertCallback } from '@server/utils/chatCompletionDefaults';
+import {
+  getSharedTokenizer,
+  publishTelemetryAlertCallback,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@bike4mind/server-utils/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import {
   buildSlackVideoToolConfig,
   type PendingSlackNotification,
 } from '@workers/videoGenerations/slackVideoToolConfig';
-import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 
 // Cache static ChatCompletion options that don't change between invocations
 type ChatCompletionOptions = ConstructorParameters<typeof ChatCompletionProcess>[0];
@@ -100,11 +103,11 @@ let cachedDbConnection: typeof mongoose.connection | null = null;
 
 export const getStaticOptions = () => {
   if (cachedStaticOptions) {
-    console.log('♻️ [PERFORMANCE] Reusing cached static ChatCompletion options');
+    Logger.info('[PERFORMANCE] Reusing cached static ChatCompletion options');
     return cachedStaticOptions;
   }
 
-  console.log('🔧 [PERFORMANCE] Initializing static ChatCompletion options (first invocation)');
+  Logger.info('[PERFORMANCE] Initializing static ChatCompletion options (first invocation)');
   cachedStaticOptions = {
     db: {
       sessions: sessionRepository,
@@ -381,7 +384,7 @@ async function deliverSlackProcessingFailure(questId: string, logger: Logger): P
  */
 export const handler = withEventContext(async (event, logger) => {
   const handlerStartTime = Date.now();
-  console.log('🌍 [SERVER] slack quest processor handler start:', new Date().toISOString());
+  logger.info('[SERVER] slack quest processor handler start');
 
   const params = LLMEvents.SlackCompletionStart.schema.parse(event.properties as unknown);
 
@@ -389,9 +392,9 @@ export const handler = withEventContext(async (event, logger) => {
     const dbStartTime = Date.now();
     await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
     cachedDbConnection = mongoose.connection;
-    console.log(`⏱️ [TIMING] MongoDB connected (new): ${Date.now() - dbStartTime}ms`);
+    logger.info(`[TIMING] MongoDB connected (new): ${Date.now() - dbStartTime}ms`);
   } else {
-    console.log(`♻️ [PERFORMANCE] Reusing existing DB connection (readyState: ${mongoose.connection.readyState})`);
+    logger.info(`[PERFORMANCE] Reusing existing DB connection (readyState: ${mongoose.connection.readyState})`);
   }
 
   const queryStartTime = Date.now();
@@ -399,7 +402,7 @@ export const handler = withEventContext(async (event, logger) => {
     User.findById(params.userId),
     sessionRepository.findById(params.sessionId),
   ]);
-  console.log(`⏱️ [TIMING] User and session queries completed: ${Date.now() - queryStartTime}ms`);
+  logger.info(`[TIMING] User and session queries completed: ${Date.now() - queryStartTime}ms`);
 
   if (!user) throw new NotFoundError('User not found');
 
@@ -446,11 +449,11 @@ export const handler = withEventContext(async (event, logger) => {
     createCompletionMeter: ({ organizationId, featureLabel }) =>
       createCompletionMeter(user, logger, featureLabel, { sessionId: params.sessionId, organizationId }),
   });
-  console.log(`⏱️ [TIMING] ChatCompletionProcess instantiation: ${Date.now() - optionsStartTime}ms`);
+  logger.info(`[TIMING] ChatCompletionProcess instantiation: ${Date.now() - optionsStartTime}ms`);
 
   const timeToProcess = Date.now() - handlerStartTime;
-  console.log('🌍 [SERVER] slack quest processor call chatCompletion.process:', new Date().toISOString());
-  console.log(`⏱️ [TIMING] Handler start to chatCompletion.process: ${timeToProcess}ms`);
+  logger.info('[SERVER] slack quest processor call chatCompletion.process');
+  logger.info(`[TIMING] Handler start to chatCompletion.process: ${timeToProcess}ms`);
 
   // Slack completions always get Slack tools - no enableSlackTools flag needed
   const baseTools: Record<string, ToolDefinition> = { ...slackToolDefinitions };

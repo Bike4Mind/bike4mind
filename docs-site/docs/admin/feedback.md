@@ -96,14 +96,34 @@ Reports are listed in one table with the following columns:
 |--------|-------------|
 | **Created** | Timestamp in `Mon DD, YYYY HH:MM AM/PM` format with relative time (e.g., "2 days ago"). Tags associated with the feedback are shown as neutral chips below the date. |
 | **Reporter** | Organization name (bold), username, email, and the user ID as a short chip (for example `690078...0001`). Click the chip to copy the full ID. |
-| **Feedback** | The feedback content, displayed with preserved whitespace and word wrapping. Scrollable if content exceeds 80px height. A **Truncated** chip appears if the original submission was cut down to the length cap, and expired content (see Data Retention below) renders as `[content expired]`. |
+| **Feedback** | The feedback content, displayed with preserved whitespace and word wrapping. Scrollable if content exceeds 80px height; open the report to read it in full. A **Truncated** chip appears if the original submission was cut down to the length cap, and expired content (see Data Retention below) renders as `[content expired]`. |
 | **Status** | A status select (see Update Status below) |
 
-The last cell of each row holds a **...** button that opens the row menu: **Copy link to this report**, **Open the conversation** (see Deep Links below) and **Delete feedback**. The button shows while you hover or focus the row, and always on touch screens. No row has a delete button of its own.
+The last cell of each row holds a **...** button that opens the row menu: **Copy link to this report**, **Open the conversation** (see Deep Links below), **Email reporter** (see Emailing the reporter below) and **Delete feedback**. The button shows while you hover or focus the row, and always on touch screens. No row has a delete button of its own.
 
 The **Created** header is clickable and toggles the sort direction, displaying an up or down arrow to indicate the current order.
 
 On a narrow window the table keeps its columns and scrolls sideways inside its own frame instead of squeezing them.
+
+Click anywhere on a row, or focus it and press **Enter**, to open the report in a detail panel (see Report Details below). Clicking the status select or the **...** button does not open it.
+
+## Report Details
+
+The detail panel slides in from the right over the list, which keeps its filters, sort and page. Below 900 px wide it covers the full width of the window.
+
+| Part | What it shows |
+|------|---------------|
+| **Header** | The report's place in the current list (for example "3 of 40"), **Previous** and **Next** arrows, a link icon that copies a link to this report, and a close button |
+| **Summary** | Status, type (Bug, Feedback, Thumbs Up, Thumbs Down), subject and how long ago it was filed |
+| **Text** | The full report text, with the help context chip, the **Truncated** chip and tags where they apply |
+| **Links** | **Open conversation at this turn** (or **Open the conversation** for a report on a whole conversation) opens it in a new tab; **Open the help article** opens the article a help report was written on in the help panel |
+| **Reporter** | Name, email, organization and user ID, with **Email reporter** to start an email to them and **Open profile** to open the reporter's admin profile in a new tab |
+| **This turn** | For a report on a conversation turn: the model and provider, the tools the turn called (and how many failed), input and output token counts, whether knowledge search ran, and how many sources were cited. This is a short summary, not the raw diagnostic record. |
+| **Status** | A status select that works like the one in the row, with when the report was filed and when it last changed |
+
+**Previous** and **Next** move through the list as it is currently filtered and sorted, turning the page when you reach the first or last report on it. If you change a report's status so it no longer matches the status filter, **Next** opens the report that took its place.
+
+Press **Escape** or the close button to close the panel; focus returns to the row of the report you were reading.
 
 ## Actions
 
@@ -125,17 +145,24 @@ Open the row menu (**...**) and choose **Delete feedback**. A **Delete feedback*
 
 ### Deep Links
 
-Two items in each row's menu link out of the list. The card a copied link pins above the list offers the same two as icon buttons.
+Two items in each row's menu link out of the list. The detail panel offers the same two.
 
 | Menu item | What it does |
 |-----------|--------------|
-| **Copy link to this report** | Copies an absolute URL that reopens this tab with the one report pinned above the list. Safe to paste into a ticket or chat. |
+| **Copy link to this report** | Copies an absolute URL that reopens this tab with the report open in the detail panel. Safe to paste into a ticket or chat. |
 | **Open the conversation** | Opens the session the report came from in a new tab, scrolled to the turn it was filed against. Shown only for a report attached to a session. |
 
-A copied link pins its report in a card above the list whether or not it matches your current
-filters or page; dismiss the card to return to the plain list, or expect the "no longer available"
-notice if the report has since been deleted. In a very long conversation the jump may land on the
-newest message first and reach the highlighted turn as older history loads.
+A copied link opens its report in the detail panel whether or not it matches your current filters
+or page; when the report is not on the page of the list on screen, **Previous** and **Next** are unavailable. If
+the report has since been deleted, the panel says it is no longer available. In a very long
+conversation the jump may land on the newest message first and reach the highlighted turn as older
+history loads.
+
+### Emailing the reporter
+
+**Email reporter** (in the row menu and next to **Open profile** in the detail panel) opens a draft in your mail client addressed to the person who filed the report. The subject names the report by the day it was filed, and the body quotes the report's text, one `>` line per line of the report. A very long report is cut at 1,500 characters with a final `> ...` line, so the draft stays small enough for mail clients to open.
+
+The action is hidden for a report with no email address. A report whose text has expired (see Data Retention below) opens a draft with the subject and no quote. Replies go out from your own mail account, not from Bike4Mind.
 
 ### Refresh
 

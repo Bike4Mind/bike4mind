@@ -2,21 +2,23 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { ApiKeyScope } from '@bike4mind/common';
+import { AdminSupportAccessAction, ApiKeyScope } from '@bike4mind/common';
 import type { PipelineStage, Types } from 'mongoose';
 import { z } from 'zod';
 import { dateParam } from '@server/utils/dateParam';
 import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
+import { authorizeSupportCase, recordSupportAccess, type SupportActorContext } from '@server/utils/adminSupportAccess';
 
 export const MODEL_LOGS_MAX_LIMIT = 100;
 const MODEL_LOGS_DEFAULT_LIMIT = 25;
-const ARTIFACT_PREVIEW_CHARS = 100;
 
 const querySchema = z.object({
   startDate: dateParam.optional(),
   endDate: dateParam.optional(),
   model: z.string().optional(),
   search: z.string().optional(),
+  // Required with `search` only, which reads the users' own prompt text; validated by authorizeSupportCase.
+  supportCase: z.unknown().optional(),
   page: z.coerce.number().int().min(1).max(MODEL_LOGS_MAX_PAGE).default(1),
   limit: z.coerce
     .number()
@@ -51,10 +53,7 @@ const LIST_PROJECTION = {
   artifacts: {
     $map: {
       input: { $cond: [{ $isArray: '$promptMeta.artifacts' }, '$promptMeta.artifacts', []] },
-      in: {
-        type: '$$this.type',
-        preview: { $substrCP: [{ $ifNull: ['$$this.content', ''] }, 0, ARTIFACT_PREVIEW_CHARS] },
-      },
+      in: { type: '$$this.type' },
     },
   },
 };
@@ -70,13 +69,18 @@ type ModelLogSummaryRow = {
   messageHistoryLength?: number;
   completedStepCount: number;
   failedStepCount: number;
-  artifacts: { type: string; preview: string }[];
+  artifacts: { type: string }[];
 };
 
 const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req, res) => {
     try {
-      const { startDate, endDate, model, search, page, limit } = querySchema.parse(req.query);
+      const { startDate, endDate, model, search, supportCase, page, limit } = querySchema.parse(req.query);
+
+      // A text search matches prompt text across every user, so it is a support read: a case is
+      // required and the search is recorded before results are served. Browsing by date and model
+      // stays case-free.
+      const searchCtx: SupportActorContext | undefined = search ? authorizeSupportCase(req, supportCase) : undefined;
 
       // aggregate/countDocuments skip the softDeletePlugin's find hook, so filter tombstones here.
       const query: Record<string, unknown> = { deletedAt: null };
@@ -128,6 +132,15 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
         Quest.aggregate<ModelLogSummaryRow>(pipeline),
         Quest.countDocuments(query),
       ]);
+
+      if (searchCtx) {
+        await recordSupportAccess(
+          searchCtx,
+          AdminSupportAccessAction.ModelLogsSearch,
+          {},
+          { search, model, startDate, endDate, page, limit, total, questIds: rows.map(row => row._id.toString()) }
+        );
+      }
 
       res.json({
         logs: rows.map(({ _id, ...row }) => ({ id: _id.toString(), ...row, timestamp: row.timestamp.toISOString() })),

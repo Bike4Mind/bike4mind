@@ -195,7 +195,7 @@ export function buildOwnershipConditions(
      * Every `ResolvedLakeAccess` now carries a scope, registry lakes included, so presence is no
      * longer a proxy for "creator-anchored" and the `kind` discriminant is the only thing that
      * decides. The two multi-lake fan-outs allow-list it: `lakeMembershipsFrom`
-     * (getDynamicDataLakeTags.ts) and `dynamicMembershipScopesFor` (server/dataLakes/index.ts).
+     * (getDynamicDataLakeTags.ts) and `dynamicMembershipScopesFor` (packages/server-utils/src/dataLakes/index.ts).
      * Any NEW multi-lake call site must go through one of them rather than mapping
      * `lakes.map(l => l.membership)` itself.
      */
@@ -366,6 +366,10 @@ export interface FabFileSearchParams {
     restrictToFileIds?: string[];
     /** Only files saved by a generation tool. ANDed with `tags`, which match any of their names. */
     generated?: boolean;
+    /** Only files NOT saved by a generation tool; the complement of `generated`. */
+    uploaded?: boolean;
+    /** Only generated files whose `sourceMetadata.generation.modelId` is exactly this. */
+    generationModelId?: string;
   };
   pagination: { page: number; limit: number };
   order: { by: 'createdAt' | 'fileName' | 'fileSize'; direction: 'asc' | 'desc' };
@@ -492,10 +496,16 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
     });
   }
 
+  const generatedTagMatch = { $elemMatch: { name: new RegExp(`^${escapeRegex(GENERATED_ASSET_TAG)}$`, 'i') } };
   if (filters.generated === true) {
-    andConditions.push({
-      tags: { $elemMatch: { name: new RegExp(`^${escapeRegex(GENERATED_ASSET_TAG)}$`, 'i') } },
-    });
+    andConditions.push({ tags: generatedTagMatch });
+  }
+  if (filters.uploaded === true) {
+    andConditions.push({ tags: { $not: generatedTagMatch } });
+  }
+
+  if (filters.generationModelId) {
+    baseFilter['sourceMetadata.generation.modelId'] = filters.generationModelId;
   }
 
   // File ID exclusion filter

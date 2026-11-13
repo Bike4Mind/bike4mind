@@ -2,6 +2,7 @@
 
 import { isOrgOwnerOrCurrentAdmin, isOrgOwnerOrPlatformAdmin, type AdministrableOrg } from '@bike4mind/common';
 import { hasOrgUpdateAccess } from '@client/app/utils/orgAccessGate';
+import { orgAclRowConfersMembership } from '@bike4mind/common';
 
 export enum OrganizationTabs {
   Overview = 'overview',
@@ -14,7 +15,9 @@ export enum OrganizationTabs {
   GitHub = 'github',
   Webhooks = 'webhooks',
   Connectors = 'connectors',
+  ApiKeys = 'api-keys',
   Settings = 'settings',
+  Audit = 'audit',
 }
 
 /**
@@ -28,6 +31,19 @@ export enum OrganizationTabs {
  */
 export const canViewOrgAnalysis = hasOrgUpdateAccess;
 
+export const canViewOrgAudit = (
+  user: { id: string } | null | undefined,
+  org:
+    | (Omit<AdministrableOrg, 'users'> & { users?: { userId: string; permissions?: readonly string[] | null }[] })
+    | null
+    | undefined
+): boolean =>
+  !!user &&
+  !!org &&
+  (org.userId === user.id ||
+    ((org.adminUserIds ?? []).includes(user.id) &&
+      (org.users ?? []).some(row => row.userId === user.id && orgAclRowConfersMembership(row))));
+
 /** `isOrgOwnerOrPlatformAdmin`, failing closed while the user or org is still loading. */
 const ownerTierGate = (
   currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
@@ -35,11 +51,13 @@ const ownerTierGate = (
 ): boolean => !!currentUser && !!organization && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
 /**
- * Who may see the Usage tab - the org's credit spend (`usage/index.ts`) and its ledger
- * (`admin/transactions.ts`, `admin/session-usage.ts`), all `verifyOrgOwner`. Owner or platform
- * admin; managers are refused.
+ * Usage and ledger reads use verifyOrgAccess: owner, current manager or platform admin.
+ * Billing actions retain their separate owner-only gate.
  */
-export const canViewOrgUsage = ownerTierGate;
+export const canViewOrgUsage = (
+  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
+  organization: AdministrableOrg | null | undefined
+): boolean => !!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization);
 
 /**
  * Who may see the Integrations, GitHub API and Webhooks tabs - Slack wiring
@@ -93,6 +111,7 @@ export interface OrgTabAccess {
   canManageGroups: boolean;
   canViewBilling: boolean;
   canManageConnectors: boolean;
+  canViewAudit?: boolean;
 }
 
 /**
@@ -102,6 +121,7 @@ export interface OrgTabAccess {
  * is a redirect rather than only a conditional render.
  */
 export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabAccess): OrganizationTabs => {
+  if (!access.canViewAudit && selected === OrganizationTabs.Audit) return OrganizationTabs.Overview;
   if (!access.canManageOrg && selected === OrganizationTabs.Settings) return OrganizationTabs.Overview;
   const integrationPinned =
     selected === OrganizationTabs.Integrations ||
@@ -112,6 +132,8 @@ export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabA
   if (!access.canViewAnalysis && selected === OrganizationTabs.Analysis) return OrganizationTabs.Overview;
   if (!access.canManageGroups && selected === OrganizationTabs.Groups) return OrganizationTabs.Overview;
   if (!access.canManageConnectors && selected === OrganizationTabs.Connectors) return OrganizationTabs.Overview;
+  // Same verifyOrgAccess gate as Connectors (pages/api/organizations/[id]/api-keys/*).
+  if (!access.canManageConnectors && selected === OrganizationTabs.ApiKeys) return OrganizationTabs.Overview;
   // Billing has its own gate rather than riding canManageOrg: every action on it is owner-only.
   if (!access.canViewBilling && selected === OrganizationTabs.Billing) return OrganizationTabs.Overview;
   return selected;

@@ -5,6 +5,7 @@
  * the whole structured payload as inline tags.
  */
 
+import { redactIpAddresses } from './redactIpAddresses';
 import type { SlackWebhookPayload } from './slack';
 
 export interface ErrorLogMessageInput {
@@ -37,7 +38,6 @@ const FIELD_KEYS: { key: string; label: string }[] = [
   { key: 'path', label: 'Path' },
   { key: 'requestId', label: 'Request' },
   { key: 'traceId', label: 'Trace' },
-  { key: 'clientIp', label: 'Client IP' },
   { key: 'functionName', label: 'Function' },
   { key: 'userId', label: 'User' },
   { key: 'sessionId', label: 'Session' },
@@ -57,6 +57,28 @@ const CONTEXT_EXCLUDED_KEYS = new Set([
   'stage',
 ]);
 const CONTEXT_RAW_MAX = 1000;
+
+/**
+ * Client IPs stay in CloudWatch for abuse investigation but not in Slack, whose retention we do not
+ * control. Every string the card renders is passed through `redactIpAddresses`, and IP-keyed metadata
+ * (`ip`, `clientIp`, `sourceIP`, `ip_address`, ...) is left off the context line rather than shown as
+ * `[IP]`. Keep in sync with the Slack error-channel entry in
+ * `apps/client/server/dataSubject/externalStores.ts`.
+ */
+const IP_ADDRESS_KEY = /^(?:ip|IP)(?:Address|_address)?$|[a-z](?:Ip|IP)(?:Address)?$|_(?:ip|IP)(?:_address)?$/;
+const isIpAddressKey = (key: string) => IP_ADDRESS_KEY.test(key);
+
+/** Nested error objects deeper than this are not rendered, so they are dropped rather than walked. */
+const REDACT_DEPTH_MAX = 6;
+
+function redactIpValues(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') return redactIpAddresses(value);
+  if (depth >= REDACT_DEPTH_MAX || value === null || typeof value !== 'object') {
+    return typeof value === 'object' ? undefined : value;
+  }
+  if (Array.isArray(value)) return value.map(item => redactIpValues(item, depth + 1));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactIpValues(item, depth + 1)]));
+}
 
 const SEVERITY_STYLE: Record<string, { emoji: string; color: string }> = {
   error: { emoji: ':red_circle:', color: '#E01E5A' },
@@ -171,7 +193,7 @@ function leftoverContext(metadata: Record<string, unknown>): string | undefined 
   const known = new Set(FIELD_KEYS.map(({ key }) => key));
   const entries: string[] = [];
   for (const [key, value] of Object.entries(metadata)) {
-    if (known.has(key) || CONTEXT_EXCLUDED_KEYS.has(key)) continue;
+    if (known.has(key) || CONTEXT_EXCLUDED_KEYS.has(key) || isIpAddressKey(key)) continue;
     if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') continue;
     const text = String(value);
     if (!text) continue;
@@ -181,7 +203,12 @@ function leftoverContext(metadata: Record<string, unknown>): string | undefined 
   return clipEscaped(escape(clip(entries.join('  |  '), CONTEXT_RAW_MAX)), SECTION_TEXT_MAX);
 }
 
-export function formatErrorLogSlackMessage(input: ErrorLogMessageInput): SlackWebhookPayload {
+export function formatErrorLogSlackMessage(rawInput: ErrorLogMessageInput): SlackWebhookPayload {
+  const input: ErrorLogMessageInput = {
+    ...rawInput,
+    message: redactIpAddresses(rawInput.message),
+    metadata: redactIpValues(rawInput.metadata) as Record<string, unknown>,
+  };
   const severity = input.severity.toLowerCase();
   const style = SEVERITY_STYLE[severity] ?? SEVERITY_STYLE.error;
   const split = splitErrorDetail(input.message);

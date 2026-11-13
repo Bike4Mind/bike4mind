@@ -30,6 +30,12 @@ export function timedOutUsageOf(error: unknown): LlmTimeoutUsage | undefined {
   return (error as Error & { usage?: LlmTimeoutUsage }).usage;
 }
 
+/** Usage a SafetyRefusalError (llm-adapters) carries for what the provider billed before the refusal. */
+export function refusedUsageOf(error: unknown): LlmTimeoutUsage | undefined {
+  if (!(error instanceof Error) || error.name !== 'SafetyRefusalError') return undefined;
+  return (error as Error & { usage?: LlmTimeoutUsage }).usage;
+}
+
 /**
  * Usage-event fields for an attempt our own timer cut: the provider's counts priced as COGS, nothing
  * charged. inputTokens/outputTokens stay 0 because they are the local estimate that feeds token quotas.

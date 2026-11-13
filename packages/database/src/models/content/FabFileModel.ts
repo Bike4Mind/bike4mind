@@ -1,6 +1,7 @@
 import {
   type AttachmentLakeAccess,
   CHUNK_STALL_REASONS,
+  EXTRACTION_REFUSAL_REASONS,
   CHUNKLESS_STALL_REASONS,
   type ChunkStallReason,
   DATALAKE_TAG_PREFIX,
@@ -34,7 +35,6 @@ import {
   chargedBytes,
   type CitableFabFileFields,
   type CitableFabFileFieldsWithTags,
-  type FabFileTypeFilter,
   LegalHoldError,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
@@ -48,6 +48,7 @@ import {
   buildLakeArms,
   buildOwnershipConditions,
   escapeRegex,
+  type FabFileSearchParams,
 } from '../../queries/fabFileSearchQuery';
 import {
   buildDataLakeMembershipFilter,
@@ -955,15 +956,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async search(
     userId: string,
     search: string,
-    filters: {
-      tags?: string[];
-      type?: FabFileTypeFilter;
-      shared?: boolean;
-      curated?: boolean;
-      generated?: boolean;
-      fileIds?: string[];
-      restrictToFileIds?: string[];
-    },
+    filters: FabFileSearchParams['filters'],
     pagination: { page: number; limit: number },
     order: { by: 'createdAt' | 'fileName' | 'fileSize'; direction: 'asc' | 'desc' },
     options?: {
@@ -986,6 +979,44 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   ) {
     const query = buildFabFileSearchQuery({ userId, search, filters, pagination, order, options });
     return this.executeSearch(query, pagination.limit);
+  }
+
+  /**
+   * The distinct generation models behind the caller's own live files, sorted, for a model filter's
+   * options. Owner-only on purpose: a shared file's model is not worth a scope-widening query.
+   */
+  async listGenerationModelIds(userId: string): Promise<string[]> {
+    const modelIds: unknown[] = await this.fabFileModel.distinct('sourceMetadata.generation.modelId', {
+      userId,
+      // The same live-file conjuncts as buildFabFileSearchQuery, so every option can match a file.
+      deletedAt: null,
+      archivedAt: null,
+      'sourceMetadata.generation.modelId': { $type: 'string' },
+    });
+    return modelIds.filter((id): id is string => typeof id === 'string' && id.length > 0).sort();
+  }
+
+  /**
+   * One page of ids of the live generated files that list `fileId` in their `derivedFrom`, newest
+   * first. No access check: the caller filters the ids through a read door. The `sourceType` and
+   * `deletedAt` conjuncts match the partial `derivedFrom.fileId` index.
+   */
+  async findDerivedChildIds(fileId: string, { limit, skip = 0 }: { limit: number; skip?: number }): Promise<string[]> {
+    const children = await this.fabFileModel
+      .find(
+        {
+          'derivedFrom.fileId': fileId,
+          sourceType: FabFileSourceType.TOOL_GENERATED,
+          deletedAt: null,
+          archivedAt: null,
+        },
+        { _id: 1 }
+      )
+      .sort({ createdAt: -1, _id: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    return children.map(child => String(child._id));
   }
 
   async executeSearch(
@@ -3137,6 +3168,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 // written off (`noExtractableTextAt`) or the kill switch halted (`chunkStallReason`).
                 chunkStallReason: null,
                 noExtractableTextAt: null,
+                extractionRefusalReason: null,
                 // The four lake-health rollups go with the rest. They describe chunks this reset is
                 // about to invalidate, and the PR that added them states the rule for exactly this
                 // case (FAB_FILE_CONTENT_REWRITE_PATCH, and chunk.ts's rewrite path). Harmless today
@@ -4065,6 +4097,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // typo cannot store a value `isChunkStalled` silently reads as "not stalled".
     chunkStallReason: { type: String, enum: [...CHUNK_STALL_REASONS, null], default: null },
     noExtractableTextAt: { type: Date, default: null },
+    // Why the chunker declined to read the file, refining noExtractableTextAt (see IFabFile).
+    extractionRefusalReason: { type: String, enum: [...EXTRACTION_REFUSAL_REASONS, null], default: null },
     contentHash: { type: String },
     // Server-verified SHA-256 over normalized extracted text, stamped by the admission contract at
     // chunk time (see IFabFile.serverTextHash). The trustworthy dedup input for #1671, distinct from
@@ -4159,7 +4193,7 @@ FabFileSchema.plugin(softDeletePlugin);
 // generic update(). Not `runValidators` via this hook: that would also validate every other path
 // in the same update. Pipeline updates are checked for literal values only; an expression (`$cond`,
 // a `$field` reference) is computed server-side and cannot be checked before the write.
-const ENUM_GATED_UPDATE_PATHS = ['status', 'moderationStatus', 'chunkStallReason'] as const;
+const ENUM_GATED_UPDATE_PATHS = ['status', 'moderationStatus', 'chunkStallReason', 'extractionRefusalReason'] as const;
 
 function rejectOutOfEnumStatusUpdate(this: mongoose.Query<unknown, unknown>): void {
   const update = this.getUpdate();
@@ -4338,6 +4372,10 @@ FabFileSchema.index({ userId: 1, deletedAt: 1, archivedAt: 1, _id: 1 });
 // row; createdAt trails as the tiebreaker. The sweep's remaining predicates (the createdAt age
 // floor, the two $ors) ride along as residual filters. Pinned by fabFileModerationSweep.test.ts.
 FabFileSchema.index({ moderationStatus: 1, deletedAt: 1, moderationAttempts: 1, createdAt: 1 });
+
+// Generated-media purges (purgeDeletedNotebookMedia) ask whether a library file still holds a
+// generated key. Sparse: only files copied from generated media carry it.
+FabFileSchema.index({ 'sourceMetadata.generatedCopyKey': 1 }, { sparse: true });
 
 // No index currently serves the `fileName` sort's `_id` tiebreaker (buildFabFileSearchQuery).
 // Two things to know before adding one: (a) any future `fileName` sort index would need

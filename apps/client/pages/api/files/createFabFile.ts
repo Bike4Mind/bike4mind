@@ -29,8 +29,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { admitPendingUploads, type PendingUploads } from '@server/files/pendingUploads';
 import { respond } from '@server/utils/respond';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import { assertDataLakeTagWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
@@ -244,7 +244,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
         result.presignedUrl = resolveBrowserUploadUrl(result.id, result.presignedUrl);
       }
 
-      const signed = await signBrowserFileResponse(result);
+      // A client upload has no bytes yet, so there is nothing to GET.
+      const signed = result.presignedUrl ? result : await signBrowserFileResponse(result);
       // Same URL the admin form builds (AdminModalVideoFields), so API-key callers need no bucket name.
       return respond(
         res,

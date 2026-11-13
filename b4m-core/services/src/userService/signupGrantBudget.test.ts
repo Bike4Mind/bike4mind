@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SignupProtection } from '@bike4mind/common';
 import {
+  alertDripCapDefault,
   drawnInRefundScope,
   refundBudgetOnFailure,
   reserveSignupGrantBudget,
@@ -205,5 +206,22 @@ describe('drawnInRefundScope', () => {
     });
 
     expect(drawnInRefundScope(adapters, 'trickle', 'tx-1')).toBe(false);
+  });
+});
+
+describe('alertDripCapDefault', () => {
+  const DAY = '2030-01-01';
+
+  it('alerts once per trickle pool-day with the default cap', async () => {
+    const notify = vi.fn().mockResolvedValue(undefined);
+    const { repository, adapters } = buildAdapters({ notify });
+    const budgetConfig = adapters.signupProtection!.grantBudget!;
+    repository.markAlerted.mockResolvedValueOnce(true).mockResolvedValue(false);
+    await alertDripCapDefault(budgetConfig, DAY, 0);
+    await alertDripCapDefault(budgetConfig, DAY, 0);
+    expect(repository.markAlerted).toHaveBeenCalledWith(`trickle:${DAY}`, 'drip_cap_default');
+    expect(notify).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ pool: 'trickle', day: DAY, threshold: 'drip_cap_default', budget: 0 })
+    );
   });
 });

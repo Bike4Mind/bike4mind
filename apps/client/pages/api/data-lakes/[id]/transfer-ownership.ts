@@ -1,5 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_OR_SHARE_SCOPES, assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
+import {
+  DATA_LAKE_READ_OR_SHARE_SCOPES,
+  assertDataLakeShareScope,
+} from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -12,7 +15,7 @@ import {
 import { lakeOwnershipOfferResponseSchema } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { lakeOwnershipOfferDb } from '@server/dataLakes/lakeOwnershipOfferDb';
 import { sendLakeOwnershipOfferEmail } from '@server/utils/dataLakeOwnershipOfferNotifier';

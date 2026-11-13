@@ -35,12 +35,17 @@ vi.mock('../connectionService', () => ({
   audit: () => h.auditEntry,
   userOwner: (id: string) => ({ ownerType: 'user', ownerKey: id }),
 }));
-vi.mock('../invokeRemoteMcp', () => ({ cleanScope: (scope: string) => scope }));
-vi.mock('./clientIdentity', () => ({ loadConnectionClient: h.loadClient, resolveOAuthClient: h.resolveClient }));
-vi.mock('./oauthFetch', () => ({
+vi.mock('@bike4mind/server-utils/mcpConnections/invokeRemoteMcp', () => ({ cleanScope: (scope: string) => scope }));
+vi.mock('@bike4mind/server-utils/mcpConnections/oauth/clientIdentity', () => ({
+  loadConnectionClient: h.loadClient,
+  resolveOAuthClient: h.resolveClient,
+}));
+vi.mock('@bike4mind/server-utils/mcpConnections/oauth/oauthFetch', () => ({
   withOAuthFetch: (_n: unknown, override: unknown, fn: (f: unknown) => Promise<unknown>) => fn(override),
 }));
-vi.mock('./redirectUri', () => ({ redirectUri: () => 'https://app.example.com/integrations/mcp-oauth-callback' }));
+vi.mock('@bike4mind/server-utils/mcpConnections/oauth/redirectUri', () => ({
+  redirectUri: () => 'https://app.example.com/integrations/mcp-oauth-callback',
+}));
 vi.mock('./revoke', () => ({ revokeConnectionGrant: h.revoke }));
 
 import { BadGatewayError, ConflictError, NotFoundError } from '@bike4mind/common';

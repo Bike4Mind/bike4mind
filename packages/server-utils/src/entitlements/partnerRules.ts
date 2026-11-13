@@ -15,6 +15,7 @@
  * Lambda instances the TTL bounds staleness. `normalizeTag` is the ONE
  * comparison rule shared with the registry so domain/key matching is identical.
  */
+import { Logger } from '@bike4mind/observability';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { normalizeTag, KNOWN_ENTITLEMENT_KEYS, unknownEntitlementKeys } from '../lib/entitlements/registry';
 import { SUBSCRIPTION_PLANS } from '../lib/userSubscriptions/constants';
@@ -69,31 +70,31 @@ async function loadRules(): Promise<Map<string, ResolvedRule>> {
   return map;
 }
 
-async function getRulesMap(): Promise<Map<string, ResolvedRule>> {
-  if (cache && Date.now() - cache.loadedAt < CACHE_TTL_MS) {
-    return cache.rules;
+type PartnerRuleLookupOptions = { strict?: boolean };
+
+/** Share the raw refresh so ordinary fallback cannot hide a failed read from audit callers. */
+async function refreshRules(): Promise<Map<string, ResolvedRule>> {
+  try {
+    return await loadRules();
+  } catch (error) {
+    Logger.error('[partnerRules] failed to load signup rules', { error });
+    throw error;
+  } finally {
+    inflight = null;
   }
-  // A refresh is already running - await it instead of firing a second query.
-  //
-  // Fail CLOSED on a DB error: return an empty map (no partner grants) rather than
-  // rejecting. Entitlement resolution and the email-verify handler both call through
-  // here on paths that must not throw - a rejection would break entitlement gating and
-  // (verify runs this AFTER the email is already verified) surface a false
-  // "Verification Failed". The failure is not cached, so the next call retries and
-  // recovers. loadRules only assigns `cache` on success, so a transient error can't
-  // pin a stale/empty map.
-  inflight ??= loadRules()
-    .catch(error => {
-      // Fail closed, but never silently: a DB outage degrades every partner to zero grants,
-      // so surface it for alerting. No req-scoped logger here (module-level cache) - console
-      // is picked up by the Lambda log pipeline.
-      console.error('[partnerRules] failed to load signup rules; failing closed to no grants', error);
-      return new Map<string, ResolvedRule>();
-    })
-    .finally(() => {
-      inflight = null;
-    });
-  return inflight;
+}
+
+async function getRulesMap(options?: PartnerRuleLookupOptions): Promise<Map<string, ResolvedRule>> {
+  if (cache && Date.now() - cache.loadedAt < CACHE_TTL_MS) return cache.rules;
+  inflight ??= refreshRules();
+  try {
+    return await inflight;
+  } catch (error) {
+    if (options?.strict) throw error;
+    // Ordinary entitlement and email-verification callers preserve their fail-closed grant fallback.
+    // Failed refreshes are not cached, so the next request can recover.
+    return new Map<string, ResolvedRule>();
+  }
 }
 
 /** Drop the cache so the next resolution reloads from the DB. Call after any admin write. */
@@ -131,14 +132,15 @@ export function assertKnownSubscriptionPlan(subscription: { priceId: string } | 
 /** The rule matching an email's verified domain, or null. Extracted like the registry (after last `@`). */
 async function ruleForEmail(
   email: string | null | undefined,
-  emailVerified: boolean | null | undefined
+  emailVerified: boolean | null | undefined,
+  options?: PartnerRuleLookupOptions
 ): Promise<ResolvedRule | null> {
   if (emailVerified !== true || !email) return null;
   const at = email.lastIndexOf('@');
   if (at < 0) return null;
   const domain = normalizeTag(email.slice(at + 1));
   if (!domain) return null;
-  const rules = await getRulesMap();
+  const rules = await getRulesMap(options);
   return rules.get(domain) ?? null;
 }
 
@@ -150,9 +152,10 @@ async function ruleForEmail(
  */
 export async function partnerEntitlementsForEmail(
   email: string | null | undefined,
-  emailVerified: boolean | null | undefined
+  emailVerified: boolean | null | undefined,
+  options?: PartnerRuleLookupOptions
 ): Promise<Set<EntitlementKey>> {
-  const rule = await ruleForEmail(email, emailVerified);
+  const rule = await ruleForEmail(email, emailVerified, options);
   return new Set(rule?.entitlements ?? []);
 }
 

@@ -8,6 +8,9 @@
 import { BadRequestError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import {
+  CONFIDENCE_GATE_MODES,
+  OrchestrationDefaultsSchema,
+  type ConfidenceGateMode,
   IAgent,
   IUserDocument,
   ServiceUnavailableError,
@@ -75,6 +78,33 @@ export function validateDefaultThoroughness(value: unknown): (typeof THOROUGHNES
     throw new AgentValidationError(`defaultThoroughness must be one of: ${THOROUGHNESS_LEVELS.join(', ')}`);
   }
   return value as (typeof THOROUGHNESS_LEVELS)[number];
+}
+
+export function validateConfidenceGateThreshold(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const parsed = OrchestrationDefaultsSchema.shape.confidenceGateThreshold.safeParse(value);
+  if (!parsed.success) {
+    throw new AgentValidationError('confidenceGateThreshold must be a number between 0 and 1');
+  }
+  return parsed.data;
+}
+
+export function validateConfidenceGateMode(value: unknown): ConfidenceGateMode | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const parsed = OrchestrationDefaultsSchema.shape.confidenceGateMode.safeParse(value);
+  if (!parsed.success) {
+    throw new AgentValidationError(`confidenceGateMode must be one of: ${CONFIDENCE_GATE_MODES.join(', ')}`);
+  }
+  return parsed.data;
+}
+
+export function validateConfidenceGateSelfReport(value: unknown): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  const parsed = OrchestrationDefaultsSchema.shape.confidenceGateSelfReport.safeParse(value);
+  if (!parsed.success) {
+    throw new AgentValidationError('confidenceGateSelfReport must be a boolean');
+  }
+  return parsed.data;
 }
 
 /**
@@ -242,6 +272,15 @@ export async function validateAgentUpdate(
   }
   if (agentData.defaultThoroughness !== undefined) {
     agentData.defaultThoroughness = validateDefaultThoroughness(agentData.defaultThoroughness);
+  }
+  if (agentData.confidenceGateThreshold !== undefined) {
+    agentData.confidenceGateThreshold = validateConfidenceGateThreshold(agentData.confidenceGateThreshold);
+  }
+  if (agentData.confidenceGateMode !== undefined) {
+    agentData.confidenceGateMode = validateConfidenceGateMode(agentData.confidenceGateMode);
+  }
+  if (agentData.confidenceGateSelfReport !== undefined) {
+    agentData.confidenceGateSelfReport = validateConfidenceGateSelfReport(agentData.confidenceGateSelfReport);
   }
   if (agentData.defaultVariables !== undefined) {
     agentData.defaultVariables = validateDefaultVariables(agentData.defaultVariables);

@@ -1,9 +1,15 @@
-import type { ResearchRunLevers, ResearchRunStopReason, ResearchRunTotals } from '@bike4mind/common';
-import { emptyResearchRunTotals, RESEARCH_RUN_PRODUCER } from '@bike4mind/common';
+import type {
+  IDataLakeProposalDocument,
+  LegacyResearchRunLevers,
+  ResearchRunStopReason,
+  ResearchRunTotals,
+} from '@bike4mind/common';
+import { emptyResearchRunTotals, RESEARCH_RUN_PRODUCER, upgradeLegacyResearchLevers } from '@bike4mind/common';
 import { isPlaceholderTitle } from '@bike4mind/fab-pipeline';
+import { trustedEntryCoversHost } from '@bike4mind/utils/registrableDomain';
 import type { ProposalCandidate, ProposalOutcome } from '../dataLakeService/proposeDataLakeContent';
 import type { RelevanceJudgement } from './RelevanceJudgeService';
-import { classifySource } from './sourceFilter';
+import { classifySource, isQueueableVerdict, matchSource, sourceHostname } from './sourceFilter';
 
 /**
  * The run loop (#1682): search -> filter by source -> judge -> fetch -> propose, once per candidate,
@@ -12,8 +18,8 @@ import { classifySource } from './sourceFilter';
  * PURE ORCHESTRATION. Every effect is a port, so the ordering rules below - which are the whole
  * value of this function - are testable without a network, a model or a database. Those rules:
  *
- *  1. The FREE filter runs first. Allow/deny drops a candidate before a judgment and before a fetch,
- *     so a narrow allow list costs nothing to enforce.
+ *  1. The FREE filter runs first. The source lists drop a candidate before a judgment and before a
+ *     fetch, so a narrow site list costs nothing to enforce.
  *  2. The ceiling is checked BEFORE each judgment, never after. Checking after would always
  *     overspend by one call, and one call is the entire budget of a small ceiling.
  *  3. The fetch happens only after the judgment clears. Fetching first would be cheaper in latency
@@ -21,8 +27,10 @@ import { classifySource } from './sourceFilter';
  *  4. The proposal limit is checked after each successful proposal, so a run that hits it has
  *     produced exactly `maxProposals` cards and not one more.
  *
- * It never writes a FabFile and never stamps a lake tag: the only write it can cause is a `pending`
- * proposal, and a human approving that is still what admits content.
+ * It never writes a FabFile and never stamps a lake tag itself. The only write it causes is a
+ * `pending` proposal, and a human approving that is what admits content, with one exception: when the
+ * config opted in, a first-time proposal from a trusted-site entry is handed to the `autoAdmit` port.
+ * That decision is by source tier alone, never by score.
  */
 
 /** One normalized search hit. Structurally the search providers' `WebSearchProviderResult`. */
@@ -45,6 +53,11 @@ export interface FetchedSource {
   text?: string;
 }
 
+export interface AutoAdmitRule {
+  /** The trusted-list entry covering `finalUrl` (and not sitting above its registrable domain), else null. */
+  isTrusted(finalUrl: string): string | null;
+}
+
 export interface ResearchRunPorts {
   /** Ask the search provider for up to `maxResults` hits, honoring the recency lever. */
   search(query: string, maxResults: number, recencyDays?: number): Promise<ResearchCandidate[]>;
@@ -63,6 +76,12 @@ export interface ResearchRunPorts {
   fetchSource(url: string): Promise<FetchedSource | null>;
   /** Hand the candidate to `proposeDataLakeContent`. The ONLY write this loop can cause. */
   propose(candidate: ProposalCandidate): Promise<ProposalOutcome>;
+  /**
+   * Admit a just-proposed row on the authority of the trusted-site list. Present only when the
+   * caller can act as the lake's owner; absent, nothing auto-admits. `rule.isTrusted` is the
+   * admit-time check on the page the fetch lands on. Must not throw: a failure is `left_pending`.
+   */
+  autoAdmit?(proposal: IDataLakeProposalDocument, rule: AutoAdmitRule): Promise<'admitted' | 'left_pending'>;
   /** Report progress mid-loop so the panel is not blank while a run works. Best-effort. */
   onProgress?(spentMicroUsd: number, totals: ResearchRunTotals): Promise<void>;
   now(): Date;
@@ -98,11 +117,25 @@ const TIME_BUDGET_RESERVE_MS = 90_000;
 /** Judge failures, with nothing scored yet, after which the judge is treated as down for the run. */
 const JUDGE_BREAKER_FAILURES = 3;
 
+/**
+ * The trusted-list entry that admits `url`, or null. Shared by the run and by the worker's live
+ * re-check, so both apply the same host-coverage rule.
+ */
+export function trustedEntryForUrl(url: string, rules: Parameters<typeof matchSource>[1]): string | null {
+  const match = matchSource(url, rules);
+  const host = sourceHostname(url);
+  return match.verdict === 'trusted' && match.entry && host && trustedEntryCoversHost(match.entry, host)
+    ? match.entry
+    : null;
+}
+
 export async function executeResearchRun(
-  levers: ResearchRunLevers,
+  storedLevers: LegacyResearchRunLevers,
   runId: string,
   ports: ResearchRunPorts
 ): Promise<ResearchRunResult> {
+  // A run snapshot can predate the tiers, so it is upgraded here rather than trusted to be current.
+  const levers = upgradeLegacyResearchLevers(storedLevers);
   const totals = emptyResearchRunTotals();
   let spentMicroUsd = 0;
   let scored = 0;
@@ -119,12 +152,15 @@ export async function executeResearchRun(
     judgeError,
   });
 
+  const autoAdmitRule: AutoAdmitRule = { isTrusted: url => trustedEntryForUrl(url, levers) };
+
   const candidates = await ports.search(levers.query, levers.maxResults, levers.recencyDays);
   totals.searchHits = candidates.length;
 
   for (const [index, candidate] of candidates.entries()) {
     // Rule 1: the free filter, before anything is spent.
-    if (classifySource(candidate.url, levers) !== 'allowed') {
+    const verdict = classifySource(candidate.url, levers);
+    if (!isQueueableVerdict(verdict)) {
       totals.filteredBySource += 1;
       continue;
     }
@@ -145,7 +181,7 @@ export async function executeResearchRun(
       // Only before the first score: once the judge has worked, a later failure is a blip, not an outage.
       if (scored === 0 && totals.judgeFailed >= JUDGE_BREAKER_FAILURES) {
         for (const unreached of candidates.slice(index + 1)) {
-          if (classifySource(unreached.url, levers) !== 'allowed') totals.filteredBySource += 1;
+          if (!isQueueableVerdict(classifySource(unreached.url, levers))) totals.filteredBySource += 1;
           else totals.notJudged += 1;
         }
         return settle('judge_unavailable');
@@ -187,13 +223,31 @@ export async function executeResearchRun(
         // When the producer RETRIEVED it, which is the fetch that just happened - not when the row
         // is written, and not when the run started.
         retrievedAt: ports.now(),
+        // Admission is never decided by score: the tier comes from the source alone.
+        sourceTier: verdict,
       },
     });
 
     switch (outcome.outcome) {
-      case 'proposed':
+      case 'proposed': {
         totals.proposed += 1;
+        // Only first-time proposals: a row with any prior disposition (declined, approved) goes to a human.
+        const eligible =
+          ports.autoAdmit !== undefined &&
+          levers.autoAdmitTrusted &&
+          verdict === 'trusted' &&
+          outcome.proposal.priorDisposition == null &&
+          totals.autoAdmitted < levers.maxAutoAdmits &&
+          trustedEntryForUrl(candidate.url, levers) !== null &&
+          trustedEntryForUrl(fetched.finalUrl, levers) !== null &&
+          !outOfTime();
+        if (eligible) {
+          const result = await ports.autoAdmit!(outcome.proposal, autoAdmitRule);
+          if (result === 'admitted') totals.autoAdmitted += 1;
+          else totals.autoAdmitSkipped += 1;
+        }
         break;
+      }
       case 'duplicate_pending':
         totals.duplicatePending += 1;
         break;

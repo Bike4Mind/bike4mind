@@ -4,6 +4,7 @@ import {
   INVITE_CENTER_SECTION_IDS,
   INVITE_CENTER_SECTION_PARAM,
   INVITE_CENTER_TAB_PARAMS,
+  PENDING_INVITE_PARAM,
   PENDING_SORT_PARAM,
   PENDING_STATUS_PARAM,
 } from './inviteCenterSearch';
@@ -25,6 +26,7 @@ describe('invite center section parser', () => {
       'pendingStatus',
       'pendingReason',
       'pendingSource',
+      'pendingInvite',
       'pendingSort',
     ]);
     expect(Object.keys(INVITE_CENTER_SEARCH_PARSERS).sort()).toEqual([...INVITE_CENTER_TAB_PARAMS].sort());
@@ -34,5 +36,9 @@ describe('invite center section parser', () => {
     expect(INVITE_CENTER_SEARCH_PARSERS[PENDING_STATUS_PARAM]('held')).toBe('held');
     expect(INVITE_CENTER_SEARCH_PARSERS[PENDING_STATUS_PARAM]('released')).toBeUndefined();
     expect(INVITE_CENTER_SEARCH_PARSERS[PENDING_SORT_PARAM]('remaining')).toBe('remaining');
+    expect(INVITE_CENTER_SEARCH_PARSERS[PENDING_INVITE_PARAM]('invited')).toBe('invited');
+    expect(INVITE_CENTER_SEARCH_PARSERS[PENDING_INVITE_PARAM]('uninvited')).toBe('uninvited');
+    expect(INVITE_CENTER_SEARCH_PARSERS[PENDING_INVITE_PARAM]('maybe')).toBeUndefined();
+    expect(INVITE_CENTER_SEARCH_PARSERS[PENDING_INVITE_PARAM]('')).toBeUndefined();
   });
 });

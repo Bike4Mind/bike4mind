@@ -6,6 +6,7 @@ import {
   IOrganizationDocument,
   IOrganizationRepository,
   IUserDocument,
+  isOrgServiceAccountOf,
   type CompletionSource,
 } from '@bike4mind/common';
 import { subtractCredits, SubtractCreditsParameters } from './subtractCredits';
@@ -226,24 +227,28 @@ export async function deductCreditsWithOrgSupport(
     // already-served request - it only skips the usage tracking below, freezing `usedCredits`
     // at 0 forever so the cap can never trip (#1536). Always track.
 
-    // Self-heal a member with no `userDetails` row - one added before grant-point seeding existed
-    // (see `ensureUserDetails`). The positional $inc below cannot create a missing row, so without
-    // this their usage is never tracked and `maxCreditsPerMember` never trips for them. Idempotent
-    // and only writes when the row is actually absent, so already-tracked members pay nothing extra.
-    if (!memberDetails) {
-      await adapters.db.organizations.ensureUserDetails(organization.id, {
-        id: user.id,
-        email: user.email ?? user.username,
-        name: user.name,
+    // The org's service account (org-owned API keys) is not a member: it gets no `userDetails`
+    // row and no per-member budget (getMemberCreditCap); its usage is on each key.
+    if (!isOrgServiceAccountOf(user, organization.id)) {
+      // Self-heal a member with no `userDetails` row - one added before grant-point seeding existed
+      // (see `ensureUserDetails`). The positional $inc below cannot create a missing row, so without
+      // this their usage is never tracked and `maxCreditsPerMember` never trips for them. Idempotent
+      // and only writes when the row is actually absent, so already-tracked members pay nothing extra.
+      if (!memberDetails) {
+        await adapters.db.organizations.ensureUserDetails(organization.id, {
+          id: user.id,
+          email: user.email ?? user.username,
+          name: user.name,
+        });
+      }
+
+      // Atomically increment per-user usage tracking within the organization.
+      // Uses $inc to avoid race conditions with concurrent requests.
+      await adapters.db.organizations.updateUserDetails(organization.id, user.id, {
+        creditsDelta: credits,
+        lastCreditUsedAt: new Date(),
       });
     }
-
-    // Atomically increment per-user usage tracking within the organization.
-    // Uses $inc to avoid race conditions with concurrent requests.
-    await adapters.db.organizations.updateUserDetails(organization.id, user.id, {
-      creditsDelta: credits,
-      lastCreditUsedAt: new Date(),
-    });
   }
 
   const baseParams = {

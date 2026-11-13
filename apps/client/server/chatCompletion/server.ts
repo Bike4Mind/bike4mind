@@ -3,13 +3,13 @@ import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { connectDB, mongoose } from '@bike4mind/database';
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
 import { hasModelCatalogProvider } from '@bike4mind/llm-adapters';
-import { Logger } from '@bike4mind/observability';
+import { installConsoleRedaction, Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
-import { registerWsCompletionRoutes } from './external/wsRoute';
 import { registerEmbedRoutes } from './external/embedRoute';
 import { requireOriginVerify } from './originVerify';
+import { createTaskProtection } from './taskProtection';
 
 /**
  * ChatCompletion - always-on HTTP worker (Fargate). Serves both internal quest
@@ -43,16 +43,25 @@ const bootLogger = new Logger({ metadata: { service: 'chatCompletion' } });
 // `stopTimeout` (infra/chatCompletion.ts) so the drain-expiry error below can log before SIGKILL -
 // a window equal to stopTimeout starts after SIGTERM and can never fire. The margin is pinned by
 // server.test.ts; work still running when the window closes (e.g. a multi-minute deep-research
-// generation) is still cut off. Requires node as PID 1 with tsx loaded in-process (see
-// Dockerfile.chatcompletion) - a wrapper that exits first SIGKILLs the drain.
+// generation) is still cut off. Scale-in and deploys skip a task while its scale-in protection
+// holds (taskProtection.ts, capped per busy stretch), so this window covers a task busy past that
+// cap, an unhealthy-task replacement, or a failed protection call. Requires node as PID 1 with
+// tsx loaded in-process (see Dockerfile.chatcompletion) - a wrapper that exits first SIGKILLs the
+// drain.
 export const DRAIN_TIMEOUT_MS = 110_000;
 
 // In-flight processing promises, tracked so SIGTERM can drain before exit. Both route
-// modules register their work here via the shared `track` callback.
+// modules register their work here via the shared `track` callback. The same count drives
+// ECS scale-in protection (taskProtection.ts), so scale-in picks a task with nothing to drain.
 const inFlight = new Set<Promise<void>>();
+const taskProtection = createTaskProtection({ agentUri: process.env.ECS_AGENT_URI, logger: bootLogger });
 const track = (p: Promise<void>) => {
   inFlight.add(p);
-  void p.finally(() => inFlight.delete(p));
+  taskProtection.update(inFlight.size);
+  void p.finally(() => {
+    inFlight.delete(p);
+    taskProtection.update(inFlight.size);
+  });
 };
 
 interface DrainLogger {
@@ -112,7 +121,7 @@ export function createApp() {
   // Lambda via NAT); keep any other direct-only route above this line too.
   app.use(requireOriginVerify);
 
-  // Every user-facing route below (completions, CLI WS completions, embed chat) refuses a caller
+  // Every user-facing route below (completions, embed chat) refuses a caller
   // on an admin's `all` IP block; the internal route above is service-to-service and is not.
   app.use(checkBlockedIP({ surface: 'app' }));
 
@@ -120,11 +129,6 @@ export function createApp() {
   // the always-on service so it has no cold start / 15-min Lambda ceiling. Its in-flight streams
   // join the same drain set so SIGTERM lets them finish (bounded by DRAIN_TIMEOUT_MS).
   registerExternalRoutes(app, track);
-
-  // CLI HTTP->WebSocket completions (POST payload here, chunks stream over the CLI's
-  // WebSocket). Replaced the CliWsCompletionHandler Lambda; its background completions
-  // join the same drain set.
-  registerWsCompletionRoutes(app, track);
 
   // Public embed chat endpoint (agent-bound, anonymous end-user, org-billed SSE).
   // Same always-on rationale + drain set as the completions route.
@@ -148,6 +152,7 @@ export function checkModelCatalogWired(logger: Pick<Logger, 'error'>): boolean {
 }
 
 async function main() {
+  installConsoleRedaction();
   // Crash-safety for a long-running process: one request's mid-stream EPIPE / orphaned undici
   // rejection must NOT take Node's default uncaughtException path and kill the whole container
   // along with every other in-flight request. Registers global handlers that log + swallow the

@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -54,6 +54,7 @@ const h = vi.hoisted(() => ({
     callbackSigningSecretCreatedAt: new Date('2026-03-01'),
   } as RotateCallbackSigningSecretResponse,
   hasOptiAccess: false,
+  scopeBypass: false,
   eligibility: { canCreate: true, message: null, refusedOrgIds: [] } as {
     canCreate: boolean;
     message: string | null;
@@ -66,7 +67,7 @@ vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAc
 vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
   useOverwatchAccess: () => true,
   useHearthEnabled: () => true,
-  useApiKeyScopeEntitlements: () => ({ bypass: false, entitlements: new Set<string>() }),
+  useApiKeyScopeEntitlements: () => ({ bypass: h.scopeBypass, entitlements: new Set<string>() }),
 }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
@@ -183,6 +184,34 @@ describe('UserApiKeysTab - revoked keys', () => {
 
     fireEvent.click(screen.getByTestId('confirmation-confirm-btn'));
     expect(h.revokeMutate).toHaveBeenCalledWith({ keyId: 'key-1', reason: 'Revoked by user' });
+  });
+});
+
+describe('UserApiKeysTab - legacy keys', () => {
+  const endsAt = '2027-04-01T00:00:00.000Z';
+  const legacyKey = { ...activeKey, legacy: true, legacyEndsAt: endsAt };
+  const newerKey = { ...activeKey, id: 'key-3', name: 'Scoped key', legacy: false, legacyEndsAt: null };
+
+  beforeEach(() => {
+    h.keys = [];
+  });
+
+  it('badges a legacy key with its end date and explains how to replace it, but not a newer key', () => {
+    h.keys = [legacyKey, newerKey];
+    renderTab();
+
+    expect(screen.getByTestId('api-key-legacy-badge-key-1')).toHaveTextContent('Legacy until Apr 1, 2027');
+    expect(screen.queryByTestId('api-key-legacy-badge-key-3')).not.toBeInTheDocument();
+    expect(screen.getByTestId('api-keys-legacy-alert')).toHaveTextContent(/Create a new key with the scopes/);
+    expect(screen.getByTestId('api-keys-legacy-alert')).toHaveTextContent(/rotating a legacy key keeps it legacy/);
+  });
+
+  it('shows no badge while no end date is set, so every older key is not flagged without a date', () => {
+    h.keys = [{ ...legacyKey, legacyEndsAt: null }];
+    renderTab();
+
+    expect(screen.queryByTestId('api-key-legacy-badge-key-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-keys-legacy-alert')).not.toBeInTheDocument();
   });
 });
 
@@ -722,5 +751,44 @@ describe('UserApiKeysTab - API key trust gate', () => {
       expect(screen.getByTestId('api-keys-create-btn')).toBeDisabled();
       expect(screen.getByTestId('api-keys-gate-notice')).toHaveTextContent(switchRefusal.message);
     });
+  });
+});
+
+describe('UserApiKeysTab - personas:mint', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.scopeBypass = true;
+    h.eligibility = { canCreate: true, message: null, refusedOrgIds: [] };
+    h.createMutate.mockClear();
+  });
+  afterEach(() => {
+    h.scopeBypass = false;
+  });
+
+  const openModal = (preset?: 'full') => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    if (preset) fireEvent.click(screen.getByTestId(`api-key-preset-${preset}`).querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Persona bot' },
+    });
+  };
+  const minted = () => (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+
+  it('leaves personas:mint out of Full access for a user who may hold it', () => {
+    openModal('full');
+    expect(screen.getByTestId('api-key-scope-personas:mint')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect(minted()).toContain(ApiKeyScope.BOB_RUN);
+    expect(minted()).not.toContain(ApiKeyScope.PERSONAS_MINT);
+  });
+
+  it('grants personas:mint when it is ticked explicitly', () => {
+    openModal();
+    const chip = screen.getByTestId('api-key-scope-personas:mint');
+    fireEvent.click(chip.querySelector('button') ?? chip);
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect(minted()).toContain(ApiKeyScope.PERSONAS_MINT);
   });
 });

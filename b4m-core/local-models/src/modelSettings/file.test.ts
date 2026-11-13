@@ -3,6 +3,9 @@ import {
   isModelSettingsId,
   parseModelSettingsFile,
   parseModelSettingsInput,
+  parseModelSettingsJson,
+  modelSettingsJsonProblem,
+  ModelSettingsEncodingError,
   changedJsonPath,
   quotedForMessage,
   storedModelEntry,
@@ -16,6 +19,116 @@ function settingsOf(raw: unknown): [string, ModelSettings][] {
   if (!parsed || parsed.invalid.size > 0) throw new Error(`not read: ${JSON.stringify(parsed?.invalid)}`);
   return [...parsed.settings];
 }
+
+describe('parseModelSettingsJson', () => {
+  const text = `{"models": {"${QWEN}": {"effort": "high"}}}`;
+  const BOM = String.fromCharCode(0xfeff);
+
+  it('reads the same settings with or without a leading byte order mark', () => {
+    expect(parseModelSettingsJson(text)).toEqual({ models: { [QWEN]: { effort: 'high' } } });
+    expect(parseModelSettingsJson(`${BOM}${text}`)).toEqual({ models: { [QWEN]: { effort: 'high' } } });
+  });
+
+  it('throws as JSON.parse does for text that is not JSON, a lone mark, or a mark past the start', () => {
+    expect(() => parseModelSettingsJson('{"models": {')).toThrow(SyntaxError);
+    expect(() => parseModelSettingsJson(BOM)).toThrow(SyntaxError);
+    expect(() => parseModelSettingsJson(`${BOM}${BOM}${text}`)).toThrow(SyntaxError);
+    expect(() => parseModelSettingsJson(` ${BOM}${text}`)).toThrow(SyntaxError);
+  });
+
+  const utf16le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+  const utf16be = Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()]);
+
+  it.each([
+    ['UTF-16 LE bytes read as UTF-8', utf16le.toString('utf8')],
+    ['UTF-16 BE bytes read as UTF-8', utf16be.toString('utf8')],
+    ['a lone UTF-16 LE mark read as UTF-8', Buffer.from([0xff, 0xfe]).toString('utf8')],
+    ['UTF-16 BE bytes read as UTF-16 LE', utf16be.toString('utf16le')],
+  ])('names the encoding and says to save as UTF-8 for %s', (_name, decoded) => {
+    expect(() => parseModelSettingsJson(decoded)).toThrow(ModelSettingsEncodingError);
+    try {
+      parseModelSettingsJson(decoded);
+    } catch (error) {
+      expect(modelSettingsJsonProblem(error)).toBe('is saved as UTF-16, which cannot be read. Save it as UTF-8');
+      expect((error as Error).message).toContain('UTF-16');
+      expect((error as Error).message).toContain('UTF-8');
+    }
+  });
+
+  it.each([
+    ['UTF-16 LE without a mark', Buffer.from(text, 'utf16le').toString('utf8')],
+    ['UTF-16 BE without a mark', Buffer.from(text, 'utf16le').swap16().toString('utf8')],
+  ])('names UTF-16 for %s', (_name, decoded) => {
+    expect(() => parseModelSettingsJson(decoded)).toThrow(ModelSettingsEncodingError);
+    try {
+      parseModelSettingsJson(decoded);
+    } catch (error) {
+      expect(modelSettingsJsonProblem(error)).toBe('is saved as UTF-16, which cannot be read. Save it as UTF-8');
+    }
+  });
+
+  const utf32le = Buffer.alloc(text.length * 4);
+  for (let i = 0; i < text.length; i++) utf32le.writeUInt32LE(text.charCodeAt(i), i * 4);
+  const utf32be = Buffer.from(utf32le).swap32();
+
+  it.each([
+    ['UTF-32 LE with a mark', Buffer.concat([Buffer.from([0xff, 0xfe, 0, 0]), utf32le])],
+    ['UTF-32 BE with a mark', Buffer.concat([Buffer.from([0, 0, 0xfe, 0xff]), utf32be])],
+    ['UTF-32 LE without a mark', utf32le],
+    ['UTF-32 BE without a mark', utf32be],
+  ])('names UTF-32, not UTF-16, for %s', (_name, bytes) => {
+    let thrown: unknown;
+    try {
+      parseModelSettingsJson(bytes.toString('utf8'));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ModelSettingsEncodingError);
+    expect(modelSettingsJsonProblem(thrown)).toBe('is saved as UTF-32, which cannot be read. Save it as UTF-8');
+  });
+
+  it.each([
+    ['a file of NUL bytes', '\u0000'.repeat(64)],
+    ['UTF-8 JSON followed by NUL padding', `${text}${'\u0000'.repeat(8)}`],
+    ['truncated UTF-8 followed by one NUL', `${text.slice(0, 20)}\u0000`],
+  ])('reports %s as not valid JSON, not as another encoding', (_name, damaged) => {
+    let thrown: unknown;
+    try {
+      parseModelSettingsJson(damaged);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(SyntaxError);
+    expect(thrown).not.toBeInstanceOf(ModelSettingsEncodingError);
+    expect(modelSettingsJsonProblem(thrown)).toBe('is not valid JSON');
+  });
+
+  it('names UTF-16, not UTF-32, for UTF-16 LE text with a wide character right after an ASCII one', () => {
+    const decoded = Buffer.from('{\u{4E00}: 1}', 'utf16le').toString('utf8');
+    let thrown: unknown;
+    try {
+      parseModelSettingsJson(decoded);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ModelSettingsEncodingError);
+    expect(modelSettingsJsonProblem(thrown)).toBe('is saved as UTF-16, which cannot be read. Save it as UTF-8');
+  });
+
+  it('reports ordinary bad JSON as not valid JSON, including a single replacement character', () => {
+    for (const bad of ['{"models": ', '\u{FFFD}{}', `{"a": "\u{FFFD}\u{FFFD}"`]) {
+      let thrown: unknown;
+      try {
+        parseModelSettingsJson(bad);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(SyntaxError);
+      expect(thrown).not.toBeInstanceOf(ModelSettingsEncodingError);
+      expect(modelSettingsJsonProblem(thrown)).toBe('is not valid JSON');
+    }
+  });
+});
 
 describe('parseModelSettingsFile', () => {
   it('reads known fields, and keeps unknown fields and unrecognized ids as written without reading them', () => {

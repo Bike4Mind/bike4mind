@@ -11,16 +11,19 @@ import {
   signupGrantRemaining,
   signupGrantUnlockCredits,
   SignupRiskScoringSchema,
+  unprotectedSignupGrantLimit,
   type IUserDocument,
   type PaymentUnlockReason,
   type SignupGrant,
   type SignupGrantUnlockReason,
+  type SignupProtection,
   type SignupUnlockForfeitCause,
 } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/db-core';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../creditService';
 import type { FreeCreditAdapters, GrantFreeCreditsResult } from './freeCredits';
 import {
+  capUnassessedSignupGrant,
   evaluateSignupRisk,
   isSignupGrantHeldForReview,
   signupRiskPolicySchema,
@@ -32,6 +35,7 @@ import { protectSignupCredits } from './signupProtection';
 import { payInviteBonus } from './inviteBonus';
 import { callerTransactionSession, inCallerTransaction } from './callerTransaction';
 import {
+  alertDripCapDefault,
   queueHeadBlocks,
   reserveSignupGrantBudget,
   signupGrantBudgetDay,
@@ -137,6 +141,21 @@ function ineligibleResult(
     : noGrant();
 }
 
+/**
+ * Every release after the first tranche waits while an unreviewed or abusive accountCampaign detection names
+ * the account; grading it legitimate lifts the hold for the next drip or held payment unlock. An admin
+ * release is itself a review, so it is never held. Grant sizes are untouched.
+ */
+async function isHeldForAccountCampaign(
+  userId: string,
+  expected: SignupGrant['stage'],
+  reason: SignupGrantUnlockReason | undefined,
+  db: GrantAdapters['db']
+): Promise<boolean> {
+  if (expected === 'pending_email' || reason === 'admin') return false;
+  return (await db.signupProtection?.hasOpenAccountCampaign?.(userId)) ?? false;
+}
+
 /** A refunded, disputed or fraud-warned payment closes every signup release except an admin's. */
 const isForfeitedRelease = (grant: SignupGrant, reason: SignupGrantUnlockReason | undefined) =>
   !!grant.unlockForfeited && reason !== 'admin';
@@ -167,6 +186,11 @@ async function readRiskPolicy(adminSettings: GrantAdapters['db']['adminSettings'
   return { policy, parsedPolicy: signupRiskPolicySchema.safeParse(policy) };
 }
 
+async function readUnprotectedLimit(adminSettings: GrantAdapters['db']['adminSettings']) {
+  const setting = await adminSettings.findBySettingName('signupGrantUnprotectedMaxCredits');
+  return unprotectedSignupGrantLimit(setting?.settingValue);
+}
+
 async function releaseStage(
   userId: string,
   expected: SignupGrant['stage'],
@@ -183,6 +207,7 @@ async function releaseStage(
       if (expected === 'pending_email') throw new Error('Email verification required for signup grant');
       return noGrant();
     }
+    if (await isHeldForAccountCampaign(userId, expected, reason, db)) return { ...noGrant(), withheld: true };
     // Detection may notify reviewers; keep it outside the retried payout transaction.
     if (await protectSignupCredits(userId, db)) {
       if (expected === 'pending_email') await db.users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
@@ -257,8 +282,11 @@ async function releaseStage(
           }
           // Only collector output is recorded: the signupMeta fallback alone would read as an observed
           // sample with every other signal missing.
+          const decision = evaluateSignupRisk(policy, signals, grant.signupCredits);
           assessment = {
-            ...evaluateSignupRisk(policy, signals, grant.signupCredits),
+            ...(decision.status === 'disabled'
+              ? capUnassessedSignupGrant(decision, await readUnprotectedLimit(db.adminSettings))
+              : decision),
             ...(collected ? { signals } : {}),
           };
           assessedBand = assessment.band;
@@ -506,6 +534,9 @@ export const releaseSignupTranche = (userId: string, adapters: GrantAdapters) =>
     adapters
   );
 
+/** A campaign-held payment unlock is rechecked this long after its due time, so it cannot occupy every hourly run. */
+const CAMPAIGN_HOLD_RECHECK_MS = 6 * 3_600_000;
+
 type UnlockAdapters = GrantAdapters & {
   validators: Partial<Record<SignupGrantUnlockReason, SignupGrantValidator>>;
   /** Held-release job only: pays a payment unlock whose hold has reached `releaseAt` by this time. */
@@ -535,8 +566,26 @@ export const unlockSignupGrant = (userId: string, reason: SignupGrantUnlockReaso
     if (releaseAt && !(grant.heldUnlock && new Date(grant.heldUnlock.releaseAt) <= releaseAt)) return false;
     return validator(user);
   };
+  const deferHeldUnlock = async (due: Date): Promise<GrantFreeCreditsResult> => {
+    const { users } = adapters.db;
+    await withTransaction(async () => {
+      const grant = (await users.findById(userId))?.signupGrant;
+      if (!grant?.heldUnlock) return;
+      const heldUnlock = { ...grant.heldUnlock, releaseAt: new Date(due.getTime() + CAMPAIGN_HOLD_RECHECK_MS) };
+      if (!(await users.update({ id: userId, signupGrant: { ...grant, heldUnlock } })))
+        throw new Error('Staged grant account update failed');
+    });
+    return { ...noGrant(), withheld: true };
+  };
   const unlock = async () => {
-    if (releaseAt || (await resolvePaymentUnlockHoldHours(adapters.db.adminSettings)) === 0)
+    if (releaseAt && (await isHeldForAccountCampaign(userId, 'signup', reason, adapters.db)))
+      return deferHeldUnlock(releaseAt);
+    // A campaign hold records a held unlock even with no settling window, so the held-release job pays it later.
+    if (
+      releaseAt ||
+      ((await resolvePaymentUnlockHoldHours(adapters.db.adminSettings)) === 0 &&
+        !(await isHeldForAccountCampaign(userId, 'signup', reason, adapters.db)))
+    )
       return releaseStage(userId, 'signup', reason, paymentValidator, adapters);
     return holdPaymentUnlock(userId, reason, paymentValidator, adapters);
   };
@@ -695,6 +744,20 @@ export async function resolveDripLimits(adminSettings: GrantAdapters['db']['admi
 }
 
 /**
+ * Alerts once per pool-day that a running drip uses the built-in cap. The built-in cap is 0, so an unstored cap
+ * silently stops the drip: callers that stop on a spent cap before reaching dripSignupGrant must call this first.
+ */
+export async function alertIfDripCapDefault(
+  signupProtection: SignupProtection | undefined,
+  day: string,
+  limits: Awaited<ReturnType<typeof resolveDripLimits>>
+): Promise<void> {
+  const budgetConfig = signupProtection?.grantBudget;
+  if (limits.dailyCredits > 0 && limits.dripCapSource === 'default' && budgetConfig)
+    await alertDripCapDefault(budgetConfig, day, limits.dripCap);
+}
+
+/**
  * Pays a UTC day's activity drip, or a trusted preview period within it. The caller establishes eligibility; this owns
  * the rate, the cap, the once-per-day ledger id and the draw from the trickle pool. A dry trickle pool
  * skips the day (withheld, not queued); signup tranches held on the signup pool do not stop it. The pool is
@@ -709,8 +772,11 @@ export async function dripSignupGrant(
 ): Promise<GrantFreeCreditsResult> {
   if (period !== undefined && !/^preview:\d{1,4}:\d+$/.test(period)) return noGrant();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return noGrant();
-  const { dailyCredits, dripCap } = await resolveDripLimits(adapters.db.adminSettings);
-  if (!(dailyCredits > 0) || !(dripCap > 0)) return noGrant();
+  const limits = await resolveDripLimits(adapters.db.adminSettings);
+  const { dailyCredits, dripCap } = limits;
+  if (!(dailyCredits > 0)) return noGrant();
+  await alertIfDripCapDefault(adapters.db.signupProtection, day, limits);
+  if (!(dripCap > 0)) return noGrant();
   const user = await adapters.db.users.findById(userId);
   if (!user?.signupGrant || user.signupGrant.unlockForfeited || hasPaidSignupDrip(user.signupGrant, day, period))
     return noGrant();

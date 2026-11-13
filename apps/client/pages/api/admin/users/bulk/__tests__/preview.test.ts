@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, type AdminPermissionId } from '@bike4mind/common';
+import { ADMIN_USERS_BULK_ROUTE_PERMISSIONS } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 
-vi.mock('@server/middlewares/baseApi', async () =>
-  (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).baseApiMock()
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).adminApiMock()
 );
 vi.mock('@server/middlewares/asyncHandler', async () =>
   (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).asyncHandlerMock()
@@ -13,11 +14,14 @@ const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => (rateLimitOptions.push(options), () => undefined),
 }));
-vi.mock('@server/admin/usersBulk/adapters', () => ({ usersBulkResolveDeps: {}, usersBulkPreviewDeps: {} }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/adapters', () => ({
+  usersBulkResolveDeps: {},
+  usersBulkPreviewDeps: {},
+}));
 
 const mockResolve = vi.fn();
 const mockPreview = vi.fn();
-vi.mock('@server/admin/usersBulk/resolve', () => ({
+vi.mock('@bike4mind/server-utils/admin/usersBulk/resolve', () => ({
   resolveAdminUsersBulk: (...a: unknown[]) => mockResolve(...a),
   previewAdminUsersBulk: (...a: unknown[]) => mockPreview(...a),
 }));
@@ -25,6 +29,7 @@ vi.mock('@server/admin/usersBulk/resolve', () => ({
 import handler from '../preview';
 
 const ADMIN = { id: 'a'.repeat(24), isAdmin: true };
+const delegate = (...adminPermissions: AdminPermissionId[]) => ({ ...ADMIN, isAdmin: false, adminPermissions });
 const BODY = { target: { kind: 'filter', filter: { status: 'active' } }, action: { type: 'suspend' } };
 
 async function call(body: unknown, user: Record<string, unknown> = ADMIN) {
@@ -45,13 +50,30 @@ describe('POST /api/admin/users/bulk/preview', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: ADMIN_USERS_BULK_ROUTE_PERMISSIONS },
     });
     expect(rateLimitOptions).toContainEqual(expect.objectContaining({ limit: 60, windowMs: 60_000 }));
   });
 
-  it('refuses a non-admin', async () => {
-    await expect(call(BODY, { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
+  it('refuses a delegate holding none of the bulk permissions', async () => {
+    await expect(call(BODY, delegate('support:read'))).rejects.toThrow('Missing permission: users:moderate');
     expect(mockResolve).not.toHaveBeenCalled();
+  });
+
+  it('refuses an action whose own permission the delegate lacks', async () => {
+    const body = { ...BODY, action: { type: 'revokeApiKeys' } };
+
+    await expect(call(body, delegate('users:moderate'))).rejects.toThrow('Missing permission: keys:revoke');
+    expect(mockResolve).not.toHaveBeenCalled();
+  });
+
+  it('resolves as a non-full admin for a delegate holding the action permission', async () => {
+    const res = await call(BODY, delegate('users:moderate'));
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockResolve).toHaveBeenCalledWith(BODY.target, [ADMIN.id], {}, expect.any(Date), {
+      actorIsFullAdmin: false,
+    });
   });
 
   it('rejects an invalid action', async () => {
@@ -63,7 +85,9 @@ describe('POST /api/admin/users/bulk/preview', () => {
     const res = await call(BODY, { ...ADMIN, impersonatedBy: 'c'.repeat(24) });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ eligible: 0 });
-    expect(mockResolve).toHaveBeenCalledWith(BODY.target, [ADMIN.id, 'c'.repeat(24)], {}, expect.any(Date));
+    expect(mockResolve).toHaveBeenCalledWith(BODY.target, [ADMIN.id, 'c'.repeat(24)], {}, expect.any(Date), {
+      actorIsFullAdmin: true,
+    });
     expect(mockPreview).toHaveBeenCalledWith(expect.anything(), BODY.action, {});
   });
 });

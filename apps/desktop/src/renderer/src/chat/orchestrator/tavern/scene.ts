@@ -1,8 +1,10 @@
+import { byAge, hashOf, type Epithet } from '@shared/agentPersona';
 import type { AgentState, AgentView } from '../roster';
-import type { Epithet } from '@shared/agentPersona';
-import type { CharacterId, Pose } from './tavernArt';
+import { CHARACTER_COUNT, characterCraft, type CharacterId, type Pose } from './tavernArt';
+import { TAVERN_LAYOUT } from './tavernLayout';
 
-export type TavernZone = 'workbench' | 'bar' | 'hearth' | 'benches' | 'door';
+/** Where an agent sits, by state; the door is only where newcomers walk in from. */
+export type TavernZone = 'workbench' | 'bar' | 'hearth' | 'benches';
 
 /** Percent of the scene box (0-100), where the sprite's feet stand. */
 export interface SlotPoint {
@@ -10,51 +12,22 @@ export interface SlotPoint {
   y: number;
 }
 
-type SeatZone = Exclude<TavernZone, 'door'>;
+// Coordinates live in assets/orchestrator/tavern/layout.json, beside the backdrop they are picked for.
+export const TAVERN_SLOTS: Record<TavernZone, readonly SlotPoint[]> = TAVERN_LAYOUT.slots;
 
-// Tied to assets/orchestrator/tavern/backdrop.png: re-pick these if the backdrop is regenerated.
-export const TAVERN_SLOTS: Record<SeatZone, readonly SlotPoint[]> = {
-  workbench: [
-    { x: 13, y: 46 },
-    { x: 25, y: 46 },
-    { x: 37, y: 46 },
-    { x: 10, y: 55 },
-    { x: 22, y: 55 },
-    { x: 34, y: 55 },
-  ],
-  bar: [
-    { x: 53, y: 45 },
-    { x: 59, y: 45 },
-    { x: 65, y: 45 },
-    { x: 71, y: 45 },
-  ],
-  // A sprite is about 5% of the scene wide, so neighbours sit at least 7% apart or a row lower.
-  hearth: [
-    { x: 70, y: 52 },
-    { x: 78, y: 60 },
-    { x: 87, y: 62 },
-    { x: 94, y: 68 },
-  ],
-  benches: [
-    { x: 20, y: 64 },
-    { x: 29, y: 64 },
-    { x: 38, y: 64 },
-    { x: 52, y: 68 },
-    { x: 61, y: 68 },
-    { x: 70, y: 68 },
-  ],
-};
+/** Where a full zone stacks the agents it has no seat for. */
+export const OVERFLOW_POINTS: Record<TavernZone, SlotPoint> = TAVERN_LAYOUT.overflow;
 
-export const DOOR_POINT: SlotPoint = { x: 4, y: 46 };
+export const DOOR_POINT: SlotPoint = TAVERN_LAYOUT.door;
 
 /**
  * The bar counter as drawn in the backdrop (percent of the scene box): `top` is where its top
  * meets the shelving behind it, `front` where its front panel meets the floor.
  */
-export const BAR_COUNTER = { left: 45, right: 77, top: 26.3, front: 38 } as const;
+export const BAR_COUNTER = TAVERN_LAYOUT.barCounter;
 
 /** Behind the bar counter, above the stools, so the Innkeeper never takes an agent's seat. */
-export const INNKEEPER_POINT: SlotPoint = { x: 62, y: 30.5 };
+export const INNKEEPER_POINT: SlotPoint = TAVERN_LAYOUT.innkeeper;
 
 /**
  * How much of a sprite standing at `point` the counter hides, as a percent of its box from the
@@ -67,7 +40,7 @@ export function hiddenByCounter(point: SlotPoint, spriteHeight: number): number 
   return Math.min(100, Math.max(0, ((point.y - BAR_COUNTER.top) / spriteHeight) * 100));
 }
 
-const ZONE: Record<AgentState, SeatZone> = {
+const ZONE: Record<AgentState, TavernZone> = {
   working: 'workbench',
   'needs-you': 'bar',
   done: 'hearth',
@@ -85,7 +58,17 @@ const POSE: Record<AgentState, Pose> = {
   idle: 'idle',
 };
 
-export function zoneFor(state: AgentState): SeatZone {
+/** The lamp on each nameplate and token: the agent's state at a glance, without the bubble. */
+export const STATE_LAMP: Record<AgentState, string> = {
+  'needs-you': '#f5c542',
+  working: '#ff9d3c',
+  done: '#7ed07a',
+  failed: '#e5534b',
+  stopped: '#a89a88',
+  idle: '#a89a88',
+};
+
+export function zoneFor(state: AgentState): TavernZone {
   return ZONE[state];
 }
 
@@ -93,82 +76,130 @@ export function poseFor(state: AgentState): Pose {
   return POSE[state];
 }
 
-// Wanderer is absent on purpose: with no craft to show it keeps the id-based pick, so the fallback
-// epithet does not turn the roster into clones of one sprite.
-const EPITHET_CHARACTER: Partial<Record<Epithet, CharacterId>> = {
-  Warden: 3,
-  Scribe: 2,
-  Seeker: 2,
-  Tinkerer: 4,
-  Cartographer: 1,
-};
+/** What a character is chosen from: the agent's id, its age (oldest choose first) and its kind of work. */
+export type CastSubject = { id: string; createdAt: string; epithet?: Epithet };
 
-export function characterFor(agentId: string, epithet?: Epithet): CharacterId {
-  const byCraft = epithet ? EPITHET_CHARACTER[epithet] : undefined;
-  if (byCraft) return byCraft;
-  let hash = 0;
-  for (let index = 0; index < agentId.length; index++) hash = (hash * 31 + agentId.charCodeAt(index)) >>> 0;
-  return ((hash % 4) + 1) as CharacterId;
+/**
+ * Gives every agent a character sheet, a pure function of the roster so it survives reloads. Oldest
+ * first, each agent takes a sheet nobody has yet, preferring one whose craft matches its epithet and
+ * otherwise walking the cast from a point picked by its id hash. Only once every sheet is in use does
+ * a sheet repeat, and then a fresh round starts so repeats spread evenly.
+ */
+export function assignCharacters(
+  agents: readonly CastSubject[],
+  count: number = CHARACTER_COUNT,
+  craftOf: (character: CharacterId) => Epithet = characterCraft
+): Map<string, CharacterId> {
+  const taken = new Set<CharacterId>();
+  const characters = new Map<string, CharacterId>();
+  for (const agent of [...agents].sort(byAge)) {
+    if (taken.size >= count) taken.clear();
+    const start = hashOf(agent.id) % count;
+    const free = Array.from({ length: count }, (_, step) => ((start + step) % count) + 1).filter(
+      character => !taken.has(character)
+    );
+    const character = free.find(candidate => agent.epithet && craftOf(candidate) === agent.epithet) ?? free[0];
+    if (character === undefined) throw new Error('assignCharacters: empty cast');
+    taken.add(character);
+    characters.set(agent.id, character);
+  }
+  return characters;
 }
 
-/** For the door, `slot` is the agent's index in the queue and `point` is always `DOOR_POINT`. */
-export type Placement = { zone: TavernZone; point: SlotPoint; slot: number };
+/**
+ * A `seat` is one of the zone's slots; `borrowed` marks a needs-you agent seated outside the full bar.
+ * An `overflow` agent has no seat and waits, `index`-th, in its zone's stack at OVERFLOW_POINTS.
+ */
+export type Placement =
+  | { kind: 'seat'; zone: TavernZone; slot: number; point: SlotPoint; borrowed: boolean }
+  | { kind: 'overflow'; zone: TavernZone; index: number; point: SlotPoint };
+
+// Where a needs-you agent sits once the bar is full: the benches face the bar, the hearth is furthest.
+const BORROW_ORDER: readonly TavernZone[] = ['benches', 'workbench', 'hearth'];
 
 /**
  * Seats agents so nobody shuffles needlessly: an agent whose zone is unchanged keeps its previous slot,
- * the rest take the lowest free slot in their zone, and whoever finds the zone full queues at the door.
- * The door remembers too: an agent still queued keeps its index, newcomers take the lowest free index in
- * roster order, so indices can have gaps.
+ * the rest take the lowest free slot in their zone, and whoever finds the zone full joins that zone's
+ * overflow stack in roster order. A needs-you agent is never stacked while any seat could hold it: it
+ * borrows a free seat elsewhere, and failing that takes the seat of the last calm agent in the roster,
+ * who goes to its own zone's stack instead.
  */
 export function placeAgents(
   agents: readonly AgentView[],
   previous: ReadonlyMap<string, Placement>
 ): Map<string, Placement> {
-  const taken: Record<SeatZone, Set<number>> = {
+  const taken: Record<TavernZone, Set<number>> = {
     workbench: new Set(),
     bar: new Set(),
     hearth: new Set(),
     benches: new Set(),
   };
   const placements = new Map<string, Placement>();
+  const seat = (agent: AgentView, zone: TavernZone, slot: number) => {
+    taken[zone].add(slot);
+    placements.set(agent.id, {
+      kind: 'seat',
+      zone,
+      slot,
+      point: TAVERN_SLOTS[zone][slot],
+      borrowed: zone !== zoneFor(agent.state),
+    });
+  };
+  const freeSlot = (zone: TavernZone) => TAVERN_SLOTS[zone].findIndex((_, slot) => !taken[zone].has(slot));
+
+  const seatAtHome = (agent: AgentView) => {
+    const zone = zoneFor(agent.state);
+    const free = freeSlot(zone);
+    if (free >= 0) seat(agent, zone, free);
+    return free >= 0;
+  };
 
   for (const agent of agents) {
-    const zone = zoneFor(agent.state);
     const before = previous.get(agent.id);
-    if (!before || before.zone !== zone || taken[zone].has(before.slot)) continue;
-    taken[zone].add(before.slot);
-    placements.set(agent.id, { zone, point: TAVERN_SLOTS[zone][before.slot], slot: before.slot });
+    if (before?.kind !== 'seat' || taken[before.zone].has(before.slot)) continue;
+    if (before.zone === zoneFor(agent.state)) seat(agent, before.zone, before.slot);
+  }
+
+  // A freed bar seat beats a borrowed one; a borrowed seat is kept over newcomers to its zone.
+  for (const agent of agents) {
+    if (agent.state !== 'needs-you' || placements.has(agent.id) || seatAtHome(agent)) continue;
+    const before = previous.get(agent.id);
+    if (before?.kind === 'seat' && before.borrowed && !taken[before.zone].has(before.slot)) {
+      seat(agent, before.zone, before.slot);
+    }
   }
 
   const unseated: AgentView[] = [];
   for (const agent of agents) {
     if (placements.has(agent.id)) continue;
-    const zone = zoneFor(agent.state);
-    const free = TAVERN_SLOTS[zone].findIndex((_, slot) => !taken[zone].has(slot));
-    if (free < 0) {
-      unseated.push(agent);
-      continue;
-    }
-    taken[zone].add(free);
-    placements.set(agent.id, { zone, point: TAVERN_SLOTS[zone][free], slot: free });
+    if (agent.state === 'needs-you' || !seatAtHome(agent)) unseated.push(agent);
   }
 
-  const queue = new Set<number>();
-  const newcomers: AgentView[] = [];
+  const stacked = new Set(unseated.filter(agent => agent.state !== 'needs-you').map(agent => agent.id));
   for (const agent of unseated) {
-    const before = previous.get(agent.id);
-    if (before?.zone !== 'door' || queue.has(before.slot)) {
-      newcomers.push(agent);
+    if (agent.state !== 'needs-you') continue;
+    const zone = BORROW_ORDER.find(candidate => freeSlot(candidate) >= 0);
+    if (zone) {
+      seat(agent, zone, freeSlot(zone));
       continue;
     }
-    queue.add(before.slot);
-    placements.set(agent.id, { zone: 'door', point: DOOR_POINT, slot: before.slot });
+    const calm = [...agents].reverse().find(other => other.state !== 'needs-you' && placements.has(other.id));
+    const calmSeat = calm && placements.get(calm.id);
+    if (!calm || calmSeat?.kind !== 'seat') {
+      stacked.add(agent.id);
+      continue;
+    }
+    placements.delete(calm.id);
+    stacked.add(calm.id);
+    taken[calmSeat.zone].delete(calmSeat.slot);
+    seat(agent, calmSeat.zone, calmSeat.slot);
   }
-  let next = 0;
-  for (const agent of newcomers) {
-    while (queue.has(next)) next++;
-    queue.add(next);
-    placements.set(agent.id, { zone: 'door', point: DOOR_POINT, slot: next });
+
+  const depth: Record<TavernZone, number> = { workbench: 0, bar: 0, hearth: 0, benches: 0 };
+  for (const agent of agents) {
+    if (!stacked.has(agent.id)) continue;
+    const zone = zoneFor(agent.state);
+    placements.set(agent.id, { kind: 'overflow', zone, index: depth[zone]++, point: OVERFLOW_POINTS[zone] });
   }
   return placements;
 }

@@ -336,6 +336,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       enableLattice: true,
       tools: ['web_search'],
       mcpServers: ['server-1'],
+      disabledMcpConnections: ['acme'],
       projectId: 'project-1',
       organizationId: 'org-1',
       toolPromptId: 'tool-prompt-1',

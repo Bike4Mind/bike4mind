@@ -12,7 +12,7 @@ import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
-import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
+import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
@@ -21,6 +21,7 @@ import { randomUUID } from 'crypto';
 
 import type { Request } from 'express';
 import { approvalDetails, notifyAfterCommit } from './approval';
+import { assertDelegateCanCreditUser } from './delegateTargets';
 
 // Admin grants carry a `periodEndsAt` 12 months out for accounting / UI
 // labelling. It is informational - there is NO cron that flips status to
@@ -60,6 +61,7 @@ export async function validateGrantOrg({ ownerEmail, seats }: Pick<GrantOrgParam
 export async function grantOrg(req: Request, params: GrantOrgParams, approval?: AdminApproval) {
   const { name, seats, initialCredits, reason } = params;
   const owner = await validateGrantOrg(params);
+  await assertDelegateCanCreditUser(req.user!, owner.id, 'grant an organization to');
 
   const now = dayjs();
   const periodStartsAt = now.toDate();

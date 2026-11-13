@@ -40,13 +40,16 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {},
   fabFileRepository: {},
   fallbackLakeSettingsRepository: {},
+  adminSettingsRepository: {},
   userRepository: {},
   activityRepository: { createActivity: vi.fn() },
   User: { findByIdAndUpdate: h.findByIdAndUpdate },
 }));
-vi.mock('@server/entitlements', () => ({ getRequestEntitlements: vi.fn().mockResolvedValue(['base']) }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
+  getRequestEntitlements: vi.fn().mockResolvedValue(['base']),
+}));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({
   sessionService: { createSession: h.createSession, resolveLakeSessionDefaults: vi.fn().mockReturnValue({}) },
   dataLakeService: { assertLakeAccess: h.assertLakeAccess, resolveCanManageLake: vi.fn() },

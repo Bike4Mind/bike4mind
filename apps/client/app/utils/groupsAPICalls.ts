@@ -23,10 +23,12 @@ export type SetGroupTypesResult = {
 // PUT /api/admin/organizations/:id/group-types - platform-admin only.
 export const setOrganizationGroupTypes = async (
   organizationId: string,
-  allowedGroupTypes: string[]
+  allowedGroupTypes: string[],
+  reason: string
 ): Promise<SetGroupTypesResult> => {
   const response = await api.put<SetGroupTypesResult>(`/api/admin/organizations/${organizationId}/group-types`, {
     allowedGroupTypes,
+    reason,
   });
   return response.data;
 };
@@ -35,6 +37,19 @@ export const setOrganizationGroupTypes = async (
 export const fetchOrganizationGroups = async (organizationId: string): Promise<GroupWithMembers[]> => {
   const response = await api.get<{ groups: GroupWithMembers[] }>(`/api/organizations/${organizationId}/groups`);
   return response.data.groups;
+};
+
+export const createStandardGroup = async (organizationId: string, type: string): Promise<void> => {
+  await api.post(`/api/organizations/${organizationId}/groups`, { type });
+};
+
+export const shareGroupProject = async (
+  organizationId: string,
+  groupId: string,
+  projectId: string,
+  enabled: boolean
+): Promise<void> => {
+  await api.put(`/api/organizations/${organizationId}/groups/${groupId}/projects`, { projectId, enabled });
 };
 
 // PATCH /api/organizations/:id/groups/:groupId - rename a group instance.

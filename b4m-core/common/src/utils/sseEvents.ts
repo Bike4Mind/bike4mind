@@ -92,7 +92,16 @@ export interface SSEProviderBlockEvent extends ProviderBlock {
   type: 'provider_block';
 }
 
-export type SSEEvent = SSEContentEvent | SSEErrorEvent | SSEMetaEvent | SSEProviderBlockEvent;
+/** Sent once after the ledger commits, before `[DONE]`; see CompletionSettledEventSchema. */
+export interface SSESettledEvent {
+  type: 'settled';
+  requestId: string;
+  creditsCharged: number;
+  usdCost?: number;
+  runId?: string;
+}
+
+export type SSEEvent = SSEContentEvent | SSEErrorEvent | SSEMetaEvent | SSEProviderBlockEvent | SSESettledEvent;
 
 export interface CompletionInfo {
   toolsUsed?: Array<{
@@ -275,12 +284,12 @@ function resolveResponseText(text: (string | null | undefined)[]): string {
  * public surfaces until deliberately surfaced here.
  *
  * It does NOT scan the text. Non-reply frames are dropped on the adapter's channel tag, and
- * families that cannot be separated that way are refused before the stream opens - see
- * {@link inlinesReasoningIntoText}. Scanning for `<think>` here would be worse than
+ * models that cannot be separated that way are refused before the stream opens - see
+ * {@link reasoningChannelOf}. Scanning for `<think>` here would be worse than
  * useless: a model is free to write the token in its ANSWER (ask one to explain the tag),
  * and escapeThinkMarkers defangs marker-shaped text inside REASONING only, so treating it
  * as a marker truncates a legitimate paid reply. A new public caller must run the same
- * family gate before it streams.
+ * model gate before it streams.
  */
 export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
   // A tagged frame is reasoning or a raw tool artifact, never the reply. Its usage still
@@ -329,6 +338,25 @@ export function formatSSEError(error: unknown, requestId?: string, code?: Comple
  */
 export function buildMetaEvent(requestId: string): SSEMetaEvent {
   return { type: 'meta', requestId };
+}
+
+/**
+ * The settlement receipt for a first-party (account-holder) stream. Carries `usdCost`, so a public
+ * surface that withholds it (see buildPublicSSEEvent) must not send this event.
+ */
+export function buildSettledEvent(settlement: {
+  requestId: string;
+  creditsCharged: number;
+  usdCost?: number;
+  runId?: string;
+}): SSESettledEvent {
+  return {
+    type: 'settled',
+    requestId: settlement.requestId,
+    creditsCharged: settlement.creditsCharged,
+    ...(settlement.usdCost !== undefined && { usdCost: settlement.usdCost }),
+    ...(settlement.runId !== undefined && { runId: settlement.runId }),
+  };
 }
 
 /**

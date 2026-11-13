@@ -60,6 +60,9 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/common', () => ({
   CreateAnnotationRequestSchema: { safeParse: (b: unknown) => ({ success: true, data: b }) },
 }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
 vi.mock('@server/services/publish', () => ({
   checkVisibility: vi.fn(),
   canAnnotate: vi.fn(),

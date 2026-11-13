@@ -3,8 +3,8 @@ import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 import { COMP_MAX_MONTHS_AHEAD } from '@client/app/utils/adminSubscriptionDetail';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: { method?: string }, res: unknown) => handlers[req.method ?? 'POST']?.(req, res),
@@ -146,12 +146,8 @@ describe('POST /api/admin/subscriptions/[id]/comp', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: 'credits:adjust' },
     });
-  });
-
-  it('refuses a non-admin', async () => {
-    await expect(call({ isAdmin: false }).run()).rejects.toThrow('Admin access required');
-    expect(mockUpdate).not.toHaveBeenCalled();
   });
 
   it('400s without a reason and changes nothing', async () => {

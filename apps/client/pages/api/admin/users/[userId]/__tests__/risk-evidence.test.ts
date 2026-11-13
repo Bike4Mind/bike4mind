@@ -1,22 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { RISK_EVIDENCE_VERSION } from '@bike4mind/common';
+import { MODERATION_PAGE_READ, RISK_EVIDENCE_VERSION, missingAdminPermissionMessage } from '@bike4mind/common';
 
 const { mockUserFind } = vi.hoisted(() => ({ mockUserFind: vi.fn() }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
-    const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
-      {
-        use: () => chain,
-        get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
-      }
-    );
-    return chain;
-  },
-}));
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/middlewares/__tests__/adminApiMock')).adminApiMock()
+);
 
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mockUserFind(...a) },
@@ -72,9 +62,27 @@ beforeEach(() => {
 });
 
 describe('GET /api/admin/users/:userId/risk-evidence', () => {
-  it('rejects non-admins before reading the user', async () => {
-    await expect(run({ user: { id: 'u2', isAdmin: false } }).promise).rejects.toThrow();
+  it('declares MODERATION_PAGE_READ for GET', () => {
+    expect((handler as unknown as { _config: unknown })._config).toEqual(
+      expect.objectContaining({ adminPermissions: { GET: MODERATION_PAGE_READ } })
+    );
+  });
+
+  it('refuses a delegate without a moderation read permission before reading the user', async () => {
+    const user = { id: 'u2', isAdmin: false, adminPermissions: ['credits:adjust'] };
+    await expect(run({ user }).promise).rejects.toMatchObject({
+      statusCode: 403,
+      message: missingAdminPermissionMessage(MODERATION_PAGE_READ),
+    });
     expect(mockUserFind).not.toHaveBeenCalled();
+  });
+
+  it.each(['support:read', 'users:moderate'])('admits a delegate holding %s', async permission => {
+    mockUserFind.mockResolvedValue({ id: USER_ID });
+    const { res, promise } = run({ user: { id: 'u2', isAdmin: false, adminPermissions: [permission] } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserFind).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a malformed user id', async () => {

@@ -207,9 +207,9 @@ export function shouldTriggerFallback(error: Error): boolean {
     'is not available',
     // Google's 404 for a model closed upstream: "models/<id> is no longer available to new users".
     'no longer available to new users',
-    // Claude Fable 5 GA safety-classifier refusal: the Anthropic backend surfaces a
-    // stop_reason: 'refusal' as a thrown error for REFUSAL_FALLBACK_MODELS so blocked
-    // requests continue on Opus 5 via the claude-fable-5 fallback chain below.
+    // Safety-classifier refusal: the Anthropic backends surface a stop_reason: 'refusal' as a thrown
+    // error when the model's refusalFallback resolves true, so blocked requests continue on the
+    // model's chain in FALLBACK_PREFERENCES below.
     SAFETY_REFUSAL_MESSAGE,
   ];
 
@@ -307,12 +307,6 @@ export function validateFallbackModel(
  * a chain pointing at a retired model is an outage waiting for an incident.
  */
 export const FALLBACK_PREFERENCES: Record<string, string[]> = {
-  // Gemini models fallback to Claude or GPT
-  'gemini-2.5-pro-preview-05-06': ['claude-sonnet-4-6', 'gpt-4o', 'claude-opus-4-6'],
-  'gemini-2.5-flash-preview-05-20': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
-  'gemini-1.5-pro': ['claude-sonnet-4-6', 'gpt-4o', 'claude-opus-4-6'],
-  'gemini-1.5-flash': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
-
   // Top tier (Fable 5 / Opus 4.7-5.5) degrades within the Opus tier before dropping to Sonnet.
   // Fable 5 leads with Opus 5: same price as 4.8, near-Fable capability, and its safety
   // classifiers intervene far less often - so a Fable refusal is most likely to succeed there.
@@ -325,6 +319,10 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
     'claude-sonnet-4-6',
     'gpt-5',
   ],
+  // Opus 4.8 leads: Anthropic names it and Opus 5 as Fable 5.1/5.2's refusal-fallback targets, while
+  // Opus 5.5 runs similar classifiers and settles a repeat refusal as a decline.
+  'claude-fable-5-2': ['claude-opus-4-8', 'claude-opus-5', 'claude-opus-5-5', 'claude-sonnet-5', 'gpt-5'],
+  'claude-fable-5-1': ['claude-opus-4-8', 'claude-opus-5', 'claude-opus-5-5', 'claude-sonnet-5', 'gpt-5'],
   'claude-haiku-5-5': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
   'claude-opus-5-5': [
     'claude-opus-5',
@@ -375,15 +373,17 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
   'global.anthropic.claude-opus-4-5-20251101-v1:0': [
     'claude-opus-4-5-20251101',
     'claude-sonnet-4-6',
-    'claude-sonnet-4-5-20250929',
+    'claude-sonnet-5-5',
     'gpt-5',
   ],
   'global.anthropic.claude-haiku-5-5': ['claude-haiku-5-5', 'claude-haiku-4-5-20251001', 'gpt-4o-mini'],
   'global.anthropic.claude-sonnet-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
-  'global.anthropic.claude-sonnet-5-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+  'global.anthropic.claude-sonnet-5-5': ['claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
   'global.anthropic.claude-sonnet-4-6': ['claude-sonnet-4-6', 'claude-sonnet-5', 'gpt-5'],
+  // Leads with Sonnet 5.5, not the direct twin: Anthropic retires claude-sonnet-4-5-20250929
+  // on 2026-11-30 and names Sonnet 5.5 as its replacement.
   'us.anthropic.claude-sonnet-4-5-20250929-v1:0': [
-    'claude-sonnet-4-5-20250929',
+    'claude-sonnet-5-5',
     'claude-sonnet-5',
     'claude-sonnet-4-6',
     'gpt-5',
@@ -391,27 +391,24 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
   'us.anthropic.claude-haiku-4-5-20251001-v1:0': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
 
   // Claude 4.5/4.6 models fallback hierarchy
-  'claude-opus-4-5-20251101': ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5', 'claude-haiku-4-5-20251001'],
+  'claude-opus-4-5-20251101': ['claude-sonnet-4-6', 'claude-sonnet-5-5', 'gpt-5', 'claude-haiku-4-5-20251001'],
   'claude-opus-4-6': [
     'claude-sonnet-5',
     'claude-sonnet-4-6',
-    'claude-sonnet-4-5-20250929',
+    'claude-sonnet-5-5',
     'gpt-5',
     'claude-haiku-4-5-20251001',
   ],
-  'claude-sonnet-5': ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5'],
-  'claude-sonnet-4-6': ['claude-sonnet-5', 'claude-sonnet-4-5-20250929', 'claude-opus-4-5-20251101', 'gpt-5'],
-  'claude-sonnet-4-5-20250929': ['claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'gpt-5'],
-
-  // Deprecated Claude models fallback to modern versions
-  'claude-3-5-haiku-20241022': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
-  'us.anthropic.claude-3-5-haiku-20241022-v1:0': ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'gpt-4o-mini'],
-  'claude-3-5-sonnet-20241022': ['claude-sonnet-4-6', 'gpt-4o', 'claude-haiku-4-5-20251001'],
-  'claude-3-7-sonnet-20250219': ['claude-sonnet-4-6', 'gpt-4o', 'claude-haiku-4-5-20251001'],
-  'claude-3-opus-20240229': ['claude-opus-4-6', 'claude-sonnet-4-6', 'gpt-4o'],
-  'claude-3-haiku-20240307': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
-  'us.anthropic.claude-3-5-sonnet-20241022-v2:0': ['global.anthropic.claude-sonnet-4-6', 'gpt-4o'],
-  'us.anthropic.claude-3-7-sonnet-20250219-v1:0': ['global.anthropic.claude-sonnet-4-6', 'gpt-4o'],
+  'claude-sonnet-5-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+  'claude-sonnet-5': ['claude-sonnet-4-6', 'claude-sonnet-5-5', 'gpt-5'],
+  'claude-sonnet-4-6': ['claude-sonnet-5', 'claude-sonnet-5-5', 'claude-opus-4-5-20251101', 'gpt-5'],
+  'claude-sonnet-4-5-20250929': [
+    'claude-sonnet-5-5',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'claude-haiku-4-5-20251001',
+    'gpt-5',
+  ],
 
   // GPT models fallback to Claude
   'gpt-4o': ['claude-sonnet-4-6', 'claude-opus-4-6', 'gpt-5.5'],
@@ -422,7 +419,7 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
 export const DEFAULT_FALLBACK_CHAIN: string[] = [
   'claude-sonnet-5',
   'claude-sonnet-4-6',
-  'claude-sonnet-4-5-20250929',
+  'claude-sonnet-5-5',
   'gpt-5',
   'claude-haiku-4-5-20251001',
 ];

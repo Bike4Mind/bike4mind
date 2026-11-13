@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope, SHADOW_DETECTION_LIST_LIMIT, type ShadowDetectionItem } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  SHADOW_DETECTION_BULK_VERDICT_LIMIT,
+  SHADOW_DETECTION_LIST_LIMIT,
+  type ShadowDetectionItem,
+} from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   handlers: {} as Record<string, Record<string, (req: unknown, res: unknown) => Promise<void>>>,
@@ -9,6 +14,8 @@ const h = vi.hoisted(() => ({
   list: vi.fn(),
   summarize: vi.fn(),
   addVerdict: vi.fn(),
+  addVerdicts: vi.fn(),
+  listContext: vi.fn(),
   record: vi.fn(),
   userWrite: vi.fn(),
 }));
@@ -33,7 +40,13 @@ vi.mock('@server/middlewares/adminApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  shadowDetectionRepository: { list: h.list, summarize: h.summarize, addVerdict: h.addVerdict },
+  shadowDetectionRepository: {
+    list: h.list,
+    summarize: h.summarize,
+    addVerdict: h.addVerdict,
+    addVerdicts: h.addVerdicts,
+    listContext: h.listContext,
+  },
   // Grading must never act on the accounts a detection names: any write here fails the test.
   userRepository: { update: h.userWrite, updateOne: h.userWrite, setRiskReviewState: h.userWrite },
   userApiKeyRepository: { update: h.userWrite },
@@ -48,6 +61,8 @@ const loadRoutes = async () => {
   await import('@pages/api/admin/shadow-detections/index');
   h.current = 'verdict';
   await import('@pages/api/admin/shadow-detections/verdict');
+  h.current = 'bulk';
+  await import('@pages/api/admin/shadow-detections/bulk-verdict');
 };
 
 const ADMIN_ID = 'a'.repeat(24);
@@ -91,6 +106,8 @@ beforeEach(async () => {
   h.list.mockReset().mockResolvedValue({ data: [], truncated: false });
   h.summarize.mockReset().mockResolvedValue([]);
   h.addVerdict.mockReset();
+  h.addVerdicts.mockReset();
+  h.listContext.mockReset().mockResolvedValue({ accounts: [], burstPeers: [], reviewers: [] });
   h.record.mockReset().mockResolvedValue(null);
   h.userWrite.mockReset();
   if (!h.handlers.list) await loadRoutes();
@@ -116,6 +133,7 @@ describe('GET /api/admin/shadow-detections', () => {
         legitimateHuman: 1,
         legitimateAutomation: 0,
         insufficientEvidence: 0,
+        automated: 0,
       },
     ];
     h.list.mockResolvedValue({ data: [item()], truncated: true });
@@ -133,6 +151,20 @@ describe('GET /api/admin/shadow-detections', () => {
     expect(res._getHeaders()['cache-control']).toBe('private, no-store');
     const body = res._getJSONData();
     expect(body).toMatchObject({ truncated: true, summary, data: [{ id: DETECTION_ID, revision: 0 }] });
+  });
+
+  it('returns the accounts, burst peers and reviewers of the listed detections', async () => {
+    const accounts = [{ userId: 'u1', status: 'suspended', signupMethod: 'google', currentCredits: 0 }];
+    const burstPeers = [{ detectionId: DETECTION_ID, userIds: ['u2'], truncated: false }];
+    const reviewers = [{ userId: 'u3', name: 'Test Admin' }];
+    h.list.mockResolvedValue({ data: [item()], truncated: false });
+    h.listContext.mockResolvedValue({ accounts, burstPeers, reviewers });
+    const { req, res } = request('GET');
+
+    await h.handlers.list.get(req, res);
+
+    expect(h.listContext).toHaveBeenCalledWith([expect.objectContaining({ id: DETECTION_ID })]);
+    expect(res._getJSONData()).toMatchObject({ accounts, burstPeers, reviewers });
   });
 
   it('rejects an unknown filter', async () => {
@@ -233,5 +265,140 @@ describe('POST /api/admin/shadow-detections/verdict', () => {
       await expect(h.handlers.verdict.post(req, res)).rejects.toMatchObject({ statusCode: 400 });
     }
     expect(h.addVerdict).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/admin/shadow-detections/bulk-verdict', () => {
+  const OTHER_ID = 'c'.repeat(24);
+  const GONE_ID = 'd'.repeat(24);
+  const bulkBody = (overrides: Record<string, unknown> = {}) => ({
+    items: [
+      { id: DETECTION_ID, expectedRevision: 0 },
+      { id: OTHER_ID, expectedRevision: 2 },
+    ],
+    verdict: 'insufficient_evidence',
+    reason: REASON,
+    ...overrides,
+  });
+
+  it('is session-only and gated on the moderation permission', () => {
+    expect(h.routeOptions).toHaveBeenCalledTimes(3);
+    expect(h.routeOptions).toHaveBeenLastCalledWith({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: 'users:moderate' },
+    });
+  });
+
+  it('grades every item as the signed-in admin, audits each graded record, and reports conflicts and missing ids', async () => {
+    const graded = item({ verdict: 'insufficient_evidence', revision: 1 });
+    const conflict = item({ id: OTHER_ID, verdict: 'confirmed_abuse', revision: 3 });
+    h.addVerdicts.mockResolvedValue({ graded: [graded], conflicts: [conflict], missing: [GONE_ID], failed: [] });
+    const { req, res } = request('POST', { body: bulkBody() });
+
+    await h.handlers.bulk.post(req, res);
+
+    expect(h.addVerdicts).toHaveBeenCalledWith({
+      items: [
+        { id: DETECTION_ID, expectedRevision: 0 },
+        { id: OTHER_ID, expectedRevision: 2 },
+      ],
+      verdict: 'insufficient_evidence',
+      reason: REASON,
+      reviewerId: ADMIN_ID,
+      onError: expect.any(Function),
+    });
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body.graded).toEqual([expect.objectContaining({ id: DETECTION_ID, revision: 1 })]);
+    expect(body.conflicts).toEqual([expect.objectContaining({ id: OTHER_ID, verdict: 'confirmed_abuse' })]);
+    expect(body.missing).toEqual([GONE_ID]);
+    expect(h.record).toHaveBeenCalledTimes(1);
+    expect(h.record).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'security.detection.reviewed',
+        target: expect.objectContaining({ kind: 'system', id: DETECTION_ID }),
+        reason: REASON,
+        details: expect.objectContaining({ detectionId: DETECTION_ID, verdict: 'insufficient_evidence', bulkSize: 2 }),
+      })
+    );
+    expect(h.userWrite).not.toHaveBeenCalled();
+  });
+
+  it('audits the graded records, logs and reports the ids that failed', async () => {
+    const writeError = new Error('cast failed');
+    h.addVerdicts.mockImplementation(async (input: { onError: (id: string, error: unknown) => void }) => {
+      input.onError(OTHER_ID, writeError);
+      return {
+        graded: [item({ verdict: 'insufficient_evidence', revision: 1 })],
+        conflicts: [],
+        missing: [],
+        failed: [OTHER_ID],
+      };
+    });
+    const { req, res } = request('POST', { body: bulkBody() });
+
+    await h.handlers.bulk.post(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().failed).toEqual([OTHER_ID]);
+    expect(h.record).toHaveBeenCalledTimes(1);
+    expect((req as unknown as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalledWith(
+      expect.stringContaining(OTHER_ID),
+      writeError
+    );
+  });
+
+  it('keeps the response when one audit write throws, and audits the rest', async () => {
+    h.addVerdicts.mockResolvedValue({
+      graded: [
+        item({ verdict: 'insufficient_evidence', revision: 1 }),
+        item({ id: OTHER_ID, verdict: 'insufficient_evidence', revision: 3 }),
+      ],
+      conflicts: [],
+      missing: [],
+      failed: [],
+    });
+    h.record.mockRejectedValueOnce(new Error('actor lookup failed'));
+    const { req, res } = request('POST', { body: bulkBody() });
+
+    await h.handlers.bulk.post(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.record).toHaveBeenCalledTimes(2);
+    expect((req as unknown as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalledWith(
+      expect.stringContaining(DETECTION_ID),
+      expect.any(Error)
+    );
+  });
+
+  it.each([
+    ['no items', { items: [] }],
+    [
+      'more items than the cap',
+      {
+        items: Array.from({ length: SHADOW_DETECTION_BULK_VERDICT_LIMIT + 1 }, (_, index) => ({
+          id: index.toString(16).padStart(24, '0'),
+          expectedRevision: 0,
+        })),
+      },
+    ],
+    [
+      'a duplicate id',
+      {
+        items: [
+          { id: DETECTION_ID, expectedRevision: 0 },
+          { id: DETECTION_ID.toUpperCase(), expectedRevision: 0 },
+        ],
+      },
+    ],
+    ['an invalid id', { items: [{ id: 'not-an-id', expectedRevision: 0 }] }],
+    ['an invalid verdict', { verdict: 'guilty' }],
+    ['a missing reason', { reason: undefined }],
+  ])('rejects %s before grading', async (_label, overrides) => {
+    const { req, res } = request('POST', { body: bulkBody(overrides) });
+    await expect(h.handlers.bulk.post(req, res)).rejects.toMatchObject({ statusCode: 400 });
+    expect(h.addVerdicts).not.toHaveBeenCalled();
   });
 });

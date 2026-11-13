@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({
+  recordOrganizationAuditEvent: vi.fn(),
+  recordOrganizationAuditEventSafe: vi.fn(),
+}));
 vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
   requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
 }));
@@ -102,6 +106,7 @@ describe('auth middleware: enforceMFA on a session that existed before it was tu
     ['POST', '/api/auth/mfa/setup'],
     ['POST', '/api/auth/mfa/verify-setup'],
     ['POST', '/api/auth/mfa/cancel-setup'],
+    ['POST', '/api/auth/mfa/enrollment-abandoned'],
     ['GET', '/api/auth/mfa/status'],
     ['GET', '/api/settings/fetch'],
     ['GET', '/api/identify'],

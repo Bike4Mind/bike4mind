@@ -1,11 +1,17 @@
-import { ADMIN_API_KEY_RESTORE_WINDOW_MINUTES, ApiKeyStatus, ConflictError, ForbiddenError } from '@bike4mind/common';
+import { ADMIN_API_KEY_RESTORE_WINDOW_MINUTES, ApiKeyStatus, ConflictError } from '@bike4mind/common';
 import { userRepository, withTransaction } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userService } from '@bike4mind/services';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { auditKeyRef, loadApiKeyOrThrow, ownerAuditTarget, readApiKeyIdParam } from '@server/utils/adminApiKeyActions';
+import {
+  assertCanActOnKeyOwner,
+  auditKeyRef,
+  loadApiKeyOrThrow,
+  ownerAuditTarget,
+  readApiKeyIdParam,
+} from '@server/utils/adminApiKeyActions';
 
 /**
  * POST /api/admin/user-api-keys/[id]/restore  { reason }
@@ -16,15 +22,15 @@ import { auditKeyRef, loadApiKeyOrThrow, ownerAuditTarget, readApiKeyIdParam } f
  * re-run: restoring returns the user to where they were. A blocked owner is refused, because a block
  * deactivates keys and lifting it must not bring any back (see userService/adminUpdate.ts).
  */
-const handler = baseApi({ auth: 'jwtOnly' })
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'keys:revoke' } })
   .use(csrfProtection())
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
     const keyId = readApiKeyIdParam(req);
     const reason = parseAdminActionReason(req.body?.reason);
     const adminId = req.user.id;
 
     const key = await loadApiKeyOrThrow(keyId);
+    await assertCanActOnKeyOwner(req.user, key.userId, 'restore API keys of');
     if (key.status !== ApiKeyStatus.DISABLED) throw new ConflictError('API key is not revoked');
     if (key.revokedBy !== adminId) {
       throw new ConflictError('Only the admin who revoked this key can restore it');

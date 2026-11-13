@@ -1,4 +1,5 @@
 import { Resource } from 'sst';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * Safe read for a manifest-optional secret (see b4m-core/resource manifest.ts
@@ -21,7 +22,7 @@ function readOptionalSecret(name: string, read: () => string | undefined): strin
   try {
     return read();
   } catch {
-    console.warn(
+    Logger.warn(
       `[config] ${name} is not linked/provisioned on this stage - degrading to undefined instead of throwing.`
     );
     return undefined;

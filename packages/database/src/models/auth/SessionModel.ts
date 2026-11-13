@@ -1,4 +1,5 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
+import { organizationContentPolicyPlugin } from '../../utils/organizationSharingPolicy';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
 import {
   ShareableDocumentRepository,
@@ -116,6 +117,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
   {
     name: { type: String, required: true },
     userId: { type: String, required: true },
+    organizationId: { type: String, immutable: true },
     lastUpdated: { type: Date, required: true },
     firstCreated: { type: Date, required: true },
     language: { type: String, required: false },
@@ -154,6 +156,13 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     temperature: { type: Number, required: false },
     maxToolCalls: { type: Number, required: false, min: 1 },
     autoNamePlaceholder: { type: String, required: false },
+    tutorial: {
+      type: new Schema(
+        { owner: { type: String, enum: ['core'], required: true }, moduleId: { type: String, required: true } },
+        { _id: false }
+      ),
+      required: false,
+    },
     openaiConversationId: { type: String, required: false },
     claudeConversationId: { type: String, required: false },
     summary: { type: String, required: false },
@@ -980,6 +989,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   }
 }
 SessionSchema.plugin(softDeletePlugin);
+SessionSchema.plugin(organizationContentPolicyPlugin);
 
 // Optimize session listing - used on homepage and many screens
 SessionSchema.index({ deletedAt: 1, userId: 1, lastUpdated: -1 });
@@ -996,6 +1006,10 @@ SessionSchema.index({ deletedAt: 1, 'users.permissions': 1, 'users.userId': 1 })
 
 // Optimize global access patterns
 SessionSchema.index({ deletedAt: 1, isGlobalRead: 1 });
+
+// Group-share arm of readAccessArms (the workspace-colleague check in GET /api/users/[id]); without it
+// that $or scans every session.
+SessionSchema.index({ deletedAt: 1, 'groups.groupId': 1 });
 
 // Tag-based search indexes
 SessionSchema.index({ deletedAt: 1, 'tags.name': 1, userId: 1 });

@@ -21,7 +21,8 @@ import {
   type ViewTab,
 } from '../shared';
 import { AnomalyBanner } from '../shared/AnomalyBanner';
-import { adminFocus } from '../shared/adminStyles';
+import { useMissingAdminPermission } from '../shared/MissingPermission';
+import { ADMIN_REGION_GAP, adminFocus } from '../shared/adminStyles';
 import { useAdminModal } from '../useAdminModal';
 import { useAdminRevenueTrend } from '../Revenue/useAdminRevenue';
 import { SUBSCRIPTIONS_SORT_COLUMNS, subscriptionsColumns } from './subscriptionsColumns';
@@ -274,14 +275,12 @@ const AdminSubscriptions: React.FC = () => {
   const pastDue = summary?.views.pastDue;
   const mrr = summary?.mrr;
   const mismatches = summary?.mismatches;
-  const sparklines = useTileSparklines(!searching && SPARKLINE_VIEWS.has(activeView?.id ?? ''));
+  // The revenue trend is a support:read route; a credits-only delegate gets the tiles without sparklines.
+  const canReadRevenue = useMissingAdminPermission('support:read') === null;
+  const sparklines = useTileSparklines(canReadRevenue && !searching && SPARKLINE_VIEWS.has(activeView?.id ?? ''));
 
   return (
-    <Stack
-      gap={2}
-      sx={{ width: '100%', minWidth: 0, px: { xs: 2, sm: 3 }, py: 2.5 }}
-      data-testid="admin-subscriptions-tab"
-    >
+    <Stack gap={ADMIN_REGION_GAP} sx={{ width: '100%', minWidth: 0 }} data-testid="admin-subscriptions-tab">
       <AdminPageHeader
         title="Subscriptions"
         count={total}
@@ -389,6 +388,12 @@ const AdminSubscriptions: React.FC = () => {
         </Alert>
       )}
       <SubscriptionsToolbar params={params} search={search} onSearchChange={setSearch} onChange={setParams} />
+      <Alert color="neutral" data-testid="admin-subscriptions-usage-definition">
+        Usage covers the last 28 days, billed to the listed user or organization, not its seats. Successful provider
+        requests use the Analytics source definitions; API is separate. Hover a usage cell or open a subscription for
+        the exact window and freshness. New subscriptions, internal/test billing owners and incomplete history are
+        excluded from usage cohorts. No recorded usage is not proof of inactivity or a prediction of churn.
+      </Alert>
       {listQuery.data?.searchTruncated && (
         <Alert color="warning" data-testid="admin-subscriptions-search-truncated">
           This search matches more accounts than the list can resolve. Narrow it to see every match.

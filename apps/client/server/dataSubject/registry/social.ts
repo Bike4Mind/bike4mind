@@ -1,3 +1,4 @@
+import { expiresAfterTtl } from './retention';
 import type { DataHolderRegistry } from '../types';
 
 export const socialHolders = {
@@ -21,12 +22,29 @@ export const socialHolders = {
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
       // Older rows may carry only the email.
       { path: 'userEmail', matchBy: 'email', action: 'deleteDocument' },
+      // The admin who last changed the report's status; the report belongs to its reporter.
+      { path: 'handledBy', matchBy: 'userId', action: 'anonymize' },
     ],
     // A display name on the person's own submission; erased with the document.
     unrelatedPaths: ['username'],
   },
   // Free text of a report; shares its _id with the owning Feedback and expires after 90 days.
   FeedbackText: { kind: 'viaParent', parent: 'Feedback', foreignKey: '_id' },
+  FeedbackAi: { kind: 'viaParent', parent: 'Feedback', foreignKey: 'feedbackId', secretPaths: ['vector'] },
+  FeedbackNote: {
+    kind: 'holder',
+    secretPaths: ['body'],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      {
+        path: 'author.id',
+        matchBy: 'userId',
+        action: 'retain',
+        reason: 'Administrator attribution retained only while the private feedback note exists',
+        retention: expiresAfterTtl('expiresAt', 0),
+      },
+    ],
+  },
   Friendship: {
     kind: 'holder',
     references: [

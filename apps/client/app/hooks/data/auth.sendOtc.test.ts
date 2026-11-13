@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { renderHook, waitFor } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AxiosError, type AxiosResponse } from 'axios';
@@ -183,5 +183,29 @@ describe('useSendOTC challenge gate', () => {
     expect(rejection.message).toContain('cancelled');
     expect(rejection.message).not.toContain('refresh');
     expect(postMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('useSendOTC form token refresh', () => {
+  const setup = () => {
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } });
+    const spy = vi.spyOn(client, 'invalidateQueries');
+    const clientWrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client }, children);
+    return { spy, ...renderHook(() => useSendOTC(), { wrapper: clientWrapper }) };
+  };
+
+  it('refetches the signup form token after a successful send', async () => {
+    postMock.mockResolvedValue({ data: { pendingToken: 'p' } });
+    const { spy, result } = setup();
+    await result.current.mutateAsync({ email: 'a@b.co' } as never);
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ['signupFormToken'] }));
+  });
+
+  it('keeps the token when the send fails', async () => {
+    postMock.mockRejectedValueOnce(make429({}));
+    const { spy, result } = setup();
+    await expect(result.current.mutateAsync({ email: 'a@b.co' } as never)).rejects.toBeDefined();
+    expect(spy).not.toHaveBeenCalledWith({ queryKey: ['signupFormToken'] });
   });
 });

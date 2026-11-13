@@ -1,5 +1,6 @@
 import type { AdminAssistantToolName } from '@bike4mind/common';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
+import { getAiAdvisoriesTool } from './tools/getAiAdvisories';
 import { getHealthTool } from './tools/getHealth';
 import { getOrgTool } from './tools/getOrg';
 import { getOrgUsageTool } from './tools/getOrgUsage';
@@ -9,6 +10,7 @@ import { getUsageSignalsTool } from './tools/getUsageSignals';
 import { getUserActivityTool } from './tools/getUserActivity';
 import { getUserCreditsTool } from './tools/getUserCredits';
 import { getUserFeedbackTool } from './tools/getUserFeedback';
+import { searchGuideTool } from './tools/searchGuide';
 
 export { defineAdminTool } from './defineAdminTool';
 export type { AdminToolResult } from './defineAdminTool';
@@ -18,6 +20,7 @@ type AdminToolRegistry = Partial<Record<AdminAssistantToolName, ToolDefinition>>
 // Each admin tool registers itself here (a full Record, so a declared name without a tool fails to compile),
 // and adds a `data` case to b4m-core/services/src/llm/evals/adminAssistant/cases.ts.
 const ADMIN_TOOL_REGISTRY: Record<AdminAssistantToolName, ToolDefinition> = {
+  admin_get_ai_advisories: getAiAdvisoriesTool,
   admin_get_health: getHealthTool,
   admin_get_org: getOrgTool,
   admin_get_org_usage: getOrgUsageTool,
@@ -27,6 +30,7 @@ const ADMIN_TOOL_REGISTRY: Record<AdminAssistantToolName, ToolDefinition> = {
   admin_get_user_activity: getUserActivityTool,
   admin_get_user_credits: getUserCreditsTool,
   admin_get_user_feedback: getUserFeedbackTool,
+  admin_search_guide: searchGuideTool,
 };
 
 /** Definitions to merge into a turn's externalTools; empty unless the loaded user is an admin. */

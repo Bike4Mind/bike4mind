@@ -2,13 +2,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  adminSettings: { getSettingsValue: vi.fn() },
   // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs.
   tx: [] as string[],
   touchIfStable: vi.fn(),
   assertLakeAccess: vi.fn(),
   assertLakeRebuildAccess: vi.fn(),
   computeLakeMemoryHealth: vi.fn(),
-  getSettingsValue: vi.fn(),
   tryIncrementWithinLimitFixedWindow: vi.fn(),
   setLakeMemoryCursor: vi.fn(),
   sendToQueue: vi.fn(),
@@ -70,7 +70,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   dataLakeRepository: { setLakeMemoryCursor: h.setLakeMemoryCursor, touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {},
-  adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
+  adminSettingsRepository: h.adminSettings,
   cacheRepository: { tryIncrementWithinLimitFixedWindow: h.tryIncrementWithinLimitFixedWindow },
   memoryLedgerRepository: {},
 }));
@@ -78,7 +78,7 @@ vi.mock('@bike4mind/common', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>();
   return actual;
 });
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 vi.mock('@bike4mind/server-utils/utils/auditLog', async importOriginal => {
@@ -137,7 +137,7 @@ beforeEach(() => {
   h.assertLakeRebuildAccess.mockImplementation(async () => (h.tx.push('gate'), lake));
   h.touchIfStable.mockImplementation(async () => void h.tx.push('touch'));
   h.computeLakeMemoryHealth.mockResolvedValue(health);
-  h.getSettingsValue.mockResolvedValue(true);
+  h.adminSettings.getSettingsValue.mockResolvedValue(true);
   h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 1000) });
   h.setLakeMemoryCursor.mockResolvedValue(undefined);
   h.sendToQueue.mockImplementation(async () => void h.tx.push('send'));
@@ -148,7 +148,11 @@ describe('GET /api/data-lakes/[id]/lake-memory', () => {
   it('returns the build door state without mutating anything', async () => {
     const { json } = await invoke('GET');
     expect(json).toHaveBeenCalledWith(health);
-    expect(h.assertLakeAccess).toHaveBeenCalled();
+    expect(h.assertLakeAccess).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ settings: h.adminSettings }) })
+    );
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(h.setLakeMemoryCursor).not.toHaveBeenCalled();
     // The caller brake is POST-scoped: this GET is the state poll the manager panel drives while a
@@ -169,6 +173,7 @@ describe('POST /api/data-lakes/[id]/lake-memory', () => {
     const { res, json } = await invoke('POST');
 
     expect(h.assertLakeRebuildAccess).toHaveBeenCalled();
+    expect(h.assertLakeRebuildAccess.mock.calls[0][2].db).not.toHaveProperty('settings');
     expect(h.setLakeMemoryCursor).not.toHaveBeenCalled();
     expect(h.sendToQueue).toHaveBeenCalledTimes(1);
     expect(h.sendToQueue).toHaveBeenCalledWith(
@@ -188,7 +193,7 @@ describe('POST /api/data-lakes/[id]/lake-memory', () => {
   });
 
   it('refuses with 409 when the platform flag is off, and never mutates the lake', async () => {
-    h.getSettingsValue.mockResolvedValue(false);
+    h.adminSettings.getSettingsValue.mockResolvedValue(false);
     await expect(invoke('POST')).rejects.toThrow(/disabled platform-wide/);
     expect(h.touchIfStable).not.toHaveBeenCalled();
     expect(h.setLakeMemoryCursor).not.toHaveBeenCalled();

@@ -1,6 +1,6 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
-import { DataSubscribeRequestAction, Permission } from '@bike4mind/common';
+import { DataSubscribeRequestAction, Permission, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
 import { z } from 'zod';
 import {
   AdminSettings,
@@ -125,6 +125,16 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   const userAbility = ability(user);
 
+  const requestedOrgId =
+    collectionName === Organization.collection.collectionName && Object.keys(query).length === 1
+      ? query._id
+      : undefined;
+  const subscribedOrg =
+    typeof requestedOrgId === 'string' && mongoose.isValidObjectId(requestedOrgId)
+      ? await Organization.findById(requestedOrgId)
+      : null;
+  const isPrivilegedOrgSubscriber = !!subscribedOrg && isOrgOwnerOrCurrentAdmin(user, subscribedOrg);
+
   // 'scope' limits the scope of the query, to only things you're allowed to see.
   // mostly it uses the accessibleBy function from the casl/mongoose package.  There
   // are some cases where a Model isn't handled by casl/mongoose, and we handle those
@@ -192,10 +202,12 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // relays, not just the one-time fetchInitialData query above.
   const fieldLimits = resolveFieldLimits(collectionName, {
     questCollectionName: Quest.collection.collectionName,
+    sessionCollectionName: SessionModel.collection.collectionName,
     organizationCollectionName: Organization.collection.collectionName,
     inviteCollectionName: Invite.collection.collectionName,
     isQuestOwner: isOwnQuestSession,
     isPlatformAdmin: !!user.isAdmin,
+    isPrivilegedOrgSubscriber,
   });
   const withheldFilterPaths = findWithheldFilterPaths(query, fieldLimits);
   if (withheldFilterPaths.length) {

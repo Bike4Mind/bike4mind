@@ -13,7 +13,7 @@ import {
   USER_STATUS_FILTERS,
   USER_VERDICT_FILTERS,
   type UserFunnelStep,
-} from '@client/app/utils/adminUsersFilter';
+} from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { AdminSearchInput } from '../../shared/FilterBar';
 import { FilterChip, type FilterChipOption } from '../../shared/FilterChip';
 import { SegmentedControl } from '../../shared/SegmentedControl';
@@ -145,7 +145,7 @@ export function UsersToolbar({
         <AdminSearchInput
           value={search}
           onChange={onSearchChange}
-          label="Search name, email or user ID"
+          label="Search name, email, user ID or provider ID"
           data-testid="admin-users-search-input"
         />
         <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1} sx={{ ml: { md: 'auto' } }}>

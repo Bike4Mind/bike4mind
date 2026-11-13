@@ -13,7 +13,7 @@ import { secrets } from './secrets';
 // hashed in @bike4mind/infra, where the ways it can go quietly constant are testable; nothing
 // imports this file. See mcpContentHash.ts for which ways and why.
 const MCP_CONTENT_HASH = computeMcpContentHash({
-  paths: ['b4m-core/mcp', 'b4m-core/common', 'b4m-core/hearth'],
+  paths: ['b4m-core/mcp', 'b4m-core/common', 'b4m-core/hearth', 'b4m-core/observability'],
   readTree: path => execFileSync('git', ['ls-tree', '-r', 'HEAD', path]).toString(),
 });
 
@@ -77,6 +77,16 @@ export const mcpHandler = new sst.aws.Function('mcpHandler', {
     {
       from: 'b4m-core/hearth/package.json',
       to: 'node_modules/@bike4mind/hearth/package.json',
+    },
+    // Copied, not installed, for the same reason as hearth: the MCP stderr log writer imports
+    // redactLogValue from it, and it has no runtime dependencies of its own.
+    {
+      from: 'b4m-core/observability/dist',
+      to: 'node_modules/@bike4mind/observability/dist',
+    },
+    {
+      from: 'b4m-core/observability/package.json',
+      to: 'node_modules/@bike4mind/observability/package.json',
     },
   ],
 });

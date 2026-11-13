@@ -24,13 +24,20 @@ export type ProviderPollResult =
   | { status: 'running'; /** Fraction complete, 0..1; the job handler clamps anything outside. */ progress?: number }
   | ProviderTerminalResult;
 
-export type ResolvedInputImage = { role: VideoInputRole; bytes: Buffer; mimeType: string };
+// The role vocabulary is the medium's (video frames, image edit sources); video is the default for existing callers.
+export type ResolvedInputImage<TRole extends string = VideoInputRole> = {
+  role: TRole;
+  bytes: Buffer;
+  mimeType: string;
+};
 
 /** The request's input images, loaded, in request order. Validation has already checked each role against the model. */
-export type ResolvedInputs = { images?: readonly ResolvedInputImage[] };
+export type ResolvedInputs<TRole extends string = VideoInputRole> = { images?: readonly ResolvedInputImage<TRole>[] };
 
-export const findInputImage = (inputs: ResolvedInputs, role: VideoInputRole): ResolvedInputImage | undefined =>
-  inputs.images?.find(image => image.role === role);
+export const findInputImage = <TRole extends string>(
+  inputs: ResolvedInputs<TRole>,
+  role: TRole
+): ResolvedInputImage<TRole> | undefined => inputs.images?.find(image => image.role === role);
 
 export type ProviderContext = {
   apiKey: string;
@@ -47,15 +54,17 @@ type ProviderBase<TProviderId extends string, TModelId extends string> = {
   fetchOutput(output: ProviderOutput, ctx: ProviderContext): Promise<Buffer>;
 };
 
-/** Submit returns a handle the job engine polls (video). */
-export type AsyncGenerationProvider<TProviderId extends string, TModelId extends string, TRequest> = ProviderBase<
-  TProviderId,
-  TModelId
-> & {
+/** Submit returns a handle the job engine polls (video, BFL images). */
+export type AsyncGenerationProvider<
+  TProviderId extends string,
+  TModelId extends string,
+  TRequest,
+  TRole extends string = VideoInputRole,
+> = ProviderBase<TProviderId, TModelId> & {
   readonly mode: 'async';
   submit(
     request: TRequest,
-    inputs: ResolvedInputs,
+    inputs: ResolvedInputs<TRole>,
     ctx: ProviderContext
   ): Promise<GenerationProviderJobHandle<TProviderId>>;
   poll(handle: GenerationProviderJobHandle<TProviderId>, ctx: ProviderContext): Promise<ProviderPollResult>;
@@ -67,12 +76,14 @@ export type AsyncGenerationProvider<TProviderId extends string, TModelId extends
  * timeout or network error leaves the outcome unknown, so throw and the job handler must not call it again.
  * Return `failed` with `retryable: true` only when the provider definitively generated nothing (e.g. a 429).
  */
-export type SyncGenerationProvider<TProviderId extends string, TModelId extends string, TRequest> = ProviderBase<
-  TProviderId,
-  TModelId
-> & {
+export type SyncGenerationProvider<
+  TProviderId extends string,
+  TModelId extends string,
+  TRequest,
+  TRole extends string = VideoInputRole,
+> = ProviderBase<TProviderId, TModelId> & {
   readonly mode: 'sync';
-  generate(request: TRequest, inputs: ResolvedInputs, ctx: ProviderContext): Promise<ProviderTerminalResult>;
+  generate(request: TRequest, inputs: ResolvedInputs<TRole>, ctx: ProviderContext): Promise<ProviderTerminalResult>;
 };
 
 // Every method is one bounded call: no method sleeps, loops or polls. The job engine owns waiting.

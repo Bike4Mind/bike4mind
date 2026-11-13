@@ -13,6 +13,9 @@ import {
   type AudioGenerationToolCall,
   type AuthOrigin,
   AuthOriginSchema,
+  type PromptMeta,
+  CONFIDENCE_GATE_MODES,
+  type ConfidenceGateMode,
 } from '@bike4mind/common';
 export { AGENT_EXECUTION_STATUSES, ACTIVE_AGENT_EXECUTION_STATUSES, type AgentExecutionStatus };
 
@@ -77,6 +80,28 @@ export interface IPendingGate {
   confidence: number;
   reason: string;
   requestedAt: Date;
+}
+
+/**
+ * The finished result a completion-time `block` pause holds back (see `low_confidence_completion`
+ * in agentExecutor). The executor's per-invocation state (images, side effects, retrieval) is gone
+ * by the time the user answers, so `gate_response: stop` finalizes from this snapshot to persist
+ * the same result a normal completion would. Cleared with `pendingGate`.
+ */
+export interface IPendingCompletion {
+  answer?: string;
+  /** `answer` plus any DAG child artifact blocks, as written to the Quest. */
+  replyText: string;
+  totalTokens: number;
+  totalIterations: number;
+  reachedMaxIterations: boolean;
+  /** Whether the answer landed below the iteration ceiling, so Continue has room to reconsider it. */
+  canReconsider: boolean;
+  lowConfidence: { confidence: number; reason: string };
+  generatedImages: string[];
+  finishReason?: string;
+  allSideEffects: { type: string; payload: unknown }[];
+  retrievalSummary?: PromptMeta['retrieval'];
 }
 
 // --- Confidence Telemetry ---
@@ -246,7 +271,6 @@ export interface IAgentExecution {
    * - `agentExecute.handleStart` (WS client dispatch) writes `cmd.questId`, which is actually the
    *   sessionId (a back-ref hack from the client - see that file's own comment refusing to fall
    *   back to it for the Lambda payload).
-   * - `questmaster/v5/runQuestNode.ts` writes the REAL Quest id here instead.
    * - Subagent and DAG children inherit whichever value their parent carried.
    *
    * Because the meaning depends on the creator, no consumer can safely interpret it. Use
@@ -350,6 +374,12 @@ export interface IAgentExecution {
   /** Whether the start payload pinned an agent; absent on executions predating this marker. */
   profileIsPinned?: boolean;
   /**
+   * Confidence-gate settings resolved on the first invocation (agent -> admin defaults -> built-in).
+   * Continuations re-read them because the resolved profile does not survive a Lambda handoff.
+   * Absent on executions predating this field.
+   */
+  confidenceGate?: { threshold: number; mode: ConfidenceGateMode; selfReport: boolean };
+  /**
    * The toolbelt names the first invocation resolved (profile + payload, ambient Smart Tools
    * included, denials already subtracted). Continuations replay this instead of recomputing,
    * because the start payload that carried the ambient picks is gone after a Lambda handoff.
@@ -370,7 +400,7 @@ export interface IAgentExecution {
   /**
    * How the request that started the run was authenticated, forwarded to ToolContext.authOrigin and
    * inherited by child and DAG-node runs. Optional only for runs started before the field existed;
-   * read it through `executionTurnAuth` (apps/client/server/auth/turnAuth.ts), which fails those closed.
+   * read it through `executionTurnAuth` (packages/server-utils/src/auth/turnAuth.ts), which fails those closed.
    */
   authOrigin?: AuthOrigin;
   /**
@@ -441,6 +471,9 @@ export interface IAgentExecution {
    * the gate threshold; cleared when the client responds via `gate_response`.
    */
   pendingGate?: IPendingGate;
+
+  /** Set alongside `pendingGate` only when the pause holds a finished answer. */
+  pendingCompletion?: IPendingCompletion;
 
   /**
    * Confidence-gate telemetry (issue #56 M1.1). Accumulated every iteration the
@@ -787,6 +820,17 @@ const AgentExecutionSchema = new mongoose.Schema(
     // materialize [] on every doc, indistinguishable from "profile denies nothing").
     profileDeniedTools: { type: [String], default: undefined },
     profileIsPinned: { type: Boolean },
+    confidenceGate: {
+      type: new mongoose.Schema(
+        {
+          threshold: { type: Number, required: true, min: 0, max: 1 },
+          mode: { type: String, enum: CONFIDENCE_GATE_MODES, required: true },
+          selfReport: { type: Boolean, required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     resolvedEnabledTools: { type: [String], default: undefined },
     scopeDeniedTools: { type: [String], default: undefined },
     apiKeyId: { type: String },
@@ -836,6 +880,7 @@ const AgentExecutionSchema = new mongoose.Schema(
 
     // Confidence-gate state
     pendingGate: { type: PendingGateSchema, required: false },
+    pendingCompletion: { type: mongoose.Schema.Types.Mixed, required: false },
 
     // Confidence-gate telemetry (#56 M1.1). `default: () => ({})` instantiates
     // the subdoc so its field defaults (evaluatedCount 0, minConfidence 1, ...)
@@ -1510,6 +1555,14 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     );
   }
 
+  /** Written on the first invocation; continuations re-read it (see IAgentExecution.confidenceGate). */
+  async persistConfidenceGate(
+    id: string,
+    confidenceGate: NonNullable<IAgentExecution['confidenceGate']>
+  ): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { confidenceGate } });
+  }
+
   /** Written once on the first invocation; continuations re-read it
    *  (see IAgentExecution.resolvedEnabledTools). */
   async persistResolvedEnabledTools(id: string, resolvedEnabledTools: string[]): Promise<void> {
@@ -1548,6 +1601,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       status: 'awaiting_permission' | 'paused';
       pendingPermission?: IPendingPermission;
       pendingGate?: IPendingGate;
+      pendingCompletion?: IPendingCompletion;
+      checkpoint?: unknown;
     }
   ): Promise<boolean> {
     const result = await this.model.updateOne(
@@ -1694,13 +1749,25 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * over a doc that's already logically aborted. Caller checks the return and
    * bails when `false`.
    *
-   * Resets `lowConfidenceStreak`: the pause consumes the streak, so after resume the
-   * run must build a fresh one before it can pause again.
+   * A mid-run pause resets `lowConfidenceStreak`: the pause consumes the streak, so after resume
+   * the run must build a fresh one before it can pause again. A completion-time pause (`held`) keeps
+   * it, so a reconsidered answer that gathers no better evidence is flagged again, and writes the
+   * final checkpoint with the result so both reflect the same end-of-run state.
    */
-  async setPendingGate(id: string, pendingGate: IPendingGate): Promise<boolean> {
+  async setPendingGate(
+    id: string,
+    pendingGate: IPendingGate,
+    held?: { completion: IPendingCompletion; checkpoint: unknown }
+  ): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: id, abortedAt: { $exists: false } },
-      { $set: { pendingGate, status: 'paused', lowConfidenceStreak: 0 } }
+      {
+        $set: {
+          pendingGate,
+          status: 'paused',
+          ...(held ? { pendingCompletion: held.completion, checkpoint: held.checkpoint } : { lowConfidenceStreak: 0 }),
+        },
+      }
     );
     return result.modifiedCount > 0;
   }
@@ -1709,12 +1776,20 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * Clear the gate marker. Caller is responsible for any subsequent status
    * transition (continuing -> re-invoke Lambda, completed -> markComplete).
    * Mirrors the `clearWaitingOnChild` `abortedAt`-not-exists guard so a
-   * concurrent abort doesn't get resurrected.
+   * concurrent abort doesn't get resurrected. `checkpoint`, when given, is written in the
+   * same update so a resumed run never reads a checkpoint older than the gate decision.
+   *
+   * Also CAS-guarded on a live gate: `timestamps: true` bumps `updatedAt` on every write, so
+   * without the `pendingGate` filter a repeated or racing response would still report a
+   * modification and act on the same pause twice.
    */
-  async clearPendingGate(id: string): Promise<boolean> {
+  async clearPendingGate(id: string, opts?: { checkpoint?: unknown; keepCompletion?: boolean }): Promise<boolean> {
     const result = await this.model.updateOne(
-      { _id: id, abortedAt: { $exists: false } },
-      { $unset: { pendingGate: '' } }
+      { _id: id, status: 'paused', pendingGate: { $exists: true }, abortedAt: { $exists: false } },
+      {
+        $unset: opts?.keepCompletion ? { pendingGate: '' } : { pendingGate: '', pendingCompletion: '' },
+        ...(opts?.checkpoint !== undefined && { $set: { checkpoint: opts.checkpoint } }),
+      }
     );
     return result.modifiedCount > 0;
   }
@@ -1785,6 +1860,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
           result,
           completedAt: new Date(),
         },
+        $unset: { pendingCompletion: '' },
       }
     );
   }

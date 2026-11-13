@@ -113,11 +113,12 @@ export function buildGitHubLakeFixAccessUrl(
 }
 
 /** Model defaults (enabled true, status 'connected') are applied here too, for rows that predate them. */
-export function toGitHubLakeConnectionResponse(
+export async function toGitHubLakeConnectionResponse(
   conn: IOrgGitHubLakeConnectionDocument,
   fileCount: number,
   config: GitHubLakeAppConfig | null = getGitHubLakeAppConfig()
-): IOrgGitHubLakeConnectionResponse {
+): Promise<IOrgGitHubLakeConnectionResponse> {
+  const bindings = await orgGitHubLakeConnectionRepository.findByInstallationId(conn.installationId);
   return {
     id: conn.id,
     accountLogin: conn.accountLogin,
@@ -135,6 +136,7 @@ export function toGitHubLakeConnectionResponse(
     skippedCount: conn.treeSkippedCount ?? null,
     syncStale: conn.status === 'syncing' && !isGitHubLakeSyncClaimLive(conn),
     fileCount,
+    isLastInstallationBinding: !bindings.some(binding => binding.id !== conn.id),
     disconnecting: !!conn.disconnectRequestedAt,
     disconnectStalled: !!conn.disconnectRequestedAt && isGitHubDisconnectStalled(conn.disconnectRequestedAt),
     fixAccessUrl: buildGitHubLakeFixAccessUrl(config, conn.accountId),
@@ -423,10 +425,13 @@ export async function completeGitHubLakeConnection(params: {
   installationId: number;
   repositoryId: number;
   logger: Pick<Logger, 'warn'>;
+  /** Runs once the caller is authorized on the lake, before any GitHub call or write (plan gate). */
+  assertAllowed: (owner: Awaited<ReturnType<typeof resolveConnectableLake>>['owner']) => Promise<void>;
 }): Promise<IOrgGitHubLakeConnectionDocument> {
   const { config, user, installationId, repositoryId, logger } = params;
   const nonceHash = requireGitHubLakeFlowNonce(params.nonceHash);
   const { lakeId, owner } = await resolveConnectableLake(user, params.dataLakeId);
+  await params.assertAllowed(owner);
   const userToken = await readGitHubLakeUserToken(nonceHash, user, lakeId);
 
   const visibleRepositories = await withGitHubLakeUserToken(config, nonceHash, () =>

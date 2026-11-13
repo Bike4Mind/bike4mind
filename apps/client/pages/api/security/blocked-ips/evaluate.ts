@@ -1,15 +1,13 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { blockedIPRepository, withTransaction } from '@bike4mind/database';
 import { runOauthAbuseAutoBlock } from '@bike4mind/server-utils/security/oauthAbuseAutoBlock';
-import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 // POST /api/security/blocked-ips/evaluate
 // Manual trigger for the auto-block that the oauthAbuseAutoBlock cron runs every minute, using the
-// same admin-set threshold, window and escalation. Writes to the IP blocklist, so it is admin-only.
+// same admin-set threshold, window and escalation. Writes to the IP blocklist, so it needs settings:manage.
 // Unlike the cron, each new block here is audited inside its own transaction.
-const handler = baseApi().post(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(async (req, res) => {
   const auditFailed: string[] = [];
   const { blocked, failed, evaluatedSince } = await runOauthAbuseAutoBlock({
     now: new Date(),

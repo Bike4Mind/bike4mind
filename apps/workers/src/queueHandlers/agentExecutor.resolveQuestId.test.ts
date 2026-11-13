@@ -33,7 +33,7 @@ describe('resolveExecutionQuestId', () => {
  * it - the files that mention it do so only in comments), so swapping
  * `executionLinkedQuestId: execution.linkedQuestId` for `execution.questId` leaves every unit test
  * above green while writing session ids into agent-mode `LakeAccessEvent.questId` rows on the WS
- * dispatch lineage. Same string-parsing approach as `server/__tests__/lakeAccessEventsWiring.test.ts`,
+ * dispatch lineage. Same string-parsing approach as `server/__tests__/lakeAccessEventsWiring.repo.test.ts`,
  * and for the same reason: an optional field wired to the wrong source fails silently.
  */
 describe('resolveExecutionQuestId call site in agentExecutor', () => {

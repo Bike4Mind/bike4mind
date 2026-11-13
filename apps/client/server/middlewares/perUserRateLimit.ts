@@ -1,6 +1,6 @@
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import type { RequestHandler } from 'express';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
 
 /**
  * Per-minute limit at the caller's subscription tier. Pass a named `bucket` so a dynamic route

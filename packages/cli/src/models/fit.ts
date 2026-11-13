@@ -16,8 +16,6 @@ import { formatBytes, largestProjectorBytes, type PullPlan } from './localModels
 /** What makes an Intel card's memory readable on Linux, for hardware where vramNeedsLlamaServer holds. */
 export const LLAMA_SERVER_VRAM_HELP =
   'Linux does not report it; put a llama.cpp SYCL or Vulkan build of llama-server first on PATH, with its ggml-sycl or ggml-vulkan library beside it, and b4m reads it from there.';
-export const OLLAMA_SKIPS_INTEL_IGPU =
-  'Ollama does not use Intel integrated graphics, so picks and badges assume the CPU.';
 
 export type FitVerdict = SizeFitLevel | 'unknown';
 

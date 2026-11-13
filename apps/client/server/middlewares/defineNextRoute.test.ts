@@ -13,6 +13,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import type { IncomingMessage, ServerResponse } from 'http';
 import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
 
@@ -78,10 +79,9 @@ const JWT_USER = { id: 'jwt-user', _id: 'jwt-user', isBanned: false, disputePend
 vi.mock('@server/auth/auth', async orig => {
   const actual = await orig<Record<string, unknown>>();
   const nc = (await import('next-connect')).default;
-  // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
-  const authRouter = nc<any, any>().use((req: any, _res: any, next: any) => {
+  const authRouter = nc<IncomingMessage & { user?: unknown }, ServerResponse>().use((req, _res, next) => {
     if (req.user) return next(); // already authenticated upstream (api key)
-    const header = req.headers.authorization as string | undefined;
+    const header = req.headers.authorization;
     if (header?.startsWith('Bearer ') && !header.includes('b4m_')) {
       req.user = JWT_USER;
       return next();
@@ -101,6 +101,9 @@ import {
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi, methodNotAllowedHandler } from './baseApi';
 import { nextRouteForContract } from './defineNextRoute';
+
+type RouteArgs = Parameters<ReturnType<typeof nextRouteForContract>>;
+type RateLimitHandler = NonNullable<NonNullable<Parameters<typeof nextRouteForContract>[1]>['rateLimit']>;
 
 const BodySchema = z.object({ message: z.string(), count: z.number().positive().default(1) });
 const OkSchema = z.object({ ok: z.boolean() });
@@ -143,9 +146,8 @@ function fire({
     },
     { eventEmitter: EventEmitter }
   );
-  // any: node-mocks-http mocks aren't structurally the Express types the
-  // next-connect handler is typed against; the sibling tests cast the same way.
-  return { req: req as any, res: res as any };
+  // node-mocks-http mocks aren't structurally the Express types the handler is typed against.
+  return { req: req as unknown as RouteArgs[0] & typeof req, res: res as unknown as RouteArgs[1] & typeof res };
 }
 
 const validKey = (scopes: ApiKeyScope[]) =>
@@ -295,8 +297,7 @@ describe('nextRouteForContract', () => {
       const limiter = vi.fn((_req: unknown, _res: unknown, next: () => void) => next());
       const handlerFn = vi.fn();
       const route = nextRouteForContract(makeContract())
-        // any: the fixture middleware isn't typed as the adapter's ValidatedReq handler.
-        .use(limiter as any)
+        .use(limiter as unknown as RateLimitHandler)
         .post(handlerFn);
 
       validKey([ApiKeyScope.AI_CHAT]);
@@ -314,8 +315,9 @@ describe('nextRouteForContract', () => {
       // bodies still meters instead of 422ing for free ahead of the limiter.
       const limiter = vi.fn((_req: unknown, _res: unknown, next: () => void) => next());
       const handlerFn = vi.fn();
-      // any: the fixture limiter isn't typed as the adapter's ValidatedReq handler.
-      const route = nextRouteForContract(makeContract(), { rateLimit: limiter as any }).post(handlerFn);
+      const route = nextRouteForContract(makeContract(), { rateLimit: limiter as unknown as RateLimitHandler }).post(
+        handlerFn
+      );
 
       validKey([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire({ apiKey: 'b4m_live_key', body: { message: 'hi', count: -1 } });
@@ -436,8 +438,9 @@ describe('nextRouteForContract', () => {
       validKey([ApiKeyScope.AI_CHAT]);
       const limiter = (_req: unknown, res: { status: (code: number) => { json: (body: unknown) => void } }) =>
         res.status(429).json({ error: 'slow down' });
-      // any: the fixture limiter isn't typed as the adapter's ValidatedReq handler.
-      const route = nextRouteForContract(makeContract({ deprecated }), { rateLimit: limiter as any }).post(vi.fn());
+      const route = nextRouteForContract(makeContract({ deprecated }), {
+        rateLimit: limiter as unknown as RateLimitHandler,
+      }).post(vi.fn());
       const { req, res } = fire({ apiKey: 'b4m_live_x' });
       await route(req, res);
       expect(res._getStatusCode()).toBe(429);
@@ -461,8 +464,9 @@ describe('nextRouteForContract', () => {
       mockCheckClientVersion.mockResolvedValue(new UpgradeRequiredError('b4m-sdk-ts', '2.0.0', '2.1.0'));
       const limiter = vi.fn();
       const handler = vi.fn();
-      // any: the fixture limiter isn't typed as the adapter's ValidatedReq handler.
-      const route = nextRouteForContract(makeContract(), { rateLimit: limiter as any }).post(handler);
+      const route = nextRouteForContract(makeContract(), { rateLimit: limiter as unknown as RateLimitHandler }).post(
+        handler
+      );
       const { req, res } = fire({ apiKey: 'b4m_live_x', body: { message: 1 }, headers: clientHeaders });
       await route(req, res);
       expect(res._getStatusCode()).toBe(426);

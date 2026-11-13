@@ -5,7 +5,7 @@ import express from 'express';
 
 // Real @bike4mind/common (pure SSE + origin helpers). Only the seams below are mocked.
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
@@ -73,7 +73,7 @@ vi.mock('@bike4mind/services/llm', async () => {
 });
 
 vi.mock('@bike4mind/llm-adapters', () => ({
-  // adapterFamily is what the embed reasoning gate reads; a catalog row always carries one.
+  // The embed reasoning gate reads adapterFamily, else backend (adapter-literal models carry no family).
   getAvailableModels: vi
     .fn()
     .mockResolvedValue([{ id: 'test-model', backend: 'anthropic', adapterFamily: 'anthropic-messages' }]),
@@ -124,7 +124,7 @@ vi.mock('@server/embed/identifiedEmbedUser', () => ({
 
 const mockVerifyEmbedApiKey = vi.hoisted(() => vi.fn());
 const mockVerifyEmbedKeyById = vi.hoisted(() => vi.fn());
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyEmbedApiKey: mockVerifyEmbedApiKey,
   verifyEmbedKeyById: mockVerifyEmbedKeyById,
 }));
@@ -151,7 +151,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
 const mockRecordUserLimitEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/billing/userLimitEvents', () => ({ recordUserLimitEvent: mockRecordUserLimitEvent }));
+vi.mock('@bike4mind/server-utils/billing/userLimitEvents', () => ({ recordUserLimitEvent: mockRecordUserLimitEvent }));
 
 import { registerEmbedRoutes } from './embedRoute';
 import { spendCapExceededError } from '@bike4mind/common';
@@ -1006,20 +1006,63 @@ describe('POST /api/embed/chat - server-side tools', () => {
   });
 
   it.each([
-    ['deepseek', 'a family that wraps reasoning in the text channel'],
-    ['ollama', 'a family that wraps reasoning in the text channel'],
-    [undefined, 'a model the catalog cannot describe'],
-  ])('refuses %s before opening the stream (%s)', async (adapterFamily, _why) => {
+    [
+      'a family that wraps reasoning in the text channel',
+      { id: 'test-model', backend: 'anthropic', adapterFamily: 'deepseek' },
+    ],
+    [
+      'a family that wraps reasoning in the text channel',
+      { id: 'test-model', backend: 'anthropic', adapterFamily: 'ollama' },
+    ],
+    [
+      'a family this build does not know',
+      { id: 'test-model', backend: 'anthropic', adapterFamily: 'some-future-provider' },
+    ],
+    ['a family-less model on a backend that inlines reasoning', { id: 'test-model', backend: 'xai' }],
+    ['a family-less Bedrock model that is not Claude', { id: 'test-model', backend: 'bedrock' }],
+    ['a family-less model with no backend', { id: 'test-model' }],
+  ])('refuses %s before opening the stream', async (_why, row) => {
     const { getAvailableModels } = await import('@bike4mind/llm-adapters');
-    vi.mocked(getAvailableModels).mockResolvedValueOnce([
-      { id: 'test-model', backend: 'anthropic', adapterFamily } as never,
-    ]);
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([row as never]);
 
     const res = await post(CHAT);
 
     expect(res.status).toBe(422);
     expect(await res.json()).toMatchObject({ code: 'agent_model_not_embeddable' });
     // Pre-stream refusal: nothing was billed and no SSE frame was written.
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'bedrock'],
+    ['global.anthropic.claude-sonnet-5', 'bedrock'],
+    ['claude-sonnet-5', 'anthropic'],
+    ['gpt-4.1-mini-2025-04-14', 'openai'],
+    ['gemini-2.5-flash', 'gemini'],
+  ])('accepts adapter-literal model %s, which carries a backend and no adapterFamily', async (id, backend) => {
+    // Only a model the catalog resolved carries adapterFamily. Every built-in model
+    // routes on backend alone, so a family-only gate refuses all of them.
+    const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([{ id, backend } as never]);
+    hydrateWith({ model: id });
+
+    const res = await post(CHAT);
+
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalled();
+  });
+
+  it('refuses a Claude-shaped id that the model list does not contain', async () => {
+    // reasoningChannelOf reads a bare Claude id as opt-in; the gate must not admit an
+    // id on its spelling when no row describes how it is served.
+    const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([{ id: 'other-model', backend: 'anthropic' } as never]);
+    hydrateWith({ model: 'claude-sonnet-5' });
+
+    const res = await post(CHAT);
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ code: 'agent_model_not_embeddable' });
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 

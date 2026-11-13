@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useUser } from '@client/app/contexts/UserContext';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAdminRouter')).fakeRouterModule);
@@ -128,6 +129,7 @@ const renderTab = () => {
 const writeText = vi.fn();
 
 beforeEach(() => {
+  useUser.setState({ currentUser: { id: 'admin-1', isAdmin: true } as never });
   overrides = {};
   apiGet.mockReset();
   openProfile.mockReset();
@@ -169,7 +171,11 @@ describe('UsersTab actions', () => {
     fireEvent.click(await screen.findByTestId('admin-users-row-actions-u2'));
     expect(screen.queryByText('Copy email')).toBeNull();
     fireEvent.click(await screen.findByTestId('admin-users-row-open-u2'));
-    expect(openProfile).toHaveBeenCalledWith('u2');
+    expect(openProfile).toHaveBeenCalledWith('u2', {
+      signupRange: '7d',
+      signupAsOf: undefined,
+      signupTzOffset: -new Date().getTimezoneOffset(),
+    });
   });
 
   it('exports the csv and warns when the export is truncated', async () => {

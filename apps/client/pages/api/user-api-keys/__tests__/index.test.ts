@@ -27,7 +27,7 @@ const mockRefs = vi.hoisted(() => ({
 const isApiKeyAccessAllowedMock = vi.hoisted(() =>
   vi.fn(async (_user: unknown, _billing?: unknown, _request?: unknown) => true)
 );
-vi.mock('@server/utils/apiKeyAccessGate', async () => {
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', async () => {
   const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
   const message = 'API keys require an active paid subscription';
   return {
@@ -69,6 +69,11 @@ vi.mock('@bike4mind/services', () => ({
   userApiKeyService: { createUserApiKey, listUserApiKeys, listOrganizationApiKeys },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
+const legacyWindow = vi.hoisted(() => ({ cutoff: null as Date | null, endsAt: null as Date | null }));
+vi.mock('@bike4mind/server-utils/middlewares/apiKeyScopeGate', async importOriginal => ({
+  ...(await importOriginal<object>()),
+  LEGACY_API_KEY_WINDOW: legacyWindow,
+}));
 // findIdsAdministeredBy stays (GET org-list + POST org-billing auth use it);
 // findById is added because the owner-scoped gate + GET now resolve owners.
 const userRepository = vi.hoisted(() => ({ findById: vi.fn().mockResolvedValue({ id: 'owner' }) }));
@@ -88,7 +93,7 @@ vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 // leaf entitlement source (getUserEntitlements) is stubbed, so these tests
 // exercise the actual OWNER-scoped strip logic through the route (#891).
 const getUserEntitlements = vi.hoisted(() => vi.fn().mockResolvedValue([]));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements }));
 
 // Product-scope access of the minting user; every product on by default so the embed/org cases
 // below are unaffected. The resolver itself is covered in server/entitlements/apiKeyScopeAccess.test.ts.
@@ -117,10 +122,12 @@ vi.mock('@bike4mind/server-utils/premium-generated/premiumApiKeyScopes.generated
     },
   ],
 }));
+const requireStepUp = vi.hoisted(() => vi.fn(async (_req?: unknown) => undefined));
+vi.mock('@server/auth/stepUp', () => ({ requireStepUp }));
 const resolveApiKeyTrust = vi.hoisted(() => vi.fn().mockResolvedValue({ assessment: { status: 'trusted' } }));
 vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
 
-import { CreditHolderType } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
 import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import '@pages/api/user-api-keys/index';
@@ -474,6 +481,49 @@ describe('GET /api/user-api-keys - revoked-key visibility', () => {
   });
 });
 
+describe('GET /api/user-api-keys - legacy status', () => {
+  const pre = { userId: 'u1', status: 'active', createdAt: new Date('2026-06-01T00:00:00Z') };
+
+  beforeEach(() => {
+    findIdsAdministeredBy.mockResolvedValue([]);
+    legacyWindow.cutoff = null;
+    legacyWindow.endsAt = null;
+  });
+
+  async function listKeys(keys: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {
+    listUserApiKeys.mockResolvedValueOnce(keys);
+    const { req, res } = createMocks({ method: 'GET' });
+    const json = vi.fn();
+    Object.assign(req, { user: { id: 'u1' } });
+    Object.assign(res, { json });
+    await mockRefs.getHandler!(req, res);
+    return json.mock.calls[0][0];
+  }
+
+  it('flags a key created before the cutoff with the end date, and not a newer one', async () => {
+    legacyWindow.cutoff = new Date('2027-01-01T00:00:00Z');
+    legacyWindow.endsAt = new Date('2099-01-01T00:00:00Z');
+
+    const [older, newer] = await listKeys([
+      { ...pre, id: 'k-older', scopes: [ApiKeyScope.AI_GENERATE] },
+      { ...pre, id: 'k-newer', scopes: [ApiKeyScope.AI_GENERATE], createdAt: new Date('2027-02-01T00:00:00Z') },
+    ]);
+
+    expect(older).toMatchObject({ legacy: true, legacyEndsAt: legacyWindow.endsAt });
+    expect(newer).toMatchObject({ legacy: false, legacyEndsAt: null });
+  });
+
+  it('flags every ordinary key with no date while the window is unset, never a confined key', async () => {
+    const [ordinary, embed] = await listKeys([
+      { ...pre, id: 'k-ordinary', scopes: [ApiKeyScope.AI_GENERATE] },
+      { ...pre, id: 'k-embed', scopes: [ApiKeyScope.EMBED_CHAT] },
+    ]);
+
+    expect(ordinary).toMatchObject({ legacy: true, legacyEndsAt: null });
+    expect(embed).toMatchObject({ legacy: false, legacyEndsAt: null });
+  });
+});
+
 /**
  * Scope allowlist guard: the server rejects any scope outside USER_API_KEY_SCOPE_VALUES
  * regardless of the caller's admin status, so privileged scopes (admin:*, cc-bridge:connect,
@@ -713,6 +763,45 @@ describe('POST /api/user-api-keys - product scope entitlement', () => {
   });
 });
 
+describe('POST /api/user-api-keys - persona mint scope', () => {
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    requireStepUp.mockReset();
+    requireStepUp.mockResolvedValue(undefined);
+    scopeAccess.current = { ...scopeAccess.current, bypass: true };
+  });
+
+  it('requires step-up before minting a key that holds personas:mint', async () => {
+    const { req, res } = post({ name: 'qa-bot', scopes: ['me:read', 'personas:mint'] });
+    await mockRefs.postHandler!(req, res);
+    expect(requireStepUp).toHaveBeenCalledWith(req);
+    expect(res._getStatusCode()).toBe(201);
+    expect(createUserApiKey).toHaveBeenCalled();
+  });
+
+  it('mints nothing when step-up is refused', async () => {
+    requireStepUp.mockRejectedValue(new Error('step-up required'));
+    const { req, res } = post({ name: 'qa-bot', scopes: ['personas:mint'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('step-up required');
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('does not ask for step-up on a key without personas:mint', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['me:read', 'files:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(requireStepUp).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('refuses personas:mint to a user who is not offered it, before any step-up', async () => {
+    scopeAccess.current = { ...scopeAccess.current, bypass: false };
+    const { req, res } = post({ name: 'qa-bot', scopes: ['personas:mint'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('Scope not available on your account: personas:mint');
+    expect(requireStepUp).not.toHaveBeenCalled();
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/user-api-keys - contributed scopes', () => {
   beforeEach(() => {
     createUserApiKey.mockClear();
@@ -850,5 +939,25 @@ describe('POST /api/user-api-keys - paid-only access switch', () => {
       },
       req
     );
+  });
+});
+
+describe('/api/user-api-keys - org service account', () => {
+  // An org-owned key authenticates as its org's service account, which holds all of the org's keys.
+  it('refuses to list or mint keys for it', async () => {
+    listUserApiKeys.mockClear();
+    createUserApiKey.mockClear();
+    const serviceAccount = { id: 'sa1', isAdmin: false, isSystem: true, serviceAccountOrganizationId: 'org-1' };
+
+    const listing = createMocks({ method: 'GET', query: {} });
+    Object.assign(listing.req, { user: serviceAccount });
+    await expect(mockRefs.getHandler!(listing.req, listing.res)).rejects.toMatchObject({ statusCode: 403 });
+
+    const { req, res } = post({ name: 'k', scopes: ['ai:chat'] });
+    Object.assign(req, { user: serviceAccount });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+
+    expect(listUserApiKeys).not.toHaveBeenCalled();
+    expect(createUserApiKey).not.toHaveBeenCalled();
   });
 });

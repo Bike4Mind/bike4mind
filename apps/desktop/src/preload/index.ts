@@ -25,6 +25,7 @@ import type {
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
+import type { WatchPreferences, WatchPreferencesPatch } from '@shared/watch';
 import type { GenerationSettings } from '@shared/generation';
 import type { ModelSettings } from '@shared/modelSettings';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
@@ -61,6 +62,7 @@ import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@sh
 // registers, which defeats the point of keeping the auth handlers out of its reach.
 const api: DesktopApi = {
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.getAppInfo),
+  setTheme: (mode, backgroundColor) => ipcRenderer.invoke(IPC_CHANNELS.setTheme, mode, backgroundColor),
   update: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.updateGetState),
     check: () => ipcRenderer.invoke(IPC_CHANNELS.updateCheck),
@@ -137,6 +139,11 @@ const api: DesktopApi = {
   account: {
     getCredits: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetCredits),
     getProfile: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetProfile),
+    getBilling: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetBilling),
+    subscribePlan: priceId => ipcRenderer.invoke(IPC_CHANNELS.accountSubscribePlan, priceId),
+    purchaseCredits: (packageId, acceptedTerms) =>
+      ipcRenderer.invoke(IPC_CHANNELS.accountPurchaseCredits, packageId, acceptedTerms),
+    sendFeedback: (content: string) => ipcRenderer.invoke(IPC_CHANNELS.accountSendFeedback, content),
   },
   usage: {
     getHistory: (window: UsageWindowId, force?: boolean) =>
@@ -204,8 +211,10 @@ const api: DesktopApi = {
     setSessionArchived: (sessionId: string, archived: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
     exportSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatExportSession, sessionId),
+    exportLocalData: () => ipcRenderer.invoke(IPC_CHANNELS.chatExportLocalData),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
     createSession: (request?: CreateSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession, request),
+    defaultsForNewSession: () => ipcRenderer.invoke(IPC_CHANNELS.chatDraftDefaults),
     createCodeSession: (request: CreateCodeSessionRequest) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCreateCodeSession, request),
     updateProject: (request: UpdateProjectRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatUpdateProject, request),
@@ -270,6 +279,9 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatReadAttachment, sessionId, attachmentId, mediaType),
     discardAttachment: (sessionId: string, attachmentId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatDiscardAttachment, sessionId, attachmentId),
+    copyDraftAttachments: (draftId, sessionId, attachmentIds) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatCopyDraftAttachments, draftId, sessionId, attachmentIds),
+    discardDraftAttachments: draftId => ipcRenderer.invoke(IPC_CHANNELS.chatDiscardDraftAttachments, draftId),
     imageAction: (image: ChatImageRef, action: ChatImageAction) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatImageAction, image, action),
     attachImage: (sessionId: string, image: ChatImageRef) =>
@@ -484,6 +496,7 @@ const api: DesktopApi = {
     setWatchFolder: (clear: boolean) => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSetWatchFolder, clear),
     setWebSettings: patch => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSetWebSettings, patch),
     syncWeb: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSyncWeb),
+    dismissHint: id => ipcRenderer.invoke(IPC_CHANNELS.claudeImportDismissHint, id),
     remove: kind => ipcRenderer.invoke(IPC_CHANNELS.claudeImportRemove, kind),
     onStateChanged: listener => {
       const handler = (_event: unknown, state: ClaudeImportState) => listener(state);
@@ -549,6 +562,15 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.attentionOpen, handler);
     },
     takePendingOpen: () => ipcRenderer.invoke(IPC_CHANNELS.attentionTakePendingOpen),
+  },
+  watch: {
+    getPreferences: () => ipcRenderer.invoke(IPC_CHANNELS.watchGetPreferences),
+    setPreferences: (patch: WatchPreferencesPatch) => ipcRenderer.invoke(IPC_CHANNELS.watchSetPreferences, patch),
+    onPreferences: listener => {
+      const handler = (_event: unknown, preferences: WatchPreferences) => listener(preferences);
+      ipcRenderer.on(IPC_CHANNELS.watchPreferences, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.watchPreferences, handler);
+    },
   },
   devLog: {
     getSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.devLogGetSnapshot),

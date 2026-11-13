@@ -21,7 +21,7 @@ const txState = vi.hoisted(() => ({ committed: false }));
 
 const assertDataLakeShareScope = vi.hoisted(() => vi.fn());
 const lakeConfigAuditPrincipal = vi.hoisted(() => vi.fn(() => undefined as unknown));
-vi.mock('@server/dataLakes/dataLakeScopes', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({
   assertDataLakeShareScope,
   DATA_LAKE_SHARE_SCOPES: ['datalake:share'],
 }));
@@ -68,7 +68,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
-vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
+vi.mock('@bike4mind/database/auth', () => ({ userRepository: {}, userApiKeyRepository: {} }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 import '@pages/api/organizations/[id]/members/index';

@@ -9,7 +9,10 @@ import {
 } from '@bike4mind/server-utils/services/operationsModelService';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
-import { createRequestCompletionMeter, type MeteredRequest } from '@server/billing/meterPlatformCompletion';
+import {
+  createRequestCompletionMeter,
+  type MeteredRequest,
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 // Identical (text, context) refinements are common (users re-clicking refine),
 // and every miss is a paid operations-model call - cache briefly.
@@ -57,7 +60,7 @@ export const refineTextRequest = async (
     async () => {
       let operationsModel;
       try {
-        operationsModel = await OperationsModelService.getOperationsModel();
+        operationsModel = await OperationsModelService.getOperationsModel({ endUserId: req.user?.id });
       } catch (error) {
         // getOperationsModel never returns a null llm - it throws when it cannot resolve
         // one, which is the same deployment state the public route calls provider_not_configured.

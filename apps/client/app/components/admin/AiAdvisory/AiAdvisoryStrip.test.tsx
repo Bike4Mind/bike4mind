@@ -14,6 +14,24 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('@client/app/hooks/data/aiAdvisory', () => ({ useAiAdvisory: () => ({ data: mocks.data }) }));
+vi.mock('../CampaignWatches/WatchAccountsButton', () => ({
+  WatchAccountsButton: ({
+    label,
+    userIds,
+    incomplete,
+  }: {
+    label?: string;
+    userIds: string[];
+    incomplete?: boolean;
+  }) => (
+    <span
+      data-testid="watch-accounts-stub"
+      data-label={label ?? ''}
+      data-user-ids={userIds.join(',')}
+      data-incomplete={String(incomplete)}
+    />
+  ),
+}));
 vi.mock('../BlockedIPs/IpBlockDialogs', () => ({
   BlockIpDialog: ({ initialIp }: { initialIp: string }) => <div data-testid="block-ip-dialog">{initialIp}</div>,
 }));
@@ -34,6 +52,8 @@ const summary = (overrides: Partial<AiAdvisorySummaryResponse> = {}): AiAdvisory
   advisories: [],
   networks: [],
   mailDomains: [],
+  linkedAccounts: [],
+  linkedAccountsStatus: 'complete',
   truncated: false,
   ...overrides,
 });
@@ -71,6 +91,12 @@ describe('AiAdvisoryStrip', () => {
     });
   });
 
+  it.each([true, false])('passes truncated=%s to the watch button as incomplete', truncated => {
+    mocks.data = summary({ advisories: [advisory('1'.repeat(24), 'accountCampaign')], truncated });
+    render(<AiAdvisoryStrip />, { wrapper: Wrapper });
+    expect(screen.getByTestId('watch-accounts-stub')).toHaveAttribute('data-incomplete', String(truncated));
+  });
+
   it('offers to block a shared IP and to open a shared domain, acting on neither by itself', () => {
     mocks.data = summary({
       advisories: [advisory('1'.repeat(24), 'accountCampaign')],
@@ -96,5 +122,104 @@ describe('AiAdvisoryStrip', () => {
     mocks.data = summary({ advisories: [advisory('1'.repeat(24), 'accountCampaign')], truncated: true });
     render(<AiAdvisoryStrip />, { wrapper: Wrapper });
     expect(screen.getByTestId('admin-dashboard-ai-advisory-summary')).toHaveTextContent('1+ account likely abuse');
+  });
+
+  it('shows exact-IP candidates separately with provenance links and no inherited probability', () => {
+    mocks.data = summary({
+      advisories: [advisory('1'.repeat(24), 'accountCampaign')],
+      linkedAccounts: [
+        {
+          userId: '2'.repeat(24),
+          name: 'Example candidate',
+          links: [{ sourceUserId: '1'.repeat(24), ip: '198.51.100.10', sourceKind: 'signup', candidateKind: 'login' }],
+        },
+      ],
+    });
+    render(<AiAdvisoryStrip />, { wrapper: Wrapper });
+    const section = screen.getByTestId('ai-advisory-linked-accounts');
+    expect(section).toHaveTextContent('1 linked account to review - not AI abuse verdicts');
+    expect(section).toHaveTextContent('login IP 198.51.100.10');
+    expect(section).toHaveTextContent('No name-only or JA4-only matches');
+    expect(screen.getByText('Example candidate')).toHaveAttribute('href', `/admin/users/${'2'.repeat(24)}`);
+    expect(screen.getByText("flagged account's signup IP")).toHaveAttribute(
+      'href',
+      `/admin/users/${'1'.repeat(24)}?tab=signins`
+    );
+    expect(screen.getByTestId('admin-dashboard-ai-advisory-summary')).toHaveTextContent('1 account likely abuse');
+  });
+  it.each([
+    ['complete', false, false],
+    ['complete', true, true],
+    ['truncated', false, true],
+  ] as const)(
+    'watches flagged and linked accounts together (scan %s, advisory truncated=%s, incomplete=%s)',
+    (linkedAccountsStatus, truncated, incomplete) => {
+      const flaggedId = '1'.repeat(24);
+      const linkedId = '2'.repeat(24);
+      mocks.data = summary({
+        advisories: [advisory(flaggedId, 'accountCampaign')],
+        linkedAccounts: [
+          {
+            userId: linkedId,
+            name: 'Example candidate',
+            links: [{ sourceUserId: flaggedId, ip: '198.51.100.10', sourceKind: 'signup', candidateKind: 'login' }],
+          },
+        ],
+        linkedAccountsStatus,
+        truncated,
+      });
+      render(<AiAdvisoryStrip />, { wrapper: Wrapper });
+      const combined = screen
+        .getAllByTestId('watch-accounts-stub')
+        .find(stub => stub.getAttribute('data-label') === 'Watch flagged and linked accounts');
+      expect(combined).toHaveAttribute('data-user-ids', `${flaggedId},${linkedId}`);
+      expect(combined).toHaveAttribute('data-incomplete', String(incomplete));
+    }
+  );
+
+  it('shows only the failed alert when the linked-account check failed', () => {
+    mocks.data = summary({ advisories: [advisory('1'.repeat(24), 'accountCampaign')], linkedAccountsStatus: 'failed' });
+    render(<AiAdvisoryStrip />, { wrapper: Wrapper });
+    expect(screen.getByText('Linked accounts could not be checked.', { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText('The linked-account scan reached a cap.', { exact: false })).not.toBeInTheDocument();
+  });
+
+  it('shows only the cap alert when the linked-account scan was truncated', () => {
+    mocks.data = summary({
+      advisories: [advisory('1'.repeat(24), 'accountCampaign')],
+      linkedAccountsStatus: 'truncated',
+    });
+    render(<AiAdvisoryStrip />, { wrapper: Wrapper });
+    expect(screen.getByText('The linked-account scan reached a cap.', { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText('Linked accounts could not be checked.', { exact: false })).not.toBeInTheDocument();
+  });
+
+  it('navigates within the SPA when either related-account link is clicked', () => {
+    const candidateId = '2'.repeat(24);
+    const sourceId = '1'.repeat(24);
+    mocks.data = summary({
+      advisories: [advisory(sourceId, 'accountCampaign')],
+      linkedAccounts: [
+        {
+          userId: candidateId,
+          name: 'Example candidate',
+          links: [{ sourceUserId: sourceId, ip: '198.51.100.10', sourceKind: 'signup', candidateKind: 'login' }],
+        },
+      ],
+    });
+    render(<AiAdvisoryStrip />, { wrapper: Wrapper });
+    fireEvent.click(screen.getByTestId(`ai-advisory-linked-account-${candidateId}`));
+    expect(mocks.navigate).toHaveBeenNthCalledWith(1, {
+      to: '/admin/users/$userId',
+      params: { userId: candidateId },
+    });
+    fireEvent.click(
+      screen.getByTestId(`ai-advisory-linked-source-${candidateId}-${sourceId}-198.51.100.10-signup-login`)
+    );
+    expect(mocks.navigate).toHaveBeenNthCalledWith(2, {
+      to: '/admin/users/$userId',
+      params: { userId: sourceId },
+      search: { tab: 'signins' },
+    });
   });
 });

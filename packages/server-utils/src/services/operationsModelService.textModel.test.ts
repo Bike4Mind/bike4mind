@@ -39,6 +39,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('../utils/modelResolvers', () => ({
+  DEFAULT_OPERATIONS_IMAGE_MODEL: 'flux-3-image-klein',
   getDefaultImageModel: mockGetDefaultImageModel,
   getApiKeyTypeFromBackend: vi.fn(),
 }));
@@ -48,6 +49,8 @@ const { OperationsModelService, OperationsModelUnavailableError } = await import
 const model = (id: string, type: string, backend: ModelBackend): ModelInfo => ({ id, type, backend }) as ModelInfo;
 
 const GPT_MINI = model('gpt-4o-mini', 'text', ModelBackend.OpenAI);
+const GPT_LUNA = model('gpt-5.6-luna', 'text', ModelBackend.OpenAI);
+const GPT_5_4_MINI = model('gpt-5.4-mini', 'text', ModelBackend.OpenAI);
 const OLLAMA_CHAT = model('qwen2.5-coder:7b', 'text', ModelBackend.Ollama);
 const noCloudKeys = {
   openai: null,
@@ -99,14 +102,27 @@ describe('OperationsModelService.getOperationsTextModel', () => {
     expect(result.modelId).toBe('qwen2.5-coder:7b');
   });
 
-  it('falls back to gpt-4o-mini when no config and a cloud key is present', async () => {
+  it('defaults to GPT-5.6 Luna when no config and a cloud key is present', async () => {
     mockAdminSettings.findOne.mockResolvedValue(null);
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ ...noCloudKeys, openai: 'sk-test' });
-    mockGetAvailableModels.mockResolvedValue([GPT_MINI, OLLAMA_CHAT]);
+    mockGetAvailableModels.mockResolvedValue([GPT_MINI, GPT_5_4_MINI, GPT_LUNA, OLLAMA_CHAT]);
 
     const result = await OperationsModelService.getOperationsTextModel();
 
-    expect(result.modelId).toBe('gpt-4o-mini');
+    expect(result.modelId).toBe('gpt-5.6-luna');
+  });
+
+  it.each([
+    ['gpt-5.4-mini', [GPT_MINI, GPT_5_4_MINI, OLLAMA_CHAT]],
+    ['gpt-4o-mini', [OLLAMA_CHAT, GPT_MINI]],
+  ])('walks the fallback list to %s when the default is not available', async (expected, available) => {
+    mockAdminSettings.findOne.mockResolvedValue(null);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ ...noCloudKeys, openai: 'sk-test' });
+    mockGetAvailableModels.mockResolvedValue(available);
+
+    const result = await OperationsModelService.getOperationsTextModel();
+
+    expect(result.modelId).toBe(expected);
   });
 
   it('fails with a named error when no text model is available', async () => {
@@ -182,7 +198,11 @@ describe('OperationsModelService.getOperationsModel without the configured backe
     expect(update).toEqual({
       $setOnInsert: {
         settingName: 'operationsModel',
-        settingValue: expect.objectContaining({ modelId: 'gpt-4o-mini' }),
+        settingValue: {
+          modelId: 'gpt-5.6-luna',
+          imageModelId: 'flux-3-image-klein',
+          speechModelId: 'whisper-1',
+        },
       },
     });
     expect(options).toEqual({ upsert: true });

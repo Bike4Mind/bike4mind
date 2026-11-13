@@ -16,9 +16,9 @@ import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { loadLinkedAgentContext } from '@bike4mind/server-utils/deepAgent/missions';
 import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
-import { createDeepAgentToolMaterializer } from '@server/deepAgent/toolMaterializer';
+import { createDeepAgentToolMaterializer } from '@bike4mind/server-utils/deepAgent/toolMaterializer';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
-import { isFreeTierDailyCapError } from '@server/billing/freeTierDailyCapGate';
+import { isFreeTierDailyCapError } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
 import {
   deferWakeUntilCapReset,
   isInsufficientCredits,
@@ -27,7 +27,7 @@ import {
   MissionModelRefusedError,
   missionWakeMeter,
   pauseMission,
-} from '@server/deepAgent/wakeMetering';
+} from '@bike4mind/server-utils/deepAgent/wakeMetering';
 import type { CompletionMeter } from '@bike4mind/services';
 import { resolveThinkingVisibilityForUserId } from '@bike4mind/server-utils/utils/thinkingVisibility';
 

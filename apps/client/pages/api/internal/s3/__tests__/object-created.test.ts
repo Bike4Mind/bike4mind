@@ -56,7 +56,7 @@ vi.mock('@bike4mind/server-utils/s3/uploadSizeGate', () => ({ admitLandedUpload:
 vi.mock('@bike4mind/server-utils/s3/recordRejectedUploadBatch', () => ({
   recordRejectedUploadBatch: recordRejectedBatchMock,
 }));
-vi.mock('@server/s3/moderationScan', () => ({
+vi.mock('@bike4mind/server-utils/s3/moderationScan', () => ({
   normalizeETag: (eTag?: string) => eTag?.replace(/^"|"$/g, '') || undefined,
   recordLandedObject: recordLandedMock,
 }));
@@ -83,7 +83,7 @@ vi.mock('@server/s3/notebookImportComplete', () => ({ dispatch: notebookDispatch
 vi.mock('@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles', () => ({
   moderateImportedKnowledgeFiles: moderateFilesMock,
 }));
-vi.mock('@server/s3/knowledgeModerationDeps', () => ({ buildKnowledgeModerationDeps: buildDepsMock }));
+vi.mock('@bike4mind/server-utils/s3/knowledgeModerationDeps', () => ({ buildKnowledgeModerationDeps: buildDepsMock }));
 
 const handler = (await import('../object-created')).default as (req: Request, res: Response) => Promise<unknown>;
 

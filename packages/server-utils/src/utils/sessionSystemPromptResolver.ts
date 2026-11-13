@@ -8,7 +8,7 @@ import { isSessionActivatablePromptId } from './sessionActivatablePrompts';
  * The ONE implementation of `IChatCompletionServiceOptions.loadSystemPromptById`.
  *
  * Every factory that builds ChatCompletionProcess options must pass THIS - see the drift guard in
- * `apps/client/__tests__/sessionSystemPromptWiring.test.ts`. It is a shared module rather than an
+ * `apps/client/__tests__/sessionSystemPromptWiring.repo.test.ts`. It is a shared module rather than an
  * inline lambda per factory because the inline version only ever reached one of them: the resolver
  * lived in `chatCompletionDefaults`, so `/api/ai/llm` (which dispatches every quest to the
  * always-on ChatCompletion worker) resolved `session.systemPromptId` to `undefined` and injected no

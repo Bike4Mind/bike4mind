@@ -31,16 +31,19 @@ import {
   type CapturedToolCall,
   type OpenAIChatRequest,
 } from '@bike4mind/voice';
-import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
+import {
+  getDefaultChatCompletionOptions,
+  getSharedTokenizer,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
-import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import { getVoiceVideoToolConfigResolver } from '@server/videoGenerations/voiceVideoToolConfig';
 import { verifyVoiceSessionToken, type VoiceSessionContext } from '@server/voice/voiceSessionToken';
 import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voiceSessionLimits';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 // Built-in tools enabled for voice turns. Curated to ones that execute INLINE
 // (no SQS/Lambda dispatch): web search, knowledge-base RAG, datetime,
@@ -173,7 +176,7 @@ async function runFullPipeline(
     invokeLambda: async () => {},
   };
   // A tool that re-reads the owner by id must see the same withheld role as `user`. Kept out of the
-  // literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.test.ts).
+  // literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.repo.test.ts).
   if (sessionCtx.adminRoleWithheld) {
     chatCompletionOptions.db = {
       ...chatCompletionOptions.db,

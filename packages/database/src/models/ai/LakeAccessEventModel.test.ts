@@ -79,6 +79,18 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(event.createdAt).toBeInstanceOf(Date);
     });
 
+    it.each([
+      'data-lake-health',
+      'data-lake-proposals',
+      'data-lake-findings',
+      'data-lake-inconsistencies',
+      'data-lake-skipped-files',
+      'data-lake-membership-duplicates',
+    ] as const)('persists the %s surface', async surface => {
+      const event = await repo.record(baseInput({ surface, resolvedLakeIds: ['lake-a'] }));
+      expect(event.surface).toBe(surface);
+    });
+
     it('round-trips questId and sessionId (#1867 turn linkage)', async () => {
       const event = await repo.record(baseInput({ questId: 'quest-1', sessionId: 'session-1' }));
       expect(event.questId).toBe('quest-1');
@@ -182,6 +194,22 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       const explicitFalse = await repo.record(baseInput({ chunkIds: ['c1'], servedNothing: false }));
       const storedFalse = await LakeAccessEventModel.findById(explicitFalse.id).lean();
       expect(Object.prototype.hasOwnProperty.call(storedFalse as object, 'servedNothing')).toBe(false);
+    });
+
+    it('stores adminBypassLakeIds filtered to resolvedLakeIds', async () => {
+      const event = await repo.record(
+        baseInput({ resolvedLakeIds: ['lake-1'], adminBypassLakeIds: ['lake-1', 'other'] })
+      );
+      const stored = await LakeAccessEventModel.findById(event.id).lean();
+      expect(stored?.adminBypassLakeIds).toEqual(['lake-1']);
+    });
+
+    it('leaves adminBypassLakeIds absent when omitted, empty, or fully filtered out', async () => {
+      for (const adminBypassLakeIds of [undefined, [], ['other']]) {
+        const event = await repo.record(baseInput({ resolvedLakeIds: ['lake-1'], adminBypassLakeIds }));
+        const stored = await LakeAccessEventModel.findById(event.id).lean();
+        expect(Object.prototype.hasOwnProperty.call(stored as object, 'adminBypassLakeIds')).toBe(false);
+      }
     });
 
     it('is absent updatedAt - an audit row that reports being updated is a lie', async () => {

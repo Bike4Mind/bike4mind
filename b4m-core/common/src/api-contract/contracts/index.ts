@@ -7,12 +7,14 @@ import { sessionDeleteContract } from './sessionDelete.contract';
 import { sessionCloneContract } from './sessionClone.contract';
 import { executeToolContract } from './tools.contract';
 import { createCompletionContract } from './completions.contract';
+import { createCompletionRunContract } from './completionRuns.contract';
 import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { getClientConfigContract } from './clientConfig.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
+import { mintPersonaContract, deletePersonaContract } from './personas.contract';
 import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
@@ -130,6 +132,7 @@ import {
   importSkillMarketListingContract,
   rescanSkillMarketVersionContract,
 } from './skillMarketWrite.contract';
+import { createSkillContract, updateSkillContract, listMySkillsContract, getSkillContract } from './skills.contract';
 import { listSkillMarketReviewQueueContract, reviewSkillMarketVersionContract } from './skillMarketReview.contract';
 
 /**
@@ -148,6 +151,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   sessionCloneContract,
   executeToolContract,
   createCompletionContract,
+  createCompletionRunContract,
   synthesizeSpeechContract,
   generateMusicContract,
   generateSoundEffectContract,
@@ -254,7 +258,13 @@ export const CONTRACTS: readonly EndpointContract[] = [
   submitSkillMarketListingVersionContract,
   importSkillMarketListingContract,
   rescanSkillMarketVersionContract,
+  createSkillContract,
+  updateSkillContract,
+  listMySkillsContract,
+  getSkillContract,
   listSkillMarketReviewQueueContract,
   reviewSkillMarketVersionContract,
   postSlackMessageContract,
+  mintPersonaContract,
+  deletePersonaContract,
 ];

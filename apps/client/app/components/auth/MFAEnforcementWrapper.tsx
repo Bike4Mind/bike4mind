@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/data/mfa';
@@ -7,13 +7,31 @@ import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import { registerMfaEnrollmentInterceptor } from '@client/app/utils/mfaEnrollmentInterceptor';
+import { readMfaEnrolledHint, writeMfaEnrolledHint } from '@client/app/utils/mfaEnrollmentHint';
+import { reportMfaEnrollmentAbandoned } from '@client/app/utils/mfaEnrollmentFunnel';
 import { api } from '@client/app/contexts/ApiContext';
 import { ADMIN_SETTINGS_QUERY_KEY } from '@client/app/hooks/data/queryKeys';
 import MFAModal from '@client/app/components/common/MFAModal';
+import {
+  MFA_SETUP_DESCRIPTION,
+  MFA_SETUP_REASON,
+  MFA_SETUP_SIGN_OUT_HINT,
+  MFA_SETUP_TITLE,
+} from '@client/app/utils/mfaSetupCopy';
 import { Box, Typography, Alert, CircularProgress, Button } from '@mui/joy';
 import { toast } from 'sonner';
 import { isAxiosError } from 'axios';
 import { useQueryClient } from '@tanstack/react-query';
+import { keyframes } from '@mui/system';
+
+// The loader stays transparent for its first moments, so a fast check never flashes it. It is
+// faded rather than mounted late on purpose: e2e waits for the loader to be hidden, and an
+// element that is present at opacity 0 still counts as shown, so those waits stay correct.
+const LOADER_REVEAL_DELAY_MS = 400;
+const loaderFadeIn = keyframes`
+  from { opacity: 0; }
+  to { opacity: 1; }
+`;
 
 interface MFAEnforcementWrapperProps {
   children: React.ReactNode;
@@ -36,14 +54,26 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // Only call MFA status API if enforcement is enabled
   const shouldCheckMFA = !!enforceMFA;
 
-  // Get user's MFA status (only if needed)
-  const mfaStatusQuery = useMFAStatus(shouldCheckMFA);
+  // Start the status check while admin settings are still loading rather than after, so the two
+  // round trips overlap; once settings say enforcement is off, the check is skipped.
+  const mfaStatusQuery = useMFAStatus(shouldCheckMFA || adminSettingsLoading);
   const mfaStatus = mfaStatusQuery.data;
   const mfaQueryFailed = mfaStatusQuery.isError;
   // The status query is the authority, not currentUser.mfa: the persisted user store drops `mfa`,
   // so a reload rehydrates without it until /api/identify lands, and reading it here fired a
   // step-up-gated setup call at an enrolled user, which then 409'd.
   const needsEnrollment = !mfaStatus?.enabled;
+
+  // A user this browser last saw enrolled skips the loader; the check still runs behind the app.
+  // A server refusal withdraws the pass, and a status saying "not enrolled" reaches the
+  // enforcement screen below, which is checked before the app is rendered.
+  const userId = currentUser?.id;
+  const knownEnrolled = useMemo(() => readMfaEnrolledHint(userId), [userId]);
+  const optimisticPass = knownEnrolled && !enrollmentRefused;
+
+  useEffect(() => {
+    if (userId && mfaStatus) writeMfaEnrolledHint(userId, mfaStatus.enabled);
+  }, [userId, mfaStatus]);
 
   const isImpersonating = useAccessToken(s => s.impersonating);
 
@@ -89,8 +119,9 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // refusal so the enrollment flow renders instead of an app whose every call fails. One refetch
   // at a time: a burst of refusals would otherwise re-run the settings load once per 403. Re-arm
   // when it settles, since a failed or stale refetch must not leave later refusals ignored.
+  // Layout effect: must register before any child's on-mount request (child effects run first).
   const refusalRefetchInFlightRef = useRef(false);
-  useEffect(
+  useLayoutEffect(
     () =>
       registerMfaEnrollmentInterceptor(api, () => {
         if (refusalRefetchInFlightRef.current) return;
@@ -225,6 +256,12 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     );
   };
 
+  // The one way out of enforced setup, offered on the screen and inside the setup dialog that covers it.
+  const signOut = () => {
+    reportMfaEnrollmentAbandoned(useAccessToken.getState().accessToken);
+    logout(undefined, { onError: () => toast.error("Couldn't sign out. Please try again.") });
+  };
+
   // Skip enforcement entirely during admin impersonation sessions
   // Must come after ALL hook calls (Rules of Hooks)
   if (isImpersonating) {
@@ -232,7 +269,8 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   }
 
   // Show loading while checking MFA status (only if we need to check MFA)
-  const showLoading = isLoading || (shouldCheckMFA && mfaStatusQuery.isLoading) || adminSettingsLoading;
+  const showLoading =
+    !optimisticPass && (isLoading || (shouldCheckMFA && mfaStatusQuery.isLoading) || adminSettingsLoading);
 
   if (showLoading) {
     return (
@@ -245,11 +283,12 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
           height: '100vh',
           flexDirection: 'column',
           gap: 2,
+          animation: `${loaderFadeIn} 200ms ease-out ${LOADER_REVEAL_DELAY_MS}ms both`,
         }}
       >
-        <CircularProgress aria-label="Checking security settings" data-testid="mfa-enforcement-loading-spinner" />
+        <CircularProgress aria-label="Loading" data-testid="mfa-enforcement-loading-spinner" />
         <Typography level="body-md" sx={{ color: 'text.tertiary' }} data-testid="mfa-enforcement-loading-message">
-          Checking security settings...
+          Loading your workspace...
         </Typography>
       </Box>
     );
@@ -257,8 +296,14 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
 
   // If MFA is enforced and user hasn't configured it, block access.
   // A failed status query normally leaves the app alone, but an observed enrollment refusal is
-  // the server telling us this session owes enrollment, so it blocks regardless.
-  if (enforceMFA && (!mfaQueryFailed || enrollmentRefused) && needsEnrollment) {
+  // the server telling us this session owes enrollment, so it blocks regardless. An unanswered
+  // status only blocks on a refusal: otherwise it means an optimistic pass is still confirming.
+  if (
+    enforceMFA &&
+    (!mfaQueryFailed || enrollmentRefused) &&
+    needsEnrollment &&
+    (mfaStatus !== undefined || enrollmentRefused)
+  ) {
     return (
       <Box
         data-testid="mfa-enforcement-required-screen"
@@ -273,12 +318,11 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
         }}
       >
         <Typography level="h2" textAlign="center">
-          Multi-Factor Authentication Required
+          {MFA_SETUP_TITLE}
         </Typography>
 
-        <Alert color="warning" sx={{ maxWidth: 500 }}>
-          Your administrator has enabled Multi-Factor Authentication for all users. You must set up MFA before you can
-          access the application.
+        <Alert color="warning" sx={{ maxWidth: 500 }} data-testid="mfa-enforcement-reason">
+          {MFA_SETUP_REASON} Set it up to continue.
         </Alert>
 
         {setupVerificationCancelled ? (
@@ -310,15 +354,20 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
 
         {/* An older session must pass an emailed "Confirm it's you" check before setup; a fresh
             sign-in skips it (see setup.ts), so this is the way out for a user stuck at that check. */}
-        <Button
-          data-testid="mfa-enforcement-sign-out-btn"
-          variant="plain"
-          color="neutral"
-          onClick={() => logout(undefined, { onError: () => toast.error("Couldn't sign out. Please try again.") })}
-          loading={logoutIsPending}
-        >
-          Sign out and sign in again
-        </Button>
+        <Box sx={{ textAlign: 'center' }}>
+          <Button
+            data-testid="mfa-enforcement-sign-out-btn"
+            variant="plain"
+            color="neutral"
+            onClick={signOut}
+            loading={logoutIsPending}
+          >
+            Sign out
+          </Button>
+          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+            {MFA_SETUP_SIGN_OUT_HINT}
+          </Typography>
+        </Box>
 
         {/* MFA Setup Modal */}
         {showMFASetup && setupMFAData && (
@@ -327,8 +376,8 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
             onClose={() => {}} // Don't allow closing when enforced
             onCancel={() => {}} // Don't allow cancel when enforced
             mode="setup"
-            title="Set Up Multi-Factor Authentication (Enforced)"
-            description="Scan the QR code with your authenticator app, then enter the verification code."
+            title={MFA_SETUP_TITLE}
+            description={MFA_SETUP_DESCRIPTION}
             qrCodeUrl={setupMFAData.qrCodeUrl}
             manualEntryKey={setupMFAData.manualEntryKey}
             backupCodes={setupMFAData.backupCodes}
@@ -337,6 +386,8 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
             error={verifyError}
             showVerify={true}
             isEnforced={true} // This will hide the close button
+            onSignOut={signOut}
+            signOutLoading={logoutIsPending}
           />
         )}
       </Box>

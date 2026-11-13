@@ -6,7 +6,7 @@ import type { ServerSubagentTracker } from '@bike4mind/services/llm';
 import { OPTI_SURFACE, isShadowTier } from '@bike4mind/common';
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
 }));
 
@@ -180,7 +180,9 @@ vi.mock('@bike4mind/services/llm/shadowTier', async () => {
   };
 });
 
-vi.mock('@server/utils/persistRunAsQuest', () => ({ persistRunAsQuest: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/persistRunAsQuest', () => ({
+  persistRunAsQuest: vi.fn().mockResolvedValue(undefined),
+}));
 
 const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
@@ -268,6 +270,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(repo, 'updateConnectionId').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'incrementLambdaInvocationCount').mockResolvedValue(1 as never);
   vi.spyOn(repo, 'persistProfileDeniedTools').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'persistConfidenceGate').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'persistResolvedEnabledTools').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'markFailed').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'markAborted').mockResolvedValue(undefined as never);

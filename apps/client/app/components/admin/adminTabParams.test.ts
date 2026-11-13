@@ -9,7 +9,7 @@ import { ADMIN_GLOBAL_PARAMS, ADMIN_TAB_PARAMS, adminSearchForTab, parseAdminSea
 import { adminTabFromSlug } from './adminTabSlugs';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { SHADOW_DETECTION_SEARCH_KEYS } from './shadowDetectionSearch';
+import { CAMPAIGN_WATCH_SEARCH_PARAM, SHADOW_DETECTION_SEARCH_KEYS } from './shadowDetectionSearch';
 import { SIGNUP_RISK_REVIEW_SEARCH_KEYS } from './signupRiskReviewSearch';
 import { SIGNUP_DOMAIN_HOLDS_SEARCH_KEYS } from './signupDomainHoldsSearch';
 import { EVENTS_SEARCH_KEYS } from './EventMetrics/eventsTabSearch';
@@ -18,6 +18,7 @@ import { ANALYTICS_SEARCH_KEYS } from './Analytics/analyticsTabSearch';
 import { PENDING_SEARCH_KEYS } from './inviteCenterSearch';
 import { STRIPE_DISPUTE_SEARCH_KEYS } from './stripeDisputeSearch';
 import { MODEL_METRICS_SEARCH_KEYS } from './ModelMetrics/modelMetricsSearch';
+import { DLQ_SEARCH_KEYS } from './dlqSearch';
 import type { AdminListSearchKeys } from './shared/useAdminListUrlState';
 
 describe('ADMIN_TAB_PARAMS', () => {
@@ -54,6 +55,21 @@ describe('adminSearchForTab', () => {
     expect(search).toMatchObject({ tab: 'admin-settings', section: 'aiConfiguration', q: 'slack' });
     expect(search[FEEDBACK_ID_PARAM]).toBeUndefined();
     expect(search.category).toBeUndefined();
+  });
+});
+
+// The alarm's DLQ replay button links here; without the registration validateSearch drops the queue.
+describe('Dead letters tab params', () => {
+  it('keeps dlqQueue through validateSearch', () => {
+    expect(parseAdminSearch({ tab: 'dlq-replay', dlqQueue: 'fab-file-chunk' })).toMatchObject({
+      tab: 'dlq-replay',
+      dlqQueue: 'fab-file-chunk',
+    });
+  });
+
+  it('keeps dlqQueue on the Dead letters tab and drops it on another tab', () => {
+    expect(adminSearchForTab({ dlqQueue: 'fab-file-chunk' }, 'dlq-replay').dlqQueue).toBe('fab-file-chunk');
+    expect(adminSearchForTab({ dlqQueue: 'fab-file-chunk' }, 'users').dlqQueue).toBeUndefined();
   });
 });
 
@@ -195,7 +211,12 @@ describe('Feedback tab params', () => {
 
 describe('record id params', () => {
   const objectId = 'aBcDeF0123456789aBcDeF01';
-  const idParams = [FEEDBACK_ID_PARAM, AUDIT_ENTRY_ID_PARAM, MODERATION_INCIDENT_ID_PARAM] as const;
+  const idParams = [
+    FEEDBACK_ID_PARAM,
+    AUDIT_ENTRY_ID_PARAM,
+    MODERATION_INCIDENT_ID_PARAM,
+    CAMPAIGN_WATCH_SEARCH_PARAM,
+  ] as const;
 
   it.each(idParams)('accepts a %s that is an ObjectId, normalized to lower case', key => {
     expect(parseAdminSearch({ [key]: objectId })[key]).toBe(objectId.toLowerCase());
@@ -259,7 +280,7 @@ describe('Organizations tab params', () => {
   const organizationsSearch = {
     tab: 'organizations',
     orgsPage: 2,
-    orgsLimit: 20,
+    orgsLimit: 50,
     orgsSort: 'createdAt',
     orgsOrder: 'desc',
     orgsPersonal: false,
@@ -379,6 +400,12 @@ describe('useAdminListUrlState keys', () => {
     PENDING_SEARCH_KEYS,
     STRIPE_DISPUTE_SEARCH_KEYS,
     MODEL_METRICS_SEARCH_KEYS,
+    ECONOMY_SEARCH_KEYS: {
+      query: 'economyQuery',
+      view: 'creditView',
+      filters: { from: 'economyFrom', to: 'economyTo', owner: 'economyOwner', flow: 'economyFlow' },
+    },
+    DLQ_SEARCH_KEYS,
   };
   // Left out of the registry on purpose, so validateSearch strips them: free-text searches that can
   // hold personal data, saved-view names that are not shareable yet, and query/view keys a tab never writes.
@@ -399,6 +426,9 @@ describe('useAdminListUrlState keys', () => {
     'disputeView',
     'metricsQuery',
     'metricsView',
+    'economyQuery',
+    'dlqQuery',
+    'dlqView',
   ]);
   const registered = new Set<string>(Object.values(ADMIN_TAB_PARAMS).flat());
 

@@ -10,6 +10,7 @@ import {
 } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
+  AdminPermissionAction,
   ADMIN_REASON_PRESETS,
   ActionDialog,
   AdminPageHeader,
@@ -24,6 +25,7 @@ import {
   useAdminListUrlState,
   type DataColumn,
 } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { STRIPE_DISPUTE_SEARCH_KEYS, readStripeDisputeFilters } from './stripeDisputeSearch';
 import {
   useResolveStripeDispute,
@@ -335,26 +337,36 @@ export const StripeDisputesTab: React.FC = () => {
   const rowActions = (row: StripeDisputeRow) => (
     <>
       {isStripeDisputeAdminResolvable(row) && (
-        <Button
-          size="sm"
-          variant="plain"
-          color="neutral"
-          data-testid={`stripe-dispute-resolve-btn-${row.id}`}
-          onClick={() => setActive({ kind: 'resolve', row })}
-        >
-          Resolve
-        </Button>
+        <AdminPermissionAction requirement="users:moderate">
+          {disabled => (
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              disabled={disabled}
+              data-testid={`stripe-dispute-resolve-btn-${row.id}`}
+              onClick={() => setActive({ kind: 'resolve', row })}
+            >
+              Resolve
+            </Button>
+          )}
+        </AdminPermissionAction>
       )}
       {canUndoContain(row) && (
-        <Button
-          size="sm"
-          variant="plain"
-          color="neutral"
-          data-testid={`stripe-dispute-undo-btn-${row.id}`}
-          onClick={() => setActive({ kind: 'undo', row })}
-        >
-          Undo contain
-        </Button>
+        <AdminPermissionAction requirement={{ allOf: ['credits:adjust', 'users:moderate'] }}>
+          {disabled => (
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              disabled={disabled}
+              data-testid={`stripe-dispute-undo-btn-${row.id}`}
+              onClick={() => setActive({ kind: 'undo', row })}
+            >
+              Undo contain
+            </Button>
+          )}
+        </AdminPermissionAction>
       )}
     </>
   );
@@ -363,7 +375,7 @@ export const StripeDisputesTab: React.FC = () => {
 
   return (
     <Stack
-      spacing={2}
+      spacing={ADMIN_REGION_GAP}
       sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', borderRadius: 'md', minWidth: 0 }}
       data-testid="admin-stripe-disputes-tab"
     >

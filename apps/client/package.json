@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/client",
-  "version": "0.1.102",
+  "version": "0.1.103",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/copy-tavern-assets.mjs && node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs",
@@ -29,6 +29,7 @@
     "typecheck:fast": "tsgo --noEmit || NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
     "test": "vitest run",
     "test:integration": "CLIENT_TEST_LANE=integration vitest run",
+    "test:repo": "CLIENT_TEST_LANE=repo vitest run",
     "test:e2e:setup": "node scripts/setup-e2e.mjs",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
@@ -40,6 +41,8 @@
     "db:create-user": "tsx server/scripts/createUser.ts",
     "db:seed-users": "tsx server/seed/seedUser.ts",
     "security:scan": "semgrep scan --config auto --exclude node_modules --exclude .next --exclude .sst",
+    "tutorials:apply": "tsx scripts/apply-tutorial-override.ts",
+    "tutorials:fields": "tsx scripts/tutorial-editable-fields.ts",
     "help:build-index": "tsx ../../packages/scripts/help/build-help-index.ts",
     "help:bundle-content": "tsx ../../packages/scripts/help/bundle-help-content.ts",
     "help:build": "pnpm help:build-index && pnpm help:bundle-content",
@@ -171,7 +174,7 @@
     "marked": "^15.0.11",
     "mermaid": "^11.16.1",
     "mime-types": "^3.0.2",
-    "mongoose": "^8.24.1",
+    "mongoose": "^8.24.7",
     "next": "16.4.1",
     "next-connect": "^0.13.0",
     "nodemailer": "^10.2.1",
@@ -234,7 +237,7 @@
   "devDependencies": {
     "@bike4mind/eslint-config": "workspace:*",
     "@bike4mind/typescript-config": "workspace:*",
-    "@playwright/test": "^1.64.0",
+    "@playwright/test": "^1.65.0",
     "@serwist/turbopack": "9.5.3",
     "@tanstack/react-query-devtools": "^5.104.2",
     "@tanstack/router-cli": "^1.167.43",

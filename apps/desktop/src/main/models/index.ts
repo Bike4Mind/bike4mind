@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { stat, statfs } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
-import { app, ipcMain, powerSaveBlocker, safeStorage } from 'electron';
+import { app, ipcMain, powerSaveBlocker } from 'electron';
 import {
   CuratedListSource,
   CuratedStore,
@@ -23,6 +23,7 @@ import { localHardware } from '../chat/localContextSizing';
 import { createMainLogger } from '../logger';
 import type { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { privateFile } from '../privateFile';
+import { appSecretCipher } from '../secrets';
 import { appWindows } from '../windows';
 import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import { BUNDLED_CURATED_TEXT } from './curated/bundled';
@@ -30,8 +31,9 @@ import { curatedDevOverrides } from './curated/devKey';
 import { invalid, registerModelsIpc, serverArg, text } from './ipc';
 import { loadCuratedManifest } from './loadCuratedManifest';
 import { ModelHubService, type ModelHubServiceDeps } from './ModelHubService';
+import { createOllamaWslPatchProbe } from './ollamaWslPatch';
 import { PullLedger } from './pullLedger';
-import { probeIntegratedGpu, runsInWsl } from './wslGpuCap';
+import { isWslHost, probeIntegratedGpu } from './wslGpuCap';
 
 // Room for a daemon busy finishing a pull on a loaded machine, which the library's short default reads as stopped.
 const RUNTIME_HEALTH_TIMEOUT_MS = 10_000;
@@ -128,10 +130,17 @@ export function registerModels(
   };
   const logger = createMainLogger(process.env.B4M_DESKTOP_VERBOSE === '1');
   const tokens = new HuggingFaceTokenStore(
-    safeStorage,
+    appSecretCipher(),
     privateFile(join(app.getPath('userData'), 'hugging-face-token.json')),
     logger
   );
+  void tokens
+    .reencrypt()
+    .catch(error =>
+      logger.warn(
+        `Models: could not re-save the Hugging Face token: ${error instanceof Error ? error.name : 'unknown'}`
+      )
+    );
   let blocker: number | null = null;
   const source = curatedSource(() => send(IPC_CHANNELS.modelsCuratedChanged));
   const service = new ModelHubService({
@@ -168,12 +177,18 @@ export function registerModels(
       return join(homedir(), '.ollama', 'models');
     },
     pathExists: async path => (await stat(path)).isDirectory(),
-    wslHost: process.platform === 'win32' || (process.platform === 'linux' && runsInWsl(process.env, procVersion())),
+    wslHost: isWslHost(process.platform, process.env, procVersion),
     integratedGpu: () => probeIntegratedGpu(),
+    // Read through /proc, so only from inside the Linux that runs Ollama; Desktop on Windows flags after a load.
+    ollamaWslPatch: process.platform === 'linux' ? createOllamaWslPatchProbe() : undefined,
     importDir: splitImportRoot,
     sameDisk: async (a, b) => (await deviceOf(a)) === (await deviceOf(b)),
     // Once, right away: the picker's reload waits for any recheck the pull or removal started.
     onInstalledChanged: serverId => send(IPC_CHANNELS.modelsInstalledChanged, serverId),
+    onRatingsChanged: serverId => {
+      send(IPC_CHANNELS.modelsInstalledChanged, serverId);
+      send(IPC_CHANNELS.modelsCuratedChanged);
+    },
     keepAwake: on => {
       if (on && blocker === null) blocker = powerSaveBlocker.start('prevent-app-suspension');
       if (!on && blocker !== null) {

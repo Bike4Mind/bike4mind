@@ -16,6 +16,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { IOrgSlackWorkspaceDocument, IOrgSlackWorkspaceResponse } from '@bike4mind/common';
 import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { recordOrganizationAuditEventSafe } from '@bike4mind/server-utils/utils/organizationAudit';
 
 function toResponse(
   doc: IOrgSlackWorkspaceDocument & { createdAt: Date; updatedAt: Date }
@@ -80,6 +81,11 @@ const handler = baseApi()
       }
 
       await orgSlackWorkspaceRepository.delete(workspace.id);
+      await recordOrganizationAuditEventSafe({
+        organizationId: orgId,
+        actorUserId: user.id,
+        action: 'connector.disconnected',
+      });
 
       return res.status(200).json({
         success: true,

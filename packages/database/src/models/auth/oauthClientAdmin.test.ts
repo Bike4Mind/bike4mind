@@ -69,6 +69,31 @@ describe('generateOAuthClientId', () => {
 });
 
 describe('createOAuthClient', () => {
+  it('persists and updates a federated profile independently of trust and scopes', async () => {
+    const rateLimit = { requestsPerMinute: 300, requestsPerDay: 20_000 };
+    const { client } = await createOAuthClient({ ...federated, rateLimit });
+    expect(client.rateLimit).toEqual(rateLimit);
+    expect((await listOAuthClients())[0].rateLimit).toEqual(rateLimit);
+    const updated = await updateOAuthClient(client.id, { rateLimit: { ...rateLimit, requestsPerMinute: 200 } });
+    expect(updated.before.rateLimit).toEqual(rateLimit);
+    expect(updated.after.rateLimit?.requestsPerMinute).toBe(200);
+    expect(updated.after.federatedIdp).toEqual(client.federatedIdp);
+    expect(updated.after.allowedScopes).toEqual(client.allowedScopes);
+    await expect(updateOAuthClient(client.id, { federatedIdp: null })).rejects.toThrow(/requires a federated/);
+    const removed = await updateOAuthClient(client.id, { rateLimit: null, federatedIdp: null });
+    expect(removed.after.rateLimit).toBeUndefined();
+    expect(removed.after.federatedIdp).toBeUndefined();
+  });
+
+  it('requires federation to add a profile to an ordinary client', async () => {
+    const { client } = await createOAuthClient(base);
+    await expect(
+      updateOAuthClient(client.id, {
+        rateLimit: { requestsPerMinute: 300, requestsPerDay: 20_000 },
+      })
+    ).rejects.toThrow(/requires a federated/);
+  });
+
   it('stores only a bcrypt hash that verifies against the returned secret', async () => {
     const { client, clientSecret } = await createOAuthClient(base);
 
@@ -228,6 +253,24 @@ describe('updateOAuthClient', () => {
 
     await updateOAuthClient(client.id, { isActive: true });
     expect(await oauthClientRepository.verifyClientSecret(client.clientId, clientSecret)).not.toBeNull();
+  });
+
+  it('sets, changes and clears the Overwatch product, leaving the rest of the client alone', async () => {
+    const { client } = await createOAuthClient(base);
+    expect(client.overwatchProductId).toBeUndefined();
+
+    const set = await updateOAuthClient(client.id, { overwatchProductId: 'reading-app' });
+    expect(set.after.overwatchProductId).toBe('reading-app');
+    expect(set.after.redirectUris).toEqual(base.redirectUris);
+    expect((await oauthClientRepository.findByClientId(client.clientId))?.overwatchProductId).toBe('reading-app');
+
+    const changed = await updateOAuthClient(client.id, { overwatchProductId: 'other-app' });
+    expect(changed.before.overwatchProductId).toBe('reading-app');
+    expect(changed.after.overwatchProductId).toBe('other-app');
+
+    const cleared = await updateOAuthClient(client.id, { overwatchProductId: null });
+    expect(cleared.after.overwatchProductId).toBeUndefined();
+    expect((await OAuthClientModel.findById(client.id).lean())?.overwatchProductId).toBeUndefined();
   });
 
   it('rejects an empty update, unknown fields and invalid URIs', async () => {

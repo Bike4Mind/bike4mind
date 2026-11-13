@@ -141,6 +141,10 @@ AdminAuditLogSchema.index({ category: 1, occurredAt: -1, _id: -1 });
 AdminAuditLogSchema.index({ action: 1, occurredAt: -1, _id: -1 });
 AdminAuditLogSchema.index({ severity: 1, occurredAt: -1, _id: -1 });
 AdminAuditLogSchema.index(
+  { 'details.feedbackId': 1, occurredAt: -1, _id: -1 },
+  { name: 'feedback_history', partialFilterExpression: { 'details.feedbackId': { $exists: true } } }
+);
+AdminAuditLogSchema.index(
   { 'context.requestId': 1, occurredAt: -1, _id: -1 },
   { partialFilterExpression: { 'context.requestId': { $exists: true } } }
 );
@@ -166,7 +170,13 @@ type StoredRecord = AdminAuditLogRecord & { _id: Types.ObjectId };
 
 const toAuditEntry = (record: StoredRecord): AuditEntry => {
   const { _id, ...rest } = record;
-  return { ...rest, id: _id.toString(), source: 'admin' };
+  // During rollout an older writer may still leave an inline note. Only the private history
+  // join may return note bodies; the migration/retention sweep removes these legacy bytes.
+  const details =
+    record.action === 'feedback.note_added' && rest.details
+      ? Object.fromEntries(Object.entries(rest.details).filter(([key]) => key !== 'note'))
+      : rest.details;
+  return { ...rest, ...(details ? { details } : {}), id: _id.toString(), source: 'admin' };
 };
 
 const OBJECT_ID_HEX_PATTERN = /^[0-9a-f]{24}$/i;
@@ -300,6 +310,13 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
     return this.listPage([ownerClause, { 'details.subscriptionId': { $in: subscriptionIds } }], page);
   }
 
+  async listForFeedback(feedbackId: string, page: { limit: number; cursor?: AuditLogCursor }) {
+    return this.listPage(
+      [{ 'details.feedbackId': feedbackId }, { action: { $in: ['feedback.status_changed', 'feedback.note_added'] } }],
+      page
+    );
+  }
+
   async listForSubscriptionOrOwner(
     scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
     page: { limit: number; cursor?: AuditLogCursor }
@@ -340,17 +357,8 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
     const unreviewed = query.status === 'unreviewed';
     if (!unreviewed && !query.from) throw new Error('from is required for the all review queue');
 
-    // Unreviewed has no product date bound: an old entry nobody signed off is exactly what the queue is for.
-    // Everything before the rollout baseline is already reviewed, so that cutoff is a safe scan floor.
-    const baselineFloor = unreviewed ? await this.findBaselineFloor() : null;
     const match: FilterClause = unreviewed
-      ? {
-          severity: 'critical',
-          ...(baselineFloor ? { occurredAt: { $gte: baselineFloor } } : {}),
-          // Exact match, unlike auditReviewConflict: stored actor and target ids are lowercase ObjectId hex.
-          'actor.userId': { $ne: query.viewerUserId },
-          $nor: [{ 'target.kind': 'user', 'target.id': query.viewerUserId }],
-        }
+      ? await this.buildUnreviewedMatch(query.viewerUserId)
       : { severity: 'critical', occurredAt: { $gte: query.from } };
 
     const [facets] = await this.auditLogModel
@@ -388,6 +396,40 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
       return { ...toAuditEntry(record), review: review ? toAuditReview(review) : null };
     });
     return { entries, nextCursor, total: readCount(facets?.total) };
+  }
+
+  async countUnreviewed(query: { viewerUserId: string }, options: { limit: number }): Promise<number> {
+    const match = await this.buildUnreviewedMatch(query.viewerUserId);
+    const rows = await this.auditLogModel
+      .aggregate<{ count: number }>([
+        { $match: match },
+        {
+          $lookup: {
+            from: AdminAuditReviewModel.collection.name,
+            localField: '_id',
+            foreignField: 'auditEntryId',
+            as: 'reviews',
+          },
+        },
+        { $match: { reviews: { $size: 0 } } },
+        { $limit: options.limit },
+        { $count: 'count' },
+      ])
+      .option({ maxTimeMS: LIST_QUERY_MAX_TIME_MS });
+    return readCount(rows);
+  }
+
+  private async buildUnreviewedMatch(viewerUserId: string): Promise<FilterClause> {
+    // Unreviewed has no product date bound: an old entry nobody signed off is exactly what the queue is for.
+    // Everything before the rollout baseline is already reviewed, so that cutoff is a safe scan floor.
+    const baselineFloor = await this.findBaselineFloor();
+    return {
+      severity: 'critical',
+      ...(baselineFloor ? { occurredAt: { $gte: baselineFloor } } : {}),
+      // Exact match, unlike auditReviewConflict: stored actor and target ids are lowercase ObjectId hex.
+      'actor.userId': { $ne: viewerUserId },
+      $nor: [{ 'target.kind': 'user', 'target.id': viewerUserId }],
+    };
   }
 
   /** A lower bound below the rollout baseline cutoff, with a day of slack for how long the migration ran. */
@@ -494,6 +536,12 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
       .maxTimeMS(LIST_QUERY_MAX_TIME_MS);
   }
 
+  async countActionsSince(actions: readonly AdminAuditAction[], since: Date): Promise<number> {
+    return this.auditLogModel
+      .countDocuments({ action: { $in: [...actions] }, occurredAt: { $gte: since } })
+      .maxTimeMS(LIST_QUERY_MAX_TIME_MS);
+  }
+
   async sumCreditsGranted(
     actorUserId: string,
     since: Date,
@@ -544,6 +592,5 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
   }
 }
 
-export const adminAuditLogRepository: SubscriptionTimelineAuditLogRepository = new AdminAuditLogRepository(
-  AdminAuditLogModel
-);
+export const adminAuditLogRepository: SubscriptionTimelineAuditLogRepository &
+  Pick<AdminAuditLogRepository, 'listForFeedback'> = new AdminAuditLogRepository(AdminAuditLogModel);

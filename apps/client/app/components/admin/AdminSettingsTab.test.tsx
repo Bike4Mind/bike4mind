@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SETTING_TABS, settingsMap, type SettingKey } from '@bike4mind/common';
@@ -7,13 +7,17 @@ import { SETTING_TABS, settingsMap, type SettingKey } from '@bike4mind/common';
 // Read at render time, so a test can seed the stored platform rows.
 let serverSettings: { settingName: string; settingValue: unknown }[] = [];
 let serverConfig: { hiddenAdminSettingKeys?: string[] } | undefined = { hiddenAdminSettingKeys: [] };
+let isLoading = false;
+let isError = false;
+const refetchSettings = vi.fn();
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useSettingsFromServer: () => ({ data: serverSettings, isLoading: false }),
+  useSettingsFromServer: () => ({ data: serverSettings, isLoading, isError, refetch: refetchSettings }),
   useConfig: () => ({ data: serverConfig }),
 }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('./EmbeddingProviderLimits', () => ({ EmbeddingProviderLimits: () => null }));
 vi.mock('./AdminOperationsModelSetting', () => ({ AdminOperationsModelSetting: () => null }));
+vi.mock('./AdminSchemaSettingField', () => ({ default: () => null }));
 vi.mock('./AdminTurnstileStatusNotice', () => ({
   AdminTurnstileStatusNotice: ({ enabled }: { enabled: boolean }) => (
     <div data-testid="admin-turnstile-notice" data-enabled={String(enabled)} />
@@ -47,7 +51,8 @@ vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => router.navigate,
 }));
 
-import AdminSettingsTab, { GROWTH_PRICING_ONLY_KEYS } from './AdminSettingsTab';
+import AdminSettingsTab from './AdminSettingsTab';
+import { HOME_BY_KEY, SETTING_HOMES } from './settingHomes';
 import { GROWTH_PRICING_SECTIONS } from './AdminGrowthPricingTab';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
@@ -99,6 +104,9 @@ const renderAiTab = () => renderTab(aiTab);
 const renderSecurityTab = () => renderTab(securityTab);
 
 beforeEach(() => {
+  isLoading = false;
+  isError = false;
+  refetchSettings.mockReset();
   serverSettings = [];
   serverConfig = { hiddenAdminSettingKeys: [] };
   router.search = {};
@@ -106,6 +114,38 @@ beforeEach(() => {
 });
 
 describe('AdminSettingsTab URL state', () => {
+  it('starts with the page header and keeps text labels on every section tab', () => {
+    renderSettings();
+    expect(screen.getByTestId('admin-settings-page').firstElementChild).toBe(screen.getByTestId('admin-page-header'));
+    for (const tab of Object.values(SETTING_TABS)) {
+      expect(screen.getByTestId(`admin-settings-section-tab-${tab.id}`)).toHaveTextContent(tab.name);
+      expect(screen.getByTestId(`admin-settings-section-tab-${tab.id}`).querySelector('svg')).toBeNull();
+    }
+  });
+
+  it('keeps the page header visible while settings load', () => {
+    isLoading = true;
+    renderSettings();
+    expect(screen.getByTestId('admin-settings-page').firstElementChild).toBe(screen.getByTestId('admin-page-header'));
+    expect(screen.getByText('Loading settings')).toBeInTheDocument();
+  });
+
+  it('shows an inline error with a retry action', () => {
+    isError = true;
+    renderSettings();
+    expect(screen.getByText('Could not load settings.')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(refetchSettings).toHaveBeenCalledOnce();
+  });
+
+  it('offers to clear a search with no matches', () => {
+    router.search = { tab: 'admin-settings', q: 'zzzz-no-setting-matches' };
+    renderSettings();
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No settings match these filters');
+    fireEvent.click(screen.getByTestId('admin-settings-clear-filters-btn'));
+    expect(screen.getByTestId('admin-settings-search-input')).toHaveValue('');
+  });
+
   it('focuses the real settings search with /', () => {
     render(
       <CssVarsProvider theme={appTheme}>
@@ -317,22 +357,42 @@ describe('AdminSettingsTab field default value', () => {
 });
 
 describe('AdminSettingsTab Credits System group', () => {
-  const renderCreditsTab = () => renderTab(findTab(settingsMap.billOperationalUsage.category));
+  const renderCreditsTab = () => renderTab(findTab(settingsMap.blockDisposableEmails.category));
 
-  it('lists only keys the Growth and Pricing tab edits', () => {
-    const growthPricingKeys = new Set<string>(GROWTH_PRICING_SECTIONS.flatMap(section => section.keys));
-    for (const key of GROWTH_PRICING_ONLY_KEYS) expect(growthPricingKeys.has(key), key).toBe(true);
+  it('gives every home key exactly one home, the growth home holding the Growth and Pricing keys', () => {
+    const seen = new Set<string>();
+    for (const home of SETTING_HOMES) {
+      for (const key of home.keys) {
+        expect(seen.has(key), key).toBe(false);
+        seen.add(key);
+        expect(settingsMap[key], key).toBeDefined();
+      }
+    }
+    expect(HOME_BY_KEY.size).toBe(seen.size);
+    const growth = SETTING_HOMES.find(home => home.id === 'growth-pricing');
+    expect(growth?.keys).toEqual(GROWTH_PRICING_SECTIONS.flatMap(section => section.keys));
   });
 
-  it('renders no editor for the Growth and Pricing keys and keeps the rest of the group', () => {
+  it('renders no generic editor for a home key in any section that holds one', () => {
+    const tabs = new Set([...HOME_BY_KEY.keys()].map(key => findTab(settingsMap[key as SettingKey].category)));
+    for (const tab of tabs) {
+      if (!tab) continue;
+      cleanup();
+      renderTab(tab);
+      for (const key of HOME_BY_KEY.keys()) {
+        expect(screen.queryByTestId(`generic-setting-${key}`), `${tab.id}:${key}`).toBeNull();
+      }
+    }
+  });
+
+  it('keeps the rest of the Credits System group', () => {
     renderCreditsTab();
 
-    for (const key of GROWTH_PRICING_ONLY_KEYS) {
-      expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
-    }
-    for (const key of ['billOperationalUsage', 'blockDisposableEmails', 'syntheticUserEmailDomains']) {
+    for (const key of ['blockDisposableEmails', 'maxSignupsPerIpPerDay', 'syntheticUserEmailDomains']) {
       expect(screen.getByTestId(`generic-setting-${key}`), key).toBeTruthy();
     }
+    // A pricing control: edited on Growth and Pricing.
+    expect(screen.queryByTestId('generic-setting-billOperationalUsage')).toBeNull();
     expect(screen.getByTestId('string-list-setting-blockedEmailDomains')).toBeTruthy();
   });
 
@@ -342,6 +402,20 @@ describe('AdminSettingsTab Credits System group', () => {
 
     fireEvent.click(screen.getByTestId('admin-settings-credits-growth-pricing-link'));
     expect(useAdminModal.getState().activeTab).toBe(AdminTab.GrowthPricing);
+  });
+
+  it.each([
+    ['invite-center-schedule', 'schedule'],
+    ['invite-center-rewards', 'rewards'],
+  ])('links to the Invite Center home %s', (homeId, section) => {
+    renderCreditsTab();
+
+    fireEvent.click(screen.getByTestId(`admin-settings-credits-${homeId}-link`));
+    expect(lastWrittenSearch({ tab: 'admin-settings', q: 'x' })).toMatchObject({
+      tab: 'waitlist',
+      inviteSection: section,
+      q: undefined,
+    });
   });
 
   it('points a search for a Growth and Pricing key to that tab', () => {
@@ -354,11 +428,27 @@ describe('AdminSettingsTab Credits System group', () => {
     expect(useAdminModal.getState().activeTab).toBe(AdminTab.GrowthPricing);
   });
 
-  it('shows no Growth and Pricing pointer for an unrelated search', () => {
+  it.each([
+    // 'drip' matches the drip cap's name; the audit log links a setting change as ?q=<key>.
+    ['drip', 'invite-center-schedule', 'schedule'],
+    ['signupGrantDripCap', 'invite-center-schedule', 'schedule'],
+    ['freeTierDays2To7SpendCapCredits', 'invite-center-schedule', 'schedule'],
+    ['ReferralHoldDays', 'invite-center-rewards', 'rewards'],
+    ['gearRewardMinAccountAgeDays', 'invite-center-rewards', 'rewards'],
+  ])('points a search for %s to its Invite Center section', (q, homeId, section) => {
+    router.search = { tab: 'admin-settings', q };
+    renderSettings();
+
+    expect(screen.getByTestId(`admin-settings-search-${homeId}-hint`)).toBeTruthy();
+    fireEvent.click(screen.getByTestId(`admin-settings-search-${homeId}-link`));
+    expect(lastWrittenSearch({ tab: 'admin-settings', q })).toMatchObject({ tab: 'waitlist', inviteSection: section });
+  });
+
+  it('shows no home pointer for an unrelated search', () => {
     router.search = { tab: 'admin-settings', q: 'slack' };
     renderSettings();
 
-    expect(screen.queryByTestId('admin-settings-search-growth-pricing-hint')).toBeNull();
+    for (const home of SETTING_HOMES) expect(screen.queryByTestId(`admin-settings-search-${home.id}-hint`)).toBeNull();
   });
 });
 

@@ -52,6 +52,7 @@ const MFA_PENDING_ALLOWED_PATHS = new Set([
   '/api/auth/mfa/verify-setup',
   '/api/auth/mfa/verify',
   '/api/auth/mfa/cancel-setup',
+  '/api/auth/mfa/enrollment-abandoned', // funnel telemetry; records nothing outside forced enrollment
   '/api/auth/mfa/status', // MFAEnforcementWrapper reads the user's MFA status
   '/api/auth/mfa/passkey/authenticate-options',
   '/api/auth/mfa/passkey/authenticate',
@@ -220,7 +221,7 @@ if (Config.GOOGLE_CLIENT_ID && Config.GOOGLE_CLIENT_ID !== 'not-configured') {
     )
   );
 } else {
-  console.warn('[AUTH] Google OAuth disabled: GOOGLE_CLIENT_ID not configured');
+  Logger.warn('[AUTH] Google OAuth disabled: GOOGLE_CLIENT_ID not configured');
 }
 
 /*
@@ -262,12 +263,12 @@ if (Config.GITHUB_CLIENT_ID && Config.GITHUB_CLIENT_ID !== 'not-configured') {
     )
   );
 } else {
-  console.warn('[AUTH] GitHub OAuth disabled: GITHUB_CLIENT_ID not configured');
+  Logger.warn('[AUTH] GitHub OAuth disabled: GITHUB_CLIENT_ID not configured');
 }
 
 // Only register Sign in with Apple if all four credentials are configured
 if (!registerAppleStrategy(passport, getAppleConfig())) {
-  console.warn('[AUTH] Sign in with Apple disabled: APPLE_* credentials not configured');
+  Logger.warn('[AUTH] Sign in with Apple disabled: APPLE_* credentials not configured');
 }
 
 // Note: Okta authentication is now handled by openid-client in oktaOidcClient.ts
@@ -306,37 +307,34 @@ export const setupSamlStrategy = (idp: {
   };
 }): string => {
   const strategyName = `saml-${idp._id}`;
-  const requestId = Math.random().toString(36).substr(2, 9);
 
-  console.log(`[SAML-${requestId}] === STARTING SAML STRATEGY SETUP ===`);
-  console.log(`[SAML-${requestId}] Setting up SAML strategy for IDP: ${idp._id}`);
-  console.log(`[SAML-${requestId}] IDP object keys:`, Object.keys(idp));
+  Logger.debug('Setting up SAML strategy', { idpId: idp._id });
 
   if (!idp.samlConfig) {
-    console.error('SAML configuration missing for IDP:', idp._id);
+    Logger.error('SAML configuration missing for IDP', { idpId: idp._id });
     throw new Error('SAML configuration missing for IDP');
   }
 
   if (!idp.samlConfig.entryPoint) {
-    console.error('Missing entryPoint in SAML config for IDP:', idp._id);
+    Logger.error('Missing entryPoint in SAML config for IDP', { idpId: idp._id });
     throw new Error('SAML entryPoint is required');
   }
 
   if (!idp.samlConfig.issuer) {
-    console.error('Missing issuer in SAML config for IDP:', idp._id);
+    Logger.error('Missing issuer in SAML config for IDP', { idpId: idp._id });
     throw new Error('SAML issuer is required');
   }
 
   if (!idp.samlConfig.cert) {
-    console.error('Missing cert in SAML config for IDP:', idp._id);
+    Logger.error('Missing cert in SAML config for IDP', { idpId: idp._id });
     throw new Error('SAML certificate is required');
   }
 
-  console.log('SAML config validation passed for IDP:', idp._id, {
-    entryPoint: idp.samlConfig.entryPoint,
-    issuer: idp.samlConfig.issuer,
-    hasValidCert: !!idp.samlConfig.cert,
-    callbackUrl: idp.samlConfig.callbackUrl || `${process.env.APP_URL}/api/auth/saml/callback`,
+  Logger.debug('SAML config validation passed for IDP', {
+    idpId: idp._id,
+    hasEntryPoint: !!idp.samlConfig.entryPoint,
+    hasIssuer: !!idp.samlConfig.issuer,
+    hasCert: !!idp.samlConfig.cert,
   });
 
   // Clean and format the certificate
@@ -364,7 +362,7 @@ export const setupSamlStrategy = (idp: {
     cacheProvider: samlRequestCache,
   };
 
-  console.log('Creating SAML strategy with options for IDP:', idp._id);
+  Logger.debug('Creating SAML strategy', { idpId: idp._id });
 
   try {
     passport.use(
@@ -462,10 +460,10 @@ export const setupSamlStrategy = (idp: {
       )
     );
 
-    console.log('SAML strategy created successfully for IDP:', idp._id);
+    Logger.info('SAML strategy created', { idpId: idp._id });
     return strategyName;
   } catch (error) {
-    console.error('Error creating SAML strategy for IDP:', idp._id, 'Error:', error);
+    Logger.error('Error creating SAML strategy', { idpId: idp._id, error });
     throw error;
   }
 };

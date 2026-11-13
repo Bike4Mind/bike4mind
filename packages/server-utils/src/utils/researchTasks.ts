@@ -3,6 +3,7 @@ import { sendToQueue } from './sqs';
 import { getSourceQueueUrl } from './dlqRegistry';
 import { sendToClient } from '../websocket/utils';
 import { Resource } from 'sst';
+import { Logger } from '@bike4mind/observability';
 
 export type DeepResearchIntoQuestJob = { questId: string; sessionId: string; userId: string; topic: string };
 
@@ -16,9 +17,9 @@ class ResearchTaskJobs implements IResearchTaskJobs {
           userId,
         },
       });
-      console.log(`✅ [QUEUE_SUCCESS] Successfully queued research task ${id}`);
+      Logger.info(`[QUEUE_SUCCESS] Successfully queued research task ${id}`);
     } catch (queueError) {
-      console.error(`❌ [QUEUE_ERROR] Failed to queue research task ${id}:`, queueError);
+      Logger.error(`[QUEUE_ERROR] Failed to queue research task ${id}`, { error: queueError });
       throw queueError;
     }
   }
@@ -50,7 +51,7 @@ class ResearchTaskJobs implements IResearchTaskJobs {
     researchTask: IResearchTask,
     update: { status: string; currentStep: string; progress: number }
   ): Promise<void> {
-    console.log('SENDING TO CLIENT');
+    Logger.info('SENDING TO CLIENT');
     await sendToClient(researchTask.userId, Resource.websocket.managementEndpoint, {
       action: 'research_task_status_update',
       status: update.status,

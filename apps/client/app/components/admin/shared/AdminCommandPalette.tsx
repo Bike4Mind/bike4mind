@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Button, Input, Modal, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { AdminTab } from '../adminSidebarConfig';
@@ -7,7 +7,13 @@ import { adminOrganizationHref } from '../organizationsTabSearch';
 import { useAdminEntitySearch } from './useAdminEntitySearch';
 import { parseUserId } from '../Users/usersTabSearch';
 import { adminFocusScope, adminSurface } from './adminStyles';
-import { focusAdminSearch, isAdminChordEvent, isAdminOverlayOpen, isAdminShortcutEvent } from './adminKeyboard';
+import {
+  focusAdminSearch,
+  isAdminChordEvent,
+  isAdminOverlayOpen,
+  isAdminShortcutEvent,
+  onOpenAdminCommandPalette,
+} from './adminKeyboard';
 
 export type AdminCommand = {
   id: string;
@@ -18,6 +24,23 @@ export type AdminCommand = {
   paletteOnly?: boolean;
   run: () => void;
 };
+
+// The button strip is a keyboard entry point, so it stays out of the page flow until it takes focus: nothing
+// may render above a page's header (DESIGN_GUIDE "Page frame"). Pointer users open the palette from the
+// sidebar's Cmd K hint.
+const revealOnFocus = {
+  '&:not(:focus-within)': {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    p: 0,
+    m: '-1px',
+    overflow: 'hidden',
+    clip: 'rect(0 0 0 0)',
+    whiteSpace: 'nowrap',
+    border: 0,
+  },
+} as const;
 
 const shortcuts = [
   ['Cmd/Ctrl+K', 'Open command palette'],
@@ -66,6 +89,11 @@ function CommandPalette({
   const [help, setHelp] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
+  const openPalette = useCallback(() => {
+    setQuery('');
+    setActive(0);
+    setOpen(true);
+  }, []);
   useEffect(() => {
     onSearchQuery?.(open ? query : '');
   }, [open, query, onSearchQuery]);
@@ -82,6 +110,7 @@ function CommandPalette({
       .filter(({ tab }) => canOpenTab(tab))
       .map(({ id, label, tab }) => ({ id, label, run: () => go(tab) })),
     ...(onOpenHelp ? [{ id: 'help', label: 'Open Help Center', run: onOpenHelp }] : []),
+    { id: 'shortcuts', label: 'Show keyboard shortcuts', run: () => setHelp(true) },
   ];
   // A user profile belongs to the Users tab.
   const userId = canOpenTab(AdminTab.Users) ? parseUserId(query.trim()) : undefined;
@@ -134,9 +163,7 @@ function CommandPalette({
       const key = event.key.toLowerCase();
       if (isAdminChordEvent(event) && key === 'k' && !event.shiftKey) {
         event.preventDefault();
-        setQuery('');
-        setActive(0);
-        setOpen(true);
+        openPalette();
         return;
       }
       if (!isAdminShortcutEvent(event) || event.metaKey || event.ctrlKey) return;
@@ -158,14 +185,16 @@ function CommandPalette({
     // which then only takes `/` when this page has no visible search.
     window.addEventListener('keydown', handleKey, true);
     return () => window.removeEventListener('keydown', handleKey, true);
-  }, [commands]);
+  }, [commands, openPalette]);
+
+  useEffect(() => onOpenAdminCommandPalette(openPalette), [openPalette]);
 
   useEffect(() => {
     if (open) document.getElementById(`admin-command-${selected?.id}`)?.scrollIntoView?.({ block: 'nearest' });
   }, [open, selected?.id]);
 
   return (
-    <Box ref={rootRef} sx={{ ...adminFocusScope, p: 1 }}>
+    <Box ref={rootRef} data-testid="admin-command-strip" sx={{ ...adminFocusScope, ...revealOnFocus, p: 1 }}>
       <Stack direction="row" gap={1} flexWrap="wrap">
         <Button
           variant="outlined"
@@ -173,11 +202,7 @@ function CommandPalette({
           size="sm"
           data-testid="admin-command-open-btn"
           aria-keyshortcuts="Meta+k Control+k"
-          onClick={() => {
-            setQuery('');
-            setActive(0);
-            setOpen(true);
-          }}
+          onClick={openPalette}
         >
           Commands (Cmd/Ctrl+K)
         </Button>

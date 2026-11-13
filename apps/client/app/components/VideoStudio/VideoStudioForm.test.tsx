@@ -207,3 +207,44 @@ describe('video form payer note', () => {
     expect(screen.queryByTestId('video-form-payer-note')).not.toBeInTheDocument();
   });
 });
+
+describe('VideoStudioForm in Create v2', () => {
+  const v2Tree = (models: readonly [VideoModel, ...VideoModel[]]) => (
+    <CssVarsProvider theme={appTheme}>
+      <VideoStudioForm models={models} isSubmitting={false} onSubmit={onSubmit} createV2 />
+    </CssVarsProvider>
+  );
+
+  it('picks models from cards and draws the aspect ratio as tiles', () => {
+    render(v2Tree([rangeModel, discreteModel]));
+    expect(screen.queryByTestId('video-form-model-select')).not.toBeInTheDocument();
+    expect(screen.getByTestId(`video-form-model-card-${rangeModel.id}`)).toHaveAttribute('data-selected', 'true');
+    expect(screen.getByTestId('video-form-aspect-1:1-btn')).toBeInTheDocument();
+  });
+
+  it('keeps the values on a model switch, marks the ones it rejects, and submits after the fix', () => {
+    render(v2Tree([rangeModel, discreteModel]));
+    typePrompt('a lighthouse');
+    fireEvent.click(screen.getByTestId('video-form-aspect-1:1-btn'));
+    fireEvent.click(screen.getByTestId(`video-form-model-card-${discreteModel.id}-radio`));
+
+    expect(screen.queryByTestId('video-form-changes')).not.toBeInTheDocument();
+    expect(screen.getByTestId('video-form-aspect-1:1-btn')).toHaveAttribute('data-invalid', 'true');
+    expect(screen.getByTestId('video-form-aspect-invalid')).toHaveTextContent('you asked for 1:1');
+    expect(screen.getByTestId('video-form-resolution-invalid')).toHaveTextContent('you asked for 480p');
+    expect(screen.queryByTestId('video-form-duration-invalid')).not.toBeInTheDocument();
+    expect(screen.getByTestId('video-form-submit-btn')).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('video-form-aspect-fix-btn'));
+    fireEvent.click(screen.getByTestId('video-form-resolution-fix-btn'));
+    fireEvent.click(screen.getByTestId('video-form-submit-btn'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: discreteModel.id,
+        aspect_ratio: '16:9',
+        resolution: '720p',
+        duration_seconds: 6,
+      })
+    );
+  });
+});

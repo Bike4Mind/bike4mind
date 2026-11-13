@@ -74,7 +74,7 @@ vi.mock('@bike4mind/database', () => ({
   // NotifierTest: the real notifier is exercised below, so its mailer is stubbed at the transport.
 }));
 vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({ default: { sendEmail: h.sendEmail } }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../transfer-ownership';
 

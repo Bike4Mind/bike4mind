@@ -143,6 +143,20 @@ describe('StreamAccumulator', () => {
       expect(callback).not.toHaveBeenCalled();
     });
 
+    it.each(['refusal', 'content_filter'])('delivers an empty %s with its usage', async stopReason => {
+      const acc = new StreamAccumulator();
+      acc.apply(content('', { stopReason, usage: { inputTokens: 10 }, credits: { used: 3 } }));
+      const callback = vi.fn().mockResolvedValue(undefined);
+
+      await acc.finalize(callback);
+
+      expect(callback).toHaveBeenCalledOnce();
+      expect(callback).toHaveBeenCalledWith(
+        [''],
+        expect.objectContaining({ inputTokens: 10, creditsUsed: 3, stopReason })
+      );
+    });
+
     it('passes usage info to callback', async () => {
       const acc = new StreamAccumulator();
       acc.apply(content('text', { usage: { inputTokens: 10, outputTokens: 20 } }));

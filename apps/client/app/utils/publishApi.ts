@@ -9,9 +9,13 @@ import type {
   ReportReason,
   UploadUrlResponse,
 } from '@bike4mind/common';
-import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX, deriveArtifactPublishSlug } from '@bike4mind/common';
+import {
+  ArtifactTypeSchema,
+  ELISION_PUBLISH_BODY,
+  SCOPE_URL_PREFIX,
+  deriveArtifactPublishSlug,
+} from '@bike4mind/common';
 import { detectElidedSafe } from '@bike4mind/server-utils/app/utils/artifactParser';
-import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
 import { exportHref, type PublishExportFormat } from '@client/app/utils/publishExport';
 import { encodeReactPublishUpload } from '@client/app/utils/reactArtifactPublish';
 import { SLUG_OWNED_BY_OTHER } from '@server/services/publish/slugOwnership';
@@ -169,6 +173,18 @@ export async function findPublishedByArtifact(artifactId: string): Promise<Manag
   }
 }
 
+function toPublishResult(a: ManagedArtifact, url: string): PublishResult {
+  return {
+    publicId: a.publicId,
+    url,
+    tier: a.tier,
+    scopeId: a.scopeId,
+    slug: a.slug,
+    visibility: a.visibility,
+    publishedAt: a.publishedAt ?? '',
+  };
+}
+
 /**
  * Look up the caller's OWN publication of a chat reply, as the share result the dialog renders,
  * so reopening Publish & Share on an answer lands on the live page. Owner-scoped server-side.
@@ -180,16 +196,7 @@ export async function findPublishedByReply(messageId: string): Promise<PublishRe
       `/api/publish/artifacts?sourceMessageId=${encodeURIComponent(messageId)}&limit=1`
     );
     const a = data.artifacts?.[0];
-    if (!a) return null;
-    return {
-      publicId: a.publicId,
-      url: `/p/r/${a.publicId}`,
-      tier: a.tier,
-      scopeId: a.scopeId,
-      slug: a.slug,
-      visibility: a.visibility,
-      publishedAt: a.publishedAt ?? '',
-    };
+    return a ? toPublishResult(a, `/p/r/${a.publicId}`) : null;
   } catch {
     return null;
   }
@@ -454,7 +461,8 @@ export async function loadReactSiblingSources(
   sessionId: string | undefined,
   identifiers: readonly string[]
 ): Promise<Record<string, string>> {
-  if (!sessionId) throw new Error('The source artifact is no longer linked to a chat, so its files cannot be found');
+  if (!sessionId)
+    throw new Error('The source chat is unavailable or you do not have access to it, so its files cannot be refreshed');
   const entries = await Promise.all(
     identifiers.map(async identifier => {
       const { data: list } = await api.get<{ artifacts?: { id?: string }[] }>('/api/artifacts', {
@@ -500,9 +508,10 @@ export async function refreshPublishedFromSource(a: ManagedArtifact): Promise<Pu
   const { data } = await api.get<SourceArtifactResponse>(
     `/api/artifacts/${encodeURIComponent(artifactId)}?includeContent=true`
   );
-  const type = data.artifact?.type;
+  const parsedType = ArtifactTypeSchema.safeParse(data.artifact?.type);
   const content = data.content?.content;
-  if (!type) throw new Error('The source artifact could not be read');
+  if (!parsedType.success) throw new Error('The source artifact could not be read');
+  const type = parsedType.data;
   if (!content?.trim()) throw new Error('The source artifact has no content to publish');
   const siblings = type === 'react' ? (a.source.reactSiblings ?? []) : [];
   const reactFiles = siblings.length ? await loadReactSiblingSources(data.artifact?.sessionId, siblings) : undefined;
@@ -526,14 +535,13 @@ export async function refreshPublishedFromSource(a: ManagedArtifact): Promise<Pu
  * Publish an artifact as a hosted static bundle (/p/u/{userId}/{slug}) via the
  * 3-step flow: request presigned upload -> PUT index.html to S3 -> finalize.
  *
- * The artifact is rendered to a single static index.html. `html`/`svg` artifacts
- * become real pages; other types render their source in a <pre> (interactive JS
- * artifacts are static-only until the sandbox-origin work lands, so inline scripts
- * are stripped at serve time).
+ * The RAW artifact content is uploaded as index.html with `source.artifactType` set, and
+ * finalize renders the published page server-side (`renderArtifactIndexHtml`, or the React
+ * transpiler for `react`), so every publish surface emits the same bytes.
  */
 export async function publishArtifactBundle(input: {
   artifactId: string;
-  type: string;
+  type: ArtifactType;
   content: string;
   title: string;
   /**
@@ -584,14 +592,11 @@ export async function publishArtifactBundle(input: {
   const scopeId = input.scopeId ?? input.userId;
   if (!scopeId) throw new Error('publishArtifactBundle needs either scopeId or userId to resolve the scope');
 
-  // React artifacts upload their RAW JSX as index.html; the server transpiles it into a
-  // self-contained inert HTML bundle at finalize (issue #21). Every other type renders to static
-  // HTML here. The `artifactType` signal on `source` tells finalize which path to take.
-  const isReact = input.type === 'react';
-  const reactSiblings = isReact && input.reactFiles ? Object.keys(input.reactFiles) : [];
-  const indexHtml = !isReact
-    ? buildArtifactIndexHtml(input.type, input.content, input.title)
-    : reactSiblings.length && input.reactFiles
+  // Upload the untrimmed content: the published page embeds it verbatim, so trimming here would
+  // change the bytes of every re-published page. A multi-file React entry travels as one JSON upload.
+  const reactSiblings = input.type === 'react' && input.reactFiles ? Object.keys(input.reactFiles) : [];
+  const indexHtml =
+    reactSiblings.length && input.reactFiles
       ? encodeReactPublishUpload({ entry: input.content, files: input.reactFiles })
       : input.content;
   const size = new TextEncoder().encode(indexHtml).length;
@@ -619,7 +624,7 @@ export async function publishArtifactBundle(input: {
       source: {
         kind: 'bundle',
         artifactId: input.artifactId,
-        ...(isReact ? { artifactType: 'react' as const } : {}),
+        artifactType: input.type,
         ...(reactSiblings.length ? { reactSiblings } : {}),
       },
       files: [{ path: 'index.html', size, mimeType: 'text/html' }],
@@ -635,12 +640,12 @@ export async function publishArtifactBundle(input: {
     ({ data: draft } = await requestDraft(`${slug}-${uniqueSlugDiscriminator()}`));
   }
 
-  // Step 2 - PUT the bytes directly to S3 (plain fetch; no app auth header).
+  // Step 2 - PUT the bytes to the minted URL (plain fetch; no app auth header, only the headers it was issued with).
   const put = draft.uploadUrls.find(u => u.path === 'index.html');
   if (!put) throw new Error('Upload URL was not issued for index.html');
   const res = await fetch(put.url, {
     method: 'PUT',
-    headers: { 'Content-Type': 'text/html' },
+    headers: { ...put.headers, 'Content-Type': 'text/html' },
     body: indexHtml,
   });
   if (!res.ok) throw new Error(`Upload failed (${res.status})`);
@@ -679,7 +684,7 @@ export interface ArtifactPublishOpts {
  */
 export function artifactBundlePublisher(input: {
   artifactId: string;
-  type: string;
+  type: ArtifactType;
   content: string;
   title: string;
   userId: string;
@@ -737,26 +742,27 @@ export function buildArtifactPublishWiring(input: {
   reactFiles?: Record<string, string> | null;
 }): {
   resolveExisting: () => Promise<ManagedArtifact | null>;
+  resolvePublished: () => Promise<PublishResult | null>;
   publish: (visibility: PublishVisibility, opts?: ArtifactPublishOpts) => Promise<PublishResult>;
   incompleteWarning?: string;
+  policySource?: { artifactId?: string; sessionId?: string };
 } {
+  // The dialog runs both lookups on open; one request serves both.
+  let lookup: Promise<ManagedArtifact | null> | undefined;
+  const findExisting = () => (lookup ??= findPublishedByArtifact(input.artifactId));
   return {
-    resolveExisting: () => findPublishedByArtifact(input.artifactId),
+    policySource: { artifactId: input.artifactId },
+    resolveExisting: findExisting,
+    resolvePublished: async () => {
+      const a = await findExisting();
+      return a ? toPublishResult(a, toArtifactSharePath(a.tier, a.scopeId, a.slug)) : null;
+    },
     publish: artifactBundlePublisher(input),
     // A /p/ link is the point of no return: it can be handed to a client before anyone
     // notices the artifact's buttons are inert. Computed here rather than in the dialog so
     // every publish surface that routes through this wiring inherits the check.
     ...(detectElidedSafe(input.content, input.type) ? { incompleteWarning: ELISION_PUBLISH_BODY } : {}),
   };
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 function isSlugOwnedByOther(err: unknown): boolean {
@@ -776,36 +782,6 @@ function uniqueSlugDiscriminator(): string {
     .toString(36)
     .padStart(3, '0');
   return `${time}${rand}`;
-}
-
-/**
- * Render an artifact to a single static index.html based on its type.
- *
- * Exported so the server renderer's byte-parity tests can pin their output to this
- * (`apps/client/server/services/publish/renderArtifactHtml.ts`). The server copy is the
- * permanent home; this client pre-render is removed once the raw-upload switch lands (#1492).
- */
-export function buildArtifactIndexHtml(type: string, content: string, title: string): string {
-  const t = escapeHtml(title || 'Shared artifact');
-  // Full HTML doc -> serve as-is, but still inject the lead-gen footer before
-  // </body> (fall back to appending) so every published page is branded.
-  if (type === 'html' && /<html[\s>]/i.test(content)) {
-    const footer = buildShareFooterHtml({ source: 'artifact' });
-    return /<\/body>/i.test(content) ? content.replace(/<\/body>/i, `${footer}</body>`) : content + footer;
-  }
-
-  const gate = buildSignupGateHtml();
-  const PAGE = (inner: string, extraStyle = '') => `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta property="og:title" content="${t}"><title>${t}</title>
-<style>:root{color-scheme:light dark}body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;line-height:1.6;max-width:900px;margin:0 auto;padding:2rem 1.25rem 4rem}pre{background:rgba(127,127,127,.12);padding:1rem;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word}img,svg{max-width:100%;height:auto}${extraStyle}${gate.styles}</style>
-</head><body>${inner}${buildShareFooterHtml({ source: 'artifact' })}${gate.html}</body></html>`;
-
-  if (type === 'html') return PAGE(content); // HTML fragment
-  if (type === 'svg') return PAGE(content); // inline SVG markup
-  // Source-bearing types (code/python/react/recharts/mermaid/json/...) -> code view.
-  return PAGE(`<pre><code>${escapeHtml(content)}</code></pre>`);
 }
 
 /** Absolute, shareable URL for a publish result (e.g. https://app.example.com/p/r/abc123). */
@@ -834,6 +810,8 @@ export interface ShareLink {
   shareToken: string;
   shareUrl: string;
   createdAt: string | null;
+  /** Null when the link never expires. */
+  expiresAt: string | null;
   viewCount: number;
   lastViewedAt: string | null;
 }
@@ -871,26 +849,38 @@ export async function getShareTokenState(publicId: string): Promise<ShareTokenSt
 /**
  * Mint (idempotent) or fetch the no-sign-in share token for a published artifact
  * (owner/admin). Pass `regenerate: true` to rotate it, which immediately revokes
- * every outstanding `/a` link. Returns the token and its relative `/a/<token>` path.
+ * every outstanding `/a` link. `expiresAt` (ISO datetime) applies only when a link is minted;
+ * an already-live link is returned unchanged. Returns the token and its relative `/a/<token>` path.
  */
-export async function createOrGetShareToken(publicId: string, regenerate = false): Promise<MintedShareLink> {
-  const { data } = await api.post<MintedShareLink>(`/api/publish/${publicId}/share-token`, { regenerate });
+export async function createOrGetShareToken(
+  publicId: string,
+  { regenerate = false, expiresAt }: { regenerate?: boolean; expiresAt?: string } = {}
+): Promise<MintedShareLink> {
+  const { data } = await api.post<MintedShareLink>(`/api/publish/${publicId}/share-token`, {
+    regenerate,
+    ...(expiresAt ? { expiresAt } : {}),
+  });
   return data;
 }
 
 /** Rotate the share token (revokes all outstanding `/a` links), returning the new one. */
-export async function regenerateShareToken(publicId: string): Promise<MintedShareLink> {
-  return createOrGetShareToken(publicId, true);
+export async function regenerateShareToken(publicId: string, expiresAt?: string): Promise<MintedShareLink> {
+  return createOrGetShareToken(publicId, { regenerate: true, expiresAt });
 }
 
 /**
  * Mint an ADDITIONAL live link alongside the existing ones (owner/admin), so an artifact can
  * be shared with two audiences and either link revoked on its own. Unlike
  * `createOrGetShareToken` this is not idempotent - each call is another link. Rejected with
- * `SHARE_LINK_LIMIT` past 20 live links.
+ * 400 `SHARE_LINK_LIMIT` at 20 live links (also when a concurrent add took the last slot), and
+ * 409 `SHARE_LINK_RACED` when the links changed mid-request and a retry may succeed. A 404
+ * means the artifact is gone, including one deleted while the request was in flight.
  */
-export async function createAdditionalShareToken(publicId: string): Promise<MintedShareLink> {
-  const { data } = await api.post<MintedShareLink>(`/api/publish/${publicId}/share-token`, { additional: true });
+export async function createAdditionalShareToken(publicId: string, expiresAt?: string): Promise<MintedShareLink> {
+  const { data } = await api.post<MintedShareLink>(`/api/publish/${publicId}/share-token`, {
+    additional: true,
+    ...(expiresAt ? { expiresAt } : {}),
+  });
   return data;
 }
 

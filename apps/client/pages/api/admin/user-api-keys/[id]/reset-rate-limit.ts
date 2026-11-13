@@ -1,17 +1,17 @@
+import { userRepository } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
-import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import {
   evaluateCounterLockout,
   resetApiKeyRateLimit,
   resolveCounterLimit,
 } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
-import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
+import { ApiKeyScope, UserApiKeyEvents, assertCanActOnAdminTarget } from '@bike4mind/common';
 import { userApiKeyService } from '@bike4mind/services';
 
 /**
@@ -39,23 +39,27 @@ import { userApiKeyService } from '@bike4mind/services';
  * fails to clear, `resetApiKeyRateLimit` itself rejects rather than
  * returning a result this route could report as a 200 success.
  */
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: 'users:moderate' },
+})
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = req.query as { id?: string | string[] };
       if (typeof id !== 'string' || !id) {
         throw new BadRequestError('Invalid API key ID');
       }
+      const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
       const apiKey = await userApiKeyRepository.findById(id);
       if (!apiKey) {
         throw new NotFoundError('API key not found');
       }
+      // An orphaned key (owner deleted) has no admin access to protect.
+      const owner = await userRepository.findById(apiKey.userId);
+      if (owner) assertCanActOnAdminTarget(req.user, owner, 'reset the API key limits of');
 
       const resetUsage = await resetApiKeyRateLimit(apiKey.id, { alsoResetManagement: true, logger: req.logger });
       const rateLimit = apiKey.rateLimit ?? userApiKeyService.API_KEY_RATE_LIMIT_DEFAULTS;
@@ -90,6 +94,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
         action: 'user.api_key.rate_limit_reset',
         target: { kind: 'apiKey', id: apiKey.id, displayName: apiKey.name },
         summary: 'reset API key rate-limit counters',
+        reason,
         details: { ownerUserId: apiKey.userId, lockout },
       });
 

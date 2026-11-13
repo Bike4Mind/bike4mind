@@ -109,6 +109,7 @@ export interface IAdminAuditLogRepository {
   findByIds(ids: string[]): Promise<AuditEntry[]>;
   /** Critical entries joined to their reviews: see adminAuditReview.ts. */
   listReviewQueue: ListAuditReviewQueue;
+  countUnreviewed(query: { viewerUserId: string }, options: { limit: number }): Promise<number>;
   summarize(since: Date): Promise<Omit<AuditSummary, 'windowDays' | 'since'>>;
   /** Oldest first: entries strictly after `after` (or from the start) up to and including `until`. */
   listAscending(page: { after: AuditLogCursor | null; until: Date; limit: number }): Promise<AuditEntry[]>;
@@ -122,6 +123,8 @@ export interface IAdminAuditLogRepository {
   ): Promise<number>;
   /** Entries one actor recorded under `actions` with occurredAt at or after `since`, skipping approval-run ones. */
   countActions(actorUserId: string, actions: readonly AdminAuditAction[], since: Date): Promise<number>;
+  /** Entries under `actions` by any actor with occurredAt at or after `since`. */
+  countActionsSince(actions: readonly AdminAuditAction[], since: Date): Promise<number>;
 }
 
 /** The subscription Timeline read capability, without extending the base repository's required contract. */

@@ -1,9 +1,9 @@
 import { IUserDocument } from '@bike4mind/common';
 import { InboxType } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { User, inboxRepository } from '@bike4mind/database';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import * as z from 'zod';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
@@ -11,14 +11,10 @@ import { InboxEvents } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler(async (req, res) => {
     const user = req.user as IUserDocument;
     const adminId = user?.id;
-
-    if (!user?.isAdmin) {
-      throw new ForbiddenError('Only admins can send system messages');
-    }
 
     const wsEndpoint = Resource.websocket.managementEndpoint;
 

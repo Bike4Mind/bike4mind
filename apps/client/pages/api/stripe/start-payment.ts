@@ -20,6 +20,7 @@ import {
   signupNetworkMetadata,
 } from '@server/integrations/stripe/riskMetadata';
 import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
+import { creditPurchaseTermsMetadata } from '@server/integrations/stripe/termsConsent';
 import type Stripe from 'stripe';
 
 const handler = baseApi()
@@ -29,6 +30,7 @@ const handler = baseApi()
     const parsedBody = transactionSchema.parse(req.body);
 
     await assertCheckoutAllowed(req.user, readNetworkMeta(req), req.logger, 'credit_purchase');
+    const termsMetadata = await creditPurchaseTermsMetadata(parsedBody.acceptedTerms);
 
     // The risk fields are what Radar rules read (`::account_age_hours::`); see riskMetadata.ts.
     const metadata: PaymentDetails['metadata'] = {
@@ -36,6 +38,7 @@ const handler = baseApi()
       environment: Config.STAGE,
       transactionType: parsedBody.transactionType,
       ...paymentRiskMetadata(req.user),
+      ...termsMetadata,
     };
 
     let paymentDetails: PaymentDetails;
@@ -87,6 +90,7 @@ const handler = baseApi()
         },
         automatic_payment_methods: {
           enabled: true,
+          ...(parsedBody.allowRedirects === false && { allow_redirects: 'never' as const }),
         },
         ...threeDSecureOptions,
       });

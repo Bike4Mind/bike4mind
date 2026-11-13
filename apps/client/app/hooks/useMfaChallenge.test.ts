@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   resetRefreshCoordinator: vi.fn(),
   resetSessionBootstrap: vi.fn(),
   toastError: vi.fn(),
+  reportMfaEnrollmentAbandoned: vi.fn(),
   tokenState: { accessToken: null as string | null, mfaPending: false, hasSession: false },
 }));
 
@@ -43,6 +44,9 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
 }));
 vi.mock('@client/app/utils/refreshCoordinator', () => ({ resetRefreshCoordinator: mocks.resetRefreshCoordinator }));
 vi.mock('@client/app/utils/sessionBootstrap', () => ({ resetSessionBootstrap: mocks.resetSessionBootstrap }));
+vi.mock('@client/app/utils/mfaEnrollmentFunnel', () => ({
+  reportMfaEnrollmentAbandoned: mocks.reportMfaEnrollmentAbandoned,
+}));
 
 import { useMfaChallenge } from './useMfaChallenge';
 
@@ -106,6 +110,22 @@ describe('useMfaChallenge begin', () => {
     });
   });
 
+  it('explains forced setup without an administrator and offers a labelled sign-out', async () => {
+    const { result } = setup();
+
+    await act(() => result.current.begin({ ...verifyStart, mode: 'setup' }));
+
+    expect(result.current.modalProps.description).toContain('your credits');
+    expect(result.current.modalProps.description).not.toMatch(/administrator/i);
+    expect(result.current.modalProps.onSignOut).toBeTypeOf('function');
+  });
+
+  it('offers no sign-out while verifying', async () => {
+    const { result } = setup();
+    await act(() => result.current.begin(verifyStart));
+    expect(result.current.modalProps.onSignOut).toBeUndefined();
+  });
+
   it('ends the sign-in as a cancelled setup when enrollment cannot start', async () => {
     mocks.setupMutateAsync.mockRejectedValue(new Error('setup down'));
     const { result, onCancel } = setup();
@@ -163,6 +183,23 @@ describe('useMfaChallenge verification', () => {
     expect(mocks.resetTokens).toHaveBeenCalledTimes(1);
     expect(onCancel).toHaveBeenCalledWith('verify');
     expect(result.current.modalProps.open).toBe(false);
+    expect(mocks.reportMfaEnrollmentAbandoned).not.toHaveBeenCalled();
+  });
+
+  it('reports an abandoned forced enrollment with the pending token before dropping it', async () => {
+    mocks.setMfaPendingTokens.mockImplementationOnce((token: string) => {
+      mocks.tokenState.accessToken = token;
+    });
+    const { result, onCancel } = setup();
+    await act(() => result.current.begin({ ...verifyStart, mode: 'setup' }));
+
+    act(() => result.current.modalProps.onSignOut?.());
+
+    expect(mocks.reportMfaEnrollmentAbandoned).toHaveBeenCalledExactlyOnceWith('pending-tok');
+    expect(mocks.reportMfaEnrollmentAbandoned.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.resetTokens.mock.invocationCallOrder[0]
+    );
+    expect(onCancel).toHaveBeenCalledWith('setup');
   });
 
   it('shows the server message with the attempts remaining and keeps the modal open', async () => {

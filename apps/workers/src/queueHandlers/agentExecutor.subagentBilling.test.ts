@@ -40,11 +40,11 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: vi.fn(() => ({ __mock: 'generatedImageStorage' })),
 }));
 
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
 const admissionAssertMock = vi.fn(async (_model: string) => {});
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({
     admits: async () => true,
     assert: (model: string) => admissionAssertMock(model),

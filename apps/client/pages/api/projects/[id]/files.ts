@@ -12,6 +12,7 @@ import { addFilesToProject, removeFilesFromProject } from '@server/projects/proj
 import { respond } from '@server/utils/respond';
 import { fabFileListResponseSchema, projectResponseSchema } from '@bike4mind/common';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { fileContentUrl } from '@bike4mind/server-utils/files/browserFileSigner';
 
 const addFileIdsBodySchema = z.object({
   fileIds: z.array(z.string()).min(1),
@@ -39,6 +40,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
             users: userRepository,
           },
           storage: getFilesStorage(),
+          contentUrl: fileContentUrl,
         }
       );
 

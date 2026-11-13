@@ -5,7 +5,7 @@ import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { assertNoPendingDeletion } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
-import { verifyApiKey } from '@server/cli/auth';
+import { verifyApiKey } from '@bike4mind/server-utils/cli/auth';
 import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { ipBlockRefusal } from '@server/middlewares/checkBlockedIP';
@@ -141,7 +141,8 @@ async function resolveIdentity(
     // below so action handlers can gate on it without re-verifying.
     const apiKeyInfo = await verifyApiKey(
       { authorization: `Bearer ${token}` },
-      { requiredScopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.AI_CHAT, ApiKeyScope.CC_BRIDGE] }
+      // Opening a socket is not a use of the key; the actions sent over it are.
+      { requiredScopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.AI_CHAT, ApiKeyScope.CC_BRIDGE], recordUse: false }
     );
     return {
       userId: apiKeyInfo.userId,
@@ -218,7 +219,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
       ...(auth.apiKeyId && { apiKeyId: auth.apiKeyId }),
     });
 
-    user.lastActiveAt = new Date();
+    // Presence only: connecting is not an action, so lastActiveAt is left to recordUserActivity.
     user.isOnline = true;
     await user.save();
 

@@ -39,4 +39,14 @@ describe('UpdatingBar', () => {
     expect(screen.queryByTestId('admin-updating-bar')).not.toBeInTheDocument();
     expect(container.querySelector('[aria-hidden="true"]')).toHaveStyle({ visibility: 'hidden' });
   });
+
+  it('reserves no height in the parent flow with the overlay placement', () => {
+    wrap(<UpdatingBar active placement="overlay" />);
+    expect(screen.getByTestId('admin-updating-bar')).toHaveStyle({ position: 'absolute', bottom: '100%' });
+  });
+
+  it('stays in the flow by default', () => {
+    wrap(<UpdatingBar active />);
+    expect(screen.getByTestId('admin-updating-bar')).not.toHaveStyle({ position: 'absolute' });
+  });
 });

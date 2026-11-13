@@ -1,5 +1,8 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
 import {
+  FeedbackStatus,
+  FEEDBACK_RESOLUTIONS,
+  FEEDBACK_CLIENT_PLATFORMS,
   FEEDBACK_SUBJECTS,
   HELP_FEEDBACK_REPORT_TYPES,
   HELP_FEEDBACK_SURFACES,
@@ -13,6 +16,8 @@ const feedbackSchema = new Schema<IFeedbackDocument>(
     // below is what tells a reader "expired" apart from "never had text".
     content: { type: String, required: false },
     status: { type: String, required: true },
+    resolution: { type: String, enum: FEEDBACK_RESOLUTIONS, required: false },
+    resolutionDuplicateId: { type: String, required: false },
     tags: { type: Array<string>, required: false },
     username: { type: String, required: true },
     userEmail: { type: String, required: false },
@@ -46,7 +51,31 @@ const feedbackSchema = new Schema<IFeedbackDocument>(
       ),
       required: false,
     },
+    // Diagnostic only - never read for authorization. Reports from before it existed have none.
+    clientContext: {
+      type: new Schema(
+        {
+          path: { type: String, required: false },
+          appVersion: { type: String, required: false },
+          platform: { type: String, enum: FEEDBACK_CLIENT_PLATFORMS, required: false },
+          viewport: {
+            type: new Schema(
+              { width: { type: Number, required: true }, height: { type: Number, required: true } },
+              { _id: false }
+            ),
+            required: false,
+          },
+          model: { type: String, required: false },
+          userAgent: { type: String, required: false },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
     contentStored: { type: Boolean, required: true, default: false },
+    handledBy: { type: String, required: false },
+    handledAt: { type: Date, required: false },
+    handledAuditEntryId: { type: String, required: false },
   },
   {
     timestamps: true,
@@ -96,8 +125,23 @@ feedbackSchema.index(
 // defaults to null, so the key is present on unstamped rows too, and a compound sparse index skips
 // a document only when every one of its keys is absent.
 feedbackSchema.index({ organizationId: 1, createdAt: -1 }, { name: 'feedback_org_createdAt' });
+// The admin triage queue: reports still in a status, newest first, and the sidebar's count of New ones.
+feedbackSchema.index({ status: 1, createdAt: -1 }, { name: 'feedback_status_createdAt' });
 
 export const FeedbackModel: Model<IFeedbackDocument> =
   mongoose.models.Feedback ?? model<IFeedbackDocument>('Feedback', feedbackSchema);
+
+/** Reports nobody has triaged yet; `limit` stops counting there. */
+export const countNewFeedback = (options: { limit?: number } = {}): Promise<number> =>
+  FeedbackModel.countDocuments({ status: FeedbackStatus.New }, { limit: options.limit }).exec();
+
+export async function oldestNewFeedbackAt(): Promise<Date | null> {
+  const row = await FeedbackModel.findOne({ status: FeedbackStatus.New })
+    .sort({ createdAt: 1 })
+    .select({ createdAt: 1 })
+    .maxTimeMS(2000)
+    .lean();
+  return row?.createdAt ?? null;
+}
 
 export default FeedbackModel;

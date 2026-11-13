@@ -7,22 +7,26 @@ import {
   creditTransactionRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
-  integrationRequestRepository,
-  partnerSignupRuleRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
-import { invalidatePartnerRuleCache } from '@bike4mind/server-utils/entitlements/partnerRules';
+import { assertDataLakeShareScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { clearDeletedOrganizationReferences } from '@bike4mind/server-utils/organizations/clearDeletedOrganizationReferences';
 import { creditService, organizationService } from '@bike4mind/services';
-import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  MAX_STORAGE_LIMIT_MB,
+  toSafeOrganization,
+  OrganizationSharingPolicySchema,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Request } from 'express';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { recordOrganizationAuditEvent } from '@bike4mind/server-utils/utils/organizationAudit';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 const updateOrgBodySchema = z.object({
@@ -32,10 +36,11 @@ const updateOrgBodySchema = z.object({
   // No bare coerce: it reads null (what JSON makes of NaN) and '' as 0, which would wipe the balance.
   currentCredits: z
     .union([z.number(), z.string().trim().min(1)])
-    .pipe(z.coerce.number<string | number>().min(0))
+    .pipe(z.coerce.number<string | number>().int().min(0))
     .optional(),
   systemPrompt: z.string().max(10000).optional(),
   redactPushContent: z.boolean().optional(),
+  sharingPolicy: OrganizationSharingPolicySchema.optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });
@@ -126,10 +131,19 @@ const handler = baseApi()
         );
 
       const updatedOrganization =
-        req.user!.isAdmin && currentCredits !== undefined
+        profile.sharingPolicy !== undefined || (req.user!.isAdmin && currentCredits !== undefined)
           ? await withTransaction(async () => {
-              await applyAdminCreditEdit(req, orgId, currentCredits);
-              return updateProfile();
+              if (req.user!.isAdmin && currentCredits !== undefined)
+                await applyAdminCreditEdit(req, orgId, currentCredits);
+              const updated = await updateProfile();
+              if (profile.sharingPolicy !== undefined) {
+                await recordOrganizationAuditEvent({
+                  organizationId: orgId,
+                  actorUserId: req.user!.impersonatedBy ?? req.user!.id,
+                  action: 'policy.updated',
+                });
+              }
+              return updated;
             })
           : await updateProfile();
 
@@ -179,22 +193,7 @@ const handler = baseApi()
       )
     );
 
-    // Clear the dangling reference from any partner signup rule that pointed at this org, so
-    // no future signup resolves to a deleted org. The rule survives (its entitlements/credits
-    // still apply); only the org association is dropped. Cache invalidation makes it immediate.
-    await partnerSignupRuleRepository.updateMany({ organizationId: id }, { organizationId: null });
-    invalidatePartnerRuleCache();
-    // Same for roadmap integration requests: they are the members' own votes and stay. Best-effort:
-    // the org is already gone, so a failure here must not turn the committed delete into a 500 a
-    // retry cannot fix. The request keeps a dangling organizationId, which the admin demand list
-    // already shows as a deleted organization.
-    try {
-      await integrationRequestRepository.clearOrganization(id);
-    } catch (err) {
-      req.logger.warn(
-        `Failed to clear integration requests' organization for deleted organization ${id}: ${String(err)}`
-      );
-    }
+    await clearDeletedOrganizationReferences(id, req.logger);
 
     return res.json({ id });
   });

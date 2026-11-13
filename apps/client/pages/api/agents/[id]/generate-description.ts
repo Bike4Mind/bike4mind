@@ -7,7 +7,7 @@ import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAcce
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { agentRepository } from '@bike4mind/database';
 import { generateAgentDescription } from '@server/agents/authoring/generateAgentDescription';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { HTTPError, isTerminalCreditRefusal } from '@bike4mind/common';
 
 interface AgentDescriptionResponse {
@@ -36,7 +36,8 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
       const description = await generateAgentDescription(
         agent,
         req.logger,
-        createRequestCompletionMeter(req, 'agent description', { systemModel: true })
+        createRequestCompletionMeter(req, 'agent description', { systemModel: true }),
+        userId
       );
 
       res.json({ description });

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyApiKey: vi.fn().mockRejectedValue(new Error('no api key')),
   verifyJwtToken: vi.fn().mockResolvedValue({ id: 'u1' }),
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
@@ -14,8 +14,11 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
+import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@bike4mind/server-utils/cli/auth';
 import { sendToClient, sendToConnection } from '@bike4mind/server-utils/websocket/utils';
+const mockRecordUserActivity = vi.hoisted(() => vi.fn());
+vi.mock('@server/users/recordUserActivity', () => ({ recordUserActivity: mockRecordUserActivity }));
+
 import { func } from './keepCommandRequest';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
@@ -47,12 +50,19 @@ describe('keepCommandRequest websocket handler', () => {
     expect(sendToClient).toHaveBeenCalled();
   });
 
+  it('stamps the user active: a HUD command is an action', async () => {
+    await run();
+
+    expect(mockRecordUserActivity).toHaveBeenCalledWith('u1', logger);
+  });
+
   it('does not relay the command when the JWT rate limit rejects', async () => {
     vi.mocked(checkRateLimit).mockRejectedValueOnce(new Error('Rate limit exceeded'));
 
     await run();
 
     expect(sendToClient).not.toHaveBeenCalled();
+    expect(mockRecordUserActivity).not.toHaveBeenCalled();
     expect(sendToConnection).toHaveBeenCalledWith(
       'conn-1',
       'https://example.test/test',

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
+import { ApiKeyScope, CONFINED_API_KEY_SCOPES, isBuiltInApiKeyScope } from '@bike4mind/common';
 import {
   USER_API_KEY_SCOPES,
   GENERIC_MODAL_API_KEY_SCOPES,
@@ -11,6 +11,8 @@ import {
   isApiKeyScopeOffered,
   type ApiKeyScopeAccess,
   genericApiKeyScopesFor,
+  ORG_API_KEY_SCOPES,
+  isOrgApiKeyScope,
 } from './apiKeyScopes';
 
 describe('apiKeyScopes catalog', () => {
@@ -262,6 +264,24 @@ describe('genericApiKeyScopesFor', () => {
     }
   });
 
+  it('offers personas:mint only to the bypass flag (admins and developers), and no product flag opens it', () => {
+    expect(gatedBy('bypass')).toEqual([ApiKeyScope.PERSONAS_MINT]);
+    expect(genericApiKeyScopesFor({ ...NO_ACCESS, bypass: true }).map(s => s.value)).toContain(
+      ApiKeyScope.PERSONAS_MINT
+    );
+    const withEveryProduct = genericApiKeyScopesFor({ ...ALL_ACCESS, bypass: false }).map(s => s.value);
+    expect(withEveryProduct).not.toContain(ApiKeyScope.PERSONAS_MINT);
+  });
+
+  it('keys the cache on bypass, so a bypass viewer never receives the list built for a non-bypass one', () => {
+    const without = genericApiKeyScopesFor({ ...ALL_ACCESS, bypass: false });
+    const withBypass = genericApiKeyScopesFor({ ...ALL_ACCESS, bypass: true });
+    expect(withBypass).not.toBe(without);
+    expect(withBypass.map(s => s.value)).toContain(ApiKeyScope.PERSONAS_MINT);
+    expect(without.map(s => s.value)).not.toContain(ApiKeyScope.PERSONAS_MINT);
+    expect(genericApiKeyScopesFor({ ...ALL_ACCESS, bypass: false })).toBe(without);
+  });
+
   it('registers every optihashi:*, hearth:*, overwatch:* and marketing-reports:* catalog scope as gated', () => {
     const productScopes = USER_API_KEY_SCOPES.map(s => s.value).filter(v =>
       /^(optihashi|hearth|overwatch|marketing-reports):/.test(v)
@@ -284,5 +304,34 @@ describe('isApiKeyScopeOffered', () => {
     expect(isApiKeyScopeOffered(ApiKeyScope.READ_FILES, NO_ACCESS)).toBe(true);
     expect(isApiKeyScopeOffered(ApiKeyScope.HEARTH_READ, NO_ACCESS)).toBe(false);
     expect(isApiKeyScopeOffered(ApiKeyScope.HEARTH_READ, { ...NO_ACCESS, hearthEnabled: true })).toBe(true);
+  });
+
+  it('offers personas:mint when bypass holds and not otherwise', () => {
+    expect(isApiKeyScopeOffered(ApiKeyScope.PERSONAS_MINT, { ...NO_ACCESS, bypass: true })).toBe(true);
+    expect(isApiKeyScopeOffered(ApiKeyScope.PERSONAS_MINT, NO_ACCESS)).toBe(false);
+    expect(isApiKeyScopeOffered(ApiKeyScope.PERSONAS_MINT, { ...ALL_ACCESS, bypass: false })).toBe(false);
+  });
+});
+
+describe('ORG_API_KEY_SCOPES', () => {
+  it('offers only ungated built-in generic scopes', () => {
+    expect(ORG_API_KEY_SCOPES.length).toBeGreaterThan(0);
+    for (const scope of ORG_API_KEY_SCOPES) {
+      expect(GENERIC_MODAL_API_KEY_SCOPES).toContain(scope);
+      expect(isBuiltInApiKeyScope(scope.value)).toBe(true);
+      expect(scope.requiredEntitlement).toBeUndefined();
+    }
+  });
+
+  it('refuses every product scope', () => {
+    for (const scope of Object.keys(GATED_API_KEY_SCOPES)) {
+      expect(isOrgApiKeyScope(scope)).toBe(false);
+    }
+  });
+
+  it('refuses every contributed scope', () => {
+    for (const scope of USER_API_KEY_SCOPES.filter(s => !isBuiltInApiKeyScope(s.value))) {
+      expect(isOrgApiKeyScope(scope.value)).toBe(false);
+    }
   });
 });

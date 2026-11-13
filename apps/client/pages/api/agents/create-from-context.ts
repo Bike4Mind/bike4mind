@@ -30,8 +30,8 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { apiKeyService, meterCompletionBackend } from '@bike4mind/services';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { createAttachmentLakeAccess } from '@bike4mind/server-utils/dataLakes/attachmentLakeAccess';
 import { v4 as uuidv4 } from 'uuid';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
@@ -312,8 +312,7 @@ IMPORTANT: Return ONLY valid JSON with no additional text, no markdown formattin
     }
   } catch (error: any) {
     logger.error('Failed to parse generated agent data:', error);
-    logger.error('Raw generated data (first 500 chars):', generatedData.substring(0, 500));
-    logger.error('Raw generated data (last 500 chars):', generatedData.substring(generatedData.length - 500));
+    logger.error('Generated agent data could not be parsed', { generatedDataLength: generatedData.length });
 
     // Fallback: Create a basic agent profile
     logger.info('Using fallback agent profile due to parse error');

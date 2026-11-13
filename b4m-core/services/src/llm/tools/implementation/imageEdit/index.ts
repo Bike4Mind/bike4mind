@@ -111,16 +111,10 @@ export async function getImageFromFileId(fileId: string, context: ToolContext): 
     throw new Error('This image is not available.');
   }
 
-  // Get signed URL if filePath exists, otherwise use fileUrl
   if (fabFile.filePath) {
     const signedUrl = await context.storage.getSignedUrl(fabFile.filePath);
     // Freshly minted from `getSignedUrl` - trusted provenance for the self-host storage exemption.
     return { url: signedUrl, fabFileId: fabFile.id ?? fileId, trustConfiguredStorageOrigin: true };
-  }
-
-  if (fabFile.fileUrl) {
-    // Stored verbatim, not signed by us - untrusted.
-    return { url: fabFile.fileUrl, fabFileId: fabFile.id ?? fileId, trustConfiguredStorageOrigin: false };
   }
 
   throw new Error(`File ${fileId} has no accessible URL`);

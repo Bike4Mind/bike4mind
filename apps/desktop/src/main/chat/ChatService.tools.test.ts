@@ -110,6 +110,7 @@ describe('ChatService tool loop', () => {
       'web_fetch',
       'ask_user',
       'request_directory',
+      'loop',
     ]);
   });
 

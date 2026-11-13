@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { shadowDetectionItemSchema } from '@bike4mind/common';
+import { ABUSE_ASSESSMENT_MAX_SIGNALS, shadowDetectionItemSchema } from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => {
   const claimed = new Set<string>();
@@ -21,7 +21,12 @@ const mocks = vi.hoisted(() => {
     claimed.delete(key);
   });
   const record = vi.fn(async () => 'detection-id');
+  const findAccountRiskProfiles = vi.fn(
+    async (): Promise<{ id: string; email: string | null; signupIp: string | null; signupJa4: string | null }[]> => []
+  );
   return {
+    findAccountRiskProfiles,
+    userRepository: spy('userRepository', { findAccountRiskProfiles }),
     claimed,
     touched,
     claimDedup,
@@ -32,18 +37,22 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-// Only these two exports exist: reaching for a user, credit or key repository would throw on import.
+// Only these exports exist, and the user repository only offers a read: reaching for a credit or key
+// repository, or a user write, would throw.
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: mocks.cacheRepository,
   shadowDetectionRepository: mocks.shadowDetectionRepository,
+  userRepository: mocks.userRepository,
 }));
 
 import {
   buildYoungAccountSpendShadowDetection,
   recordYoungAccountSpendShadowDetections,
+  spenderCohorts,
   youngAccountSpendDedupeKey,
   YOUNG_ACCOUNT_SPEND_POLICY_VERSION,
 } from './youngAccountSpendShadowDetections';
+import type { FarmSignalDeps, FarmSignals } from './youngAccountSpendFarmSignals';
 
 const window = { start: new Date('2026-10-26T10:00:00Z'), end: new Date('2026-10-26T11:00:00Z') };
 const thresholds = { credits: 5000, accounts: 25 };
@@ -53,6 +62,7 @@ const spenderA = {
   accountCreatedAt: new Date('2026-10-25T05:00:00Z'),
   stripeCustomerId: null,
   email: 'a@example.com',
+  currentCredits: 500,
 };
 const spenderB = {
   userId: 'user-b',
@@ -60,11 +70,43 @@ const spenderB = {
   accountCreatedAt: new Date('2026-10-20T11:00:00Z'),
   stripeCustomerId: 'cus_b',
   email: null,
+  currentCredits: 0,
 };
 const summary = { totalCredits: 9000, accountCount: 2, topSpenders: [spenderA, spenderB] };
 const logger = { error: vi.fn() };
 
-const record = () => recordYoungAccountSpendShadowDetections({ summary, thresholds, window, logger });
+/** API-only spend, nothing else: the smallest set of facts that passes the v3 gate. */
+const apiOnlyFarmSignals: FarmSignals = {
+  spendChannels: { apiCredits: 6000, chatCredits: 0 },
+  minutesToApiKey: null,
+  minutesToAuthenticator: null,
+  networkPeers: null,
+  flaggedLinkedAccounts: null,
+};
+const quietFarmSignals: FarmSignals = { ...apiOnlyFarmSignals, spendChannels: { apiCredits: 0, chatCredits: 6000 } };
+
+/** Farm-signal reads where every listed spender's spend is API-only unless `chatUserIds` says otherwise. */
+function farmSignalDeps(chatUserIds: readonly string[] = []): FarmSignalDeps {
+  return {
+    findAccountRiskProfiles: async () => [],
+    findSpendChannelsByUsers: async ids =>
+      Object.fromEntries(
+        ids.map(id => [
+          id,
+          chatUserIds.includes(id) ? { apiCredits: 0, chatCredits: 10 } : { apiCredits: 10, chatCredits: 0 },
+        ])
+      ),
+    findFirstApiKeyCreatedAt: async () => ({}),
+    recentDistinctSignups: async () => ({ ipSignups: 0, asnSignups: 0, prefixSignups: 0 }),
+    findSignupLinkCandidates: async () => [],
+    findConfirmedAbuseUserIds: async () => [],
+    isBlocked: () => false,
+    now: () => window.end,
+  };
+}
+
+const record = (deps: FarmSignalDeps = farmSignalDeps()) =>
+  recordYoungAccountSpendShadowDetections({ summary, thresholds, window, logger, farmSignalDeps: deps });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -72,14 +114,19 @@ beforeEach(() => {
   mocks.touched.length = 0;
 });
 
+const linkedCohort = { linkedUserIds: ['user-b'], kinds: ['mailbox' as const], linkedCredits: 9000 };
+const unlinkedCohort = { linkedUserIds: [], kinds: [], linkedCredits: 6000 };
+
 describe('young-account spend shadow detection evidence', () => {
-  it('records a valid contain detection for one account with its own and the fleet signals', () => {
+  it('records a valid contain detection for a linked account with its own, cohort and fleet signals', () => {
     const detection = buildYoungAccountSpendShadowDetection({
       spender: spenderA,
       rank: 1,
       summary,
       thresholds,
       window,
+      cohort: linkedCohort,
+      farmSignals: apiOnlyFarmSignals,
     });
 
     expect(detection).toEqual({
@@ -87,7 +134,8 @@ describe('young-account spend shadow detection evidence', () => {
       policyVersion: YOUNG_ACCOUNT_SPEND_POLICY_VERSION,
       wouldAction: 'contain',
       summary:
-        '6,000 credits in 60 minutes from a 30-hour-old account (#1 of 2 young accounts, 9,000 credits in total)',
+        '6,000 credits in 60 minutes from a 30-hour-old account (#1 by spend of 2 young accounts; ' +
+        'linked to 1 other listed spender by mailbox, 9,000 credits together); API-only spend',
       userIds: ['user-a'],
       network: null,
       signals: [
@@ -95,6 +143,21 @@ describe('young-account spend shadow detection evidence', () => {
         { key: 'spendRank', label: expect.any(String), observed: 1, threshold: null },
         { key: 'accountAgeHours', label: expect.any(String), observed: 30, threshold: null },
         { key: 'hasStripeCustomer', label: expect.any(String), observed: 0, threshold: null },
+        { key: 'farmSignals', label: expect.any(String), observed: 1, threshold: 1 },
+        { key: 'apiOnlySpend', label: expect.any(String), observed: 1, threshold: 1 },
+        { key: 'apiSpendCredits', label: expect.any(String), observed: 6000, threshold: null },
+        { key: 'chatSpendCredits', label: expect.any(String), observed: 0, threshold: null },
+        { key: 'minutesToApiKey', label: expect.any(String), observed: null, threshold: 10 },
+        { key: 'minutesToAuthenticator', label: expect.any(String), observed: null, threshold: 10 },
+        { key: 'youngNetworkPeers', label: expect.any(String), observed: null, threshold: 1 },
+        { key: 'youngSignupsSameIp', label: expect.any(String), observed: null, threshold: null },
+        { key: 'youngSignupsSamePrefix', label: expect.any(String), observed: null, threshold: null },
+        { key: 'youngSignupsSameAsn', label: expect.any(String), observed: null, threshold: null },
+        { key: 'linkedFlaggedAccounts', label: expect.any(String), observed: null, threshold: 1 },
+        { key: 'overdraftCredits', label: expect.any(String), observed: 0, threshold: null },
+        { key: 'linkedSpenders', label: expect.any(String), observed: 1, threshold: null },
+        { key: 'linkedSpenderCredits', label: expect.any(String), observed: 9000, threshold: null },
+        { key: 'linkedBy_mailbox', label: expect.any(String), observed: 1, threshold: null },
         { key: 'youngAccountCredits', label: expect.any(String), observed: 9000, threshold: 5000 },
         { key: 'youngAccountCount', label: expect.any(String), observed: 2, threshold: 25 },
       ],
@@ -109,6 +172,48 @@ describe('young-account spend shadow detection evidence', () => {
     ).not.toThrow();
   });
 
+  it('drops the fleet totals from an account unrelated to the other spenders', () => {
+    const detection = buildYoungAccountSpendShadowDetection({
+      spender: spenderA,
+      rank: 1,
+      summary,
+      thresholds,
+      window,
+      cohort: unlinkedCohort,
+      farmSignals: apiOnlyFarmSignals,
+    });
+    expect(detection.summary).toBe(
+      '6,000 credits in 60 minutes from a 30-hour-old account (#1 by spend of 2 young accounts; ' +
+        'not linked to the other listed spenders); API-only spend'
+    );
+    expect(detection.summary).not.toContain('in total');
+    expect(detection.signals.map(signal => signal.key).slice(0, 5)).toEqual([
+      'accountCredits',
+      'spendRank',
+      'accountAgeHours',
+      'hasStripeCustomer',
+      'farmSignals',
+    ]);
+    expect(detection.signals.at(-1)?.key).toBe('linkedSpenders');
+    expect(detection.signals.some(signal => signal.key === 'youngAccountCredits')).toBe(false);
+    expect(detection.signals.find(signal => signal.key === 'linkedSpenders')?.observed).toBe(0);
+  });
+
+  it('says the links are unknown, without fleet totals, when the link facts could not be read', () => {
+    const detection = buildYoungAccountSpendShadowDetection({
+      spender: spenderA,
+      rank: 1,
+      summary,
+      thresholds,
+      window,
+      cohort: null,
+      farmSignals: apiOnlyFarmSignals,
+    });
+    expect(detection.summary).toContain('links to the other listed spenders unknown');
+    expect(detection.signals.find(signal => signal.key === 'linkedSpenders')?.observed).toBeNull();
+    expect(detection.signals.some(signal => signal.key === 'youngAccountCredits')).toBe(false);
+  });
+
   it('marks an account that reached Stripe checkout', () => {
     const detection = buildYoungAccountSpendShadowDetection({
       spender: spenderB,
@@ -116,13 +221,68 @@ describe('young-account spend shadow detection evidence', () => {
       summary,
       thresholds,
       window,
+      cohort: unlinkedCohort,
+      farmSignals: apiOnlyFarmSignals,
     });
     expect(detection.signals.find(signal => signal.key === 'hasStripeCustomer')?.observed).toBe(1);
     expect(detection.signals.find(signal => signal.key === 'spendRank')?.observed).toBe(2);
   });
 });
 
+describe('spenderCohorts', () => {
+  it('links spenders by signup facts and leaves unrelated spenders in a cohort of one', () => {
+    const spenderC = { ...spenderB, userId: 'user-c', creditsSpent: 1000, email: 'c@gmail.com' };
+    const cohorts = spenderCohorts(
+      [spenderA, spenderB, spenderC],
+      [
+        { id: 'user-a', email: 'farm+x7k2q9@outlook.com', signupIp: null, signupJa4: null },
+        { id: 'user-b', email: 'farm+p3m8z1@outlook.com', signupIp: null, signupJa4: null },
+        { id: 'user-c', email: 'c@gmail.com', signupIp: '198.51.100.4', signupJa4: null },
+      ]
+    );
+    expect(cohorts.get('user-a')).toEqual({ linkedUserIds: ['user-b'], kinds: ['mailbox'], linkedCredits: 9000 });
+    expect(cohorts.get('user-c')).toEqual({ linkedUserIds: [], kinds: [], linkedCredits: 1000 });
+  });
+});
+
 describe('young-account spend shadow detection recording', () => {
+  it('records linked spenders with the cohort and unlinked ones without the fleet totals', async () => {
+    mocks.findAccountRiskProfiles.mockResolvedValueOnce([
+      { id: 'user-a', email: 'a@example.com', signupIp: '198.51.100.4', signupJa4: null },
+      { id: 'user-b', email: null, signupIp: '198.51.100.4', signupJa4: null },
+    ]);
+    await record();
+    expect(mocks.findAccountRiskProfiles).toHaveBeenCalledWith(['user-a', 'user-b']);
+    expect(mocks.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userIds: ['user-a'],
+        signals: expect.arrayContaining([expect.objectContaining({ key: 'linkedBy_signupIp' })]),
+      })
+    );
+
+    vi.clearAllMocks();
+    mocks.claimed.clear();
+    await record();
+    expect(mocks.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userIds: ['user-a'],
+        signals: expect.not.arrayContaining([expect.objectContaining({ key: 'youngAccountCredits' })]),
+      })
+    );
+  });
+
+  it('still records, with links unknown, when the link facts read fails', async () => {
+    mocks.findAccountRiskProfiles.mockRejectedValueOnce(new Error('db down'));
+    expect(await record()).toBe(2);
+    expect(mocks.record).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: expect.stringContaining('links to the other listed spenders unknown') })
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('link facts were not read'),
+      expect.objectContaining({ error: expect.any(Error) })
+    );
+  });
+
   it('records one detection per listed account, claimed per account and window', async () => {
     expect(await record()).toBe(2);
     expect(mocks.record).toHaveBeenCalledTimes(2);
@@ -146,7 +306,15 @@ describe('young-account spend shadow detection recording', () => {
     await record();
     mocks.record.mockClear();
     const nextWindow = { start: window.end, end: new Date('2026-10-26T12:00:00Z') };
-    expect(await recordYoungAccountSpendShadowDetections({ summary, thresholds, window: nextWindow, logger })).toBe(2);
+    expect(
+      await recordYoungAccountSpendShadowDetections({
+        summary,
+        thresholds,
+        window: nextWindow,
+        logger,
+        farmSignalDeps: farmSignalDeps(),
+      })
+    ).toBe(2);
     expect(youngAccountSpendDedupeKey('user-a', nextWindow)).not.toBe(youngAccountSpendDedupeKey('user-a', window));
   });
 
@@ -184,7 +352,147 @@ describe('young-account spend shadow detection recording', () => {
     mocks.record.mockRejectedValueOnce(new Error('write failed'));
     await record();
     expect(new Set(mocks.touched)).toEqual(
-      new Set(['cacheRepository.claimDedup', 'cacheRepository.deleteByKey', 'shadowDetectionRepository.record'])
+      new Set([
+        'userRepository.findAccountRiskProfiles',
+        'cacheRepository.claimDedup',
+        'cacheRepository.deleteByKey',
+        'shadowDetectionRepository.record',
+      ])
     );
+  });
+});
+
+describe('young-account spend policy v3: the farm-signal gate', () => {
+  it('is graded apart from v1 and v2', () => {
+    // v1 contained every listed spender, v2 added cohort links; both stay on their own precision cards.
+    expect(YOUNG_ACCOUNT_SPEND_POLICY_VERSION).toBe(3);
+    const detection = buildYoungAccountSpendShadowDetection({
+      spender: spenderA,
+      rank: 1,
+      summary,
+      thresholds,
+      window,
+      cohort: unlinkedCohort,
+      farmSignals: apiOnlyFarmSignals,
+    });
+    expect(detection.policyVersion).toBe(3);
+  });
+
+  it('records only the spenders with a farm signal', async () => {
+    expect(await record(farmSignalDeps(['user-b']))).toBe(1);
+    expect(mocks.record).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ userIds: ['user-a'] }));
+    expect(mocks.claimDedup).not.toHaveBeenCalledWith(
+      youngAccountSpendDedupeKey('user-b', window),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('records nothing when no listed spender has a farm signal', async () => {
+    expect(await record(farmSignalDeps(['user-a', 'user-b']))).toBe(0);
+    expect(mocks.record).not.toHaveBeenCalled();
+  });
+
+  it('records nothing, and logs, when every farm-signal read fails', async () => {
+    const failing = farmSignalDeps();
+    const down = async () => {
+      throw new Error('db down');
+    };
+    const deps: FarmSignalDeps = {
+      ...failing,
+      findAccountRiskProfiles: down,
+      findSpendChannelsByUsers: down,
+      findFirstApiKeyCreatedAt: down,
+    };
+    expect(await record(deps)).toBe(0);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('farm signal read failed'),
+      expect.objectContaining({ error: expect.any(Error) })
+    );
+  });
+
+  it('names every fired signal in the summary', () => {
+    const detection = buildYoungAccountSpendShadowDetection({
+      spender: spenderA,
+      rank: 1,
+      summary,
+      thresholds,
+      window,
+      cohort: unlinkedCohort,
+      farmSignals: {
+        spendChannels: { apiCredits: 6000, chatCredits: 0 },
+        minutesToApiKey: 3,
+        minutesToAuthenticator: 2,
+        networkPeers: { sameIp: 4, samePrefix: 4, sameAsn: 9, anonymizingNetwork: false },
+        flaggedLinkedAccounts: 2,
+      },
+    });
+    expect(detection.summary).toContain(
+      '; API-only spend, API key soon after signup, authenticator 2FA soon after signup, ' +
+        'another new account on its signup network, linked to a flagged account'
+    );
+    const observed = (key: string) => detection.signals.find(signal => signal.key === key)?.observed;
+    expect(observed('farmSignals')).toBe(5);
+    expect(observed('minutesToApiKey')).toBe(3);
+    expect(observed('minutesToAuthenticator')).toBe(2);
+    expect(observed('youngNetworkPeers')).toBe(4);
+    expect(observed('youngSignupsSameAsn')).toBe(9);
+    expect(observed('linkedFlaggedAccounts')).toBe(2);
+  });
+
+  it('annotates spend that ran the balance below zero', () => {
+    const detection = buildYoungAccountSpendShadowDetection({
+      spender: { ...spenderA, currentCredits: -1200 },
+      rank: 1,
+      summary,
+      thresholds,
+      window,
+      cohort: unlinkedCohort,
+      farmSignals: apiOnlyFarmSignals,
+    });
+    expect(detection.summary).toMatch(/; 1,200 credits of it ran the balance below zero$/);
+    expect(detection.signals.find(signal => signal.key === 'overdraftCredits')?.observed).toBe(1200);
+  });
+
+  it('builds a valid record even with no farm signal (the gate lives in the recorder)', () => {
+    const detection = buildYoungAccountSpendShadowDetection({
+      spender: spenderA,
+      rank: 1,
+      summary,
+      thresholds,
+      window,
+      cohort: null,
+      farmSignals: quietFarmSignals,
+    });
+    expect(detection.summary).toContain('; no farm signals');
+    expect(() =>
+      shadowDetectionItemSchema.parse({ ...detection, id: 'x', verdict: null, verdicts: [], revision: 0 })
+    ).not.toThrow();
+  });
+});
+
+describe('young-account spend evidence for the advisory assessment', () => {
+  it('keeps every farm signal inside the signal cap the assessment reads, even for a fully linked spender', () => {
+    const detection = buildYoungAccountSpendShadowDetection({
+      spender: spenderA,
+      rank: 1,
+      summary,
+      thresholds,
+      window,
+      cohort: { linkedUserIds: ['user-b'], kinds: ['signupIp', 'ja4', 'mailbox', 'mailDomain'], linkedCredits: 9000 },
+      farmSignals: apiOnlyFarmSignals,
+    });
+    const kept = detection.signals.slice(0, ABUSE_ASSESSMENT_MAX_SIGNALS).map(signal => signal.key);
+    for (const key of [
+      'farmSignals',
+      'apiOnlySpend',
+      'minutesToApiKey',
+      'minutesToAuthenticator',
+      'youngNetworkPeers',
+      'linkedFlaggedAccounts',
+      'overdraftCredits',
+    ]) {
+      expect(kept).toContain(key);
+    }
   });
 });

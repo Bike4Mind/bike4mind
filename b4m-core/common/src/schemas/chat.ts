@@ -1,14 +1,17 @@
 import { z } from 'zod';
 import { MAX_MODEL_ID_LENGTH } from './modelId';
 import {
+  ACCOUNT_SUSPENDED_ERROR_CODE,
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
   UPGRADE_REQUIRED_ERROR_CODE,
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
+  RUN_NOT_FOUND_ERROR_CODE,
   type ApiErrorCode,
 } from '../apiErrorCodes';
 import { StorageLimitErrorInfoSchema } from '../errors';
+import { SuspensionReasonCategorySchema } from '../accountSuspensionCategories';
 // Specific file, not the `../types` barrel: this module is imported by the
 // contracts, which the CI openapi job runs against an install-only tree (see the
 // note in tools.contract.ts).
@@ -424,17 +427,39 @@ export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
     .optional(),
 });
 
+/** 404 when a completion names a `run` that does not exist or that another user or billing owner minted. */
+export const RunNotFoundErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(RUN_NOT_FOUND_ERROR_CODE),
+});
+
 /** @deprecated Use CompletionsBadRequestErrorSchema; kept so the published export does not break. */
 export const UnknownModelErrorSchema = CompletionsBadRequestErrorSchema;
 
 /**
- * Error envelope for the 403 apiKeyAuth (apps/client/server/middlewares/apiKeyAuth.ts)
- * throws when an API key lacks a route's scopes. It names what the ROUTE requires,
- * never what the key holds, so a caller knows which scope to mint a key with.
- * Values are `ApiKeyScope` strings; plain `z.string()` because the enum's module is
- * not import-safe for the install-only openapi job (see the import note above).
+ * The `suspension` member of an `account_suspended` 403 (common/src/accountSuspension.ts builds it).
+ * Names the rule and where to appeal; never the signals behind the decision.
+ */
+export const AccountSuspensionDetailSchema = z.object({
+  reason_category: SuspensionReasonCategorySchema.describe(
+    'Which Terms of Service rule the account was suspended under. New categories may be added.'
+  ),
+  terms_url: z.string().optional().describe('The policy page for this category. Absent on self-hosted deployments.'),
+  appeal_url: z.string().optional().describe('Where to appeal the suspension. Absent on self-hosted deployments.'),
+});
+
+/**
+ * Error envelope for the 403s apiKeyAuth (apps/client/server/middlewares/apiKeyAuth.ts) throws ahead
+ * of every route: an API key that lacks the route's scopes, or a key whose owner is suspended.
+ *
+ * The scope refusal names what the ROUTE requires, never what the key holds, so a caller knows which
+ * scope to mint a key with. Values are `ApiKeyScope` strings; plain `z.string()` because the enum's
+ * module is not import-safe for the install-only openapi job (see the import note above).
+ *
+ * The suspension refusal carries `errorCode: account_suspended` and `suspension`; it is not retryable.
  */
 export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(ACCOUNT_SUSPENDED_ERROR_CODE).optional(),
+  suspension: AccountSuspensionDetailSchema.optional(),
   required_scopes: z
     .array(z.string())
     .optional()
@@ -451,5 +476,5 @@ export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
  * (apps/client/server/billing/resolveMediaBillingOrgId.ts).
  */
 export const BillingOrganizationForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
-  errorCode: z.literal(BILLING_ORGANIZATION_MISMATCH_ERROR_CODE).optional(),
+  errorCode: z.enum([ACCOUNT_SUSPENDED_ERROR_CODE, BILLING_ORGANIZATION_MISMATCH_ERROR_CODE]).optional(),
 });

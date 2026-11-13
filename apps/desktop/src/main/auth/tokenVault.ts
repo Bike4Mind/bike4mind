@@ -1,5 +1,6 @@
 import { normalizeEnvKey, type AuthLogger, type AuthTokens, type TokenStore } from '@bike4mind/client-auth';
 import type { EnvironmentSelection, TokenStorageStatus } from '@shared/auth';
+import { resealed } from '../secrets/reseal';
 
 /**
  * The slice of Electron's `safeStorage` this module needs. Narrowed to a port so the vault
@@ -11,6 +12,8 @@ export interface SecretCipher {
   isEncryptionAvailable(): boolean;
   encryptString(plainText: string): Buffer;
   decryptString(encrypted: Buffer): string;
+  /** True for a blob in an older format that the vault should re-save (see secrets/appSecretCipher.ts). */
+  needsReencrypt?(encrypted: Buffer): boolean;
 }
 
 /** Persistence port for the vault document. Backed by a JSON file under `userData`. */
@@ -121,6 +124,23 @@ export class TokenVault {
     if (!(key in document.tokens)) return;
     delete document.tokens[key];
     await this.persist(document);
+  }
+
+  /**
+   * Re-saves every blob the cipher reports as an older format. One it cannot open is left on disk
+   * for the read path, and tried again on the next launch.
+   */
+  async reencrypt(): Promise<void> {
+    if (!this.cipher.needsReencrypt || this.storageStatus() === 'unavailable') return;
+    const document = await this.load({ fromDisk: true });
+    let changed = false;
+    for (const [key, blob] of Object.entries(document.tokens)) {
+      const next = resealed(this.cipher, blob);
+      if (next === null) continue;
+      document.tokens[key] = next;
+      changed = true;
+    }
+    if (changed) await this.persist(document);
   }
 
   /** A {@link TokenStore} bound to one environment, for the shared auth package to consume. */

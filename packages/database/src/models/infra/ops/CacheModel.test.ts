@@ -205,6 +205,10 @@ describe('CacheRepository.findByKey', () => {
     expect(doc?.result).toEqual({ value: 'fresh' });
   });
 
+  it('resolves exactly null for a key that has no row', async () => {
+    expect(await cacheRepository.findByKey(`cache:missing:${Date.now()}`)).toBeNull();
+  });
+
   it('does not return an entry that has expired but is awaiting TTL cleanup', async () => {
     // Mongo's TTL monitor sweeps about once a minute, so a row can outlive its own expiresAt by
     // that long. Before the expiresAt guard, findByKey handed those out as hits - which meant a
@@ -212,8 +216,7 @@ describe('CacheRepository.findByKey', () => {
     const key = `cache:stale:${Date.now()}`;
     await Cache.create({ key, result: { value: 'stale' }, expiresAt: new Date(Date.now() - 1000) });
 
-    // Falsy, not null: the underlying findOne yields undefined for a miss.
-    expect(await cacheRepository.findByKey(key)).toBeFalsy();
+    expect(await cacheRepository.findByKey(key)).toBeNull();
     // Still physically present - the guard is what excludes it, not a deletion.
     expect(await Cache.findOne({ key })).not.toBeNull();
   });
@@ -324,6 +327,84 @@ describe('CacheRepository.tryAddWithinLimitFixedWindow', () => {
       });
     }
     expect((await cacheRepository.tryIncrementWithinLimitFixedWindow(key, 3, windowMs)).success).toBe(false);
+  });
+});
+
+describe('CacheRepository.releaseFromFixedWindow', () => {
+  const windowMs = 60_000;
+  const countOf = async (key: string) => ((await cacheRepository.findByKey(key))?.result as { count: number }).count;
+
+  it('returns the live window to its prior count and keeps its expiry', async () => {
+    const key = `release:${Date.now()}-1`;
+    await cacheRepository.tryAddWithinLimitFixedWindow(key, 30, 100, windowMs);
+    const before = await cacheRepository.findByKey(key);
+    await cacheRepository.tryAddWithinLimitFixedWindow(key, 25, 100, windowMs);
+    await cacheRepository.releaseFromFixedWindow(key, 25);
+    expect(await countOf(key)).toBe(30);
+    expect((await cacheRepository.findByKey(key))?.expiresAt).toEqual(before?.expiresAt);
+  });
+
+  it('is a no-op for an absent key', async () => {
+    const key = `release:${Date.now()}-2`;
+    await cacheRepository.releaseFromFixedWindow(key, 10);
+    expect(await Cache.findOne({ key })).toBeNull();
+  });
+
+  it('never goes below zero', async () => {
+    const key = `release:${Date.now()}-3`;
+    await cacheRepository.tryAddWithinLimitFixedWindow(key, 10, 100, windowMs);
+    await cacheRepository.releaseFromFixedWindow(key, 50);
+    expect(await countOf(key)).toBe(0);
+  });
+
+  it('leaves an expired window untouched', async () => {
+    const key = `release:${Date.now()}-4`;
+    await cacheRepository.tryAddWithinLimitFixedWindow(key, 40, 100, windowMs);
+    await Cache.updateOne({ key }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+    await cacheRepository.releaseFromFixedWindow(key, 15);
+    expect(((await Cache.findOne({ key }))?.result as { count: number }).count).toBe(40);
+  });
+
+  it('gives an amount back to a live window so it can be granted again', async () => {
+    const key = `release:${Date.now()}-5`;
+    const { expiresAt } = await cacheRepository.tryAddWithinLimitFixedWindow(key, 8, 10, windowMs);
+
+    await cacheRepository.releaseFromFixedWindow(key, 5, expiresAt);
+
+    const regranted = await cacheRepository.tryAddWithinLimitFixedWindow(key, 7, 10, windowMs);
+    expect(regranted).toMatchObject({ success: true, count: 10 });
+  });
+
+  it('leaves the count alone when the window identity does not match', async () => {
+    const key = `release:${Date.now()}-6`;
+    const { expiresAt } = await cacheRepository.tryAddWithinLimitFixedWindow(key, 6, 10, windowMs);
+
+    await cacheRepository.releaseFromFixedWindow(key, 6, new Date(expiresAt.getTime() + 1_000));
+
+    const doc = await cacheRepository.findByKey(key);
+    expect((doc?.result as { count: number }).count).toBe(6);
+  });
+
+  it('floors the count at zero', async () => {
+    const key = `release:${Date.now()}-7`;
+    const { expiresAt } = await cacheRepository.tryAddWithinLimitFixedWindow(key, 3, 10, windowMs);
+
+    await cacheRepository.releaseFromFixedWindow(key, 50, expiresAt);
+
+    const doc = await cacheRepository.findByKey(key);
+    expect((doc?.result as { count: number }).count).toBe(0);
+  });
+
+  it('leaves an expired window alone and is a no-op for an absent key', async () => {
+    const key = `release:${Date.now()}-8`;
+    await Cache.create({ key, result: { count: 4 }, expiresAt: new Date(Date.now() - 1_000) });
+
+    await cacheRepository.releaseFromFixedWindow(key, 4, new Date(Date.now() - 1_000));
+    await cacheRepository.releaseFromFixedWindow(`${key}-absent`, 4, new Date(Date.now() + windowMs));
+
+    const doc = await Cache.findOne({ key }).lean();
+    expect((doc?.result as { count: number }).count).toBe(4);
+    expect(await Cache.findOne({ key: `${key}-absent` })).toBeNull();
   });
 });
 

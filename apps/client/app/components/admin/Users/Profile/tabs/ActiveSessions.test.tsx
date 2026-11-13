@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useUser } from '@client/app/contexts/UserContext';
 import { buildProfile, ProfileTestWrapper } from '../profileTestUtils';
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn() }));
@@ -7,7 +8,7 @@ const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn() }
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: mocks.get, post: mocks.post, delete: mocks.delete },
 }));
-vi.mock('./SupportAccessHistory', () => ({ SupportAccessHistory: () => null }));
+vi.mock('./SupportAccessHistory', () => ({ SupportAccessHistory: () => <div data-testid="support-history" /> }));
 
 import { ActiveSessions, sessionDevice } from './ActiveSessions';
 
@@ -43,6 +44,7 @@ const pickReasonAndConfirm = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useUser.setState({ currentUser: { id: 'admin1', isAdmin: true } as never });
   mocks.get.mockResolvedValue({ data: { items: SESSIONS } });
   mocks.post.mockResolvedValue({ data: {} });
   mocks.delete.mockResolvedValue({ data: {} });
@@ -161,5 +163,24 @@ describe('ActiveSessions', () => {
     mocks.get.mockResolvedValue({ data: { items: [] } });
     renderSessions();
     expect(await screen.findByText('No active sessions.')).toBeInTheDocument();
+  });
+});
+
+describe('support access history gating', () => {
+  it('shows it to a full admin', () => {
+    renderSessions();
+    expect(screen.getByTestId('support-history')).toBeInTheDocument();
+  });
+
+  it('shows it to a delegate with users:impersonate', () => {
+    useUser.setState({ currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['users:impersonate'] } as never });
+    renderSessions();
+    expect(screen.getByTestId('support-history')).toBeInTheDocument();
+  });
+
+  it('hides it from a delegate without users:impersonate', () => {
+    useUser.setState({ currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['support:read'] } as never });
+    renderSessions();
+    expect(screen.queryByTestId('support-history')).not.toBeInTheDocument();
   });
 });

@@ -53,6 +53,7 @@ import { adminPageFrame } from './shared/adminStyles';
 export { AdminTab } from './adminSidebarConfig';
 
 const AdminDashboardTab = dynamic(() => import('./AdminDashboardTab'), { ssr: false });
+const AiOperationsTab = dynamic(() => import('./AiOperationsTab'), { ssr: false });
 
 const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTriageMultiConfigTab'), {
   ssr: false,
@@ -96,6 +97,8 @@ const RetrievalRateTab = dynamic(() => import('./RetrievalRateTab'), { ssr: fals
 const RateLimitsTab = dynamic(() => import('./RateLimits'), { ssr: false });
 const DlqReplayTab = dynamic(() => import('./DlqReplayTab'), { ssr: false });
 const ApiKeyScopePreflightTab = dynamic(() => import('./ApiKeyScopePreflightTab'), { ssr: false });
+const LegacyApiKeysTab = dynamic(() => import('./LegacyApiKeysTab'), { ssr: false });
+const TutorialsTab = dynamic(() => import('./TutorialsTab'), { ssr: false });
 const IntegrationHealthTab = dynamic(() => import('./IntegrationHealth'), { ssr: false });
 const IntegrationDemandTab = dynamic(() => import('./IntegrationDemandTab'), { ssr: false });
 const SreAgentTab = dynamic(() => import('./SreAgentTab'), { ssr: false });
@@ -166,12 +169,15 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           sx={{
             flex: 1,
             minHeight: 0,
-            '& [role="tabpanel"]': { height: '100%', overflow: 'auto' },
-            [`& [role="tabpanel"]:not([${SELF_FRAMED_ATTR}])`]: adminPageFrame,
+            '& > [role="tabpanel"]': { height: '100%', overflow: 'auto' },
+            [`& > [role="tabpanel"]:not([${SELF_FRAMED_ATTR}])`]: adminPageFrame,
           }}
         >
           <TabPanel value={AdminTab.Dashboard}>
             {activeTab === AdminTab.Dashboard && <AdminDashboardTab onNavigate={setActiveTab} />}
+          </TabPanel>
+          <TabPanel value={AdminTab.AiOperations}>
+            {activeTab === AdminTab.AiOperations && <AiOperationsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.Users}>{activeTab === AdminTab.Users && <UsersTab />}</TabPanel>
           <TabPanel value={AdminTab.EmailVerification}>
@@ -183,14 +189,12 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.PreferenceArena}>
             {activeTab === AdminTab.PreferenceArena && <PreferenceArenaTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.AdminSettings} {...selfFramed}>
+          <TabPanel value={AdminTab.AdminSettings}>
             {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.WorldTime}>{activeTab === AdminTab.WorldTime && <WorldTimeTab />}</TabPanel>
           <TabPanel value={AdminTab.Feedback}>{activeTab === AdminTab.Feedback && <FeedbackTab />}</TabPanel>
-          <TabPanel value={AdminTab.Analytics} {...selfFramed}>
-            {activeTab === AdminTab.Analytics && <AnalyticsTab />}
-          </TabPanel>
+          <TabPanel value={AdminTab.Analytics}>{activeTab === AdminTab.Analytics && <AnalyticsTab />}</TabPanel>
           <TabPanel value={AdminTab.RegistrationInvites}>
             {activeTab === AdminTab.RegistrationInvites && <InviteCenter />}
           </TabPanel>
@@ -240,16 +244,14 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.PartnerSignupRules}>
             {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.Revenue} {...selfFramed}>
-            {activeTab === AdminTab.Revenue && <AdminRevenue />}
-          </TabPanel>
-          <TabPanel value={AdminTab.Subscriptions} {...selfFramed}>
+          <TabPanel value={AdminTab.Revenue}>{activeTab === AdminTab.Revenue && <AdminRevenue />}</TabPanel>
+          <TabPanel value={AdminTab.Subscriptions}>
             {activeTab === AdminTab.Subscriptions && <AdminSubscriptions />}
           </TabPanel>
-          <TabPanel value={AdminTab.Organizations} {...selfFramed}>
+          <TabPanel value={AdminTab.Organizations}>
             {activeTab === AdminTab.Organizations && <OrganizationsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.CreditAnalytics} {...selfFramed}>
+          <TabPanel value={AdminTab.CreditAnalytics}>
             {activeTab === AdminTab.CreditAnalytics && <CreditAnalyticsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.SecretsRotation}>
@@ -303,7 +305,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.VoiceSettings}>
             {activeTab === AdminTab.VoiceSettings && <VoiceSettingsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.SecurityDashboard} {...selfFramed}>
+          <TabPanel value={AdminTab.SecurityDashboard}>
             {activeTab === AdminTab.SecurityDashboard && <SecurityDashboard />}
           </TabPanel>
           <TabPanel value={AdminTab.Team}>{activeTab === AdminTab.Team && <Team />}</TabPanel>
@@ -323,10 +325,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.WebhookAuditLogs}>
             {activeTab === AdminTab.WebhookAuditLogs && <WebhookAuditLogsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.AuditLog} {...selfFramed}>
-            {activeTab === AdminTab.AuditLog && <AuditLogTab />}
-          </TabPanel>
+          <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
           <TabPanel value={AdminTab.Approvals}>{activeTab === AdminTab.Approvals && <ApprovalsTab />}</TabPanel>
+          <TabPanel value={AdminTab.Tutorials}>{activeTab === AdminTab.Tutorials && <TutorialsTab />}</TabPanel>
           <TabPanel value={AdminTab.GitHubConnection}>
             {activeTab === AdminTab.GitHubConnection && <GitHubConnectionTab />}
           </TabPanel>
@@ -337,6 +338,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.DlqReplay}>{activeTab === AdminTab.DlqReplay && <DlqReplayTab />}</TabPanel>
           <TabPanel value={AdminTab.ApiKeyScopePreflight}>
             {activeTab === AdminTab.ApiKeyScopePreflight && <ApiKeyScopePreflightTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.LegacyApiKeys}>
+            {activeTab === AdminTab.LegacyApiKeys && <LegacyApiKeysTab />}
           </TabPanel>
           <TabPanel value={AdminTab.IntegrationHealth}>
             {activeTab === AdminTab.IntegrationHealth && <IntegrationHealthTab />}

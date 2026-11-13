@@ -15,6 +15,7 @@ import { generateAuthCode, validateClient } from '@server/auth/oauthServer';
 import { PKCE_S256_CHALLENGE_RE } from '@server/auth/pkce';
 import { decideConsent } from '@server/auth/oauthConsent';
 import { logOAuthError } from '@server/auth/oauthErrorLog';
+import { creditOAuthSignup } from '@server/analytics/oauthSignupCredit';
 
 const RequestSchema = z.object({
   client_id: z.string(),
@@ -139,6 +140,9 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
     codeChallenge: code_challenge,
     nonce,
   });
+
+  // An account created to sign in to this client is credited to the client's product. Never throws.
+  await creditOAuthSignup({ req, userId: user.id, client });
 
   return res.json({ code });
 });

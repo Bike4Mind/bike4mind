@@ -17,6 +17,8 @@ import {
   Switch,
   Alert,
   Checkbox,
+  Select,
+  Option,
   type ColorPaletteProp,
 } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
@@ -31,6 +33,7 @@ import type { CommentPolicy, PublishResult, PublishVisibility } from '@bike4mind
 import { ELISION_PUBLISH_TITLE } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { getValidationViolationsMessage } from '@client/app/utils/error';
+import { api } from '@client/app/contexts/ApiContext';
 import { ShareActions } from './ShareActions';
 import { EmbedAllowlistEditor } from './EmbedAllowlistEditor';
 import { ClearGateConfirmModal, StoredGateNote, STORED_GATE_CLEARED_MESSAGE } from './StoredGateClear';
@@ -49,6 +52,7 @@ import {
   getShareTokenState,
   isRevokeOrphanGateRefusal,
   type PublishAccessGateInput,
+  type ShareLink,
   type PublishMode,
   type ArtifactPublishOpts,
 } from '@client/app/utils/publishApi';
@@ -107,7 +111,27 @@ export interface PublishShareModalProps {
    * rather than a hard block.
    */
   incompleteWarning?: string;
+  policySource?: { artifactId?: string; sessionId?: string };
 }
+
+const SHARE_EXPIRY_DAYS = { none: null, '1d': 1, '7d': 7, '30d': 30 } as const;
+type ShareExpiryChoice = keyof typeof SHARE_EXPIRY_DAYS;
+const SHARE_EXPIRY_LABELS: Record<ShareExpiryChoice, string> = {
+  none: 'Never expires',
+  '1d': 'Expires in 1 day',
+  '7d': 'Expires in 7 days',
+  '30d': 'Expires in 30 days',
+};
+
+/** Computed at click time so the chosen lifetime starts when the link is made. */
+function shareExpiryIso(choice: ShareExpiryChoice): string | undefined {
+  const days = SHARE_EXPIRY_DAYS[choice];
+  return days === null ? undefined : new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+type MintedLink = { shareToken: string; shareLinks: ShareLink[]; id: string };
+const mintedExpiry = (minted: MintedLink) => minted.shareLinks?.find(l => l.id === minted.id)?.expiresAt ?? null;
+const newestExpiry = (links: ShareLink[] | undefined) => links?.[links.length - 1]?.expiresAt ?? null;
 
 type VisibilityOption = { value: PublishVisibility; label: string; hint: string };
 
@@ -298,6 +322,7 @@ export function PublishShareModal({
   resolvePublished,
   orgOption,
   incompleteWarning,
+  policySource,
 }: PublishShareModalProps) {
   const [visibility, setVisibility] = useState<PublishVisibility>(defaultVisibility);
   const [commentsOn, setCommentsOn] = useState(true);
@@ -306,6 +331,27 @@ export function PublishShareModal({
   const [discoverableOn, setDiscoverableOn] = useState(false);
   const [result, setResult] = useState<PublishResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [policyError, setPolicyError] = useState<string | null>(null);
+  const [publicLinkBlockedReason, setPublicLinkBlockedReason] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open || !policySource) return;
+    let active = true;
+    api
+      .get<{ publicLinkBlockedReason: string | null }>('/api/publish/policy', { params: policySource })
+      .then(response => {
+        if (active) setPublicLinkBlockedReason(response.data.publicLinkBlockedReason);
+      })
+      .catch(() => {
+        /* The publish endpoint remains authoritative. */
+      });
+    return () => {
+      active = false;
+      setPublicLinkBlockedReason(null);
+    };
+  }, [open, policySource]);
+  useEffect(() => {
+    if (publicLinkBlockedReason) setVisibility(current => (current === 'public' ? 'private' : current));
+  }, [publicLinkBlockedReason]);
   // A prior publication of this artifact, resolved asynchronously after the dialog opens.
   // Its presence reveals the "update existing vs publish as new" choice. We keep the
   // prior commentPolicy so an update can RE-ASSERT it exactly rather than collapsing the binary
@@ -320,6 +366,9 @@ export function PublishShareModal({
   const [mode, setMode] = useState<PublishMode>('new');
   // The opt-in no-sign-in (`/a/<token>`) share link, minted lazily only when the owner asks.
   const [shareToken, setShareToken] = useState<string | null>(null);
+  const [shareExpiresAt, setShareExpiresAt] = useState<string | null>(null);
+  // Expiry for the next link minted or regenerated; the current link's own expiry is shareExpiresAt.
+  const [shareExpiry, setShareExpiry] = useState<ShareExpiryChoice>('none');
   const [shareBusy, setShareBusy] = useState(false);
   // Access gate on top of Public (issue #383). `gateTouched` distinguishes "left at
   // defaults" from an explicit choice, so an update-publish never clobbers an existing
@@ -355,6 +404,7 @@ export function PublishShareModal({
   useEffect(() => {
     if (open) {
       setResult(null);
+      setPolicyError(null);
       setVisibility(defaultVisibility);
       setCommentsOn(true);
       setDiscoverableOn(false);
@@ -362,6 +412,8 @@ export function PublishShareModal({
       setExisting(null);
       setMode('new');
       setShareToken(null);
+      setShareExpiresAt(null);
+      setShareExpiry('none');
       setShareBusy(false);
       setGateKind('none');
       setGatePassphrase('');
@@ -402,7 +454,10 @@ export function PublishShareModal({
     let active = true;
     void getShareTokenState(result.publicId)
       .then(state => {
-        if (active && state.shareToken) setShareToken(prev => prev ?? state.shareToken);
+        if (active && state.shareToken) {
+          setShareToken(prev => prev ?? state.shareToken);
+          setShareExpiresAt(prev => prev ?? newestExpiry(state.shareLinks));
+        }
       })
       .catch(() => {
         /* best-effort seed; Create still surfaces an existing link idempotently */
@@ -475,7 +530,10 @@ export function PublishShareModal({
           setStoredGate(state.accessGate?.kind ?? null);
           if (state.accessGate?.kind === 'domain') setGateDomainsText(state.accessGate.allowedDomains.join(', '));
         }
-        if (links?.shareToken) setShareToken(links.shareToken);
+        if (links?.shareToken) {
+          setShareToken(links.shareToken);
+          setShareExpiresAt(newestExpiry(links.shareLinks));
+        }
       })
       .catch(() => {
         /* lookup failure -> the plain publish form; the server still updates in place */
@@ -542,6 +600,7 @@ export function PublishShareModal({
   // Phase 1 -> publish with the chosen visibility.
   const handleCreate = async () => {
     if (!publish) return;
+    if (visibility === 'public' && publicLinkBlockedReason) return;
     // Validate the staged gate BEFORE publishing so a typo'd passphrase doesn't
     // leave the page momentarily open-public.
     const stagedGate = isPublic && gateTouched ? buildGateInput() : null;
@@ -588,7 +647,9 @@ export function PublishShareModal({
       }
       setResult(r);
     } catch (err) {
-      toast.error(errorMessage(err));
+      const message = errorMessage(err);
+      setPolicyError(message);
+      toast.error(message);
     } finally {
       setBusy(false);
     }
@@ -649,9 +710,11 @@ export function PublishShareModal({
     try {
       await updatePublishedVisibility(result.publicId, next);
       toast.success(next === 'public' ? 'Now public - anyone with the link can view' : `Visibility set to ${next}`);
-    } catch {
+    } catch (err) {
       setVisibility(prev);
-      toast.error('Failed to update visibility');
+      const message = errorMessage(err);
+      setPolicyError(message);
+      toast.error(message);
     } finally {
       setBusy(false);
     }
@@ -659,6 +722,7 @@ export function PublishShareModal({
 
   const onPick = (next: PublishVisibility) => {
     if (busy) return;
+    if (next === 'public' && publicLinkBlockedReason) return;
     // Leaving public retires a staged search-listing choice rather than parking it on a
     // hidden control. Re-picking Public starts from off, so listing is always a choice
     // made against the exposure the artifact actually has.
@@ -713,11 +777,17 @@ export function PublishShareModal({
   }, [confirmingClear]);
 
   // No-sign-in link (`/a/<token>`): mint on demand, rotate (revokes old links), or revoke.
-  const runShareToken = async (action: () => Promise<string | null>, successMsg: string): Promise<void> => {
-    if (!result || shareBusy) return;
+  const runShareToken = async (
+    action: () => Promise<MintedLink | null>,
+    successMsg: string,
+    revoking = false
+  ): Promise<void> => {
+    if (!result || shareBusy || (!revoking && publicLinkBlockedReason)) return;
     setShareBusy(true);
     try {
-      setShareToken(await action());
+      const minted = await action();
+      setShareToken(minted?.shareToken ?? null);
+      setShareExpiresAt(minted ? mintedExpiry(minted) : null);
       toast.success(successMsg);
     } catch (err) {
       toast.error(errorMessage(err));
@@ -729,17 +799,24 @@ export function PublishShareModal({
     }
   };
   const onCreateShareToken = () =>
-    runShareToken(async () => (await createOrGetShareToken(result!.publicId)).shareToken, 'Link created');
+    runShareToken(
+      () => createOrGetShareToken(result!.publicId, { expiresAt: shareExpiryIso(shareExpiry) }),
+      'Link created'
+    );
   const onRegenerateShareToken = () =>
     runShareToken(
-      async () => (await regenerateShareToken(result!.publicId)).shareToken,
+      () => regenerateShareToken(result!.publicId, shareExpiryIso(shareExpiry)),
       'Link regenerated - the old link no longer works'
     );
   const onRevokeShareToken = () =>
-    runShareToken(async () => {
-      await revokeShareToken(result!.publicId);
-      return null;
-    }, 'Link turned off');
+    runShareToken(
+      async () => {
+        await revokeShareToken(result!.publicId);
+        return null;
+      },
+      'Link turned off',
+      true
+    );
 
   const copyToClipboard = async (text: string) => {
     try {
@@ -848,6 +925,16 @@ export function PublishShareModal({
 
         <FormControl sx={{ mb: 2 }}>
           <FormLabel>Visibility</FormLabel>
+          {publicLinkBlockedReason && (
+            <Alert color="warning" data-testid="publish-sharing-policy-explanation" sx={{ mb: 1 }}>
+              {publicLinkBlockedReason}
+            </Alert>
+          )}
+          {policyError && (
+            <Alert color="warning" data-testid="publish-sharing-policy-error" sx={{ mb: 1 }}>
+              {policyError}
+            </Alert>
+          )}
           <RadioGroup
             value={visibility}
             onChange={e => onPick(e.target.value as PublishVisibility)}
@@ -875,7 +962,7 @@ export function PublishShareModal({
                     transition: 'border-color .15s, background-color .15s',
                   }}
                 >
-                  <Radio value={o.value} disabled={busy} />
+                  <Radio value={o.value} disabled={busy || (o.value === 'public' && !!publicLinkBlockedReason)} />
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
                     <AccessIcon
                       access={getPublishAccess({ visibility: o.value })}
@@ -1139,6 +1226,26 @@ export function PublishShareModal({
             </Box>
             <ShareActions title={title} url={url} markdown={markdown} />
 
+            {reopened && existing && (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                disabled={busy || shareBusy}
+                onClick={() => {
+                  setResult(null);
+                  setReopened(false);
+                  // "Publish as new" mints a different page; the seed effect re-reads the link on the next result.
+                  setShareToken(null);
+                  setShareExpiresAt(null);
+                }}
+                sx={{ mt: 2 }}
+                data-testid="publish-share-republish"
+              >
+                Publish new version
+              </Button>
+            )}
+
             {/* The /a link only grants access the main link doesn't when the page isn't
                 public; still shown once minted so it can be rotated or revoked. */}
             {(!isPublic || shareToken) && (
@@ -1164,8 +1271,30 @@ export function PublishShareModal({
                       ? `This page is public, so the link above already opens for anyone${storedGate ? ` ${GATED_LINK_WHO[storedGate]}` : ''}. Revoke this one if you no longer need it.`
                       : `The link above only opens for ${visibility === 'organization' ? 'your team' : 'you'}. This one opens for anyone you send it to${storedGate ? ` ${GATED_LINK_WHO[storedGate]}` : ', without signing in'}.`}
                 </Typography>
+                <Typography level="body-xs" sx={{ mb: 0.5 }} data-testid="publish-share-token-expiry-label">
+                  {shareToken ? 'Expiry for a regenerated link' : 'Link expiry'}
+                </Typography>
+                <Select
+                  size="sm"
+                  value={shareExpiry}
+                  onChange={(_, value) => value && setShareExpiry(value)}
+                  sx={{ mb: 1, maxWidth: 220 }}
+                  aria-label={shareToken ? 'Expiry for a regenerated link' : 'Link expiry'}
+                  data-testid="publish-share-token-expiry"
+                >
+                  {(Object.keys(SHARE_EXPIRY_LABELS) as ShareExpiryChoice[]).map(choice => (
+                    <Option key={choice} value={choice} data-testid={`publish-share-token-expiry-${choice}`}>
+                      {SHARE_EXPIRY_LABELS[choice]}
+                    </Option>
+                  ))}
+                </Select>
                 {shareToken ? (
                   <>
+                    <Typography level="body-xs" sx={{ mb: 0.5 }} data-testid="publish-share-token-expires">
+                      {shareExpiresAt
+                        ? `This link stops working on ${new Date(shareExpiresAt).toLocaleString()}.`
+                        : 'This link does not expire.'}
+                    </Typography>
                     <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
                       <Input
                         value={toShareTokenUrl(shareToken)}

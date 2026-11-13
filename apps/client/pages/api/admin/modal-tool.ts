@@ -4,7 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Logger } from '@bike4mind/observability';
 import { ApiKeyScope, HTTPError } from '@bike4mind/common';
 import { meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import {
   collectModalChanges,
   createModal,
@@ -43,7 +43,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     }
 
     const { query, context } = requestSchema.parse(req.body);
-    logger.info(`Modal tool API called with query: "${query}"`);
+    logger.info('Modal tool API called', { queryLength: query.length });
 
     try {
       // Parse the natural language query to determine intent and parameters
@@ -52,7 +52,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         context,
         createRequestCompletionMeter(req, 'admin modal tool', { systemModel: true })
       );
-      logger.info(`Parsed tool params - Action: ${toolParams.action}`, toolParams);
+      logger.info(`Parsed tool params - Action: ${toolParams.action}`, { modalId: toolParams.modalId });
 
       // Execute the appropriate action based on parsed parameters
       const { result, changes } = await collectModalChanges(
@@ -62,7 +62,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
               logger.info('Executing CREATE action');
               return await createModal(toolParams);
             case 'list':
-              logger.info('Executing LIST action with filter:', toolParams.filter);
+              logger.info('Executing LIST action', { filterKeys: Object.keys(toolParams.filter ?? {}) });
               return await listModals(toolParams.filter);
             case 'update':
               logger.info(`Executing UPDATE action for modal ${toolParams.modalId}`);
@@ -79,7 +79,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       );
       await recordModalChanges(req, changes, 'modal-tool');
 
-      logger.info(`Modal tool result - Success: ${result.success}, Message: ${result.message}`);
+      logger.info(`Modal tool result - Success: ${result.success}`);
       return res.json(result);
     } catch (error) {
       // Credit and admission refusals keep their status (422) instead of becoming a 500.
@@ -242,7 +242,6 @@ What is the user's intent?`;
       const jsonMatch = llmResponse.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         logger.warn('No JSON found in LLM response');
-        logger.warn(`Raw response first 300 chars: ${llmResponse.substring(0, 300)}`);
         throw new Error('No JSON found in LLM response');
       }
 
@@ -300,16 +299,13 @@ What is the user's intent?`;
       // Fix incomplete key-value pairs at the end (e.g., "removeTags": null,)
       jsonString = jsonString.replace(/,\s*$/, '');
 
-      logger.info(`Cleaned JSON (first 500 chars): ${jsonString.substring(0, 500)}`);
       logger.info(`Cleaned JSON length: ${jsonString.length} characters`);
 
       // Log if JSON still contains ellipsis after cleaning
       if (jsonString.includes('...')) {
         logger.error('WARNING: JSON still contains ellipsis after cleaning!');
         const ellipsisPos = jsonString.indexOf('...');
-        logger.error(
-          `Ellipsis found at position ${ellipsisPos}: ${jsonString.substring(Math.max(0, ellipsisPos - 20), ellipsisPos + 20)}`
-        );
+        logger.error(`Ellipsis found at position ${ellipsisPos}`);
       }
 
       const intent = JSON.parse(jsonString);
@@ -338,14 +334,17 @@ What is the user's intent?`;
           const imageAttachment = context.attachments.find((att: any) => att.type === 'image');
           if (imageAttachment?.url) {
             params.imageUrl = imageAttachment.url;
-            logger.info(`Using attached image URL: ${params.imageUrl}`);
+            logger.info('Using attached image URL');
           }
         }
 
         // Add logging to debug what we're getting
-        logger.info(
-          `LLM CREATE params - title: "${params.title}", description: "${params.description}", message: "${params.message}", imageUrl: "${params.imageUrl || 'none'}"`
-        );
+        logger.info('LLM CREATE params', {
+          titleLength: params.title?.length ?? 0,
+          descriptionLength: params.description?.length ?? 0,
+          messageLength: params.message?.length ?? 0,
+          hasImageUrl: Boolean(params.imageUrl),
+        });
       } else if (intent.action === 'list') {
         params.filter = intent.parameters?.filter || {};
 
@@ -438,7 +437,7 @@ What is the user's intent?`;
 function fallbackParsing(query: string, context?: any) {
   const lower = query.toLowerCase();
 
-  logger.info(`Fallback parsing for query: "${query}"`);
+  logger.info('Fallback parsing for query', { queryLength: query.length });
 
   // Check if this is a question (starts with interrogative or contains question patterns)
   const questionWords = ['what', 'which', 'where', 'when', 'who', 'how', 'are', 'is', 'do', 'does', 'can'];
@@ -724,7 +723,7 @@ function fallbackParsing(query: string, context?: any) {
     const match = query.match(pattern);
     if (match && match[1]) {
       title = match[1].trim();
-      logger.info(`Extracted title from pattern: "${title}"`);
+      logger.info('Extracted title from pattern', { titleLength: title.length });
       break;
     }
   }
@@ -745,7 +744,7 @@ function fallbackParsing(query: string, context?: any) {
       description = match[1].trim();
       if (!message) message = description;
       if (!title) title = description; // Use description as title if no title found
-      logger.info(`Extracted description from pattern: "${description}"`);
+      logger.info('Extracted description from pattern', { descriptionLength: description.length });
       break;
     }
   }
@@ -784,11 +783,11 @@ function fallbackParsing(query: string, context?: any) {
     const imageAttachment = context.attachments.find((att: any) => att.type === 'image');
     if (imageAttachment?.url) {
       result.imageUrl = imageAttachment.url;
-      logger.info(`Using attached image URL in fallback: ${result.imageUrl}`);
+      logger.info('Using attached image URL in fallback');
     }
   }
 
-  logger.info('Fallback parsing result for CREATE:', result);
+  logger.info('Fallback parsing result for CREATE', { action: result.action, hasImageUrl: Boolean(result.imageUrl) });
   return result;
 }
 

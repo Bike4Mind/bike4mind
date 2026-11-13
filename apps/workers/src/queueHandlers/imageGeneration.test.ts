@@ -11,12 +11,15 @@ const h = vi.hoisted(() => ({
   publishImageQuestReadyPush: vi.fn(),
 }));
 
-vi.mock('@server/imageGenerations/imageGeneration', () => ({
+vi.mock('@bike4mind/server-utils/imageGenerations/imageGeneration', () => ({
   getImageGeneration: () => ({ process: h.process }),
 }));
 
 vi.mock('@bike4mind/database', () => ({ Connection: {}, questRepository: {} }));
-vi.mock('@server/utils/pushNotifications', () => ({ publishPushNotification: vi.fn(), sessionDeepLink: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/pushNotifications', () => ({
+  publishPushNotification: vi.fn(),
+  sessionDeepLink: vi.fn(),
+}));
 vi.mock('./generationPush', () => ({ publishImageQuestReadyPush: h.publishImageQuestReadyPush }));
 
 vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', () => ({

@@ -39,6 +39,8 @@ const handler = baseApi({
   // Sent on every realtime connect and reconnect, so an outage's retries would spend the write budget
   // and a user near it would lose realtime until the window resets.
   defaultWriteRateLimit: false,
+  // Minting a ticket is connecting, not acting.
+  recordsActivity: false,
 })
   // Its own bucket instead: each mint writes a ticket row. A tab's reconnect backoff peaks near 10 per
   // minute, so 60 covers several tabs reconnecting after an outage.

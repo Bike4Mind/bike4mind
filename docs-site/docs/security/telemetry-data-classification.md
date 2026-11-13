@@ -23,6 +23,7 @@ personal information or secrets in campaign URLs.
 | Resolved consent         | App cookie `b4m_consent`, republished on every load                                              | 90 days, cleared when consent resolves unset   | Let the server read the browser's decision     |
 | Purchase attribution     | Stripe subscription metadata `acq_first_*` / `acq_last_*` and MongoDB `Subscription.acquisition` | No automatic expiry configured by this feature | Record the consenting buyer's checkout touches |
 | Purchase visit           | Random server-minted 30-minute visit id in MongoDB `PaymentAttempt.visitId` (not sent to Stripe) | 90 days, the payment attempt's TTL             | Name the visit a purchase was started in       |
+| OAuth client credit      | MongoDB `User.acquisition.oauthTouch`, written by the server                                     | The account's lifetime                         | Credit an account to the OAuth client it was created to sign in to |
 
 The app's three campaign cookies and `b4m_consent` use `path=/` and
 `SameSite=Lax`. They are JavaScript-readable and scoped to the app host. Lax,
@@ -132,6 +133,16 @@ Account creation emits a `signup` event to each Overwatch product named by the
 consenting visitor's campaign touches, for products this deployment holds an
 ingest key for. The host product is excluded from `signup`, because it already
 receives `signup_completed` for every new account from the signup funnel.
+
+An OAuth client can be registered with an Overwatch product. When an account is
+created and its first authorization code goes to such a client within 30 minutes,
+the server that issued the code stores `User.acquisition.oauthTouch` (`source`: the
+client's product, `medium`: `oauth`, `content`: the `client_id`) and emits that
+product the same `signup`, marked `touch: 'oauth'`. It is written once per account,
+only with the same consent the campaign touches need, and never for a synthetic
+account. The browser does not supply it: the product comes from the client's
+registration. A product that a campaign touch already names keeps that touch, and
+is credited once.
 
 A later payment by that account emits a `purchase` event to the host product and
 to the same products:
@@ -290,6 +301,26 @@ site is still attributed by signup until the app loads again and republishes,
 while checkout, which resolves consent in the browser at request time, would
 already see the denial.
 
+## Team feature-use events
+
+The browser reports in-app actions to the app's own activity log through `POST
+/api/analytics/log-event`. For a signed-in account that is an admin, carries a
+developer tag, or carries the `rounds` user tag, each action that route records
+is also sent to Overwatch as a `quest_feature_used` event, so the team's use of a
+feature can be checked. Requests made with an API key send nothing, and no other
+account's actions are sent.
+
+The event goes to the host product under the user's pseudonym and the visit id
+from `b4m_vid`, as the daily `active` event does. Its metadata is only:
+
+- `feature`: the recorded action's type in snake case, so `Integrations Page
+  Viewed` becomes `integrations_page_viewed`.
+- `internal: true`, whatever the account's flags, and `lane: "synthetic"` as
+  well for a synthetic account. This is the one event that can carry both marks.
+
+The action's own metadata is never sent. At most one event is sent per account
+and feature every 10 minutes on each server instance.
+
 ## Verified hops
 
 A verified hop records that a visitor clicked through from another Overwatch
@@ -435,6 +466,8 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
 
+Streaming HTTP API-key completion requests can additionally record a server-observed start time, correlation id, requested model and explicit completion outcome in `ApiKeyUsageLog.completionObservation`. The start is written after authentication and before execution, then the same server-owned log row is updated on response completion or disconnect. A missing terminal response keeps an unknown outcome; status `0` means no HTTP response was recorded. Daily-cap rejections are separate from successful completions, and HTTP transport status is separate from in-band stream outcome. No prompts, messages, response bodies or key secrets are added. These fields use the existing 90-day API-log TTL, including retained security logs after account deletion; no source retention is extended.
+
 ## Client usage
 
 Every authenticated request to a `baseApi` route records which client the account used on the user record (`clientUsage`): the web app, the desktop app, the CLI, or the API (an API key or an OAuth token without a first-party client header). The desktop app and the CLI name themselves in their `User-Agent` and `X-B4M-Client` headers, so the value is a claim the caller makes, used only for statistics and for hiding the desktop app prompt, never for access decisions. A record is written at most once a day per client, or sooner when the client reports a new version. Impersonation sessions, sign-ins still waiting on MFA, system accounts and accounts pending deletion write nothing. The account owner and admins can see it, and it is deleted with the account.
@@ -443,6 +476,32 @@ Every authenticated request to a `baseApi` route records which client the accoun
 | -------------- | --------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------- |
 | Client seen    | `clientUsage.<web, desktop, cli or api>.firstSeenAt`, `lastSeenAt` | Account lifetime; deleted with the account | Usage statistics, hiding the desktop app prompt |
 | Client version | `clientUsage.<desktop or cli>.version`, at most 32 characters   | Account lifetime; deleted with the account | Usage statistics                                |
+
+## Related advisory accounts
+
+The admin AI advisory can derive one-hop review candidates from exact signup and successful-login IP observations in the preceding seven days. It reads existing user signup metadata and AuthEvent records, returns the matching account ids, current display names, IP and observation kinds to authorized admins, and does not persist another evidence store or extend source retention. Reads are bounded and high-population addresses are discounted. The candidate scan sends no extra data to an AI provider and does not apply an abuse verdict or account action to a linked candidate. Capped and failed coverage are reported separately.
+
+## Coordinated completion observations
+
+An hourly job, controlled by `shadowDetectionRecordingEnabled`, reads existing successful `completion_api` UsageEvent settlements from the preceding 24 hours. Results are capped at 5,000 events and 1,000 eligible accounts, processing is bounded, and database reads have time limits. Unavailable account activity remains a barrier when comparing contiguous runs. No prompts, response bodies, model names, key identifiers or network observations are copied.
+
+The derived `ShadowDetection` record stores the ordered participant ids, settlement time range, repeated-round counts, request-count ranges, timing summaries, and coverage flags. One ordered group is deduplicated within a UTC activity day; reviewed records remain immutable. Records follow the existing 365-day shadow detection TTL. Purging any participant removes the whole ordered observation. The detector is review-only and is excluded from automatic containment and automatic risk-review approval decisions.
+
+When advisory model assessment is enabled, its allowlisted summary can include ordered pseudonymous member references, counts, relative timing summaries, coverage flags and an explicit review-only marker. It sends no participant identifiers or absolute settlement timestamps. Missing source data or omitted participants are represented as incomplete evidence. This uses the assessment's existing retention and budget controls; it does not train model weights.
+
+## Synchronized completion observations
+
+The existing hourly completion observation job can read bounded API-key request metadata from the preceding 24 hours. It derives repeated account subsets with closely timed starts and requested-model switches. It stores participant ids, first/last observation times, burst and switch counts, relative skew, outcome counts and explicit legacy/capped coverage in `ShadowDetection.completionSynchrony`. Model names and request correlation ids are not copied into this derived record. Source reads have time limits; result and processing caps are explicit. Old request rows without start/model metadata are incomplete coverage, never reconstructed from settlement times.
+
+For matched cohorts, a separate bounded UsageEvent read can add a snapshot of total API-completion credits charged, grant-funded credits and unknown funding in the scan's 24-hour window. This is cohort-wide spending, not only matched bursts. Grants include non-signup rewards. Failed or capped reads remain unavailable or incomplete, without suppressing the timing observation.
+
+Unreviewed observations refresh from newer scan snapshots, including settled outcomes and recovered funding evidence without requiring another request burst. Older scans cannot overwrite newer snapshots, and reviewed records stay immutable. Derived observations use the existing 365-day shadow-record TTL and are removed when any participant is purged. API source logs retain their existing 90-day security retention. The provider summary uses only pseudonymous member references, counts, relative timing, funding totals and coverage flags; it includes no absolute start timestamps, models or correlation ids. These detections are excluded from automated containment and automatic risk-review approval decisions. Any manual grant block uses the existing credit-adjustment permissions, preview and audit flow.
+
+## Manual campaign watches
+
+Admins can save a fixed group of accounts for manual follow-up independently of the rolling AI advisory. A watch contains its name, member user ids, an optional source detection id, owner id, status, revision and lifecycle timestamps. It also stores a hash of the originally selected ids to avoid duplicate open watches. It does not copy account names, emails, IPs, fingerprints or request histories. Account details are read from current user records when a watch is opened.
+
+Watch records have no automatic expiry; closing a watch retains it in the Closed list. Account purge removes that account's membership and clears its ownership without deleting a watch shared with other accounts. Lifecycle writes require an audit reason and use the admin audit log's retention policy. Watches enable no automated alerts or enforcement.
 
 ## Usage pattern signals
 
@@ -464,6 +523,10 @@ These derived fields use the assessment summary's existing retention policy.
 
 Off by default behind the `abuseAssessmentEnabled` and `abuseAssessmentConfig` admin settings, an admin action or an hourly job can ask a Decisions model to judge a shadow detection as abuse, legitimate automation or insufficient evidence. The model receives only a pseudonymous summary built from an allowlist: detector name, window, a hosting-network flag, per-signal counts and thresholds, and per-account ages and counts from the stored behavioral evidence, with accounts named `acct_1`, `acct_2` and so on. It never receives an IP, network number, country, email, user id, prompt, document or free text. Calls use the platform's provider key and a platform budget, never the assessed account's credits or keys. The result is for admin review only and triggers no automatic action on the account, its access, its credits or its review state.
 
+The allowlisted account profile can also include signup-method and network flags, provider-aware email-shape flags, relative minutes to two-factor setup and first spend, up to five recorded model identifiers with spending shares, and counts of nearby signups sharing an IP, JA4, canonical mailbox or non-consumer mail domain. No raw shared value or linked-account identifier enters the provider payload. Profile reads are bounded to the accounts retained in the summary; unavailable profiles or link reads remain null. These derived facts use existing account, authentication and usage records and add no raw collection or source-retention extension.
+
+The same model call can return probabilities for fixed evidence-factor questions. Up to three allowlisted factor keys and finite probabilities are stored as `AbuseAssessment.reasons` for the same 365-day assessment retention. No generated explanation text is stored. The factors describe the supplied evidence rather than measuring causal contributions to the overall verdict.
+
 | Data              | Storage                                                                                                | Lifetime                       | Purpose                              |
 | ----------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------ | ------------------------------------ |
 | Summary sent      | `AbuseAssessment.featureSummary`, the exact pseudonymous summary the model received                    | 365 days (TTL on `assessedAt`) | Admin review, audit of what was sent |
@@ -472,7 +535,7 @@ Off by default behind the `abuseAssessmentEnabled` and `abuseAssessmentConfig` a
 
 ## Advisory signup domain hold assessments
 
-Off by default behind the `signupDomainHoldAssessmentEnabled` and `signupDomainHoldAssessmentConfig` admin settings, a scheduled job can ask a Decisions model to judge a signup domain hold placed on a recently registered domain as abuse, legitimate or insufficient evidence. The model receives only a summary computed by the platform: the domain's age in days, a mail-provider class, whether the domain's website answers and has content, signup counts and timing, and counts of distinct networks, network operators and countries across the held signups, with a hosting-network share. It never receives the domain name, an email, an IP, a network number, a user id or any text from the domain's website. Calls use the platform's provider key and a platform budget. A confident abuse judgment can only confirm the hold, which keeps the signups' free credits held; it never releases a hold, and an admin can still release it.
+Off by default behind the `signupDomainHoldAssessmentEnabled` and `signupDomainHoldAssessmentConfig` admin settings, a scheduled job can ask a Decisions model to judge a signup domain hold placed on a recently registered domain as abuse, legitimate or insufficient evidence. The model receives only a summary computed by the platform: the domain's age in days, a mail-provider class, whether the domain's website answers and has content and whether it describes a temporary or disposable mail service (both judged by the platform), signup counts and timing, and counts of distinct networks, network operators and countries across the held signups, with a hosting-network share. It never receives the domain name, an email, an IP, a network number, a user id or any text from the domain's website. Calls use the platform's provider key and a platform budget. A confident abuse judgment confirms the hold, which keeps the signups' free credits held, and an admin can still release it. A confident legitimate judgment releases the hold only when a separate auto-release setting is on and checks computed by the platform also pass; it then pays only the signups it judged, and the domain is re-held on a new risk signal.
 
 | Data       | Storage                                                                                       | Lifetime                  | Purpose                 |
 | ---------- | --------------------------------------------------------------------------------------------- | ------------------------- | ----------------------- |
@@ -526,6 +589,19 @@ A failed refresh stores a short error message (200 characters at most) and a tim
 | ------------------- | ---------------------- | -------------------------- | --------------------------------------------- |
 | Evidence summary    | `riskEvidence.summary` | Account lifetime, replaced | Give admins context when reviewing an account |
 | Refresh diagnostics | `riskEvidence.refresh` | Account lifetime, replaced | Show when and why a refresh failed            |
+
+## Feedback report context
+
+Each feedback report stores where it was written as `clientContext` on the report document, so a bug can be reproduced without asking the reporter. The browser sends the page, app version, platform, window size and selected model. The server validates each field on its own, drops any it cannot accept, and reads the user agent from the request itself rather than from the browser's payload. The page keeps the route only: the query string and hash are dropped, and any long opaque path segment (a reset link or signed URL token) is replaced with `:redacted`. The context is diagnostic only and never used for authorization. Reporters can read it on their own reports, admins on all reports, and it appears in the admin CSV export. Reports from before this was captured have no context.
+
+| Data        | Storage                                                           | Lifetime                      | Purpose                               |
+| ----------- | ----------------------------------------------------------------- | ----------------------------- | ------------------------------------- |
+| Page        | `clientContext.path`, route only, first 200 characters            | Lives with the report; no TTL | Reproduce the report on the same page |
+| App version | `clientContext.appVersion`                                        | Lives with the report; no TTL | Tie the report to a release           |
+| Platform    | `clientContext.platform`: `web` (also accepts `desktop`, `ios`)   | Lives with the report; no TTL | Triage by app surface                 |
+| Window size | `clientContext.viewport`: width and height in pixels              | Lives with the report; no TTL | Reproduce layout issues               |
+| Model       | `clientContext.model`: the model selected in the client           | Lives with the report; no TTL | Reproduce model-specific issues       |
+| User agent  | `clientContext.userAgent`, read server-side, first 300 characters | Lives with the report; no TTL | Identify the browser and OS           |
 
 ## Chat turn timing
 
@@ -591,6 +667,28 @@ message. You use these records to identify broken model references and review
 lifecycle changes. Metrics follow CloudWatch retention, and logs follow the
 deployment's configured log retention. This operational monitoring does not send
 product usage events to third-party analytics services.
+
+## API request and web-fetch diagnostics
+
+Outside development mode, `req-timing` records request duration, database-connect
+duration, whether the container is cold, response status, whether headers were
+sent, and whether the response ended before completion. It includes `userId`
+when the request has a user. Treat these records as account-associated operational
+data. A status is only a sent response status when `headersSent` is true.
+
+After input validation, the `web-fetch` API route records the target hostname and
+an outcome of `ok`, `refused`, or `error`. The target's user information, port,
+path, query, and fragment are excluded. Validation failures emit no `web-fetch`
+line, and insufficient credits count as `error`. These lines inherit the request
+logger's request id, method, API route path, deployment stage, client IP, and
+trace id when present; the API route path is distinct from the fetched URL.
+
+You use these logs to diagnose request latency, response failures, and fetch
+outcomes. They are operational logs rather than consent-gated product analytics
+events. Hosted API logs go to CloudWatch with one-week retention configured by
+the deployment. Self-hosted logs go to the runtime's console output; you control
+their collection and retention. These log additions do not send events to
+third-party analytics services.
 
 ## Credit hold monitoring
 

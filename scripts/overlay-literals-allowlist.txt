@@ -61,11 +61,11 @@ apps/client/scripts/copy-highs-wasm.mjs
 apps/client/scripts/generate-premium-glue.mjs
 apps/client/scripts/resolve-highs-wasm.mjs
 apps/client/server/dataLakes/resolveAccessibleLakes.test.ts
-apps/client/server/dataLakes/resolveRetrievalLakeScope.test.ts
+packages/server-utils/src/dataLakes/resolveRetrievalLakeScope.test.ts
 apps/client/server/entitlements/apiKeyScopeAccess.ts
 packages/server-utils/src/entitlements/partnerRules.test.ts
 apps/client/server/entitlements/signupDomainGrant.test.ts
-apps/client/server/files/loadAccessibleFabFile.ts
+packages/server-utils/src/files/loadAccessibleFabFile.ts
 apps/client/server/middlewares/apiKeyAuth.test.ts
 packages/server-utils/src/middlewares/apiKeyScopeGate.test.ts
 packages/server-utils/src/middlewares/apiKeyScopeGate.ts

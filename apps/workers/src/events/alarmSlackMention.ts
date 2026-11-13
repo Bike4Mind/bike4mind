@@ -3,6 +3,7 @@
  * alarms. It lives in an SSM parameter (created in infra/alarmSlackMention.ts, value ignored
  * after creation) rather than a secret so an operator can flip it without a deploy.
  */
+import { Logger } from '@bike4mind/observability';
 
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 
@@ -53,7 +54,7 @@ export async function readAlarmMention(
   } catch (error) {
     const code = (error as { name?: string })?.name;
     if (code !== 'ParameterNotFound') {
-      console.warn(`[alarmSlackMention] could not read ${name}: ${code ?? String(error)}`);
+      Logger.warn(`[alarmSlackMention] could not read ${name}: ${code ?? String(error)}`);
     }
   }
   cache = { name, value, readAt: now() };

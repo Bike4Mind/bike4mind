@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import { createUserApiKey } from '../create';
 import { validateUserApiKey, validateUserApiKeyById } from '../validate';
 import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
-import type { ApiKeyStoredSecret, IUserApiKeyDocument } from '@bike4mind/common';
+import type { ApiKeyStoredSecret, IUserApiKeyDocument, IUserApiKeyRepository } from '@bike4mind/common';
 import { KEY_PREFIX_LENGTH } from '../constants';
 
 vi.mock('bcryptjs', async () => {
@@ -283,8 +283,8 @@ describe('validateUserApiKey - embed context fields', () => {
 
   it('carries preauthorizedLakeIds through the projection', async () => {
     const { repo } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapters = { db: { userApiKeys: repo as any } };
+
+    const adapters = { db: { userApiKeys: repo as unknown as IUserApiKeyRepository } };
 
     const { key } = await createUserApiKey(
       'sys-1',
@@ -367,6 +367,13 @@ describe('validateUserApiKeyById + shared finalize gates', () => {
     expect(repo.updateLastUsed).toHaveBeenCalledWith('key-1');
   });
 
+  it('leaves last-used alone when the caller says the check is not a use', async () => {
+    const { repo, adapters } = repoWith(baseDoc);
+    const result = await validateUserApiKeyById('key-1', adapters, { recordUse: false });
+    expect(result.isValid).toBe(true);
+    expect(repo.updateLastUsed).not.toHaveBeenCalled();
+  });
+
   it('returns not_found when the id does not resolve', async () => {
     const { adapters } = repoWith(null);
     const result = await validateUserApiKeyById('missing', adapters);
@@ -400,8 +407,8 @@ describe('validateUserApiKeyById + shared finalize gates', () => {
 describe('validateUserApiKey - SHA-256 digest fast path', () => {
   async function mint() {
     const { repo, getStored } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapters = { db: { userApiKeys: repo as any } };
+
+    const adapters = { db: { userApiKeys: repo as unknown as IUserApiKeyRepository } };
     const { key } = await createUserApiKey('sys-1', mintParams, { ...adapters, systemUserId: 'sys-1' });
     return { key, repo, getStored, adapters };
   }
@@ -418,6 +425,18 @@ describe('validateUserApiKey - SHA-256 digest fast path', () => {
     expect(compare).not.toHaveBeenCalled();
     expect(repo.setKeyDigest).not.toHaveBeenCalled();
     compare.mockRestore();
+  });
+
+  it('stamps last-used by default and skips it when the check is not a use', async () => {
+    const { key, repo, adapters } = await mint();
+
+    await validateUserApiKey(key, adapters);
+    expect(repo.updateLastUsed).toHaveBeenCalledWith('key-1');
+
+    repo.updateLastUsed.mockClear();
+    const result = await validateUserApiKey(key, adapters, { recordUse: false });
+    expect(result.isValid).toBe(true);
+    expect(repo.updateLastUsed).not.toHaveBeenCalled();
   });
 
   it('validates a digest-only key (no keyHash at all) without bcrypt or a backfill', async () => {
@@ -556,5 +575,34 @@ describe('validation admin provisioning provenance', () => {
   it('leaves self-service keys without an admin exemption', async () => {
     const { key, adapters } = await mintLegacyKey();
     expect((await validateUserApiKey(key, adapters)).createdByUserId).toBeUndefined();
+  });
+});
+
+describe('validateUserApiKey - exchange key marker', () => {
+  async function validateWithMetadata(metadata: IUserApiKeyDocument['metadata']) {
+    const { repo, getStored } = makeSyncedRepo();
+    const adapters = { db: { userApiKeys: repo as unknown as IUserApiKeyRepository } };
+    const { key } = await createUserApiKey('sys-1', mintParams, { ...adapters, systemUserId: 'sys-1' });
+    getStored()!.metadata = metadata;
+    return validateUserApiKey(key, adapters);
+  }
+
+  it('projects the minting client for an exchange key', async () => {
+    const result = await validateWithMetadata({ createdFrom: 'oauth-exchange', oauthClientId: 'client-1' });
+    expect(result.oauthExchangeClientId).toBe('client-1');
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['empty', ''],
+  ])('refuses an exchange key whose client id is %s', async (_label, id) => {
+    const result = await validateWithMetadata({ createdFrom: 'oauth-exchange', oauthClientId: id });
+    expect(result).toEqual({ isValid: false, reason: 'disabled' });
+  });
+
+  it('carries no marker for a personal key with a stray oauthClientId', async () => {
+    const result = await validateWithMetadata({ createdFrom: 'api', oauthClientId: 'client-1' });
+    expect(result.isValid).toBe(true);
+    expect(result.oauthExchangeClientId).toBeUndefined();
   });
 });

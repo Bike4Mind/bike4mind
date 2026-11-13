@@ -11,6 +11,11 @@ export type AccountStatusChange = {
   isSuspended: boolean;
   /** The audited suspend or reinstate reason; absent when the update carried none. */
   reason: string | undefined;
+  /**
+   * The reinstatement undoes the admin's own suspension (an Undo action): the grades that suspension
+   * recorded are removed rather than replaced with legitimate_human.
+   */
+  undo?: boolean;
 };
 
 /**
@@ -18,13 +23,15 @@ export type AccountStatusChange = {
  * Detections queue does not ask for a verdict an admin has already given (repository rules in
  * ShadowDetectionModel gradeForSuspension / gradeForReinstatement). A suspension counts only with an
  * abuse reason (isAbuseSuspensionReason). Each graded record gets the same audit entry a manual grade
- * does. Runs after the account change committed and never throws: grading must not undo it.
+ * does. An undone suspension removes its own grades instead (revertSuspensionGrades). Runs after the
+ * account change committed and never throws: grading must not undo it.
  */
 export async function gradeDetectionsForStatusChange(
   change: AccountStatusChange,
   deps: { writeAudit: AdminAuditWriter; logger: Logger }
 ): Promise<ShadowDetectionItem[]> {
   const { userId, adminId, wasSuspended, isSuspended, reason } = change;
+  const reverting = !isSuspended && change.undo === true;
   if (wasSuspended === isSuspended || !reason) return [];
   if (isSuspended && !isAbuseSuspensionReason(reason)) return [];
 
@@ -35,9 +42,9 @@ export async function gradeDetectionsForStatusChange(
   };
   let graded: ShadowDetectionItem[];
   try {
-    graded = isSuspended
-      ? await shadowDetectionRepository.gradeForSuspension(input)
-      : await shadowDetectionRepository.gradeForReinstatement(input);
+    if (isSuspended) graded = await shadowDetectionRepository.gradeForSuspension(input);
+    else if (reverting) graded = await shadowDetectionRepository.revertSuspensionGrades(input);
+    else graded = await shadowDetectionRepository.gradeForReinstatement(input);
   } catch (error) {
     deps.logger.error(`Grading shadow detections for account ${userId} failed`, error);
     return [];
@@ -48,7 +55,9 @@ export async function gradeDetectionsForStatusChange(
       await deps.writeAudit({
         action: 'security.detection.reviewed',
         target: { kind: 'system', id: item.id, displayName: `Shadow detection ${item.id}` },
-        summary: `graded a ${item.detector} detection as ${item.verdict} by ${isSuspended ? 'suspending' : 'reinstating'} the account`,
+        summary: reverting
+          ? `removed the confirmed_abuse grade from a ${item.detector} detection by undoing the account's suspension`
+          : `graded a ${item.detector} detection as ${item.verdict} by ${isSuspended ? 'suspending' : 'reinstating'} the account`,
         reason: input.reason,
         details: {
           detectionId: item.id,
@@ -57,7 +66,7 @@ export async function gradeDetectionsForStatusChange(
           wouldAction: item.wouldAction,
           verdict: item.verdict,
           userIds: item.userIds,
-          source: isSuspended ? 'suspension' : 'reinstatement',
+          source: isSuspended ? 'suspension' : reverting ? 'suspension_undone' : 'reinstatement',
         },
       });
     } catch (error) {

@@ -21,7 +21,7 @@ import GroupOutlinedIcon from '@mui/icons-material/GroupOutlined';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { toast } from 'sonner';
 import { ADMIN_SAVED_VIEW_NAME_MAX_LENGTH, AdminSavedViewNameSchema } from '@client/app/utils/adminSavedViews';
-import type { AdminUsersSummary } from '@client/app/utils/adminUsersFilter';
+import type { AdminUsersSummary } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { AdminDialog, ViewTabs, type ViewTab } from '../../shared';
 import { adminFocus } from '../../shared/adminStyles';
 import type { UsersListParams } from '../usersTabSearch';

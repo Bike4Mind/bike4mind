@@ -116,7 +116,7 @@ describe('clampToModel', () => {
 
 describe('toCreateBody', () => {
   it('sends the trimmed prompt and the chosen values, without audio for a fixed-audio model', () => {
-    expect(toCreateBody(form({ prompt: '  a lighthouse  ' }))).toEqual({
+    expect(toCreateBody(form({ prompt: '  a lighthouse  ' }), rangeModel)).toEqual({
       model: 'grok-imagine-video-1.5',
       prompt: 'a lighthouse',
       mode: 'text_to_video',
@@ -128,15 +128,21 @@ describe('toCreateBody', () => {
 
   it('sends audio only when the model lets the user choose', () => {
     const state = { ...clampToModel(form({ durationSeconds: 4 }), optionalAudioModel).state, audio: false };
-    expect(toCreateBody(state)).toMatchObject({ audio: false });
+    expect(toCreateBody(state, optionalAudioModel)).toMatchObject({ audio: false });
+  });
+
+  it('leaves a kept audio choice out for a model with fixed audio (Create v2 keeps values on a switch)', () => {
+    expect(toCreateBody(form({ audio: false }), rangeModel)).not.toHaveProperty('audio');
   });
 
   it('sends the image only in image to video', () => {
-    expect(toCreateBody(form({ mode: 'image_to_video', inputImage: IMAGE }))).toMatchObject({
+    expect(toCreateBody(form({ mode: 'image_to_video', inputImage: IMAGE }), rangeModel)).toMatchObject({
       mode: 'image_to_video',
       input_image_file_id: 'img-1',
     });
-    expect(toCreateBody(form({ mode: 'text_to_video', inputImage: IMAGE }))).not.toHaveProperty('input_image_file_id');
+    expect(toCreateBody(form({ mode: 'text_to_video', inputImage: IMAGE }), rangeModel)).not.toHaveProperty(
+      'input_image_file_id'
+    );
   });
 });
 

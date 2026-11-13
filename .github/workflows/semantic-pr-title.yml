@@ -9,13 +9,6 @@ on:
   pull_request:
     types: [opened, edited, synchronize]
     branches: [main]
-  # Also triggered by the merge queue so the required "validate" check reports there;
-  # without this, the queue would hang forever waiting on a check that never runs.
-  # A merge_group has no PR title to lint, so the job is skipped at the job level:
-  # a skipped required check counts as passing and, unlike a job of skipped steps,
-  # takes no runner slot.
-  merge_group:
-    branches: [main]
 
 permissions:
   contents: read
@@ -23,17 +16,12 @@ permissions:
 
 jobs:
   validate:
-    # Canonical repo only (forks can't reach the merge queue anyway). Skipped on
-    # merge_group, where every step below would be skipped too.
-    if: >-
-      github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5') &&
-      github.event_name != 'merge_group'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     steps:
       - name: Validate PR title (Conventional Commits)
-        # Enforce only on real PRs. Skip on merge_group (no title to lint),
-        # dependabot, and Version Packages PRs — a skipped step still succeeds,
+        # Skip dependabot and Version Packages PRs: a skipped step still succeeds,
         # so the required "validate" check stays green in all those cases.
         if: >-
           github.event_name == 'pull_request' &&
@@ -64,7 +52,7 @@ jobs:
       # The changeset check runs main's scripts against the PR head, on the read-only token.
       # Its `if:` must stay in sync with the auto-changeset job's `if:` in
       # auto-changeset.yml: the bot and this gate must agree on which PRs need a changeset.
-      # Skipped (and so green) on merge_group, forks, dependabot and Version Packages PRs.
+      # Skipped (and so green) on forks, dependabot and Version Packages PRs.
       - name: Check out PR head
         if: >-
           github.event_name == 'pull_request' &&

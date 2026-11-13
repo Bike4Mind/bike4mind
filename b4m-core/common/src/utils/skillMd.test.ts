@@ -88,10 +88,37 @@ describe('parseSkillMd', () => {
         argumentHint: '[pr]',
         disableModelInvocation: true,
         claudeCodeAllowedTools: ['Bash', 'Read'],
+        claudeCodeModel: 'opus',
         body: 'Do it.',
       },
-      dropped: ['model', 'hooks'],
+      dropped: ['hooks'],
     });
+  });
+
+  it.each(['haiku', 'opus', 'inherit', 'claude-haiku-4-5', 'claude-opus-4-1-20250805', 'sonnet:1m'])(
+    'keeps model %s as claudeCodeModel',
+    model => {
+      const result = parseSkillMd(`---\nname: x\nmodel: ${model}\n---\nDo it.`);
+      expect(result).toMatchObject({ ok: true, fields: { claudeCodeModel: model }, dropped: [] });
+    }
+  );
+
+  it.each([
+    ['a value with spaces', '"two words"'],
+    ['a value over 64 characters', 'a'.repeat(65)],
+    ['a list', '[a, b]'],
+  ])('reports a model it cannot use as dropped (%s)', (_label, value) => {
+    const result = parseSkillMd(`---\nname: x\nmodel: ${value}\n---\nDo it.`);
+    expect(result).toMatchObject({ ok: true, dropped: ['model'] });
+    expect(result.ok && result.fields.claudeCodeModel).toBeUndefined();
+  });
+
+  it('round-trips model through toSkillMd and omits it when unset', () => {
+    const md = toSkillMd({ name: 'x', description: 'y', body: 'z', claudeCodeModel: 'haiku' });
+    expect(md).toContain('model: haiku');
+    const parsed = parseSkillMd(md);
+    expect(parsed.ok && parsed.fields.claudeCodeModel).toBe('haiku');
+    expect(toSkillMd({ name: 'x', description: 'y', body: 'z' })).not.toContain('model:');
   });
 
   it.each([
@@ -203,6 +230,41 @@ describe('parseSkillMd', () => {
     expect(!result.ok && result.error).toBeTruthy();
   });
 
+  describe('friendly YAML errors', () => {
+    const fail = (text: string) => {
+      const result = parseSkillMd(text);
+      if (result.ok) throw new Error('expected a failure');
+      return result;
+    };
+
+    it('explains an unquoted colon with the real line and key, and keeps the parser text', () => {
+      const result = fail(
+        "---\nname: team-rules\ndescription: Applies the team's house rules: TikTok-safe layout\n---\nbody"
+      );
+      expect(result.error).toBe(
+        'Line 3 (`description`) has a colon followed by a space, which YAML reads as a new key. Wrap the value in double quotes.'
+      );
+      expect(result.details).toMatch(/Nested mappings are not allowed/);
+    });
+
+    it('explains a tab used for indentation', () => {
+      const result = fail('---\nname: a\nmetadata:\n\tfoo: 1\n---\nbody');
+      expect(result.error).toBe('Line 4 uses a tab for indentation; YAML needs spaces.');
+      expect(result.details).toBeTruthy();
+    });
+
+    it('explains an unclosed quote at the line that opens it', () => {
+      const result = fail('---\nname: a\ndescription: "never closed\nother: 1\n---\nbody');
+      expect(result.error).toBe('Line 3 has a quote that is never closed.');
+    });
+
+    it('falls back to the line number for other YAML errors', () => {
+      const result = fail('---\nname: [unclosed\n---\nbody');
+      expect(result.error).toMatch(/^The frontmatter is not valid YAML \(line \d+\)\.$/);
+      expect(result.details).toBeTruthy();
+    });
+  });
+
   it('returns source for stamped exports and flags third-party ones', () => {
     const skill = { name: 'x', description: 'd', body: 'b' };
     const own = parseSkillMd(toSkillMd(skill, { sourceUrl: 'https://app.example/skills/1' }));
@@ -303,6 +365,27 @@ describe('referencedRelativePaths', () => {
       'img/chart.png',
       'scripts/lint.sh',
       './tools/fix.py',
+    ]);
+  });
+
+  it('skips repo-level docs and placeholder paths, keeps README.md and real paths', () => {
+    const body = [
+      'Follow CLAUDE.md and CONTRIBUTING.md, plus ./AGENTS.md.',
+      'Edit `path/to/file.ts`, `src/foo.ts` and `src/foo.test.ts`; match src/foo*.',
+      'Run scripts/run.sh, see [guide](reference.md) and [skip](CLAUDE.md), [ex](path/to/x.md), README.md.',
+    ].join('\n');
+    expect(referencedRelativePaths(body)).toEqual(['reference.md', 'scripts/run.sh', 'README.md']);
+  });
+
+  it('skips a repo doc reached through ./ or ../', () => {
+    expect(referencedRelativePaths('See ../CLAUDE.md, ../../AGENTS.md and ./CONTRIBUTING.md.')).toEqual([]);
+  });
+
+  it('still reports a shipped file that shares a repo doc name in a subfolder or other case', () => {
+    expect(referencedRelativePaths('See references/agents.md and docs/CLAUDE.md and claude.md.')).toEqual([
+      'references/agents.md',
+      'docs/CLAUDE.md',
+      'claude.md',
     ]);
   });
 

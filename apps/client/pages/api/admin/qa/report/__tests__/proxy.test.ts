@@ -45,6 +45,21 @@ describe('GET /api/admin/qa/report/[runId]/[token]/[...path]', () => {
     expect(res.getHeader('Set-Cookie')).toBeUndefined();
   });
 
+  it('adds the storage stand-in to HTML only, keeping the sandbox', async () => {
+    mockGet.mockResolvedValueOnce(Buffer.from('<html><head><script>report()</script></head></html>'));
+    const html = await call({ runId: RUN_A, token: signQaReportToken(RUN_A), path: ['index.html'] });
+    const body = String(html._getData());
+    expect(body).toMatch(
+      /^<html><head><script>\(function\(\)\{[\s\S]*localStorage[\s\S]*<\/script><script>report\(\)<\/script>/
+    );
+    expect(html.getHeader('Content-Security-Policy')).toBe('sandbox allow-scripts allow-popups allow-downloads');
+
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    mockGet.mockResolvedValueOnce(png);
+    const asset = await call({ runId: RUN_A, token: signQaReportToken(RUN_A), path: ['data', 'a.png'] });
+    expect(Buffer.compare(Buffer.from(asset._getData()), png)).toBe(0);
+  });
+
   it('serves a relative asset with the token taken from the path', async () => {
     const res = await call({ runId: RUN_A, token: signQaReportToken(RUN_A), path: ['data', 'a.png'] });
     expect(res._getStatusCode()).toBe(200);

@@ -1,7 +1,9 @@
 import { useCallback, useMemo } from 'react';
-import { FeedbackStatus, FeedbackSubject } from '@bike4mind/common';
+import { FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { FeedbackFilters, FeedbackListFilterParams, UseFeedbackFiltersReturn } from '../types';
+import { DEFAULT_FEEDBACK_VIEW } from '../feedbackTabSearch';
+import type { FeedbackReceivedWindow } from '../feedbackTrends';
 import { useFeedbackView } from './useFeedbackView';
 
 /**
@@ -21,9 +23,31 @@ import { useFeedbackView } from './useFeedbackView';
  * that nothing read. The dropdown's selection now reaches the query.
  */
 export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
-  const { value: searchTerm, debouncedValue: debouncedSearchTerm, setValue: setSearchTermValue } = useDebounceValue('');
+  const {
+    value: searchTerm,
+    debouncedValue: debouncedSearchTerm,
+    setValue: setSearchTermValue,
+    setValueImmediately: clearSearchTerm,
+  } = useDebounceValue('');
   const [view, updateView] = useFeedbackView();
-  const { statusFilters, organizations: selectedOrganizations, subject, sortAscending, page } = view;
+  const { area, severity } = view;
+  const setArea: UseFeedbackFiltersReturn['setArea'] = value => updateView({ area: value, page: 1 });
+  const setSeverity: UseFeedbackFiltersReturn['setSeverity'] = value => updateView({ severity: value, page: 1 });
+  const resolution = view.resolution;
+  const setResolution = useCallback<UseFeedbackFiltersReturn['setResolution']>(
+    next =>
+      updateView({
+        resolution: next,
+        statusFilters: next
+          ? (Object.fromEntries(
+              Object.values(FeedbackStatus).map(status => [status, status === FeedbackStatus.Closed])
+            ) as Record<FeedbackStatus, boolean>)
+          : DEFAULT_FEEDBACK_VIEW.statusFilters,
+        page: 1,
+      }),
+    [updateView]
+  );
+  const { statusFilters, organizations: selectedOrganizations, subject, types, received, sortAscending, page } = view;
 
   const setSearchTerm = useCallback(
     (term: string) => {
@@ -36,10 +60,13 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
 
   const setStatusFilters = useCallback<UseFeedbackFiltersReturn['setStatusFilters']>(
     update =>
-      updateView(current => ({
-        statusFilters: typeof update === 'function' ? update(current.statusFilters) : update,
-        page: 1,
-      })),
+      updateView(current => {
+        const statusFilters = typeof update === 'function' ? update(current.statusFilters) : update;
+        const onlyClosed = Object.values(FeedbackStatus).every(
+          status => statusFilters[status] === (status === FeedbackStatus.Closed)
+        );
+        return { statusFilters, resolution: onlyClosed ? current.resolution : undefined, page: 1 };
+      }),
     [updateView]
   );
 
@@ -53,33 +80,92 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     [updateView]
   );
 
+  const setTypes = useCallback((next: FeedbackType[]) => updateView({ types: next, page: 1 }), [updateView]);
+
+  const setReceived = useCallback(
+    (next: FeedbackReceivedWindow | undefined) => updateView({ received: next, page: 1 }),
+    [updateView]
+  );
+
+  const showOnly = useCallback<UseFeedbackFiltersReturn['showOnly']>(
+    next => {
+      clearSearchTerm('');
+      updateView({
+        statusFilters: DEFAULT_FEEDBACK_VIEW.statusFilters,
+        subject: DEFAULT_FEEDBACK_VIEW.subject,
+        types: DEFAULT_FEEDBACK_VIEW.types,
+        organizations: DEFAULT_FEEDBACK_VIEW.organizations,
+        received: DEFAULT_FEEDBACK_VIEW.received,
+        area: undefined,
+        severity: undefined,
+        resolution: undefined,
+        ...next,
+        page: 1,
+      });
+    },
+    [clearSearchTerm, updateView]
+  );
+
   const toggleSortDirection = useCallback(
     () => updateView(current => ({ sortAscending: !current.sortAscending, page: 1 })),
     [updateView]
   );
 
-  const filters: FeedbackFilters = { searchTerm, statusFilters, selectedOrganizations, subject, sortAscending };
+  const filters: FeedbackFilters = {
+    area,
+    severity,
+    searchTerm,
+    statusFilters,
+    selectedOrganizations,
+    subject,
+    resolution,
+    types,
+    received,
+    sortAscending,
+  };
 
   const filterParams = useMemo<FeedbackListFilterParams>(() => {
     const statuses = Object.values(FeedbackStatus).filter(status => statusFilters[status]);
     return {
+      ...(area ? { area } : {}),
+      ...(severity ? { severity } : {}),
       // Omitted rather than sent empty: an empty array would be serialized as no filter anyway,
       // and `status` absent is the server's "any status".
       ...(statuses.length > 0 ? { status: statuses } : {}),
       ...(selectedOrganizations.length > 0 ? { organization: selectedOrganizations } : {}),
       // Single-valued, unlike status/organization: the endpoint takes one subject or none.
       ...(subject ? { subject } : {}),
+      ...(resolution ? { resolution } : {}),
+      ...(types.length > 0 ? { type: types } : {}),
+      ...(received ? { received } : {}),
       ...(debouncedSearchTerm.trim() ? { search: debouncedSearchTerm.trim() } : {}),
       sort: sortAscending ? 'asc' : 'desc',
     };
-  }, [statusFilters, selectedOrganizations, subject, debouncedSearchTerm, sortAscending]);
+  }, [
+    area,
+    severity,
+    resolution,
+    statusFilters,
+    selectedOrganizations,
+    subject,
+    types,
+    received,
+    debouncedSearchTerm,
+    sortAscending,
+  ]);
 
   return {
+    setArea,
+    setSeverity,
     filters,
     setSearchTerm,
     setStatusFilters,
     setSelectedOrganizations,
     setSubject,
+    setResolution,
+    setTypes,
+    setReceived,
+    showOnly,
     toggleSortDirection,
     filterParams,
   };

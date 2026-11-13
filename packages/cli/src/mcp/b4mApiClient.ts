@@ -8,6 +8,7 @@ import {
   type ArtifactResource,
   generatedAudioResponseSchema,
   type GeneratedAudioResponse,
+  type BatchPresignedUrlRequestInputType,
   type IBriefcasePrompt,
   ttsBase64ResponseSchema,
   type CitableSourceSchema,
@@ -463,6 +464,35 @@ export class B4mApiClient {
     return this.client.get<RawFile>(`/api/files/${encodeURIComponent(fileId)}`);
   }
 
+  async requestFileUpload(file: BatchPresignedUrlRequestInputType['files'][number]): Promise<{
+    files: { fileId: string; url: string }[];
+  }> {
+    return this.client.post('/api/files/generate-presigned-urls-batch', { files: [file] });
+  }
+
+  async uploadFileBytes(uploadUrl: string, bytes: Buffer, mimeType: string): Promise<void> {
+    if (uploadUrl.startsWith('//')) throw new Error('Unexpected file upload URL');
+    const url = new URL(uploadUrl, this.baseURL);
+    if (uploadUrl.startsWith('/')) {
+      if (url.origin !== new URL(this.baseURL).origin || !/^\/api\/files\/[^/]+\/upload$/.test(url.pathname)) {
+        throw new Error('Unexpected file upload proxy URL');
+      }
+      await this.client.put(url.pathname, bytes, { headers: { 'Content-Type': mimeType } });
+      return;
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('Unexpected file upload URL');
+    const res = await fetch(url, { method: 'PUT', headers: { 'Content-Type': mimeType }, body: bytes });
+    if (!res.ok) throw new Error(`file upload failed (${res.status})`);
+  }
+
+  async deleteFile(fileId: string): Promise<void> {
+    await this.client.delete(`/api/files/${encodeURIComponent(fileId)}`);
+  }
+
+  async attachFileToProject(fileId: string, projectId: string): Promise<void> {
+    await this.client.post(`/api/projects/${encodeURIComponent(projectId)}/files`, { fileIds: [fileId] });
+  }
+
   /** Generate a sound effect. The SDK requests base64 and rebuilds an old server's raw-bytes answer. */
   async generateSoundEffect(args: SoundEffectArgs): Promise<GeneratedAudioResponse> {
     const body = {
@@ -617,12 +647,17 @@ export class B4mApiClient {
   /**
    * PUT one draft file to the URL upload-url minted. Plain fetch, never the app
    * client: that client injects auth headers, which break an S3 presigned
-   * signature. Self-host mints a relative proxy URL, so resolve against baseURL.
+   * signature. Self-host mints a relative proxy URL, so resolve against baseURL,
+   * and sends its upload token in the `headers` the entry came with.
    */
-  async uploadPublishDraftFile(uploadUrl: string, body: string, mimeType: string): Promise<void> {
-    const res = await fetch(new URL(uploadUrl, this.baseURL), {
+  async uploadPublishDraftFile(
+    upload: Pick<UploadUrlResponse['uploadUrls'][number], 'url' | 'headers'>,
+    body: string,
+    mimeType: string
+  ): Promise<void> {
+    const res = await fetch(new URL(upload.url, this.baseURL), {
       method: 'PUT',
-      headers: { 'Content-Type': mimeType },
+      headers: { ...upload.headers, 'Content-Type': mimeType },
       body,
     });
     if (!res.ok) throw new Error(`publish upload failed (${res.status})`);

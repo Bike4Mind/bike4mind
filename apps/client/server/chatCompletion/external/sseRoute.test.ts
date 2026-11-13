@@ -4,20 +4,27 @@ import { request as httpRequest, type Server } from 'http';
 import express from 'express';
 import { OutputBudgetExhaustedError } from '@bike4mind/llm-adapters';
 import type { z } from 'zod';
-import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
+import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@bike4mind/server-utils/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 // Real @bike4mind/common (pure SSE helpers + the published stream-event schema, which
 // these tests parse frames against). Only the seams below are mocked.
+const mockApiUsage = vi.hoisted(() => ({
+  beginCompletionUsage: vi.fn(async () => 'log-id'),
+  logUsage: vi.fn(async () => undefined),
+}));
+vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({ ApiKeyUsageManager: mockApiUsage }));
 const mockLoggerError = vi.hoisted(() => vi.fn());
 const mockLoggerWarn = vi.hoisted(() => vi.fn());
 const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
-vi.mock('@server/billing/freeTierDailyCapGate', () => ({ checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap }));
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', () => ({
+  checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap,
+}));
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
 const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
-vi.mock('@server/utils/apiKeyAccessGate', async () => {
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', async () => {
   const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
   const message = 'API keys require an active paid subscription';
   return {
@@ -28,7 +35,7 @@ vi.mock('@server/utils/apiKeyAccessGate', async () => {
     },
   };
 });
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
@@ -70,6 +77,7 @@ vi.mock('@bike4mind/services/llm', async () => {
   };
 });
 
+const mockFindCompletionRun = vi.hoisted(() => vi.fn());
 const mockConnectDB = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const dbConnection = vi.hoisted(() => ({ readyState: 1 }));
 vi.mock('@bike4mind/database', () => ({
@@ -82,6 +90,7 @@ vi.mock('@bike4mind/database', () => ({
   usageEventRepository: { record: vi.fn() },
   organizationRepository: {},
   cacheRepository: {},
+  completionRunRepository: { findById: mockFindCompletionRun },
   User: {},
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue({ id: 'key-1', name: 'cli' }) },
 }));
@@ -93,7 +102,7 @@ vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
     ownerUntrusted: false,
   }),
 }));
-vi.mock('@server/cli/resolveContractAuth', () => ({ resolveContractAuth: mockResolveContractAuth }));
+vi.mock('@bike4mind/server-utils/cli/resolveContractAuth', () => ({ resolveContractAuth: mockResolveContractAuth }));
 
 const quotaRelease = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockAdmitApiKeyCompletion = vi.hoisted(() => vi.fn());
@@ -102,7 +111,7 @@ vi.mock('@server/utils/untrustedCompletionQuota', () => ({
   NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
 }));
 
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
   checkApiKeyRateLimitOrThrow: vi.fn().mockResolvedValue(undefined),
 }));
@@ -340,6 +349,45 @@ describe('JWT rate limiting', () => {
     expect(res.headers.get('retry-after')).toBe('3600');
     expect(body.errorCode).toBe(DAILY_FREE_LIMIT_REACHED_ERROR_CODE);
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+});
+
+describe('API-key completion outcome evidence', () => {
+  it('records a daily-cap refusal without starting provider work', async () => {
+    mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free usage limit reached.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+    const res = await post();
+    await expectJsonError(res, 429);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockApiUsage.beginCompletionUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ completionObservation: expect.objectContaining({ outcome: 'unknown' }) })
+    );
+    expect(mockApiUsage.logUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 429,
+        existingLogId: 'log-id',
+        completionObservation: expect.objectContaining({ outcome: 'daily_cap_rejected' }),
+      })
+    );
+  });
+  it('records a failed in-band stream separately from its HTTP 200 response', async () => {
+    mockExecuteCompletion.mockImplementationOnce(async (params: ExecuteParams) => {
+      await params.onReady?.();
+      throw new Error('Synthetic provider fault');
+    });
+    const res = await post();
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(mockApiUsage.logUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 200,
+        completionObservation: expect.objectContaining({ outcome: 'failed' }),
+      })
+    );
   });
 });
 
@@ -901,7 +949,8 @@ describe('POST /api/ai/v1/completions - body-parser and method failures', () => 
 });
 
 describe('POST /api/ai/v1/completions - rate limits from the real limiters', () => {
-  const loadActualAuth = () => vi.importActual<typeof import('@server/cli/auth')>('@server/cli/auth');
+  const loadActualAuth = () =>
+    vi.importActual<typeof import('@bike4mind/server-utils/cli/auth')>('@bike4mind/server-utils/cli/auth');
 
   it('turns a JWT limiter throw into a 429 with Retry-After', async () => {
     const actual = await loadActualAuth();
@@ -1274,5 +1323,170 @@ describe('daily cap billing target', () => {
     expect(mockExecuteCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ billingOrganizationId: organizationId })
     );
+  });
+});
+
+describe('POST /api/ai/v1/completions - run attribution', () => {
+  const RUN_ID = '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80';
+  const RUN = { runId: RUN_ID, role: 'worker', purpose: 'explore', taskId: 'task-1' };
+  const storedRun = (overrides: Record<string, unknown> = {}) => ({
+    runId: RUN_ID,
+    userId: 'user-1',
+    ownerType: 'User',
+    ownerId: 'user-1',
+    createdAt: new Date(),
+    ...overrides,
+  });
+
+  it('passes a run the caller minted through to the completion', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+
+    const res = await post({ ...COMPLETION, run: RUN });
+    await res.text();
+
+    expect(res.status).toBe(200);
+    expect(mockFindCompletionRun).toHaveBeenCalledWith(RUN_ID);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ run: RUN }));
+  });
+
+  it('refuses an unknown run with a 404 before the stream opens or the provider is called', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(null);
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it("refuses another user's run exactly as it refuses an unknown one", async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ userId: 'user-2', ownerId: 'user-2' }));
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('refuses a personal run on an org-billed key, since the run would bill a different owner', async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', organizationId: 'org-1', billingOwnerType: 'Organization' },
+    });
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it("refuses a teammate's run on the same org-billed key, since the minting user must match", async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', organizationId: 'org-1', billingOwnerType: 'Organization' },
+    });
+    mockFindCompletionRun.mockResolvedValueOnce(
+      storedRun({ userId: 'user-2', ownerType: 'Organization', ownerId: 'org-1' })
+    );
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it("refuses the caller's run minted for another org when the key bills a different org", async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', organizationId: 'org-B', billingOwnerType: 'Organization' },
+    });
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ ownerType: 'Organization', ownerId: 'org-A' }));
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('accepts an uppercased id for an owned run and forwards the normalized id', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+
+    const res = await post({ ...COMPLETION, run: { ...RUN, runId: RUN_ID.toUpperCase() } });
+    await res.text();
+
+    expect(res.status).toBe(200);
+    expect(mockFindCompletionRun).toHaveBeenCalledWith(RUN_ID);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ run: RUN }));
+  });
+
+  it('accepts an org run on the org-billed key that minted it', async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', organizationId: 'org-1', billingOwnerType: 'Organization' },
+    });
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ ownerType: 'Organization', ownerId: 'org-1' }));
+
+    const res = await post({ ...COMPLETION, run: RUN });
+    await res.text();
+
+    expect(res.status).toBe(200);
+  });
+
+  it('looks nothing up for an unattributed request', async () => {
+    await (await post()).text();
+
+    expect(mockFindCompletionRun).not.toHaveBeenCalled();
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ run: undefined }));
+  });
+
+  type SettlingParams = ExecuteParams & { onSettled?: (outcome: unknown) => void; requestId?: string };
+  const settleWith = (committed: boolean) => async (params: SettlingParams) => {
+    await params.onReady?.();
+    await params.onChunk(['', 'hello'], { outputTokens: 5, creditsUsed: 9, usdCost: 0.009 });
+    params.onSettled?.({ requestId: params.requestId, committed, creditsCharged: committed ? 7 : 0, usdCost: 0.009 });
+  };
+
+  it('sends one settled event after the content and before [DONE], carrying the run and the caller request id', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+    mockExecuteCompletion.mockImplementationOnce(settleWith(true));
+
+    const res = await postAs(
+      { 'x-api-key': 'b4m_live_test', 'x-request-id': 'caller-req-1' },
+      { ...COMPLETION, run: RUN }
+    );
+    const text = await res.text();
+
+    const sent = frames(text).filter(f => f.type !== 'meta');
+    expect(sent.map(f => f.type)).toEqual(['content', 'settled']);
+    expect(CompletionStreamEventSchema.parse(sent[1])).toEqual({
+      type: 'settled',
+      requestId: 'caller-req-1',
+      creditsCharged: 7,
+      usdCost: 0.009,
+      runId: RUN_ID,
+    });
+    expect(text.indexOf('"settled"')).toBeLessThan(text.indexOf('[DONE]'));
+  });
+
+  it('sends a settled event without a runId on an unattributed request', async () => {
+    mockExecuteCompletion.mockImplementationOnce(settleWith(true));
+
+    const settled = frames(await (await post()).text()).find(f => f.type === 'settled');
+
+    expect(settled).toBeDefined();
+    expect(settled).not.toHaveProperty('runId');
+  });
+
+  it('sends no settled event when settlement did not commit', async () => {
+    mockExecuteCompletion.mockImplementationOnce(settleWith(false));
+
+    const text = await (await post()).text();
+
+    expect(frames(text).some(f => f.type === 'settled')).toBe(false);
+    expect(text).toContain('[DONE]');
   });
 });

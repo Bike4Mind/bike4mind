@@ -17,6 +17,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import WarningIcon from '@mui/icons-material/Warning';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import EmailIcon from '@mui/icons-material/Email';
 import StorageIcon from '@mui/icons-material/Storage';
 import SendIcon from '@mui/icons-material/Send';
@@ -102,9 +103,10 @@ interface CircuitBreakerStatus {
 
 interface IntegrationHealthSummary {
   integration: IntegrationName;
-  status: 'healthy' | 'degraded' | 'unhealthy';
+  // 'no_data' (with a null lastCheckedAt) means the integration has never been checked.
+  status: 'healthy' | 'degraded' | 'unhealthy' | 'no_data';
   latencyMs: number;
-  lastCheckedAt: string;
+  lastCheckedAt: string | null;
   successRate: number;
   consecutiveFailures: number;
   error: string | null;
@@ -217,15 +219,17 @@ const getRealtimeBreakerChipProps = (
   }
 };
 
-const getStatusColor = (status: string): 'success' | 'warning' | 'danger' => {
+const getStatusColor = (status: string): 'success' | 'warning' | 'danger' | 'neutral' => {
   if (status === 'healthy') return 'success';
   if (status === 'degraded') return 'warning';
+  if (status === 'no_data') return 'neutral';
   return 'danger';
 };
 
 const getStatusIcon = (status: string) => {
   if (status === 'healthy') return <CheckCircleIcon sx={{ fontSize: 16 }} />;
   if (status === 'degraded') return <WarningIcon sx={{ fontSize: 16 }} />;
+  if (status === 'no_data') return <HelpOutlineIcon sx={{ fontSize: 16 }} />;
   return <ErrorIcon sx={{ fontSize: 16 }} />;
 };
 
@@ -1099,7 +1103,9 @@ const AdminSystemHealthTab = () => {
                           startDecorator={getStatusIcon(integration.status)}
                           data-testid={`integration-health-${integration.integration}-status`}
                         >
-                          {integration.status.charAt(0).toUpperCase() + integration.status.slice(1)}
+                          {integration.status === 'no_data'
+                            ? 'Not checked'
+                            : integration.status.charAt(0).toUpperCase() + integration.status.slice(1)}
                         </Chip>
                       </Stack>
 
@@ -1308,7 +1314,7 @@ const AdminSystemHealthTab = () => {
                       {/* Last checked */}
                       <Stack direction="row" justifyContent="space-between" alignItems="center">
                         <Typography level="body-xs" sx={{ opacity: 0.6 }}>
-                          {integration.lastCheckedAt && new Date(integration.lastCheckedAt).getTime() > 0
+                          {integration.lastCheckedAt
                             ? `Checked ${new Date(integration.lastCheckedAt).toLocaleTimeString()}`
                             : 'No data yet'}
                         </Typography>

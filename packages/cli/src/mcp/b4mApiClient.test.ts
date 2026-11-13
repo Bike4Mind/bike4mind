@@ -1000,7 +1000,7 @@ describe('B4mApiClient publish', () => {
     globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
 
     await client.uploadPublishDraftFile(
-      'https://bucket.s3.amazonaws.com/drafts/d1/index.html?X-Amz=1',
+      { url: 'https://bucket.s3.amazonaws.com/drafts/d1/index.html?X-Amz=1' },
       '<p/>',
       'text/html'
     );
@@ -1012,20 +1012,77 @@ describe('B4mApiClient publish', () => {
     expect(init).toEqual({ method: 'PUT', headers: { 'Content-Type': 'text/html' }, body: '<p/>' });
   });
 
-  it('resolves a self-host relative proxy URL against the base URL', async () => {
+  it('presigns a single file through the batch endpoint and PUTs hosted bytes without credentials', async () => {
+    mockPost.mockResolvedValue({ files: [{ fileId: 'f1', url: 'https://s3.example/put' }] });
+    globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
+    const file = { fileName: 'note.txt', fileSize: 3, mimeType: 'text/plain' };
+    await client.requestFileUpload(file);
+    await client.uploadFileBytes('https://s3.example/put', Buffer.from('abc'), 'text/plain');
+    expect(mockPost).toHaveBeenCalledWith('/api/files/generate-presigned-urls-batch', { files: [file] });
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(globalFetch.mock.calls[0][1]).toEqual({
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: Buffer.from('abc'),
+    });
+  });
+
+  it('uses authenticated client for same-origin self-host proxy and refuses unexpected proxy paths', async () => {
+    mockPut.mockResolvedValue({ ok: true });
+    await client.uploadFileBytes('/api/files/f1/upload', Buffer.from('abc'), 'text/plain');
+    expect(mockPut).toHaveBeenCalledWith('/api/files/f1/upload', Buffer.from('abc'), {
+      headers: { 'Content-Type': 'text/plain' },
+    });
+    await expect(client.uploadFileBytes('//evil.example/steal', Buffer.from('abc'), 'text/plain')).rejects.toThrow(
+      'Unexpected'
+    );
+    await expect(client.uploadFileBytes('/api/other', Buffer.from('abc'), 'text/plain')).rejects.toThrow('Unexpected');
+  });
+
+  it('throws when the hosted upload PUT is not OK', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 403 }));
+    await expect(client.uploadFileBytes('https://s3.example/put', Buffer.from('abc'), 'text/plain')).rejects.toThrow(
+      'file upload failed (403)'
+    );
+  });
+
+  it('refuses an upload URL with a non-http protocol', async () => {
+    await expect(client.uploadFileBytes('ftp://x/y', Buffer.from('abc'), 'text/plain')).rejects.toThrow('Unexpected');
+    expect(globalFetch).not.toHaveBeenCalled();
+  });
+
+  it('deletes a file through the files route', async () => {
+    await client.deleteFile('f1');
+    expect(mockDelete).toHaveBeenCalledWith('/api/files/f1');
+  });
+
+  it('attaches an uploaded file through the project write route', async () => {
+    await client.attachFileToProject('f1', 'p1');
+    expect(mockPost).toHaveBeenCalledWith('/api/projects/p1/files', { fileIds: ['f1'] });
+  });
+
+  it('resolves a self-host relative proxy URL against the base URL and sends its token header', async () => {
     globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
 
-    await client.uploadPublishDraftFile('/api/publish/artifact/draft-upload?token=t', '<p/>', 'text/html');
-
-    expect(String(globalFetch.mock.calls[0][0])).toBe(
-      'http://localhost:3000/api/publish/artifact/draft-upload?token=t'
+    await client.uploadPublishDraftFile(
+      { url: '/api/publish/artifact/draft-upload?draftId=d1&path=index.html', headers: { 'x-upload-token': 't' } },
+      '<p/>',
+      'text/html'
     );
+
+    const [url, init] = globalFetch.mock.calls[0];
+    expect(String(url)).toBe('http://localhost:3000/api/publish/artifact/draft-upload?draftId=d1&path=index.html');
+    expect(init).toEqual({
+      method: 'PUT',
+      headers: { 'x-upload-token': 't', 'Content-Type': 'text/html' },
+      body: '<p/>',
+    });
   });
 
   it('fails loudly when the upload is rejected', async () => {
     globalFetch.mockResolvedValue(new Response(null, { status: 403 }));
 
-    await expect(client.uploadPublishDraftFile('https://s3/x', '<p/>', 'text/html')).rejects.toThrow(
+    await expect(client.uploadPublishDraftFile({ url: 'https://s3/x' }, '<p/>', 'text/html')).rejects.toThrow(
       'publish upload failed (403)'
     );
   });

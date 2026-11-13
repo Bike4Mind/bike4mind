@@ -2,7 +2,7 @@ import { organizationRepository, userRepository, withTransaction } from '@bike4m
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, IMongoDocument } from '@bike4mind/common';
-import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
+import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';
 import {
   SubscriptionOwnerType,
   ISubscription,
@@ -10,7 +10,8 @@ import {
   LIVE_STRIPE_SUBSCRIPTION_REMOVE_MESSAGE,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
-import { baseApi } from '@server/middlewares/baseApi';
+import { assertDelegateCanChangeSubscription } from '@server/admin/creditGrants/delegateTargets';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
@@ -21,13 +22,11 @@ interface RequestQuery {
   subscriptionId: string;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
+const handler = adminApi({
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { DELETE: 'credits:adjust' },
+}).delete(
   asyncHandler(async (req, res) => {
-    // Check admin authorization
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { userId, subscriptionId } = req.query as RequestQuery;
 
     if (typeof userId !== 'string' || !userId) {
@@ -52,6 +51,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
     if (!subscription) {
       throw new NotFoundError('Subscription not found');
     }
+    await assertDelegateCanChangeSubscription(req.user, subscription, 'remove the subscription of');
 
     // The delete never reaches Stripe, so a live Stripe row would keep invoicing with no credits granted.
     if (isLiveStripeBilledSubscription(subscription)) {

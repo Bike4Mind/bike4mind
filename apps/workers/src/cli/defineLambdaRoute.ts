@@ -14,7 +14,7 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
-import { resolveContractAuth, type ContractAuthResult } from '@server/cli/resolveContractAuth';
+import { resolveContractAuth, type ContractAuthResult } from '@bike4mind/server-utils/cli/resolveContractAuth';
 import { authInfraFailureHeaders, isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 export type LambdaRouteContext<C extends EndpointContract> = {
@@ -145,6 +145,9 @@ export function defineLambdaRoute<C extends EndpointContract>(
           );
         }
         return json(authFailureStatus(error), {
+          // A 403's classifier (e.g. `errorCode: account_suspended` and its `suspension` detail) is part
+          // of the published body; a 401 carries none.
+          ...(error instanceof ForbiddenError && error.additionalInfo),
           error: error instanceof Error ? error.message : 'Authentication failed',
           request_id: requestId,
         });
@@ -232,7 +235,7 @@ export function defineLambdaRoute<C extends EndpointContract>(
         // No schema => the contract declares a raw (non-JSON) body for this status.
         const check = spec?.schema?.safeParse(result.body);
         if (check && !check.success) {
-          console.warn(
+          Logger.warn(
             `[contract] ${contract.operationId} response ${result.statusCode} violates schema: ${check.error.message}`
           );
         }

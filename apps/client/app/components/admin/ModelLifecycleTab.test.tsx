@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -13,7 +14,9 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 // Stubbed: the card fetches and polls its own endpoint, which would otherwise
 // show up in this file's api.get assertions. Covered by DiscoveryStatusCard.test.tsx.
 vi.mock('./DiscoveryStatusCard', () => ({
-  DiscoveryStatusCard: () => <div data-testid="discovery-status-card" />,
+  DiscoveryStatusCard: ({ onRunFinished }: { onRunFinished?: () => void }) => (
+    <button data-testid="discovery-status-card" onClick={() => onRunFinished?.()} />
+  ),
 }));
 
 import { ModelLifecycleTab } from './ModelLifecycleTab';
@@ -62,6 +65,12 @@ const renderTab = () =>
     </TestWrapper>
   );
 
+/** Accept and Dismiss live in the queue row's "..." menu: open it, then return the item. */
+const queueAction = async (action: 'accept' | 'dismiss', modelId = 'gpt-sunset') => {
+  fireEvent.click(await screen.findByTestId(`model-lifecycle-queue-actions-${modelId}`));
+  return screen.findByTestId(`model-lifecycle-${action}-${modelId}`);
+};
+
 describe('ModelLifecycleTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -86,6 +95,17 @@ describe('ModelLifecycleTab', () => {
     expect(screen.getByTestId('model-lifecycle-stale-row-fallback-default-gpt-ghost')).toHaveTextContent('unknown');
   });
 
+  it('reloads its table when a run the status card waited on finishes', async () => {
+    renderTab();
+    await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');
+    expect(mockGet).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId('discovery-status-card'));
+
+    await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
+    expect(mockGet).toHaveBeenLastCalledWith('/api/admin/model-deprecation-status');
+  });
+
   it('renders a not-invocable reference as its own readable problem kind', async () => {
     renderTab();
 
@@ -94,10 +114,26 @@ describe('ModelLifecycleTab', () => {
     );
   });
 
+  it('prefills the note with an evidence line built from the suggestion', async () => {
+    renderTab();
+    fireEvent.click(await queueAction('accept'));
+
+    const note = screen.getByTestId('model-lifecycle-note-input') as HTMLTextAreaElement;
+    expect(note.value).toContain('developers.openai.com/api/docs/deprecations');
+    expect(note.value).toContain('Deprecated 2026-08-01');
+    expect(note.value).toContain('Signal: anthropic-docs signal.');
+    expect(screen.getByTestId('model-lifecycle-accept-confirm-btn')).not.toHaveAttribute('disabled');
+
+    fireEvent.click(screen.getByTestId('model-lifecycle-note-quickpick-confirmed'));
+    expect(note.value).toMatch(/Signal: anthropic-docs signal\. Confirmed on vendor page\.$/);
+  });
+
   it('accept requires a note, then posts the suggested successor with it', async () => {
     renderTab();
-    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+    fireEvent.click(await queueAction('accept'));
 
+    // The prefill is a draft: emptying it blocks the accept, because the note is the audit trail.
+    fireEvent.change(screen.getByTestId('model-lifecycle-note-input'), { target: { value: '  ' } });
     const confirm = screen.getByTestId('model-lifecycle-accept-confirm-btn');
     expect(confirm).toHaveAttribute('disabled');
     expect(mockPost).not.toHaveBeenCalled();
@@ -120,7 +156,7 @@ describe('ModelLifecycleTab', () => {
 
   it('sends an edited successor override instead of the suggested one', async () => {
     renderTab();
-    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+    fireEvent.click(await queueAction('accept'));
     fireEvent.change(screen.getByTestId('model-lifecycle-replacedby-input'), { target: { value: 'gpt-newer' } });
     fireEvent.change(screen.getByTestId('model-lifecycle-note-input'), { target: { value: 'operator pick' } });
     fireEvent.click(screen.getByTestId('model-lifecycle-accept-confirm-btn'));
@@ -139,7 +175,7 @@ describe('ModelLifecycleTab', () => {
   // one making a cost decision, and a precomputed delta would price the wrong model.
   it('reprices the accept panel against the typed successor, not the suggested one', async () => {
     renderTab();
-    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+    fireEvent.click(await queueAction('accept'));
 
     expect(screen.getByTestId('successor-cost-panel')).toHaveTextContent('costs more');
 
@@ -152,7 +188,7 @@ describe('ModelLifecycleTab', () => {
 
   it('flags a typed successor with no price row rather than showing it as free', async () => {
     renderTab();
-    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+    fireEvent.click(await queueAction('accept'));
     fireEvent.change(screen.getByTestId('model-lifecycle-replacedby-input'), { target: { value: 'gpt-unpriced' } });
 
     expect(screen.getByTestId('successor-cost-panel')).toHaveTextContent('no price on file');
@@ -166,13 +202,13 @@ describe('ModelLifecycleTab', () => {
 
     expect(await screen.findByTestId('successor-cost-chip-gpt-sunset')).toHaveTextContent('no price on file');
 
-    fireEvent.click(screen.getByTestId('model-lifecycle-accept-gpt-sunset'));
+    fireEvent.click(await queueAction('accept'));
     expect(screen.getByTestId('successor-cost-panel')).toHaveTextContent('no price on file');
   });
 
   it('dismiss confirms before posting, since the suggestion cannot be brought back', async () => {
     renderTab();
-    fireEvent.click(await screen.findByTestId('model-lifecycle-dismiss-gpt-sunset'));
+    fireEvent.click(await queueAction('dismiss'));
 
     expect(screen.getByTestId('model-lifecycle-dismiss-modal')).toBeInTheDocument();
     expect(mockPost).not.toHaveBeenCalled();
@@ -186,7 +222,7 @@ describe('ModelLifecycleTab', () => {
 
   it('cancelling the dismiss confirmation posts nothing', async () => {
     renderTab();
-    fireEvent.click(await screen.findByTestId('model-lifecycle-dismiss-gpt-sunset'));
+    fireEvent.click(await queueAction('dismiss'));
     fireEvent.click(screen.getByTestId('model-lifecycle-dismiss-cancel-btn'));
 
     expect(mockPost).not.toHaveBeenCalled();
@@ -196,13 +232,13 @@ describe('ModelLifecycleTab', () => {
     let settle = (_value: { data: Record<string, unknown> }) => {};
     mockPost.mockReturnValue(new Promise(resolve => (settle = resolve)));
     renderTab();
-    fireEvent.click(await screen.findByTestId('model-lifecycle-dismiss-gpt-sunset'));
+    fireEvent.click(await queueAction('dismiss'));
 
     const confirm = screen.getByTestId('model-lifecycle-dismiss-confirm-btn');
     fireEvent.click(confirm);
     await waitFor(() => expect(confirm).toHaveAttribute('disabled'));
     fireEvent.click(confirm);
-    expect(screen.getByTestId('model-lifecycle-dismiss-gpt-sunset')).toHaveAttribute('disabled');
+    expect(screen.getByTestId('model-lifecycle-queue-actions-gpt-sunset')).toHaveAttribute('disabled');
 
     settle({ data: {} });
     await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
@@ -215,7 +251,7 @@ describe('ModelLifecycleTab', () => {
       response: { data: { message: 'replacedBy gpt-typo is unknown to the merged model list' } },
     });
     renderTab();
-    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+    fireEvent.click(await queueAction('accept'));
     fireEvent.change(screen.getByTestId('model-lifecycle-note-input'), { target: { value: 'operator pick' } });
     fireEvent.click(screen.getByTestId('model-lifecycle-accept-confirm-btn'));
 
@@ -244,7 +280,7 @@ describe('ModelLifecycleTab', () => {
       },
     });
     renderTab();
-    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+    fireEvent.click(await queueAction('accept'));
 
     expect(screen.getByTestId('model-lifecycle-accept-detail')).toHaveTextContent('but it costs more');
   });
@@ -262,7 +298,7 @@ describe('ModelLifecycleTab', () => {
       },
     });
     renderTab();
-    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+    fireEvent.click(await queueAction('accept'));
     fireEvent.change(screen.getByTestId('model-lifecycle-note-input'), { target: { value: 'operator pick' } });
     fireEvent.click(screen.getByTestId('model-lifecycle-accept-confirm-btn'));
 
@@ -284,7 +320,7 @@ describe('ModelLifecycleTab', () => {
       response: { status: 409, data: { code: 'replacement-blocked', details: ['it is not active'] } },
     });
     renderTab();
-    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+    fireEvent.click(await queueAction('accept'));
     fireEvent.change(screen.getByTestId('model-lifecycle-note-input'), { target: { value: 'operator pick' } });
     fireEvent.click(screen.getByTestId('model-lifecycle-accept-confirm-btn'));
     await screen.findByTestId('model-lifecycle-accept-blockers');
@@ -326,5 +362,294 @@ describe('ModelLifecycleTab', () => {
     mockGet.mockResolvedValue({ data: { ...STATUS, queue: [] } });
     renderTab();
     expect(await screen.findByTestId('model-lifecycle-queue-empty')).toBeInTheDocument();
+  });
+});
+
+describe('ModelLifecycleTab page layout', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGet.mockResolvedValue({ data: STATUS });
+    mockPost.mockResolvedValue({ data: {} });
+    useAdminModal.setState({ activeTab: AdminTab.ModelLifecycle });
+    useCreditAnalysisStore.setState({ activeTab: 'users', pricingModelId: null });
+  });
+
+  it('opens with the page header: a sentence-case h1 with no icon, the pricing link and Refresh in the actions', async () => {
+    renderTab();
+    await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');
+
+    const header = screen.getByTestId('admin-page-header');
+    expect(screen.getByTestId('model-lifecycle-panel').firstElementChild).toBe(header);
+    const title = within(header).getByRole('heading', { level: 1 });
+    expect(title).toHaveTextContent(/^Model lifecycle$/);
+    expect(title.querySelector('svg')).toBeNull();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(within(header).getByTestId('model-lifecycle-model-pricing-link')).toBeInTheDocument();
+    expect(within(header).getByTestId('model-lifecycle-refresh-btn')).toBeInTheDocument();
+  });
+
+  it('puts each list in its own DataTable under a section heading, scrolling sideways below its min width', async () => {
+    renderTab();
+    await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');
+
+    expect(screen.getAllByRole('heading', { level: 2 }).map(heading => heading.textContent)).toEqual([
+      'Deprecation queue (1)',
+      'Expired and expiring (2)',
+      'Stale references (3)',
+    ]);
+    expect(screen.getByTestId('model-lifecycle-queue-table')).toHaveStyle({ minWidth: '65rem' });
+    expect(screen.getByTestId('model-lifecycle-horizon-table')).toHaveStyle({ minWidth: '48rem' });
+    expect(screen.getByTestId('model-lifecycle-stale-table')).toHaveStyle({ minWidth: '48rem' });
+    expect(screen.getByTestId('model-lifecycle-queue-table-frame')).toBeInTheDocument();
+    expect(screen.getByTestId('model-lifecycle-panel').querySelectorAll('.MuiCard-root')).toHaveLength(0);
+
+    const model = within(screen.getByTestId('model-lifecycle-queue-row-gpt-sunset')).getByTitle('gpt-sunset');
+    expect(getComputedStyle(model).whiteSpace).toBe('nowrap');
+  });
+
+  it('maps each stale-reference problem to one status tone', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        ...STATUS,
+        staleReferences: [
+          ...STATUS.staleReferences,
+          { surface: 'agent-default', key: 'agent', referencedId: 'gpt-gone', problem: 'retired' },
+        ],
+      },
+    });
+    renderTab();
+    await screen.findByTestId('model-lifecycle-stale-row-agent-default-gpt-gone');
+
+    const tone = (surface: string, id: string) =>
+      screen.getByTestId(`model-lifecycle-stale-problem-${surface}-${id}`).getAttribute('data-tone');
+    expect(tone('fallback-chain', 'gpt-sunset')).toBe('warn');
+    expect(tone('fallback-chain', 'gpt-metadata-only')).toBe('warn');
+    expect(tone('agent-default', 'gpt-gone')).toBe('bad');
+    expect(tone('fallback-default', 'gpt-ghost')).toBe('neutral');
+  });
+
+  it('shows the empty lists as EmptyStates in place of their tables', async () => {
+    mockGet.mockResolvedValue({
+      data: { ...STATUS, queue: [], expired: [], expiringOrExpired: [], staleReferences: [] },
+    });
+    renderTab();
+
+    const queue = await screen.findByTestId('model-lifecycle-queue-empty');
+    expect(within(queue).getByTestId('admin-empty-state')).toHaveTextContent('Nothing awaiting a decision');
+    expect(
+      within(screen.getByTestId('model-lifecycle-horizon-empty')).getByTestId('admin-empty-state')
+    ).toHaveTextContent('Nothing reaches its deprecation date in the next 90 days.');
+    expect(screen.getByTestId('model-lifecycle-stale-empty')).toHaveTextContent('No stale references');
+    fireEvent.click(within(queue).getByTestId('model-lifecycle-queue-refresh-btn'));
+    await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows an ErrorState with Try again when the first load fails', async () => {
+    mockGet.mockRejectedValueOnce({ response: { data: { message: 'catalog unavailable' } } });
+    renderTab();
+
+    const error = await screen.findByTestId('model-lifecycle-error');
+    expect(within(error).getByTestId('admin-error-state')).toHaveTextContent('catalog unavailable');
+    expect(screen.queryByTestId('model-lifecycle-queue-table')).not.toBeInTheDocument();
+    fireEvent.click(within(error).getByTestId('admin-error-retry-btn'));
+    expect(await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset')).toBeInTheDocument();
+  });
+
+  it('keeps the loaded lists and shows a toned banner when a refresh fails', async () => {
+    renderTab();
+    await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');
+    mockGet.mockRejectedValueOnce({ message: 'Network Error' });
+
+    fireEvent.click(screen.getByTestId('model-lifecycle-refresh-btn'));
+
+    const banner = await screen.findByTestId('model-lifecycle-error');
+    expect(banner).toHaveTextContent('Network Error. Showing the last loaded status.');
+    expect(within(banner).queryByTestId('admin-error-state')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-lifecycle-queue-row-gpt-sunset')).toBeInTheDocument();
+  });
+
+  it('shows table skeleton rows on the first load', async () => {
+    mockGet.mockReturnValue(new Promise(() => {}));
+    renderTab();
+
+    expect(screen.getByTestId('admin-page-header')).toBeInTheDocument();
+    expect((await screen.findAllByTestId('admin-table-skeleton-row')).length).toBeGreaterThan(0);
+  });
+
+  it('says so in place when the stale-reference report could not be built', async () => {
+    mockGet.mockResolvedValue({
+      data: { ...STATUS, staleReferences: null, staleReferencesError: 'catalog read failed' },
+    });
+    renderTab();
+
+    const stale = await screen.findByTestId('model-lifecycle-stale-error');
+    expect(within(stale).getByTestId('admin-error-state')).toHaveTextContent('catalog read failed');
+    expect(screen.getByTestId('model-lifecycle-queue-row-gpt-sunset')).toBeInTheDocument();
+  });
+
+  it('opens accept and dismiss in admin dialogs with an h2 title and a close button', async () => {
+    renderTab();
+    fireEvent.click(await queueAction('accept'));
+
+    const accept = screen.getByTestId('model-lifecycle-accept-modal');
+    expect(within(accept).getByRole('heading', { level: 2 })).toHaveTextContent(
+      'Accept lifecycle change for gpt-sunset'
+    );
+    fireEvent.click(within(accept).getByTestId('model-lifecycle-accept-modal-close-btn'));
+    await waitFor(() => expect(screen.queryByTestId('model-lifecycle-accept-modal')).not.toBeInTheDocument());
+
+    fireEvent.click(await queueAction('dismiss'));
+    const dismiss = screen.getByTestId('model-lifecycle-dismiss-modal');
+    expect(dismiss).toHaveAttribute('role', 'alertdialog');
+    expect(within(dismiss).getByRole('heading', { level: 2 })).toHaveTextContent(
+      'Dismiss the suggestion for gpt-sunset?'
+    );
+  });
+
+  it('opens on table skeletons in its very first render, before any effect runs', () => {
+    // Server markup is the render before effects, which is the frame a browser paints first.
+    const html = renderToStaticMarkup(
+      <TestWrapper>
+        <ModelLifecycleTab />
+      </TestWrapper>
+    );
+
+    expect(html).toContain('data-testid="admin-table-skeleton-row"');
+    expect(html).not.toContain('admin-empty-state');
+    expect(html).not.toContain('Nothing awaiting a decision');
+    expect(html).toContain('>Deprecation queue</h2>');
+    expect(html).not.toContain('(0)');
+  });
+
+  it('offers Accept and Dismiss from one row menu, not as buttons in every row', async () => {
+    renderTab();
+    const row = await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');
+
+    const table = screen.getByTestId('model-lifecycle-queue-table');
+    expect(within(table).queryByRole('columnheader', { name: 'Decision' })).not.toBeInTheDocument();
+    const actions = row.querySelector('[data-row-actions]') as HTMLElement;
+    expect(within(actions).getAllByRole('button')).toEqual([
+      within(actions).getByRole('button', { name: 'Actions for gpt-sunset' }),
+    ]);
+    expect(screen.queryByTestId('model-lifecycle-accept-gpt-sunset')).not.toBeInTheDocument();
+
+    fireEvent.click(within(actions).getByTestId('model-lifecycle-queue-actions-gpt-sunset'));
+    expect(await screen.findByRole('menuitem', { name: 'Accept suggestion' })).toBe(
+      screen.getByTestId('model-lifecycle-accept-gpt-sunset')
+    );
+    expect(screen.getByRole('menuitem', { name: 'Dismiss suggestion' })).toBe(
+      screen.getByTestId('model-lifecycle-dismiss-gpt-sunset')
+    );
+  });
+
+  it('renders a missing value as a muted dash', async () => {
+    renderTab();
+    const row = await screen.findByTestId('model-lifecycle-horizon-row-gpt-soon');
+
+    const dash = within(row).getAllByText('-')[0];
+    expect(dash.tagName).toBe('SPAN');
+    expect(dash).toHaveStyle({ color: 'var(--joy-palette-admin-inkMuted)' });
+  });
+
+  describe('bulk settle', () => {
+    const BULK_STATUS = {
+      ...STATUS,
+      queue: [
+        ...STATUS.queue,
+        {
+          modelId: 'anthropic.claude-v2',
+          backend: 'bedrock',
+          suggestion: {
+            status: 'deprecated',
+            deprecationDate: '2026-09-30',
+            retirementDate: '2027-03-30',
+            source: 'litellm',
+            suggestedAt: '2026-11-01T00:00:00.000Z',
+          },
+        },
+      ],
+    };
+
+    const selectRows = async (...modelIds: string[]) => {
+      for (const modelId of modelIds) {
+        // The test id sits on the Joy root; the click has to reach the input inside it.
+        fireEvent.click(within(await screen.findByTestId(`admin-table-select-${modelId}`)).getByRole('checkbox'));
+      }
+    };
+
+    beforeEach(() => {
+      mockGet.mockResolvedValue({ data: BULK_STATUS });
+    });
+
+    it('accepts every selected row with one shared, template-filled note', async () => {
+      renderTab();
+      await selectRows('anthropic.claude-v2');
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-accept-btn'));
+
+      const note = screen.getByTestId('model-lifecycle-bulk-note-input') as HTMLTextAreaElement;
+      expect(note.value).toContain('AWS Bedrock legacy page');
+      expect(note.value).toContain('Legacy 2026-09-30, EOL 2027-03-30');
+
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-confirm-btn'));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+      expect(mockPost).toHaveBeenCalledWith('/api/admin/model-deprecation-status', {
+        modelId: 'anthropic.claude-v2',
+        action: 'accept',
+        note: note.value.trim(),
+      });
+      // Everything settled: the dialog closes and the queue reloads.
+      await waitFor(() => expect(screen.queryByTestId('model-lifecycle-bulk-modal')).not.toBeInTheDocument());
+      expect(mockGet).toHaveBeenCalledTimes(2);
+    });
+
+    it('will not bulk accept with an emptied note', async () => {
+      renderTab();
+      await selectRows('gpt-sunset', 'anthropic.claude-v2');
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-accept-btn'));
+      fireEvent.change(screen.getByTestId('model-lifecycle-bulk-note-input'), { target: { value: ' ' } });
+
+      expect(screen.getByTestId('model-lifecycle-bulk-confirm-btn')).toHaveAttribute('disabled');
+    });
+
+    it('reports a replacement-blocked row back and hands it to the single-row dialog', async () => {
+      mockPost.mockImplementation(async (_url: string, body: { modelId: string }) => {
+        if (body.modelId !== 'gpt-sunset') return { data: {} };
+        throw Object.assign(new Error('Request failed with status code 409'), {
+          response: { status: 409, data: { code: 'replacement-blocked', details: ['costs more than gpt-sunset'] } },
+        });
+      });
+      renderTab();
+      await selectRows('gpt-sunset', 'anthropic.claude-v2');
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-accept-btn'));
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-confirm-btn'));
+
+      const result = await screen.findByTestId('model-lifecycle-bulk-result-gpt-sunset');
+      expect(result).toHaveTextContent('costs more than gpt-sunset');
+      expect(screen.getByTestId('model-lifecycle-bulk-summary')).toHaveTextContent('1 of 2 settled');
+      expect(screen.queryByTestId('model-lifecycle-bulk-result-anthropic.claude-v2')).not.toBeInTheDocument();
+      // Never auto-acknowledged: one request per row, none overruling.
+      expect(mockPost).toHaveBeenCalledTimes(2);
+      for (const [, body] of mockPost.mock.calls) expect(body).not.toHaveProperty('acknowledgeBlockers');
+
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-review-gpt-sunset'));
+      expect(await screen.findByTestId('model-lifecycle-accept-modal')).toHaveTextContent('gpt-sunset');
+    });
+
+    it('dismisses the selection with an optional note', async () => {
+      renderTab();
+      await selectRows('gpt-sunset', 'anthropic.claude-v2');
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-dismiss-btn'));
+
+      expect((screen.getByTestId('model-lifecycle-bulk-note-input') as HTMLTextAreaElement).value).toBe('');
+      expect(screen.getByTestId('model-lifecycle-bulk-confirm-btn')).not.toHaveAttribute('disabled');
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-confirm-btn'));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
+      expect(mockPost.mock.calls.map(([, body]) => body)).toEqual([
+        { modelId: 'gpt-sunset', action: 'dismiss' },
+        { modelId: 'anthropic.claude-v2', action: 'dismiss' },
+      ]);
+    });
   });
 });

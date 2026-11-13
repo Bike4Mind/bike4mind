@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
@@ -16,7 +16,7 @@ import { CONVERGENCE_ORIGIN, isSupportedEmbeddingModel } from '@bike4mind/common
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
@@ -116,7 +116,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const ctx = await toAccessContext(req);
     // Read gate, not the rebuild gate: anyone who can read the lake may see what convergence WOULD
     // do, exactly as they can already see its health. Executing it still requires manage.
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, gateDeps);
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      db: { ...gateDeps.db, settings: adminSettingsRepository },
+      logger: req.logger,
+    });
 
     const { report } = await dataLakeService.planLakeConvergenceRun(lake, {
       ...(await convergenceAdapters()),

@@ -36,8 +36,10 @@ vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({ getFabFileBy
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/dataLakes/dataLakeScopes', () => ({ assertDataLakeWriteScope: h.assertDataLakeWriteScope }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({
+  assertDataLakeWriteScope: h.assertDataLakeWriteScope,
+}));
 
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { findAllInIds: h.findAllInIds, resetChunkStateByIds: h.resetChunkStateByIds },

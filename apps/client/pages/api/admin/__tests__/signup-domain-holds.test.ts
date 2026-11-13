@@ -1,11 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ForbiddenError,
+  MODERATION_PAGE_READ,
+  PENDING_FREE_CREDITS_TAG,
+  meetsAdminPermissionRequirement,
+  missingAdminPermissionMessage,
+  type AdminPermissionRequirement,
+} from '@bike4mind/common';
 
 const {
   handlers,
   find,
   reviewUpdate,
+  reviewFind,
   release,
   eligible,
   count,
@@ -21,6 +30,7 @@ const {
   settings: vi.fn(async (): Promise<Record<string, unknown>> => ({})),
   find: vi.fn(),
   reviewUpdate: vi.fn(),
+  reviewFind: vi.fn(),
   release: vi.fn(),
   eligible: vi.fn(),
   count: vi.fn(),
@@ -28,16 +38,33 @@ const {
   recordAudit: vi.fn(),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (options: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  requireAdminPermission: (
+    req: { user?: Parameters<typeof meetsAdminPermissionRequirement>[0] },
+    requirement: AdminPermissionRequirement
+  ) => {
+    if (!meetsAdminPermissionRequirement(req.user, requirement)) {
+      throw new ForbiddenError(missingAdminPermissionMessage(requirement));
+    }
+  },
+  adminApi: (options: { adminPermissions: Partial<Record<string, AdminPermissionRequirement>> }) => {
     baseOptions(options);
+    const gated =
+      (method: string, fn: (req: unknown, res: unknown) => Promise<void>) => async (req: unknown, res: unknown) => {
+        const requirement = options.adminPermissions[method];
+        const { user } = req as { user?: Parameters<typeof meetsAdminPermissionRequirement>[0] };
+        if (requirement && !meetsAdminPermissionRequirement(user, requirement)) {
+          throw new ForbiddenError(missingAdminPermissionMessage(requirement));
+        }
+        return fn(req, res);
+      };
     const chain = {
       get: (fn: typeof handlers.get) => {
-        handlers.get = fn;
+        handlers.get = gated('GET', fn);
         return chain;
       },
       post: (fn: typeof handlers.post) => {
-        handlers.post = fn;
+        handlers.post = gated('POST', fn);
         return chain;
       },
     };
@@ -52,7 +79,7 @@ vi.mock('@bike4mind/database', () => {
   return {
     adminSettingsRepository: {},
     signupDomainHoldListRepository: { list: listed, countByStatus },
-    SignupDomainReviewModel: { findOneAndUpdate: reviewUpdate },
+    SignupDomainReviewModel: { findOneAndUpdate: reviewUpdate, findOne: reviewFind },
     DomainIntelligenceModel: { estimatedDocumentCount: async () => 12 },
     disposableDomainRepository: {
       getDisposableSourceStatus: async () => [
@@ -64,20 +91,24 @@ vi.mock('@bike4mind/database', () => {
     withTransaction: (fn: () => Promise<unknown>) => fn(),
   };
 });
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: recordAudit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: recordAudit,
+  isSelfOrImpersonator: (user: { id?: string } | undefined, id: string) => user?.id === id,
+}));
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
   isEligibleForFreeCredits: eligible,
   releaseVerifiedPendingFreeCredits: release,
 }));
 import '@pages/api/admin/signup-domain-holds';
 
-const makeRequest = (body: unknown, isAdmin = true) => {
+const makeRequest = (body: unknown, user: Record<string, unknown> = { id: 'admin-1', isAdmin: true }) => {
   const { req, res } = createMocks({ method: 'POST', body });
-  Object.assign(req, { user: { id: 'admin-1', isAdmin }, logger: {} });
+  Object.assign(req, { user, logger: {} });
   return { req, res };
 };
 beforeEach(() => {
-  reviewUpdate.mockReset().mockResolvedValue({ domain: 'example.net', status: 'released' });
+  reviewUpdate.mockReset().mockResolvedValue({ domain: 'example.net', status: 'held_pending_review' });
+  reviewFind.mockReset().mockResolvedValue(null);
   find.mockReset().mockReturnValue({
     sort: vi.fn().mockReturnValue({
       limit: vi
@@ -194,18 +225,85 @@ describe('signup domain hold listing', () => {
   });
 });
 describe('signup domain hold decisions', () => {
-  it('is session-only and rejects non-admin decisions before reading or writing', async () => {
-    expect(baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] });
-    const { req, res } = makeRequest({ domain: 'example.net', action: 'release' }, false);
-    await expect(handlers.post(req, res)).rejects.toThrow(/admin access required/i);
+  it('is session-only and declares users:moderate for decisions and a moderation read for the list', () => {
+    expect(baseOptions).toHaveBeenCalledWith({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: MODERATION_PAGE_READ, POST: 'users:moderate' },
+    });
+  });
+  it('refuses decisions from a delegate without users:moderate before reading or writing', async () => {
+    const delegate = { id: 'mod-1', isAdmin: false, adminPermissions: ['support:read'] };
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release' }, delegate);
+    await expect(handlers.post(req, res)).rejects.toThrow(missingAdminPermissionMessage('users:moderate'));
     expect(reviewUpdate).not.toHaveBeenCalled();
     expect(release).not.toHaveBeenCalled();
+  });
+  it('admits a users:moderate delegate to confirm a hold', async () => {
+    const delegate = { id: 'mod-1', isAdmin: false, adminPermissions: ['users:moderate'] };
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'confirm' }, delegate);
+    await handlers.post(req, res);
+    expect(reviewUpdate).toHaveBeenCalled();
+  });
+  it('needs credits:adjust to release a hold, since releasing pays pending credits', async () => {
+    const delegate = { id: 'mod-1', isAdmin: false, adminPermissions: ['users:moderate'] };
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release' }, delegate);
+    await expect(handlers.post(req, res)).rejects.toThrow('Missing permission: credits:adjust');
+    expect(reviewUpdate).not.toHaveBeenCalled();
+  });
+  it('never pays a delegate itself or an account with admin access on release', async () => {
+    const delegate = { id: 'mod-1', isAdmin: false, adminPermissions: ['users:moderate', 'credits:adjust'] };
+    find.mockReturnValue({
+      sort: vi.fn().mockReturnValue({
+        limit: vi.fn().mockResolvedValue([
+          { _id: 'mod-1', email: 'me@example.net', tags: [PENDING_FREE_CREDITS_TAG] },
+          { _id: 'admin-2', email: 'boss@example.net', tags: [PENDING_FREE_CREDITS_TAG], isAdmin: true },
+          {
+            _id: 'deleg-3',
+            email: 'ops@example.net',
+            tags: [PENDING_FREE_CREDITS_TAG],
+            adminPermissions: ['support:read'],
+          },
+          { _id: 'user-4', email: 'user@example.net', tags: [PENDING_FREE_CREDITS_TAG] },
+        ]),
+      }),
+    });
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release' }, delegate);
+    await handlers.post(req, res);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(release.mock.calls[0][0]).toMatchObject({ id: 'user-4' });
+    expect(res._getJSONData()).toMatchObject({ remaining: 3 });
+  });
+  it('admits a delegate holding users:moderate and credits:adjust to release', async () => {
+    const delegate = { id: 'mod-1', isAdmin: false, adminPermissions: ['users:moderate', 'credits:adjust'] };
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release' }, delegate);
+    await handlers.post(req, res);
+    expect(reviewUpdate).toHaveBeenCalled();
+  });
+  it('refuses the list to a delegate without a moderation read permission', async () => {
+    listed.mockClear();
+    const { req, res } = createMocks({ method: 'GET' });
+    Object.assign(req, { user: { id: 'mod-1', isAdmin: false, adminPermissions: ['credits:adjust'] } });
+    await expect(handlers.get(req, res)).rejects.toThrow(missingAdminPermissionMessage(MODERATION_PAGE_READ));
+    expect(listed).not.toHaveBeenCalled();
+  });
+  it.each(['support:read', 'users:moderate'])('admits a delegate holding %s to the list', async permission => {
+    const { req, res } = createMocks({ method: 'GET' });
+    Object.assign(req, { user: { id: 'mod-1', isAdmin: false, adminPermissions: [permission] } });
+    await handlers.get(req, res);
+    expect(res._getStatusCode()).toBe(200);
   });
   it('releases only verified pending users from the reviewed domain and reports remaining work', async () => {
     const { req, res } = makeRequest({ domain: 'example.net', action: 'release' });
     await handlers.post(req, res);
     expect(reviewUpdate).toHaveBeenCalledWith(
-      { domain: 'example.net', status: { $in: ['held_pending_review', 'blocked', 'released'] } },
+      {
+        domain: 'example.net',
+        $or: [
+          { status: { $in: ['held_pending_review', 'blocked'] } },
+          { status: 'released', autoDecision: { $exists: true } },
+        ],
+      },
       {
         $set: { status: 'released', reviewedBy: 'admin-1', reviewedAt: expect.any(Date) },
         $unset: { autoDecision: 1 },
@@ -293,7 +391,7 @@ describe('signup domain hold decisions', () => {
     await handlers.post(req, res);
     expect(res._getStatusCode()).toBe(200);
     const [filter, update] = reviewUpdate.mock.calls[0];
-    expect(filter.status.$in).toContain('blocked');
+    expect(filter.$or[0].status.$in).toContain('blocked');
     expect(update).toMatchObject({
       $set: { status: 'released', reviewedBy: 'admin-1' },
       $unset: { autoDecision: 1 },
@@ -338,13 +436,132 @@ describe('signup domain hold decisions', () => {
     }
   );
   it('writes no new decision entry when a release is re-posted for an already released hold', async () => {
-    reviewUpdate.mockResolvedValue({ domain: 'example.net', status: 'released', reason: 'pattern' });
+    reviewFind.mockResolvedValue({
+      domain: 'example.net',
+      status: 'released',
+      reason: 'pattern',
+      cohortUserIds: ['user-1'],
+      autoDecision: { policy: 'advisory-decision', decidedAt: new Date() },
+    });
     const { req, res } = makeRequest({
       domain: 'example.net',
       action: 'release',
       afterUserId: '000000000000000000000064',
     });
     await handlers.post(req, res);
+    expect(recordAudit).not.toHaveBeenCalled();
+    // The retry leaves the stored decision (and its auto-release marker) as it was.
+    expect(reviewUpdate).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalled();
+  });
+  it('retries an auto-release payout for its judged accounts only, within budget, ignoring any cursor', async () => {
+    reviewFind.mockResolvedValue({
+      domain: 'example.net',
+      status: 'released',
+      reason: 'young-domain (<30 days)',
+      cohortUserIds: ['user-1', 'user-2'],
+      autoDecision: { policy: 'advisory-decision', decidedAt: new Date() },
+    });
+    const { req, res } = makeRequest({
+      domain: 'example.net',
+      action: 'release',
+      afterUserId: '000000000000000000000064',
+    });
+    await handlers.post(req, res);
+    expect(find.mock.calls[0][0]._id).toEqual({ $in: ['user-1', 'user-2'] });
+    expect(release).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'Signup domain hold payout retried by admin',
+      expect.anything(),
+      undefined,
+      { bypassBudget: false }
+    );
+    expect(res._getJSONData()).toEqual({ status: 'released', creditsReleased: 25, remaining: 0, nextCursor: null });
+    expect(count).not.toHaveBeenCalled();
+  });
+  it('pays nobody on a payout retry of an auto-release with no judged accounts', async () => {
+    reviewFind.mockResolvedValue({
+      domain: 'example.net',
+      status: 'released',
+      reason: 'young-domain (<30 days)',
+      cohortUserIds: [],
+      autoDecision: { policy: 'advisory-decision', decidedAt: new Date() },
+    });
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release' });
+    await handlers.post(req, res);
+    expect(find).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+    expect(res._getJSONData()).toEqual({ status: 'released', creditsReleased: 0, remaining: 0, nextCursor: null });
+  });
+  it('lets an admin confirm a hold the advisory assessment auto-released', async () => {
+    reviewUpdate.mockResolvedValue({
+      domain: 'example.net',
+      status: 'released',
+      reason: 'young-domain (<30 days)',
+      autoDecision: { policy: 'advisory-decision', decidedAt: new Date() },
+    });
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'confirm' });
+    await handlers.post(req, res);
+    expect(res._getJSONData()).toMatchObject({ status: 'blocked' });
+    const [filter, update] = reviewUpdate.mock.calls[0];
+    // Only an automated release is open to an admin's Confirm; an admin's own release is not matched.
+    expect(filter.$or).toContainEqual({ status: 'released', autoDecision: { $exists: true } });
+    expect(update).toMatchObject({ $set: { status: 'blocked', reviewedBy: 'admin-1' }, $unset: { autoDecision: 1 } });
+    expect(recordAudit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'signup_domain_hold.confirmed',
+        changes: [{ field: 'status', before: 'released', after: 'blocked' }],
+        details: { reason: 'young-domain (<30 days)', overrodeAutoDecision: 'advisory-decision' },
+      })
+    );
+    expect(release).not.toHaveBeenCalled();
+  });
+  it('makes an auto-release permanent when an admin explicitly releases it', async () => {
+    const autoReleased = {
+      domain: 'example.net',
+      status: 'released',
+      reason: 'young-domain (<30 days)',
+      autoDecision: { policy: 'advisory-decision', decidedAt: new Date() },
+    };
+    reviewFind.mockResolvedValue(autoReleased);
+    reviewUpdate.mockResolvedValue(autoReleased);
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release', overrideAutoDecision: true });
+    await handlers.post(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(reviewUpdate.mock.calls[0][1]).toMatchObject({
+      $set: { status: 'released', reviewedBy: 'admin-1' },
+      $unset: { autoDecision: 1 },
+    });
+    expect(recordAudit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'signup_domain_hold.released',
+        details: { reason: 'young-domain (<30 days)', overrodeAutoDecision: 'advisory-decision' },
+      })
+    );
+    // A takeover pays the whole domain like any admin release, not only the judged accounts.
+    expect(find.mock.calls[0][0]._id).toBeUndefined();
+    expect(release).toHaveBeenCalledWith(
+      expect.anything(),
+      'Signup domain hold released by admin',
+      expect.anything(),
+      undefined,
+      { bypassBudget: true }
+    );
+  });
+  it.each([
+    [
+      'a payout retry of an auto-release',
+      { cohortUserIds: ['user-1'], autoDecision: { policy: 'advisory-decision', decidedAt: new Date() } },
+      {},
+    ],
+    ['an explicit release of an admin release', {}, { overrideAutoDecision: true }],
+  ])('leaves the stored decision alone on %s', async (_label, stored, body) => {
+    reviewFind.mockResolvedValue({ domain: 'example.net', status: 'released', reason: 'pattern', ...stored });
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release', ...body });
+    await handlers.post(req, res);
+    expect(reviewUpdate).not.toHaveBeenCalled();
     expect(recordAudit).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalled();
   });

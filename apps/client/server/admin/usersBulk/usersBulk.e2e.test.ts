@@ -16,12 +16,12 @@ import {
   ADMIN_USERS_BULK_UNDO_WINDOW_MS,
   type AdminUsersBulkAction,
   type AdminUsersBulkExecuteRequest,
-} from '@client/app/utils/adminUsersBulk';
-import { usersBulkExecuteDeps, usersBulkUndoDeps } from './adapters';
-import { executeAdminUsersBulk, type ExecuteDeps } from './execute';
-import { SUBSCRIPTION_CANCEL_GRACE_MS } from './ports';
-import { SUPERSEDED_MESSAGE, undoAdminUsersBulk } from './undo';
-import { cohortHashOf, type BulkUser } from './resolve';
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
+import { usersBulkExecuteDeps, usersBulkUndoDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
+import { executeAdminUsersBulk, type ExecuteDeps } from '@bike4mind/server-utils/admin/usersBulk/execute';
+import { SUBSCRIPTION_CANCEL_GRACE_MS } from '@bike4mind/server-utils/admin/usersBulk/ports';
+import { SUPERSEDED_MESSAGE, undoAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/undo';
+import { cohortHashOf, type BulkUser } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 import { requestUsersBulkApprovalIfNeeded } from './approvalGate';
 import { approveApproval } from '@server/admin/approvals/service';
 
@@ -32,8 +32,8 @@ const cancelAccountSubscriptions = vi.hoisted(() =>
     failed: [] as { customerId: string; subscriptionId: string | null; reason: string }[],
   }))
 );
-vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/cancelAccountSubscriptions')>()),
   cancelAccountSubscriptions,
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
@@ -387,6 +387,40 @@ describe('users bulk actions on a real replica set', () => {
       })
     ).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining(String(ADMIN_USERS_BULK_MAX)) });
     expect(await auditCount('user.bulk.suspended')).toBe(0);
+  });
+
+  it.each([{ isAdmin: true }, { adminPermissions: ['support:read'] }])(
+    'refuses a delegate undo after a target gains admin access: %j',
+    async targetAccess => {
+      const adminId = await seedUser();
+      const targetId = await seedUser();
+      const result = await run(adminId, request([targetId], { type: 'suspend' }, [targetId]));
+      await User.updateOne({ _id: targetId }, { $set: targetAccess });
+      const req = reqFor(adminId);
+      req.user.isAdmin = false;
+      req.user.adminPermissions = ['users:moderate'];
+      const undone = await undoAdminUsersBulk(result.batchId, adminId, usersBulkUndoDeps(req));
+      expect(undone.restored).toBe(0);
+      expect(undone.failed).toEqual([
+        { userId: targetId, error: 'Only full administrators can undo actions on users with admin access' },
+      ]);
+      expect((await userState(targetId))?.isBanned).toBe(true);
+      expect(await auditCount('user.bulk.undone')).toBe(0);
+    }
+  );
+
+  it('checks action authorization before consuming the undo record', async () => {
+    const adminId = await seedUser();
+    const targetId = await seedUser();
+    const result = await run(adminId, request([targetId], { type: 'suspend' }, [targetId]));
+    const base = usersBulkUndoDeps(reqFor(adminId));
+    await expect(
+      undoAdminUsersBulk(result.batchId, adminId, base, () => {
+        throw new Error('Permission revoked');
+      })
+    ).rejects.toThrow('Permission revoked');
+    expect((await userState(targetId))?.isBanned).toBe(true);
+    expect((await undo(adminId, result.batchId)).restored).toBe(1);
   });
 
   it('lets only the same admin undo, and only inside the window', async () => {

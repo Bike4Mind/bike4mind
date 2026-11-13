@@ -34,6 +34,33 @@ const renderForm = (fields: CapabilityField[], overrides: Partial<Parameters<typ
 };
 
 describe('CapabilityForm', () => {
+  it('toggles chips: picks a value, clears the selected one, and skips a disabled one', () => {
+    const onChange = vi.fn();
+    renderForm([
+      {
+        kind: 'chips',
+        id: 'look',
+        label: 'Look',
+        value: 'a',
+        options: [
+          { value: 'a', label: 'A', swatch: { from: '#000000', to: '#ffffff' } },
+          { value: 'b', label: 'B' },
+          { value: 'c', label: 'C', disabled: true },
+        ],
+        onChange,
+      },
+    ]);
+
+    expect(screen.getByTestId('demo-form-look-chips')).toBeInTheDocument();
+    expect(screen.getByTestId('demo-form-look-a-chip')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('demo-form-look-b-chip')).toHaveAccessibleName('B');
+    fireEvent.click(screen.getByTestId('demo-form-look-b-chip'));
+    expect(onChange).toHaveBeenLastCalledWith('b');
+    fireEvent.click(screen.getByTestId('demo-form-look-a-chip'));
+    expect(onChange).toHaveBeenLastCalledWith(null);
+    expect(screen.getByTestId('demo-form-look-c-chip')).toBeDisabled();
+  });
+
   it('renders each field kind under the prefix and reports changes through its own handler', () => {
     const onText = vi.fn();
     const onSegment = vi.fn();
@@ -180,5 +207,95 @@ describe('CapabilityForm', () => {
     expect(screen.getByTestId('demo-form-a-verse-snippet-btn')).toBeDisabled();
     fireEvent.click(screen.getByTestId('demo-form-b-verse-snippet-btn'));
     expect(onLyrics).not.toHaveBeenCalled();
+  });
+
+  it('draws aspect ratios as tiles and reports a pick', () => {
+    const onAspect = vi.fn();
+    renderForm([
+      {
+        kind: 'aspect',
+        id: 'aspect',
+        label: 'Aspect ratio',
+        value: '1:1',
+        options: [
+          { value: '1:1', label: '1:1' },
+          { value: '16:9', label: '16:9' },
+        ],
+        onChange: onAspect,
+      },
+    ]);
+    fireEvent.click(screen.getByTestId('demo-form-aspect-16:9-btn'));
+    expect(onAspect).toHaveBeenCalledWith('16:9');
+  });
+
+  it('lists reference files with a remove button and offers Add until the slots are full', () => {
+    const onAdd = vi.fn();
+    const onRemove = vi.fn();
+    const field = {
+      kind: 'references' as const,
+      id: 'refs',
+      label: 'Reference images',
+      files: [{ fileId: 'f1', fileName: 'a.png' }],
+      max: 2,
+      onAdd,
+      onRemove,
+    };
+    renderForm([field]);
+    expect(screen.getByTestId('demo-form-refs-file-f1')).toHaveTextContent('a.png');
+    fireEvent.click(screen.getByTestId('demo-form-refs-remove-f1-btn'));
+    expect(onRemove).toHaveBeenCalledWith('f1');
+    fireEvent.click(screen.getByTestId('demo-form-refs-add-btn'));
+    expect(onAdd).toHaveBeenCalled();
+  });
+
+  it('marks a kept value the model does not take, offers its fix, and holds submit', () => {
+    const apply = vi.fn();
+    renderForm([
+      {
+        kind: 'segmented',
+        id: 'res',
+        label: 'Resolution',
+        value: '4k',
+        options: [
+          { value: '720p', label: '720p' },
+          { value: '4k', label: '4k', invalid: true },
+        ],
+        onChange: vi.fn(),
+        invalidReason: 'Model B supports 720p; you asked for 4k',
+        fix: { label: 'Use 720p', apply },
+      },
+    ]);
+    expect(screen.getByTestId('demo-form-res-4k-btn')).toHaveAttribute('data-invalid', 'true');
+    expect(screen.getByTestId('demo-form-res-invalid')).toHaveTextContent('you asked for 4k');
+    expect(screen.getByTestId('demo-form-submit-btn')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('demo-form-res-fix-btn'));
+    expect(apply).toHaveBeenCalled();
+  });
+
+  it('picks the model from cards, greying a mismatch but keeping it pickable, and an unavailable one not', () => {
+    const card = {
+      provider: 'Acme',
+      strength: 'Good at things.',
+      creditsPerOutput: 12,
+      outputNoun: 'image',
+      modes: ['Generate'],
+      unavailableReason: null,
+      mismatchReason: null,
+    };
+    const props = renderForm([], {
+      models: undefined,
+      modelCards: [
+        { ...card, id: 'a', name: 'Model A' },
+        { ...card, id: 'b', name: 'Model B', mismatchReason: 'Model B takes no aspect ratio' },
+        { ...card, id: 'c', name: 'Model C', unavailableReason: 'Temporarily unavailable in Studio.' },
+      ],
+    });
+    expect(screen.queryByTestId('demo-form-model-select')).not.toBeInTheDocument();
+    expect(screen.getByTestId('demo-form-model-card-a')).toHaveAttribute('data-selected', 'true');
+    expect(screen.getByTestId('demo-form-model-card-a-cost')).toHaveTextContent('credits per image');
+    expect(screen.getByTestId('demo-form-model-card-b-reason')).toHaveTextContent('takes no aspect ratio');
+    expect(screen.getByTestId('demo-form-model-card-c-radio')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('demo-form-model-card-b-radio'));
+    expect(props.onModelChange).toHaveBeenCalledWith('b');
   });
 });

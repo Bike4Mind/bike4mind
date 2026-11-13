@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/mcp",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "publishConfig": {
     "access": "restricted"
   },
@@ -83,6 +83,7 @@
     "@anthropic-ai/sdk": "^0.111.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
+    "@bike4mind/observability": "workspace:*",
     "@modelcontextprotocol/sdk": "1.32.1",
     "@octokit/rest": "^22.0.1",
     "unzipper": "^0.12.5",

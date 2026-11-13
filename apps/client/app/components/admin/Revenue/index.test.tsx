@@ -31,6 +31,7 @@ vi.mock('./RevenueCharts', () => ({
   PayingByOwnerChart: () => <div data-testid="admin-revenue-by-owner-chart" />,
   AtRiskChart: () => <div data-testid="admin-revenue-at-risk-chart" />,
 }));
+vi.mock('./payments/PaymentsView', () => ({ PaymentsView: () => <div data-testid="admin-payments-view-stub" /> }));
 
 import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
 import AdminRevenue from './index';
@@ -157,6 +158,15 @@ beforeEach(() => {
 });
 
 describe('AdminRevenue', () => {
+  it('leaves the outer padding to the admin page frame', async () => {
+    renderTab();
+    const root = await screen.findByTestId('admin-revenue-tab');
+    const style = getComputedStyle(root);
+    for (const side of [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]) {
+      expect(parseFloat(side || '0')).toBe(0);
+    }
+  });
+
   it('says when the trend starts before the first snapshot, with the current numbers in the strip', async () => {
     renderTab();
     expect(await screen.findByText('Trend starts collecting on October 30, 2026')).toBeTruthy();
@@ -354,6 +364,15 @@ describe('AdminRevenue', () => {
     );
     expect(screen.queryByTestId('admin-stat-strip')).toBeNull();
     expect(screen.queryByTestId('admin-revenue-range')).toBeNull();
+  });
+
+  it('keeps the ledger-backed Payments view reachable without Stripe', async () => {
+    response = { stripeConfigured: false };
+    fakeAdminRouter.reset({ tab: 'revenue', revenueView: 'payments' });
+    renderTab();
+    expect(await screen.findByTestId('admin-payments-view-stub')).toBeTruthy();
+    expect(screen.getByTestId('admin-revenue-view')).toBeTruthy();
+    expect(screen.queryByTestId('admin-revenue-stripe-unconfigured')).toBeNull();
   });
 
   it('offers a retry when the read fails', async () => {

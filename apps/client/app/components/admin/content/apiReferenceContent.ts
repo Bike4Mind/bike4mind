@@ -92,6 +92,8 @@ every scope involved. Containment is checked literally: \`admin:*\` is not treat
 superset of other scopes, so an \`admin:*\`-scoped key still can't mint or rotate a key
 holding scopes it doesn't literally list.
 
+Keys minted for a connected app reach only routes that declare their scopes.
+
 ### Rate Limits
 
 | Limit | Default |
@@ -141,10 +143,11 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/music-*\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,
   \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
 - Transcription: \`/api/v1/transcriptions/uploads\`, \`/api/v1/transcriptions\`
-- Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`, \`/api/v1/embedding-models\`,
-  \`/api/v1/text-refinements\`
+- Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/completion-runs\`,
+  \`/api/v1/embeddings\`, \`/api/v1/embedding-models\`, \`/api/v1/text-refinements\`
 - Decisions (typed questions answered with probabilities): \`/api/v1/decisions\`, \`/api/v1/decision-models\`
 - Account and models: \`/api/v1/me\`, \`/api/v1/client-config\`, \`/api/v1/credits\`, \`/api/v1/models\`
+- Skills (create and update from a SKILL.md): \`/api/v1/skills\`, \`/api/v1/skills/mine\`, \`/api/v1/skills/{id}\`
 - Skill Market as a Claude Code plugin marketplace: \`/api/v1/skills/market/claude-marketplace.json\`,
   \`/api/v1/skills/market/{id}/claude-plugin.zip\`
 - Skill Market listings: \`/api/v1/skills/market/listings\`, \`/api/v1/skills/market/listings/mine\`,

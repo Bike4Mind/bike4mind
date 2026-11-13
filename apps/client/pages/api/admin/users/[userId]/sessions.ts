@@ -1,11 +1,17 @@
 import { authSessionRepository, realtimeConnectionRepository, userRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
-import { ApiKeyScope, type AdminUserSession, type IAuthSessionDocument } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import {
+  ApiKeyScope,
+  MODERATION_PAGE_READ,
+  assertCanActOnAdminTarget,
+  type AdminUserSession,
+  type IAuthSessionDocument,
+} from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { BadRequestError, ensureAdmin, NotFoundError, UnprocessableEntityError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 
@@ -31,10 +37,13 @@ const parseUserId = (value: unknown): string => {
  * POST /api/users/[id]/revoke-sessions (tokenVersion bump); this one only clears that session's
  * refresh token, so its access token lapses within its short TTL, as in /api/users/me/sessions.
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: MODERATION_PAGE_READ, DELETE: 'users:moderate' },
+})
   .use(csrfProtection())
   .get(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
     const userId = parseUserId(req.query.userId);
     const user = await userRepository.findById(userId);
     if (!user) throw new NotFoundError('User not found');
@@ -45,7 +54,6 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
     return res.json({ items: sessions.map(session => toAdminSession(session, req.user?.sid)) });
   })
   .delete(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
     const userId = parseUserId(req.query.userId);
     const sid = typeof req.query.sid === 'string' ? req.query.sid : undefined;
     if (!sid) throw new UnprocessableEntityError('sid is required');
@@ -55,6 +63,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
 
     const user = await userRepository.findById(userId);
     if (!user) throw new NotFoundError('User not found');
+    assertCanActOnAdminTarget(req.user, user, 'sign out a session of');
     // A sid of another user is a 404, same as an unknown one, so this is no existence oracle. An
     // already-revoked session is a 404 too, so a double submit does not write a second audit row.
     const session = await authSessionRepository.findBySid(sid);

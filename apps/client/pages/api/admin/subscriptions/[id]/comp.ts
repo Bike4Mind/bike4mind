@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 import {
   SubscriptionSource,
   isCancellableSubscriptionStatus,
@@ -14,9 +14,10 @@ import {
   type AdminCompChange,
   type AdminCompChangeResponse,
 } from '@client/app/utils/adminSubscriptionDetail';
+import { assertDelegateCanChangeSubscription } from '@server/admin/creditGrants/delegateTargets';
 import { resolveSubscriptionOwner } from '@server/admin/subscriptionDetail/resolveSubscriptionOwner';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { Subscription, subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { subscriptionPlanCatalog } from '@server/admin/subscriptionsList/adminSubscriptionsQuery';
 import { toAdminSubscriptionRows, type SubscriptionDoc } from '@server/admin/subscriptionsList/listAdminSubscriptions';
@@ -154,10 +155,12 @@ const readRow = async (id: string) => {
  * POST /api/admin/subscriptions/[id]/comp: extend, shorten, end or reopen an admin-granted comp. Nothing
  * auto-expires a comp on periodEndsAt, so this is the only way one ends. Credits already granted are not reclaimed.
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: 'credits:adjust' },
+}).post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
-
     const parsed = AdminCompChangeSchema.safeParse(req.body);
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'Invalid request body');
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
@@ -177,6 +180,8 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
         target: owner.target,
       });
     }
+
+    await assertDelegateCanChangeSubscription(req.user, subscription, 'change the comp on');
 
     const mutation = await planMutation(subscription, parsed.data, new Date());
 

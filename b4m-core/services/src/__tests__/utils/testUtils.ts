@@ -55,6 +55,7 @@ export const createMockShareableRepository = <T>(): IShareableStaticMethods<T> =
 export const createMockProjectRepository = (): IProjectRepository => ({
   ...createMockRepository<IProjectDocument>(),
   shareable: createMockShareableRepository<IProjectDocument>(),
+  setOwnedGroupReadAccess: vi.fn(),
   // Echoes the patch so a test that does not care about the write-time re-check sees a success.
   updateWithUpdateAccess: vi.fn(async (_user, data) => data as IProjectDocument),
   findByIdAndUserId: vi.fn(),
@@ -313,6 +314,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     decrementCreditsFloored: vi.fn(),
     incrementCurrentStorage: vi.fn(),
     setCurrentStorageIfUnchanged: vi.fn(),
+    setPlanStorageLimit: vi.fn(),
     findCurrentStorageSize: vi.fn(),
     listUserIdsAfter: vi.fn(),
     incrementTokenVersion: vi.fn(),
@@ -325,6 +327,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     atomicConsumeBackupCode: vi.fn(),
     claimFreeCreditGrant: vi.fn().mockResolvedValue(true),
     markInviteBonusPaid: vi.fn().mockResolvedValue(true),
+    restoreReleasedGrantState: vi.fn().mockResolvedValue(true),
     atomicEnableMfa: vi.fn(),
     findOrCreateByEmail: vi.fn(),
     recordModerationHit: vi.fn(),
@@ -353,6 +356,8 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     findByIdAndUserId: vi.fn(),
     ensureUserDetails: vi.fn(),
     removeMember: vi.fn(),
+    addAdmin: vi.fn(),
+    removeAdmin: vi.fn(),
     setMemberMaxCredits: vi.fn(),
     updateUserDetails: vi.fn(),
     findMembershipOrgIds: vi.fn(),
@@ -368,6 +373,7 @@ export const createMockCreditTransactionRepository = (): MockedObject<ICreditTra
     findByPaymentIntentId: vi.fn(),
     updateTransactionStatus: vi.fn(),
     markPurchaseReversed: vi.fn(),
+    rekeyTransaction: vi.fn(),
     findUnreversedPurchase: vi.fn(),
     findByOwnerWithFilters: vi.fn(),
     queryLedgerPage: vi.fn(),
@@ -376,6 +382,7 @@ export const createMockCreditTransactionRepository = (): MockedObject<ICreditTra
     findAdminAdjustmentsForUser: vi.fn(),
     apiKeyUsageForOwner: vi.fn(),
     sourceUsageForOwner: vi.fn(),
+    usageTotalForOwner: vi.fn(),
   });
 
 /**

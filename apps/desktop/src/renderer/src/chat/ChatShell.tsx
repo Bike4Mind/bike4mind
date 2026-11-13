@@ -1,4 +1,3 @@
-import { OrchestrationSummary } from './OrchestrationSummary';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
@@ -35,7 +34,7 @@ import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
 import { readPanelFlag, spawnedSessions, writePanelFlag } from './backgroundTasks';
 import { BrowserPane } from './BrowserPane';
 import { SimulatorPane } from './SimulatorPane';
-import { ModelPane } from './ModelPane';
+import { ModelPane, type PartEditTurn } from './ModelPane';
 import { useModelBackgroundBuilds } from './model3d/useModelBackgroundBuilds';
 import { useModelEngine } from './model3d/useModelEngine';
 import { useSimulatorView } from './useSimulatorView';
@@ -70,7 +69,7 @@ import { CacheExpiryNote } from './CacheExpiryNote';
 import { ContextRing } from './ContextRing';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { SESSION_PANEL_ID, SessionPanel } from './SessionPanel';
-import { panelFitsBesideThread, SESSION_PANEL_SPACE, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
+import { SESSION_PANEL_SPACE, sessionPanelLayout, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
 import { createPullRequestPrompt } from './changesBarModel';
 import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { openInSessionBrowser } from './prLinks';
@@ -101,6 +100,7 @@ import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
 import { readLastSession, useLastSession } from './lastSession';
 import { newSessionInProject } from './newSessionInProject';
+import { isSessionDraft, useSessionDraft } from './useSessionDraft';
 import { roundsOf } from './replyRounds';
 import { describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
@@ -146,6 +146,8 @@ import { prefersReducedMotion } from './orchestrator/motion';
 import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
+import { SidebarSyncHints } from './SyncHints';
+import type { ClaudeImportKind } from '@shared/claudeImport';
 
 /** How long the orchestrator's "Read the report" keeps the summary highlighted (ms). */
 const REPORT_HIGHLIGHT_MS = 2400;
@@ -241,18 +243,6 @@ function renderOrchestratorView(view: OrchestratorViewId, props: OrchestratorVie
 /** Key of the Add folder alert for a failure before any chat existed. */
 const NO_CHAT = '';
 
-/** How long Add folder waits on the first-run chat before it makes its own, so a hung seed cannot block it (ms). */
-const SEED_WAIT_MS = 3000;
-
-/** What `promise` resolves to, or null once it rejects or `ms` pass without it settling. */
-function settledWithin<T>(promise: Promise<T>, ms: number): Promise<T | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<null>(resolve => {
-    timer = setTimeout(() => resolve(null), ms);
-  });
-  return Promise.race([promise.catch(() => null), timeout]).finally(() => clearTimeout(timer));
-}
-
 /** An Add folder failure, or the warning that came back from a share into a chat that was not open. */
 interface AddFolderAlert {
   text: string;
@@ -270,17 +260,18 @@ export function ChatShell({
   auth,
   account,
   onOpenModelServers,
+  onOpenImportSettings,
 }: {
   auth?: AuthState | null;
   account?: AccountStrip;
   onOpenModelServers?: () => void;
+  /** Settings > Import, scrolled to one source; the sidebar's sync hints are shown only with it. */
+  onOpenImportSettings?: (focus: ClaudeImportKind) => void;
 }) {
   const {
     sessions,
     loading,
     reload,
-    create,
-    createCode,
     creatingCode,
     codeError,
     clearCodeError,
@@ -326,16 +317,24 @@ export function ChatShell({
       }),
     []
   );
-  const conversation = useConversation(activeId, apply, clearAddFolderAlert);
+  const sessionDraft = useSessionDraft(setActiveId, reload);
+  const persistedId = isSessionDraft(activeId) ? null : activeId;
+  const persistedConversation = useConversation(persistedId, apply, clearAddFolderAlert);
+  const conversation = sessionDraft.wrap(persistedConversation);
+  const draftActive = isSessionDraft(activeId);
   // The header follows the sidebar's copy of the title, so a rename from any row - including
   // its optimistic title and any rollback - shows above the thread too.
   const activeSummary = useMemo(() => sessions.find(session => session.id === activeId), [sessions, activeId]);
   // A conversation picked before its transcript has been read would otherwise show the empty
   // thread's "send a message" line for a frame - or, on a switch, the PREVIOUS conversation's
   // transcript under this one's id until the read lands.
-  const opening = settling || (!!activeId && conversation.session?.id !== activeId);
+  const opening =
+    settling || (!!activeId && conversation.session?.id !== activeId && conversation.openFailedFor !== activeId);
+  // The composer's per-chat settings show conversation.session: the previous chat's while opening, none after a failed open.
+  const chatSettingsLocked = !activeId || settling || conversation.session?.id !== activeId;
+  const openFailed = !!activeId && conversation.openFailedFor === activeId && conversation.session?.id !== activeId;
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
-  const heldRelays = useHeldRelays(activeId);
+  const heldRelays = useHeldRelays(persistedId);
   const markSessionStart = useSessionStartTiming(sessions);
   const startSuggestion = spawnSuggestions.start;
   const onStartSuggestion = useCallback(
@@ -345,10 +344,10 @@ export function ChatShell({
     },
     [startSuggestion, markSessionStart]
   );
-  const background = useBackgroundProcesses(activeId);
-  const loop = useLoop(activeId);
-  const videoJobs = useVideoJobs(activeId);
-  const skills = useSkills(activeId);
+  const background = useBackgroundProcesses(persistedId);
+  const loop = useLoop(persistedId);
+  const videoJobs = useVideoJobs(persistedId);
+  const skills = useSkills(persistedId);
   const localMode = isLocalMode(auth);
   const catalog = useModelCatalog(localMode);
   const noLocal = localMode ? noLocalModels(catalog) : null;
@@ -358,6 +357,12 @@ export function ChatShell({
   const prSummaries = usePrSummaries();
   const [collapsed, setCollapsed] = useState(false);
   const [screen, setScreen] = useState<ChatScreen>('conversation');
+  useEffect(() => {
+    if (!draftActive || screen !== 'conversation' || sessionDraft.session?.mode !== mode) {
+      sessionDraft.discard();
+      if (draftActive) setActiveId(null);
+    }
+  }, [draftActive, screen, mode, sessionDraft.discard, sessionDraft.session?.mode]);
   // Window chrome, so it is remembered per machine rather than per conversation. Seeded from
   // storage on the first render and written back on every change, which is the whole of the
   // persistence - see backgroundTasks.ts for the keys and the blocked-storage fallback.
@@ -370,15 +375,15 @@ export function ChatShell({
   // Mounted here rather than in the pane so builds, GLB writes and screenshots keep working while it
   // is closed. Each conversation has its own model: the pane follows this one, and the background
   // builds keep every other conversation's model tools working.
-  const modelEngine = useModelEngine(darkMode, activeId);
-  useModelBackgroundBuilds(activeId, darkMode);
+  const modelEngine = useModelEngine(darkMode, persistedId);
+  useModelBackgroundBuilds(persistedId, darkMode);
   const [modelOpen, setModelOpen] = useState(false);
   // Per conversation rather than one flag: see terminalPanelState.ts.
   const [terminalSessions, setTerminalSessions] = useState(readTerminalOpenSessions);
   // Which conversation last asked for the keyboard to go to its terminal; see TerminalPanel.
   const [terminalFocus, setTerminalFocus] = useState<{ sessionId: string; seq: number } | null>(null);
   const draft = useAttachmentDraft(activeId);
-  const nextPrompt = usePromptSuggestion(activeId);
+  const nextPrompt = usePromptSuggestion(persistedId);
   const blankChatId =
     screen === 'conversation' &&
     !opening &&
@@ -396,10 +401,6 @@ export function ChatShell({
   const [composerFill, setComposerFill] = useState<ComposerFill | null>(null);
   const fillSeq = useRef(0);
   const fillComposer = useCallback((text: string) => setComposerFill({ id: ++fillSeq.current, text }), []);
-  const appendToComposer = useCallback(
-    (text: string) => setComposerFill({ id: ++fillSeq.current, text, append: true }),
-    []
-  );
   const clearComposerFill = useCallback(() => setComposerFill(null), []);
   const [composerFocus, setComposerFocus] = useState(0);
   // Per conversation, like the composer's own drafts: a quote waits in the one it was taken in.
@@ -409,7 +410,7 @@ export function ChatShell({
   // Keyed by the conversation it was raised in, so it does not follow the user into another one.
   const [sideChatError, setSideChatError] = useState<{ sessionId: string; error: string } | null>(null);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
-  const pullRequest = usePullRequest(screen === 'conversation' ? activeId : null);
+  const pullRequest = usePullRequest(screen === 'conversation' ? persistedId : null);
   // What the browser pane trades width with; see BrowserPane.
   const conversationColumn = useRef<HTMLDivElement | null>(null);
   const panelPrefs = useSessionPanelPrefs();
@@ -672,7 +673,7 @@ export function ChatShell({
    * one thing it cannot do is belong to no conversation, so the toggle stays on screen and
    * disabled on the empty window rather than disappearing from it.
    */
-  const browserAvailable = !!activeId;
+  const browserAvailable = !!persistedId;
 
   // The header's pane toggles. The simulator and 3D model are left out where they cannot exist;
   // terminal and browser only lack a conversation, so they stay listed and say so.
@@ -680,7 +681,7 @@ export function ChatShell({
     {
       id: 'terminal',
       open: terminalOpen,
-      unavailableReason: activeId ? undefined : 'Open a conversation to use the terminal.',
+      unavailableReason: persistedId ? undefined : 'Open a conversation to use the terminal.',
       onToggle: toggleTerminal,
     },
     {
@@ -710,7 +711,7 @@ export function ChatShell({
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
 
   const workspaceChanges = useWorkspaceChanges(
-    screen === 'conversation' ? activeId : null,
+    screen === 'conversation' ? persistedId : null,
     conversation.session?.project,
     conversation.settledTurns
   );
@@ -727,11 +728,13 @@ export function ChatShell({
   // A Code session can orchestrate before it has any agents; a Chat session only shows its agents.
   // One at the depth cap, or on a model sent no tools, could start none: main ignores its flag
   // there (orchestratesAgents, toolsSupported) and so does this.
+  const orchestrationSession =
+    sessionDraft.session && sessionDraft.session.id === conversation.session?.id ? conversation.session : activeSummary;
   const orchestrateCapable =
-    !!activeSummary?.project &&
-    canSpawnDeeper(activeSummary) &&
-    modelSupportsTools(activeSummary.model, findModelOption(catalog.models, activeSummary.model));
-  const delegating = activeSummary?.orchestrate === true;
+    !!orchestrationSession?.project &&
+    canSpawnDeeper(orchestrationSession) &&
+    modelSupportsTools(orchestrationSession.model, findModelOption(catalog.models, orchestrationSession.model));
+  const delegating = orchestrationSession?.orchestrate === true;
   // The stage exists only once there is an agent to show, whatever the Orchestrate behaviour: a fresh
   // orchestrating session gets its example quests above the composer instead (ExampleQuestStrip).
   const hasAgents = spawnedStates.length > 0;
@@ -846,6 +849,27 @@ export function ChatShell({
     return message && snippet ? { id: message.id, snippet } : undefined;
   }, [conversation.session?.id, activeId, conversation.messages, turnOpen]);
   const { send: sendToConversation } = conversation;
+  const conversationId = conversation.session?.id;
+  const modelSessionId = modelEngine.sessionId;
+  // Point-and-edit from the model pane, straight to its conversation like the innkeeper desk below.
+  const sendModelEdit = useCallback(
+    async (edit: PartEditTurn): Promise<boolean> => {
+      if (!modelSessionId || modelSessionId !== conversationId) return false;
+      // Decided before sending, as the composer does: a refused send hands its text back to the
+      // composer, so retrying without the image would leave it there as well.
+      const readsImages = modelOption?.supportsVision !== false;
+      const closeup =
+        edit.closeup && readsImages
+          ? (
+              await window.b4m.chat.addAttachments(modelSessionId, [
+                { source: 'bytes', name: edit.closeup.name, mediaType: 'image/png', data: edit.closeup.bytes },
+              ])
+            ).attachments
+          : [];
+      return sendToConversation(edit.text, closeup, [edit.note(closeup.length > 0)]);
+    },
+    [sendToConversation, modelSessionId, conversationId, modelOption]
+  );
   const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
   const innkeeperDesk = useMemo<InnkeeperDesk>(
     () => ({
@@ -915,16 +939,18 @@ export function ChatShell({
    * The session panel: a Code session with a folder after its first message. Until then the same
    * controls are centered in the empty transcript. A loop also makes the panel available in Chat.
    *
-   * Docked when it fits beside the reading column, and then its open flag is remembered; on a
-   * narrower pane it folds into the header button and opens as a popover, which is never left open
-   * across conversations or launches.
+   * Docked (`beside` or `push`, see sessionPanelLayout) while the region has room, and then its open
+   * flag is remembered; on a narrower region it folds into the header button and opens as an overlay,
+   * which is never left open across conversations, launches or a resize.
    */
   const panelProject =
     !opening && !initialCodeSetup && conversation.session?.mode === 'code' ? conversation.session.project : undefined;
   const panelAvailable = !!panelProject || (!opening && !!loop);
-  const panelDocked = threadRegionWidth === null || panelFitsBesideThread(threadRegionWidth);
+  const orchestratorShown = orchestrating && activeId !== null;
+  const panelLayout = sessionPanelLayout(threadRegionWidth, { centeredColumn: !orchestratorShown });
+  const panelDocked = panelLayout !== 'overlay';
   const panelShown = panelAvailable && (panelDocked ? panelPrefs.open : panelPopoverOpen);
-  const panelSpace = panelShown && panelDocked ? SESSION_PANEL_SPACE : 0;
+  const panelSpace = panelShown && panelLayout === 'push' ? SESSION_PANEL_SPACE : 0;
   const bindingErrorHidden =
     !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
   const { toggleOpen: togglePanelOpen } = panelPrefs;
@@ -992,11 +1018,13 @@ export function ChatShell({
    */
   const disabledPlaceholder = settling
     ? ''
-    : creatingCode
-      ? 'Starting a session...'
-      : mode === 'code'
-        ? 'Start a Code session to type here'
-        : 'Start a conversation to type here';
+    : openFailed
+      ? 'This conversation could not be opened'
+      : creatingCode
+        ? 'Starting a session...'
+        : mode === 'code'
+          ? 'Start a Code session to type here'
+          : 'Start a conversation to type here';
 
   const setQuote = useCallback((sessionId: string, quote: string | null) => {
     setQuotes(current => {
@@ -1045,12 +1073,13 @@ export function ChatShell({
       // Cleared before the await so the row does not sit under the composer while the turn is
       // accepted; a rejected turn restores its text (see useConversation.send) but not its
       // attachments.
-      draft.clear();
+      if (!draftActive) draft.clear();
       const accepted = await conversation.send(text, attached);
+      if (!accepted && draftActive && activeIdRef.current === activeId) fillComposer(typed);
       // Main knows something this window did not: reread so the banner and Send gate catch up.
       if (!accepted && localMode) void catalog.reload();
     },
-    [activeId, quotes, setQuote, conversation, draft, localMode, catalog]
+    [activeId, quotes, setQuote, conversation, draft, localMode, catalog, draftActive, fillComposer]
   );
 
   /**
@@ -1071,6 +1100,7 @@ export function ChatShell({
   // the user's choice stands.
   useEffect(() => {
     if (settling) return;
+    if (draftActive && sessionDraft.session?.mode === mode && screen === 'conversation') return;
     const open = sessions.find(session => session.id === activeId);
     if (open?.mode === mode) return;
     // A live Claude Code CLI session is always the newest import; landing on it would select a
@@ -1078,25 +1108,15 @@ export function ChatShell({
     const candidate = (session: ChatSessionSummary) =>
       session.mode === mode && (importedInline || !isUntouchedImport(session));
     setActiveId(sessions.find(candidate)?.id ?? null);
-  }, [settling, activeId, sessions, mode, importedInline]);
+  }, [settling, activeId, sessions, mode, importedInline, draftActive, sessionDraft.session?.mode, screen]);
 
-  /**
-   * Make a session, without touching what the pane is showing. The two callers differ on that:
-   * the New button is a click on the sidebar and has to put the transcript back, the first-run
-   * seeding below must not pull a user out of the screen they opened.
-   *
-   * A Code session is created UNBOUND - no directory, no branch - and its empty transcript is where
-   * a project gets chosen. Creating one used to open the OS folder picker
-   * first, which meant dismissing that dialog produced nothing at all: no session, no message,
-   * and no way back in. Nothing is asked up front now, so there is nothing left to cancel.
-   */
+  /** First-run and explicit New share the renderer-only draft lifecycle. */
   const startSession = useCallback(
-    async (placement?: SessionPlacement) => {
-      if (mode !== 'code') return await create(placement);
+    (placement?: SessionPlacement) => {
       clearCodeError();
-      return await createCode({}, placement);
+      return sessionDraft.start(mode, {}, placement);
     },
-    [mode, create, createCode, clearCodeError]
+    [mode, sessionDraft.start, clearCodeError]
   );
 
   /**
@@ -1106,39 +1126,18 @@ export function ChatShell({
    * depend on which row happens to be selected, which nothing on the button shows, and a user
    * who wanted a loose session would have to move it back out.
    */
-  const onCreate = useCallback(async () => {
+  const onCreate = useCallback(() => {
     setScreen('conversation');
     markSessionStart('new');
-    const created = await startSession();
+    const created = startSession();
     if (created) setActiveId(created);
+    setComposerFocus(request => request + 1);
   }, [startSession, markSessionStart]);
 
-  /**
-   * The Chat composer's Add folder. With no conversation open it picks first, so a dismissed picker
-   * creates nothing, then shares by id, open or not, into the first-run chat still being made or one it creates.
-   */
   const shareFolderTo = conversation.addContextDirectoryTo;
   const addingFolder = useRef(false);
-  // A Code session can be open in Chat mode for one commit, until the reselect effect replaces it.
-  const openChatId = useRef(activeId);
-  openChatId.current = activeSummary?.mode === 'chat' ? activeId : null;
   const modeRef = useRef(mode);
   modeRef.current = mode;
-  const sessionsRef = useRef(sessions);
-  sessionsRef.current = sessions;
-  // The open chat's local count includes a message still being sent, which the summary count lacks until it lands.
-  const openMessageCount = useRef(0);
-  openMessageCount.current = conversation.session?.id === activeId ? conversation.messages.length : 0;
-  const unmounted = useRef(false);
-  useEffect(() => {
-    unmounted.current = false;
-    return () => {
-      unmounted.current = true;
-    };
-  }, []);
-  // The first-run Chat seed's create while it is in flight, so Add folder joins it instead of making a second chat.
-  const seedInFlight = useRef<Promise<string | null> | null>(null);
-  const deletedChats = useRef(new Set<string>());
   const shareInto = useCallback(async (chatId: string, share: () => Promise<string | undefined>) => {
     try {
       const warning = await share();
@@ -1152,106 +1151,40 @@ export function ChatShell({
   }, []);
   const addFolder = useCallback(async () => {
     clearAddFolderAlert(activeId ?? NO_CHAT);
+    if (draftActive) {
+      await conversation.project.addContextDirectory();
+      return;
+    }
     if (activeId) {
       await shareInto(activeId, () => shareFolderTo(activeId));
       return;
     }
     if (addingFolder.current) return;
     addingFolder.current = true;
-    // Taken before the pick: the ref clears as the seed settles, which can be before the render that opens its chat.
-    const seedAtClick = seedInFlight.current;
-    let picked = false;
     try {
       const path = await window.b4m.chat.pickProjectDirectory();
-      picked = true;
-      if (!path || modeRef.current !== 'chat') return;
-      // The first-run seed can land while the picker is open; share into that chat instead of making another.
-      const open = openChatId.current;
-      if (open && !deletedChats.current.has(open)) {
-        await shareInto(open, () => shareFolderTo(open, path));
-        return;
-      }
-      const seeded = seedAtClick && (await settledWithin(seedAtClick, SEED_WAIT_MS));
-      const joined = seeded && !deletedChats.current.has(seeded) ? seeded : null;
-      if (unmounted.current || (!joined && modeRef.current !== 'chat')) return;
-      // A chat the user opened during the wait cannot be the seed, which has not landed.
-      const openNow = openChatId.current;
-      if (!joined && openNow && !deletedChats.current.has(openNow)) {
-        await shareInto(openNow, () => shareFolderTo(openNow, path));
-        return;
-      }
-      // A seed that lands after the wait opens empty; the chat made here replaces it unless it has messages.
-      const late = { id: null as string | null };
-      if (seedAtClick && !seeded)
-        void seedAtClick.then(
-          id => (late.id = id),
-          () => undefined
-        );
-      if (!joined) markSessionStart('new');
-      let created: string;
-      try {
-        created = joined || (await create());
-      } catch (error) {
-        // The seed's own chain is longer than create()'s, so give a seed that landed in the same tick a turn to report.
-        const seed = late.id ?? (seedAtClick ? await settledWithin(seedAtClick, 0) : null);
-        if (
-          !unmounted.current &&
-          modeRef.current === 'chat' &&
-          seed &&
-          (openChatId.current ?? seed) === seed &&
-          !deletedChats.current.has(seed)
-        ) {
-          await shareInto(seed, () => shareFolderTo(seed, path));
-          return;
-        }
-        throw error;
-      }
-      if (unmounted.current) return;
-      const lateOpen = late.id && openChatId.current === late.id ? late.id : null;
-      const lateHasMessages =
-        lateOpen &&
-        ((sessionsRef.current.find(session => session.id === lateOpen)?.messageCount ?? 0) > 0 ||
-          openMessageCount.current > 0);
-      if (lateOpen && lateHasMessages) {
-        const removed = remove(created).then(
-          () => true,
-          () => false
-        );
-        await shareInto(lateOpen, () => shareFolderTo(lateOpen, path));
-        if ((await removed) || unmounted.current) return;
-        const warning = 'Desktop could not remove the empty conversation it made. Delete it from the sidebar.';
-        setAddFolderAlerts(current => {
-          const existing = current[lateOpen];
-          const joiner = existing && /[.!?]$/.test(existing.text) ? ' ' : '. ';
-          return {
-            ...current,
-            [lateOpen]: {
-              text: existing ? `${existing.text}${joiner}${warning}` : warning,
-              color: existing?.color ?? 'warning',
-            },
-          };
-        });
-        return;
-      }
-      void shareInto(created, () => shareFolderTo(created, path));
-      // Opened in Code mode, a chat would be remembered as the session to reopen there.
-      if (modeRef.current === 'chat')
-        setActiveId(current => (current === null || current === late.id ? created : current));
+      if (!path || modeRef.current !== 'chat' || activeIdRef.current) return;
+      setActiveId(sessionDraft.start('chat'));
+      await sessionDraft.share(path);
     } catch (error) {
-      if (openChatId.current || modeRef.current !== 'chat') return;
+      if (activeIdRef.current || modeRef.current !== 'chat') return;
       setAddFolderAlerts(current => ({
         ...current,
-        [NO_CHAT]: failure(
-          picked
-            ? 'Desktop could not start a conversation, so the folder was not added'
-            : 'Desktop could not open the folder picker, so the folder was not added',
-          error
-        ),
+        [NO_CHAT]: failure('Desktop could not add the folder', error),
       }));
     } finally {
       addingFolder.current = false;
     }
-  }, [activeId, shareFolderTo, shareInto, clearAddFolderAlert, create, remove, markSessionStart]);
+  }, [
+    activeId,
+    shareFolderTo,
+    shareInto,
+    clearAddFolderAlert,
+    draftActive,
+    conversation.project,
+    sessionDraft.start,
+    sessionDraft.share,
+  ]);
   // A failure from before any chat existed retires when a chat opens or the mode switches; the rest stay with their chat.
   useEffect(() => {
     clearAddFolderAlert(NO_CHAT);
@@ -1274,22 +1207,8 @@ export function ChatShell({
       setChatOnError(null);
       try {
         markSessionStart('new');
-        const created = await create();
-        const updated = await window.b4m.chat.setSessionModel(created, modelId).catch(() => null);
-        if (!updated) {
-          // Opening it anyway would send the first message to the default model, which can be a hosted one.
-          const removed = await remove(created).then(
-            () => true,
-            () => false
-          );
-          setChatOnError(
-            removed
-              ? 'Desktop could not start a conversation on that model. Try again, or pick it in a chat.'
-              : 'Desktop could not start a conversation on that model, and could not remove the empty one it made. Delete it from the sidebar before chatting in it.'
-          );
-          return;
-        }
-        apply(updated);
+        const created = sessionDraft.start('chat');
+        await sessionDraft.patch({ model: modelId });
         setMode('chat');
         setActiveId(created);
         setScreen('conversation');
@@ -1301,7 +1220,7 @@ export function ChatShell({
         startingChatOn.current = false;
       }
     },
-    [create, remove, apply, markSessionStart]
+    [sessionDraft.start, sessionDraft.patch, markSessionStart]
   );
   /** The catalog's own entry for an installed model, so the conversation routes to the server it runs on. */
   const modelWith = useCallback(
@@ -1332,9 +1251,9 @@ export function ChatShell({
    * from the moment main mints its id - see CreateSessionRequest.
    */
   const onCreateInSection = useCallback(
-    async (sectionId: string) => {
+    (sectionId: string) => {
       setScreen('conversation');
-      const created = await startSession({
+      const created = startSession({
         sectionId,
         placed: adoptSections,
         failed: reportPlacementFailure,
@@ -1344,38 +1263,13 @@ export function ChatShell({
     [startSession, adoptSections, reportPlacementFailure]
   );
 
-  /**
-   * On first arrival in a mode with nothing in it, make the session instead of sitting on a
-   * disabled composer over a sidebar with nothing to pick.
-   *
-   * This is the whole of a fresh install's first screen: signed in, no sessions, and every
-   * control that could get the user moving either disabled or unlabelled. Creating costs
-   * nothing here - a Chat session is empty until something is typed, and a Code session is
-   * created unbound - so neither one asks a question or touches a folder on the way in.
-   *
-   * See firstRunSeed.ts for what the ref holds, and why marking the arrival rather than the
-   * creation is what keeps this from looping, from seeding on every mode toggle, and from
-   * putting a session back the moment the user deletes their last one.
-   */
+  /** Seed a usable draft once per mode, never a persisted sidebar row. */
   const arrived = useRef(new Set<ChatSessionMode>());
   useEffect(() => {
     const empty = !sessions.some(session => session.mode === mode);
     if (!seedOnArrival(arrived.current, { loading: settling, mode, hasSessionInMode: !empty })) return;
-    const seeding = startSession();
-    if (mode === 'chat') seedInFlight.current = seeding;
-    void seeding
-      .then(
-        created => {
-          // A slow seed must not replace a chat the user opened or created while it was in flight, nor open in the other mode.
-          if (created && modeRef.current === mode) setActiveId(current => current ?? created);
-        },
-        // Failing leaves the empty pane, as firstRunSeed.ts describes; Add folder then makes its own chat.
-        () => undefined
-      )
-      .finally(() => {
-        if (seedInFlight.current === seeding) seedInFlight.current = null;
-      });
-  }, [settling, sessions, mode, startSession]);
+    if (!activeId && screen === 'conversation') setActiveId(sessionDraft.start(mode));
+  }, [settling, sessions, mode, activeId, screen, sessionDraft.start]);
 
   /**
    * Another session in the same project, from the group header's "+".
@@ -1396,17 +1290,17 @@ export function ChatShell({
       const inWorktree =
         worktreeByDefault() && canHoldWorktree(await window.b4m.chat.inspectProject(sibling.directory));
       setScreen('conversation');
-      const created = await createCode(newSessionInProject(sibling, inWorktree));
-      if (created) setActiveId(created);
+      setMode('code');
+      setActiveId(sessionDraft.start('code', newSessionInProject(sibling, inWorktree)));
+      setComposerFocus(request => request + 1);
     },
-    [sessions, createCode, clearCodeError, markSessionStart]
+    [sessions, sessionDraft.start, clearCodeError, markSessionStart]
   );
 
   const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null);
   const onDelete = useCallback(
     async (sessionId: string, removeWorktree: boolean) => {
       await remove(sessionId, removeWorktree);
-      deletedChats.current.add(sessionId);
       clearAddFolderAlert(sessionId);
       clearDefaultsReadFailure(sessionId);
       setActiveId(current => (current === sessionId ? null : current));
@@ -1528,7 +1422,6 @@ export function ChatShell({
     </VideoJobsContext.Provider>
   );
 
-  const orchestratorShown = orchestrating && activeId !== null;
   const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
 
   return (
@@ -1593,6 +1486,13 @@ export function ChatShell({
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         onOpenModels={() => setScreen('models')}
+        syncHints={
+          onOpenImportSettings
+            ? (empty, fallback) => (
+                <SidebarSyncHints empty={empty} fallback={fallback} onOpenSettings={onOpenImportSettings} />
+              )
+            : undefined
+        }
         footer={account?.(
           <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
         )}
@@ -1810,7 +1710,7 @@ export function ChatShell({
                 // Keyed so an action error or an unfolded list does not follow the user to the next
                 // conversation.
                 key={`panel-${activeId ?? 'none'}`}
-                variant={panelDocked ? 'docked' : 'popover'}
+                variant={panelDocked ? 'docked' : 'overlay'}
                 collapsed={panelPrefs.collapsed}
                 onToggleSection={panelPrefs.toggleSection}
                 onDismiss={closePanelPopover}
@@ -2028,19 +1928,9 @@ export function ChatShell({
               </Box>
             )}
 
-            {delegating && conversation.session?.orchestrationPolicy && (
-              <Box sx={{ ...contentColumnSx, pb: 1 }}>
-                <OrchestrationSummary
-                  root={conversation.session.orchestrationPolicy}
-                  planner={conversation.session.model}
-                  models={catalog.models}
-                />
-              </Box>
-            )}
-
             <Composer
               sessionId={activeId}
-              disabled={!activeId || creatingCode}
+              disabled={!activeId || creatingCode || sessionDraft.busy || openFailed}
               disabledPlaceholder={disabledPlaceholder}
               streaming={turnOpen}
               attachments={draft}
@@ -2078,7 +1968,7 @@ export function ChatShell({
               // Chat: for a frame after a mode switch, the open session is still the old mode's.
               addFolder={
                 mode === 'chat' && (conversation.session?.mode ?? 'chat') === 'chat'
-                  ? { onClick: () => void addFolder(), disabled: opening }
+                  ? { onClick: () => void addFolder(), disabled: opening || openFailed }
                   : null
               }
               sessionMode={conversation.session?.mode ?? 'chat'}
@@ -2099,12 +1989,20 @@ export function ChatShell({
               leading={
                 <>
                   <ApprovalModePill
+                    key={`approval:${activeId ?? ''}`}
                     mode={conversation.session?.approvalMode ?? 'ask'}
-                    disabled={!activeId}
+                    disabled={chatSettingsLocked}
                     onSelect={mode => void conversation.setApprovalMode(mode)}
                   />
                   {orchestrateCapable && (
-                    <OrchestratePill on={delegating} disabled={!activeId} onChange={on => void setOrchestrate(on)} />
+                    <OrchestratePill
+                      on={delegating}
+                      disabled={!activeId}
+                      policy={conversation.session?.orchestrationPolicy}
+                      planner={conversation.session?.model}
+                      models={catalog.models}
+                      onChange={on => void setOrchestrate(on)}
+                    />
                   )}
                 </>
               }
@@ -2114,9 +2012,10 @@ export function ChatShell({
                   trailing={
                     <>
                       <ModelPicker
+                        key={`model:${activeId ?? ''}`}
                         catalog={catalog}
                         modelId={conversation.session?.model ?? null}
-                        disabled={!activeId}
+                        disabled={chatSettingsLocked}
                         onSelect={model => void conversation.setModel(model)}
                         noLocal={noLocal}
                         local={localMode}
@@ -2135,11 +2034,12 @@ export function ChatShell({
                   {compact => (
                     <>
                       <ReasoningEffortPicker
+                        key={`effort:${activeId ?? ''}`}
                         models={catalog.models}
                         modelId={conversation.session?.model ?? null}
                         effort={conversation.session?.reasoningEffort ?? 'default'}
                         defaultEffort={defaultEffort}
-                        disabled={!activeId}
+                        disabled={chatSettingsLocked}
                         compact={compact}
                         onSelect={effort => void conversation.setReasoningEffort(effort)}
                       />
@@ -2150,15 +2050,16 @@ export function ChatShell({
                         generation={conversation.session?.generation}
                         modelDefaults={modelDefaults ?? undefined}
                         effort={conversation.session?.reasoningEffort ?? 'default'}
-                        disabled={!activeId}
+                        disabled={chatSettingsLocked}
                         compact={compact}
                         onChange={conversation.setGeneration}
                       />
                       <PromptCacheTtlPicker
+                        key={`cache:${activeId ?? ''}`}
                         model={modelOption}
                         ttl={sessionCacheTtl}
                         contextTokens={composerUsage.contextTokens ?? 0}
-                        disabled={!activeId}
+                        disabled={chatSettingsLocked}
                         compact={compact}
                         onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
                       />
@@ -2211,7 +2112,8 @@ export function ChatShell({
           dark={darkMode}
           onClose={toggleModel}
           onExamplePrompt={fillComposer}
-          onPickPart={appendToComposer}
+          onSendEdit={sendModelEdit}
+          replying={turnOpen && modelSessionId === conversationId}
           conversation={conversationColumn}
         />
       )}

@@ -1,10 +1,11 @@
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
+import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Quest, Session } from '@bike4mind/database';
 import { PublishReplyRequestSchema, type PublishResult, type CitableSource, visibleReplyText } from '@bike4mind/common';
 import { resolveVisibility, checkScopePermission, type PublishUser } from '@server/services/publish';
 import { settlePublication } from '@server/services/publish/settlePublication';
-import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { parseArtifactsWithFallback } from '@bike4mind/server-utils/app/utils/artifactParser';
 import {
   REPLY_TITLE_MAX,
@@ -127,6 +128,8 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   if (!viz.ok) {
     return res.status(400).json({ error: viz.error, code: viz.code });
   }
+  if (viz.visibility === 'public')
+    await assertPublicationPublicLink({ tier, scopeId, source: { sessionId: body.sessionId } });
 
   // Store the ids as the database spells them: the lookups above cast case-insensitively, while the
   // take-down on message/notebook delete (purgeOwnerPublishedArtifactsBySource) matches exact strings.

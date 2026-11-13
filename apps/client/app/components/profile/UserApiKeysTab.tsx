@@ -59,6 +59,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import {
   IUserApiKeyDocument,
+  IUserApiKeyListItem,
   ApiKeyScope,
   ApiKeyScopeValue,
   getMeContract,
@@ -177,7 +178,12 @@ const buildScopeModel = (scopes: ApiKeyScopeOption[]): ScopeModel => {
   return {
     scopeValues,
     groups: [...groups.values()],
-    presetScopes: { read: readScopes, readwrite: [...readScopes, ...writeScopes], full: [...scopeValues] },
+    presetScopes: {
+      read: readScopes,
+      readwrite: [...readScopes, ...writeScopes],
+      // Minting personas creates accounts, so it is only granted by ticking it explicitly.
+      full: scopeValues.filter(value => value !== ApiKeyScope.PERSONAS_MINT),
+    },
   };
 };
 
@@ -601,7 +607,7 @@ curl -H "Authorization: Bearer $B4M_API_KEY" \\
 
   return (
     <Modal open={open} onClose={onClose} className="project-api-keys-created-modal">
-      <ModalDialog size="lg" className="project-api-keys-created-dialog">
+      <ModalDialog size="lg" className="project-api-keys-created-dialog" data-testid="api-key-created-dialog">
         <Typography level="h4" mb={2} color="success" className="project-api-keys-created-title">
           🎉 API Key Created Successfully!
         </Typography>
@@ -673,7 +679,11 @@ curl -H "Authorization: Bearer $B4M_API_KEY" \\
           <Button variant="outlined" onClick={onClose} className="project-api-keys-created-cancel-button">
             I&apos;ve Copied My Key
           </Button>
-          <Button onClick={onClose} className="project-api-keys-created-continue-button">
+          <Button
+            onClick={onClose}
+            className="project-api-keys-created-continue-button"
+            data-testid="api-key-created-continue-btn"
+          >
             Continue
           </Button>
         </Stack>
@@ -991,7 +1001,7 @@ ai_response = response.json()`,
         <TabList sx={{ gap: 1, mb: '20px', flexWrap: 'wrap' }}>
           <StyledTab>Quick Start</StyledTab>
           <StyledTab>Endpoints</StyledTab>
-          <StyledTab>Scopes</StyledTab>
+          <StyledTab data-testid="api-keys-docs-scopes-tab">Scopes</StyledTab>
           <StyledTab>Examples</StyledTab>
         </TabList>
 
@@ -2019,8 +2029,13 @@ export default function UserApiKeysTab() {
     return 'Active';
   };
 
+  // The server decides legacy status. The badge waits for an end date: while none is announced
+  // every older key is legacy, and a dateless badge on all of them would only alarm.
+  const legacyEndsAt = (key: IUserApiKeyListItem) => (key.legacy ? key.legacyEndsAt : null);
+
   const keys = data ?? [];
   const revokedCount = keys.filter(isRevoked).length;
+  const legacyKeyEndDates = keys.map(legacyEndsAt).filter(endsAt => endsAt !== null);
   const visibleKeys = showRevoked ? keys : keys.filter(key => !isRevoked(key));
 
   return (
@@ -2038,7 +2053,7 @@ export default function UserApiKeysTab() {
       <Tabs value={mainTab} onChange={(_, value) => setMainTab(value as number)}>
         <TabList sx={{ gap: '2px', mb: '20px', flexWrap: 'wrap' }}>
           <StyledTab>My keys</StyledTab>
-          <StyledTab>API Documentation</StyledTab>
+          <StyledTab data-testid="api-keys-docs-tab">API Documentation</StyledTab>
         </TabList>
 
         <TabPanel value={0}>
@@ -2089,6 +2104,19 @@ export default function UserApiKeysTab() {
           {createBlockedByGate && (
             <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-keys-gate-notice">
               {eligibility?.message}
+            </Alert>
+          )}
+
+          {legacyKeyEndDates.length > 0 && (
+            <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-keys-legacy-alert">
+              <Typography level="body-sm">
+                {legacyKeyEndDates.length === 1
+                  ? 'One key in this list uses'
+                  : `${legacyKeyEndDates.length} keys in this list use`}{' '}
+                legacy access, which ends on {dayjs(legacyKeyEndDates[0]).format('MMM D, YYYY')}. After that, endpoints
+                that now require scopes refuse a key that does not hold them. Create a new key with the scopes your
+                integration needs and switch to it; rotating a legacy key keeps it legacy.
+              </Typography>
             </Alert>
           )}
 
@@ -2146,7 +2174,26 @@ export default function UserApiKeysTab() {
                   {visibleKeys.map(key => (
                     <tr key={key.id}>
                       <td>
-                        <Typography fontWeight="lg">{key.name}</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Typography fontWeight="lg">{key.name}</Typography>
+                          {legacyEndsAt(key) && (
+                            <Tooltip
+                              title="This key was created before scopes were enforced. Before this date, create a new key with the scopes it needs; rotating keeps the key legacy."
+                              variant="soft"
+                              size="sm"
+                              sx={{ maxWidth: 320 }}
+                            >
+                              <Chip
+                                size="sm"
+                                variant="soft"
+                                color="warning"
+                                data-testid={`api-key-legacy-badge-${key.id}`}
+                              >
+                                Legacy until {dayjs(legacyEndsAt(key)).format('MMM D, YYYY')}
+                              </Chip>
+                            </Tooltip>
+                          )}
+                        </Box>
                       </td>
                       <td>
                         {key.organizationId ? (

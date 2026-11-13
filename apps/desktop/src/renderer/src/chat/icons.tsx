@@ -473,6 +473,15 @@ export function UserIcon() {
   );
 }
 
+export function BillingIcon() {
+  return (
+    <Glyph>
+      <rect x="1.75" y="3" width="12.5" height="10" rx="1.75" />
+      <path d="M2 6.25h12M4 10h3" />
+    </Glyph>
+  );
+}
+
 /** Leaving: a door with an arrow walking out of it. */
 export function SignOutIcon() {
   return (

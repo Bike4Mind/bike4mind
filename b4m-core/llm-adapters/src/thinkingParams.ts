@@ -13,6 +13,7 @@ import {
   type ReasoningEffort,
   MAX_THINKING_BUDGET_TOKENS,
 } from '@bike4mind/common';
+import { isKimiThinkingAlwaysOn } from './kimiParams';
 
 /**
  * Thinking parameter shapes for the Anthropic Messages API.
@@ -429,6 +430,7 @@ const ADAPTIVE_THINKING_OFF_SWITCH: ReadonlyMap<string, 'disabled' | 'between_to
   [ChatModels.CLAUDE_5_5_HAIKU, 'disabled'],
   [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, 'disabled'],
   // Sonnet 5.5 rejects `disabled`; `between_tools` is its off switch.
+  [ChatModels.CLAUDE_5_5_SONNET, 'between_tools'],
   [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 'between_tools'],
 ]);
 
@@ -441,6 +443,7 @@ const ADAPTIVE_THINKING_OFF_SWITCH: ReadonlyMap<string, 'disabled' | 'between_to
 const ADAPTIVE_THINKING_BY_DEFAULT: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET,
   ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
   ChatModels.CLAUDE_FABLE_5_BEDROCK,
@@ -600,10 +603,35 @@ export function planReasoningEffort(
   };
 }
 
+/**
+ * Whether no request can turn thinking off for `model`: an adaptive Claude id with no entry in
+ * ADAPTIVE_THINKING_OFF_SWITCH (planReasoningEffort runs those at the lowest effort instead),
+ * or a Kimi id that only accepts thinking enabled.
+ */
+export function thinkingCannotBeDisabled(model: string, modelInfo: ModelInfo): boolean {
+  if (isKimiThinkingAlwaysOn(model)) return true;
+  return (
+    modelInfo.can_think === true && modelInfo.thinkingStyle === 'adaptive' && !ADAPTIVE_THINKING_OFF_SWITCH.has(model)
+  );
+}
+
 /** Whether `model` thinks adaptively, at the provider default effort, on a request that names no thinking. */
 export function isAdaptiveThinkingByDefault(model: string, modelInfo: ModelInfo): boolean {
   return (
     modelInfo.can_think === true && modelInfo.thinkingStyle === 'adaptive' && ADAPTIVE_THINKING_BY_DEFAULT.has(model)
+  );
+}
+
+/** Whether the caller's `thinking: { enabled: false }` must go out as the model's off switch: it would otherwise think unasked. */
+export function thinkingTurnedOff(
+  model: string,
+  modelInfo: ModelInfo,
+  thinking: { enabled?: boolean } | undefined
+): boolean {
+  return (
+    thinking?.enabled === false &&
+    isAdaptiveThinkingByDefault(model, modelInfo) &&
+    ADAPTIVE_THINKING_OFF_SWITCH.has(model)
   );
 }
 

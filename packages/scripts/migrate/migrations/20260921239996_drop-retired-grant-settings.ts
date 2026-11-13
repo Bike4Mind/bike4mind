@@ -58,7 +58,11 @@ const migration: MigrationFile = {
 
   // Restores each backed-up row unless an operator has since recreated that setting; keeps the backup.
   down: async () => {
-    const backups = await mongoose.connection.collection<RowBackup>(BACKUP_COLLECTION).find({ kind: 'row' }).toArray();
+    // Scoped to this migration's names: later migrations back up other rows into the same collection.
+    const backups = await mongoose.connection
+      .collection<RowBackup>(BACKUP_COLLECTION)
+      .find({ kind: 'row', settingName: { $in: DEAD_SIGNUP_GRANT_SETTING_NAMES } })
+      .toArray();
     for (const { settingName, row } of backups) {
       await AdminSettings.collection.updateOne({ settingName }, { $setOnInsert: row }, { upsert: true });
     }

@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import type { ChatModelOption } from './chat';
 import {
   acceptTask,
+  assertReportCoversCriteria,
   automaticUpgradeAllowed,
   inheritancePolicy,
+  modelRequestHint,
   renderTaskBrief,
+  resolveModelAlias,
   resolveWorkerModel,
   spawnOptionsSchema,
   taskContractSchema,
@@ -53,7 +57,7 @@ describe('orchestration contracts and role routing', () => {
     expect(resolveWorkerModel('planner', policy, { role: 'review' })).toMatchObject({ effectiveModel: 'planner' });
     expect(() =>
       resolveWorkerModel('planner', policy, { role: 'implementation', requestedModelId: 'planner' })
-    ).toThrow(/explicit user/);
+    ).toThrow(/^Model request refused: /);
     expect(resolveWorkerModel('planner', policy, { role: 'review', requestedModelId: 'planner' })).toMatchObject({
       effectiveModel: 'planner',
     });
@@ -70,7 +74,96 @@ describe('orchestration contracts and role routing', () => {
     expect(resolveWorkerModel('planner', policy, { requestedModelId: 'planner' })).toMatchObject({
       effectiveModel: 'planner',
     });
-    expect(() => resolveWorkerModel('planner', policy, { requestedModelId: 'unauthorized' })).toThrow(/explicit user/);
+    expect(() => resolveWorkerModel('planner', policy, { requestedModelId: 'unauthorized' })).toThrow(
+      /^Model request refused: /
+    );
+  });
+  describe('model requests', () => {
+    const catalog: ChatModelOption[] = [
+      { id: 'claude-opus-5', name: 'Claude Opus 5', releaseDate: '2026-08-01', supportsTools: true },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', releaseDate: '2026-02-01', supportsTools: true },
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', releaseDate: '2026-09-01', supportsTools: true },
+      { id: 'claude-sonnet-5-1', name: 'Claude Sonnet 5.1', releaseDate: '2026-10-01', unavailable: 'Server down' },
+      { id: 'claude-haiku-5', name: 'Claude Haiku 5', releaseDate: '2026-09-15', supportsTools: true },
+      { id: 'gpt-6.1', name: 'GPT-6.1', releaseDate: '2026-07-01', supportsTools: true },
+      { id: 'gpt-6.1-mini', name: 'GPT-6.1 mini', releaseDate: '2026-07-01', supportsTools: true },
+    ];
+    const open = {
+      ...inheritancePolicy(),
+      roles: { implementation: 'claude-sonnet-4-6', exploration: 'inherit', review: 'inherit' },
+      allowedOverrides: ['claude-sonnet-5', 'claude-sonnet-5-1', 'claude-haiku-5', 'gpt-6.1', 'gpt-6.1-mini'],
+    };
+
+    it('resolves a family alias to the newest usable allowed model, never an unallowed or exact-id variant', () => {
+      const ids = catalog.map(model => model.id);
+      expect(resolveModelAlias('sonnet', ids, catalog)).toBe('claude-sonnet-5');
+      expect(resolveModelAlias('Opus', ids, catalog)).toBe('claude-opus-5');
+      expect(resolveModelAlias('gpt-6.1', ['gpt-6.1-mini'], catalog)).toBeNull();
+      expect(resolveModelAlias('GPT 6.1', ['gpt-6.1-mini', 'gpt-6.10'], catalog)).toBe('gpt-6.1-mini');
+      expect(resolveModelAlias('sonnet', ['claude-opus-5'], catalog)).toBeNull();
+      expect(resolveModelAlias('claude-sonnet-5', ['claude-sonnet-5-1'], catalog)).toBeNull();
+      expect(resolveModelAlias('son', ids, catalog)).toBeNull();
+    });
+
+    it('routes an alias through the allowlist and refuses with an actionable message', () => {
+      expect(
+        resolveWorkerModel('claude-opus-5', open, { role: 'implementation', requestedModelId: 'sonnet' }, catalog)
+      ).toMatchObject({ effectiveModel: 'claude-sonnet-5', requestedModelId: 'sonnet', source: 'override' });
+      expect(
+        resolveWorkerModel('claude-opus-5', open, { role: 'review', requestedModelId: 'opus' }, catalog)
+      ).toMatchObject({ effectiveModel: 'claude-opus-5' });
+      expect(
+        resolveWorkerModel(
+          'claude-opus-5',
+          open,
+          { role: 'implementation', requestedModelId: 'claude-haiku-5' },
+          catalog
+        )
+      ).toMatchObject({ effectiveModel: 'claude-haiku-5', source: 'override' });
+      const closed = { ...open, allowedOverrides: [] };
+      expect(() =>
+        resolveWorkerModel('claude-opus-5', closed, { role: 'implementation', requestedModelId: 'opus' }, catalog)
+      ).toThrow(
+        "Model request refused: 'opus' is not an allowed override (allowed: none). Nothing was started. Omit requested_model_id to use the role default (claude-sonnet-4-6), or ask the user to allow it in orchestration settings."
+      );
+      expect(() =>
+        resolveWorkerModel('claude-opus-5', open, { role: 'implementation', requestedModelId: 'opus' }, catalog)
+      ).toThrow(/allowed: claude-sonnet-5, claude-sonnet-5-1, claude-haiku-5, gpt-6.1, gpt-6.1-mini\)/);
+      expect(resolveWorkerModel('claude-opus-5', closed, { role: 'implementation' }, catalog)).toMatchObject({
+        effectiveModel: 'claude-sonnet-4-6',
+        source: 'role-policy',
+      });
+    });
+
+    it('leaves requested_model_id out with no allowed override and lists the choices otherwise', () => {
+      expect(modelRequestHint('claude-opus-5', inheritancePolicy())).toBeNull();
+      expect(modelRequestHint('claude-opus-5', { ...open, allowedOverrides: ['claude-haiku-5'] })).toBe(
+        'Optional; omit for the role default (implementation=claude-sonnet-4-6, exploration=claude-opus-5, review=claude-opus-5). Allowed: claude-haiku-5. A family name like sonnet picks the newest allowed match.'
+      );
+    });
+
+    it('still refuses a hosted alias match for device-local work', () => {
+      const local = [...catalog, { id: 'local:qwen3:8b', name: 'Qwen3 8B', supportsTools: true }];
+      const selection = resolveWorkerModel(
+        'local:qwen3:8b',
+        { ...open, roles: { ...open.roles, implementation: 'inherit' } },
+        { role: 'implementation', requestedModelId: 'sonnet' },
+        local
+      );
+      expect(() => validateWorkerModel(selection.effectiveModel, local, { localOnly: 'local-work' })).toThrow(
+        /never moved to a hosted model automatically/
+      );
+    });
+  });
+  it('points a refused hosted spawn at the parent picker before any worker exists', () => {
+    const models = [
+      { id: 'worker', name: 'Hosted worker', supportsTools: true },
+      { id: 'local:qwen', name: 'Local worker', supportsTools: true },
+    ];
+    expect(() => validateWorkerModel('worker', models, { localOnly: 'local-parent' })).toThrow(
+      'Worker model worker is blocked: a conversation using a local model cannot start a hosted worker automatically. To start one, explicitly select a hosted model for the parent conversation first.'
+    );
+    expect(() => validateWorkerModel('local:qwen', models, { localOnly: 'local-parent' })).not.toThrow();
   });
   it('validates a self-contained bounded contract and explicit empty sections', () => {
     expect(taskContractSchema.parse(contract)).toEqual(contract);
@@ -93,7 +186,17 @@ describe('orchestration contracts and role routing', () => {
       expect(() => validateWorkerModel('worker', models, { localOnly: false })).toThrow(/blocked/);
     }
     const models = [{ id: 'worker', name: 'Worker', supportsTools: true, supportsVision: false, contextWindow: 1000 }];
-    expect(() => validateWorkerModel('worker', models, { localOnly: true })).toThrow(/device-local/);
+    expect(() => validateWorkerModel('worker', models, { localOnly: 'device' })).toThrow(
+      /only local models can run here\. Choose a local model, or sign in/
+    );
+    expect(() => validateWorkerModel('worker', models, { localOnly: 'local-work' })).toThrow(
+      /never moved to a hosted model automatically\. To move it, pick a hosted model/
+    );
+    expect(() =>
+      validateWorkerModel('local:ollama:qwen', [{ id: 'local:ollama:qwen', name: 'Qwen', supportsTools: true }], {
+        localOnly: 'device',
+      })
+    ).not.toThrow();
     expect(() => validateWorkerModel('worker', models, { localOnly: false, vision: true })).toThrow(/images/);
     expect(() => validateWorkerModel('worker', models, { localOnly: false, contextTokens: 2000 })).toThrow(/context/);
     expect(() => validateWorkerModel('worker', models, { localOnly: false })).not.toThrow();
@@ -149,6 +252,77 @@ describe('orchestration contracts and role routing', () => {
       )
     ).toThrow();
     expect(workerTaskSchema.parse(JSON.parse(JSON.stringify(completed)))).toEqual(completed);
+  });
+  describe('criterion matching', () => {
+    const criteria = ['Discarded messages leave list/count', 'Retry keeps the message order'];
+    const multi: TaskContract = { ...contract, acceptanceCriteria: criteria };
+    const check = (criterion: string, outcome: 'passed' | 'failed' | 'not-run' = 'passed') => ({
+      criterion,
+      command: 'pnpm test dlq',
+      outcome,
+      evidence: 'Observed in the focused run',
+    });
+    const report = (
+      verification: ReturnType<typeof check>[],
+      unmetCriteria: string[] = []
+    ): Extract<WorkerTask['state'], { status: 'completed' }> => ({
+      status: 'completed',
+      accepted: false,
+      changedPaths: [],
+      verification,
+      unmetCriteria,
+      handoff: 'Done',
+    });
+    const withState = (state: WorkerTask['state']): WorkerTask => ({ ...task(), contract: multi, state });
+
+    it('names the uncovered criteria when every check passed under other labels', () => {
+      const labelled = withState(report([check('Targeted DLQ tests'), check('Relevant typecheck')]));
+      expect(() => acceptTask(labelled, 'Looks fine')).toThrow(
+        /No passed verification entry quotes these acceptance criteria:\n- "Discarded messages leave list\/count"\n- "Retry keeps the message order"/
+      );
+    });
+    it('accepts exact and whitespace, case or trailing-punctuation variants, alongside extra checks', () => {
+      expect(acceptTask(withState(report(criteria.map(c => check(c)))), 'Exact').state).toMatchObject({
+        accepted: true,
+      });
+      const variants = report([
+        check('  discarded   MESSAGES leave list/count.'),
+        check('Retry keeps the message order!\n'),
+        check('Relevant typecheck'),
+      ]);
+      expect(acceptTask(withState(variants), 'Variants').state).toMatchObject({ accepted: true });
+    });
+    it('does not match anything fuzzier than whitespace, case and trailing punctuation', () => {
+      const near = withState(report([check('Discarded messages leave the list/count'), check(criteria[1])]));
+      expect(() => acceptTask(near, 'Close enough')).toThrow(/- "Discarded messages leave list\/count"/);
+    });
+    it('still rejects a failed check or an unmet criterion and lists each', () => {
+      const failed = withState(
+        report([...criteria.map(c => check(c)), check('Lint', 'failed'), check('E2E', 'not-run')])
+      );
+      expect(() => acceptTask(failed, 'Ignore')).toThrow(
+        /Checks that did not pass:\n- "Lint" \(failed\)\n- "E2E" \(not-run\)/
+      );
+      const failedCriterion = withState(report([check(criteria[0]), check(criteria[1], 'failed')]));
+      expect(() => acceptTask(failedCriterion, 'Ignore')).toThrow(/quotes these acceptance criteria:\n- "Retry keeps/);
+      const unmet = withState(
+        report(
+          criteria.map(c => check(c)),
+          ['Edge case still open']
+        )
+      );
+      expect(() => acceptTask(unmet, 'Ignore')).toThrow(/Unmet criteria reported:\n- "Edge case still open"/);
+    });
+    it('rejects a completed report that leaves a criterion unaccounted for', () => {
+      const { accepted: _accepted, ...uncovered } = report([check('Targeted DLQ tests'), check(criteria[1])]);
+      expect(() => assertReportCoversCriteria(multi, uncovered)).toThrow(
+        /exact text.*Not covered:\n- "Discarded messages leave list\/count"$/s
+      );
+      const { accepted: _a, ...honest } = report([check(criteria[0], 'failed')], [`${criteria[1]}.`]);
+      expect(() => assertReportCoversCriteria(multi, honest)).not.toThrow();
+      const { accepted: _b, ...variant } = report([check(' DISCARDED messages leave list/count '), check(criteria[1])]);
+      expect(() => assertReportCoversCriteria(multi, variant)).not.toThrow();
+    });
   });
   it('requires budget admission, role/model allowlists and a single automatic upgrade maximum', () => {
     const policy = {

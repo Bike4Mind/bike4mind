@@ -55,7 +55,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: browserSigner }),
 }));
 
-import { queryDataLakeArticles } from './index';
+import { queryDataLakeArticles } from '@bike4mind/server-utils/dataLakes/index';
 import { fabFileRepository, dataLakeRepository } from '@bike4mind/database';
 
 const findById = fabFileRepository.findById as ReturnType<typeof vi.fn>;
@@ -101,11 +101,9 @@ describe('queryDataLakeArticles scope plumbing', () => {
       await queryDataLakeArticles(req, [DYNAMIC_LAKE], {});
       const adapter = h.search.mock.calls[0][2] as {
         storage: {
-          signedUrlCache?: string;
           generateSignedUrl: (path: string, expiry: number) => Promise<string | null>;
         };
       };
-      expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
       await adapter.storage.generateSignedUrl('owned/report.txt', 600);
       expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', {
         expiresIn: 600,
@@ -314,38 +312,40 @@ describe('queryDataLakeArticles deep-link (?id=) branch', () => {
   });
 });
 
-it.each(
-  [undefined, '', '   ', 'https://objects.example.invalid'].flatMap(endpoint =>
-    (['clean', 'pending'] as const).map(moderationStatus => ({ endpoint, moderationStatus }))
-  )
-)('signs authorized deep links without sharing cache state: %s', async ({ endpoint, moderationStatus }) => {
-  vi.stubEnv('S3_PRESIGN_ENDPOINT', endpoint);
-  const original = {
-    id: 'f1',
-    tags: [{ name: 'datalake:opti-knowledge' }],
-    moderationStatus,
-    filePath: 'owned/report.txt',
-    fileUrl: 'http://private.example.invalid/file',
-    fileUrlExpireAt: new Date(Date.now() - 3600000),
-    content: 'private-content',
-    chunks: ['chunk'],
-    vector: [1],
-  };
-  const before = { ...original };
-  findById.mockResolvedValue(original);
-  browserSigner.mockClear();
-  const update = vi.mocked(fabFileRepository.update);
-  update.mockClear();
-  const result = await queryDataLakeArticles(req, [STATIC_LAKE], { id: 'f1' });
-  const returned = result.data[0] as Record<string, unknown>;
-  expect(returned.fileUrl).toBe(moderationStatus === 'clean' ? 'https://objects.example.invalid/file' : undefined);
-  expect(returned.content).toBeUndefined();
-  expect(returned.chunks).toBeUndefined();
-  expect(returned.vector).toBeUndefined();
-  expect(result.grantedLakeIds).toEqual(['opti-knowledge']);
-  expect(browserSigner).toHaveBeenCalledTimes(moderationStatus === 'clean' ? 1 : 0);
-  expect(update).toHaveBeenCalledTimes(moderationStatus === 'clean' && !endpoint?.trim() ? 1 : 0);
-  expect(original).toEqual(before);
-});
+it.each(['clean', 'pending'] as const)(
+  'hands out the stable content URL for authorized deep links without writing the row: %s',
+  async moderationStatus => {
+    const original = {
+      id: 'f1',
+      tags: [{ name: 'datalake:opti-knowledge' }],
+      moderationStatus,
+      filePath: 'owned/report.txt',
+      fileUrl: 'http://private.example.invalid/file',
+      fileUrlExpireAt: new Date(Date.now() - 3600000),
+      content: 'private-content',
+      chunks: ['chunk'],
+      vector: [1],
+    };
+    const before = { ...original };
+    findById.mockResolvedValue(original);
+    browserSigner.mockClear();
+    const update = vi.mocked(fabFileRepository.update);
+    update.mockClear();
+    const result = await queryDataLakeArticles(req, [STATIC_LAKE], { id: 'f1' });
+    const returned = result.data[0] as Record<string, unknown>;
+    if (moderationStatus === 'clean') {
+      expect(returned.fileUrl).toMatch(/\/api\/files\/f1\/content\?exp=\d+&sig=[A-Za-z0-9_-]{43}$/);
+    } else {
+      expect(returned.fileUrl).toBeUndefined();
+    }
+    expect(returned.content).toBeUndefined();
+    expect(returned.chunks).toBeUndefined();
+    expect(returned.vector).toBeUndefined();
+    expect(result.grantedLakeIds).toEqual(['opti-knowledge']);
+    expect(browserSigner).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(original).toEqual(before);
+  }
+);
 
 afterEach(() => vi.unstubAllEnvs());

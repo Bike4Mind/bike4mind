@@ -10,6 +10,8 @@ import {
   IUserApiKeyDocument,
   IUserApiKeyRateLimit,
   IUserApiKeyRepository,
+  LegacyApiKeyCandidatePage,
+  LegacyApiKeyCandidateQuery,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
@@ -48,6 +50,65 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       { $group: { _id: '$userId', count: { $sum: 1 } } },
     ]);
     return Object.fromEntries(rows.map(row => [String(row._id), row.count]));
+  }
+
+  /** Unexpired active keys per user, across every pool; users with none are absent. */
+  async countActiveByUserIds(userIds: string[]): Promise<Record<string, number>> {
+    if (userIds.length === 0) return {};
+    const rows = await this.model.aggregate<{ _id: string; count: number }>([
+      {
+        $match: {
+          userId: { $in: userIds },
+          status: ApiKeyStatus.ACTIVE,
+          // aggregate skips the soft-delete filter, so it is repeated here.
+          deletedAt: null,
+          $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
+        },
+      },
+      { $group: { _id: '$userId', count: { $sum: 1 } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.count]));
+  }
+
+  async findLegacyCandidatesPage({
+    createdBefore,
+    usedSince,
+    excludeScopes,
+    skip,
+    limit,
+  }: LegacyApiKeyCandidateQuery): Promise<LegacyApiKeyCandidatePage> {
+    const now = new Date();
+    const filter = {
+      status: ApiKeyStatus.ACTIVE,
+      // Explicit because countDocuments and aggregate skip the soft-delete filter.
+      deletedAt: null,
+      lastUsedAt: { $gte: usedSince },
+      ...(createdBefore ? { createdAt: { $lt: createdBefore } } : {}),
+      scopes: { $nin: [...excludeScopes] },
+      'metadata.createdFrom': { $ne: 'oauth-exchange' },
+      $or: [{ expiresAt: { $gt: now } }, { expiresAt: null }],
+    };
+    const [keys, total, owners] = await Promise.all([
+      this.model.find(filter).sort({ lastUsedAt: -1, _id: -1 }).skip(skip).limit(limit).exec(),
+      this.model.countDocuments(filter).exec(),
+      this.model.aggregate<{ count: number }>([
+        { $match: filter },
+        { $group: { _id: '$userId' } },
+        { $count: 'count' },
+      ]),
+    ]);
+    return { keys, total, ownerCount: owners[0]?.count ?? 0 };
+  }
+
+  /** When each user created their first key, deleted keys included; users with no key are absent. */
+  async findFirstCreatedAtByUserIds(userIds: string[]): Promise<Record<string, Date>> {
+    if (userIds.length === 0) return {};
+    // aggregate skips the soft-delete filter, so a deleted first key still counts.
+    const rows = await this.model.aggregate<{ _id: string; firstCreatedAt: Date }>([
+      { $match: { userId: { $in: userIds } } },
+      { $group: { _id: '$userId', firstCreatedAt: { $min: '$createdAt' } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.firstCreatedAt]));
   }
 
   findByUserIdAndId(userId: string, id: string) {
@@ -140,6 +201,14 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       .exec();
   }
 
+  // Only keys disabled in bulk. Capped because this runs after auth fails and prefix collisions are rare.
+  findDisabledByKeyPrefix(keyPrefix: string) {
+    return this.model
+      .find({ keyPrefix, status: ApiKeyStatus.DISABLED, revokedBy: { $exists: false } })
+      .limit(5)
+      .exec();
+  }
+
   // Bulk deactivation has no human actor, so it stamps revokedAt without revokedBy.
   // Scoped to keys actually transitioning: re-running must not reset an existing
   // timestamp, and keys disabled before this field existed must not get a fabricated one.
@@ -215,6 +284,37 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       }
     );
     return live.map(key => ({ id: String(key._id), status: key.status }));
+  }
+
+  /**
+   * Disables the member's live keys billed to this org when their membership ends. Personal
+   * (User-billed) keys, legacy rows with no billingOwnerType, and embed keys (bound to an agent;
+   * they serve the org's embedded widget, not the member) are left alone. No batch id: a
+   * removal is not undoable, so these must not be restorable through `reactivateByIds`.
+   * Returns the selected live ids. Call within withTransaction when these ids are used as an
+   * exact audit receipt, so a concurrent revocation retries the read and write together.
+   */
+  // Keep the selection in sync with orgBilledKeyFilter in b4m-core/services/src/organizationService/offboardingScope.ts.
+  async revokeLiveOrgBilledByUserId(
+    userId: string,
+    organizationId: string,
+    { revokedBy, revokedReason }: { revokedBy: string; revokedReason: string }
+  ): Promise<string[]> {
+    const filter = {
+      userId,
+      organizationId,
+      billingOwnerType: CreditHolderType.Organization,
+      status: { $ne: ApiKeyStatus.DISABLED },
+      agentId: null,
+    };
+    const live = await this.model.find(filter).select('_id').lean<{ _id: unknown }[]>();
+    if (live.length === 0) return [];
+    const ids = live.map(key => key._id);
+    await this.model.updateMany(
+      { ...filter, _id: { $in: ids } },
+      { $set: { status: ApiKeyStatus.DISABLED, revokedAt: new Date(), revokedBy, revokedReason } }
+    );
+    return ids.map(String);
   }
 
   /**
@@ -438,6 +538,14 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // No index: the only read is by the key's own id (already indexed), never a bulk lookup by
     // lake. `default: undefined` so an ordinary key does not materialize an empty array.
     preauthorizedLakeIds: { type: [String], default: undefined },
+    // Org-owned key (see IUserApiKey.orgOwned). Set on insert only.
+    orgOwned: {
+      type: new mongoose.Schema<{ createdByUserId: string }>(
+        { createdByUserId: { type: String, required: true } },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     branding: {
       type: new mongoose.Schema<IEmbedBranding>(
         {

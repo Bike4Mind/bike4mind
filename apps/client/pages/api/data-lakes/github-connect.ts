@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 import { z } from 'zod';
 import { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_WRITE_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_WRITE_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeAccessGrantRepository, dataLakeRepository, organizationRepository } from '@bike4mind/database';
@@ -22,6 +22,7 @@ import {
 } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 import { clearStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { assertLakePlanAllowed } from '@server/entitlements/lakePlanGate';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { assertLakeConnectorFree } from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
@@ -185,6 +186,7 @@ export function createGitHubConnectHandler(suffix: () => string = newPlaceholder
       const { organizationId } = body.data;
       // A personal lake needs no gate here: the caller becomes its creator, whom every later step admits.
       if (organizationId) await verifyOrgAccess(req.user, organizationId);
+      await assertLakePlanAllowed(req, organizationId);
       const config = requireGitHubLakeAppConfig(getGitHubLakeAppConfig());
 
       let reused = await findReusablePendingLake(req, organizationId);

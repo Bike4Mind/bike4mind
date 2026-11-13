@@ -1,5 +1,5 @@
 import { withTransaction } from '@bike4mind/database';
-import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
+import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';
 import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
 import {
   type ISubscription,
@@ -12,19 +12,21 @@ import {
   planDetails,
   rowTimestamps,
   subscriptionEventUser,
-} from '@server/analytics/billingEventDetails';
+} from '@bike4mind/server-utils/analytics/billingEventDetails';
 import type Stripe from 'stripe';
-import { applyStripeSubscriptionState } from '@server/subscriptions/applyStripeSubscriptionState';
+import { applyStripeSubscriptionState } from '@bike4mind/server-utils/subscriptions/applyStripeSubscriptionState';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StripeEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
-import { postSubscriptionChangesToSlack } from '@server/integrations/slack/subscriptionLifecycle';
+import { postSubscriptionChangesToSlack } from '@bike4mind/server-utils/integrations/slack/subscriptionLifecycle';
 import { detectSubscriptionChanges } from '@bike4mind/server-utils/lib/subscriptions/subscriptionChanges';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import { withEventContext } from '@workers/utils/eventContext';
+import { Logger } from '@bike4mind/observability';
+import { applyPlanStorageLimit } from '@workers/lib/userSubscriptions/applyPlanStorageLimit';
 
 export const handler = withEventContext(async (event, logger) => {
   const { subscriptionId } = StripeEvents.CustomerSubscriptionUpdated.schema.parse(event.properties);
@@ -79,7 +81,8 @@ export const handler = withEventContext(async (event, logger) => {
   // against a state that is already gone. Nothing extra to fail: the sync either writes and
   // returns it, or fails as it always could. The cancel and change routes do not write the row
   // themselves, so an in-app change reaches here exactly as a Billing Portal one does.
-  let before: ISubscription | null = null;
+  // Asserted, not annotated: assigned only inside the closure, so `= null` would narrow it to never below.
+  let before = null as ISubscription | null;
 
   // Update subscription in unified Subscription model
   const shouldInvalidateOrgs = await withTransaction(async () => {
@@ -136,6 +139,12 @@ export const handler = withEventContext(async (event, logger) => {
   // failures, so once the write commits nothing can skip these. Never throws.
   if (owned && before) {
     await emitSubscriptionChangeEvents(before, subscription);
+  }
+
+  // Owner from the stored row, not metadata: legacy metadata loses ownerType. Org-owned subscriptions
+  // have no plan storage mapping yet; the org pool keeps its own limit.
+  if (owned && before && before.ownerType === SubscriptionOwnerType.User) {
+    await applyPlanStorageLimit(subscription, before.ownerId, logger);
   }
 
   // sendToClient calls must be outside the transaction to avoid
@@ -248,6 +257,6 @@ async function emitSubscriptionChangeEvents(before: ISubscription, subscription:
 
     await Promise.all(sends);
   } catch {
-    console.warn('[b4m-analytics] subscription change events failed');
+    Logger.warn('[b4m-analytics] subscription change events failed');
   }
 }

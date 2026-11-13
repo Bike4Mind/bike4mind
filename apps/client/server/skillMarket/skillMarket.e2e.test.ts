@@ -81,6 +81,7 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
 import {
   inboxRepository,
   Skill,
+  SkillBundle,
   SkillListing,
   SkillListingImport,
   SkillListingReport,
@@ -100,6 +101,7 @@ import skillHandler from '@pages/api/skills/[id]/index';
 import importHandler from '@pages/api/skills/market/[id]/import';
 import ratingHandler from '@pages/api/skills/market/[id]/rating';
 import detailHandler from '@pages/api/skills/market/[id]/index';
+import permanentHandler from '@pages/api/skills/market/[id]/permanent';
 import moderateHandler from '@pages/api/skills/market/[id]/moderate';
 import reportHandler from '@pages/api/skills/market/[id]/report';
 import publishHandler from '@pages/api/skills/market/publish';
@@ -109,6 +111,7 @@ import reviewHandler from '@pages/api/skills/market/versions/[vid]/review';
 import updateSkillHandler from '@pages/api/skills/[id]/index';
 import reviewQueueHandler from '@pages/api/skills/market/review-queue';
 import byTokenHandler from '@pages/api/skills/market/by-token/[token]';
+import byTokenHeaderHandler from '@pages/api/skills/market/by-token/index';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -138,6 +141,7 @@ beforeEach(async () => {
       'skill_listing_versions',
       'skill_listing_imports',
       'skill_listing_reports',
+      'skill_bundles',
       'inboxes',
       'users',
     ].map(c => mongoose.connection.db!.collection(c).deleteMany({}))
@@ -201,9 +205,10 @@ async function call(
   query: Record<string, string>,
   body: Record<string, unknown> = {},
   isAdmin = false,
-  createdAt = new Date(0)
+  createdAt = new Date(0),
+  headers: Record<string, string> = {}
 ) {
-  const { req, res } = createMocks({ method: method as never, query, body });
+  const { req, res } = createMocks({ method: method as never, query, body, headers });
   Object.assign(req, { user: { id: userId, isAdmin, createdAt }, logger: { info: vi.fn() } });
   await handler(req, res);
   return res;
@@ -776,6 +781,32 @@ describe('Skill Market (real mongod)', () => {
     await expect(call(importHandler, 'POST', OTHER, { id: listing.id })).rejects.toMatchObject({ statusCode: 404 });
   });
 
+  it('reports: the queue splits counting reports from the total, and an importer sees the hidden state', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    const { listing } = await publish(source, 'public');
+    const imported = await call(importHandler, 'POST', OTHER, { id: listing.id });
+    const copy = (await skillRepository.findById(imported._getJSONData().skill.id))!;
+    // A newer version exists, so the copy is stale; the report hold must still win.
+    await skillRepository.update({ id: source.id, body: 'Rewrite as bullets v2.' });
+    await submitListingVersion(listing, (await skillRepository.findById(source.id))!, deps);
+    for (const u of ['new-1', 'new-2']) {
+      await call(reportHandler, 'POST', u, { id: listing.id }, { reason: 'spam' }, false, new Date());
+    }
+    for (const u of ['old-1', 'old-2', 'old-3']) {
+      await call(reportHandler, 'POST', u, { id: listing.id }, { reason: 'spam' });
+    }
+
+    const queue = (await call(reviewQueueHandler, 'GET', ADMIN, { filter: 'reports' }, {}, true))._getJSONData();
+    expect(queue.data).toHaveLength(1);
+    expect(queue.data[0]).toMatchObject({ count: 5, countingCount: 3 });
+
+    let [status] = await attachMarketStatus([copy]);
+    expect(status.marketStatus?.state).toBe('hidden');
+    await call(moderateHandler, 'POST', ADMIN, { id: listing.id }, { action: 'restore' }, true);
+    [status] = await attachMarketStatus([copy]);
+    expect(status.marketStatus?.state).toBe('stale');
+  });
+
   it('update: refuses to apply a version other than the one the importer reviewed', async () => {
     const source = await makeSkill(AUTHOR, 'Rewrite as bullets v1.');
     const { listing, version: v1 } = await publish(source, 'public');
@@ -940,6 +971,90 @@ describe('Skill Market (real mongod)', () => {
     expect(await withdrawAuthorListings(AUTHOR)).toBe(0);
   });
 
+  it('deleting a skill withdraws its live listings, even when a shared recipient deletes it', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets.', {
+      users: [{ userId: OTHER, permissions: ['read', 'delete'] }],
+    } as never);
+    const { listing } = await publish(source, 'public');
+    const imported = await call(importHandler, 'POST', OTHER, { id: listing.id });
+    const copy = (await skillRepository.findById(imported._getJSONData().skill.id))!;
+    const untouched = await publish(await makeSkill(AUTHOR, 'Summarize as a table.'), 'public');
+
+    expect((await call(skillHandler, 'DELETE', OTHER, { id: source.id }))._getStatusCode()).toBe(204);
+
+    const after = (await SkillListing.findById(listing.id))!;
+    expect(after.status).toBe('withdrawn');
+    expect((await SkillListing.findById(listing.id).lean())!.activeSlot).toBeUndefined();
+    expect((await browse()).data.map(l => l.id)).toEqual([untouched.listing.id]);
+    const [status] = await attachMarketStatus([copy]);
+    expect(status.marketStatus?.state).toBe('removed');
+  });
+
+  it('deleting a skill that has no listing still succeeds', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    expect((await call(skillHandler, 'DELETE', AUTHOR, { id: source.id }))._getStatusCode()).toBe(204);
+    expect(await skillRepository.findById(source.id)).toBeNull();
+  });
+
+  it('permanent delete removes a withdrawn listing and everything keyed to it, and the skill can be republished', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    const { listing } = await publish(source, 'public');
+    await call(importHandler, 'POST', OTHER, { id: listing.id });
+    await call(reportHandler, 'POST', 'reporter-1', { id: listing.id }, { reason: 'spam' });
+    const keep = await publish(await makeSkill(AUTHOR, 'Summarize as a table.'), 'public');
+    const bundle = await SkillBundle.create({
+      organizationId: ORG,
+      name: 'Bundle',
+      description: 'Bundle',
+      pluginName: 'bundle',
+      listingIds: [listing.id, keep.listing.id],
+      createdByUserId: AUTHOR,
+    } as never);
+    await call(detailHandler, 'DELETE', AUTHOR, { id: listing.id });
+    // A listing with an open report is refused until a moderator has reviewed it.
+    await expect(call(permanentHandler, 'DELETE', AUTHOR, { id: listing.id })).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(await SkillListingReport.countDocuments({ listingId: listing.id })).toBe(1);
+    await SkillListingReport.updateMany({ listingId: listing.id }, { $set: { status: 'dismissed' } });
+    await expect(call(permanentHandler, 'DELETE', OTHER, { id: listing.id })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect((await call(permanentHandler, 'DELETE', AUTHOR, { id: listing.id }))._getStatusCode()).toBe(204);
+
+    expect(await SkillListing.findById(listing.id)).toBeNull();
+    expect(await SkillListingVersion.countDocuments({ listingId: listing.id })).toBe(0);
+    expect(await SkillListingImport.countDocuments({ listingId: listing.id })).toBe(0);
+    expect(await SkillListingReport.countDocuments({ listingId: listing.id })).toBe(0);
+    expect((await SkillBundle.findById(bundle.id))!.listingIds).toEqual([keep.listing.id]);
+    expect(await SkillListingVersion.countDocuments({ listingId: keep.listing.id })).toBe(1);
+    expect((await listMyListings(AUTHOR, { limit: 50 })).listings.map(l => String(l.listing._id))).toEqual([
+      keep.listing.id,
+    ]);
+    await expect(call(detailHandler, 'GET', AUTHOR, { id: listing.id })).rejects.toMatchObject({ statusCode: 404 });
+    await expect(call(permanentHandler, 'DELETE', AUTHOR, { id: listing.id })).rejects.toMatchObject({
+      statusCode: 404,
+    });
+
+    const again = await call(publishHandler, 'POST', AUTHOR, {}, { skillId: source.id, visibility: 'public' });
+    expect(again._getStatusCode()).toBe(201);
+  });
+
+  it.each([
+    ['live', {}],
+    ['held', { status: 'in_review' }],
+    ['delisted', { status: 'delisted' }],
+    ['withdrawn and report-hidden', { status: 'withdrawn', hiddenByReports: true }],
+  ])('permanent delete refuses a %s listing', async (_label, patch) => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public');
+    await SkillListing.updateOne({ _id: listing.id }, { $set: patch });
+    await expect(call(permanentHandler, 'DELETE', AUTHOR, { id: listing.id })).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(await SkillListing.findById(listing.id)).not.toBeNull();
+    expect(await SkillListingVersion.countDocuments({ listingId: listing.id })).toBe(1);
+  });
+
   it('organization membership is enforced on a later version and on a rescan', async () => {
     orgs.members.set(AUTHOR, [ORG]);
     const skill = await makeSkill(AUTHOR, 'Rewrite as bullets.');
@@ -1080,7 +1195,7 @@ describe('Skill Market (real mongod)', () => {
     expect((await recommendListings('viewer-1', [ORG])).map(r => r.id)).toEqual([pub.id]);
   });
 
-  it('by-token: opens an unlisted listing and 404s a malformed token', async () => {
+  it('by-token (deprecated path route): opens an unlisted listing and 404s a malformed token', async () => {
     const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'unlisted');
     const res = await call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken });
     expect(res._getStatusCode()).toBe(200);
@@ -1088,6 +1203,17 @@ describe('Skill Market (real mongod)', () => {
     await expect(call(byTokenHandler, 'GET', OTHER, { token: 'x'.repeat(31) })).rejects.toMatchObject({
       statusCode: 404,
     });
+  });
+
+  it('by-token: opens an unlisted listing from the x-share-token header and 404s without one', async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'unlisted');
+    const open = (headers: Record<string, string>) =>
+      call(byTokenHeaderHandler, 'GET', OTHER, {}, {}, false, new Date(0), headers);
+    const res = await open({ 'x-share-token': listing.shareToken });
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().listing).toMatchObject({ id: listing.id, visibility: 'unlisted' });
+    await expect(open({})).rejects.toMatchObject({ statusCode: 404 });
+    await expect(open({ 'x-share-token': 'x'.repeat(32) })).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it('search: filters and sorts all run behind the visibility gate', async () => {
