@@ -117,6 +117,21 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
       return true;
     },
 
+    async findByGroup(requestedBy: string, groupId: string) {
+      return [...jobs.values()]
+        .filter(job => job.requestedBy === requestedBy && job.kind === 'image' && job.payload.groupId === groupId)
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map(job => structuredClone(job));
+    },
+
+    async claimGroupCompletionNotice(id: string, at: Date) {
+      const job = jobs.get(id);
+      if (!job || job.groupCompletionNotifiedAt) return false;
+      job.groupCompletionNotifiedAt = at;
+      touch(job);
+      return true;
+    },
+
     async markTerminalHandled(id: string, at: Date) {
       const job = jobs.get(id);
       if (!job) return;
