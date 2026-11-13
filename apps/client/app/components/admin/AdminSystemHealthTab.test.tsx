@@ -60,6 +60,16 @@ const INTEGRATIONS = {
       error: 'HTTP 502',
       circuitBreaker: { available: false, reason: 'tripped', mode: 'auto', autoTripped: true },
     },
+    {
+      integration: 'jira',
+      status: 'unhealthy',
+      latencyMs: 0,
+      lastCheckedAt: '2026-11-13T10:00:00.000Z',
+      successRate: 0,
+      consecutiveFailures: 0,
+      error: null,
+      circuitBreaker: { available: false, reason: 'manual', mode: 'force_block', autoTripped: false },
+    },
   ],
 };
 
@@ -116,7 +126,9 @@ describe('AdminSystemHealthTab', () => {
 
     expect(await screen.findByTestId('integration-health-slack-status')).toHaveAttribute('data-tone', 'good');
     expect(screen.getByTestId('integration-health-github-status')).toHaveAttribute('data-tone', 'bad');
-    expect(screen.getByText('Tripped (auto)').closest('[data-tone]')).toHaveAttribute('data-tone', 'bad');
+    expect(screen.getByTestId('circuit-breaker-status-github')).toHaveAttribute('data-tone', 'bad');
+    expect(screen.getByTestId('circuit-breaker-status-github')).toHaveTextContent('Tripped (auto)');
+    expect(screen.getByTestId('circuit-breaker-status-slack')).toHaveAttribute('data-tone', 'good');
     expect(screen.getByTestId('circuit-breaker-block-github-btn')).toBeInTheDocument();
     expect(screen.getByTestId('circuit-breaker-force-open-github-btn')).toBeInTheDocument();
   });
@@ -130,7 +142,53 @@ describe('AdminSystemHealthTab', () => {
     cards.forEach(card => {
       expect(card.querySelector('[data-testid="admin-section-card"]')).toBeNull();
       expect(card.querySelector('.MuiCard-root')).toBeNull();
+      expect(card.querySelector('.MuiSheet-variantOutlined')).toBeNull();
+      expect(card.querySelector('.MuiAlert-root .MuiAlert-root')).toBeNull();
     });
+  });
+
+  it('sends the chosen breaker mode for the chosen integration', async () => {
+    mocks.put.mockResolvedValue({ data: {} });
+    renderTab();
+
+    fireEvent.click(await screen.findByTestId('circuit-breaker-block-github-btn'));
+    await waitFor(() =>
+      expect(mocks.put).toHaveBeenLastCalledWith(INTEGRATIONS_URL, {
+        integration: 'github',
+        mode: 'force_block',
+        reason: undefined,
+      })
+    );
+
+    await waitFor(() => expect(screen.getByTestId('circuit-breaker-force-open-github-btn')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('circuit-breaker-force-open-github-btn'));
+    await waitFor(() =>
+      expect(mocks.put).toHaveBeenLastCalledWith(INTEGRATIONS_URL, {
+        integration: 'github',
+        mode: 'force_open',
+        reason: undefined,
+      })
+    );
+
+    await waitFor(() => expect(screen.getByTestId('circuit-breaker-reset-jira-btn')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('circuit-breaker-reset-jira-btn'));
+    await waitFor(() =>
+      expect(mocks.put).toHaveBeenLastCalledWith(INTEGRATIONS_URL, {
+        integration: 'jira',
+        mode: 'auto',
+        reason: undefined,
+      })
+    );
+    expect(mocks.put).toHaveBeenCalledTimes(3);
+  });
+
+  it('probes only the integration whose button was clicked', async () => {
+    mocks.post.mockResolvedValue({ data: { results: [] } });
+    renderTab();
+
+    fireEvent.click(await screen.findByTestId('integration-health-probe-github-btn'));
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledWith(INTEGRATIONS_URL, { integration: 'github' }));
+    expect(mocks.post).toHaveBeenCalledTimes(1);
   });
 
   it('shows an error state with retry when the load fails', async () => {

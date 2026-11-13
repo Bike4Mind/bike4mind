@@ -581,7 +581,7 @@ const AdminSystemHealthTab = () => {
   const header = (
     <AdminPageHeader
       title="System health"
-      description="Monitor configuration status for critical services. Useful for fork deployments to diagnose issues without CloudWatch access."
+      description="Configuration and connection status for email, database, sign-in and integrations."
       actions={
         <>
           <ContextHelpButton helpId="admin/system-health" tooltipText="System health help" />
@@ -962,11 +962,12 @@ const AdminSystemHealthTab = () => {
                         <OktaDiagnosticsPanel diagnostics={testResult.details.diagnostics} />
                       )}
                       {key === 'okta' && testResult.success && testResult.error && (
-                        <Alert color="warning" variant="outlined" size="sm" sx={{ mt: 1 }}>
+                        <Stack direction="row" alignItems="center" gap={1} sx={{ mt: 0.5 }}>
+                          <StatusChip tone="warn" label="Warning" />
                           <Typography level="body-xs" sx={{ color: 'text.primary' }}>
                             {testResult.error}
                           </Typography>
-                        </Alert>
+                        </Stack>
                       )}
                       {!testResult.success && testResult.error && (
                         <>
@@ -1102,20 +1103,44 @@ const AdminSystemHealthTab = () => {
                         Circuit breaker:
                       </Typography>
                       {integration.circuitBreaker.mode === 'force_block' && (
-                        <StatusChip tone="bad" label="Blocked (manual)" />
+                        <StatusChip
+                          tone="bad"
+                          label="Blocked (manual)"
+                          data-testid={`circuit-breaker-status-${integration.integration}`}
+                        />
                       )}
                       {integration.circuitBreaker.mode === 'force_open' && (
-                        <StatusChip tone="warn" label="Forced open (manual)" />
+                        <StatusChip
+                          tone="warn"
+                          label="Forced open (manual)"
+                          data-testid={`circuit-breaker-status-${integration.integration}`}
+                        />
                       )}
                       {integration.circuitBreaker.mode === 'auto' && integration.circuitBreaker.autoTripped && (
-                        <StatusChip tone="bad" label="Tripped (auto)" />
+                        <StatusChip
+                          tone="bad"
+                          label="Tripped (auto)"
+                          data-testid={`circuit-breaker-status-${integration.integration}`}
+                        />
                       )}
                       {integration.circuitBreaker.mode === 'auto' &&
                         !integration.circuitBreaker.autoTripped &&
-                        integration.circuitBreaker.noData && <StatusChip tone="neutral" label="OK (no data)" />}
+                        integration.circuitBreaker.noData && (
+                          <StatusChip
+                            tone="neutral"
+                            label="OK (no data)"
+                            data-testid={`circuit-breaker-status-${integration.integration}`}
+                          />
+                        )}
                       {integration.circuitBreaker.mode === 'auto' &&
                         !integration.circuitBreaker.autoTripped &&
-                        !integration.circuitBreaker.noData && <StatusChip tone="good" label="OK (auto)" />}
+                        !integration.circuitBreaker.noData && (
+                          <StatusChip
+                            tone="good"
+                            label="OK (auto)"
+                            data-testid={`circuit-breaker-status-${integration.integration}`}
+                          />
+                        )}
                     </Stack>
 
                     <Stack direction="row" flexWrap="wrap" gap={0.5}>
