@@ -255,7 +255,17 @@ export function LoopFormModal({
     setSaving(true);
     setError(null);
     const request = requestOf(values);
-    const result = loop ? await api.updateLoop({ id: loop.id, ...request }) : await api.createLoop(request);
+    const result = loop
+      ? await api.updateLoop({
+          id: loop.id,
+          ...request,
+          // A blank optional field on edit clears it; left out, main would keep the old value.
+          escalationModel: request.escalationModel ?? null,
+          fallbackModel: request.fallbackModel ?? null,
+          budgetCreditsPerDay: request.budgetCreditsPerDay ?? null,
+          p2RunsPerDay: request.p2RunsPerDay ?? null,
+        })
+      : await api.createLoop(request);
     setSaving(false);
     if (!result.ok) {
       setError(result.error);

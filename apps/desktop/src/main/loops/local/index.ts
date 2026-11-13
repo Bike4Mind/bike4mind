@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { BrowserWindow, Notification, app, dialog, ipcMain, powerMonitor, powerSaveBlocker } from 'electron';
+import { Notification, app, ipcMain, powerMonitor, powerSaveBlocker } from 'electron';
 import { z } from 'zod';
 import { BadRequestError, startOfUtcDay } from '@bike4mind/common';
 import { UNSURE_PREFIX } from '@bike4mind/common/loops';
@@ -23,6 +23,7 @@ import {
 import type { AuthService } from '../../auth/AuthService';
 import { onAuthStateChanged } from '../../auth';
 import type { ChatService } from '../../chat/ChatService';
+import { pickDirectory } from '../../chat';
 import { sessionScopeForChat, sessionScopeKey } from '../../chat/sessionScope';
 import type { BackgroundProcessRegistry } from '../../chat/tools/BackgroundProcessRegistry';
 import { createMainLogger } from '../../logger';
@@ -120,11 +121,13 @@ export function registerLocalLoops(
     const api = auth.getApiClient();
     if (!api || !currentScope) return;
     budgetRefreshedAt = Date.now();
+    const asked = currentScope;
+    const day = startOfUtcDay(new Date()).toISOString();
     const body = await api.get<{ effectiveCap?: number | null; creditsToday?: number }>(BUDGET_PATH).catch(() => null);
-    if (!body) return;
+    // An account switch during the fetch: these numbers belong to the previous account.
+    if (!body || currentScope !== asked) return;
     store.setSetting(ALL_LOOPS_CAP, body.effectiveCap ?? null);
-    if (typeof body.creditsToday === 'number')
-      store.setSetting(CLOUD_SPENT, { day: startOfUtcDay(new Date()).toISOString(), credits: body.creditsToday });
+    if (typeof body.creditsToday === 'number') store.setSetting(CLOUD_SPENT, { day, credits: body.creditsToday });
   };
 
   const follow = () => {
@@ -178,11 +181,12 @@ export function registerLocalLoops(
   ipcMain.handle(
     IPC_CHANNELS.localLoopsPickFolder,
     async (event): Promise<LocalLoopsResult<{ directory: string } | null>> => {
-      const window = BrowserWindow.fromWebContents(event.sender);
-      const options = { title: 'Folder for this loop', properties: ['openDirectory' as const] };
-      const picked = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
-      const directory = picked.filePaths[0];
-      if (picked.canceled || !directory) return { ok: true, value: null };
+      const directory = await pickDirectory(event.sender).catch((err: unknown) => {
+        logger.warn(`LOOPS: folder picker failed: ${String(err)}`);
+        return undefined;
+      });
+      if (directory === undefined) return { ok: false, error: 'The folder picker could not open.' };
+      if (directory === null) return { ok: true, value: null };
       if (!existsSync(join(directory, '.git'))) return { ok: false, error: 'Pick a local git checkout.' };
       pickedFolders.add(directory);
       return { ok: true, value: { directory } };
@@ -216,7 +220,8 @@ export function registerLocalLoops(
   });
   handle(IPC_CHANNELS.localLoopsUpdateLoop, async input => {
     const { id, ...request } = updateLocalLoopSchema.parse(input);
-    loopOf(id);
+    // Validated before git runs in the requested folder; the real check is redone on the fresh read below.
+    checkedFields(request, loopOf(id), pickedFolders);
     // Resolved before the read, so the write below cannot undo what the scheduler stored meanwhile.
     const repo = request.directory !== undefined ? repoSlug(await originOf(request.directory)) : undefined;
     const current = loopOf(id);

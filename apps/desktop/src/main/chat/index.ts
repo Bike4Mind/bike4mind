@@ -395,7 +395,7 @@ function pickerStart(): string {
 }
 
 /** The OS folder picker, parented to the window that asked when there is one. */
-async function pickDirectory(sender: WebContents): Promise<string | null> {
+export async function pickDirectory(sender: WebContents): Promise<string | null> {
   const window = BrowserWindow.fromWebContents(sender);
   const properties: ('openDirectory' | 'createDirectory')[] = ['openDirectory', 'createDirectory'];
   const options = { properties, defaultPath: pickerStart() };

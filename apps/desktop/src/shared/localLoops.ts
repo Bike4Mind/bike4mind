@@ -178,7 +178,13 @@ const loopFields = {
 export const createLocalLoopSchema = z.object(loopFields);
 export type CreateLocalLoopRequest = z.infer<typeof createLocalLoopSchema>;
 
-export const updateLocalLoopSchema = z.object({ id: z.string() }).extend(z.object(loopFields).partial().shape);
+// null clears an optional field on edit.
+export const updateLocalLoopSchema = z.object({ id: z.string() }).extend(z.object(loopFields).partial().shape).extend({
+  escalationModel: loopFields.escalationModel.nullable(),
+  fallbackModel: loopFields.fallbackModel.nullable(),
+  budgetCreditsPerDay: loopFields.budgetCreditsPerDay.nullable(),
+  p2RunsPerDay: loopFields.p2RunsPerDay.nullable(),
+});
 export type UpdateLocalLoopRequest = z.infer<typeof updateLocalLoopSchema>;
 
 const priority = z.enum(['p0', 'p1', 'p2', 'p3']);

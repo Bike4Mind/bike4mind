@@ -21,7 +21,7 @@ import { LoopBoardView, type TicketMove } from './LoopBoardView';
 import { LoopFormModal } from './LoopFormModal';
 import { NeedsYouInbox } from './NeedsYouInbox';
 import { TicketDetail } from './TicketDetail';
-import { useLocalLoop, useLocalLoopList } from './useLocalLoops';
+import { useLocalLoop, type useLocalLoopList } from './useLocalLoops';
 
 const statusColor = (status: LocalLoopSummary['loop']['status']) =>
   status === 'live' ? 'success' : status === 'error' ? 'danger' : 'neutral';
@@ -328,15 +328,17 @@ function LoopPane({
  * web Loops page has for its loops except Slack, coaching and stats. Web loops stay on the web.
  */
 export function LoopsScreen({
+  list: { summaries, error },
   models,
   onClose,
   onOpenSession,
 }: {
+  /** ChatShell's subscription (it also feeds the sidebar badge), so the list is not fetched twice. */
+  list: Pick<ReturnType<typeof useLocalLoopList>, 'summaries' | 'error'>;
   models: readonly ChatModelOption[];
   onClose: () => void;
   onOpenSession: (sessionId: string) => void;
 }) {
-  const { summaries, error } = useLocalLoopList();
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [panel, setPanel] = useState<'budget' | 'machine' | null>(null);

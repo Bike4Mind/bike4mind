@@ -70,26 +70,32 @@ export function useLocalLoop(loopId: string | null) {
       prev => prev && { ...prev, tickets: prev.tickets.map(entry => (entry.id === ticket.id ? ticket : entry)) }
     );
 
-  const moveTicket = useCallback(async (id: string, patch: Omit<UpdateLocalTicketRequest, 'id'>) => {
-    const api = localLoopsApi();
-    const before = latest.current?.tickets.find(ticket => ticket.id === id);
-    if (!api || !before) return false;
-    setError(null);
-    const { reason: _reason, priority, ...shown } = patch;
-    replaceTicket({
-      ...before,
-      ...shown,
-      ...(priority !== undefined && { priority: priority ?? undefined }),
-    } as LocalTicket);
-    const result = await api.updateTicket({ id, ...patch });
-    if (!result.ok) {
-      replaceTicket(before);
-      setError(result.error);
-      return false;
-    }
-    if (result.value) replaceTicket(result.value);
-    return true;
-  }, []);
+  const moveTicket = useCallback(
+    async (id: string, patch: Omit<UpdateLocalTicketRequest, 'id'>) => {
+      const api = localLoopsApi();
+      const before = latest.current?.tickets.find(ticket => ticket.id === id);
+      if (!api || !before) return false;
+      setError(null);
+      const { reason: _reason, priority, ...shown } = patch;
+      const optimistic = {
+        ...before,
+        ...shown,
+        ...(priority !== undefined && { priority: priority ?? undefined }),
+      } as LocalTicket;
+      replaceTicket(optimistic);
+      const result = await api.updateTicket({ id, ...patch });
+      if (!result.ok) {
+        // Restore only our own patch; a refetch or a later move that landed meanwhile is newer than `before`.
+        if (latest.current?.tickets.find(ticket => ticket.id === id) === optimistic) replaceTicket(before);
+        else void reload();
+        setError(result.error);
+        return false;
+      }
+      if (result.value) replaceTicket(result.value);
+      return true;
+    },
+    [reload]
+  );
 
   const act = useCallback(async <T>(call: () => Promise<LocalLoopsResult<T>>): Promise<T | undefined> => {
     setError(null);

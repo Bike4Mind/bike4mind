@@ -78,3 +78,18 @@ it('rolls a refused move back and says why', async () => {
   expect(stageOf()).toBe('todo');
   expect(hook.error).toBe('Running - pause the loop or wait for the run to end.');
 });
+
+it('refetches instead of restoring a stale ticket when newer data landed during a refused move', async () => {
+  let moved!: Promise<boolean>;
+  act(() => void (moved = hook.moveTicket('t1', { stage: 'doing' })));
+  const claimed = { ...ticket, stage: 'todo', status: 'in_progress' as const };
+  api.get.mockResolvedValue({ ok: true, value: { ...detail, tickets: [claimed] } });
+  await act(async () => void (await hook.reload()));
+  await act(async () => {
+    resolveUpdate({ ok: false, error: 'Running - pause the loop or wait for the run to end.' });
+    await moved;
+  });
+  expect(hook.detail?.tickets[0].status).toBe('in_progress');
+  expect(api.get).toHaveBeenCalledTimes(3);
+  api.get.mockResolvedValue({ ok: true, value: detail });
+});

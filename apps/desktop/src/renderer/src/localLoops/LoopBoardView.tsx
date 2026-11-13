@@ -55,6 +55,8 @@ function TicketCard({
   onDelete,
 }: CardActions & { ticket: LocalTicket; runningModel?: string }) {
   const running = ticket.status === 'in_progress';
+  // Delete is permanent: the first click arms it, a second one from the reopened menu deletes.
+  const [armed, setArmed] = useState(false);
   return (
     <Box
       role="button"
@@ -120,7 +122,7 @@ function TicketCard({
               stages
                 .filter(stage => stage !== ticket.stage || ticket.status !== 'open')
                 .map(stage => (
-                  <MenuItem key={stage} onClick={() => onMove(ticket.id, dropMove(ticket, { stage }) ?? {})}>
+                  <MenuItem key={stage} onClick={() => onMove(ticket.id, dropMove(ticket, { stage })!)}>
                     Move to {stage}
                   </MenuItem>
                 ))}
@@ -146,8 +148,12 @@ function TicketCard({
               </MenuItem>
             )}
             {!running && (
-              <MenuItem color="danger" onClick={() => onDelete(ticket.id)}>
-                Delete
+              <MenuItem
+                color="danger"
+                onClick={() => (armed ? onDelete(ticket.id) : setArmed(true))}
+                data-testid={`local-loops-card-delete-${ticket.id}`}
+              >
+                {armed ? 'Confirm delete' : 'Delete'}
               </MenuItem>
             )}
           </Menu>
@@ -189,7 +195,8 @@ function Lane({
 }: CardActions & {
   label: string;
   testId: string;
-  target: DropTarget;
+  /** Absent: not a drop target. */
+  target?: DropTarget;
   tickets: LocalTicket[];
   runningModels: Map<string, string>;
   onDropTicket: (id: string, target: DropTarget) => void;
@@ -198,12 +205,15 @@ function Lane({
   return (
     <Box
       data-testid={testId}
-      onDragOver={(event: DragEvent) => event.preventDefault()}
-      onDrop={(event: DragEvent) => {
-        event.preventDefault();
-        const id = event.dataTransfer.getData(DRAG_TYPE);
-        if (id) onDropTicket(id, target);
-      }}
+      onDragOver={target && ((event: DragEvent) => event.preventDefault())}
+      onDrop={
+        target &&
+        ((event: DragEvent) => {
+          event.preventDefault();
+          const id = event.dataTransfer.getData(DRAG_TYPE);
+          if (id) onDropTicket(id, target);
+        })
+      }
       sx={{ flex: '1 1 0', minWidth: 200, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 1 }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
@@ -304,13 +314,7 @@ export function LoopBoardView({
           tickets={blocked.filter(ticket => !isUnsure(ticket))}
           {...cardProps}
         />
-        <Lane
-          label="Unsure"
-          testId="local-loops-column-unsure"
-          target={{ blocked: true }}
-          tickets={blocked.filter(isUnsure)}
-          {...cardProps}
-        />
+        <Lane label="Unsure" testId="local-loops-column-unsure" tickets={blocked.filter(isUnsure)} {...cardProps} />
       </Box>
       {closed.length > 0 && (
         <Box>

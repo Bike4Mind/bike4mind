@@ -1508,7 +1508,12 @@ export function ChatShell({
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
       ) : screen === 'loops' ? (
-        <LoopsScreen models={catalog.models} onClose={() => setScreen('conversation')} onOpenSession={selectSession} />
+        <LoopsScreen
+          list={localLoops}
+          models={catalog.models}
+          onClose={() => setScreen('conversation')}
+          onOpenSession={selectSession}
+        />
       ) : screen === 'models' ? (
         <ModelsScreen
           onClose={() => {

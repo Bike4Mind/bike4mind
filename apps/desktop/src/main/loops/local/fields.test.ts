@@ -34,3 +34,15 @@ describe('checkedFields', () => {
     expect(checkedFields({ directory, name: 'Renamed' }, current, new Set())).toMatchObject({ name: 'Renamed' });
   });
 });
+
+describe('checkedFields optional fields', () => {
+  it('clears an optional field sent as null and leaves an absent one alone', () => {
+    const current = testLoop({ fallbackModel: 'gpt-old', budgetCreditsPerDay: 50 });
+    const fields = checkedFields({ fallbackModel: null }, current, new Set());
+    expect(fields).toHaveProperty('fallbackModel', undefined);
+    expect(fields).not.toHaveProperty('budgetCreditsPerDay');
+    const stored = JSON.parse(JSON.stringify({ ...current, ...fields }));
+    expect(stored).not.toHaveProperty('fallbackModel');
+    expect(stored.budgetCreditsPerDay).toBe(50);
+  });
+});

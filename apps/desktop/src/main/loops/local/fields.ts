@@ -10,7 +10,7 @@ import {
   validateLoopStageConfig,
   validateLoopStages,
 } from '@bike4mind/common/loops';
-import type { CreateLocalLoopRequest, LocalLoop, LocalLoopStageConfig } from '@shared/localLoops';
+import type { LocalLoop, LocalLoopStageConfig, UpdateLocalLoopRequest } from '@shared/localLoops';
 
 /** The stage overrides a Desktop loop keeps: no `runner` (every stage runs here), tools or repo hint. */
 function stageConfigOf(value: unknown, stages: string[]): LocalLoopStageConfig[] {
@@ -19,15 +19,23 @@ function stageConfigOf(value: unknown, stages: string[]): LocalLoopStageConfig[]
   );
 }
 
+/** undefined leaves the field as is, null clears it (an undefined value is dropped when the loop is stored). */
+const optional = <T, R>(value: T | null | undefined, check: (value: T) => R): { value?: R } | undefined =>
+  value === undefined ? undefined : { value: value === null ? undefined : check(value) };
+
 /**
  * A loop request's fields, validated. `picked` holds the folders the owner chose in the native picker
  * (localloops:pick-folder): a directory is taken only from there, never as a path the renderer typed.
  */
 export function checkedFields(
-  request: Partial<CreateLocalLoopRequest>,
+  request: Omit<UpdateLocalLoopRequest, 'id'>,
   current: LocalLoop | undefined,
   picked: ReadonlySet<string>
 ): Partial<LocalLoop> {
+  const escalationModel = optional(request.escalationModel, validateLoopModel);
+  const fallbackModel = optional(request.fallbackModel, validateLoopModel);
+  const budgetCreditsPerDay = optional(request.budgetCreditsPerDay, validateLoopBudget);
+  const p2RunsPerDay = optional(request.p2RunsPerDay, runs => runs);
   const stages = request.stages !== undefined ? validateLoopStages(request.stages) : current?.stages;
   if (request.directory !== undefined && request.directory !== current?.directory && !picked.has(request.directory))
     throw new BadRequestError('Choose the folder with Choose folder.');
@@ -44,13 +52,11 @@ export function checkedFields(
       stageConfig: stageConfigOf(request.stageConfig ?? current?.stageConfig, stages ?? []),
     }),
     ...(request.model !== undefined && { model: validateLoopModel(request.model) }),
-    ...(request.escalationModel !== undefined && { escalationModel: validateLoopModel(request.escalationModel) }),
-    ...(request.fallbackModel !== undefined && { fallbackModel: validateLoopModel(request.fallbackModel) }),
+    ...(escalationModel && { escalationModel: escalationModel.value }),
+    ...(fallbackModel && { fallbackModel: fallbackModel.value }),
     ...(request.maxConcurrent !== undefined && { maxConcurrent: validateLoopMaxConcurrent(request.maxConcurrent) }),
-    ...(request.budgetCreditsPerDay !== undefined && {
-      budgetCreditsPerDay: validateLoopBudget(request.budgetCreditsPerDay),
-    }),
-    ...(request.p2RunsPerDay !== undefined && { p2RunsPerDay: request.p2RunsPerDay }),
+    ...(budgetCreditsPerDay && { budgetCreditsPerDay: budgetCreditsPerDay.value }),
+    ...(p2RunsPerDay && { p2RunsPerDay: p2RunsPerDay.value }),
     ...(request.directory !== undefined && { directory: request.directory }),
     ...(request.approvalMode !== undefined && { approvalMode: request.approvalMode }),
     ...(request.mirror !== undefined && { mirror: request.mirror }),
