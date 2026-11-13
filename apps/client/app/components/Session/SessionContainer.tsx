@@ -635,9 +635,7 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
                   off the input divider since the input has no top padding. */}
               {/* px aligns the message/status content with the input row (SessionBottom
                   pads 16px) so nothing hugs the narrow docked/floating panel edges. */}
-              <Box
-                sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', px: '16px', pb: '24px' }}
-              >
+              <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', px: '16px', pb: '24px' }}>
                 {!currentSessionId ? (
                   customSplash || <NotebookSplash />
                 ) : (
@@ -678,8 +676,7 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
                 sx={{
                   flexShrink: 0,
                   width: '100%',
-                  borderTop: '1px solid',
-                  borderColor: 'divider',
+                  // The line sits on the composer box (SessionBottom), under the status line.
                   backgroundColor: 'background.body',
                 }}
               >
@@ -704,20 +701,19 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
               {...dropZoneHandlers}
             >
               {isDraggingOver && <DropFilesOverlay />}
-              {/* pb keeps the last message's action row from touching the input divider
-                  now that the docked input has no top padding of its own. */}
               {/* px aligns the message/status content with the input row (SessionBottom
-                  pads 16px) so nothing hugs the narrow docked/floating panel edges. */}
+                  pads 16px) so nothing hugs the narrow docked/floating panel edges. minHeight,
+                  not overflow hidden: the scroll-to-bottom button (SessionMiddle) hangs below
+                  this pane into the status line and must stay visible. */}
               <Box
                 sx={{
                   flex: 1,
-                  overflow: 'hidden',
+                  minHeight: 0,
                   display: 'flex',
                   flexDirection: 'column',
                   pl: '16px',
                   // Narrower on the right: the message list's own scrollbar already sits there.
                   pr: '8px',
-                  pb: '24px',
                 }}
               >
                 {!currentSessionId ? (
@@ -734,8 +730,7 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
                 sx={{
                   flexShrink: 0,
                   width: '100%',
-                  borderTop: '1px solid',
-                  borderColor: 'divider',
+                  // The line sits on the composer box (SessionBottom), under the status line.
                   backgroundColor: 'background.body',
                 }}
               >

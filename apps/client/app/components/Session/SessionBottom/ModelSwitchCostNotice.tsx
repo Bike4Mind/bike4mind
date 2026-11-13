@@ -49,16 +49,3 @@ export function ModelSwitchCostNotice({ credits }: { credits: number | null }) {
     />
   );
 }
-
-/** The last turn's cache has expired. Dismissal lasts until the next turn's cache expires. */
-export function CacheExpiryNotice({ credits, expiresAt }: { credits: number | null; expiresAt: number | null }) {
-  return (
-    <CacheCostNotice
-      credits={credits}
-      testId="chat-cache-expiry-notice"
-      dismissLabel="Dismiss expired cache note"
-      lead="This chat's cache has expired"
-      dismissKey={expiresAt ?? undefined}
-    />
-  );
-}

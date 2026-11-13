@@ -51,17 +51,21 @@ export function usePromptCacheComposer({
       providerInputTokens: contextUsage?.providerInputTokens,
       cacheTtl,
     };
+    const cacheExpiryCredits =
+      writesPromptCache(selectedModel) && !isGenerating ? getCacheExpiryCostNotice({ ...input, expired }) : null;
     return {
       modelSwitchCredits: getModelSwitchCostNotice(input),
-      cacheExpiryCredits:
-        writesPromptCache(selectedModel) && !isGenerating ? getCacheExpiryCostNotice({ ...input, expired }) : null,
+      cacheExpiryCredits,
     };
   }, [selectedModel, contextUsage, cacheTtl, expired, isGenerating]);
 
+  // Every Claude chat has a cache worth a chip (and an anchor for the expired-cache hint); only
+  // models that take the 1-hour TTL get the choice.
   const ttlChip = useMemo(() => {
-    if (!hasSession || !supportsOneHourPromptCache(selectedModel)) return null;
+    if (!hasSession || !writesPromptCache(selectedModel)) return null;
     return {
       value: cacheTtl,
+      canChoose: supportsOneHourPromptCache(selectedModel),
       prices: contextUsage?.providerInputTokens
         ? promptCacheTtlPrices(selectedModel, contextUsage.providerInputTokens, contextUsage.answeredModelId)
         : promptCacheTtlPrices(selectedModel, contextUsage?.actualInputTokens, contextUsage?.inputModelId),
