@@ -238,7 +238,6 @@ export async function runAdminAi(
     );
   } catch {
     logger.error('admin AI attempt settlement failed', { feature });
-    return { ok: false, skip: 'error' };
   }
   return result;
 }

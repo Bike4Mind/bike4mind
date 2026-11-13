@@ -7,7 +7,12 @@ import {
   createMockRealtimeConnectionRepository,
   createMockUserRepository,
 } from '../__tests__/utils/testUtils';
-import { ABSOLUTE_SESSION_MAX_MS, DEFAULT_REFRESH_TTL_MS, MAX_SESSION_RECOVERIES } from './constants';
+import {
+  ABSOLUTE_SESSION_MAX_MS,
+  DEFAULT_REFRESH_TTL_MS,
+  MAX_SESSION_RECOVERIES,
+  PERSONA_SESSION_IDLE_TTL_MS,
+} from './constants';
 
 const SID = 'sid-1';
 const future = () => new Date(Date.now() + 60_000);
@@ -423,6 +428,22 @@ describe('rotateSession', () => {
       await rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken });
       const params = authSessions.rotateHash.mock.calls[0][1] as { newExpiresAt?: Date };
       expect(Math.abs(params.newExpiresAt!.getTime() - (Date.now() + DEFAULT_REFRESH_TTL_MS))).toBeLessThan(5000);
+    });
+
+    it('slides a persona-mint session by the persona idle window, never the 30-day one', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      const secret = generateRefreshSecret();
+      authSessions.findBySid.mockResolvedValue(
+        makeSession({
+          refreshTokenHash: hashRefreshSecret(secret),
+          createdAt: new Date(),
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+          createdVia: 'persona-mint',
+        })
+      );
+      await rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken });
+      const params = authSessions.rotateHash.mock.calls[0][1] as { newExpiresAt: Date };
+      expect(Math.abs(params.newExpiresAt.getTime() - (Date.now() + PERSONA_SESSION_IDLE_TTL_MS))).toBeLessThan(5000);
     });
 
     it('clamps the slide to createdAt + ABSOLUTE_SESSION_MAX_MS', async () => {
