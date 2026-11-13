@@ -3,7 +3,7 @@ import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
-import { UserApiKeyEvents } from '@bike4mind/common';
+import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
@@ -35,10 +35,14 @@ interface UpdateRateLimitRequest {
  * quota: metered on the key's own quota, the escape hatch sat behind the gate
  * it opens, so a headless client holding one exhausted key had no API path
  * back until the window rolled. It changes only which counter is charged -
- * csrfProtection and the findByUserIdAndId scoping above still decide who may
- * call this.
+ * the `api-keys:manage` scope gate, csrfProtection and the findByUserIdAndId
+ * scoping above still decide who may call this.
  */
-const handler = baseApi({ meterAsKeyManagement: true })
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.API_KEYS_MANAGE, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+  meterAsKeyManagement: true,
+})
   .use(csrfProtection())
   .patch(
     asyncHandler<{}, unknown, UpdateRateLimitRequest, { id: string }>(async (req, res) => {

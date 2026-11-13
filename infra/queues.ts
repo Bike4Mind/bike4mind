@@ -2,6 +2,7 @@ import {
   appFilesBucket,
   fabFileBucket,
   generatedImagesBucket,
+  historyImportBucket,
   publishedArtifactsBucket,
   slackExportBucket,
 } from './buckets';
@@ -781,6 +782,60 @@ const questExportQueueSubscription = questExportQueue.subscribe(
         resources: ['*'],
       },
     ],
+  },
+  SINGLE_RECORD_BATCH
+);
+
+// Account Erasure Queue
+// Admin data subject erasure: runs the account purge at once instead of waiting for the daily sweep.
+const accountErasureQueueDLQ = new sst.aws.Queue('accountErasureQueueDLQ', {});
+const accountErasureQueue = new sst.aws.Queue('accountErasureQueue', {
+  visibilityTimeout: '16 minutes',
+  dlq: {
+    queue: accountErasureQueueDLQ.arn,
+    retry: 2,
+  },
+});
+const accountErasureQueueSubscription = accountErasureQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/accountErasure.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '15 minutes',
+    vpc: lambdaVpc,
+    link: [
+      ...allSecrets,
+      eventBus,
+      fabFileBucket,
+      generatedImagesBucket,
+      appFilesBucket,
+      historyImportBucket,
+      publishedArtifactsBucket,
+      routerDistributionId,
+    ],
+    permissions: [
+      {
+        actions: ['s3:ListBucketVersions', 's3:DeleteObjectVersion'],
+        resources: [
+          fabFileBucket.arn,
+          $interpolate`${fabFileBucket.arn}/*`,
+          generatedImagesBucket.arn,
+          $interpolate`${generatedImagesBucket.arn}/*`,
+          appFilesBucket.arn,
+          $interpolate`${appFilesBucket.arn}/*`,
+          historyImportBucket.arn,
+          $interpolate`${historyImportBucket.arn}/*`,
+          publishedArtifactsBucket.arn,
+          $interpolate`${publishedArtifactsBucket.arn}/*`,
+        ],
+      },
+      {
+        actions: ['cloudfront:CreateInvalidation'],
+        resources: [router.nodes.cdn.apply(cdn => cdn.nodes.distribution.arn)],
+      },
+    ],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
   },
   SINGLE_RECORD_BATCH
 );
@@ -1798,6 +1853,7 @@ export {
   webhookDeliveryQueue,
   questExportQueue,
   accountDataExportQueue,
+  accountErasureQueue,
   publishThumbnailQueue,
   dataLakeCleanupQueue,
   dataLakeTaxonomyQueue,
@@ -1838,6 +1894,7 @@ export {
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
+  accountErasureQueueDLQ,
   publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
@@ -1880,6 +1937,7 @@ export {
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
   accountDataExportQueueSubscription,
+  accountErasureQueueSubscription,
   publishThumbnailQueueSubscription,
   publishThumbnailRenderer,
   dataLakeCleanupQueueSubscription,
