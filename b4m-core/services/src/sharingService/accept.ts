@@ -6,6 +6,7 @@ import {
   IInviteRepository,
   InviteType,
   IOrganizationDocument,
+  IOrganizationRepository,
   IProjectRepository,
   ISessionRepository,
   IShareableDocument,
@@ -13,6 +14,11 @@ import {
   Permission,
   ShareableAccessShape,
   isLinkOnlyInvite,
+  ConflictError,
+  isOrgMember,
+  isOrgOwnerOrCurrentAdmin,
+  isOrgOwnerOrPlatformAdmin,
+  roleForPermissions,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -22,6 +28,7 @@ import {
   UnprocessableEntityError,
 } from '@bike4mind/utils';
 import { z } from 'zod';
+import { pendingOrgInviteRecipients } from './orgSeatReservations';
 import { resolveRedeemableInvite } from './resolveRedeemableInvite';
 import { assertContentInvitePolicy } from './organizationPolicy';
 
@@ -43,7 +50,7 @@ interface AcceptInviteAdapters {
     };
     organization: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
-      update: (data: Partial<IOrganizationDocument>) => Promise<unknown>;
+      addMemberIfUnderCeiling: IOrganizationRepository['addMemberIfUnderCeiling'];
       ensureUserDetails: (organizationId: string, member: { id: string; email: string; name: string }) => Promise<void>;
     };
     users: {
@@ -62,15 +69,22 @@ const RESHAREABLE_INVITE_TYPES: ReadonlySet<InviteType> = new Set([
 
 type Inviter = Pick<IUserDocument, 'id' | 'groups'> | null;
 
+// 'already-member': a named org invite reached someone already in the org; it was consumed, nothing granted.
+export type AcceptInviteOutcome = 'accepted' | 'already-member';
+
 /**
  * Accepts an invite from a user.
  *
  * @param userId - The ID of the user accepting the invite.
  * @param params - The parameters for the accept invite operation.
  * @param adapters - The adapters for the database operations.
- * @returns The invite after accepting.
+ * @returns The invite after accepting, and whether the accept granted access or found an existing org member.
  */
-export const acceptInvite = async (userId: string, params: AcceptInviteParameters, { db }: AcceptInviteAdapters) => {
+export const acceptInvite = async (
+  userId: string,
+  params: AcceptInviteParameters,
+  { db }: AcceptInviteAdapters
+): Promise<{ invite: IInvite; outcome: AcceptInviteOutcome }> => {
   const { id } = secureParameters(params, acceptInviteSchema);
 
   const user = await db.users.findById(userId);
@@ -83,9 +97,22 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   const invite = await resolveRedeemableInvite(id, { db });
   if (!invite) throw new NotFoundError('Invite not found');
 
+  if (invite.revokedAt) throw new UnprocessableEntityError('Invite has been revoked');
+
   // createInvite defaults expiresAt 100 years out, so this only bites a real expiration.
   if (invite.expiresAt && invite.expiresAt < new Date()) {
     throw new UnprocessableEntityError('Invite has expired');
+  }
+
+  const acceptedEmail = user.email.toLowerCase();
+  if (
+    invite.type === InviteType.Organization &&
+    isLinkOnlyInvite(invite) &&
+    (invite.remaining <= 0 || invite.recipients?.accepted?.some(address => address.toLowerCase() === acceptedEmail))
+  ) {
+    const organization = await db.organization.findById(invite.documentId);
+    if (organization && isMemberOf(organization, user.id))
+      throw new ConflictError('You are already a member of this organization');
   }
 
   if (invite.remaining <= 0) {
@@ -96,7 +123,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   // out of `pending` into `accepted`, so on a multi-recipient invite where others are still
   // pending, checking membership first would misreport a re-accept as "not sent to your
   // account" instead of "already accepted".
-  if ((invite.recipients?.accepted || []).includes(user.email)) {
+  if ((invite.recipients?.accepted || []).some(email => email.toLowerCase() === acceptedEmail)) {
     throw new UnprocessableEntityError('User has already accepted the invite');
   }
 
@@ -120,6 +147,17 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
     throw new ForbiddenError('This invite was not sent to your account');
   }
 
+  // Exact host match on a verified address: an unverified email is only a claim, and a subdomain is
+  // not the domain the inviter named.
+  if (invite.allowedDomains?.length) {
+    const domain = email.slice(email.lastIndexOf('@') + 1);
+    if (!user.emailVerified || !invite.allowedDomains.includes(domain)) {
+      throw new ForbiddenError(
+        `This invite is limited to verified email addresses at ${invite.allowedDomains.join(', ')}`
+      );
+    }
+  }
+
   // Assumes the invite carries permissions.
   const inviteWithPermissions = invite as IInvite & { permissions: Permission[] };
 
@@ -128,6 +166,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   const inviter =
     invite.inviterId && RESHAREABLE_INVITE_TYPES.has(invite.type) ? await db.users.findById(invite.inviterId) : null;
 
+  let outcome: AcceptInviteOutcome = 'accepted';
   switch (invite.type) {
     case InviteType.Group: {
       const group = await db.groups.findById(invite.documentId);
@@ -217,11 +256,13 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
       break;
     }
     case InviteType.Organization:
-      await acceptOrganization(
+      outcome = await acceptOrganization(
         user,
         {
           organizationId: invite.documentId,
           permissions: inviteWithPermissions.permissions,
+          isLink: isLinkOnlyInvite(invite),
+          inviterId: invite.inviterId,
         },
         { db }
       );
@@ -238,37 +279,96 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   const accepted = await db.invites.acceptRecipient(invite.id, user.email);
   if (!accepted) throw new UnprocessableEntityError('Invite has no remaining users');
 
-  return accepted;
+  return { invite: accepted, outcome };
 };
 
 interface AcceptOrganizationParameters {
   organizationId: string;
   permissions: Permission[];
+  isLink: boolean;
+  inviterId?: string;
 }
+
+const isMemberOf = (organization: IOrganizationDocument, userId: string) =>
+  organization.userId === userId || organization.users.some(member => member.userId === userId);
 
 const acceptOrganization = async (
   user: IUserDocument,
   params: AcceptOrganizationParameters,
   { db }: AcceptInviteAdapters
-) => {
-  const { organizationId, permissions } = params;
+): Promise<AcceptInviteOutcome> => {
+  const { organizationId, permissions, isLink } = params;
   const organization = await db.organization.findById(organizationId);
 
   if (!organization) {
     throw new NotFoundError('Organization not found');
   }
+  // A named invite to an existing member is still consumed (by the caller's acceptRecipient), so its
+  // address leaves recipients.pending and stops reserving a seat; only a link join reports the 409.
+  // The member keeps their current role: an invite never changes it, only an org owner does.
+  if (isMemberOf(organization, user.id)) {
+    if (isLink) throw new ConflictError('You are already a member of this organization');
+    if (organization.users.some(member => member.userId === user.id)) {
+      await db.organization.ensureUserDetails(organizationId, {
+        id: user.id,
+        email: user.email ?? user.username,
+        name: user.name,
+      });
+    }
+    return 'already-member';
+  }
 
-  const totalUsers = (organization.users.length ?? 0) + 1; // We add 1 to include the owner of the organization
-  if (totalUsers >= organization.seats) {
+  if (isLink) {
+    const minter = params.inviterId ? await db.users.findById(params.inviterId) : null;
+    if (
+      !minter ||
+      !isOrgMember(minter, organization) ||
+      !isOrgOwnerOrCurrentAdmin(minter, organization) ||
+      (roleForPermissions(permissions) !== 'viewer' && !isOrgOwnerOrPlatformAdmin(minter, organization))
+    ) {
+      throw new ForbiddenError('The inviter can no longer grant access to this organization');
+    }
+  }
+
+  // A named invite's seat was reserved when it was minted, so only a link join holds the others back.
+  // The reservation is read from Invite docs while the conditional update reads only the Organization,
+  // so concurrent bulk minting and link joins can over-reserve pending seats; the accepted roster
+  // remains bounded by the conditional Organization update.
+  const ownEmail = (user.email ?? '').trim().toLowerCase();
+  const orgInvites = isLink ? await db.invites.findAllByDocumentId(organizationId) : [];
+  const reservedSeats = pendingOrgInviteRecipients(orgInvites).filter(address => address !== ownEmail).length;
+  // One conditional update, so concurrent joins cannot both pass the seat check; it runs inside the
+  // caller's transaction, so a later acceptRecipient failure rolls the join back.
+  const added = await db.organization.addMemberIfUnderCeiling(
+    organizationId,
+    { userId: user.id, permissions },
+    reservedSeats
+  );
+  if (!added) {
+    const current = await db.organization.findById(organizationId);
+    if (!current) throw new NotFoundError('Organization not found');
+    if (isMemberOf(current, user.id)) {
+      if (isLink) throw new ConflictError('You are already a member of this organization');
+      if (current.users.some(member => member.userId === user.id)) {
+        await db.organization.ensureUserDetails(organizationId, {
+          id: user.id,
+          email: user.email ?? user.username,
+          name: user.name,
+        });
+      }
+      return 'already-member';
+    }
     throw new ForbiddenError('Organization is full');
   }
 
-  pushShareable(organization, { userId: user.id, permissions });
-
-  // Persist ONLY the users[] edit with a targeted write. A whole-document write would $set the entire
-  // userDetails array from this stale snapshot and could revert a concurrent credit increment
-  // (updateUserDetails' atomic positional $inc); see organizationService/addMember.
-  await db.organization.update({ id: organization.id, users: organization.users });
+  // A named invite addressed to someone who joined by link would otherwise keep holding a seat for a
+  // member who already has one. Inside the caller's transaction, so a rolled-back join restores it.
+  if (ownEmail) {
+    const ownNamedInvites = orgInvites.filter(invite =>
+      (invite.recipients?.pending ?? []).some(address => address.trim().toLowerCase() === ownEmail)
+    );
+    for (const invite of ownNamedInvites) await db.invites.cancelPendingRecipient(invite.id, ownEmail);
+  }
 
   // Seed the credit side-table via the idempotent guarded $push - keeps users[]/userDetails[] in sync
   // and, unlike the previous unconditional push, never creates a duplicate row on a re-accept.
@@ -286,6 +386,7 @@ const acceptOrganization = async (
   // which set the selected organization as a required side effect of joining.
   user.organizationId = organizationId;
   await db.users.update({ id: user.id, organizationId: user.organizationId });
+  return 'accepted';
 };
 
 const acceptProject = async (

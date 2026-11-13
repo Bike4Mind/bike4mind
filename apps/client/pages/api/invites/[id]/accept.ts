@@ -11,12 +11,13 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ message: 'Invalid accept invite request' });
   }
 
-  const invite = await acceptInviteForUser(req, id);
+  const { invite, outcome } = await acceptInviteForUser(req, id);
 
   await notifyInvitesRefetch(req.user.id, 'Accepted invite');
 
   // Invitee-facing: strip co-recipients' emails from the returned invite.
-  return res.json(filterInviteRecipientsToSelf(invite, req.user.email));
+  // acceptOutcome 'already-member': a named org invite was consumed without changing the member's role.
+  return res.json({ ...filterInviteRecipientsToSelf(invite, req.user.email), acceptOutcome: outcome });
 });
 
 export const config = {

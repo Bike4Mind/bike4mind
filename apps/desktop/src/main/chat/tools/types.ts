@@ -762,7 +762,7 @@ export interface ApprovalPart {
 }
 
 /** What makes a part ask: an "Allow in this chat" covers it only when given over every one of these. */
-export type PartAskKind = 'unread' | 'outbound' | 'env';
+export type PartAskKind = 'unread' | 'outbound' | 'env' | 'gitUnlisted';
 
 export interface ApprovalAlways {
   /** The tool the patterns belong to: allowing `npm run dev *` for one tool is not allowing it for the other. */

@@ -133,6 +133,17 @@ export const InviteSchema: Schema<IInviteDocument> = new Schema<IInviteDocument>
       type: String,
       required: false,
     },
+    // See IBaseInvite.allowedDomains. `default: undefined` so an unrestricted invite stores nothing.
+    allowedDomains: {
+      type: [String],
+      required: false,
+      default: undefined,
+    },
+    revokedAt: {
+      type: Date,
+      required: false,
+      default: null,
+    },
     accepted: {
       type: Number,
       required: true,
@@ -164,6 +175,8 @@ export const InviteSchema: Schema<IInviteDocument> = new Schema<IInviteDocument>
   }
 );
 
+InviteSchema.index({ documentId: 1, type: 1 }, { name: 'invite_document_type' });
+
 // PARTIAL rather than sparse: DocumentDB honours `unique` on a sparse index but not the sparseness,
 // so every legacy tokenless invite collides on the missing value and the second one fails to save.
 // `$type: 'string'` (not `$exists`) also keeps an explicit null out of the constraint. Built by an
@@ -191,6 +204,8 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
     const filter = {
       _id: id,
       remaining: { $gt: 0 },
+      // A revoke landing after the service's read still refuses here; null also matches legacy rows.
+      revokedAt: null,
       $expr: {
         $and: [
           { $not: [{ $in: [lower, lowercased('accepted')] }] },
@@ -268,6 +283,13 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
     ]);
   }
 
+  async markRevoked(id: string): Promise<IInviteDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    return this.pipelineUpdate({ _id: id }, [
+      { $set: { remaining: 0, revokedAt: { $ifNull: ['$revokedAt', '$$NOW'] }, updatedAt: '$$NOW' } },
+    ]);
+  }
+
   private async updatePendingRecipient(id: string, email: string, stages: Record<string, unknown>[]) {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     return this.pipelineUpdate(
@@ -318,16 +340,18 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
   /** A bounded keyset page; callers may request one extra row to detect another page. */
   async findPageByDocumentId(
     documentId: string,
-    options: { type: InviteType; status?: 'pending' | 'accepted'; afterId?: string; limit: number }
+    options: { type: InviteType; status?: 'pending' | 'accepted'; afterId?: string; limit: number; linkOnly?: boolean }
   ): Promise<IInviteDocument[]> {
-    const { type, status, afterId, limit } = options;
+    const { type, status, afterId, limit, linkOnly } = options;
     const invites = await this.inviteModel
       .find({
         documentId,
         type,
+        ...(linkOnly !== undefined && { isLinkOnly: linkOnly }),
         ...(status !== undefined && { [`recipients.${status}.0`]: { $exists: true } }),
         ...(afterId !== undefined && { _id: { $gt: afterId } }),
       })
+      .select(linkOnly ? { recipients: 0 } : {})
       .sort({ _id: 1 })
       .limit(limit);
     return invites.map(invite => invite.toJSON() as IInviteDocument);

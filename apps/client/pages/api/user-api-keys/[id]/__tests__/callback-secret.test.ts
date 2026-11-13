@@ -100,6 +100,20 @@ describe('POST /api/user-api-keys/[id]/callback-secret', () => {
     expect(mockRefs.baseApiOptions).toMatchObject({ requiredScopes: [ApiKeyScope.AI_GENERATE] });
   });
 
+  it('refuses a key minted for a connected app and never calls the service', async () => {
+    const { req, res } = post('key-1');
+    (req as { apiKeyInfo?: unknown }).apiKeyInfo = {
+      scopes: [ApiKeyScope.AI_GENERATE],
+      oauthExchangeClientId: 'client-1',
+    };
+
+    const error = await mockRefs.handler!(req, res).catch(e => e);
+
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect(error.message).toBe('Keys minted for a connected app cannot manage API keys');
+    expect(userApiKeyRepository.findByUserIdAndId).not.toHaveBeenCalled();
+  });
+
   it('rejects a missing key id with a 400 BadRequestError and never calls the service', async () => {
     const { req, res } = post(undefined);
 

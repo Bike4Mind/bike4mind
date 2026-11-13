@@ -15,6 +15,7 @@ export * from './FabFileTypes';
 export * from './GroupTypes';
 export * from './InboxTypes';
 export * from './InviteType';
+export * from './organizationInviteRoles';
 export * from './MessageTypes';
 export * from './OrganizationTypes';
 export * from './SessionTypes';

@@ -35,6 +35,8 @@ declare global {
       preauthorizedLakeIds?: string[];
       /** When the key was minted; decides legacy status for grandfathered scope checks. */
       createdAt?: Date;
+      /** OAuth client that minted this key, present only for a federated exchange key. */
+      oauthExchangeClientId?: string;
     }
 
     interface ApiKeyUsageInfo {

@@ -18,6 +18,7 @@ import { ANALYTICS_SEARCH_KEYS } from './Analytics/analyticsTabSearch';
 import { PENDING_SEARCH_KEYS } from './inviteCenterSearch';
 import { STRIPE_DISPUTE_SEARCH_KEYS } from './stripeDisputeSearch';
 import { MODEL_METRICS_SEARCH_KEYS } from './ModelMetrics/modelMetricsSearch';
+import { DLQ_SEARCH_KEYS } from './dlqSearch';
 import type { AdminListSearchKeys } from './shared/useAdminListUrlState';
 
 describe('ADMIN_TAB_PARAMS', () => {
@@ -404,6 +405,7 @@ describe('useAdminListUrlState keys', () => {
       view: 'creditView',
       filters: { from: 'economyFrom', to: 'economyTo', owner: 'economyOwner', flow: 'economyFlow' },
     },
+    DLQ_SEARCH_KEYS,
   };
   // Left out of the registry on purpose, so validateSearch strips them: free-text searches that can
   // hold personal data, saved-view names that are not shareable yet, and query/view keys a tab never writes.
@@ -425,6 +427,8 @@ describe('useAdminListUrlState keys', () => {
     'metricsQuery',
     'metricsView',
     'economyQuery',
+    'dlqQuery',
+    'dlqView',
   ]);
   const registered = new Set<string>(Object.values(ADMIN_TAB_PARAMS).flat());
 

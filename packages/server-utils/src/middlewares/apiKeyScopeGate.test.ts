@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
 import {
   assertApiKeyScope,
@@ -8,6 +8,7 @@ import {
   LEGACY_API_KEY_WINDOW,
   LEGACY_SCOPE_PASS_LOG,
   parseStagedScopes,
+  SCOPE_STAGING_ENV_VAR,
   shouldLogLegacyPass,
 } from './apiKeyScopeGate';
 
@@ -291,24 +292,30 @@ describe('decideScopeGate grandfathering', () => {
   const required = [ApiKeyScope.ME_READ];
 
   it('legacy-allows a grandfathered key that misses the required scope', () => {
-    expect(decideScopeGate(required, [ApiKeyScope.AI_GENERATE], NONE, undefined, true)).toEqual({
+    expect(decideScopeGate(required, [ApiKeyScope.AI_GENERATE], NONE, undefined, { grandfathered: true })).toEqual({
       outcome: 'legacyAllow',
     });
-    expect(decideScopeGate(required, [], NONE, undefined, true).outcome).toBe('legacyAllow');
+    expect(decideScopeGate(required, [], NONE, undefined, { grandfathered: true }).outcome).toBe('legacyAllow');
   });
 
   it('denies the same key when the route or the key is not grandfathered', () => {
-    expect(decideScopeGate(required, [ApiKeyScope.AI_GENERATE], NONE, undefined, false).outcome).toBe('deny');
+    expect(
+      decideScopeGate(required, [ApiKeyScope.AI_GENERATE], NONE, undefined, { grandfathered: false }).outcome
+    ).toBe('deny');
     expect(decideScopeGate(required, [ApiKeyScope.AI_GENERATE], NONE).outcome).toBe('deny');
   });
 
   it('prefers a real hold, so the log lists only keys that still need a new key', () => {
-    expect(decideScopeGate(required, [ApiKeyScope.ME_READ], NONE, undefined, true).outcome).toBe('allow');
+    expect(decideScopeGate(required, [ApiKeyScope.ME_READ], NONE, undefined, { grandfathered: true }).outcome).toBe(
+      'allow'
+    );
   });
 
   it('reports a staged pass over a legacy one, so the key stays on the staging backlog', () => {
     expect(
-      decideScopeGate(required, [ApiKeyScope.AI_GENERATE], new Set([ApiKeyScope.ME_READ]), undefined, true)
+      decideScopeGate(required, [ApiKeyScope.AI_GENERATE], new Set([ApiKeyScope.ME_READ]), undefined, {
+        grandfathered: true,
+      })
     ).toEqual({
       outcome: 'stagedAllow',
       stagedScopes: required,
@@ -316,17 +323,21 @@ describe('decideScopeGate grandfathering', () => {
   });
 
   it('never admits a confined key', () => {
-    expect(decideScopeGate(required, [ApiKeyScope.EMBED_CHAT], NONE, undefined, true).outcome).toBe('deny');
-  });
-
-  it('never covers a missing AND scope', () => {
-    expect(decideScopeGate(required, [ApiKeyScope.ME_READ], NONE, [ApiKeyScope.AI_GENERATE], true).outcome).toBe(
+    expect(decideScopeGate(required, [ApiKeyScope.EMBED_CHAT], NONE, undefined, { grandfathered: true }).outcome).toBe(
       'deny'
     );
   });
 
+  it('never covers a missing AND scope', () => {
+    expect(
+      decideScopeGate(required, [ApiKeyScope.ME_READ], NONE, [ApiKeyScope.AI_GENERATE], { grandfathered: true }).outcome
+    ).toBe('deny');
+  });
+
   it('still denies an empty required list', () => {
-    expect(decideScopeGate([], [ApiKeyScope.AI_GENERATE], NONE, undefined, true).outcome).toBe('deny');
+    expect(decideScopeGate([], [ApiKeyScope.AI_GENERATE], NONE, undefined, { grandfathered: true }).outcome).toBe(
+      'deny'
+    );
   });
 });
 
@@ -366,5 +377,62 @@ describe('shouldLogLegacyPass', () => {
     expect(shouldLogLegacyPass('dedupe-key', '/api/x', t0 + 59 * 60 * 1000)).toBe(false);
     expect(shouldLogLegacyPass('dedupe-key', '/api/y', t0)).toBe(true);
     expect(shouldLogLegacyPass('dedupe-key', '/api/x', t0 + 60 * 60 * 1000)).toBe(true);
+  });
+});
+
+describe('exchange keys', () => {
+  const held = [ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ];
+
+  it('denies an exchange key on a scope-less route, staged or not', () => {
+    expect(decideScopeGate(undefined, held, NONE, undefined, { exchangeKey: true })).toEqual({ outcome: 'deny' });
+    expect(
+      decideScopeGate([ApiKeyScope.READ_NOTEBOOKS], held, new Set([ApiKeyScope.READ_NOTEBOOKS]), undefined, {
+        exchangeKey: true,
+      })
+    ).toEqual({
+      outcome: 'deny',
+    });
+  });
+
+  it('allows an exchange key on a route that names one of its scopes', () => {
+    expect(decideScopeGate([ApiKeyScope.ME_READ], held, NONE, undefined, { exchangeKey: true })).toEqual({
+      outcome: 'allow',
+    });
+  });
+
+  it('leaves a personal key with the same scopes on the scope-less default', () => {
+    expect(decideScopeGate(undefined, held, NONE)).toEqual({ outcome: 'allow' });
+  });
+
+  it('denies an exchange key on a grandfathered route, whatever it holds', () => {
+    const required = [ApiKeyScope.READ_NOTEBOOKS];
+    expect(decideScopeGate(required, held, NONE, undefined, { exchangeKey: true, grandfathered: true })).toEqual({
+      outcome: 'deny',
+    });
+    expect(decideScopeGate(required, held, NONE, undefined, { grandfathered: true })).toEqual({
+      outcome: 'legacyAllow',
+    });
+    expect(decideScopeGate(required, held, NONE, undefined, { grandfathered: false })).toEqual({ outcome: 'deny' });
+  });
+
+  it('allows an exchange key that explicitly matches on a grandfathered route', () => {
+    expect(
+      decideScopeGate([ApiKeyScope.ME_READ], held, NONE, undefined, { exchangeKey: true, grandfathered: true })
+    ).toEqual({ outcome: 'allow' });
+  });
+
+  describe('in-handler check', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('applies the same rule, including while the required scope is staged', () => {
+      vi.stubEnv(SCOPE_STAGING_ENV_VAR, ApiKeyScope.READ_NOTEBOOKS);
+      expect(parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]).staged.has(ApiKeyScope.READ_NOTEBOOKS)).toBe(true);
+      const exchange = { apiKeyInfo: { scopes: held, oauthExchangeClientId: 'client-1' } };
+      expect(holdsApiKeyScope(exchange, [ApiKeyScope.AI_GENERATE])).toBe(true);
+      expect(holdsApiKeyScope(exchange, [ApiKeyScope.READ_NOTEBOOKS])).toBe(false);
+      expect(holdsApiKeyScope({ apiKeyInfo: { scopes: held } }, [ApiKeyScope.READ_NOTEBOOKS])).toBe(true);
+    });
   });
 });
