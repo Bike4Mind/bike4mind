@@ -483,8 +483,8 @@ async function partAsk(entry: ShellScan['commands'][number]): Promise<ApprovalPa
  * The prompt for a shell command, shared by bash_execute and bash_background.
  *
  * The script is parsed here rather than at decision time so the card can say what "always" will
- * cover, and so one reading of the command serves both. A script that does not parse, or a `cwd`
- * outside every granted root, is asked about even where commands otherwise run unasked.
+ * cover, and so one reading of the command serves both. A `cwd` outside every granted root is asked
+ * about even where commands otherwise run unasked; a script that does not parse is decided by `unreadApproval`.
  */
 export async function shellApproval(
   tool: 'bash_execute' | 'bash_background',
