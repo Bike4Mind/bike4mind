@@ -4,6 +4,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
 import {
+  EXPLICIT_ONLY_API_KEY_SCOPES,
   GENERIC_MODAL_API_KEY_SCOPES,
   genericApiKeyScopesFor,
 } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
@@ -177,20 +178,24 @@ describe('AdminGenerateApiKeyModal - ingest scopes', () => {
 
   it('the generic counter ignores a selected ingest scope, and Select All replaces it', () => {
     renderModal();
-    const offered = genericApiKeyScopesFor({
+    const offeredScopes = genericApiKeyScopesFor({
       hasOptiAccess: true,
       hasOverwatchAccess: true,
       hearthEnabled: true,
       bypass: false,
       entitlements: new Set<string>(),
-    }).length;
+    });
+    const offered = offeredScopes.length;
+    const bulk = offeredScopes.filter(s => !EXPLICIT_ONLY_API_KEY_SCOPES.has(s.value)).length;
     const counter = () => screen.getByTestId('admin-generate-key-scopes-count').textContent;
     fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
     expect(counter()).toContain(`(0/${offered} selected)`);
 
     fireEvent.click(screen.getByText('Select All'));
-    expect(counter()).toContain(`(${offered}/${offered} selected)`);
+    expect(counter()).toContain(`(${bulk}/${offered} selected)`);
     expect(scopeInput(ApiKeyScope.QA_INGEST).checked).toBe(false);
+    // A key that can mint keys is only ever granted by ticking it.
+    expect(scopeInput(ApiKeyScope.API_KEYS_MANAGE).checked).toBe(false);
 
     fireEvent.click(screen.getByText('Clear All'));
     expect(counter()).toContain(`(0/${offered} selected)`);
@@ -332,15 +337,16 @@ describe('AdminGenerateApiKeyModal - premium scopes', () => {
     for (const scope of PREMIUM) expect(scopeRow(scope)).toBeNull();
 
     fireEvent.click(screen.getByText('Select All'));
-    const offered = genericApiKeyScopesFor({
+    const offeredScopes = genericApiKeyScopesFor({
       hasOptiAccess: false,
       hasOverwatchAccess: true,
       hearthEnabled: true,
       bypass: false,
       entitlements: new Set(),
-    }).length;
+    });
+    const bulk = offeredScopes.filter(s => !EXPLICIT_ONLY_API_KEY_SCOPES.has(s.value)).length;
     expect(screen.getByTestId('admin-generate-key-scopes-count').textContent).toContain(
-      `(${offered}/${offered} selected)`
+      `(${bulk}/${offeredScopes.length} selected)`
     );
   });
 

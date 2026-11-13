@@ -10,7 +10,11 @@ import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminU
 import { useAdminGenerateApiKey, AdminCreateUserApiKeyRequest } from '@client/app/hooks/data/userApiKeys';
 import { useGetPreauthorizableDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
-import { ADMIN_ONLY_API_KEY_SCOPES, type ApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import {
+  ADMIN_ONLY_API_KEY_SCOPES,
+  EXPLICIT_ONLY_API_KEY_SCOPES,
+  type ApiKeyScopeOption,
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import WarningIcon from '@mui/icons-material/Warning';
@@ -132,7 +136,10 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     });
   };
 
-  const selectAllScopeOptions = useMemo(() => scopeOptions.filter(s => !s.requiredEntitlement), [scopeOptions]);
+  const selectAllScopeOptions = useMemo(
+    () => scopeOptions.filter(s => !s.requiredEntitlement && !EXPLICIT_ONLY_API_KEY_SCOPES.has(s.value)),
+    [scopeOptions]
+  );
   const allScopesSelected = selectAllScopeOptions.every(s => formData.scopes.includes(s.value));
   const genericSelectedCount = formData.scopes.filter(s => !confinedScopeValues.has(s)).length;
 

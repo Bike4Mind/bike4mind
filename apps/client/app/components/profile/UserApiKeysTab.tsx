@@ -70,7 +70,11 @@ import {
   listAgentsContract,
   listDataLakesContract,
 } from '@bike4mind/common';
-import { OPEN_TO_ANY_KEY_ENDPOINTS, type ApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import {
+  EXPLICIT_ONLY_API_KEY_SCOPES,
+  OPEN_TO_ANY_KEY_ENDPOINTS,
+  type ApiKeyScopeOption,
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
@@ -115,6 +119,7 @@ const RESOURCE_LABELS: Record<string, string> = {
   'marketing-reports': 'Marketing Reports',
   optihashi: 'OptiHashi',
   me: 'Account',
+  'api-keys': 'API Keys',
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -123,6 +128,7 @@ const ACTION_LABELS: Record<string, string> = {
   generate: 'Generate',
   chat: 'Chat',
   compute: 'Compute',
+  manage: 'Manage',
 };
 
 const humanize = (s: string) =>
@@ -181,8 +187,7 @@ const buildScopeModel = (scopes: ApiKeyScopeOption[]): ScopeModel => {
     presetScopes: {
       read: readScopes,
       readwrite: [...readScopes, ...writeScopes],
-      // Minting personas creates accounts, so it is only granted by ticking it explicitly.
-      full: scopeValues.filter(value => value !== ApiKeyScope.PERSONAS_MINT),
+      full: scopeValues.filter(value => !EXPLICIT_ONLY_API_KEY_SCOPES.has(value)),
     },
   };
 };
