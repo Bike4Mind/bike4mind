@@ -5,8 +5,8 @@ import { b4mLLMTools, DATA_LAKE_TOOL_NAMES } from './llm';
 
 /**
  * An organization's allowlist of model providers, model ids and built-in tools. Each list is
- * `null` for unrestricted. Providers and models need at least one entry so an org cannot lock its
- * members out of every model; `allowedTools: []` is valid and withholds every built-in tool.
+ * `null` for unrestricted. Provider and model lists require at least one entry; their intersection
+ * can still refuse every available model. `allowedTools: []` withholds every built-in tool.
  */
 export const OrgModelPolicySchema = z
   .object({
@@ -18,20 +18,27 @@ export const OrgModelPolicySchema = z
 
 export type OrgModelPolicy = z.infer<typeof OrgModelPolicySchema>;
 
+/** Stored selections survive enum changes so administrators can see and remove obsolete restrictions. */
+export const StoredOrgModelPolicySchema = OrgModelPolicySchema.extend({
+  allowedProviders: z.array(z.string().min(1).max(200)).min(1).max(50).nullable().default(null),
+  allowedTools: z.array(z.string().min(1).max(200)).max(100).nullable().default(null),
+});
+export type StoredOrgModelPolicy = z.infer<typeof StoredOrgModelPolicySchema>;
+
 /**
  * A stored policy that no longer parses. Callers treat it as deny-all for everything the policy
  * governs, so a corrupt row fails closed instead of lifting the restriction.
  */
 export const INVALID_ORG_MODEL_POLICY = 'invalid' as const;
-export type ReadOrgModelPolicy = OrgModelPolicy | null | typeof INVALID_ORG_MODEL_POLICY;
+export type ReadOrgModelPolicy = StoredOrgModelPolicy | null | typeof INVALID_ORG_MODEL_POLICY;
 
 /**
- * Parse `organization.modelPolicy` as stored. Absent or null reads as unrestricted (`null`). A provider or
- * tool that is no longer a known enum member is dropped with a warning, which only narrows the allowlist.
+ * Parse `organization.modelPolicy` as stored. Absent or null reads as unrestricted (`null`). Unknown
+ * provider/tool strings remain restrictions; malformed shapes fail closed. Writes use the strict schema.
  */
 export function readOrgModelPolicy(raw: unknown): ReadOrgModelPolicy {
   if (raw === undefined || raw === null) return null;
-  const parsed = OrgModelPolicySchema.safeParse(dropUnknownMembers(normalizeStoredPolicy(raw)));
+  const parsed = StoredOrgModelPolicySchema.safeParse(normalizeStoredPolicy(raw));
   if (!parsed.success) return INVALID_ORG_MODEL_POLICY;
   const { allowedProviders, allowedModels, allowedTools } = parsed.data;
   if (allowedProviders === null && allowedModels === null && allowedTools === null) return null;
@@ -42,37 +49,16 @@ export function readOrgModelPolicy(raw: unknown): ReadOrgModelPolicy {
 // .strict() and .default(null) see the same shape the API wrote.
 function normalizeStoredPolicy(raw: unknown): unknown {
   if (typeof raw !== 'object' || Array.isArray(raw)) return raw;
-  const source =
+  const source: unknown =
     typeof (raw as { toObject?: unknown }).toObject === 'function'
-      ? (raw as { toObject: () => Record<string, unknown> }).toObject()
-      : (raw as Record<string, unknown>);
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(source)) {
-    if (key === '_id' || value === undefined) continue;
-    out[key] = value;
-  }
-  return out;
-}
-
-const KNOWN_MEMBERS: Readonly<Record<'allowedProviders' | 'allowedTools', ReadonlySet<string>>> = {
-  allowedProviders: new Set<string>(Object.values(ModelBackend)),
-  allowedTools: new Set<string>(b4mLLMTools.options),
-};
-
-// A provider or tool renamed in code would otherwise fail the whole row closed; an emptied provider list still
-// fails .min(1) and reads as invalid, so dropping can never widen the policy.
-function dropUnknownMembers(normalized: unknown): unknown {
-  if (typeof normalized !== 'object' || normalized === null || Array.isArray(normalized)) return normalized;
-  const out: Record<string, unknown> = { ...normalized };
-  for (const key of ['allowedProviders', 'allowedTools'] as const) {
-    const list = out[key];
-    if (!Array.isArray(list) || !list.every(item => typeof item === 'string')) continue;
-    const unknown = list.filter(item => !KNOWN_MEMBERS[key].has(item));
-    if (unknown.length === 0) continue;
-    console.warn(`readOrgModelPolicy: dropping unknown ${key} entries from a stored org policy`, unknown);
-    out[key] = list.filter(item => KNOWN_MEMBERS[key].has(item));
-  }
-  return out;
+      ? (raw as { toObject: () => unknown }).toObject()
+      : raw;
+  if (typeof source !== 'object' || source === null || Array.isArray(source)) return INVALID_ORG_MODEL_POLICY;
+  const prototype: unknown = Object.getPrototypeOf(source);
+  if (prototype !== Object.prototype && prototype !== null) return INVALID_ORG_MODEL_POLICY;
+  return Object.fromEntries(
+    Object.entries(source as Record<string, unknown>).filter(([key, value]) => key !== '_id' && value !== undefined)
+  );
 }
 
 /**

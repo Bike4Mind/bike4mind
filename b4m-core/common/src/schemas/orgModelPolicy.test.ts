@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ModelBackend } from '../models';
 import {
   INVALID_ORG_MODEL_POLICY,
@@ -59,41 +59,47 @@ describe('readOrgModelPolicy', () => {
     expect(readOrgModelPolicy({ allowedModels: 'gpt-4o' })).toBe(INVALID_ORG_MODEL_POLICY);
     expect(readOrgModelPolicy('nonsense')).toBe(INVALID_ORG_MODEL_POLICY);
     expect(readOrgModelPolicy([])).toBe(INVALID_ORG_MODEL_POLICY);
+    expect(readOrgModelPolicy(new Date('2026-01-01T00:00:00Z'))).toBe(INVALID_ORG_MODEL_POLICY);
+    expect(readOrgModelPolicy(/openai/)).toBe(INVALID_ORG_MODEL_POLICY);
+    expect(readOrgModelPolicy({ toObject: () => new Date() })).toBe(INVALID_ORG_MODEL_POLICY);
+    expect(readOrgModelPolicy(Object.fromEntries([['__proto__', {}]]))).toBe(INVALID_ORG_MODEL_POLICY);
   });
 });
 
 describe('readOrgModelPolicy with stale enum members', () => {
-  afterEach(() => vi.restoreAllMocks());
-
-  it('drops an unknown provider or tool with a warning instead of failing the row closed', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('retains obsolete selections for display and removal', () => {
     expect(
       readOrgModelPolicy({
         allowedProviders: ['openai', 'retired-provider'],
         allowedTools: ['web_search', 'removed_tool'],
       })
-    ).toEqual({ allowedProviders: ['openai'], allowedModels: null, allowedTools: ['web_search'] });
-    expect(warn).toHaveBeenCalledTimes(2);
-    expect(readOrgModelPolicy({ allowedTools: ['removed_tool'] })).toEqual({
-      allowedProviders: null,
+    ).toEqual({
+      allowedProviders: ['openai', 'retired-provider'],
       allowedModels: null,
-      allowedTools: [],
+      allowedTools: ['web_search', 'removed_tool'],
     });
   });
 
-  it('stays deny-all when every listed provider is unknown, and for a structurally broken row', () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(readOrgModelPolicy({ allowedProviders: ['retired-provider'] })).toBe(INVALID_ORG_MODEL_POLICY);
-    expect(readOrgModelPolicy({ allowedProviders: [1] })).toBe(INVALID_ORG_MODEL_POLICY);
-    expect(readOrgModelPolicy({ allowedTools: 'web_search' })).toBe(INVALID_ORG_MODEL_POLICY);
+  it('does not turn unknown-only providers into unrestricted or invalidate unrelated tools', () => {
+    const stored = readOrgModelPolicy({ allowedProviders: ['retired-provider'] });
+    expect(stored).toEqual({ allowedProviders: ['retired-provider'], allowedModels: null, allowedTools: null });
+    expect(isModelAllowedByOrgPolicy(stored, { id: 'tts-1', backend: ModelBackend.OpenAI })).toBe(false);
+    expect(isToolAllowedByOrgPolicy(stored, 'web_search')).toBe(true);
   });
 
-  it('does not warn for a policy whose members are all known', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    readOrgModelPolicy({ allowedProviders: ['openai'], allowedTools: ['web_search'], allowedModels: ['gpt-4o'] });
-    readOrgModelPolicy({ allowedTools: null });
-    expect(warn).not.toHaveBeenCalled();
+  it('withholds known tools for unknown-only tool selections without blocking unrelated models', () => {
+    const stored = readOrgModelPolicy({ allowedTools: ['removed_tool'] });
+    expect(stored).toEqual({ allowedProviders: null, allowedModels: null, allowedTools: ['removed_tool'] });
+    expect(isToolAllowedByOrgPolicy(stored, 'web_search')).toBe(false);
+    expect(isModelAllowedByOrgPolicy(stored, { id: 'tts-1' })).toBe(true);
   });
+
+  it.each([{ allowedProviders: [1] }, { allowedTools: 'web_search' }, { allowedTools: [1] }, { extra: true }])(
+    'fails closed on malformed stored structure: %j',
+    raw => {
+      expect(readOrgModelPolicy(raw)).toBe(INVALID_ORG_MODEL_POLICY);
+    }
+  );
 });
 
 describe('isModelAllowedByOrgPolicy', () => {
@@ -140,6 +146,10 @@ describe('isModelAllowedByOrgPolicy', () => {
     expect(isModelAllowedByOrgPolicy(p, { id: 'new-model' }, resolve)).toBe(true);
     expect(isModelAllowedByOrgPolicy(p, { id: 'new-model' })).toBe(false);
     expect(isModelAllowedByOrgPolicy(p, { id: 'other-model' }, resolve)).toBe(false);
+    const providerRestricted = policy({ allowedModels: ['old-model'], allowedProviders: [ModelBackend.OpenAI] });
+    expect(
+      isModelAllowedByOrgPolicy(providerRestricted, { id: 'new-model', backend: ModelBackend.Anthropic }, resolve)
+    ).toBe(false);
   });
 });
 

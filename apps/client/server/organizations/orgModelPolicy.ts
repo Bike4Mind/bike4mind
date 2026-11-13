@@ -3,6 +3,7 @@ import {
   OrgModelPolicySchema,
   readOrgModelPolicy,
   type OrgModelPolicy,
+  type StoredOrgModelPolicy,
 } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/utils';
@@ -14,12 +15,12 @@ export const ORG_MODEL_POLICY_FIELDS: readonly OrgModelPolicyField[] = [
   'allowedTools',
 ];
 
-export interface OrgModelPolicyView {
+export type OrgModelPolicyView = {
   /** The effective policy; every list null when the org has none. */
-  policy: OrgModelPolicy;
+  policy: StoredOrgModelPolicy;
   /** The stored row no longer parses; enforcement treats it as deny-all until it is saved or reset. */
   invalidStored: boolean;
-}
+};
 
 const UNRESTRICTED: OrgModelPolicy = OrgModelPolicySchema.parse({});
 
@@ -42,7 +43,7 @@ export async function setOrgModelPolicy(orgId: string, policy: OrgModelPolicy): 
     if (policy[field] !== null) Object.assign(stored, { [field]: policy[field] });
   }
   if (Object.keys(stored).length === 0) return resetOrgModelPolicy(orgId);
-  await organizationRepository.update({ id: orgId, modelPolicy: stored as OrgModelPolicy });
+  await organizationRepository.update({ id: orgId, modelPolicy: stored });
 }
 
 export async function resetOrgModelPolicy(orgId: string): Promise<void> {

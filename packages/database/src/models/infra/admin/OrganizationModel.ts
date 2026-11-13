@@ -57,15 +57,6 @@ const orgMembershipFilter = (userId: string): Record<string, unknown> => ({
   $or: [{ userId }, { users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } }],
 });
 
-const OrgModelPolicySubSchema = new Schema(
-  {
-    allowedProviders: { type: [String], default: undefined },
-    allowedModels: { type: [String], default: undefined },
-    allowedTools: { type: [String], default: undefined },
-  },
-  { _id: false }
-);
-
 const OrganizationSchema = new Schema<IOrganizationDocument>(
   {
     ...ShareableDocumentSchema,
@@ -176,8 +167,9 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     maxCreditsPerMember: { type: Number, required: false },
     serviceAccountUserId: { type: String, required: false },
     redactPushContent: { type: Boolean, default: false },
-    // Absent = unrestricted; validated by OrgModelPolicySchema on write and readOrgModelPolicy on read.
-    modelPolicy: { type: OrgModelPolicySubSchema, required: false, default: undefined },
+    // Preserve raw shapes: [String] casting could repair a corrupt restriction before fail-closed validation.
+    // Writes use OrgModelPolicySchema; every reader must use readOrgModelPolicy.
+    modelPolicy: { type: Schema.Types.Mixed, required: false, default: undefined },
     sharingPolicy: {
       type: new Schema(
         {

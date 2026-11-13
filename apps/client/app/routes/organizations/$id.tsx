@@ -4,6 +4,7 @@ import {
   WithId,
   isOrgOwnerOrCurrentAdmin,
   isOrgOwnerOrPlatformAdmin,
+  canAdministerOrganization,
 } from '@bike4mind/common';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
@@ -142,6 +143,7 @@ const OrganizationPage: FC = () => {
     () => canManageOrgConnectors(currentUser, organization),
     [currentUser, organization]
   );
+  const canManageModelPolicy = !!currentUser && !!organization && canAdministerOrganization(currentUser, organization);
 
   // Only the billing owner or a platform admin may add or remove managers (admins route authz).
   const canSetAdmins = useMemo(() => {
@@ -459,9 +461,11 @@ const OrganizationPage: FC = () => {
                   {t('organization.headings.settings')}
                 </Typography>
                 <OrganizationSettingsSection organization={organization} />
-                <Box sx={{ mt: 4 }}>
-                  <OrgModelPolicySection key={organization.id} organization={organization} />
-                </Box>
+                {canManageModelPolicy && (
+                  <Box sx={{ mt: 4 }}>
+                    <OrgModelPolicySection key={organization.id} organization={organization} />
+                  </Box>
+                )}
               </TabPanel>
             )}
           </Box>

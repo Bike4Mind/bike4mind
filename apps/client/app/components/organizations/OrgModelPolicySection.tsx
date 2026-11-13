@@ -19,8 +19,9 @@ import {
   b4mLLMTools,
   expandOrgAllowedTools,
   ModelBackend,
+  OrgModelPolicySchema,
   type IOrganizationDocument,
-  type OrgModelPolicy,
+  type StoredOrgModelPolicy,
 } from '@bike4mind/common';
 import {
   useOrgModelPolicy,
@@ -29,16 +30,16 @@ import {
 } from '@client/app/hooks/data/useOrgModelPolicy';
 import { useOrgModelChoices } from '@client/app/hooks/data/useModelInfo';
 
-interface PolicyForm {
+type PolicyForm = {
   restrictProviders: boolean;
   providers: string[];
   restrictModels: boolean;
   models: string[];
   restrictTools: boolean;
   tools: string[];
-}
+};
 
-const toForm = (policy: OrgModelPolicy): PolicyForm => ({
+const toForm = (policy: StoredOrgModelPolicy): PolicyForm => ({
   restrictProviders: policy.allowedProviders !== null,
   providers: [...(policy.allowedProviders ?? [])],
   restrictModels: policy.allowedModels !== null,
@@ -47,11 +48,12 @@ const toForm = (policy: OrgModelPolicy): PolicyForm => ({
   tools: [...(policy.allowedTools ?? [])],
 });
 
-const toPolicy = (form: PolicyForm): OrgModelPolicy => ({
-  allowedProviders: form.restrictProviders ? (form.providers as OrgModelPolicy['allowedProviders']) : null,
-  allowedModels: form.restrictModels ? form.models : null,
-  allowedTools: form.restrictTools ? (form.tools as OrgModelPolicy['allowedTools']) : null,
-});
+const toPolicy = (form: PolicyForm) =>
+  OrgModelPolicySchema.safeParse({
+    allowedProviders: form.restrictProviders ? form.providers : null,
+    allowedModels: form.restrictModels ? form.models : null,
+    allowedTools: form.restrictTools ? form.tools : null,
+  });
 
 const PROVIDERS: readonly string[] = Object.values(ModelBackend);
 
@@ -72,7 +74,10 @@ const TOOL_ROWS: ReadonlyArray<{ tool: string; companions: string[] }> = (() => 
 const toggle = (list: string[], value: string, on: boolean) =>
   on ? [...list.filter(item => item !== value), value] : list.filter(item => item !== value);
 
-const sameList = (a: string[], b: string[]) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
+const sameList = (a: string[], b: string[]) => {
+  const sortedB = [...b].sort();
+  return a.length === b.length && [...a].sort().every((value, index) => value === sortedB[index]);
+};
 
 const sameForm = (a: PolicyForm, b: PolicyForm) =>
   a.restrictProviders === b.restrictProviders &&
@@ -108,23 +113,32 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
   const { data: catalogModels } = useOrgModelChoices(orgId);
 
   // Models the org currently disallows come back locked, so listed and locked together are the full choice.
-  // A selected id the catalog no longer lists (a retired model) is kept, labelled by id, so it can be removed.
+  // Keep every selected id visible, including retired ids and models outside the draft's provider list.
   const modelChoices = useMemo(() => {
     const byId = new Map<string, { id: string; name: string }>();
     for (const model of catalogModels ?? []) {
       if (!form.restrictProviders || form.providers.includes(model.backend)) byId.set(model.id, model);
     }
-    const listed = [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
-    const known = new Set<string>((catalogModels ?? []).map(model => model.id));
-    const unlisted = form.models.filter(id => !known.has(id)).map(id => ({ id, name: id }));
-    return [...listed, ...unlisted];
+    for (const id of form.models) {
+      if (byId.has(id)) continue;
+      const model = catalogModels?.find(candidate => candidate.id === id);
+      byId.set(id, {
+        id,
+        name: model ? `${model.name} (outside selected providers)` : `${id} (not in current catalog)`,
+      });
+    }
+    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [catalogModels, form.restrictProviders, form.providers, form.models]);
 
   const update = (patch: Partial<PolicyForm>) => setForm(current => ({ ...current, ...patch }));
   const emptyRestriction =
     (form.restrictProviders && form.providers.length === 0) || (form.restrictModels && form.models.length === 0);
   const busy = save.isPending || reset.isPending;
-  const canSave = !busy && !emptyRestriction && (invalidStored || !sameForm(form, saved));
+  const parsedPolicy = toPolicy(form);
+  const staleProviders = [...new Set(form.providers.filter(provider => !PROVIDERS.includes(provider)))];
+  const knownTools: ReadonlySet<string> = new Set(b4mLLMTools.options);
+  const staleTools = [...new Set(form.tools.filter(tool => !knownTools.has(tool)))];
+  const canSave = !busy && !emptyRestriction && parsedPolicy.success && (invalidStored || !sameForm(form, saved));
   const savedUnrestricted = !saved.restrictProviders && !saved.restrictModels && !saved.restrictTools;
 
   return (
@@ -156,10 +170,10 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
           </Stack>
           {form.restrictProviders && (
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mt: 1 }}>
-              {PROVIDERS.map(provider => (
+              {[...PROVIDERS, ...staleProviders].map(provider => (
                 <Checkbox
                   key={provider}
-                  label={provider}
+                  label={PROVIDERS.includes(provider) ? provider : `${provider} (unrecognized; remove to save)`}
                   checked={form.providers.includes(provider)}
                   onChange={event => update({ providers: toggle(form.providers, provider, event.target.checked) })}
                   data-testid={`org-model-policy-provider-${provider}`}
@@ -201,6 +215,9 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
           {form.restrictModels && form.models.length === 0 && (
             <FormHelperText>Choose at least one model.</FormHelperText>
           )}
+          <FormHelperText>
+            A retired model ID also allows its configured successor. Provider restrictions still apply.
+          </FormHelperText>
         </FormControl>
 
         <FormControl>
@@ -224,6 +241,15 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
                   data-testid={`org-model-policy-tool-${tool}`}
                 />
               ))}
+              {staleTools.map(tool => (
+                <Checkbox
+                  key={tool}
+                  label={`${tool} (unrecognized; remove to save)`}
+                  checked
+                  onChange={() => update({ tools: toggle(form.tools, tool, false) })}
+                  data-testid={`org-model-policy-tool-${tool}`}
+                />
+              ))}
               <FormHelperText>Unchecking every tool turns off all built-in tools.</FormHelperText>
             </Box>
           )}
@@ -240,7 +266,9 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
             Reset to unrestricted
           </Button>
           <Button
-            onClick={() => save.mutate(toPolicy(form))}
+            onClick={() => {
+              if (parsedPolicy.success) save.mutate(parsedPolicy.data);
+            }}
             disabled={!canSave}
             loading={save.isPending}
             data-testid="org-model-policy-save-btn"

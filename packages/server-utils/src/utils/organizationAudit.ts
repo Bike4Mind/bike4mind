@@ -39,6 +39,5 @@ export const organizationLifecycleAuditActions: Readonly<Record<string, Organiza
   'org.invite.created': 'invite.created',
   'org.member_budget.updated': 'policy.updated',
   'org.custom_mcp_policy.updated': 'policy.updated',
-  'org.model_policy.updated': 'policy.updated',
   'org.slack_channel_api_posting.updated': 'policy.updated',
 };

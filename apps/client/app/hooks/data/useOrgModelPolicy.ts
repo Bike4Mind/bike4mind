@@ -1,16 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import type { OrgModelPolicy } from '@bike4mind/common';
+import type { OrgModelPolicy, StoredOrgModelPolicy } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { MODEL_CATALOG_QUERY_KEY } from '@client/app/hooks/data/useModelInfo';
 import { getErrorMessage } from '@client/app/utils/error';
 
 /** Mirrors OrgModelPolicyView in server/organizations/orgModelPolicy.ts. */
-export interface OrgModelPolicyView {
-  policy: OrgModelPolicy;
+export type OrgModelPolicyView = {
+  policy: StoredOrgModelPolicy;
   /** The stored row failed validation, so enforcement treats the org as allowing nothing. */
   invalidStored: boolean;
-}
+};
 
 export const orgModelPolicyQueryKey = (orgId: string) => ['org-model-policy', orgId] as const;
 

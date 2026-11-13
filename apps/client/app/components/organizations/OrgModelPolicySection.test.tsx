@@ -1,12 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { ModelBackend, type IOrganizationDocument, type OrgModelPolicy } from '@bike4mind/common';
+import {
+  ModelBackend,
+  type IOrganizationDocument,
+  type OrgModelPolicy,
+  type StoredOrgModelPolicy,
+} from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
-    view: undefined as { policy: OrgModelPolicy; invalidStored: boolean } | undefined,
+    view: undefined as { policy: StoredOrgModelPolicy; invalidStored: boolean } | undefined,
     save: vi.fn(),
     reset: vi.fn(),
     choicesOrgId: undefined as string | undefined,
@@ -118,5 +123,43 @@ describe('OrgModelPolicySection', () => {
     expect(screen.getByTestId('org-model-policy-invalid-alert')).toBeTruthy();
     expect(saveButton().disabled).toBe(false);
     expect((screen.getByTestId('org-model-policy-reset-btn') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('keeps a selected known model visible after its provider is excluded from the draft', () => {
+    mocks.view = {
+      policy: { ...UNRESTRICTED, allowedProviders: [ModelBackend.OpenAI], allowedModels: ['gpt'] },
+      invalidStored: false,
+    };
+    renderSection();
+    tick(`org-model-policy-provider-${ModelBackend.OpenAI}`);
+    tick(`org-model-policy-provider-${ModelBackend.Anthropic}`);
+    expect(screen.getByTestId('org-model-policy-models-select').textContent).toContain(
+      'GPT (outside selected providers)'
+    );
+    expect(screen.getByText(/A retired model ID also allows its configured successor/)).toBeTruthy();
+  });
+
+  it('shows obsolete selections and requires their explicit removal before a strict save', () => {
+    mocks.view = {
+      policy: {
+        ...UNRESTRICTED,
+        allowedProviders: [ModelBackend.OpenAI, 'retired-provider'],
+        allowedTools: ['web_search', 'removed_tool'],
+      },
+      invalidStored: false,
+    };
+    renderSection();
+    expect(screen.getByLabelText('retired-provider (unrecognized; remove to save)')).toBeTruthy();
+    expect(screen.getByLabelText('removed_tool (unrecognized; remove to save)')).toBeTruthy();
+    tick('org-model-policy-provider-retired-provider');
+    expect(saveButton().disabled).toBe(true);
+    tick('org-model-policy-tool-removed_tool');
+    expect(saveButton().disabled).toBe(false);
+    fireEvent.click(saveButton());
+    expect(mocks.save).toHaveBeenCalledWith({
+      allowedProviders: [ModelBackend.OpenAI],
+      allowedModels: null,
+      allowedTools: ['web_search'],
+    });
   });
 });

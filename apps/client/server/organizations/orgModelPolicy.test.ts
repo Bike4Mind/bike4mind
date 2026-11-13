@@ -20,14 +20,14 @@ describe('diffOrgModelPolicy', () => {
   });
 
   it('over an invalid stored row, records every field the new policy sets and skips null-to-null', () => {
-    const before = toOrgModelPolicyView({ allowedProviders: ['not-a-backend'] });
+    const before = toOrgModelPolicyView({ allowedProviders: [] });
     expect(before.invalidStored).toBe(true);
     const changes = diffOrgModelPolicy(before, policy({ allowedModels: ['a'] }));
     expect(changes).toEqual([{ field: 'allowedModels', before: null, after: ['a'] }]);
   });
 
   it('still records nothing over an invalid stored row reset to unrestricted', () => {
-    const before = toOrgModelPolicyView({ allowedProviders: ['not-a-backend'] });
+    const before = toOrgModelPolicyView({ allowedProviders: [] });
     expect(diffOrgModelPolicy(before, policy({}))).toEqual([]);
   });
 });

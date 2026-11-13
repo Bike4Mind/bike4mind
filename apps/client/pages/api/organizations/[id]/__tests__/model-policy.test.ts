@@ -29,8 +29,16 @@ const verifyOrgAccess = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+const strictAudit = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/organizationAudit')>()),
+  recordOrganizationAuditEvent: strictAudit,
+}));
 const organizationRepository = vi.hoisted(() => ({ findById: vi.fn(), update: vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ organizationRepository }));
+vi.mock('@bike4mind/database', () => ({
+  organizationRepository,
+  withTransaction: async (callback: () => Promise<unknown>) => callback(),
+}));
 
 await import('@pages/api/organizations/[id]/model-policy');
 
@@ -121,6 +129,12 @@ describe('/api/organizations/[id]/model-policy', () => {
       policy: { allowedProviders: ['openai'], allowedModels: ['gpt-4o'], allowedTools: [] },
       invalidStored: false,
     });
+    expect(strictAudit).toHaveBeenCalledExactlyOnceWith({
+      organizationId: 'org1',
+      actorUserId: 'manager1',
+      action: 'policy.updated',
+      targetId: 'model-policy',
+    });
   });
 
   it('PUT with the same lists in another order writes nothing and records no audit', async () => {
@@ -172,8 +186,8 @@ describe('/api/organizations/[id]/model-policy', () => {
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
-  it('is catalogued for the admin audit and surfaces as policy.updated in the org audit', () => {
+  it('keeps the platform catalogue but excludes the strictly written event from the best-effort bridge', () => {
     expect(ADMIN_AUDIT_CATALOGUE['org.model_policy.updated']).toMatchObject({ category: 'org', severity: 'notice' });
-    expect(organizationLifecycleAuditActions['org.model_policy.updated']).toBe('policy.updated');
+    expect(organizationLifecycleAuditActions['org.model_policy.updated']).toBeUndefined();
   });
 });

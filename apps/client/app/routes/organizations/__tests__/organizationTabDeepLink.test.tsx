@@ -59,7 +59,9 @@ vi.mock('@client/app/components/organizations/Member', () => ({ default: () => n
 vi.mock('@client/app/components/organizations/OrganizationGroups', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationBillingSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationSettingsSection', () => ({ default: () => null }));
-vi.mock('@client/app/components/organizations/OrgModelPolicySection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgModelPolicySection', () => ({
+  default: () => <div data-testid="model-policy-editor" />,
+}));
 vi.mock('@client/app/components/organizations/OrganizationUsageSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationAnalysisSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgSlackIntegration', () => ({ default: () => null }));
@@ -147,6 +149,7 @@ describe('organization detail page - ?tab= deep link', () => {
     render(wrapper(<OrganizationPage />));
     expect(selectedTabName()).toContain('Settings');
     expect(screen.getAllByTestId('organization-audit-tab')).toHaveLength(1);
+    expect(screen.getByTestId('model-policy-editor')).toBeTruthy();
   });
 
   it.each([404, 403, 500])('shows a way back instead of spinning after HTTP %s', status => {
@@ -197,6 +200,7 @@ describe('organization detail page - ?tab= deep link', () => {
     renderThroughLoad();
 
     expect(selectedTabName()).toBe('Settings');
+    expect(screen.getByTestId('model-policy-editor')).toBeTruthy();
   });
 
   it('still falls back to Overview for a member who may not see Usage', () => {
@@ -218,6 +222,14 @@ describe('organization detail page - ?tab= deep link', () => {
     renderThroughLoad();
 
     expect(selectedTabName()).toBe('Settings');
+    expect(screen.queryByTestId('model-policy-editor')).toBeNull();
+  });
+
+  it('shows the policy editor to a platform administrator without requiring an organization ACL row', () => {
+    searchParams.current = { tab: 'settings' };
+    user.current = { id: 'platform-admin', isAdmin: true };
+    renderThroughLoad();
+    expect(screen.getByTestId('model-policy-editor')).toBeTruthy();
   });
 
   it('opens the Billing tab for the owner, the only caller its actions accept', () => {
