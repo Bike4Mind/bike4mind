@@ -41,7 +41,10 @@ for (const file of coreFiles) {
   }
 }
 
-const files = git(staged ? ['diff', '--cached', '--name-only', '--diff-filter=AM'] : ['ls-files'])
+// Pathspec-filtered: an unfiltered `git ls-files` outgrows execFileSync's 1 MiB default buffer (ENOBUFS).
+const files = git(
+  staged ? ['diff', '--cached', '--name-only', '--diff-filter=AM'] : ['ls-files', '--', '*sst-env.d.ts']
+)
   .split('\n')
   .filter(f => f === 'sst-env.d.ts' || f.endsWith('/sst-env.d.ts'));
 
