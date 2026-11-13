@@ -318,7 +318,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       let authResult;
       try {
-        authResult = await resolveContractAuth(headers, createCompletionContract);
+        authResult = await resolveContractAuth(headers, createCompletionContract, { allowExchangeKeys: true });
       } catch (authError) {
         logger.warn('[CLI_LLM] Authentication failed', { requestId, error: serializeError(authError) });
         // verifyApiKey and verifyJwtToken throw plain Errors for a missing or invalid credential.

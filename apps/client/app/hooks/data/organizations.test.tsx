@@ -9,6 +9,7 @@ import { fabFileKeys } from './fabFileKeys';
 import { dataLakeKeys } from './dataLakeKeys';
 import {
   useGetOrganization,
+  useOrganizationInviteLinks,
   useGetUserOrganizations,
   useMemberOffboardingInventory,
   useRemoveMemberFromOrganization,
@@ -357,5 +358,24 @@ describe('member offboarding inventory after removal', () => {
       queryClient.clear();
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('organization invite link pages', () => {
+  it('loads the next cursor and keeps earlier rows', async () => {
+    get.mockReset();
+    get.mockResolvedValueOnce({ data: [{ id: 'link-a' }], headers: { 'x-next-cursor': '000000000000000000000001' } });
+    const { result } = renderWithClient(() => useOrganizationInviteLinks('org-pages'));
+    await waitFor(() => expect(result.current.data).toEqual([{ id: 'link-a' }]));
+    expect(result.current.hasNextPage).toBe(true);
+    get.mockResolvedValueOnce({ data: [{ id: 'link-b' }], headers: {} });
+    await act(async () => {
+      await result.current.fetchNextPage();
+    });
+    await waitFor(() => expect(result.current.data).toEqual([{ id: 'link-a' }, { id: 'link-b' }]));
+    expect(get).toHaveBeenLastCalledWith('/api/organizations/org-pages/invite-links', {
+      params: { after: '000000000000000000000001' },
+    });
+    expect(result.current.hasNextPage).toBe(false);
   });
 });

@@ -6,6 +6,7 @@ import {
   IUserApiKeyRateLimit,
   type ApiKeyRateLimitHeader,
   type ApiKeyRateLimitUsage,
+  isExchangeKeyMetadata,
 } from '@bike4mind/common';
 import { logEvent } from './analyticsLog';
 import { Logger } from '@bike4mind/observability';
@@ -98,7 +99,7 @@ export function buildRateLimitKeys(
 async function resolveRateLimitKeys(keyId: string, counter: RateLimitCounter = 'request') {
   if (counter === 'management') return buildRateLimitKeys(keyId, counter);
   const key = await userApiKeyRepository.findById(keyId);
-  if (key?.metadata?.createdFrom !== 'oauth-exchange') return buildRateLimitKeys(keyId, counter);
+  if (!isExchangeKeyMetadata(key?.metadata)) return buildRateLimitKeys(keyId, counter);
   if (!key.userId || !key.metadata.oauthClientId) throw new Error('Invalid federated quota identity');
   // Hash a tuple so client ids cannot collide with delimiters or ordinary key ids.
   const identity = createHash('sha256')

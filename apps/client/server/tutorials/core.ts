@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import { isFullAdmin } from '@bike4mind/common';
 import type { EntitlementUser } from '@bike4mind/server-utils/entitlements/index';
 import { coreTutorialDepsFor } from './coreDeps';
+import { coreKnownSelectors } from './coreDraftProfile';
 import { CORE_TUTORIAL_CONTENT } from './content';
 import { CORE_TUTORIAL_SETTING } from './settingName';
 import { tutorialContent } from './effectiveModules';
@@ -11,7 +12,6 @@ import type { FieldMap } from './overrides';
 import { CORE_TUTORIALS, resolveCoreTutorial } from './registry';
 import type { TutorialSummary } from './routes';
 import { tutorialService } from './service';
-import { knownSelectorsOf } from './validate';
 import { coreTutorialVisibleTo, filterCoreTutorialsVisibleTo } from './visibility';
 import type { TutorialModule } from './types';
 import editableFields from './editableFields.json';
@@ -19,7 +19,7 @@ import editableFields from './editableFields.json';
 export { CORE_TUTORIAL_SETTING };
 
 export const coreModels = tutorialModels({ prefix: '', modelPrefix: 'Core' });
-export const coreKnownSelectors = knownSelectorsOf(CORE_TUTORIAL_CONTENT.map(t => ({ steps: [...t.steps] })));
+export { coreKnownSelectors };
 export const coreOverridePolicy = { editable: editableFields as FieldMap };
 
 export const coreContent = tutorialContent({

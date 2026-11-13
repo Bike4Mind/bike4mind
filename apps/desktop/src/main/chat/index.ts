@@ -166,6 +166,7 @@ import type { PrMonitor } from '../pr/PrMonitor';
 import { appWindows, focusedAppWindow } from '../windows';
 import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
+import { rendererNotes } from './rendererNotes';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 /** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
@@ -1152,7 +1153,7 @@ export function registerChat(
     )
   );
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
-    service.send(request.sessionId, request.text, request.attachments)
+    service.send(request.sessionId, request.text, request.attachments, { notes: rendererNotes(request.notes) })
   );
   ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => service.stop(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatLoopCommand, (_event, sessionId: string, args: string) =>

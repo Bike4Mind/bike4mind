@@ -17,7 +17,6 @@ export default {
   'EventMetrics/UserActivity/filters/MetadataFilterPanel.tsx': [[2, 'b522c36076f32b47']],
   'EventMetrics/UserActivity/UserActivityTab.tsx': [[2, '7fe9553a65056a2a']],
   'FilesTab/EditTagModal.tsx': [[3, 'e29b446aa5957de4']],
-  'FilesTab/index.tsx': [[4, 'bb9b66251f6b8489']],
   'GitHubConnectionTab.tsx': [[8, '1fd7087d06a0ddbe']],
   'IntegrationDemandTab.tsx': [[3, '33c84625c2e68e9d']],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': [[2, '9c638f58c4fefb44']],
