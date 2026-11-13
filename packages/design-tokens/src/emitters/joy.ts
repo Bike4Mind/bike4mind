@@ -33,8 +33,12 @@ export type JoyThemeFragment = {
   spacing: number;
   radius: Record<keyof DesignTokens['radii'], string>;
   shadow: Record<keyof DesignTokens['shadows']['levels'], string>;
-  /** Joy has no motion slot; this rides through `extendTheme` as a custom key. */
-  motion: DesignTokens['motion'];
+  /**
+   * Joy has no motion slot; this rides through `extendTheme` as a custom key.
+   * Durations are CSS time strings: Joy's CSS-vars parser appends `px` to bare
+   * numbers, which would emit invalid `--joy-motion-duration-*` values.
+   */
+  motion: { duration: Record<keyof DesignTokens['motion']['duration'], string> };
 };
 
 /** Semantic interaction-tone names -> Joy palette variant names. */
@@ -119,7 +123,7 @@ export const emitJoyThemeFragment = (tokens: DesignTokens): JoyThemeFragment => 
   spacing: tokens.spacing.unit,
   radius: mapEntries(tokens.radii, px => `${px}px`),
   shadow: mapEntries(tokens.shadows.levels, layers => toJoyShadow(tokens.shadows, layers)),
-  motion: { duration: { ...tokens.motion.duration } },
+  motion: { duration: mapEntries(tokens.motion.duration, ms => `${ms}ms`) },
 });
 
 export const joyEmitter: TokenEmitter<JoyThemeFragment> = {

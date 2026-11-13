@@ -1,4 +1,4 @@
-import { designTokens, emitJoyThemeFragment } from '@bike4mind/design-tokens';
+import { designTokens, emitJoyThemeFragment, type JoyThemeFragment } from '@bike4mind/design-tokens';
 import { adminPalette } from './admin';
 import { APP_NAME } from '@client/config/general';
 import {
@@ -23,11 +23,11 @@ import {
 
 declare module '@mui/joy/styles' {
   interface Theme {
-    motion: { duration: { fast: number; standard: number; slow: number; slower: number } };
+    motion: JoyThemeFragment['motion'];
   }
 
   interface CssVarsThemeOptions {
-    motion?: { duration: { fast: number; standard: number; slow: number; slower: number } };
+    motion?: JoyThemeFragment['motion'];
   }
 
   interface PaletteBackground {

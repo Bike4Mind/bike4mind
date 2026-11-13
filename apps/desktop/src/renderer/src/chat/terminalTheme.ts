@@ -1,6 +1,5 @@
-import { designTokens } from '@bike4mind/design-tokens';
 import type { ITheme } from '@xterm/xterm';
-import { DARK_PALETTE } from '../theme';
+import { DARK_PALETTE, LIGHT_SURFACE } from '../theme';
 
 /** VS Code's terminal ANSI colours, which are tuned for contrast on light and dark grounds. */
 const ANSI: Record<'light' | 'dark', ITheme> = {
@@ -43,7 +42,7 @@ const ANSI: Record<'light' | 'dark', ITheme> = {
 };
 
 const FALLBACK = {
-  light: { background: designTokens.color.schemes.light.background.body, foreground: '#171a1c', selection: '#c7dff7' },
+  light: { background: LIGHT_SURFACE, foreground: '#171a1c', selection: '#c7dff7' },
   dark: { background: DARK_PALETTE.panel, foreground: DARK_PALETTE.ink, selection: DARK_PALETTE.selected },
 };
 

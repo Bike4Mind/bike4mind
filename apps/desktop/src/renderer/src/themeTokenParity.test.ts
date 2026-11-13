@@ -4,8 +4,11 @@ import { desktopTheme } from './theme';
 
 // Pins what the desktop theme renders. The fixture was captured from the hand-written theme
 // before it was derived from @bike4mind/design-tokens, so a green run proves the switch changed
-// no color or metric. If a value changes on purpose, regenerate it from `snapshot()` in the same
-// PR and say so.
+// no color or metric. If a value changes on purpose, regenerate the fixture in the same PR and say
+// so: temporarily replace `expect(snapshot()).toEqual(fixture)` below with
+// `console.log(JSON.stringify(snapshot(), null, 2))`, run this file with
+// `pnpm --filter @bike4mind/desktop exec vitest run src/renderer/src/themeTokenParity.test.ts`,
+// paste the output over __fixtures__/desktopThemeBefore.json, and restore the assertion.
 
 const COLOR = /^(?:#([0-9a-f]{6})|rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)(?:\s*[,/]\s*([\d.]+))?\s*\))$/i;
 

@@ -21,15 +21,19 @@ const avoidPage = [avoidPageModifier];
 const tokens = emitJoyThemeFragment(designTokens);
 const web = tokens.colorSchemes.dark.palette;
 
+/** The light-mode page and surface: the web's light body token. */
+export const LIGHT_SURFACE = tokens.colorSchemes.light.palette.background.body;
+
 /**
  * Dark mode borrows the web app's cool, blue-tinted ramp instead of Joy's default, whose page is
- * pure black. Light mode stays on Joy's defaults, which already share the web's light grays.
+ * pure black. Light mode stays on Joy's palette apart from its surface, which is the web's
+ * light body token.
  */
 export const DARK_PALETTE = {
   /** The page behind the thread. */
   page: web.background.body,
   /** Inputs, cards, the terminal. */
-  panel: web.background.panel as string,
+  panel: web.background.panel,
   /** Every border and divider, and the level2 fill (selected rows, inline code). */
   stroke: web.divider,
   /** The pale-blue ink the web sets its text in. */
@@ -54,7 +58,8 @@ export const DARK_PALETTE = {
 
 const INK_RGB = [1, 3, 5].map(offset => Number.parseInt(DARK_PALETTE.ink.slice(offset, offset + 2), 16)).join(' ');
 
-// Only the hover fills below are derived from the ink; text.secondary/tertiary are web tokens.
+// Only the translucent hover/soft fills below are derived from the ink; text.secondary/tertiary
+// are web tokens.
 const inkAt = (opacity: number) => `rgba(${INK_RGB} / ${opacity})`;
 
 export const desktopTheme = extendTheme({
@@ -68,7 +73,7 @@ export const desktopTheme = extendTheme({
     light: {
       palette: {
         // Electron's window background cannot resolve Joy's default CSS variable.
-        background: { surface: tokens.colorSchemes.light.palette.background.body },
+        background: { surface: LIGHT_SURFACE },
       },
     },
     dark: {

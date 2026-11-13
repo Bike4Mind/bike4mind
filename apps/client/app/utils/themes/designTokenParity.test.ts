@@ -52,8 +52,14 @@ describe('design token parity', () => {
     expect(Object.keys(theme.shadow)).toEqual(Object.keys(designTokens.shadows.levels));
   });
 
-  it('passes the custom motion key through extendTheme', () => {
+  it('passes the custom motion key through extendTheme as ms strings, with valid CSS vars', () => {
     const theme = extendTheme(getThemeConfig() as Parameters<typeof extendTheme>[0]);
-    expect(theme.motion).toEqual(designTokens.motion);
+    expect(theme.motion.duration).toEqual(
+      Object.fromEntries(Object.entries(designTokens.motion.duration).map(([name, ms]) => [name, `${ms}ms`]))
+    );
+    const { css } = theme.generateCssVars();
+    const motionVars = Object.entries(css).filter(([name]) => name.startsWith('--joy-motion'));
+    expect(motionVars.length).toBe(Object.keys(designTokens.motion.duration).length);
+    for (const [, value] of motionVars) expect(value).toMatch(/^\d+ms$/);
   });
 });
