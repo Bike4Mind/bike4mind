@@ -334,8 +334,11 @@ const handler = baseApi()
       });
     }
 
-    // `false`, not `$ne: true`: the field is always present (schema default, and the text-split
-    // migration backfilled it), and an equality keeps feedback_status_contentStored_createdAt usable.
+    // "Has comment" means text was submitted, which `contentStored` records permanently. It is not
+    // hasFeedbackComment(): a report whose only text is the legacy placeholder counts as having one,
+    // since on older rows the text that would tell them apart has expired. `false`, not `$ne: true`:
+    // the field is always present (schema default, and the text-split migration backfilled it), and
+    // an equality keeps feedback_status_contentStored_createdAt usable.
     if (query.hasComment) clauses.push({ contentStored: query.hasComment === 'true' });
 
     if (query.search) {

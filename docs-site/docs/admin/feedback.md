@@ -92,7 +92,7 @@ The **Received** chip limits the list to reports created in a time window: the *
 
 ### Comment Filter
 
-The **Comment** chip separates reports written with text from those without, such as a thumbs-down with no comment. **Has comment** shows reports that were submitted with text and **No comment** shows the rest. A report whose text has expired (see Data Retention below) still counts as having a comment.
+The **Comment** chip separates reports written with text from those without, such as a thumbs-down with no comment. **Has comment** shows reports that were submitted with text and **No comment** shows the rest. A report whose text has expired (see Data Retention below) still counts as having a comment. So does an older report from the bug-report form whose only text is "No feedback details provided", which that form filled in when nothing was typed.
 
 All filters are kept in the page URL, so a copied link reopens the list with the same filters, and they combine with each other and with search. The CSV export uses the same filters.
 
