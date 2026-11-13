@@ -1,5 +1,11 @@
 # @bike4mind/observability
 
+## 1.1.0
+
+### Minor Changes
+
+- [#6929](https://github.com/Bike4Mind/bike4mind/pull/6929) [`3deabf1`](https://github.com/Bike4Mind/bike4mind/commit/3deabf1fb5f5f1c86dc7399f06890db273ad773d) Thanks [@cgtorniado](https://github.com/cgtorniado)! - redact raw console output at process bootstrap
+
 ## 1.0.3
 
 ### Patch Changes

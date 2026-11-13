@@ -71,10 +71,15 @@ Some accounts also have a tokens-per-minute limit and a limit on completions in 
 | Status | Retry? |
 |--------|--------|
 | 400, 401, 403, 413, 422 | No. Fix the request, key, scopes or balance first. |
+| 404 with `run_not_found` | No. Resend without `run`, or use a run you created. |
 | 429 | Yes. Wait `Retry-After` seconds. See [Account-level limits](#account-level-limits) for the `errorCode` values. |
 | 500, 503 | Yes, with exponential backoff. A 503 with `errorCode: "provider_not_configured"` means the model's provider is unavailable here; try later or another model. |
 
 Log the `request_id` from the error body (also sent as the `X-Request-ID` header) and include it when you contact support.
+
+## Runs
+
+A 404 with `errorCode: "run_not_found"` means the `run.runId` in your request is not a run you created. It is returned before any credit hold or provider call, so nothing is charged. It is not retryable unchanged: resend without `run`, or mint a new run with `POST /api/v1/completion-runs`. See [Streaming](./streaming.md#settled-event).
 
 ## Unknown model
 

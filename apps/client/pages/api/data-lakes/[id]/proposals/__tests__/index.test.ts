@@ -7,6 +7,8 @@ const h = vi.hoisted(() => ({
   resolveCanManageLake: vi.fn(),
   listByLake: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'creator-1', isAdmin: false })),
+  record: vi.fn(),
+  adminBypassLakeIds: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -20,10 +22,22 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
-vi.mock('@bike4mind/services', () => ({
-  dataLakeService: { assertLakeAccess: h.assertLakeAccess, resolveCanManageLake: h.resolveCanManageLake },
+vi.mock('@bike4mind/services', async () => ({
+  dataLakeService: {
+    assertLakeAccess: h.assertLakeAccess,
+    resolveCanManageLake: h.resolveCanManageLake,
+    recordLakeAccessEvent: (
+      await import('../../../../../../../../b4m-core/services/src/dataLakeService/recordLakeAccessEvent')
+    ).recordLakeAccessEvent,
+  },
 }));
+vi.mock('@server/dataLakes', () => ({ adminBypassLakeIds: h.adminBypassLakeIds }));
 vi.mock('@bike4mind/database', () => ({
+  lakeAccessEventRepository: { record: h.record },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   dataLakeProposalRepository: { listByLake: h.listByLake },
@@ -31,6 +45,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../index';
+import { describeLakeReadAudit } from '../../../__tests__/lakeReadAuditCases';
 
 const makeReq = (query: Record<string, unknown> = {}) => ({
   method: 'GET',
@@ -49,6 +64,8 @@ beforeEach(() => {
   h.assertLakeAccess.mockResolvedValue(LAKE);
   h.resolveCanManageLake.mockResolvedValue(true);
   h.listByLake.mockResolvedValue([{ id: 'prop-1' }]);
+  h.record.mockResolvedValue(undefined);
+  h.adminBypassLakeIds.mockResolvedValue([]);
 });
 
 describe('GET /api/data-lakes/:id/proposals', () => {
@@ -105,5 +122,33 @@ describe('GET /api/data-lakes/:id/proposals', () => {
     await handler(makeReq({ limit: '5' }) as never, res);
 
     expect(h.listByLake).toHaveBeenCalledWith('lake1', { status: undefined, limit: 5 });
+  });
+});
+
+const runWith = async (rows: unknown[]) => {
+  h.listByLake.mockResolvedValue(rows);
+  const { res, json } = makeRes();
+  await handler(makeReq() as never, res);
+  return json.mock.calls.length > 0;
+};
+
+describeLakeReadAudit({
+  surface: 'data-lake-proposals',
+  lakeId: 'lake1',
+  record: h.record,
+  bypass: h.adminBypassLakeIds,
+  run: () => runWith([{ id: 'prop-1' }]),
+  runEmpty: () => runWith([]),
+});
+
+describe('proposals audit file ids', () => {
+  it('records only the admitted file ids', async () => {
+    await runWith([{ id: 'p1', admittedFabFileId: 'f1' }, { id: 'p2' }]);
+    expect(h.record.mock.calls[0][0].fileIds).toEqual(['f1']);
+  });
+
+  it('records no fileIds when nothing was admitted', async () => {
+    await runWith([{ id: 'p1' }]);
+    expect(h.record.mock.calls[0][0]).not.toHaveProperty('fileIds');
   });
 });

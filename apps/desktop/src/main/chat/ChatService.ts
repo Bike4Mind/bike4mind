@@ -1,23 +1,27 @@
 import {
   acceptTask,
   assertReportCoversCriteria,
+  modelRequestHint,
   renderTaskBrief,
   resolveWorkerModel,
   validateWorkerModel,
+  type WorkerLocality,
   spawnOptionsSchema,
   taskActionSchema,
   rolePolicySchema,
+  type ModelSelection,
   type RolePolicy,
+  type RootPolicy,
   type SpawnOptions,
   type TaskAction,
 } from '@shared/orchestration';
 import { randomUUID } from 'node:crypto';
-import { LOOP_HELP, parseLoop, type LoopResult, type LoopState } from '@shared/loop';
+import { LOOP_HELP, parseLoop, type LoopResult, type LoopStart, type LoopState } from '@shared/loop';
 import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
-import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
+import { DEFAULT_PROMPT_CACHE_TTL, type CompletionRunAttribution, type PromptCacheTtl } from '@bike4mind/common';
 import type {
   ChatApprovalDecidedBy,
   ChatApprovalSystemReason,
@@ -40,6 +44,7 @@ import type {
   ChatRelayOrigin,
   ChatReplyRound,
   ChatSentRound,
+  ChatSettledCharge,
   ChatSession,
   ChatSessionStatusEvent,
   ChatSessionSummary,
@@ -179,9 +184,11 @@ import {
   streamCompletion,
   supportsPromptCache,
   withCacheBreakpoints,
+  withRunFallback,
   type CompletionMessage,
   type CompletionRequest,
 } from './completions';
+import type { CompletionRunMinter } from './completionRuns';
 import { describeAlways } from './approvalScope';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { auxiliaryGeneration, turnEffortSetting, turnGeneration, turnThinks } from '@shared/modelDefaults';
@@ -243,6 +250,7 @@ import {
   type ApprovalSettlement,
 } from './tools/ApprovalGate';
 import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirectoryTool';
+import { LOOP_TOOL_NAME } from './tools/loopTool';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { QUEST_COMPLETE_TOOL_NAME, SESSION_SPAWN_TOOL_NAME } from './tools/hostTools';
 import { isWithin } from './tools/paths';
@@ -283,6 +291,7 @@ import {
   type SuggestionOutcome,
   type SkillContext,
   type ImageContext,
+  type KeptImage,
   type ScreenCapturer,
   type ScreenContext,
   type ModelContext,
@@ -383,6 +392,25 @@ const MID_TURN_NOTE =
 /** Rides with a relay that reached a running turn; the relay's own framing says whose words they are. */
 const RELAY_MID_TURN_NOTE =
   'This message from another conversation arrived while you were still working. Weigh it now, then carry on with the task unless it changes what you should do.';
+
+/** Refusal for anything but the user (and auto-fix) starting a turn in a canceled worker session. */
+const CANCELED_TASK_REFUSAL =
+  'This task was canceled, so nothing automatic runs in it any more. Type a message in that conversation to follow up, or start a new task.';
+
+/** Rides with a follow-up the user sends after the task was canceled; see isUserFollowUp. */
+const CLOSED_TASK_NOTE =
+  'The structured task in this conversation was canceled and is closed. This message is a follow-up from the user, not a new attempt at that task: answer it as an ordinary request. task_report is unavailable and nothing from this turn reports back to the orchestrator.';
+
+/**
+ * Whether a turn is the user's own: typed, queued from the composer, run from a suggestion card,
+ * or an auto-fix prompt the user enabled for this session's PR. Only these may run after a task
+ * is canceled; cancellation stays terminal for relays, wakes, loops and spawn seeds.
+ */
+function isUserFollowUp(options: SendOptions): boolean {
+  const { released } = options;
+  if (options.spawnSeed || options.loop || options.seedHops !== undefined || released?.relay) return false;
+  return !released?.automatic || released.automatic.kind === 'auto-fix';
+}
 
 /** Something that reached a running turn between rounds; see takeArrivals. */
 interface MidTurnArrival {
@@ -628,6 +656,11 @@ export interface ChatServiceDeps {
   turnTiming?: boolean;
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
   getApiClient(): AuthenticatedApiClient | null;
+  /**
+   * Issues the server run id an orchestrated session's turns are attributed to (see
+   * completionRuns.ts). Absent in tests that do not exercise it; turns are then sent without `run`.
+   */
+  mintCompletionRun?: CompletionRunMinter;
   /** True in the device-local scope (signed out by choice); false for an account whose session expired. */
   isDeviceLocal?(): boolean;
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
@@ -686,6 +719,8 @@ interface RawRound {
   timing: ChatRoundTiming;
   usage?: ChatUsage;
   sent: ChatSentRound;
+  requestId?: string;
+  settled?: ChatSettledCharge;
 }
 
 /**
@@ -763,6 +798,12 @@ export class ChatService {
     if (action.kind === 'help' || action.kind === 'list') {
       return { ok: true, state: this.getLoop(sessionId), notice: action.kind === 'help' ? LOOP_HELP : undefined };
     }
+    return this.startLoop(sessionId, action);
+  }
+
+  /** Both /loop and the agent's `loop` tool start here, so every check below applies to both. */
+  private async startLoop(sessionId: string, action: LoopStart, callingSignal?: AbortSignal): Promise<LoopResult> {
+    if (callingSignal?.aborted) return { ok: false, error: 'Loop start was cancelled.' };
     this.loopRequests.get(sessionId)?.abort();
     const request = new AbortController();
     this.loopRequests.set(sessionId, request);
@@ -795,10 +836,17 @@ export class ChatService {
         : undefined;
       if (invocation && !command)
         return { ok: false, error: `No skill called /${invocation.name}. Type / to see what is available.` };
-      if (request.signal.aborted || this.deps.store.scopeKey() !== scope)
+      if (request.signal.aborted || callingSignal?.aborted || this.deps.store.scopeKey() !== scope)
         return { ok: false, error: 'Loop stopped or account changed. Start the loop again.' };
       this.loops.start(
-        { sessionId, prompt: action.prompt, intervalMs: action.intervalMs, phase: 'scheduled', nextRunAt: Date.now() },
+        {
+          sessionId,
+          prompt: action.prompt,
+          intervalMs: action.intervalMs,
+          phase: 'scheduled',
+          nextRunAt: Date.now(),
+          ...(action.until === undefined ? {} : { until: action.until }),
+        },
         async signal => {
           const current = await this.deps.store.get(sessionId);
           const valid = async (value: ChatSession) => {
@@ -1307,6 +1355,11 @@ export class ChatService {
     return !this.deps.getApiClient() && this.deps.isDeviceLocal?.() === true;
   }
 
+  private workerLocality(localWork: boolean, context: 'local-work' | 'local-parent' = 'local-work'): WorkerLocality {
+    if (this.deviceLocal()) return 'device';
+    return localWork ? context : false;
+  }
+
   /**
    * The base a workspace session is cut from: the picked branch, else the repository's default.
    * Only a repository with nothing to base on is refused.
@@ -1773,8 +1826,9 @@ export class ChatService {
     if (session?.workerSelection) {
       if (this.hasTurnInFlight(sessionId))
         throw new Error('Stop the worker attempt before explicitly changing its model.');
+      // An explicit pick is how local work moves to a hosted model, so only device-local mode blocks it.
       validateWorkerModel(model, (await this.listModels()).models, {
-        localOnly: this.deviceLocal() || isLocalModel(session.model),
+        localOnly: this.workerLocality(false),
         ...session.workerSelection?.requirements,
       });
       const updated = await this.deps.store.setWorkerModel(sessionId, model, scope);
@@ -1815,21 +1869,121 @@ export class ChatService {
     const session = await this.deps.store.get(sessionId);
     if (!session || this.deps.store.scopeKey() !== scope) return null;
     if (orchestrate && !session.orchestrationPolicy) {
-      const policy = await this.deps.store.getRolePolicy();
-      const saved = await this.deps.store.setOrchestrationPolicy(
-        sessionId,
-        {
-          rootSessionId: sessionId,
-          rootRunId: randomUUID(),
-          policy,
-        },
-        scope
-      );
+      const rootPolicy: RootPolicy = {
+        rootSessionId: sessionId,
+        rootRunId: randomUUID(),
+        policy: await this.deps.store.getRolePolicy(),
+      };
+      // No server run is minted here: the first orchestrated turn mints one, so a toggle that never
+      // sends a turn leaves no server row behind.
+      const saved = await this.deps.store.setOrchestrationPolicy(sessionId, rootPolicy, scope);
       if (!saved) return null;
     }
     if (!orchestrate && !session.origin) await this.deps.store.setOrchestrationPolicy(sessionId, undefined, scope);
     if (this.deps.store.scopeKey() !== scope) return null;
     return this.deps.store.setOrchestrate(sessionId, orchestrate);
+  }
+
+  /**
+   * Server run ids by local `rootRunId`, for a worker whose root no longer carries the policy (its
+   * orchestrate flag expired on restart) and whose own copy predates the id.
+   */
+  private serverRuns = new Map<string, string>();
+
+  /**
+   * Mint the server's run id for an orchestration root and record it on the root's policy and on
+   * the requesting session's own copy. `undefined` when none could be had; the minter has logged why.
+   */
+  private async mintServerRun(
+    requesterId: string,
+    policy: RootPolicy,
+    scope: string | null
+  ): Promise<string | undefined> {
+    const api = this.deps.getApiClient();
+    if (!api || !this.deps.mintCompletionRun) return undefined;
+    const run = await this.deps.mintCompletionRun(policy.rootRunId, api.getAxiosInstance(), policy.rootSessionId);
+    if (!run) return undefined;
+    this.serverRuns.set(policy.rootRunId, run.runId);
+    await this.recordServerRun(requesterId, policy, run.runId, scope);
+    return run.runId;
+  }
+
+  private async recordServerRun(
+    requesterId: string,
+    policy: RootPolicy,
+    serverRunId: string,
+    scope: string | null
+  ): Promise<void> {
+    try {
+      for (const id of new Set([policy.rootSessionId, requesterId])) {
+        await this.deps.store.setServerRunId(id, policy.rootRunId, serverRunId, scope);
+      }
+    } catch (err) {
+      this.deps.logger.warn(`CHAT: could not record run attribution: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /**
+   * The `run` an orchestrated session's agent turn is sent with; `undefined` outside orchestration
+   * or when no server run id could be had, which sends the turn unattributed rather than holding
+   * it. Prefers the ROOT's current policy over the session's own copy: a worker copied its policy
+   * at spawn, possibly before the root's id arrived. An id found only on the root or in memory is
+   * copied onto the session, since after a restart the root's policy and the map are both gone.
+   */
+  private async runAttribution(session: ChatSession): Promise<CompletionRunAttribution | undefined> {
+    const policy = session.orchestrationPolicy;
+    if (!policy || !this.deps.mintCompletionRun) return undefined;
+    const scope = this.deps.store.scopeKey();
+    const root =
+      policy.rootSessionId === session.id ? session : await this.deps.store.get(policy.rootSessionId).catch(() => null);
+    const rootPolicy = root?.orchestrationPolicy?.rootRunId === policy.rootRunId ? root.orchestrationPolicy : undefined;
+    const known = rootPolicy?.serverRunId ?? policy.serverRunId ?? this.serverRuns.get(policy.rootRunId);
+    if (known && known !== policy.serverRunId) await this.recordServerRun(session.id, policy, known, scope);
+    const serverRunId = known ?? (await this.mintServerRun(session.id, policy, scope));
+    if (!serverRunId) {
+      this.deps.logger.warn(`CHAT: no server run id for session ${session.id}; sending its turn unattributed`);
+      return undefined;
+    }
+    const attemptId = session.workerTask?.attempts.at(-1)?.id;
+    return {
+      runId: serverRunId,
+      role: session.origin ? 'worker' : 'root',
+      purpose: 'turn',
+      // A worker session carries exactly one task, so its id names the task.
+      ...(session.workerTask ? { taskId: session.id } : {}),
+      ...(attemptId ? { attemptId } : {}),
+      ...(session.origin ? { parentSessionId: session.origin.parentSessionId } : {}),
+    };
+  }
+
+  /**
+   * Forget a run id the server refused, so the next turn mints a fresh one. Only where it still
+   * holds `refusedRunId`: a refusal arriving after a newer id was minted leaves the newer one.
+   */
+  private async forgetServerRun(session: ChatSession, refusedRunId: string): Promise<void> {
+    const policy = session.orchestrationPolicy;
+    if (!policy) return;
+    this.deps.logger.warn(`CHAT: server refused run attribution for session ${session.id}; resending without it`);
+    if (this.serverRuns.get(policy.rootRunId) === refusedRunId) this.serverRuns.delete(policy.rootRunId);
+    const scope = this.deps.store.scopeKey();
+    try {
+      for (const id of new Set([policy.rootSessionId, session.id])) {
+        await this.deps.store.clearServerRunId(id, policy.rootRunId, refusedRunId, scope);
+      }
+    } catch (err) {
+      this.deps.logger.warn(`CHAT: could not forget run attribution: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /**
+   * The policy a worker spawned now inherits: the parent's STORED copy when it still belongs to the
+   * same run, since the server run id may have landed after the parent's turn read its session.
+   */
+  private async currentPolicyFor(parent: ChatSession, snapshot: RootPolicy): Promise<RootPolicy> {
+    const stored = (await this.deps.store.get(parent.id).catch(() => null))?.orchestrationPolicy;
+    const current = stored?.rootRunId === snapshot.rootRunId ? stored : snapshot;
+    const serverRunId = current.serverRunId ?? this.serverRuns.get(current.rootRunId);
+    return serverRunId ? { ...current, serverRunId } : current;
   }
 
   getRolePolicy(): Promise<RolePolicy> {
@@ -1849,7 +2003,7 @@ export class ChatService {
       ...policy.allowedOverrides,
       ...policy.escalation.allowedModels,
     ])) {
-      if (model !== 'inherit') validateWorkerModel(model, models, { localOnly: this.deviceLocal() });
+      if (model !== 'inherit') validateWorkerModel(model, models, { localOnly: this.workerLocality(false) });
     }
     if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen settings.');
     return this.deps.store.setRolePolicy(policy);
@@ -1925,7 +2079,7 @@ export class ChatService {
             throw new Error('Model upgrade is outside this run policy. Revise the task or cancel it.');
           nextModel = action.modelId;
           validateWorkerModel(nextModel, (await this.listModels()).models, {
-            localOnly: this.deviceLocal() || isLocalModel(child.model),
+            localOnly: this.workerLocality(isLocalModel(child.model)),
             ...child.workerSelection?.requirements,
           });
           seed = `The user approved this targeted model change. Continue the same task using the existing changes and evidence.\n\n${renderTaskBrief(task.contract)}`;
@@ -1940,7 +2094,8 @@ export class ChatService {
           };
         }
       } else if (action.kind === 'revise') {
-        if (task.state.status === 'canceled') throw new Error('Canceled tasks cannot restart.');
+        if (task.state.status === 'canceled')
+          throw new Error('Canceled tasks cannot restart. Start a new task for more work.');
         if (action.contract.role !== task.contract.role)
           throw new Error('Keep the task role when revising. Reassign explicitly with a new task.');
         seed = `${action.instruction}\n\n${renderTaskBrief(action.contract)}`;
@@ -1970,7 +2125,7 @@ export class ChatService {
             return { ...current, state: next.state };
           }
           if (current.state.status === 'canceled' && action.kind !== 'cancel')
-            throw new Error('This task was canceled.');
+            throw new Error('This task was canceled. Start a new task for more work.');
           if (action.kind === 'cancel') return { ...current, state: next.state };
           if (current.attempts.at(-1)?.id !== task.attempts.at(-1)?.id)
             throw new Error('A newer task attempt has started. Reload agent details.');
@@ -2625,21 +2780,23 @@ export class ChatService {
     historyScope: string | null
   ): Promise<SendMessageResult> {
     const { released, seedHops } = options;
-    const notes = released?.notes ?? options.notes;
+    const userFollowUp = isUserFollowUp(options);
+    let notes = released?.notes ?? options.notes;
     const api = this.deps.getApiClient();
     if (!api && !isLocalModel(claimed.model) && !this.deviceLocal())
       return { ok: false, error: 'Sign in to send a message.' };
     if (claimed.workerSelection) {
       try {
         validateWorkerModel(claimed.model, (await this.listModels()).models, {
-          localOnly: this.deviceLocal() || isLocalModel(claimed.workerSelection.effectiveModel),
+          localOnly: this.workerLocality(isLocalModel(claimed.workerSelection.effectiveModel)),
           ...claimed.workerSelection.requirements,
         });
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
     }
-    if (claimed.workerTask?.state.status === 'canceled') return { ok: false, error: 'This task was canceled.' };
+    if (claimed.workerTask?.state.status === 'canceled' && !userFollowUp)
+      return { ok: false, error: CANCELED_TASK_REFUSAL };
     const settled: SettledModel = this.deviceLocal()
       ? await this.settleDeviceLocal(claimed, await this.localModelsFor(claimed.model))
       : { session: claimed };
@@ -2692,9 +2849,8 @@ export class ChatService {
     // Last before the prompt is stored, so the boundary lands above it and the summary covers
     // everything the prompt follows on from. Every refusal above has already had its say: a
     // turn that will not go out must not cost a summary.
-    if (reconciled.workerTask && !options.spawnSeed) {
-      if (reconciled.workerTask.state.status === 'canceled')
-        return { ok: false, error: 'This task was canceled. Start a new task explicitly.' };
+    let taskClosed = reconciled.workerTask?.state.status === 'canceled';
+    if (reconciled.workerTask && !options.spawnSeed && !taskClosed) {
       const updated = await this.deps.store.updateWorkerTask(sessionId, task =>
         task.state.status === 'canceled'
           ? task
@@ -2707,11 +2863,15 @@ export class ChatService {
               ],
             }
       );
-      if (!updated || updated.workerTask?.state.status === 'canceled')
-        return { ok: false, error: 'The task no longer exists or was canceled.' };
-      this.deps.summaryChanged?.(updated);
-      if (reconciled.origin) this.spawnWatch.set(sessionId, { parentSessionId: reconciled.origin.parentSessionId });
+      if (!updated) return { ok: false, error: 'The task no longer exists.' };
+      taskClosed = updated.workerTask?.state.status === 'canceled';
+      if (taskClosed && !userFollowUp) return { ok: false, error: CANCELED_TASK_REFUSAL };
+      if (!taskClosed) {
+        this.deps.summaryChanged?.(updated);
+        if (reconciled.origin) this.spawnWatch.set(sessionId, { parentSessionId: reconciled.origin.parentSessionId });
+      }
     }
+    if (taskClosed) notes = [...(notes ?? []), CLOSED_TASK_NOTE];
     await this.autoCompact(reconciled);
     timer?.lap('autoCompact');
     if (options.loop) {
@@ -2749,12 +2909,24 @@ export class ChatService {
     const isFirstPrompt =
       !existing.titleLocked && !existing.messages.some(message => message.role === 'user' && !message.system);
 
-    const session = await this.deps.store.appendMessage(sessionId, userMessage);
+    // A cancel can land while this turn was being accepted; for anything but the user's own turn
+    // it is checked in the same write, so a refusal leaves nothing saved without an answer.
+    const session = userFollowUp
+      ? await this.deps.store.appendMessage(sessionId, userMessage)
+      : await this.deps.store.appendMessageIf(
+          sessionId,
+          userMessage,
+          current => current.workerTask?.state.status !== 'canceled'
+        );
     timer?.lap('append');
+    if (session === false) return { ok: false, error: CANCELED_TASK_REFUSAL };
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
     if (options.loop && !(await options.loop.valid(session)))
       return { ok: false, error: 'Loop context changed or stopped.' };
-    if (session.workerTask?.state.status === 'canceled') return { ok: false, error: 'This task was canceled.' };
+    // A follow-up after a cancel (even one landing during the awaits above) reports nothing to
+    // the parent and so never wakes it.
+    const closedTask = session.workerTask?.state.status === 'canceled';
+    if (closedTask) this.spawnWatch.delete(sessionId);
 
     // Now that the conversation's attachments are settled, anything on disk it does not
     // reference was added to the composer and then removed. See AttachmentStore.prune.
@@ -2776,7 +2948,8 @@ export class ChatService {
     } else {
       this.attendedTurns.delete(sessionId);
       const parentSessionId = session.origin?.parentSessionId;
-      if (parentSessionId && isAgentSession(session)) this.spawnWatch.set(sessionId, { parentSessionId });
+      if (parentSessionId && isAgentSession(session) && !closedTask)
+        this.spawnWatch.set(sessionId, { parentSessionId });
     }
     const replyId = this.startReply(
       session,
@@ -2784,7 +2957,8 @@ export class ChatService {
       historyScope,
       undefined,
       released?.relay?.hops ?? seedHops ?? 0,
-      options.loop?.settled
+      options.loop?.settled,
+      Boolean(options.loop)
     );
     this.noteNotify(sessionId, released?.relay);
 
@@ -2836,15 +3010,15 @@ export class ChatService {
     if (session.workerSelection) {
       try {
         validateWorkerModel(session.model, (await this.listModels()).models, {
-          localOnly: this.deviceLocal() || isLocalModel(session.model),
+          localOnly: this.workerLocality(isLocalModel(session.model)),
           ...session.workerSelection?.requirements,
         });
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
     }
-    if (session.workerTask) {
-      if (session.workerTask.state.status === 'canceled') return { ok: false, error: 'This task was canceled.' };
+    // A canceled task stays canceled: the Continue carries the conversation on, not the task.
+    if (session.workerTask && session.workerTask.state.status !== 'canceled') {
       const updated = await this.deps.store.updateWorkerTask(sessionId, task =>
         task.state.status === 'canceled'
           ? task
@@ -2853,10 +3027,11 @@ export class ChatService {
               state: { status: 'running' },
             }
       );
-      if (!updated || updated.workerTask?.state.status === 'canceled')
-        return { ok: false, error: 'This task no longer exists or was canceled.' };
-      if (updated) this.deps.summaryChanged?.(updated);
-      if (session.origin) this.spawnWatch.set(sessionId, { parentSessionId: session.origin.parentSessionId });
+      if (!updated) return { ok: false, error: 'This task no longer exists.' };
+      if (updated.workerTask?.state.status !== 'canceled') {
+        this.deps.summaryChanged?.(updated);
+        if (session.origin) this.spawnWatch.set(sessionId, { parentSessionId: session.origin.parentSessionId });
+      }
     }
     // Reached only from the Continue button, so whoever clicked it is there to answer a card.
     this.attendedTurns.add(sessionId);
@@ -2873,6 +3048,8 @@ export class ChatService {
           text: last.content,
           toolCallIds: (last.toolCalls ?? []).map(call => call.id),
           ...(startedOn ? { model: startedOn } : {}),
+          ...(last.requestId ? { requestId: last.requestId } : {}),
+          ...(last.settled ? { settled: last.settled } : {}),
         },
       ],
       toolCalls: last.toolCalls ?? [],
@@ -3123,7 +3300,8 @@ export class ChatService {
      * `continueReply`, which is carrying an existing turn on and keeps the depth it had.
      */
     hops?: number,
-    onSettled?: (outcome: TurnOutcome, reply: { content: string; stopReason?: string }) => void
+    onSettled?: (outcome: TurnOutcome, reply: { content: string; stopReason?: string }) => void,
+    isLoopTurn = false
   ): string {
     const sessionId = session.id;
     const replyId = resume?.id ?? randomUUID();
@@ -3133,9 +3311,18 @@ export class ChatService {
     if (hops !== undefined) this.turnRelay.set(sessionId, { hops, sends: 0 });
 
     let finalReply = { content: '' } as { content: string; stopReason?: string };
-    void this.runReply(session, replyId, api, controller, historyScope, resume, reply => {
-      finalReply = reply;
-    })
+    void this.runReply(
+      session,
+      replyId,
+      api,
+      controller,
+      historyScope,
+      resume,
+      reply => {
+        finalReply = reply;
+      },
+      isLoopTurn
+    )
       // runReply already catches, so this only covers a throw from its own bookkeeping. A turn
       // whose end cannot be classified is treated as failed, which HOLDS the queue rather than
       // firing it - the safe direction when the outcome is unknown.
@@ -3330,7 +3517,8 @@ export class ChatService {
     controller: AbortController,
     historyScope: string | null,
     resume?: ResumedReply,
-    completed?: (reply: { content: string; stopReason?: string }) => void
+    completed?: (reply: { content: string; stopReason?: string }) => void,
+    isLoopTurn = false
   ): Promise<TurnOutcome> {
     const sessionId = session.id;
     // A new id from each mid-turn message on: see takeArrivals and the round loop below.
@@ -3371,6 +3559,13 @@ export class ChatService {
       const localTurn = isLocalModel(session.model);
       if (!api && !localTurn) throw new Error('Sign in to send a message.');
       const serverConfig = api && !localTurn ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
+      // Once per turn: a worker's attempt cannot change mid-turn. Cleared when the server refuses it.
+      let run = api && !localTurn ? await this.runAttribution(session) : undefined;
+      const dropRun = async (): Promise<void> => {
+        const refused = run?.runId;
+        run = undefined;
+        if (refused) await this.forgetServerRun(session, refused);
+      };
       // A spawned session's seed run has nobody watching it; a turn the user typed into it does.
       const ask = !session.origin || this.attendedTurns.has(sessionId);
       // Narrower than `ask`: a relay or automatic turn in a main session can still show a card,
@@ -3450,7 +3645,11 @@ export class ChatService {
       // Silence is not "no": see ChatModelOption.supportsVision.
       const vision = modelOption?.supportsVision !== false;
       const images: ImageContext | undefined = this.deps.prepareImage
-        ? { vision, prepare: this.deps.prepareImage }
+        ? {
+            vision,
+            prepare: this.deps.prepareImage,
+            keep: (source, display, caption) => this.keepToolImage(sessionId, source, display, caption),
+          }
         : undefined;
       // A wrapper only: nothing is listed or captured until the model calls the tool.
       const screenCapturer = this.deps.screen;
@@ -3489,6 +3688,8 @@ export class ChatService {
               endpoint: serverConfig.endpoint,
               models: catalog?.models ?? [],
               sessionModel: session.model,
+              run: () => (run ? { ...run, purpose: 'explore' } : undefined),
+              onRunRejected: dropRun,
               onUsage: spent => {
                 usage = addUsage(usage, spent);
                 if (usage) this.emit({ type: 'usage', sessionId, messageId: replyId, usage });
@@ -3536,8 +3737,11 @@ export class ChatService {
               ask,
               suggestions: !session.origin && !orchestrating,
               delegates: orchestrating,
-              structuredTask: !!session.workerTask,
+              structuredTask: !!session.workerTask && session.workerTask.state.status !== 'canceled',
               managedDelegation: !!session.origin && !!session.orchestrationPolicy,
+              spawnModelHint: session.orchestrationPolicy
+                ? modelRequestHint(session.model, session.orchestrationPolicy.policy)
+                : null,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
               pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
@@ -3732,7 +3936,7 @@ export class ChatService {
         // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning,
         // and one continued on another model needs them to say which model spent what.
         const continuedOnOther = resume?.model !== undefined && resume.model !== session.model;
-        const keepRounds = toolCalls.length > 0 || continuedOnOther || rounds.some(round => round.reasoning);
+        const keepRounds = continuedOnOther || keepsRounds(rounds, toolCalls);
         const finalContent = joinRounds(rounds.map(round => round.text));
         const lastTiming = produced[produced.length - 1]?.timing;
         const promptCache: ChatPromptCacheStamp | undefined =
@@ -3749,6 +3953,7 @@ export class ChatService {
           stopReason,
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
           ...(keepRounds ? { rounds } : {}),
+          ...(keepRounds ? {} : plainRequestOf(rounds)),
           ...(thinking ? { thinking } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
           ...(usage ? { usage } : {}),
@@ -3795,6 +4000,8 @@ export class ChatService {
         let turnText = '';
         let turnThinking: unknown[] | undefined;
         let turnUsage: ChatUsage | undefined;
+        let turnRequestId: string | undefined;
+        let turnSettled: ChatSettledCharge | undefined;
         let turnReasoning = '';
         const splitThinking = createThinkFilter();
         const timer = startRoundTimer();
@@ -3838,9 +4045,21 @@ export class ChatService {
         );
         setPhase(WAITING);
         const onCompletionEvent = (event: CompletionStreamEvent): void => {
-          // `error` never reaches here (the transport throws on it); `meta` carries no reply.
-          if (event.type === 'meta') probe?.frame('meta');
-          if (event.type === 'error' || event.type === 'meta') return;
+          // `error` never reaches here (the transport throws on it); `meta` and `settled` carry no reply.
+          if (event.type === 'meta') {
+            probe?.frame('meta');
+            if (event.requestId) turnRequestId = event.requestId;
+            return;
+          }
+          if (event.type === 'settled') {
+            turnRequestId ??= event.requestId;
+            turnSettled = {
+              creditsCharged: event.creditsCharged,
+              ...(event.usdCost !== undefined ? { usdCost: event.usdCost } : {}),
+            };
+            return;
+          }
+          if (event.type === 'error') return;
           if (event.text || event.type === 'tool_use') timer.firstToken();
           if (event.text) {
             const split = splitThinking.push(event.text);
@@ -3885,23 +4104,31 @@ export class ChatService {
               dropped => this.emit({ type: 'context-trimmed', sessionId, dropped }),
               (message, kind) => this.emit({ type: 'context-notice', sessionId, message, ...(kind ? { kind } : {}) })
             )
-          : await streamRound(
-              api!.getAxiosInstance(),
-              serverConfig.endpoint,
-              {
-                model: session.model,
-                messages: cacheable ? withCacheBreakpoints(wire) : wire,
-                tools,
-                thinking: askForThinking,
-                // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
-                sessionId,
-                ...effortField,
-                ...generationField,
-                ...cacheTtlField,
-                ...(maxTokens ? { maxTokens } : {}),
-              },
-              onCompletionEvent,
-              controller.signal
+          : await streamRound(() =>
+              withRunFallback(
+                run,
+                attribution =>
+                  streamCompletion(
+                    api!.getAxiosInstance(),
+                    serverConfig.endpoint,
+                    {
+                      model: session.model,
+                      messages: cacheable ? withCacheBreakpoints(wire) : wire,
+                      tools,
+                      thinking: askForThinking,
+                      // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
+                      sessionId,
+                      ...(attribution ? { run: attribution } : {}),
+                      ...effortField,
+                      ...generationField,
+                      ...cacheTtlField,
+                      ...(maxTokens ? { maxTokens } : {}),
+                    },
+                    onCompletionEvent,
+                    controller.signal
+                  ),
+                dropRun
+              )
             );
         append(splitThinking.flush());
         const timing = timer.end();
@@ -3919,6 +4146,8 @@ export class ChatService {
           reasoning: turnReasoning || readableThinking(turnThinking),
           timing,
           ...(turnUsage ? { usage: turnUsage } : {}),
+          ...(turnRequestId ? { requestId: turnRequestId } : {}),
+          ...(turnSettled ? { settled: turnSettled } : {}),
           sent: { ...(turnThinking ? { thinking: turnThinking } : {}), text: turnText },
         };
         produced.push(round);
@@ -4023,6 +4252,7 @@ export class ChatService {
                 patchEdits,
                 ask,
                 attended,
+                isLoopTurn,
                 title: session.title,
                 directories: directoryTurn,
                 ...(deferred ? { offered: new Set(toolsFor(roots).map(tool => tool.toolSchema.name)) } : {}),
@@ -4254,7 +4484,13 @@ export class ChatService {
               ],
               ...(resume.artifacts.length > 0 ? { artifacts: resume.artifacts } : {}),
             }
-          : {}),
+          : failedSettlement(
+              storedRounds(
+                produced.map(round => ({ round, text: round.text })),
+                session.model
+              ),
+              toolCalls
+            )),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
         ...(contextSnapshot ? { contextSnapshot } : {}),
@@ -4346,6 +4582,10 @@ export class ChatService {
       thinking: message.thinking,
       artifacts: message.artifacts,
       usage: message.usage,
+      // A reply that keeps rounds holds each request's charge there; clearing these keeps a
+      // continued plain reply from also holding its first request's charge on the message.
+      requestId: message.requestId,
+      settled: message.settled,
       promptCache: message.promptCache,
       contextSnapshot: message.contextSnapshot,
       questComplete: message.questComplete,
@@ -4646,6 +4886,32 @@ export class ChatService {
     return { kind: 'image', url: stored.url, mimeType: stored.mimeType, byteLength: stored.byteLength, caption };
   }
 
+  private async keepToolImage(
+    sessionId: string,
+    source: Buffer,
+    display: KeptImage,
+    caption: string
+  ): Promise<ChatMedia | undefined> {
+    const store = this.deps.media;
+    if (!store) return undefined;
+    try {
+      const stored = await store.saveForContent(sessionId, source, display.bytes, display.mediaType);
+      return {
+        kind: 'image',
+        url: stored.url,
+        mimeType: stored.mimeType,
+        byteLength: stored.byteLength,
+        caption,
+        ...(display.width && display.height ? { width: display.width, height: display.height } : {}),
+      };
+    } catch (error) {
+      this.deps.logger.warn(
+        `CHAT: could not keep a read image for the transcript: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return undefined;
+    }
+  }
+
   /**
    * Run every tool the model asked for, in parallel, reporting each to the UI as it starts and
    * finishes. A tool that throws is reported back to the MODEL as a failed result rather than
@@ -4673,6 +4939,8 @@ export class ChatService {
       ask: boolean;
       /** Whether the user typed this turn, as opposed to a relay, an automatic turn or a seed prompt. */
       attended: boolean;
+      /** Captured when the reply starts; stopping its schedule does not change its origin. */
+      isLoopTurn: boolean;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
       /** Absent outside a reply's own loop, where request_directory then has no turn to track. */
@@ -4865,6 +5133,17 @@ export class ChatService {
                 pullRequests: {
                   bind: (target: string) => pullRequests.bindForAgent(sessionId, target),
                   clear: () => pullRequests.dismiss(sessionId),
+                },
+              }
+            : {}),
+          ...(ask
+            ? {
+                loop: {
+                  // The schedule may be stopped while its model turn is still running.
+                  inRun: () => scope.isLoopTurn,
+                  start: request => this.startLoop(sessionId, request, signal),
+                  current: () => this.getLoop(sessionId),
+                  stop: () => this.stopLoop(sessionId),
                 },
               }
             : {}),
@@ -5489,6 +5768,13 @@ export class ChatService {
         message: `"${title}" is archived. Ask the user to restore it before sending to it.`,
       };
     }
+    if (target.workerTask?.state.status === 'canceled') {
+      return {
+        ok: false,
+        reason: 'unavailable',
+        message: `"${title}" belongs to a canceled task and takes no more relayed work. Start a new task instead.`,
+      };
+    }
 
     if (this.abandoning.has(targetId)) {
       return {
@@ -5947,11 +6233,7 @@ export class ChatService {
         validated.contract ||
         validated.requirements
       );
-      const selection =
-        managed && explicitWorkerChoice
-          ? { ...resolveWorkerModel(parent.model, managed.policy, validated), rootRunId: managed.rootRunId }
-          : undefined;
-      if (!managed && (validated.role || validated.requestedModelId || validated.contract || validated.requirements)) {
+      if (!managed && explicitWorkerChoice) {
         return {
           ok: false,
           reason: 'model-policy',
@@ -5959,13 +6241,15 @@ export class ChatService {
             'Turn on Orchestrate to use role routing or task contracts. Legacy free-text spawn is still available.',
         };
       }
-      if (selection) {
+      let selection: ModelSelection | undefined;
+      if (managed && explicitWorkerChoice) {
         try {
           const { models } = await this.listModels();
-          const contextWindow = models.find(model => model.id === selection.effectiveModel)?.contextWindow;
+          const resolved = resolveWorkerModel(parent.model, managed.policy, validated, models);
+          const contextWindow = models.find(model => model.id === resolved.effectiveModel)?.contextWindow;
           const briefTokens = Math.ceil((validated.contract ? renderTaskBrief(validated.contract) : seed).length / 3);
-          validateWorkerModel(selection.effectiveModel, models, {
-            localOnly: this.deviceLocal() || isLocalModel(parent.model),
+          validateWorkerModel(resolved.effectiveModel, models, {
+            localOnly: this.workerLocality(isLocalModel(parent.model), 'local-parent'),
             ...validated.requirements,
             contextTokens:
               validated.requirements?.contextTokens !== undefined
@@ -5974,6 +6258,7 @@ export class ChatService {
                   ? briefTokens
                   : undefined,
           });
+          selection = { ...resolved, rootRunId: managed.rootRunId };
         } catch (error) {
           return { ok: false, reason: 'model-policy', message: error instanceof Error ? error.message : String(error) };
         }
@@ -5986,8 +6271,15 @@ export class ChatService {
         };
       const brief = validated.contract ? renderTaskBrief(validated.contract) : seed;
       const named = title?.trim();
+      const inherited = managed ? await this.currentPolicyFor(parent, managed) : undefined;
+      if (this.deps.store.scopeKey() !== scope)
+        return {
+          ok: false,
+          reason: 'model-policy',
+          message: 'Account changed before launch. Try again in the intended account.',
+        };
       const child = await this.deps.store.create(selection?.effectiveModel ?? parent.model, {
-        ...(managed ? { orchestrationPolicy: managed } : {}),
+        ...(inherited ? { orchestrationPolicy: inherited } : {}),
         ...(selection ? { workerSelection: selection } : {}),
         ...(validated.contract
           ? {
@@ -8144,6 +8436,9 @@ const MODEL_GUIDANCE: readonly string[] = [
   'batch as the save) to fix any build error it reports. Check it',
   'with model_screenshot from several angles before saying it is done. Each good build also writes',
   '<name>.glb beside it, ready for three.js or Unity (via glTFast); wire it into their game if asked.',
+  'A turn may carry a point-and-edit note: the user clicked those parts in the pane, so "this" means',
+  'them. Change only their code, starting from the lines the note lists, and leave every other part',
+  'as it is; then model_view in a later batch and model_screenshot to confirm the change.',
 ];
 
 const WEB_GUIDANCE: readonly string[] = [
@@ -8185,6 +8480,8 @@ const ASK_GUIDANCE: readonly string[] = [
   'to its label. Never add an "Other" option, never use it to ask "should I proceed?", and never',
   'end a turn with an offer of next steps. Keep labels short, a few words, and put the detail in',
   'the description.',
+  `For anything recurring ("every hour", "until 6pm") call ${LOOP_TOOL_NAME} with action start; never`,
+  'emulate a schedule with sleep, a shell loop or a background timer.',
 ];
 
 /** For GPT models, which stop at plans and offers more readily than the rest. */
@@ -8323,9 +8620,9 @@ const ORCHESTRATOR_GUIDANCE: readonly string[] = [
  */
 const THINK_MARKER = /<\/?think>/;
 
-async function streamRound(...args: Parameters<typeof streamCompletion>): Promise<Error | null> {
+async function streamRound(send: () => Promise<void>): Promise<Error | null> {
   try {
-    await streamCompletion(...args);
+    await send();
     return null;
   } catch (err) {
     return err instanceof Error ? err : new Error(String(err));
@@ -9050,6 +9347,8 @@ function storedRounds(runs: { round: RawRound; text: string }[], model: string):
         toolCallIds: round.toolCallIds,
         timing: round.timing,
         ...(round.usage ? { usage: round.usage } : {}),
+        ...(round.requestId ? { requestId: round.requestId } : {}),
+        ...(round.settled ? { settled: round.settled } : {}),
         model,
         ...(round.reasoning.trim() ? { reasoning: round.reasoning.trim() } : {}),
         sent: round.sent,
@@ -9057,6 +9356,37 @@ function storedRounds(runs: { round: RawRound; text: string }[], model: string):
       // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
       .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage)
   );
+}
+
+/**
+ * Whether a reply is stored with its rounds. A plain reply keeps none, but one that ran tools or
+ * reasoned needs them, and one that made several settled requests needs them to keep each
+ * request's charge apart. Charges live on rounds or on the message, never both; see plainRequestOf.
+ */
+function keepsRounds(rounds: readonly ChatReplyRound[], toolCalls: readonly ChatToolCall[]): boolean {
+  const settledApart = rounds.length > 1 && rounds.some(round => round.requestId || round.settled);
+  return toolCalls.length > 0 || settledApart || rounds.some(round => round.reasoning);
+}
+
+/** The one request of a reply stored without rounds, whose charge then rides the message. */
+function plainRequestOf(rounds: readonly ChatReplyRound[]): Pick<ChatMessage, 'requestId' | 'settled'> {
+  const only = rounds.length === 1 ? rounds[0] : undefined;
+  return {
+    ...(only?.requestId ? { requestId: only.requestId } : {}),
+    ...(only?.settled ? { settled: only.settled } : {}),
+  };
+}
+
+/**
+ * What a failed fresh reply stores of the requests it already made, so the charges they settled
+ * are not lost with the turn. Nothing when none settled, which leaves the failure stored as before.
+ */
+function failedSettlement(
+  rounds: ChatReplyRound[],
+  toolCalls: readonly ChatToolCall[]
+): Pick<ChatMessage, 'rounds' | 'requestId' | 'settled'> {
+  if (!rounds.some(round => round.requestId || round.settled)) return {};
+  return keepsRounds(rounds, toolCalls) ? { rounds } : plainRequestOf(rounds);
 }
 
 /** The rounds minus `sent`, which only replay reads, for the renderer: it roughly doubles a tool turn. */

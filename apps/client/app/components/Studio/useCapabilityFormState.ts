@@ -15,12 +15,19 @@ export type StudioFormRules<TModel extends StudioModel, TState extends { modelId
 };
 
 /**
+ * What picking another model does to the form's values. `clamp` moves them onto the new model and reports each
+ * move; `keep` leaves them as they are, for a form that marks the ones the model does not take (Create v2).
+ */
+export type ModelSwitchPolicy = 'clamp' | 'keep';
+
+/**
  * Form state shared by every Studio modality: the values, the selected model, and what a model switch changed.
  * The model list is a non-empty tuple so the initial state always has a model to describe.
  */
 export function useCapabilityFormState<TModel extends StudioModel, TState extends { modelId: string }>(
   models: NonEmptyList<TModel>,
-  rules: StudioFormRules<TModel, TState>
+  rules: StudioFormRules<TModel, TState>,
+  onModelSwitch: ModelSwitchPolicy = 'clamp'
 ) {
   const [form, setForm] = useState<TState>(() => rules.initialFor(models[0]));
   const [changes, setChanges] = useState<string[]>([]);
@@ -31,19 +38,26 @@ export function useCapabilityFormState<TModel extends StudioModel, TState extend
   useEffect(() => {
     if (model) return;
     const fallback = models[0];
-    const clamped = rules.clampToModel(form, fallback);
-    setForm(clamped.state);
-    setChanges([
-      `The selected model is no longer available; switched to ${fallback.display_name}.`,
-      ...clamped.changes,
-    ]);
-  }, [form, model, models, rules]);
+    const notice = `The selected model is no longer available; switched to ${fallback.display_name}.`;
+    // Under 'keep' the values stay and the field builders mark the ones the fallback does not take.
+    const next =
+      onModelSwitch === 'keep'
+        ? { state: { ...form, modelId: fallback.id }, changes: [] }
+        : rules.clampToModel(form, fallback);
+    setForm(next.state);
+    setChanges([notice, ...next.changes]);
+  }, [form, model, models, rules, onModelSwitch]);
 
   const update = (patch: Partial<TState>) => setForm(previous => ({ ...previous, ...patch }));
 
   const selectModel = (modelId: string) => {
     const next = models.find(candidate => candidate.id === modelId);
     if (!next || next.id === form.modelId) return;
+    if (onModelSwitch === 'keep') {
+      setForm(previous => ({ ...previous, modelId: next.id }));
+      setChanges([]);
+      return;
+    }
     const clamped = rules.clampToModel(form, next);
     setForm(clamped.state);
     setChanges(clamped.changes);

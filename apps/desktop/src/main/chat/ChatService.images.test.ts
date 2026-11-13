@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -28,6 +28,8 @@ describe('ChatService images shown by tools', () => {
   let streams: PassThrough[];
   let root: string;
   let store: SessionStore;
+  let media: MediaStore;
+  let mediaRoot: string;
   let capture: ReturnType<typeof vi.fn<ScreenCapturer['capture']>>;
 
   beforeEach(async () => {
@@ -50,11 +52,13 @@ describe('ChatService images shown by tools', () => {
       capture,
     };
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-images-sessions-')), 'test-model');
+    mediaRoot = await mkdtemp(join(tmpdir(), 'b4m-images-media-'));
+    media = new MediaStore(mediaRoot);
     service = new ChatService({
       store,
       approvals: new ApprovalGate(),
       access: { list: async () => [root] } as unknown as AccessStore,
-      media: new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-images-media-'))),
+      media,
       models: {
         list: async () => ({ models: [{ id: 'test-model', name: 'Test', backend: 'anthropic' }] }),
         cached: () => [],
@@ -126,6 +130,67 @@ describe('ChatService images shown by tools', () => {
     await service.send(id, 'and now?');
     await vi.waitUntil(() => post.mock.calls.length === 3, { timeout: 3000, interval: 5 });
     expect(JSON.stringify(post.mock.calls[2][1].messages)).not.toContain('"type":"image"');
+  });
+
+  it('keeps a read image on the row once per content, so an overwrite shows on the new row only', async () => {
+    const id = await codeSession();
+    /** One read round, and the media its call settled with. */
+    const readShot = async (args: Record<string, unknown> = {}) => {
+      events.length = 0;
+      await toolRound(id, 'file_read', { path: join(root, 'shot.png'), ...args });
+      const end = events.find(event => event.type === 'tool-end');
+      return end && 'call' in end ? end.call.media : undefined;
+    };
+
+    const first = await readShot();
+    expect(first).toEqual([
+      expect.objectContaining({ kind: 'image', caption: join(root, 'shot.png'), width: 10, height: 10 }),
+    ]);
+    expect((await readShot())?.[0].url).toBe(first?.[0].url);
+
+    await writeFile(join(root, 'shot.png'), Buffer.concat([PNG, Buffer.from('changed')]));
+    // `limit` only so the doom-loop guard does not stop a third identical call; an image ignores it.
+    const changed = await readShot({ limit: 1 });
+    expect(changed?.[0].url).not.toBe(first?.[0].url);
+
+    const stored = await store.get(id);
+    const urls = (stored?.messages ?? [])
+      .flatMap(message => message.toolCalls ?? [])
+      .flatMap(call => call.media ?? [])
+      .map(item => item.url);
+    expect(urls).toEqual([first?.[0].url, first?.[0].url, changed?.[0].url]);
+  });
+
+  it('does not keep an image whose file read finishes after conversation deletion', async () => {
+    const id = await codeSession();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const saveForContent = media.saveForContent.bind(media);
+    const keep = vi.spyOn(media, 'saveForContent').mockImplementation(async (...args) => {
+      started.resolve();
+      await release.promise;
+      return saveForContent(...args);
+    });
+    await service.send(id, 'look at it');
+    await vi.waitUntil(() => streams.length === 1);
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'read', name: 'file_read', arguments: JSON.stringify({ path: join(root, 'shot.png') }) }],
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+    await started.promise;
+    try {
+      await service.deleteSession(id);
+    } finally {
+      release.resolve();
+    }
+    const attempt = keep.mock.results[0];
+    if (attempt.type !== 'return') throw new Error('Image save did not start');
+    await expect(attempt.value).rejects.toThrow(/deleted/);
+    expect(await readdir(mediaRoot)).toEqual([]);
+    expect(await store.get(id)).toBeNull();
   });
 
   it('caps the images one round sends and tells the model how many were left out', async () => {

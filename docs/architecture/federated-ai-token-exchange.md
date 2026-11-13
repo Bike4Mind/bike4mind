@@ -34,6 +34,47 @@ Scope validation runs before revoking the previous exchange key. A successful
 exchange replaces the previous key for that user/client pair, including when the
 requested scopes differ, and returns the minted scopes in the response's `scope`.
 
+## Request quotas
+
+A federated client registration can include an optional top-level `rateLimit`:
+
+```json
+{ "requestsPerMinute": 300, "requestsPerDay": 20000 }
+```
+
+The exchange copies the registered profile to each new key; it never accepts a
+profile from the exchange request. Without a profile, keys keep the defaults of
+60 requests/minute and 1,000/day. Profiles require positive whole numbers, capped
+at 10,000/minute and 1,000,000/day. They do not change credit charging, balance
+checks, or application run budgets.
+
+Ordinary keys count per key. Federated exchange keys share both request counters
+by the stored B4M user id and OAuth client id, across scopes, expiry, revocation,
+and re-exchange. A window starts on the first request and resets 60 seconds or
+24 hours later; minting another key does not restart it. Management requests
+retain their separate per-key counter. Routes explicitly exempting cheap reads
+from the daily quota still charge the minute quota. Admin usage reads and resets
+of an exchange key address the shared user/client request counters.
+
+API-key responses include `X-RateLimit-Limit-Minute`, `X-RateLimit-Remaining-Minute`,
+`X-RateLimit-Reset-Minute`, and the corresponding `-Day` headers. Quota 429s also
+include `Retry-After` in seconds; reset headers are Unix epoch seconds. Pause for
+`Retry-After` rather than re-exchanging a key.
+
+### Operator rollout
+
+After deploying, use the existing audited admin OAuth-client PATCH API with the
+exact registration id in each environment. Send `rateLimit` as above together
+with `expectedUpdatedAt` from the admin client-list response. Preserve the trust
+config, scopes, and secret. `rateLimit: null` removes the override for future
+mints. Existing keys keep their stored profile until the next exchange.
+
+For the requested higher profile, set 300/minute and 20,000/day separately on
+staging and production, then read back each registration and verify a newly
+exchanged key's quota headers. This document is a rollout procedure, not evidence
+that either live environment has been changed. Do not identify registrations by
+display name alone. Billing and limits changes remain human-merged.
+
 ## Grant enforcement and rollout
 
 The SST `production` and `dev` stages, and preview stages, enforce grants

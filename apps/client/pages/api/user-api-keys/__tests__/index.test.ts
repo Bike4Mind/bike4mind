@@ -117,6 +117,8 @@ vi.mock('@bike4mind/server-utils/premium-generated/premiumApiKeyScopes.generated
     },
   ],
 }));
+const requireStepUp = vi.hoisted(() => vi.fn(async (_req?: unknown) => undefined));
+vi.mock('@server/auth/stepUp', () => ({ requireStepUp }));
 const resolveApiKeyTrust = vi.hoisted(() => vi.fn().mockResolvedValue({ assessment: { status: 'trusted' } }));
 vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
 
@@ -713,6 +715,45 @@ describe('POST /api/user-api-keys - product scope entitlement', () => {
   });
 });
 
+describe('POST /api/user-api-keys - persona mint scope', () => {
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    requireStepUp.mockReset();
+    requireStepUp.mockResolvedValue(undefined);
+    scopeAccess.current = { ...scopeAccess.current, bypass: true };
+  });
+
+  it('requires step-up before minting a key that holds personas:mint', async () => {
+    const { req, res } = post({ name: 'qa-bot', scopes: ['me:read', 'personas:mint'] });
+    await mockRefs.postHandler!(req, res);
+    expect(requireStepUp).toHaveBeenCalledWith(req);
+    expect(res._getStatusCode()).toBe(201);
+    expect(createUserApiKey).toHaveBeenCalled();
+  });
+
+  it('mints nothing when step-up is refused', async () => {
+    requireStepUp.mockRejectedValue(new Error('step-up required'));
+    const { req, res } = post({ name: 'qa-bot', scopes: ['personas:mint'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('step-up required');
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('does not ask for step-up on a key without personas:mint', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['me:read', 'files:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(requireStepUp).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('refuses personas:mint to a user who is not offered it, before any step-up', async () => {
+    scopeAccess.current = { ...scopeAccess.current, bypass: false };
+    const { req, res } = post({ name: 'qa-bot', scopes: ['personas:mint'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('Scope not available on your account: personas:mint');
+    expect(requireStepUp).not.toHaveBeenCalled();
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/user-api-keys - contributed scopes', () => {
   beforeEach(() => {
     createUserApiKey.mockClear();
@@ -850,5 +891,25 @@ describe('POST /api/user-api-keys - paid-only access switch', () => {
       },
       req
     );
+  });
+});
+
+describe('/api/user-api-keys - org service account', () => {
+  // An org-owned key authenticates as its org's service account, which holds all of the org's keys.
+  it('refuses to list or mint keys for it', async () => {
+    listUserApiKeys.mockClear();
+    createUserApiKey.mockClear();
+    const serviceAccount = { id: 'sa1', isAdmin: false, isSystem: true, serviceAccountOrganizationId: 'org-1' };
+
+    const listing = createMocks({ method: 'GET', query: {} });
+    Object.assign(listing.req, { user: serviceAccount });
+    await expect(mockRefs.getHandler!(listing.req, listing.res)).rejects.toMatchObject({ statusCode: 403 });
+
+    const { req, res } = post({ name: 'k', scopes: ['ai:chat'] });
+    Object.assign(req, { user: serviceAccount });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+
+    expect(listUserApiKeys).not.toHaveBeenCalled();
+    expect(createUserApiKey).not.toHaveBeenCalled();
   });
 });

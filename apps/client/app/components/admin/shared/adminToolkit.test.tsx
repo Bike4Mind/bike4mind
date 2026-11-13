@@ -6,6 +6,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import {
   AdminPageHeader,
   EntityHeader,
+  CopyValue,
   Fact,
   Kbd,
   RelativeTime,
@@ -239,6 +240,21 @@ describe('EntityHeader', () => {
     expect(await screen.findByRole('tooltip')).toHaveTextContent(formatUtc(new Date(isoDatetime)));
   });
 
+  it('truncates copyable identifiers while copying the full value without activating the parent', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const parent = vi.fn();
+    const value = 'a-long-identifier-that-must-never-wrap';
+    renderToolkit(
+      <div onClick={parent}>
+        <CopyValue value={value} label="message ID" mono truncate />
+      </div>
+    );
+    expect(screen.getByText(value)).toHaveStyle({ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
+    fireEvent.click(screen.getByRole('button', { name: 'Copy message ID' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(value));
+    expect(parent).not.toHaveBeenCalled();
+  });
   it('reports clipboard failures and omits invalid dates', async () => {
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: vi.fn().mockRejectedValue(new Error('Denied')) },

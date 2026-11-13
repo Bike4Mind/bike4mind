@@ -78,8 +78,8 @@ export function registerAuth(): AuthService {
   const vault = new TokenVault(safeStorage, vaultFile(join(userData, 'auth-vault.json')), logger);
   // The same media directory registerChat builds its store over, and deliberately so: that is
   // the only directory the `b4m-media:` handler will serve, and the renderer's CSP admits no
-  // other origin for an image. MediaStore holds no state beyond the path, so a second instance
-  // over it is just a second door onto the same folder.
+  // other origin for an image. This instance owns only the reusable photo bucket; conversation
+  // deletion barriers are owned by the chat store.
   const profilePhotos = new ProfilePhotoCache(
     new MediaStore(join(userData, 'media')),
     photoRecordFile(join(userData, 'profile-photo.json'))

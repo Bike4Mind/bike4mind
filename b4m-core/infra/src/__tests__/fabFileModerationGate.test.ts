@@ -159,6 +159,8 @@ const ALLOWLIST: Record<string, string> = {
     'signs a server-rendered admin audit-log CSV it just staged under exports/ for a platform admin - not user-uploaded FabFile bytes, so there is no moderationStatus to gate on',
   'apps/client/pages/api/users/me/data-export/[jobId].ts':
     "signs the caller's own account data export zip under exports/ - not a FabFile row; the worker that built it already left out files that are not isImageServeable",
+  'apps/client/pages/api/admin/users/[userId]/data-export/[jobId].ts':
+    'signs a data subject export zip under exports/ for an admin - not a FabFile row; the same worker as the self-serve export built it and left out files that are not isImageServeable',
 
   // --- DI passthroughs: the file only wires a storage closure; the actual gate lives
   // in the shared service function the closure is handed to. ---
@@ -182,7 +184,7 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/files/createFabFileURL.ts':
     'DI passthrough to fabFileService.createFabFileByUrl -> createFabFile (create.ts), which skips minting fileUrl for images at creation time (root-cause fix, commit 63cc8f9d3e)',
-  'apps/client/server/dataLakes/proposalAdmissionDeps.ts':
+  'packages/server-utils/src/dataLakes/proposalAdmissionDeps.ts':
     'DI passthrough to fabFileService.createFabFileByUrl -> createFabFile (create.ts:175 withholds fileUrl for image/* at creation time); the adapter only forwards the mode createFabFile asks for, and never reads an existing FabFile',
   'apps/client/pages/api/notebooks/export.ts':
     'DI passthrough — fileStorageService adapter consumed by already-gated notebookExportService.exportKnowledge/processImages (both import isImageServeable)',

@@ -1,9 +1,36 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { describe, expect, it, vi } from 'vitest';
-import { ImageModels } from '@bike4mind/common';
+import { IMAGE_JOB_PROMPT_MAX_CHARS, ImageModels, SCENE_PRESETS } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
+
+// The picker modal and its file search are the Agent's; the form only opens it and takes the applied file.
+const h = vi.hoisted(() => ({
+  openImageBrowser: vi.fn(),
+  applyImage: undefined as undefined | ((file: { id: string; fileName: string }) => void),
+}));
+vi.mock('@client/app/hooks/agent/useImageBrowser', () => ({
+  useImageBrowser: () => ({
+    isImageBrowserOpen: false,
+    openImageBrowser: h.openImageBrowser,
+    closeImageBrowser: vi.fn(),
+    imageSearch: '',
+    setImageSearch: vi.fn(),
+    isLoadingImages: false,
+    imageFiles: [],
+    selectedImage: null,
+    selectImage: vi.fn(),
+    fetchImageFiles: vi.fn(),
+  }),
+}));
+vi.mock('@client/app/components/Agent/ImageBrowserModal', () => ({
+  default: ({ onApplyImage }: { onApplyImage: (file: { id: string; fileName: string }) => void }) => {
+    h.applyImage = onApplyImage;
+    return null;
+  },
+}));
+
 import ImageStudioForm from './ImageStudioForm';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -14,6 +41,7 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 type Models = Parameters<typeof ImageStudioForm>[0]['models'];
 const models: Models = [
   { id: ImageModels.FLUX_KONTEXT_PRO, name: 'FLUX Kontext Pro' },
+  { id: ImageModels.FLUX_PRO_ULTRA, name: 'FLUX Ultra' },
   { id: ImageModels.GEMINI_3_1_FLASH_IMAGE, name: 'Nano Banana 2' },
   { id: ImageModels.GPT_IMAGE_1_5, name: 'GPT Image 1.5' },
 ];
@@ -29,81 +57,198 @@ const renderForm = (overrides: Partial<Parameters<typeof ImageStudioForm>[0]> = 
 };
 
 const typePrompt = (value: string) =>
-  fireEvent.change(screen.getByTestId('image-studio-prompt-input'), { target: { value } });
-
-const openSelect = (testId: string) => fireEvent.click(screen.getByTestId(testId));
+  fireEvent.change(screen.getByTestId('image-form-prompt-input'), { target: { value } });
+const card = (model: ImageModels) => screen.getByTestId(`image-form-model-card-${model}`);
+const pickCard = (model: ImageModels) => fireEvent.click(screen.getByTestId(`image-form-model-card-${model}-radio`));
+const submitButton = () => screen.getByTestId('image-form-submit-btn');
 
 describe('ImageStudioForm', () => {
-  it('opens on the default model and keeps Generate off until there is a prompt', () => {
+  it('opens on a visible default card and keeps Generate off until there is a prompt', () => {
     renderForm();
-    expect(screen.getByTestId('image-studio-model-select')).toHaveTextContent('GPT Image 1.5');
-    expect(screen.getByTestId('image-studio-generate-btn')).toBeDisabled();
+    expect(card(ImageModels.GPT_IMAGE_1_5)).toHaveAttribute('data-selected', 'true');
+    expect(card(ImageModels.GPT_IMAGE_1_5)).toHaveTextContent('OpenAI');
+    expect(screen.getByTestId(`image-form-model-card-${ImageModels.GPT_IMAGE_1_5}-cost`)).toHaveTextContent(
+      /credits per image/
+    );
+    expect(submitButton()).toBeDisabled();
   });
 
   it('submits the prompt, the model and "make N"', () => {
     const { onSubmit } = renderForm();
     typePrompt('  a red fox in snow  ');
-    fireEvent.click(screen.getByTestId('image-studio-count-3'));
-    expect(screen.getByTestId('image-studio-generate-btn')).toHaveTextContent('Generate 3 images');
-    fireEvent.click(screen.getByTestId('image-studio-generate-btn'));
+    fireEvent.click(screen.getByTestId('image-form-count-3-btn'));
+    expect(submitButton()).toHaveTextContent('Generate 3 images');
+    fireEvent.click(submitButton());
     expect(onSubmit).toHaveBeenCalledWith({
       count: 3,
       request: { model: ImageModels.GPT_IMAGE_1_5, mode: 'generate', prompt: 'a red fox in snow' },
     });
   });
 
-  it('shows an edit-only model disabled with its why-not reason', () => {
+  it('makes edit-only and not-yet-wired models unpickable, with the reason on the card', () => {
     renderForm();
-    openSelect('image-studio-model-select');
-    const kontext = screen.getByTestId(`image-studio-model-option-${ImageModels.FLUX_KONTEXT_PRO}`);
-    expect(kontext).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId(`image-form-model-card-${ImageModels.FLUX_KONTEXT_PRO}-radio`)).toBeDisabled();
     expect(
-      within(kontext).getByTestId(`image-studio-model-reason-${ImageModels.FLUX_KONTEXT_PRO}`)
+      screen.getByTestId(`image-form-model-card-${ImageModels.FLUX_KONTEXT_PRO}-reason`)
     ).not.toBeEmptyDOMElement();
-    expect(screen.getByTestId(`image-studio-model-option-${ImageModels.GPT_IMAGE_1_5}`)).not.toHaveAttribute(
-      'aria-disabled',
-      'true'
+    expect(screen.getByTestId(`image-form-model-card-${ImageModels.FLUX_PRO_ULTRA}-reason`)).toHaveTextContent(
+      'Temporarily unavailable'
     );
   });
 
-  it('sends a chosen size and disables the models that cannot honour it', () => {
+  it('sends a chosen quality, and greys the models that cannot honour them', () => {
     const { onSubmit } = renderForm();
-    openSelect('image-studio-size-select');
-    fireEvent.click(screen.getByTestId('image-studio-size-option-1024x1536'));
-    openSelect('image-studio-model-select');
-    expect(screen.getByTestId(`image-studio-model-option-${ImageModels.GEMINI_3_1_FLASH_IMAGE}`)).toHaveAttribute(
-      'aria-disabled',
-      'true'
-    );
+    fireEvent.click(screen.getByTestId('image-form-quality-high-btn'));
+    expect(
+      screen.getByTestId(`image-form-model-card-${ImageModels.GEMINI_3_1_FLASH_IMAGE}-reason`)
+    ).toBeInTheDocument();
     typePrompt('tall poster');
-    fireEvent.click(screen.getByTestId('image-studio-generate-btn'));
+    fireEvent.click(submitButton());
     expect(onSubmit).toHaveBeenCalledWith({
       count: 1,
-      request: { model: ImageModels.GPT_IMAGE_1_5, mode: 'generate', prompt: 'tall poster', size: '1024x1536' },
+      request: { model: ImageModels.GPT_IMAGE_1_5, mode: 'generate', prompt: 'tall poster', quality: 'high' },
     });
   });
 
-  it('hides size and aspect ratio for a model that offers neither', () => {
+  it('keeps a value the new model does not take, marks it with the reason, and holds Generate until it is fixed', () => {
+    const { onSubmit } = renderForm();
+    fireEvent.click(screen.getByTestId('image-form-quality-high-btn'));
+    typePrompt('a lighthouse');
+    pickCard(ImageModels.GEMINI_3_1_FLASH_IMAGE);
+
+    expect(card(ImageModels.GEMINI_3_1_FLASH_IMAGE)).toHaveAttribute('data-selected', 'true');
+    expect(screen.getByTestId('image-form-quality-high-btn')).toHaveAttribute('data-invalid', 'true');
+    expect(screen.getByTestId('image-form-quality-invalid')).not.toBeEmptyDOMElement();
+    expect(submitButton()).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('image-form-quality-fix-btn'));
+    expect(screen.queryByTestId('image-form-quality-toggle')).not.toBeInTheDocument();
+    fireEvent.click(submitButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      count: 1,
+      request: { model: ImageModels.GEMINI_3_1_FLASH_IMAGE, mode: 'generate', prompt: 'a lighthouse' },
+    });
+  });
+
+  it('hides the settings a model does not offer', () => {
     renderForm({ models: [{ id: ImageModels.GEMINI_3_1_FLASH_IMAGE, name: 'Nano Banana 2' }] });
-    expect(screen.queryByTestId('image-studio-size-select')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('image-studio-aspect-select')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('image-form-size-select')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('image-form-aspect-toggle')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('image-form-quality-toggle')).not.toBeInTheDocument();
+    expect(screen.getByTestId('image-form-references-add-btn')).toBeInTheDocument();
   });
 
-  it('offers aspect ratios on a model that takes them', () => {
-    const { onSubmit } = renderForm({ models: [{ id: ImageModels.FLUX_PRO_ULTRA, name: 'FLUX Ultra' }] });
-    openSelect('image-studio-aspect-select');
-    fireEvent.click(screen.getByTestId('image-studio-aspect-option-16:9'));
-    typePrompt('wide shot');
-    fireEvent.click(screen.getByTestId('image-studio-generate-btn'));
+  it('opens the picker from the reference slot', () => {
+    renderForm();
+    fireEvent.click(screen.getByTestId('image-form-references-add-btn'));
+    expect(h.openImageBrowser).toHaveBeenCalled();
+  });
+
+  it('sends an applied reference image as a reference input', () => {
+    const { onSubmit } = renderForm();
+    act(() => h.applyImage?.({ id: 'file-1', fileName: 'fox.png' }));
+    typePrompt('a fox like this one');
+    fireEvent.click(submitButton());
     expect(onSubmit).toHaveBeenCalledWith({
       count: 1,
-      request: { model: ImageModels.FLUX_PRO_ULTRA, mode: 'generate', prompt: 'wide shot', aspectRatio: '16:9' },
+      request: {
+        model: ImageModels.GPT_IMAGE_1_5,
+        mode: 'generate',
+        prompt: 'a fox like this one',
+        inputs: [{ role: 'reference', fileId: 'file-1' }],
+      },
     });
+  });
+
+  it('says so when a models refetch drops the picked model', () => {
+    const { rerender } = render(
+      <TestWrapper>
+        <ImageStudioForm models={models} isSubmitting={false} onSubmit={vi.fn()} />
+      </TestWrapper>
+    );
+    pickCard(ImageModels.GEMINI_3_1_FLASH_IMAGE);
+    expect(screen.queryByTestId('image-form-changes')).not.toBeInTheDocument();
+    rerender(
+      <TestWrapper>
+        <ImageStudioForm
+          models={[{ id: ImageModels.GPT_IMAGE_1_5, name: 'GPT Image 1.5' }]}
+          isSubmitting={false}
+          onSubmit={vi.fn()}
+        />
+      </TestWrapper>
+    );
+    expect(card(ImageModels.GPT_IMAGE_1_5)).toHaveAttribute('data-selected', 'true');
+    expect(screen.getByTestId('image-form-changes')).toHaveTextContent('switched to GPT Image 1.5');
   });
 
   it('says so when no model can generate from a prompt', () => {
     renderForm({ models: [{ id: ImageModels.FLUX_KONTEXT_PRO, name: 'FLUX Kontext Pro' }] });
     expect(screen.getByTestId('image-studio-no-generate-model')).toBeInTheDocument();
-    expect(screen.queryByTestId('image-studio-form')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('image-form')).not.toBeInTheDocument();
+  });
+  describe('Look chips', () => {
+    const [slate, kitchen] = SCENE_PRESETS;
+    const chip = (id: string) => screen.getByTestId(`image-form-look-${id}-chip`);
+    const promptInput = () => screen.getByTestId('image-form-prompt-input');
+
+    it('shows a chip per scene preset, none selected', () => {
+      renderForm();
+      for (const preset of SCENE_PRESETS) {
+        expect(chip(preset.id)).toHaveAccessibleName(preset.name);
+        expect(chip(preset.id)).toHaveAttribute('aria-pressed', 'false');
+      }
+    });
+
+    it('fills an empty prompt and enables Generate', () => {
+      renderForm();
+      fireEvent.click(chip(slate.id));
+      expect(promptInput()).toHaveValue(slate.promptFragment);
+      expect(chip(slate.id)).toHaveAttribute('aria-pressed', 'true');
+      expect(submitButton()).toBeEnabled();
+    });
+
+    it("adds to the user's prompt, swaps scenes and clears on a second click", () => {
+      renderForm();
+      typePrompt('A lemon tart');
+      fireEvent.click(chip(slate.id));
+      expect(promptInput()).toHaveValue(`A lemon tart, ${slate.promptFragment}`);
+
+      fireEvent.click(chip(kitchen.id));
+      expect(promptInput()).toHaveValue(`A lemon tart, ${kitchen.promptFragment}`);
+      expect(chip(slate.id)).toHaveAttribute('aria-pressed', 'false');
+      expect(chip(kitchen.id)).toHaveAttribute('aria-pressed', 'true');
+
+      fireEvent.click(chip(kitchen.id));
+      expect(promptInput()).toHaveValue('A lemon tart');
+      expect(chip(kitchen.id)).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('deselects when the user edits the scene words away', () => {
+      renderForm();
+      fireEvent.click(chip(slate.id));
+      typePrompt('A tart on dark stone');
+      expect(chip(slate.id)).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('disables a chip whose words would not fit in the prompt', () => {
+      renderForm();
+      const nearlyFull = 'x'.repeat(IMAGE_JOB_PROMPT_MAX_CHARS - 10);
+      typePrompt(nearlyFull);
+      expect(chip(slate.id)).toBeDisabled();
+      fireEvent.click(chip(slate.id));
+      expect(promptInput()).toHaveValue(nearlyFull);
+    });
+
+    it('submits the prompt with the scene in it', () => {
+      const { onSubmit } = renderForm();
+      typePrompt('A lemon tart');
+      fireEvent.click(chip(slate.id));
+      fireEvent.click(submitButton());
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({ prompt: `A lemon tart, ${slate.promptFragment}` }),
+        })
+      );
+    });
   });
 });
