@@ -65,6 +65,7 @@ export const ADMIN_USER_PROJECTION: Record<string, 1> = {
   _id: 1,
   ...Object.fromEntries(ADMIN_USER_LIST_FIELDS.map(field => [field, 1])),
   'mfa.totpEnabled': 1,
+  'mfa.passkeyEnabled': 1,
   'mfa.setupAt': 1,
   'mfa.lastUsedAt': 1,
 };
@@ -78,7 +79,7 @@ export type AdminUserListItem = Omit<Pick<IUserDocument, (typeof ADMIN_USER_LIST
   // The endpoint populates organizationId and serializes it, so it arrives as the safe org shape
   // (null when unset). A non-admin viewer gets only id and name, since the list spans tenants.
   organizationId: SafeOrganization | Pick<SafeOrganization, 'id' | 'name'> | null;
-  mfa?: Pick<IMFAConfig, 'totpEnabled' | 'setupAt' | 'lastUsedAt'> | null;
+  mfa?: Pick<IMFAConfig, 'totpEnabled' | 'passkeyEnabled' | 'setupAt' | 'lastUsedAt'> | null;
 };
 
 // publicView for an admin caller. Non-admin pickers get PICKER_USER_PROJECTION instead.
