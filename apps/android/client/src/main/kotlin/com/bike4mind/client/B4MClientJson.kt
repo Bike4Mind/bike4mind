@@ -12,7 +12,8 @@ import kotlinx.serialization.modules.SerializersModule
  * without a converter, so pass [installB4MJson] as each API's `httpClientConfig`.
  *
  * - `ignoreUnknownKeys`: the server adds fields without a version bump; a shipped build must still decode.
- * - `explicitNulls = false`: an optional field the server omits decodes as null.
+ * - `explicitNulls = false`: an optional field the server omits decodes as null. It also drops null properties
+ *   from request bodies, so a write that clears a field by sending `null` needs its own encoder.
  * - Decimal is registered contextually because the generator also marks `number` properties `@Contextual`.
  */
 val B4MClientJson: Json = Json {
