@@ -35,6 +35,10 @@ describe('organizationService - setOrganizationManager', () => {
         removeAdmin: vi.fn(async (_orgId: string, userId: string) => {
           org = { ...org, adminUserIds: org.adminUserIds.filter(id => id !== userId) } as IOrganizationDocument;
         }),
+        update: vi.fn(async (patch: Partial<IOrganizationDocument>) => {
+          org = { ...org, ...patch } as IOrganizationDocument;
+          return org;
+        }),
       },
     },
   });
@@ -55,6 +59,19 @@ describe('organizationService - setOrganizationManager', () => {
     expect(change.previousAdminUserIds).toEqual(['admin1']);
     expect(change.adminUserIds).toEqual(['admin1', 'user2']);
     expect(change.changed).toBe(true);
+  });
+
+  it('drops a billing manager from billingManagerUserIds when promoting them', async () => {
+    org = freshOrg({ billingManagerUserIds: ['user2', 'other'] });
+    await run(owner, 'user2', true);
+
+    expect(adapters.db.organizations.update).toHaveBeenCalledWith({ id: 'org1', billingManagerUserIds: ['other'] });
+  });
+
+  it('does not touch billingManagerUserIds when promoting a plain member', async () => {
+    await run(owner, 'user2', true);
+
+    expect(adapters.db.organizations.update).not.toHaveBeenCalled();
   });
 
   it('removes a manager through the targeted write', async () => {

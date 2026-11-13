@@ -63,6 +63,16 @@ describe('toSafeOrganization', () => {
     expect(safe.billingContact).toBe('billing@acme.com');
   });
 
+  it('shows billingContact to a billing manager and hides it from a manager', () => {
+    const org = {
+      ...fullOrg,
+      billingManagerUserIds: ['biller1'],
+      users: [...(fullOrg as unknown as { users: unknown[] }).users, { userId: 'biller1', permissions: ['read'] }],
+    } as unknown as IOrganization;
+    expect(toSafeOrganization(org, { userId: 'biller1', isAdmin: false })!.billingContact).toBe('billing@acme.com');
+    expect('billingContact' in toSafeOrganization(org, { userId: 'manager1', isAdmin: false })!).toBe(false);
+  });
+
   it('drops billingContact for a non-owner, non-admin member', () => {
     const safe = toSafeOrganization(fullOrg, { userId: 'member2', isAdmin: false })!;
     expect('billingContact' in safe).toBe(false);

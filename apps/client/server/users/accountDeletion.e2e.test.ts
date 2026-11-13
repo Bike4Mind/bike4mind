@@ -269,6 +269,18 @@ describe('requestAccountDeletion', () => {
     await expect(requestAccountDeletion(requestFor(userId))).rejects.toMatchObject({ statusCode: 409 });
   });
 
+  it('refuses an owner whose only other person is a billing manager without a member row', async () => {
+    const userId = await seedAccount();
+    await Organization.create({
+      name: 'Billed',
+      userId,
+      personal: false,
+      billingManagerUserIds: [new mongoose.Types.ObjectId().toString()],
+    });
+
+    await expect(requestAccountDeletion(requestFor(userId))).rejects.toMatchObject({ statusCode: 409 });
+  });
+
   it('does not let a personal workspace block the request', async () => {
     const userId = await seedAccount();
     await Organization.create({ name: 'Personal', userId });

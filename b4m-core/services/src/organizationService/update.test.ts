@@ -322,4 +322,31 @@ describe('organizationService - update', () => {
     });
     expect(persisted).not.toHaveProperty('currentCredits');
   });
+
+  describe('billingContact write gate', () => {
+    const run = (actor: Partial<IUserDocument>) =>
+      update(actor as IUserDocument, { id: 'org1', billingContact: 'new@example.com' }, mockAdapters);
+    const persisted = () => mockAdapters.db.organizations.update.mock.calls[0][0];
+
+    it('lets the owner change it', async () => {
+      await run(mockRegularUser);
+      expect(persisted().billingContact).toBe('new@example.com');
+    });
+
+    it('lets a platform admin change it', async () => {
+      await run(mockAdminUser);
+      expect(persisted().billingContact).toBe('new@example.com');
+    });
+
+    it('denies a manager', async () => {
+      const org = {
+        ...existingOrganization,
+        adminUserIds: ['mgr1'],
+        users: [{ userId: 'mgr1', permissions: ['read'] }],
+      };
+      mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(org);
+      await run({ id: 'mgr1', isAdmin: false });
+      expect(persisted()).not.toHaveProperty('billingContact');
+    });
+  });
 });

@@ -1,4 +1,4 @@
-import { IOrganizationRepository, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
+import { hasOrgPermission, IOrganizationRepository, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -44,17 +44,13 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
       : organization
   ) as NonNullable<typeof organization>;
 
-  const isManager = (plain.adminUserIds ?? []).includes(user.id);
-  const isOwner = plain.userId === user.id;
-
   // Persist ONLY the caller-editable fields this request changed, never a spread of
   // the read snapshot. A whole-document write reverted concurrent credit, seat and
   // membership writes; currentCredits/seats/users[]/userDetails[] are never round-tripped.
   const update: Partial<typeof plain> & { id: string } = { id };
   if (rest.name !== undefined) update.name = rest.name;
   if (rest.description !== undefined) update.description = rest.description;
-  // Only allow billing contact changes for owners and admins, not managers.
-  if (rest.billingContact !== undefined && !(isManager && !isOwner && !user.isAdmin)) {
+  if (rest.billingContact !== undefined && hasOrgPermission(user, plain, 'manageBilling')) {
     update.billingContact = rest.billingContact;
   }
   // Managers can update systemPrompt intentionally - they customize org-wide AI

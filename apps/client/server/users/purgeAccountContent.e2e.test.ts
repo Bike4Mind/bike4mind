@@ -103,6 +103,19 @@ describe('permanent personal-content purge', () => {
     expect(retained?.ownerId).toBeNull();
     expect(retained?.status).toBe('open');
   });
+  it('pulls a deleted account from billingManagerUserIds even without a roster row', async () => {
+    const orgId = new mongoose.Types.ObjectId();
+    await collection('Organization').insertOne({
+      _id: orgId,
+      userId: otherOwnerId,
+      personal: false,
+      billingManagerUserIds: [ownerId, otherOwnerId],
+    });
+    await purgeAccountContent(ownerId, { assertLease, logger });
+    expect(await collection('Organization').findOne({ _id: orgId })).toMatchObject({
+      billingManagerUserIds: [otherOwnerId],
+    });
+  });
   it('retains the real account and purge marker after object failure, then removes content and User before emailing completion', async () => {
     const notebookId = new mongoose.Types.ObjectId();
     const fileId = new mongoose.Types.ObjectId();

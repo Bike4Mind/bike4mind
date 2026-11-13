@@ -123,7 +123,8 @@ const handler = adminApi({
         next === 'manager'
           ? [...(organization.adminUserIds ?? []), userId]
           : (organization.adminUserIds ?? []).filter(id => id !== userId);
-      await organizationRepository.update({ id: organizationId, adminUserIds });
+      const billingManagerUserIds = (organization.billingManagerUserIds ?? []).filter(id => id !== userId);
+      await organizationRepository.update({ id: organizationId, adminUserIds, billingManagerUserIds });
       await recordAdminActionFromRequest(req, {
         action: 'org.member.role_changed',
         target: await userAuditTarget(userId),

@@ -36,6 +36,16 @@ describe('organization audit personal-data policy', () => {
   });
 });
 
+describe('organization role lists', () => {
+  it('pulls the user from billingManagerUserIds like the other role lists', () => {
+    const holder = DATA_HOLDER_REGISTRY.Organization;
+    if (holder.kind !== 'holder') throw new Error('Organization must be a holder');
+    const lists = holder.references.filter(reference => reference.path === 'billingManagerUserIds');
+    expect(lists).toHaveLength(1);
+    expect(lists[0]).toMatchObject({ matchBy: 'userId', action: 'pullFromArray' });
+  });
+});
+
 describe('findUnclassifiedModels', () => {
   it('returns the names the registry does not classify', () => {
     expect(findUnclassifiedModels(['User', 'NotARealModel'])).toEqual(['NotARealModel']);
