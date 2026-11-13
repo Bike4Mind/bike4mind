@@ -108,13 +108,13 @@ async function makeCertificate(label) {
   return { label, sha1 };
 }
 
-// Some macOS versions let codesign use an identity from --keychain alone; others resolve it only
-// through the user search list. The list is changed only where the probe says it has to be, and
-// the finally block puts it back.
 function git(...args) {
   return (spawnSync('git', args, { encoding: 'utf8' }).stdout ?? '').trim();
 }
 
+// Some macOS versions let codesign use an identity from --keychain alone; others resolve it only
+// through the user search list. The list is changed only where the probe says it has to be, and
+// the finally block puts it back.
 async function exposeSigningKeychain(sha1) {
   const probe = join(root, 'probe');
   await copyFile('/usr/bin/true', probe);
