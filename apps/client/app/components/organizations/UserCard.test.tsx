@@ -232,15 +232,19 @@ describe('OrganizationUserCard manager role', () => {
     for (const aclLabel of ['Admin', 'Editor', 'Viewer']) expect(screen.queryByText(aclLabel)).toBeNull();
   });
 
-  it.each([[Permission.update], [Permission.share]])(
-    'flags a member whose %s permission opens team settings',
-    permission => {
-      renderCard({ ...member('a', usage), permissions: [Permission.read, permission] }, false, false, {
-        organization: managedOrg,
-      });
-      expect(screen.getByTestId('organization-user-card-settings-access-chip').textContent).toBe('Can edit settings');
-    }
-  );
+  it('flags a member whose update permission opens team settings', () => {
+    renderCard({ ...member('a', usage), permissions: [Permission.read, Permission.update] }, false, false, {
+      organization: managedOrg,
+    });
+    expect(screen.getByTestId('organization-user-card-settings-access-chip').textContent).toBe('Can edit settings');
+  });
+
+  it('does not flag a share-only member', () => {
+    renderCard({ ...member('a', usage), permissions: [Permission.read, Permission.share] }, false, false, {
+      organization: managedOrg,
+    });
+    expect(screen.queryByTestId('organization-user-card-settings-access-chip')).toBeNull();
+  });
 
   it('does not flag a read-only member', () => {
     renderCard(member('a', usage), false, false, { organization: managedOrg });

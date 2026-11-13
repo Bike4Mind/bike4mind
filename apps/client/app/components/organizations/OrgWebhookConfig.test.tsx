@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IOrganizationDocument } from '@bike4mind/common';
 import OrgWebhookConfig from './OrgWebhookConfig';
 
-const { testMutateAsync, updateMutateAsync, idleMutation } = vi.hoisted(() => ({
+const { testMutateAsync, updateMutateAsync, idleMutation, updatePending } = vi.hoisted(() => ({
+  updatePending: { current: false },
   testMutateAsync: vi.fn(),
   updateMutateAsync: vi.fn(),
   idleMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -28,7 +29,7 @@ vi.mock('@client/app/hooks/data/useOrgWebhooks', () => ({
     refetch: vi.fn(),
   }),
   useCreateOrgWebhookConfig: idleMutation,
-  useUpdateOrgWebhookConfig: () => ({ mutateAsync: updateMutateAsync, isPending: false }),
+  useUpdateOrgWebhookConfig: () => ({ mutateAsync: updateMutateAsync, isPending: updatePending.current }),
   useDeleteOrgWebhookConfig: idleMutation,
   useRotateOrgWebhookSecret: idleMutation,
   useTestOrgWebhook: () => ({ mutateAsync: testMutateAsync, isPending: false }),
@@ -107,5 +108,24 @@ describe('OrgWebhookConfig subscribed events', () => {
 
     expect(screen.queryByTestId('admin-save-bar')).toBeNull();
     expect(updateMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('shows the save bar as saving only while the events save is in flight, not for the Enabled toggle', async () => {
+    let finish: () => void = () => undefined;
+    updateMutateAsync.mockReturnValue(new Promise<void>(resolve => (finish = resolve)));
+    try {
+      renderConfig();
+      pickEvent('push');
+      updatePending.current = true;
+      pickEvent('pull_request');
+      expect(screen.getByTestId('admin-save-discard-btn').hasAttribute('disabled')).toBe(false);
+
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+      await waitFor(() => expect(screen.getByTestId('admin-save-discard-btn').hasAttribute('disabled')).toBe(true));
+      finish();
+      await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+    } finally {
+      updatePending.current = false;
+    }
   });
 });

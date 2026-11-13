@@ -207,6 +207,21 @@ const OrganizationPage: FC = () => {
   const selectedSection = resolveIntegrationSection(requestedSection, access);
   const integrationSections = visibleIntegrationSections(access);
 
+  // Unlike tabs, a section this caller cannot see is rewritten: sections are renamed and regrouped
+  // per role, so a stale link lands on the one they get. Waits for the load (gates deny until then)
+  // and for the legacy rewrite above to settle, so it never races or loops.
+  const resolvedSection = currentUser && organization ? selectedSection : undefined;
+  useEffect(() => {
+    if (legacySection || !resolvedSection || selectedTab !== OrganizationTabs.Integrations) return;
+    if (!search.section || search.section === resolvedSection) return;
+    navigate({
+      to: '/organizations/$id',
+      params: { id: id as string },
+      search: { tab: OrganizationTabs.Integrations, section: resolvedSection },
+      replace: true,
+    });
+  }, [legacySection, resolvedSection, selectedTab, search.section, id, navigate]);
+
   useDocumentTitle(organization?.name, t('organization.document_title_suffix'));
 
   if (isLoading || !organization) {
