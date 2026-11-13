@@ -262,6 +262,33 @@ describe('useDeleteOrganization', () => {
     expect(get).toHaveBeenCalledTimes(1);
   });
 
+  it('cancels an in-flight fetch of the deleted org detail', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    let fetchSignal: AbortSignal | undefined;
+    const pending = queryClient
+      .fetchQuery({
+        queryKey: ['organizations', 'org1'],
+        queryFn: ({ signal }) => {
+          fetchSignal = signal;
+          return new Promise(() => undefined);
+        },
+      })
+      .catch(() => undefined);
+    await waitFor(() => expect(queryClient.getQueryState(['organizations', 'org1'])?.fetchStatus).toBe('fetching'));
+    const view = renderHook(() => useDeleteOrganization(), { wrapper });
+
+    await act(async () => {
+      await view.result.current.mutateAsync('org1');
+    });
+    await pending;
+
+    expect(fetchSignal?.aborted).toBe(true);
+    expect(queryClient.getQueryState(['organizations', 'org1'])?.fetchStatus).toBe('idle');
+  });
+
   it('drops the deleted org from the cached org list before any refetch lands', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     const wrapper = ({ children }: { children: React.ReactNode }) => (
