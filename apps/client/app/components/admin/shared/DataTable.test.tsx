@@ -403,3 +403,83 @@ describe('DataTable', () => {
     expect(activate).not.toHaveBeenCalled();
   });
 });
+
+describe('DataTable cell overflow', () => {
+  type Person = { id: string; email: string; note: string };
+  const people: Person[] = [{ id: 'p1', email: 'a-very-long-unbroken-address@example.com', note: 'A long note' }];
+  const personColumns: DataColumn<Person>[] = [
+    { id: 'email', label: 'Email', render: row => row.email },
+    { id: 'note', label: 'Note', render: row => row.note, wrap: true },
+  ];
+  const renderPeople = (props: Partial<DataTableProps<Person>> = {}) =>
+    render(
+      <CssVarsProvider theme={theme}>
+        <DataTable
+          rows={people}
+          columns={personColumns}
+          getRowId={row => row.id}
+          label="People"
+          onRetry={vi.fn()}
+          {...props}
+        />
+      </CssVarsProvider>
+    );
+  const cell = (index: number) => within(screen.getByTestId('admin-table-row-p1')).getAllByRole('cell')[index];
+
+  it('keeps a body cell on one line with an ellipsis by default', () => {
+    renderPeople();
+    const style = getComputedStyle(cell(0));
+    expect(cell(0)).toHaveAttribute('data-cell-truncate');
+    expect(style.whiteSpace).toBe('nowrap');
+    expect(style.textOverflow).toBe('ellipsis');
+    expect(style.overflow).toBe('hidden');
+  });
+
+  it('lets a column opt out of truncation and wrap, breaking long words inside the cell', () => {
+    renderPeople();
+    const style = getComputedStyle(cell(1));
+    expect(cell(1)).not.toHaveAttribute('data-cell-truncate');
+    expect(style.whiteSpace).toBe('normal');
+    expect(style.overflowWrap).toBe('anywhere');
+  });
+
+  it('titles a clipped cell with its full text on hover, and leaves a cell that fits alone', () => {
+    renderPeople();
+    const email = cell(0);
+    const width = (scroll: number) => {
+      Object.defineProperty(email, 'scrollWidth', { configurable: true, value: scroll });
+      Object.defineProperty(email, 'clientWidth', { configurable: true, value: 100 });
+    };
+    width(100);
+    fireEvent.mouseEnter(email);
+    expect(email).not.toHaveAttribute('title');
+    width(240);
+    fireEvent.mouseEnter(email);
+    expect(email).toHaveAttribute('title', people[0].email);
+  });
+
+  it('never truncates a numeric cell', () => {
+    render(
+      <CssVarsProvider theme={theme}>
+        <DataTable {...defaults} rows={rows.slice(0, 1)} />
+      </CssVarsProvider>
+    );
+    const amount = within(screen.getByTestId('admin-table-row-1')).getByRole('cell');
+    expect(amount).toHaveAttribute('data-cell-numeric');
+    expect(amount).not.toHaveAttribute('data-cell-truncate');
+    expect(getComputedStyle(amount).textOverflow).not.toBe('ellipsis');
+  });
+
+  it('sizes the row-action column for one icon button unless told otherwise', () => {
+    const rowActions = () => <button type="button">Open</button>;
+    const { unmount } = renderPeople({ rowActions });
+    const header = () =>
+      within(screen.getByTestId('admin-data-table')).getByRole('columnheader', { name: 'Row actions' });
+    expect(header().style.width).toBe('3.5rem');
+    expect(getComputedStyle(screen.getByTestId('admin-table-row-actions')).whiteSpace).toBe('nowrap');
+    unmount();
+
+    renderPeople({ rowActions, actionsWidth: '5.75rem' });
+    expect(header().style.width).toBe('5.75rem');
+  });
+});

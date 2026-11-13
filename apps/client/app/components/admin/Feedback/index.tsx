@@ -447,7 +447,7 @@ const FeedbackTab: React.FC = () => {
   const columns: DataColumn<FeedbackRow>[] = [
     { id: 'createdAt', label: 'Created', sortable: true, width: '7.5rem', render: row => <CreatedCell row={row} /> },
     { id: 'reporter', label: 'Reporter', width: '15rem', render: row => <ReporterCell row={row} /> },
-    { id: 'content', label: 'Feedback', render: row => <ContentCell row={row} /> },
+    { id: 'content', label: 'Feedback', wrap: true, render: row => <ContentCell row={row} /> },
     {
       id: 'status',
       label: 'Status',

@@ -360,6 +360,8 @@ const Approvals: React.FC = () => {
         }
         rowTestId={row => `admin-approval-row-${row.id}`}
         rowActions={rowActions}
+        // Details, Approve and Reject (or Withdraw) are text buttons on pending rows.
+        actionsWidth="17rem"
         pagination={false}
       />
       {approvals.hasNextPage && (
