@@ -322,4 +322,11 @@ describe('updateNoticeVersion', () => {
     expect(updateNoticeVersion(offered('1.1.0', { dismissedVersion: '1.1.0' }))).toBeNull();
     expect(updateNoticeVersion(offered('1.2.0', { dismissedVersion: '1.1.0' }))).toBe('1.2.0');
   });
+
+  it('keeps showing a download the user started, and one waiting for a restart, after the offer was dismissed', () => {
+    const declined = offered('1.1.0', { dismissedVersion: '1.1.0' });
+    const downloading = reduceUpdate(declined, { type: 'download-started' });
+    expect(updateNoticeVersion(downloading)).toBe('1.1.0');
+    expect(updateNoticeVersion(reduceUpdate(downloading, { type: 'downloaded', version: '1.1.0' }))).toBe('1.1.0');
+  });
 });

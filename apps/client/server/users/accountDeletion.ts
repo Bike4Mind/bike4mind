@@ -42,6 +42,14 @@ export async function findOwnedOrganizations(userId: string): Promise<OwnedOrgan
   return (await classifyOwnedOrganizations(userId)).shared;
 }
 
+/** What the delete-account dialog needs: orgs that block the request, and orgs the purge will delete. */
+export async function findAccountDeletionOrganizations(
+  userId: string
+): Promise<{ ownedOrganizations: OwnedOrganization[]; soleOwnedOrganizations: OwnedOrganization[] }> {
+  const { shared, solo } = await classifyOwnedOrganizations(userId);
+  return { ownedOrganizations: shared, soleOwnedOrganizations: solo };
+}
+
 export type AccountDeletionLockdown = {
   deletion: IUserDeletion;
   subscriptions: AccountSubscriptionCancellation;
