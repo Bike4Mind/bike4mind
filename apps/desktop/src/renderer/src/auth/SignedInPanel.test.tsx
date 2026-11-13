@@ -5,14 +5,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthState } from '@shared/auth';
-import {
-  initialUpdateState,
-  reduceUpdate,
-  type UpdateBusyReport,
-  type UpdateInstallResult,
-  type UpdateState,
-  type UpdateStatus,
-} from '@shared/update';
+import { initialUpdateState, reduceUpdate, type UpdateStatus } from '@shared/update';
 import type { AppUpdateController } from '../chat/useAppUpdate';
 import { AccountMenu, SignedInPanel, updateNextStep } from './SignedInPanel';
 
@@ -44,8 +37,23 @@ const signedIn: AuthState = {
   user: { id: 'u1', nickname: 'Jude', email: 'jude@example.invalid' },
 };
 
+const available = reduceUpdate(initialUpdateState('0.1.10', true), { type: 'available', version: '0.2.0', at: 1 });
+
+function controllerIn(status: UpdateStatus): AppUpdateController {
+  return {
+    state: { ...available, status },
+    blockedBy: null,
+    downloadFailed: false,
+    check: vi.fn(),
+    download: vi.fn(),
+    install: vi.fn(async () => false),
+    dismissBlock: vi.fn(),
+    dismiss: vi.fn(),
+  };
+}
+
 describe('the account strip', () => {
-  const html = markup(<SignedInPanel state={signedIn} />);
+  const html = markup(<SignedInPanel state={signedIn} update={controllerIn('idle')} />);
 
   it('keeps showing which deployment replies come from', () => {
     expect(html).toContain('Production');
@@ -108,13 +116,6 @@ describe('the account menu', () => {
 });
 
 describe('the account strip with an update waiting', () => {
-  const BUSY: UpdateBusyReport = { replying: 0, awaitingApproval: 0, background: 2 };
-  const available = reduceUpdate(initialUpdateState('0.1.10', true), { type: 'available', version: '0.2.0', at: 1 });
-  const ready = reduceUpdate(reduceUpdate(available, { type: 'download-started' }), {
-    type: 'downloaded',
-    version: '0.2.0',
-  });
-
   let root: Root | null = null;
   let host: HTMLElement | null = null;
 
@@ -125,80 +126,58 @@ describe('the account strip with an update waiting', () => {
     host = null;
   });
 
-  let push: (state: UpdateState) => void = () => {};
-
-  function stubBridge(state: UpdateState, installResult: UpdateInstallResult = { ok: true }) {
-    const update = {
-      getState: vi.fn(async () => state),
-      onStateChanged: vi.fn((listener: (state: UpdateState) => void) => {
-        push = listener;
-        return () => {};
-      }),
-      check: vi.fn(async () => {}),
-      download: vi.fn(async () => {}),
-      dismiss: vi.fn(async () => {}),
-      install: vi.fn(async (_force: boolean) => installResult),
-    };
-    (window as unknown as { b4m: unknown }).b4m = {
-      update,
-      shell: { openExternal: vi.fn() },
-      getAppInfo: () => new Promise(() => {}),
-    };
-    return update;
-  }
-
-  async function mount() {
+  function mount(update: AppUpdateController) {
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
-    await act(async () => {
+    act(() => {
       root?.render(
         <CssVarsProvider>
-          <SignedInPanel state={signedIn} />
+          <SignedInPanel state={signedIn} update={update} />
         </CssVarsProvider>
       );
     });
   }
 
   const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
-  const clickChip = () => act(async () => byTestId('account-attention-chip')?.querySelector('button')?.click());
+  const chipButton = () => byTestId('account-attention-chip')?.querySelector('button') ?? null;
 
-  it('starts the download when the Update label is clicked', async () => {
-    const update = stubBridge(available);
-    await mount();
+  it('starts the download when the Update label is clicked', () => {
+    const update = controllerIn('available');
+    mount(update);
 
     expect(byTestId('account-attention-chip')?.textContent).toBe('Update');
-    await clickChip();
+    act(() => chipButton()?.click());
     expect(update.download).toHaveBeenCalledTimes(1);
   });
 
-  it('offers nothing to click while the download runs, so it is never started twice', async () => {
-    const update = stubBridge(available);
-    await mount();
-    await clickChip();
+  it('starts the restart from the Restart label', () => {
+    const update = controllerIn('ready');
+    mount(update);
 
-    act(() => push(reduceUpdate(available, { type: 'download-started' })));
-    expect(byTestId('account-attention-chip')?.querySelector('button') ?? null).toBeNull();
+    expect(byTestId('account-attention-chip')?.textContent).toBe('Restart');
+    act(() => chipButton()?.click());
+    expect(update.install).toHaveBeenCalledWith(false);
+    expect(update.download).not.toHaveBeenCalled();
+  });
+
+  it('offers nothing to click while the download runs, so it is never started twice', () => {
+    const update = controllerIn('downloading');
+    mount(update);
+
+    expect(chipButton()).toBeNull();
     act(() => byTestId('account-attention-chip')?.click());
-    await clickChip();
-    expect(update.download).toHaveBeenCalledTimes(1);
-    expect(byTestId('update-notice-progress')).not.toBeNull();
+    expect(update.download).not.toHaveBeenCalled();
+  });
+
+  it('draws no update card in the footer; the card floats on its own', () => {
+    (window as unknown as { b4m: unknown }).b4m = { getAppInfo: () => new Promise(() => {}) };
+    mount(controllerIn('available'));
+    act(() => byTestId('account-menu-btn')?.click());
+    expect(byTestId('update-notice')).toBeNull();
   });
 
   describe('the next step the label takes', () => {
-    function controllerIn(status: UpdateStatus): AppUpdateController {
-      return {
-        state: { ...available, status },
-        blockedBy: null,
-        downloadFailed: false,
-        check: vi.fn(),
-        download: vi.fn(),
-        install: vi.fn(async () => false),
-        dismissBlock: vi.fn(),
-        dismiss: vi.fn(),
-      };
-    }
-
     it('downloads an offer and restarts into a downloaded update', () => {
       const offer = controllerIn('available');
       updateNextStep(offer)?.();
@@ -216,30 +195,5 @@ describe('the account strip with an update waiting', () => {
         expect(updateNextStep(controllerIn(status))).toBeUndefined();
       }
     );
-  });
-
-  it('restarts from the Restart label, confirming in the notice when work is running', async () => {
-    const update = stubBridge(ready, { ok: false, reason: 'busy', busy: BUSY });
-    await mount();
-
-    expect(byTestId('account-attention-chip')?.textContent).toBe('Restart');
-    await clickChip();
-    expect(update.install).toHaveBeenCalledWith(false);
-    expect(byTestId('update-busy-alert')?.textContent).toContain('2 background processes are running.');
-
-    await act(async () => byTestId('update-force-install-btn')?.click());
-    expect(update.install).toHaveBeenLastCalledWith(true);
-  });
-
-  it('lays the notice out in the strip, above the open account menu rather than over it', async () => {
-    stubBridge(available);
-    await mount();
-    act(() => byTestId('account-menu-btn')?.click());
-
-    const notice = byTestId('update-notice') as HTMLElement;
-    const menu = byTestId('account-menu') as HTMLElement;
-    expect(getComputedStyle(notice).position).not.toBe('fixed');
-    expect(notice.contains(menu) || menu.contains(notice)).toBe(false);
-    expect(notice.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

@@ -13,8 +13,7 @@ import type { AuthState } from '@shared/auth';
 import { updateAttention } from '@shared/update';
 import { BillingIcon, ChevronIcon, ConversationIcon, GearIcon, SignOutIcon, UserIcon } from '../chat/icons';
 import { NavItem } from '../chat/SessionList';
-import { ControlledUpdateNotice } from '../chat/UpdateNotice';
-import { useAppUpdate, type AppUpdateController } from '../chat/useAppUpdate';
+import type { AppUpdateController } from '../chat/useAppUpdate';
 import { RuntimeInfo } from '../components/RuntimeInfo';
 import { SendFeedbackDialog } from './SendFeedbackDialog';
 
@@ -48,24 +47,28 @@ function initials(name: string): string {
  * readout, and which deployment a reply came from is worth a line under the name whether or not
  * anyone is about to change it.
  *
- * A waiting update is reported here too, by the notice at the top and the chip beside the name:
- * Settings has no nav row, so this strip is the one place that is always on screen.
+ * A waiting update is reported here too, by the chip beside the name: Settings has no nav row,
+ * so this strip is the one place that is always on screen. `update` is shared with the update
+ * card, which is where a restart the chip asks for is confirmed.
  */
-export function SignedInPanel({ state, status }: { state: AuthState; status?: ReactNode }) {
+export function SignedInPanel({
+  state,
+  status,
+  update,
+}: {
+  state: AuthState;
+  status?: ReactNode;
+  update: AppUpdateController;
+}) {
   const [open, setOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const navigate = useNavigate();
-  // One controller for the notice and the chip, so a restart the chip asks for and finds work
-  // running is confirmed in the notice.
-  const update = useAppUpdate();
   const settingsAttention = updateAttention(update.state);
   const user = state.user;
   const displayName = user?.nickname || user?.username || user?.email || user?.id || 'Signed in';
 
   return (
     <Stack spacing={1} sx={{ p: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
-      <ControlledUpdateNotice controller={update} placement="sidebar" />
-
       {state.storage === 'unavailable' && (
         <Alert color="warning" variant="soft" size="sm" data-testid="auth-storage-alert">
           No OS keychain is available here, so this sign-in lasts only until you quit.

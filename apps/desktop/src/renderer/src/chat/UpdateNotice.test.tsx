@@ -10,7 +10,8 @@ import {
   type UpdateState,
 } from '@shared/update';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AppUpdateNotice, UpdateNotice, type UpdateNoticeActions, type UpdateNoticePlacement } from './UpdateNotice';
+import { AppUpdateNotice, UpdateNotice, type UpdateNoticeActions } from './UpdateNotice';
+import { useAppUpdate } from './useAppUpdate';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -75,7 +76,6 @@ function mount(
     onOpenRelease?: (url: string) => void;
     onDismiss?: (v: string) => void;
     actions?: UpdateNoticeActions;
-    placement?: UpdateNoticePlacement;
   } = {}
 ) {
   return render(
@@ -84,7 +84,6 @@ function mount(
       onOpenRelease={options.onOpenRelease ?? (() => {})}
       onDismiss={options.onDismiss ?? (() => {})}
       actions={options.actions}
-      placement={options.placement}
     />
   );
 }
@@ -203,13 +202,15 @@ describe('UpdateNotice with in-app updates', () => {
     expect(actions.download).toHaveBeenCalledTimes(1);
   });
 
-  it('sits in the sidebar flow instead of floating over it', async () => {
-    await mount(offered('0.2.0'), { actions: actionsFor(), placement: 'sidebar' });
-    const sidebar = byTestId('update-notice') as HTMLElement;
-    expect(getComputedStyle(sidebar).position).not.toBe('fixed');
-
+  it('floats in the upper-right corner, below the 53px header bar', async () => {
     await mount(offered('0.2.0'), { actions: actionsFor() });
-    expect(getComputedStyle(byTestId('update-notice') as HTMLElement).position).toBe('fixed');
+    const style = getComputedStyle(byTestId('update-notice') as HTMLElement);
+
+    expect(style.position).toBe('fixed');
+    expect(style.top).toBe('65px');
+    expect(style.right).toBe('12px');
+    expect(style.left).toBe('auto');
+    expect(style.bottom).toBe('auto');
   });
 });
 
@@ -234,7 +235,8 @@ describe('AppUpdateNotice', () => {
   it('surfaces a download that failed, then lets the user close it', async () => {
     const declined = offered('0.2.0', { dismissedVersion: '0.2.0' });
     const { bridge, push } = stubBridge(declined);
-    await render(<AppUpdateNotice placement="sidebar" />);
+    const Wired = () => <AppUpdateNotice controller={useAppUpdate()} />;
+    await render(<Wired />);
     expect(byTestId('update-notice')).toBeNull();
 
     // Both pushes land before React renders, as when a download fails straight away.

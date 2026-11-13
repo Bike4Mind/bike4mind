@@ -12,12 +12,16 @@ import { SignedInPanel } from '../auth/SignedInPanel';
 import { useAuthState } from '../auth/useAuthState';
 import { ChatShell } from '../chat/ChatShell';
 import { AppUpdateNotice } from '../chat/UpdateNotice';
+import { useAppUpdate } from '../chat/useAppUpdate';
 import { isLocalChatActive, setLocalChatActive } from './localChatMode';
 import { centeredScreenSx } from './centeredScreenSx';
 
 export function Home() {
   const state = useAuthState();
   const navigate = useNavigate();
+  // One controller for the update card and the account label, so a restart the label asks for and
+  // finds work running is confirmed in the card.
+  const update = useAppUpdate();
   const [localChat, setLocalChatState] = useState(isLocalChatActive);
   const setLocalChat = (next: boolean) => {
     setLocalChatActive(next);
@@ -50,10 +54,9 @@ export function Home() {
           onOpenImportSettings={focus => void navigate({ to: '/settings', search: { section: 'import', focus } })}
           account={status =>
             state?.status === 'signed-in' || state?.reauthRequired ? (
-              <SignedInPanel state={state} status={status} />
+              <SignedInPanel state={state} status={status} update={update} />
             ) : (
               <Stack spacing={1} sx={{ p: 1.5 }}>
-                <AppUpdateNotice placement="sidebar" />
                 <Button
                   variant="plain"
                   onClick={() => void navigate({ to: '/settings' })}
@@ -69,6 +72,7 @@ export function Home() {
           }
         />
         {state?.reauthRequired && <ReauthNotice state={state} />}
+        <AppUpdateNotice controller={update} />
       </>
     );
   }
@@ -92,7 +96,7 @@ export function Home() {
           </Button>
         )}
       </Card>
-      <AppUpdateNotice />
+      <AppUpdateNotice controller={update} />
     </Box>
   );
 }
