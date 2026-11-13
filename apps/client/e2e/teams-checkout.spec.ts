@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures';
-import type { Frame, Page, Response } from '@playwright/test';
+import type { Frame, Locator, Page, Response } from '@playwright/test';
 import { TIMEOUTS } from './constants';
 import { isStagingEnv } from './helpers/env';
 import { checkoutUsdAmountPattern } from './helpers/checkout-currency';
@@ -39,23 +39,25 @@ const isSubscribeResponse = (r: Response): boolean =>
   r.request().method() === 'POST' && new URL(r.url()).pathname === SUBSCRIBE_PATH;
 
 /**
- * Where Stripe's hosted page keeps its payment form. It moved into an iframe on 2026-11-13, so the
- * pay button and the card fields are looked up in whichever document holds the button: the main
- * frame or a child frame. Stripe's frames come and go while the page boots, so a frame that detaches
- * mid-look is skipped rather than failing the look. Gives up after ACTION with every frame's URL and
- * accessibility tree in the error, which is the only way to see inside a cross-origin frame from CI.
+ * Stripe's hosted page renders its payment form inside an Elements frame since 2026-11-13, and the
+ * pay button there is a plain "Subscribe" (or "Pay") button with no test id. The button is looked
+ * up in every frame, by the old test id or by that name, so the spec follows whichever layout
+ * Stripe serves. Stripe's frames come and go while the page boots, so a frame that detaches
+ * mid-look is skipped. Gives up after ACTION with every frame's URL and accessibility tree in the
+ * error, which is the only way to see inside a cross-origin frame from CI.
  */
-async function paymentForm(page: Page): Promise<Frame> {
-  const button = (frame: Frame) => frame.getByTestId('hosted-payment-submit-button');
+async function payButton(page: Page): Promise<Locator> {
+  const candidate = (frame: Frame) =>
+    frame.getByTestId('hosted-payment-submit-button').or(frame.getByRole('button', { name: /^(subscribe|pay)\b/i }));
   const deadline = Date.now() + TIMEOUTS.ACTION;
   while (Date.now() < deadline) {
     for (const frame of page.frames()) {
       if (
-        await button(frame)
+        await candidate(frame)
           .count()
           .catch(() => 0)
       )
-        return frame;
+        return candidate(frame).first();
     }
     await page.waitForTimeout(500);
   }
@@ -68,7 +70,7 @@ async function paymentForm(page: Page): Promise<Frame> {
       return `${frame.url()}\n${tree.slice(0, 4000)}`;
     })
   );
-  throw new Error(`No hosted-payment-submit-button in any of ${page.frames().length} frames:\n${dump.join('\n---\n')}`);
+  throw new Error(`No pay button in any of ${page.frames().length} frames:\n${dump.join('\n---\n')}`);
 }
 
 /** "Total Price: $150/month" -> 150 */
@@ -177,8 +179,7 @@ test.describe('Teams - Stripe checkout (staging only)', () => {
     });
 
     await test.step('the hosted checkout page renders with a pay button', async () => {
-      const form = await paymentForm(page);
-      await expect(form.getByTestId('hosted-payment-submit-button')).toBeVisible({ timeout: TIMEOUTS.ACTION });
+      await expect(await payButton(page)).toBeVisible({ timeout: TIMEOUTS.ACTION });
     });
 
     await test.step('the total matches the modal, in US dollars', async () => {
@@ -215,14 +216,16 @@ test.describe('Teams - Stripe checkout (staging only)', () => {
     expect(sessionUrl).toContain('cs_test_');
 
     await test.step('pay with the 4242 test card', async () => {
-      const form = await paymentForm(page);
+      // The card fields have never been driven; they sit in Stripe's Elements frames now, so these
+      // selectors are a best guess until the paid test is run with STRIPE_CHECKOUT_PAY=true.
+      const form = page.frameLocator('iframe[src*="elements-inner"]').first();
       await form.locator('#cardNumber').fill('4242424242424242');
       await form.locator('#cardExpiry').fill('12 / 34');
       await form.locator('#cardCvc').fill('123');
       await form.locator('#billingName').fill('E2E Teams');
       const postal = form.locator('#billingPostalCode');
       if (await postal.isVisible().catch(() => false)) await postal.fill('94103');
-      await form.getByTestId('hosted-payment-submit-button').click();
+      await (await payButton(page)).click();
       await page.waitForURL(`${teamsUrl(baseURL)}**`, { timeout: TIMEOUTS.ACTION * 2 });
     });
 
