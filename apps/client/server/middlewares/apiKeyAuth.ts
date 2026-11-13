@@ -145,7 +145,10 @@ export const apiKeyAuth = (
         }
       }
       const grandfathered = grandfatherLegacyKeys && isLegacyApiKey(validation.createdAt);
-      const gate = decideScopeGate(requiredScopes, validation.scopes, staged, alsoRequiredScopes, grandfathered);
+      const gate = decideScopeGate(requiredScopes, validation.scopes, staged, alsoRequiredScopes, {
+        grandfathered,
+        exchangeKey: !!validation.oauthExchangeClientId,
+      });
       if (gate.outcome !== 'allow') {
         // A scope 403 fires before req.apiKeyInfo is set, so log from `validation`
         // (never the raw key) - otherwise the only trace is errorHandler's generic warn.
@@ -235,6 +238,7 @@ export const apiKeyAuth = (
         organizationId: validation.organizationId,
         preauthorizedLakeIds: validation.preauthorizedLakeIds,
         createdAt: validation.createdAt,
+        oauthExchangeClientId: validation.oauthExchangeClientId,
       };
 
       // Create CASL ability for the user

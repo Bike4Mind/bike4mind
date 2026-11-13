@@ -332,6 +332,11 @@ export interface IUserApiKeyMetadata {
   baseline?: IUserApiKeyBaseline;
 }
 
+/** True for a key minted by the federated AI-token exchange. The one definition of that marker. */
+export const isExchangeKeyMetadata = (
+  metadata: IUserApiKeyMetadata | undefined
+): metadata is IUserApiKeyMetadata & { createdFrom: 'oauth-exchange' } => metadata?.createdFrom === 'oauth-exchange';
+
 /**
  * An org-owned key as the org management surface shows it (pages/api/organizations/[id]/api-keys).
  * A projection, never the stored document: no secret material and no minter location metadata.

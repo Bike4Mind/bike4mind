@@ -26,6 +26,13 @@ describe('resolveContractAuth', () => {
     });
   });
 
+  it('passes allowExchangeKeys through only when the caller sets it', async () => {
+    await resolveContractAuth(headers, chatContract, { allowExchangeKeys: true });
+    expect(verifyApiKey).toHaveBeenLastCalledWith(headers, expect.objectContaining({ allowExchangeKeys: true }));
+    await resolveContractAuth(headers, chatContract);
+    expect(verifyApiKey).toHaveBeenLastCalledWith(headers, expect.objectContaining({ allowExchangeKeys: undefined }));
+  });
+
   it('falls back to undefined requiredScopes when the contract declares none', async () => {
     // A synthetic apiKeyOrJwt contract with no scopes must not send an empty array
     // (verifyApiKey treats [] and its default differently).
