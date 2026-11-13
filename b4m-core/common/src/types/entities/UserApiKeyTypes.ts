@@ -204,6 +204,16 @@ export enum ApiKeyScope {
    * the API reference, like {@link SKILLS_READ}, because customers mint it.
    */
   SLACK_POST = 'slack:post',
+  /**
+   * Manage the key owner's own API keys (`/api/user-api-keys/*`): list, create, edit, rotate and
+   * revoke them, and raise a key's rate limit. Rotating a key's callback signing secret
+   * (`/api/user-api-keys/[id]/callback-secret`) is not covered: that route requires `ai:generate`.
+   * A key minted or rotated through this scope can carry only scopes the calling key already holds
+   * (the no-escalation rule in createUserApiKey and rotateUserApiKey). Unsuffixed and left out of
+   * every New-Key preset, Full access included: a key that can mint keys outlives its own
+   * revocation, so it is granted only by ticking it.
+   */
+  API_KEYS_MANAGE = 'api-keys:manage',
 }
 
 /**
@@ -545,7 +555,44 @@ export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
  */
 export type ApiKeyCapPool = 'standard' | 'personal' | 'oauth-exchange';
 
+/**
+ * A key as the owner list (GET /api/user-api-keys) returns it, with its legacy status
+ * computed server-side by `getApiKeyLegacyStatus`.
+ */
+export type IUserApiKeyListItem = IUserApiKeyDocument & {
+  /** Rides the legacy window: routes that grandfather legacy keys admit it without their scopes. */
+  legacy: boolean;
+  /** When legacy access ends; `null` when the key is not legacy or no end date is set yet. */
+  legacyEndsAt: Date | null;
+};
+
+/** Filter for {@link IUserApiKeyRepository.findLegacyCandidatesPage}. */
+export type LegacyApiKeyCandidateQuery = {
+  /** Keys created before this; `null` matches any creation date (no legacy cutoff set yet). */
+  createdBefore: Date | null;
+  /** Keys last used at or after this. */
+  usedSince: Date;
+  /** Keys holding any of these scopes are left out (confined keys are never legacy). */
+  excludeScopes: readonly string[];
+  skip: number;
+  limit: number;
+};
+
+export type LegacyApiKeyCandidatePage = {
+  keys: IUserApiKeyDocument[];
+  /** Matching keys across every page. */
+  total: number;
+  /** Distinct owners of the matching keys across every page. */
+  ownerCount: number;
+};
+
 export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
+  /**
+   * Active, unexpired, non-exchange keys that may still ride the legacy window, most recently
+   * used first. A query primitive only: the legacy rule itself is `getApiKeyLegacyStatus` in
+   * server-utils, which callers apply to every row.
+   */
+  findLegacyCandidatesPage: (query: LegacyApiKeyCandidateQuery) => Promise<LegacyApiKeyCandidatePage>;
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
   findByUserIdAndId: (userId: string, id: string) => Promise<IUserApiKeyDocument | null>;

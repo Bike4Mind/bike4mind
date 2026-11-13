@@ -3,6 +3,7 @@ import { Permission, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
 import {
   canManageOrgConnectors,
   canManageOrgIntegrations,
+  canEditOrgProfile,
   canManageOrgSettings,
   IntegrationSections,
   LEGACY_INTEGRATION_TABS,
@@ -53,12 +54,19 @@ describe('Organization Permissions', () => {
     });
   });
 
-  // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs share the
-  // verifyOrgOwner tier: owner or platform admin, never a manager.
-  describe.each([
-    ['canViewOrgUsage', canViewOrgUsage],
-    ['canManageOrgIntegrations', canManageOrgIntegrations],
-  ])('%s', (_name, gate) => {
+  describe('canViewOrgUsage', () => {
+    const org = { userId: 'owner', adminUserIds: ['manager', 'lapsed'], users: [{ userId: 'manager' }] };
+    it('admits current managers to usage but not billing', () => {
+      expect(canViewOrgUsage({ id: 'manager' }, org)).toBe(true);
+      expect(canViewOrgBilling({ id: 'manager' }, org)).toBe(false);
+    });
+    it('denies former managers and unrelated users', () => {
+      expect(canViewOrgUsage({ id: 'lapsed' }, org)).toBe(false);
+      expect(canViewOrgUsage({ id: 'stranger' }, org)).toBe(false);
+    });
+  });
+
+  describe.each([['canManageOrgIntegrations', canManageOrgIntegrations]])('%s', (_name, gate) => {
     const org = {
       userId: 'owner123',
       adminUserIds: ['orgManager789'],
@@ -242,10 +250,10 @@ describe('resolveAccessibleTab', () => {
     );
   });
 
-  // A manager: Analysis is open to them, Usage (credit spend) is owner-only.
-  it('bounces Usage but keeps Analysis for a manager', () => {
-    const manager = { ...all, canViewUsage: false, canManageIntegrations: false, canViewBilling: false };
-    expect(resolveAccessibleTab(OrganizationTabs.Usage, manager)).toBe(OrganizationTabs.Overview);
+  it('keeps Usage and Analysis but bounces Billing for a manager', () => {
+    const manager = { ...all, canViewUsage: true, canManageIntegrations: false, canViewBilling: false };
+    expect(resolveAccessibleTab(OrganizationTabs.Usage, manager)).toBe(OrganizationTabs.Usage);
+    expect(resolveAccessibleTab(OrganizationTabs.Billing, manager)).toBe(OrganizationTabs.Overview);
     expect(resolveAccessibleTab(OrganizationTabs.Analysis, manager)).toBe(OrganizationTabs.Analysis);
   });
 
@@ -392,7 +400,8 @@ describe('LEGACY_INTEGRATION_TABS', () => {
 });
 
 describe('canManageOrgSettings', () => {
-  // Mirrors organizationService.update: platform admin, owner, or a users[] row holding update.
+  // Mirrors organizationService.update: platform admin, owner, a users[] row holding update, or a
+  // current manager (sharing policy only).
   const org = {
     userId: 'owner1',
     users: [
@@ -418,5 +427,27 @@ describe('canManageOrgSettings', () => {
     expect(canManageOrgSettings({ id: 'stranger' }, org)).toBe(false);
     expect(canManageOrgSettings(null, org)).toBe(false);
     expect(canManageOrgSettings({ id: 'owner1' }, undefined)).toBe(false);
+  });
+
+  // A current manager may save the sharing policy, so the tab opens for them; the profile save
+  // still needs update, so canEditOrgProfile keeps the system prompt read-only.
+  it('opens the tab to a current manager without letting them edit the profile', () => {
+    const managed = {
+      ...org,
+      adminUserIds: ['reader1', 'gone1'],
+    };
+    expect(canManageOrgSettings({ id: 'reader1' }, managed)).toBe(true);
+    expect(canEditOrgProfile({ id: 'reader1' }, managed)).toBe(false);
+  });
+
+  it('refuses a stale manager who is no longer on the roster', () => {
+    expect(canManageOrgSettings({ id: 'gone1' }, { ...org, adminUserIds: ['gone1'] })).toBe(false);
+  });
+
+  it('gates the profile on the same rule as the server update finder', () => {
+    expect(canEditOrgProfile({ id: 'owner1' }, org)).toBe(true);
+    expect(canEditOrgProfile({ id: 'admin9', isAdmin: true }, org)).toBe(true);
+    expect(canEditOrgProfile({ id: 'editor1' }, org)).toBe(true);
+    expect(canEditOrgProfile({ id: 'sharer1' }, org)).toBe(false);
   });
 });

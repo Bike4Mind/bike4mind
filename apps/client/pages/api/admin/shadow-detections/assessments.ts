@@ -10,8 +10,8 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { assessShadowDetection } from '@server/security/abuseAssessment/abuseAssessment';
-import { linkedAccountGroupEvidence } from '@server/security/abuseAssessment/linkedAccountEvidence';
+import { assessShadowDetection } from '@bike4mind/server-utils/security/abuseAssessment/abuseAssessment';
+import { linkedAccountGroupEvidence } from '@bike4mind/server-utils/security/abuseAssessment/linkedAccountEvidence';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { respond } from '@server/utils/respond';
 

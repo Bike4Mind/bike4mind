@@ -69,6 +69,8 @@ import {
   toSubjectFilter,
 } from './constants';
 import { checkedStatuses, toStatusFilters } from './feedbackTabSearch';
+import { useFeedbackSelection } from './hooks/useFeedbackSelection';
+import FeedbackBulkActions from './FeedbackBulkActions';
 
 type FeedbackRow = IExtendedFeedbackDocument;
 
@@ -345,6 +347,12 @@ const FeedbackTab: React.FC = () => {
   // the row that opened the drawer. Ids are compared rather than put in a selector: a deep-linked
   // id is arbitrary text.
   const tableRegionRef = useRef<HTMLDivElement>(null);
+  const selectionScope = JSON.stringify({ filterParams, currentPage, itemsPerPage });
+  const selection = useFeedbackSelection({
+    pageIds: currentFeedback.map(row => row._id),
+    scopeKey: selectionScope,
+    total,
+  });
   const previousOpenId = useRef(openFeedbackId);
   useEffect(() => {
     const closedId = previousOpenId.current;
@@ -447,7 +455,7 @@ const FeedbackTab: React.FC = () => {
   const columns: DataColumn<FeedbackRow>[] = [
     { id: 'createdAt', label: 'Created', sortable: true, width: '7.5rem', render: row => <CreatedCell row={row} /> },
     { id: 'reporter', label: 'Reporter', width: '15rem', render: row => <ReporterCell row={row} /> },
-    { id: 'content', label: 'Feedback', render: row => <ContentCell row={row} /> },
+    { id: 'content', label: 'Feedback', wrap: true, render: row => <ContentCell row={row} /> },
     {
       id: 'status',
       label: 'Status',
@@ -611,6 +619,8 @@ const FeedbackTab: React.FC = () => {
           rows={currentFeedback}
           columns={columns}
           getRowId={row => row._id}
+          selection={!loading && totalSettled ? selection.selection : undefined}
+          onSelectionChange={selection.setSelection}
           onRowActivate={row => openFeedback(row._id)}
           activeRowId={openFeedbackId}
           rowTestId={row => `feedback-row-${row._id}`}
@@ -657,6 +667,16 @@ const FeedbackTab: React.FC = () => {
           maxHeight="none"
         />
       </Stack>
+
+      <FeedbackBulkActions
+        key={`${selectionScope}:${JSON.stringify(selection.selection)}`}
+        selection={selection.selection}
+        filters={filterParams}
+        total={total}
+        disabled={loading || !totalSettled}
+        onSelectionChange={selection.setSelection}
+        onApplied={refreshFeedback}
+      />
 
       <ActionDialog
         open={openDeleteFeedbackModal}

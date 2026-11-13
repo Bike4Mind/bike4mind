@@ -33,7 +33,7 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mockGetOperationsModel },
   OperationsModelUnavailableError: class OperationsModelUnavailableError extends Error {},
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createRequestCompletionMeter: mockCreateRequestCompletionMeter,
 }));
 

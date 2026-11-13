@@ -54,10 +54,24 @@ const renderAs = (user: Partial<IUserDocument> | null, organization: IOrganizati
 
 /**
  * The Danger Zone mirrors the server gate in organizationService/delete.ts (billing owner or
- * platform admin). The rest of this tab is open to anyone with org update/share, so these pin that
+ * platform admin). The rest of this tab is open to anyone with org update, or a current manager, so these pin that
  * a member who can reach the tab is not shown a Delete button whose call would 403.
  */
 describe('OrganizationSettingsSection - Danger Zone visibility', () => {
+  it('exposes policy controls to read-only managers while keeping generic profile writes disabled', () => {
+    updateOrg.mockClear();
+    renderAs({ id: 'manager', isAdmin: false }, {
+      ...org,
+      adminUserIds: ['manager'],
+      users: [{ userId: 'manager', permissions: ['read'] }],
+    } as IOrganizationDocument);
+    expect(screen.getByTestId('organization-sharing-save-btn')).not.toBeDisabled();
+    expect(screen.getByTestId('organization-settings-system-prompt-input')).toBeDisabled();
+    // A disabled prompt cannot be edited, so the save bar never appears for it.
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(updateOrg).not.toHaveBeenCalled();
+  });
+
   it('shows Delete Team to the billing owner', () => {
     renderAs({ id: OWNER_ID, isAdmin: false });
 

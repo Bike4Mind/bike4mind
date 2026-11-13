@@ -41,6 +41,7 @@ import {
   slackExportQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
+  accountErasureQueueDLQ,
   publishThumbnailQueueDLQ,
   generatedMediaPurgeQueueDLQ,
   dataLakeCleanupQueueDLQ,
@@ -143,8 +144,8 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
   // A log group arn drops the API's trailing stream wildcard, so the policy names both forms.
   const spendLogSources = llmSpendLogSources();
   const spendLogGroupNames = spendLogSources.map(source => source.logGroupName);
-  const spendLogGroupArns = spendLogSources.flatMap(({ logGroupName, logGroupArn }) => {
-    const arn = logGroupArn ?? aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;
+  const spendLogGroupArns = spendLogSources.flatMap(({ logGroupName }) => {
+    const arn = aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;
     return [arn, $interpolate`${arn}:*`];
   });
   dlqAlarmTopic!.subscribe(
@@ -364,6 +365,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'AccountDataExport',
     sourceQueue: 'accountDataExportQueue',
     queue: accountDataExportQueueDLQ,
+  },
+  {
+    label: 'account-erasure',
+    displayName: 'Account Erasure',
+    application: 'AccountErasure',
+    sourceQueue: 'accountErasureQueue',
+    queue: accountErasureQueueDLQ,
   },
   {
     label: 'data-lake-cleanup',

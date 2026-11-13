@@ -134,6 +134,24 @@ describe('organization detail page - ?tab= deep link', () => {
     navigateSpy.mockClear();
   });
 
+  it('admits a read-only current manager to settings and renders exactly one audit tab', () => {
+    user.current = { id: 'read-manager' };
+    searchParams.current = { tab: 'settings' };
+    orgQuery.current = {
+      data: {
+        ...ORG,
+        adminUserIds: ['read-manager'],
+        users: [...ORG.users, { userId: 'read-manager', permissions: [Permission.read] }],
+      },
+      isLoading: false,
+      isError: false,
+      error: undefined,
+    };
+    render(wrapper(<OrganizationPage />));
+    expect(selectedTabName()).toContain('Settings');
+    expect(screen.getAllByTestId('organization-audit-tab')).toHaveLength(1);
+  });
+
   it.each([404, 403, 500])('shows a way back instead of spinning after HTTP %s', status => {
     orgQuery.current = {
       data: undefined,

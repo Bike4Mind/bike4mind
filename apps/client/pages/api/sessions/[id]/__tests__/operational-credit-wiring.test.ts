@@ -1,6 +1,6 @@
 /**
  * What the two single-session publishers ASK the credit pre-flight for. The helper's own
- * behaviour is covered by server/utils/sessionOperationalCreditPreflight.test.ts; this file
+ * behaviour is covered by packages/server-utils/src/utils/sessionOperationalCreditPreflight.test.ts; this file
  * covers the arguments, which the helper cannot check for itself and which a reader cannot infer
  * from a green unit suite.
  *
@@ -41,7 +41,7 @@ vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
 // Only the pre-flight itself is mocked. OPERATIONS_PER_SUMMARIZE_WITH_TAGGING lives in its own
 // unmocked module precisely so the `operationCount: 2` assertion below reads the real constant -
 // re-declaring it in this factory would pin the test to its own copy instead.
-vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
+vi.mock('@bike4mind/server-utils/utils/sessionOperationalCreditPreflight', () => ({
   assertSessionOperationalCredits: mockAssertCredits,
 }));
 

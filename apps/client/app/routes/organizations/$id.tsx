@@ -174,9 +174,9 @@ const OrganizationPage: FC = () => {
     });
   };
 
-  // Every gate is computed here once and passed down; children never re-derive them. Usage and the
-  // GitHub/Slack/Webhooks integrations are owner-only, Analysis is open to managers, Connectors to
-  // owners and current managers - see orgTabAccess.ts for each rule and the server gate it mirrors.
+  // Every gate is computed here once and passed down; children never re-derive them. The
+  // GitHub/Slack/Webhooks integrations are owner-only; Usage, Analysis and Connectors also admit
+  // current managers - see orgTabAccess.ts for each rule and the server gate it mirrors.
   const access = useMemo<OrgTabAccess>(
     () => ({
       canManageOrg: canManageOrgSettings(currentUser, organization),

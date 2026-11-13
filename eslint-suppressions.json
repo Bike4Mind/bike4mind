@@ -1710,11 +1710,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/auth/mfa/passkey/__tests__/passkeyRoutes.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 40
-    }
-  },
   "apps/client/pages/api/auth/mfa/regenerate-backup-codes.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -1846,11 +1841,6 @@
   "apps/client/pages/api/email/__tests__/verify.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 23
-    }
-  },
-  "apps/client/pages/api/email/send.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 4
     }
   },
   "apps/client/pages/api/fabfiles/[id]/apply-auto-rename.ts": {
@@ -3012,11 +3002,6 @@
       "count": 5
     }
   },
-  "apps/client/server/integrations/slack/slackPackageInit.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
-    }
-  },
   "apps/client/server/managers/countersManager.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
@@ -3030,11 +3015,6 @@
   "apps/client/server/managers/regInviteManager.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
-    }
-  },
-  "apps/client/server/managers/sessionCrud.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
     }
   },
   "apps/client/server/middlewares/__tests__/requireStripeWebhook.test.ts": {
@@ -3140,11 +3120,6 @@
   "apps/client/server/utils/cacheExternalImage.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "apps/client/server/utils/chatCompletionDefaults.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 5
     }
   },
   "apps/client/server/websocket/__tests__/dataSubscribeRequest.test.ts": {
@@ -4657,6 +4632,16 @@
       "count": 43
     }
   },
+  "packages/server-utils/src/integrations/slack/slackPackageInit.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/server-utils/src/managers/sessionCrud.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
   "packages/server-utils/src/models/Subscription.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -4690,6 +4675,11 @@
   "packages/server-utils/src/utils/auditLog.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
+    }
+  },
+  "packages/server-utils/src/utils/chatCompletionDefaults.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
     }
   },
   "packages/server-utils/src/utils/cloudwatch.test.ts": {

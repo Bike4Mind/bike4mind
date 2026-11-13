@@ -1,4 +1,5 @@
-import type { MusicModelId } from './catalog';
+import type { ModelProfile } from '../generation/types';
+import { MUSIC_MODEL_CATALOG, type MusicModelId } from './catalog';
 import type { MusicProviderId } from './types';
 
 /** How Studio introduces each music model on its model card. Kept beside MUSIC_MODEL_CATALOG for the same keys. */
@@ -16,3 +17,8 @@ export const MUSIC_PROVIDER_LABELS: Record<MusicProviderId, string> = {
   'gemini-lyria': 'Google',
   elevenlabs: 'ElevenLabs',
 };
+
+export const musicModelProfile = (modelId: MusicModelId): ModelProfile => ({
+  blurb: MUSIC_MODEL_STRENGTHS[modelId],
+  providerLabel: MUSIC_PROVIDER_LABELS[MUSIC_MODEL_CATALOG[modelId].provider],
+});

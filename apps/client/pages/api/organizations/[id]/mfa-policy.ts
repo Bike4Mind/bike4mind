@@ -30,13 +30,14 @@ const handler = baseApi({ auth: 'jwtOnly' })
       ];
       const members = await User.find(
         { _id: { $in: memberIds }, serviceAccountOrganizationId: null },
-        { _id: 1, name: 1, 'mfa.totpEnabled': 1 }
+        { _id: 1, name: 1, 'mfa.totpEnabled': 1, 'mfa.passkeyEnabled': 1 }
       ).lean();
       return res.json({
         members: members.map(member => ({
           id: String(member._id),
           name: member.name,
-          mfaEnabled: member.mfa?.totpEnabled === true,
+          // Either factor counts, as in mfaService.userHasMFAConfigured: a passkey alone is MFA.
+          mfaEnabled: member.mfa?.totpEnabled === true || member.mfa?.passkeyEnabled === true,
         })),
       });
     })

@@ -1,3 +1,4 @@
+import type { AdminErasureCollection } from './adminDataErasure';
 import { IBaseRepository, IMongoDocument } from '.';
 import { ISessionDocument } from './SessionTypes';
 import { IRegInviteDocument } from './RegistrationInviteType';
@@ -139,8 +140,20 @@ export interface IKeywordRoutingRule {
  * that will not be present on the client side.
  */
 export interface IMFAConfig {
-  totpSecret: string;
+  /** Absent for a passkey-only user, who never set up an authenticator app. */
+  totpSecret?: string;
   totpEnabled: boolean;
+  /**
+   * True once a passkey was enrolled as a factor. Denormalized from the passkey collection so the
+   * per-request "has MFA" check stays synchronous; set and cleared only through dotted writes
+   * (see the user model's secret-less `mfa` guard).
+   *
+   * Authoritative only for a user without an authenticator app. An app user who registered
+   * passkeys before this flag existed has it unset until their next registration (totpEnabled
+   * carries their MFA meanwhile), so an absent flag alongside totpEnabled does not mean "no
+   * passkeys": ask the passkey collection when that matters.
+   */
+  passkeyEnabled?: boolean;
   backupCodes: string[];
   setupAt: Date;
   lastUsedAt?: Date;
@@ -156,7 +169,7 @@ export interface IMFAConfig {
 }
 
 /**
- * A WebAuthn credential (passkey) enrolled as an additional MFA method. Lives in its own
+ * A WebAuthn credential (passkey) enrolled as an MFA factor. Lives in its own
  * collection rather than on `IMFAConfig`: the user model's guard strips any `mfa` write that
  * lacks the select:false `totpSecret`, which a credential write would routinely trip.
  * Binary fields are base64url-encoded.
@@ -187,7 +200,8 @@ export interface IPasskeyCredentialRepository {
   recordUse(id: string, counter: number): Promise<void>;
   /** Returns true when a credential was actually removed (false = unknown id or not this user's). */
   remove(id: string, userId: string): Promise<boolean>;
-  removeAllForUser(userId: string): Promise<number>;
+  /** `createdBefore` limits the purge to credentials older than that instant. */
+  removeAllForUser(userId: string, options?: { createdBefore?: Date }): Promise<number>;
 }
 
 /**
@@ -335,6 +349,10 @@ export interface IUserRiskSignal {
   at: Date;
 }
 
+/**
+ * `self`: the person's own request. `support`: an admin scheduling it on the person's request. Both wait out
+ * the grace period. `admin`: a data subject erasure an admin started, due at once.
+ */
 export const ACCOUNT_DELETION_SOURCES = ['self', 'support', 'admin'] as const;
 export type AccountDeletionSource = (typeof ACCOUNT_DELETION_SOURCES)[number];
 
@@ -390,6 +408,13 @@ export interface IUserDeletion {
   requestedAt: Date;
   scheduledFor: Date;
   source: AccountDeletionSource;
+  /** The admin who requested an `admin` erasure. */
+  requestedBy?: string;
+  /**
+   * What the data holder registry counted before the first purge attempt of an `admin` erasure, kept
+   * so the deletion record describes the whole erasure even when a retry finds less left. Counts only.
+   */
+  erasureScope?: AdminErasureCollection[];
   /** Set once irreversible cleanup starts; cancellation is no longer allowed. */
   purgeStartedAt?: Date;
   purgeLeaseId?: string;
@@ -1099,7 +1124,13 @@ export interface IUserRepository
    * Returns null when a concurrent setup replaced the secret, so a code verified against a
    * superseded secret never enables a secret the user's authenticator does not hold.
    */
-  atomicEnableMfa: (userId: string, totpSecret: string) => Promise<IUserDocument | null>;
+  atomicEnableMfa: (userId: string, totpSecret: string, hashedBackupCodes?: string[]) => Promise<IUserDocument | null>;
+  /**
+   * Make a passkey the user's first factor: set `mfa.passkeyEnabled` and store `hashedBackupCodes`,
+   * discarding any unconfirmed app setup. Only while the user has no factor yet; returns null when
+   * a concurrent enrollment got there first, so backup codes are never issued twice.
+   */
+  atomicEnablePasskeyMfa: (userId: string, hashedBackupCodes: string[]) => Promise<IUserDocument | null>;
   findAllByEmailsOrUsernames: (emails: string[], usernames: string[]) => Promise<IUserDocument[]>;
   findByStripeCustomerId: (stripeCustomerId: string) => Promise<IUserDocument | null>;
   // `id` is included so callers can map results back to the requested ids (Mongoose adds the

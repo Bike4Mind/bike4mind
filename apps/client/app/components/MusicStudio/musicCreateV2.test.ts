@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { MUSIC_MODEL_STRENGTHS, type PublicMusicModel } from '@bike4mind/common';
-import { musicFieldProblems, musicModelCards } from './musicCreateV2';
+import type { PublicMusicModel } from '@bike4mind/common';
+import { musicFieldProblems, musicModelCards, withRankedMusicDefaultFirst } from './musicCreateV2';
 import { estimateCredits, initialFormFor, type MusicFormState } from './musicForm';
 
 const model = (overrides: Partial<PublicMusicModel> = {}): PublicMusicModel => ({
@@ -8,6 +8,8 @@ const model = (overrides: Partial<PublicMusicModel> = {}): PublicMusicModel => (
   object: 'music_model',
   display_name: 'Exact',
   provider: 'elevenlabs',
+  provider_label: 'ElevenLabs',
+  blurb: 'Exact-length songs with lyric control.',
   vocals: 'optional',
   lyrics: { max_chars: 100, max_line_chars: 20 },
   duration: { control: 'exact', min: 3, max: 300, default: 60 },
@@ -63,14 +65,53 @@ describe('musicModelCards', () => {
       id: 'music_v2',
       name: 'Exact',
       provider: 'ElevenLabs',
-      strength: MUSIC_MODEL_STRENGTHS.music_v2,
+      strength: 'Exact-length songs with lyric control.',
       creditsPerOutput: estimateCredits(initialFormFor(exact)),
       outputNoun: 'song',
-      modes: ['Vocals', 'Instrumental', 'Your lyrics'],
+      pickedFor: 'exact-length songs + 60s length',
+      whyNotCode: null,
       unavailableReason: null,
       mismatchReason: null,
     });
+    expect(cards[1]).toMatchObject({ id: fixed.id, pickedFor: null, whyNotCode: 'unsupported_duration' });
     expect(cards[1]?.unavailableReason).toBeNull();
     expect(cards[1]?.mismatchReason).toEqual(expect.any(String));
+  });
+
+  it('ranks the models that fit the form above the preferred one that does not', () => {
+    const cards = musicModelCards([fixed, exact], form({ durationSeconds: 60 }));
+    expect(cards.map(card => card.id)).toEqual([exact.id, fixed.id]);
+  });
+
+  it('names your lyrics or instrumental in the picked-for line', () => {
+    const [withLyrics] = musicModelCards([exact], form({ lyrics: 'hello', durationSeconds: null }));
+    expect(withLyrics?.pickedFor).toBe('exact-length songs + your lyrics');
+    const [instrumental] = musicModelCards([exact], form({ instrumental: true, durationSeconds: null }));
+    expect(instrumental?.pickedFor).toBe('exact-length songs + instrumental');
+  });
+
+  it('falls back to the provider id and no strength when the server sends no card copy', () => {
+    const [card] = musicModelCards([model({ provider_label: undefined, blurb: undefined })], form());
+    expect(card).toMatchObject({ provider: 'elevenlabs', strength: '' });
+  });
+});
+
+describe('withRankedMusicDefaultFirst', () => {
+  it('moves the ranker pick for a fresh form to the front', () => {
+    const lyria = model({ id: 'lyria-3.5', display_name: 'Lyria' });
+    expect(withRankedMusicDefaultFirst([exact, lyria]).map(candidate => candidate.id)).toEqual([
+      'lyria-3.5',
+      'music_v2',
+    ]);
+  });
+
+  it('opens on a model that also ranks first against its own defaults, whatever the server order', () => {
+    // At test-music's 5s, ElevenLabs v2.5 ranks first; at v2.5's own 60s, Lyria does. The row must agree with the panel.
+    const shortTest = model({ id: 'test-music', duration: { control: 'exact', min: 1, max: 30, default: 5 } });
+    const v25 = model({ id: 'music_v2_5' });
+    const lyria = model({ id: 'lyria-3.5', display_name: 'Lyria' });
+    const [first] = withRankedMusicDefaultFirst([shortTest, v25, lyria]);
+    expect(first.id).toBe('lyria-3.5');
+    expect(musicModelCards([shortTest, v25, lyria], initialFormFor(first))[0].id).toBe('lyria-3.5');
   });
 });

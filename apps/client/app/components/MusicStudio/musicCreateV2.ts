@@ -1,19 +1,21 @@
 /**
  * Create v2's music rules on top of musicForm: a model switch keeps every value, so each one the model does not take
  * is reported here with its why-not reason (musicFailureReason, the same text the server refuses with) and the value
- * the user can move to in one click. The model cards read the same problems to grey out the models that do not fit.
+ * the user can move to in one click. The model cards come from rankMusicModels, which runs the same validator.
  */
 import {
-  MUSIC_MODEL_STRENGTHS,
-  MUSIC_PROVIDER_IDS,
-  MUSIC_PROVIDER_LABELS,
-  MusicModelIdSchema,
   musicFailureReason,
-  type MusicProviderId,
+  rankMusicModels,
+  type MusicRankingRequest,
   type PublicMusicModel,
 } from '@bike4mind/common';
 import type { FieldProblem } from '@client/app/components/Studio/capabilityFields';
-import type { StudioModelCard } from '@client/app/components/Studio/StudioModelCards';
+import type { NonEmptyList } from '@client/app/components/Studio/useCapabilityFormState';
+import {
+  rankedCardFit,
+  withRankedDefaultFirst,
+  type StudioModelCard,
+} from '@client/app/components/Studio/studioModelCard';
 import { clampDuration, estimateCredits, initialFormFor, type MusicFormState } from './musicForm';
 
 export type MusicProblemField = 'instrumental' | 'lyrics' | 'duration';
@@ -67,33 +69,39 @@ export function musicFieldProblems(model: PublicMusicModel, form: MusicFormState
   return problems;
 }
 
-const isMusicProvider = (provider: string): provider is MusicProviderId =>
-  (MUSIC_PROVIDER_IDS as readonly string[]).includes(provider);
-
-const strengthOf = (modelId: string): string => {
-  const parsed = MusicModelIdSchema.safeParse(modelId);
-  return parsed.success ? MUSIC_MODEL_STRENGTHS[parsed.data] : '';
+/** The form as the ranker reads it: lyrics only while the song has vocals, a length only when one is set. */
+export const musicRankingRequest = (form: MusicFormState): MusicRankingRequest => {
+  const lyrics = form.lyrics.trim();
+  return {
+    instrumental: form.instrumental,
+    ...(!form.instrumental && lyrics.length > 0 && { lyrics }),
+    ...(form.durationSeconds !== null && { durationSeconds: form.durationSeconds }),
+  };
 };
 
-const capabilitiesOf = (model: PublicMusicModel): string[] => [
-  ...(model.vocals === 'never' ? [] : ['Vocals']),
-  'Instrumental',
-  ...(model.lyrics !== null && model.vocals !== 'never' ? ['Your lyrics'] : []),
-];
-
-/** A card per music model, each priced at its own default length and greyed with the first value it does not take. */
-export const musicModelCards = (models: readonly PublicMusicModel[], form: MusicFormState): StudioModelCard[] =>
-  models.map(model => {
-    const [firstProblem] = Object.values(musicFieldProblems(model, form));
-    return {
-      id: model.id,
-      name: model.display_name,
-      provider: isMusicProvider(model.provider) ? MUSIC_PROVIDER_LABELS[model.provider] : model.provider,
-      strength: strengthOf(model.id),
-      creditsPerOutput: estimateCredits(initialFormFor(model)),
-      outputNoun: 'song',
-      modes: capabilitiesOf(model),
-      unavailableReason: null,
-      mismatchReason: firstProblem?.reason ?? null,
-    };
+/**
+ * A card per music model in rankMusicModels order for the form: the ones that fit first with why they were picked,
+ * the rest after with the validator's why-not reason. Each is priced at its own default length.
+ */
+export const musicModelCards = (models: readonly PublicMusicModel[], form: MusicFormState): StudioModelCard[] => {
+  const byId = new Map(models.map(model => [model.id, model]));
+  return rankMusicModels([...byId.keys()], musicRankingRequest(form)).flatMap(ranked => {
+    const model = byId.get(ranked.id);
+    if (!model) return [];
+    return [
+      {
+        id: model.id,
+        name: model.display_name,
+        provider: model.provider_label ?? model.provider,
+        strength: model.blurb ?? '',
+        creditsPerOutput: estimateCredits(initialFormFor(model)),
+        outputNoun: 'song',
+        ...rankedCardFit(ranked),
+      },
+    ];
   });
+};
+
+/** `models` with the ranked default first, so Create v2 opens on it (see withRankedDefaultFirst). */
+export const withRankedMusicDefaultFirst = (models: NonEmptyList<PublicMusicModel>): NonEmptyList<PublicMusicModel> =>
+  withRankedDefaultFirst(models, model => musicModelCards(models, initialFormFor(model)));

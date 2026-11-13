@@ -334,4 +334,9 @@ describe('ORG_API_KEY_SCOPES', () => {
       expect(isOrgApiKeyScope(scope.value)).toBe(false);
     }
   });
+
+  it('refuses api-keys:manage, which the key-management routes refuse for a service account', () => {
+    expect(isOrgApiKeyScope(ApiKeyScope.API_KEYS_MANAGE)).toBe(false);
+    expect(GENERIC_MODAL_API_KEY_SCOPES.map(s => s.value)).toContain(ApiKeyScope.API_KEYS_MANAGE);
+  });
 });
