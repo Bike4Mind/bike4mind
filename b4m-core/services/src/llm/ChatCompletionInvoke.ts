@@ -34,6 +34,7 @@ import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompl
 import {
   createModelAdmission,
   isModelRequiresSubscriptionError,
+  isOrgModelNotAllowedError,
   loadFreeTierAllowedModels,
   loadModelConfigurations,
 } from './modelAdmission';
@@ -274,6 +275,23 @@ export class ChatCompletionInvoke {
     // resolveQuestModelType falls back.
     if (model.type && !isPromptMetaModelType(model.type)) {
       throw new BadRequestError(`Model "${model.id}" is a ${model.type} model and cannot run a chat completion`);
+    }
+
+    // An API-key caller gets the org model refusal as a real 403 before any quest exists; other admission
+    // refusals, and session turns, still surface through the quest below.
+    if (authOrigin === 'apiKey') {
+      const orgAdmission = createModelAdmission({
+        user: this.user,
+        configs: [],
+        models: modelInfo,
+        enforceCredits: false,
+        orgModelPolicy: readOrgModelPolicy(organization?.modelPolicy),
+      });
+      for (const gatedModelId of [model.id, ...researchModelIds]) {
+        await orgAdmission.assert(gatedModelId).catch(err => {
+          if (isOrgModelNotAllowedError(err)) throw err;
+        });
+      }
     }
 
     // Start sessions.update early (will await later in parallel with admin settings)

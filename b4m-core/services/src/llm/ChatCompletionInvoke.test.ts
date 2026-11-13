@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vite
 import {
   ChatCompletionInvokeParamsSchema,
   type IUserDocument,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
 } from '@bike4mind/common';
 import { ChatCompletionInvoke } from './ChatCompletionInvoke';
@@ -557,6 +558,24 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     const personal = makeInvoke();
     await personal.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
     expect(Reflect.get(personal, 'questStartParams')).not.toBeNull();
+  });
+
+  it('refuses an org-disallowed model for an API-key caller with a 403 before creating the quest', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as never);
+    mockDb.organizations.findById.mockResolvedValue({
+      id: 'org-1',
+      modelPolicy: { allowedProviders: null, allowedModels: ['some-other-model'], allowedTools: null },
+    });
+
+    await expect(
+      makeInvoke().invoke({
+        body: { ...bodyFor(SUCCESSOR_ID), organizationId: 'org-1' },
+        userId: OWNER_ID,
+        authOrigin: 'apiKey',
+        apiKeyId: 'key1',
+      })
+    ).rejects.toMatchObject({ additionalInfo: { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE } });
+    expect(mockDb.quests.create).not.toHaveBeenCalled();
   });
 
   it("refuses an API-key caller naming a built-in tool outside the organization's policy, and strips it silently for a session", async () => {
