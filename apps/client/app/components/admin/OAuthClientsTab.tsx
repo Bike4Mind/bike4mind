@@ -78,6 +78,7 @@ type CreateForm = {
   redirectUris: string;
   firstParty: boolean;
   federated: FederatedForm;
+  unpaidAccountsAllowed: boolean;
 };
 
 const emptyCreateForm: CreateForm = {
@@ -85,6 +86,7 @@ const emptyCreateForm: CreateForm = {
   redirectUris: '',
   firstParty: false,
   federated: { enabled: false, subjectSource: 'sub', issuer: '', audience: '', providerName: '', jwksUri: '' },
+  unpaidAccountsAllowed: true,
 };
 
 const parseUris = (text: string) =>
@@ -109,10 +111,17 @@ export function buildCreatePayload(form: CreateForm): CreateOAuthClientInput {
     redirectUris: parseUris(form.redirectUris),
     clientType: form.firstParty ? 'first-party' : 'relying-party',
     ...(form.federated.enabled ? { federatedIdp: federatedInput(form.federated) } : {}),
+    ...(form.federated.enabled && !form.unpaidAccountsAllowed ? { unpaidAccountsAllowed: false } : {}),
   };
 }
 
-type EditForm = { redirectUris: string; scopes: string[]; federated: FederatedForm; overwatchProductId: string };
+type EditForm = {
+  redirectUris: string;
+  scopes: string[];
+  federated: FederatedForm;
+  overwatchProductId: string;
+  unpaidAccountsAllowed: boolean;
+};
 
 // A stored trust config without subjectSource is the 'identities' shape (see resolveOAuthFederatedIdp).
 export function federatedFormFromClient(client: OAuthClientView): FederatedForm {
@@ -132,6 +141,7 @@ export const editFormFromClient = (client: OAuthClientView): EditForm => ({
   scopes: client.allowedScopes,
   federated: federatedFormFromClient(client),
   overwatchProductId: client.overwatchProductId ?? '',
+  unpaidAccountsAllowed: client.unpaidAccountsAllowed !== false,
 });
 
 /** Only the fields the admin changed, so an unrelated save never trips the server's concurrent-edit guards. */
@@ -158,6 +168,9 @@ export function buildEditPayload(client: OAuthClientView, form: EditForm): Updat
 
   const product = form.overwatchProductId.trim();
   if (product !== (client.overwatchProductId ?? '')) payload.overwatchProductId = product || null;
+  if (form.unpaidAccountsAllowed !== (client.unpaidAccountsAllowed !== false)) {
+    payload.unpaidAccountsAllowed = form.unpaidAccountsAllowed;
+  }
   return payload;
 }
 
@@ -229,6 +242,33 @@ function FederatedTrustFields({
         </FormControl>
       </Stack>
     </Sheet>
+  );
+}
+
+function UnpaidAccountsToggle({
+  checked,
+  onChange,
+  testid,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  testid: string;
+}) {
+  return (
+    <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+      <Box>
+        <FormLabel>Starter and free accounts may use this app</FormLabel>
+        <FormHelperText sx={{ mt: 0 }}>
+          Under the paid-only API key switch, keys from this app&apos;s AI-token exchange work for accounts without a
+          paid plan. Off keeps this app paid-only.
+        </FormHelperText>
+      </Box>
+      <Switch
+        checked={checked}
+        onChange={e => onChange(e.target.checked)}
+        slotProps={{ input: { 'data-testid': testid } }}
+      />
+    </FormControl>
   );
 }
 
@@ -722,6 +762,14 @@ export default function OAuthClientsTab() {
               />
             )}
 
+            {createForm.federated.enabled && (
+              <UnpaidAccountsToggle
+                checked={createForm.unpaidAccountsAllowed}
+                onChange={unpaidAccountsAllowed => setCreateForm(f => ({ ...f, unpaidAccountsAllowed }))}
+                testid="oauth-client-unpaid-accounts-switch"
+              />
+            )}
+
             {formError && (
               <Alert color="danger" variant="soft" data-testid="oauth-client-form-error">
                 {formError}
@@ -821,6 +869,14 @@ export default function OAuthClientsTab() {
                   onChange={setEditFederated}
                   testIdPrefix="oauth-client-edit-federated"
                   audiencePlaceholder="Defaults to this client_id"
+                />
+              )}
+
+              {editForm.federated.enabled && (
+                <UnpaidAccountsToggle
+                  checked={editForm.unpaidAccountsAllowed}
+                  onChange={unpaidAccountsAllowed => setEditForm(f => f && { ...f, unpaidAccountsAllowed })}
+                  testid="oauth-client-edit-unpaid-accounts-switch"
                 />
               )}
 
