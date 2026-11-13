@@ -584,6 +584,10 @@ export const handler = withEventContext(async (event, logger) => {
       try {
         const imageBuffer = await getGeneratedImageStorage().download(imagePath);
         const filename = imagePath.split('/').pop() || 'generated-image.png';
+        logger.info('[TEMP-PR7289] T11 quest image upload', {
+          questId: params.questId,
+          hasThread: !!(threadTs || messageTs),
+        });
         await slackClient.uploadFile({
           channel: channelId,
           filename,

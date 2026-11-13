@@ -124,6 +124,7 @@ export class CommandHandler {
         $or: [{ userId: this.user.id }, { 'users.userId': this.user.id }],
         deletedAt: { $exists: false },
       });
+      this.logger.info('[TEMP-PR7289] T12 custom agent', { found: !!agent });
 
       if (agent) {
         this.customAgent = customAgentToPersona(agent);
@@ -160,6 +161,10 @@ export class CommandHandler {
           ? Organization.findById(this.user.organizationId).select('preferredModel temperature maxTokens').lean()
           : null,
       ]);
+      this.logger.info('[TEMP-PR7289] T6 resolveModelConfig lookups', {
+        channelConfig: !!channelConfig,
+        orgDoc: !!orgDoc,
+      });
     } catch (error) {
       this.logger.error('[Slack] Failed to fetch model config from database, using system defaults', {
         error,
@@ -204,6 +209,7 @@ export class CommandHandler {
             ? 'org'
             : 'system';
 
+    this.logger.info('[TEMP-PR7289] T6 resolveModelConfig source', { source: modelSource });
     this.logger.info('[Slack] Model config resolved', {
       channelId: this.slackEvent.channel,
       modelId,
@@ -297,6 +303,7 @@ export class CommandHandler {
     if (this.slackEvent.threadTs) {
       // This is a reply in a thread - fetch thread messages
       contextMessages = await this.slackClient.fetchThreadHistory(this.slackEvent.channel, this.slackEvent.threadTs);
+      this.logger.info('[TEMP-PR7289] T8 thread context', { messages: contextMessages.length });
     } else {
       // Regular channel message - fetch recent channel history
       contextMessages = await this.slackClient.fetchChannelHistory(this.slackEvent.channel, 20);
@@ -344,6 +351,7 @@ export class CommandHandler {
     try {
       const User = getSlackDb().User as mongoose.Model<IUserDocument>;
       const user = await User.findById(this.user.id);
+      this.logger.info('[TEMP-PR7289] T6 user', { found: !!user });
       if (!user) throw new Error('User not found');
 
       this.logger.info('[Legacy Path] triggerAIResponseWithContext started', {
@@ -379,6 +387,7 @@ export class CommandHandler {
           Logger.globalInstance.log('🌍 [SERVER] CommandHandler invokeLambda end:', new Date().toISOString());
         },
       } as unknown as ConstructorParameters<typeof ChatCompletionInvoke>[0]);
+      this.logger.info('[TEMP-PR7289] T6 chatCompletion constructed');
 
       // Resolve model config: channel -> agent -> org -> system fallback
       const { modelId, temperature: agentTemperature, maxTokens: agentMaxTokens } = await this.resolveModelConfig();
@@ -551,6 +560,7 @@ export class CommandHandler {
         error: settingsError,
       });
     }
+    this.logger.info('[TEMP-PR7289] T9 maxFileSizeBytes', { maxFileSizeBytes });
     // `this.user.currentStorageSize` is a snapshot taken once for this whole
     // call - it is only updated asynchronously later via the S3 `objectCreated` event, not as
     // attachments are accepted here. Tracking bytes accepted so far in THIS message and adding
@@ -587,6 +597,7 @@ export class CommandHandler {
           // Warning sign, escaped so this source file stays ASCII.
           const error = `\u26a0\ufe0f File "${file.name}" (${sizeMB}MB) exceeds ${limitMB}MB limit. Skipping.`;
           this.logger.warn(error);
+          this.logger.info('[TEMP-PR7289] T9 file rejected', { reason: 'size' });
           errors.push(error);
           continue;
         }
@@ -604,6 +615,7 @@ export class CommandHandler {
           // Warning sign, escaped so this source file stays ASCII.
           const error = `\u26a0\ufe0f File "${file.name}" (${sizeMB}MB) exceeds ${limitMB}MB limit. Skipping.`;
           this.logger.warn(error);
+          this.logger.info('[TEMP-PR7289] T9 file rejected', { reason: 'size' });
           errors.push(error);
           continue;
         }
@@ -666,6 +678,7 @@ export class CommandHandler {
           // `channel` is '' on an event that carries none; the field is Mixed, so it round-trips.
           sourceMetadata: { channel: this.slackEvent.channel, messageTs: this.slackEvent.ts },
         });
+        this.logger.info('[TEMP-PR7289] T9 fabFile created', { id: String(fabFile._id) });
 
         // Only charged against quota once the file is actually persisted - a file that fails
         // upload or create must not eat into the headroom the next attachment in this same

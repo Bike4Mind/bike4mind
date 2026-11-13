@@ -309,7 +309,14 @@ export class SlackClient {
       MARKDOWN: 11900, // Limit: 12000
     };
 
-    return blocks.map(block => {
+    const truncated = { header: 0, sectionText: 0, sectionFields: 0, markdown: 0, context: 0 };
+    const trunc = (text: string, limit: number, key: keyof typeof truncated): string => {
+      const out = this.safeTruncate(text, limit);
+      if (out.length < text.length) truncated[key]++;
+      return out;
+    };
+
+    const out = blocks.map(block => {
       // Block Kit is a wide union; only the text-bearing fields matter for truncation, so view it through a narrow shape.
       const newBlock = { ...block } as unknown as TruncatableBlock;
 
@@ -318,7 +325,7 @@ export class SlackClient {
         if (newBlock.text && typeof newBlock.text === 'object' && newBlock.text.text) {
           newBlock.text = {
             ...newBlock.text,
-            text: this.safeTruncate(newBlock.text.text, LIMITS.HEADER),
+            text: trunc(newBlock.text.text, LIMITS.HEADER, 'header'),
           };
         }
         return newBlock as KnownBlock | Block;
@@ -330,7 +337,7 @@ export class SlackClient {
         if (newBlock.text && typeof newBlock.text === 'object' && newBlock.text.text) {
           newBlock.text = {
             ...newBlock.text,
-            text: this.safeTruncate(newBlock.text.text, LIMITS.SECTION_TEXT),
+            text: trunc(newBlock.text.text, LIMITS.SECTION_TEXT, 'sectionText'),
           };
         }
 
@@ -340,7 +347,7 @@ export class SlackClient {
             if (field.text) {
               return {
                 ...field,
-                text: this.safeTruncate(field.text, LIMITS.SECTION_FIELD),
+                text: trunc(field.text, LIMITS.SECTION_FIELD, 'sectionFields'),
               };
             }
             return field;
@@ -352,7 +359,7 @@ export class SlackClient {
       // 3. Markdown Blocks
       if (newBlock.type === 'markdown') {
         if (typeof newBlock.text === 'string') {
-          newBlock.text = this.safeTruncate(newBlock.text, LIMITS.MARKDOWN);
+          newBlock.text = trunc(newBlock.text, LIMITS.MARKDOWN, 'markdown');
         }
         return newBlock as KnownBlock | Block;
       }
@@ -363,14 +370,14 @@ export class SlackClient {
           // Context elements: image or mrkdwn/plain_text
           if (element.text) {
             if (typeof element.text === 'string') {
-              return { ...element, text: this.safeTruncate(element.text, LIMITS.CONTEXT) };
+              return { ...element, text: trunc(element.text, LIMITS.CONTEXT, 'context') };
             }
             if (typeof element.text === 'object' && element.text.text) {
               return {
                 ...element,
                 text: {
                   ...element.text,
-                  text: this.safeTruncate(element.text.text, LIMITS.CONTEXT),
+                  text: trunc(element.text.text, LIMITS.CONTEXT, 'context'),
                 },
               };
             }
@@ -382,6 +389,12 @@ export class SlackClient {
 
       return newBlock as KnownBlock | Block;
     });
+    this.logger.info('[TEMP-PR7289] T7 truncateBlocks', {
+      in: blocks.length,
+      types: blocks.map(b => b.type),
+      truncated,
+    });
+    return out;
   }
 
   /**
@@ -417,6 +430,7 @@ export class SlackClient {
         hasMetadata: !!metadata,
       });
 
+      this.logger.info('[TEMP-PR7289] T6 sendMessage', { blocks: blocks?.length ?? 0, hasMetadata: !!metadata });
       const result = await this.client.chat.postMessage({
         channel,
         text: truncatedText,
@@ -917,6 +931,10 @@ export class SlackClient {
         ts: threadTs,
         include_all_metadata: includeMetadata,
       });
+      this.logger.info('[TEMP-PR7289] T8 fetchThreadHistory', {
+        includeMetadata,
+        messages: result.messages?.length ?? 0,
+      });
 
       if (!result.ok) {
         this.logger.error('Failed to fetch Slack thread history');
@@ -1061,6 +1079,7 @@ export class SlackClient {
       const uploadArgs: FilesUploadV2Arguments = threadTs ? { ...baseArgs, thread_ts: threadTs } : baseArgs;
 
       const result = await this.client.files.uploadV2(uploadArgs);
+      this.logger.info('[TEMP-PR7289] T10/T11 uploadFile', { threadTs: !!threadTs, ok: result.ok });
 
       // files.uploadV2 returns { ok: boolean, files: Array<{ id, name, ... }> }
       const fileResult = result as { ok: boolean; files?: Array<{ id?: string }> };

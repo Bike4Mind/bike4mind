@@ -134,6 +134,7 @@ export async function handleConfigCommand(context: B4mCommandContext): Promise<B
 
     if (dmChannelId) {
       // Upload the full system prompt as a file so users can read it without truncation
+      logger.info('[TEMP-PR7289] T10 config DM upload', { hasDm: true });
       await slackClient.uploadFile({
         channel: dmChannelId,
         filename: 'system-prompt.md',
