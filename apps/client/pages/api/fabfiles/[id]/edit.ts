@@ -1,3 +1,4 @@
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { shadowIdentityOptions } from '@bike4mind/services/llm/shadowTier';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import {
@@ -241,7 +242,9 @@ const handler = baseApi()
           }
 
           // A platform-picked fallback (no request model) is not a user choice, so it skips the user-facing gates.
-          await (await createModelAdmission(user, models, !model)).assert(modelInfo.id);
+          await (
+            await createModelAdmission(user, models, !model, { organizationId: resolveRequestBillingOrgId(req) })
+          ).assert(modelInfo.id);
 
           const runModelInfo = (await resolveShadowSubstitute(req, modelInfo, models)) ?? modelInfo;
 

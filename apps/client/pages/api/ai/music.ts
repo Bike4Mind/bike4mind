@@ -13,7 +13,7 @@ import {
 import { adminSettingsRepository, apiKeyRepository, cacheRepository, usageEventRepository } from '@bike4mind/database';
 import { apiKeyService, estimateMusicCredits, ProviderBusyError, runElevenLabsWithCapacity } from '@bike4mind/services';
 import { aiMusicService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import { reserveRequestCredits, resolveRequestBillingOrgId } from '@server/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
 import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
@@ -57,7 +57,9 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
     throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
   }
 
-  await (await createModelAdmission(req.user!)).assert(modelId ?? DEFAULT_MUSIC_MODEL_ID);
+  await (
+    await createModelAdmission(req.user!, undefined, false, { organizationId: resolveRequestBillingOrgId(req) })
+  ).assert(modelId ?? DEFAULT_MUSIC_MODEL_ID);
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,

@@ -1,3 +1,4 @@
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { shadowIdentityOptions } from '@bike4mind/services/llm/shadowTier';
 import { Request, Response } from 'express';
 import { z } from 'zod';
@@ -220,7 +221,9 @@ async function handleRlmAnswer(req: Request, res: Response) {
 
   // --- Resolve the root LLM backend ---
   const models = await getAvailableModels(apiKeyTable);
-  const admission = await createModelAdmission(req.user, models);
+  const admission = await createModelAdmission(req.user, models, false, {
+    organizationId: resolveRequestBillingOrgId(req),
+  });
   let modelInfo: ModelInfo | undefined;
   if (parsed.model) {
     // Unrestricted callers run the requested model; restricted ones run the substitute resolved below.

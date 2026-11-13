@@ -50,7 +50,12 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
     throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
   }
 
-  await (await createModelAdmission(req.user!)).assert(DEFAULT_SOUND_MODEL_ID);
+  // Omitted keeps the home-org default. A key bills its own account (resolveAudioBillingOrgId 403s any
+  // other target), so only the JWT caller's value changes the payer.
+  const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'home-org');
+  await (
+    await createModelAdmission(req.user!, undefined, false, { organizationId: billingOrganizationId })
+  ).assert(DEFAULT_SOUND_MODEL_ID);
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,
@@ -77,10 +82,6 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   // it's computed regardless of enforceCredits so analytics capture true provider
   // cost even on credits-off / self-host deployments.
   const { requiredCredits, usdCost, billedSeconds } = estimateSoundCredits(provider, { durationSeconds });
-
-  // Omitted keeps the home-org default. A key bills its own account (resolveAudioBillingOrgId 403s any
-  // other target), so only the JWT caller's value changes the payer.
-  const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'home-org');
 
   const reservation = await reserveRequestCredits({
     req,

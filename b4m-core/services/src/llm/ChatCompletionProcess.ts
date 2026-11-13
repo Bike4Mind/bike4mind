@@ -3844,6 +3844,7 @@ export class ChatCompletionProcess {
         // builder produces never appear in that list - MCP tools and the delegate tool's captured
         // parentTools.
         sessionDisabledTools: deniedTools,
+        orgToolPolicy: readOrgModelPolicy(organization?.modelPolicy),
         mcpToolsByServer,
         quest,
         saveQuest,

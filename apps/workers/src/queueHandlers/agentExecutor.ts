@@ -2428,6 +2428,7 @@ async function runExecution(
       // them to `toolNames`, which MCP tools never pass through, so a profile that denies
       // `atlassian__jira_create_issue` could not reach it either. Both sets are pure subtraction,
       // so unioning them cannot widen what this agent is offered.
+      orgToolPolicy: readOrgModelPolicy(organization?.modelPolicy),
       sessionDisabledTools: mcpSessionDisabledTools(
         sessionDeniedTools(session),
         orchestrationProfile?.deniedTools,
@@ -4730,6 +4731,7 @@ async function processSubagentDispatch(
       config: subagentToolConfig,
       // This site passes no `enabledTools`, so the denylist is the only thing standing between a
       // session-forbidden MCP tool and a dispatched subagent.
+      orgToolPolicy: readOrgModelPolicy(organization?.modelPolicy),
       sessionDisabledTools: [...sessionDeniedTools(session), ...(child.scopeDeniedTools ?? [])],
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP

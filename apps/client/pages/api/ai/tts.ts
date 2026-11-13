@@ -85,7 +85,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   // (resolveAudioBillingOrgId 403s any other target).
   const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'user');
   const userId = req.user?.id;
-  const admission = await createModelAdmission(req.user!);
+  const admission = await createModelAdmission(req.user!, undefined, false, { organizationId: billingOrganizationId });
   await admission.assert(model ?? TTS_DEFAULT_MODEL[vendor]);
   const candidateAvailability = await Promise.all(
     ttsCandidates(vendor, text.length).map(async candidate => ({

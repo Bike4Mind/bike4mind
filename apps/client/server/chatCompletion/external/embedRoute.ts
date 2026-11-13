@@ -631,7 +631,8 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         logger,
         getAbortSignal: () => abortController.signal,
       });
-      // The embed key bills its organization, so that org's tool policy governs the turn.
+      // The embed key's organization owns the agent, so its policy governs the turn's tools and model
+      // even when an identified end user pays personally (see governingOrgModelPolicy below).
       const orgFiltered = builtServerTools
         ? applyOrgToolPolicy(builtServerTools, readOrgModelPolicy(org?.modelPolicy))
         : undefined;
@@ -694,7 +695,9 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           scopeActor: ctx.adminRoleWithheld && !ctx.endUserId ? withholdAdminRole : undefined,
           // Anonymous: bill the owner org's pool (ownerType: Organization). Identified:
           // omitted, so executeCompletion bills the acting user's own balance.
-          ...(ctx.endUserId ? {} : { billingOrganizationId: ctx.organizationId }),
+          ...(ctx.endUserId
+            ? { governingOrgModelPolicy: org?.modelPolicy }
+            : { billingOrganizationId: ctx.organizationId }),
           // Meter usage even on a stage with enforceCredits off.
           alwaysRecordUsage: true,
           // Server-side tool execution (KB scoped to the agent's project; see

@@ -61,7 +61,13 @@ export type MusicJobDeps = {
 };
 
 export type CreateMusicJobDeps = MusicJobDeps & {
-  assertModelAdmission(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
+  /** organizationId is the org the job bills (input.user.organizationId), so its model policy applies. */
+  assertModelAdmission(
+    userId: string,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null
+  ): Promise<void>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
   /** The refusal detail when the user's Files quota lacks room for `bytes` more (the song is saved there, as saveToFiles does); undefined when there is room. */
   checkStorageFor(userId: string, bytes: number): Promise<StorageLimitErrorInfo | undefined>;

@@ -50,8 +50,8 @@ export async function resetOrgModelPolicy(orgId: string): Promise<void> {
 }
 
 /**
- * The fields whose value differs, for the admin audit `changes` list. An invalid stored row counts
- * as changed on every field the new policy sets, since its old value was not in force as written.
+ * The fields whose value differs, for the admin audit `changes` list. Over an invalid stored row (whose
+ * old value was not in force as written) every field the new policy sets counts; null-to-null never does.
  */
 export function diffOrgModelPolicy(
   before: OrgModelPolicyView,
@@ -61,7 +61,7 @@ export function diffOrgModelPolicy(
   for (const field of ORG_MODEL_POLICY_FIELDS) {
     const prev = before.invalidStored ? null : before.policy[field];
     const next = after[field];
-    if (!before.invalidStored && sameList(prev, next)) continue;
+    if (before.invalidStored ? next === null : sameList(prev, next)) continue;
     changes.push({ field, before: prev, after: next });
   }
   return changes;

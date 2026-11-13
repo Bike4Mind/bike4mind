@@ -15,7 +15,12 @@ import {
   usdToCreditsStochastic,
   type UsagePriceStamp,
 } from '@bike4mind/common';
-import type { SoundGenerationVendor, ThinkingVisibility, VoiceGenerationVendor } from '@bike4mind/common';
+import type {
+  ReadOrgModelPolicy,
+  SoundGenerationVendor,
+  ThinkingVisibility,
+  VoiceGenerationVendor,
+} from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -462,6 +467,8 @@ export interface BuildToolsArgs {
   offerOnlyNamedTools?: boolean;
   /** See `BuildSharedToolsOptions.sessionDisabledTools`. */
   sessionDisabledTools?: readonly string[];
+  /** See `BuildSharedToolsOptions.orgToolPolicy`. */
+  orgToolPolicy?: ReadOrgModelPolicy;
   mcpToolsByServer?: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
   quest: IChatHistoryItemDocument;
   saveQuest: (quest: IChatHistoryItemDocument) => Promise<IChatHistoryItemDocument | null>;
@@ -1012,6 +1019,7 @@ export class ToolBuilder {
     enabledTools = [],
     offerOnlyNamedTools,
     sessionDisabledTools,
+    orgToolPolicy,
     mcpToolsByServer = {},
     quest,
     saveQuest,
@@ -1278,6 +1286,7 @@ export class ToolBuilder {
         enabledTools,
         offerOnlyNamedTools,
         sessionDisabledTools,
+        orgToolPolicy,
         mcpToolsByServer,
         config,
         agentOnlyMcpServers,

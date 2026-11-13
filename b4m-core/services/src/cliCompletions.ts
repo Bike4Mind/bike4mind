@@ -223,6 +223,11 @@ export interface CompletionParams {
    * Requires `db.organizations`.
    */
   billingOrganizationId?: string;
+  /**
+   * Model policy of an organization that governs the turn without paying for it (an org-owned embed agent
+   * serving an identified end user, who is billed personally). Ignored when `billingOrganizationId` is set.
+   */
+  governingOrgModelPolicy?: unknown;
   /** Correlation id for the usage-event dual write. Synthesized when absent. */
   requestId?: string;
   /**
@@ -694,7 +699,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     models,
     enforceCredits: Boolean(enforceCredits),
     freeTierAllowedModels,
-    orgModelPolicy: readOrgModelPolicy(organization?.modelPolicy),
+    orgModelPolicy: readOrgModelPolicy(organization ? organization.modelPolicy : params.governingOrgModelPolicy),
   }).assert(model);
 
   if (requestedModelInfo && !supportsAssistantPrefill(requestedModelInfo) && hasAssistantPrefill(messages)) {

@@ -20,7 +20,11 @@ import {
 } from '@bike4mind/server-utils/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE, startAgentExecutionContract } from '@bike4mind/common';
+import {
+  BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+  ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+  startAgentExecutionContract,
+} from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
@@ -52,8 +56,10 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       logger: req.logger,
     });
     // A free account must not start on a paid-only admin default.
+    // Resolved under the org the run bills (startAgentExecution's rule), so an org-disallowed default
+    // falls back here instead of being refused by the executor. Membership is checked there before any run starts.
     model = await resolveCallerDefaultModel(resolved.model, req.user, req.logger, {
-      organizationId: apiKeyBillingOrgId(req.apiKeyInfo),
+      organizationId: apiKeyBillingOrgId(req.apiKeyInfo) ?? body.organization_id ?? null,
     });
     // Self-host guard: apiKeys/models are populated only there. Fail fast with
     // actionable guidance rather than a cryptic error deep inside the executor.
@@ -117,6 +123,8 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
         throw new NotFoundError('Organization not found');
       case 'billing_organization_mismatch':
         throw new ForbiddenError(result.message, { errorCode: BILLING_ORGANIZATION_MISMATCH_ERROR_CODE });
+      case 'org_tool_not_allowed':
+        throw new ForbiddenError(result.message, { errorCode: ORG_TOOL_NOT_ALLOWED_ERROR_CODE });
       case 'billing_key_stale':
         throw new BadRequestError(result.message);
       case 'confidence_overrides_forbidden':

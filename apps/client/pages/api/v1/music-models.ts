@@ -4,6 +4,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { getMusicJobDeps } from '@server/generationJobs/wiring';
 import { listUsableMusicModels } from '@bike4mind/server-utils/musicGenerations/listUsableMusicModels';
 import { filterAdmittedMediaModels } from '@server/billing/assertMediaModelAdmission';
+import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 
 const handler = nextRouteForContract(listMusicModelsContract, {
@@ -11,7 +12,11 @@ const handler = nextRouteForContract(listMusicModelsContract, {
   rateLimit: perUserRateLimit('GET /api/v1/music-models'),
 }).get(async (req, res) =>
   res.json({
-    models: await filterAdmittedMediaModels(req.user, await listUsableMusicModels(req.user.id, getMusicJobDeps())),
+    models: await filterAdmittedMediaModels(
+      req.user,
+      await listUsableMusicModels(req.user.id, getMusicJobDeps()),
+      await resolveMediaBillingOrgId(req, undefined)
+    ),
   })
 );
 

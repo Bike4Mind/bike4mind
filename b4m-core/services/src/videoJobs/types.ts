@@ -65,7 +65,13 @@ export type VideoJobDeps = {
 };
 
 export type CreateVideoJobDeps = VideoJobDeps & {
-  assertModelAdmission(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
+  /** organizationId is the org the job bills (input.user.organizationId), so its model policy applies. */
+  assertModelAdmission(
+    userId: string,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null
+  ): Promise<void>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
 };
 

@@ -47,8 +47,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const org = await verifyOrgAccess(req.user!, orgIdOf(req));
       const policy = parseOrBadRequest(OrgModelPolicySchema, req.body);
-      const changes = diffOrgModelPolicy(toOrgModelPolicyView(org.modelPolicy), policy);
-      if (changes.length > 0) {
+      const before = toOrgModelPolicyView(org.modelPolicy);
+      const changes = diffOrgModelPolicy(before, policy);
+      // Replacing an unreadable row changes enforcement (it failed closed) even when no field reads as changed.
+      if (changes.length > 0 || before.invalidStored) {
         await setOrgModelPolicy(org.id, policy);
         await recordChange(req, org, changes, 'updated the model and tool policy');
       }
@@ -63,7 +65,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       if (org.modelPolicy !== undefined && org.modelPolicy !== null) {
         await resetOrgModelPolicy(org.id);
       }
-      if (changes.length > 0) {
+      if (changes.length > 0 || before.invalidStored) {
         await recordChange(req, org, changes, 'reset the model and tool policy to unrestricted');
       }
       return res.json(await getOrgModelPolicy(org.id));
