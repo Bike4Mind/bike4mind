@@ -14,6 +14,7 @@ import {
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
+  isGrantPackageExpired,
   requiresGrantReason,
   updateRequiresGrantReason,
   type GrantPackageReasonPolicy,
@@ -30,7 +31,9 @@ import {
   type AdminReasonDraft,
 } from '@client/app/components/admin/shared';
 import { createGrantPackage, updateGrantPackage } from '@client/app/utils/grantPackageAPICalls';
+import { createRegInvites } from '@client/app/utils/regInviteAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
+import { GrantPackageCodesSection, dayOf, expiresAtFromDay, type QueuedCode } from './GrantPackageCodesSection';
 
 type Props = {
   open: boolean;
@@ -41,7 +44,17 @@ type Props = {
   reasonPolicy: GrantPackageReasonPolicy;
 };
 
-type Draft = { name: string; credits: string; totalCap: string; dailyCap: string; active: boolean };
+type Draft = {
+  name: string;
+  credits: string;
+  totalCap: string;
+  dailyCap: string;
+  active: boolean;
+  /** YYYY-MM-DD from the date input; empty means the package never expires. */
+  expiresOn: string;
+};
+
+const expiryDay = (pkg: IGrantPackageDocument | null): string => dayOf(pkg?.expiresAt);
 
 const toDraft = (pkg: IGrantPackageDocument | null): Draft => ({
   name: pkg?.name ?? '',
@@ -49,6 +62,7 @@ const toDraft = (pkg: IGrantPackageDocument | null): Draft => ({
   totalCap: pkg?.totalCap != null ? String(pkg.totalCap) : '',
   dailyCap: pkg?.dailyCap != null ? String(pkg.dailyCap) : '',
   active: pkg?.active ?? true,
+  expiresOn: expiryDay(pkg),
 });
 
 const WHOLE = /^\d+$/;
@@ -64,21 +78,32 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
   const [draft, setDraft] = useState<Draft>(() => toDraft(editing));
   const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
   const [formError, setFormError] = useState<string | null>(null);
+  // Set when a create saved the package but a queued code failed; the form then keeps editing that package.
+  const [saved, setSaved] = useState<IGrantPackageDocument | null>(null);
+  const [queuedCodes, setQueuedCodes] = useState<QueuedCode[]>([]);
+  const current = saved ?? editing;
 
   const creditsText = draft.credits.trim();
   const credits = WHOLE.test(creditsText) ? Number(creditsText) : null;
   const totalCap = parseCap(draft.totalCap);
   const dailyCap = parseCap(draft.dailyCap);
-  const valid = draft.name.trim() !== '' && credits !== null && totalCap !== 'invalid' && dailyCap !== 'invalid';
+  // An edit that leaves the day alone keeps the stored instant; only a newly picked day is rounded to its end.
+  const expiryChanged = !current || draft.expiresOn !== expiryDay(current);
+  const expiresAt =
+    !expiryChanged && current?.expiresAt ? new Date(current.expiresAt) : expiresAtFromDay(draft.expiresOn);
+  const expiryInvalid =
+    expiresAt !== null && (Number.isNaN(expiresAt.getTime()) || (!current && isGrantPackageExpired({ expiresAt })));
+  const valid =
+    draft.name.trim() !== '' && credits !== null && totalCap !== 'invalid' && dailyCap !== 'invalid' && !expiryInvalid;
 
   const reasonRequired =
     valid &&
-    (editing
-      ? updateRequiresGrantReason(editing, { credits, totalCap, active: draft.active }, reasonPolicy)
+    (current
+      ? updateRequiresGrantReason(current, { credits, totalCap, active: draft.active, expiresAt }, reasonPolicy)
       : requiresGrantReason({ credits, totalCap }, reasonPolicy));
 
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!valid) throw new Error('Fix the highlighted fields first');
       const body = {
         name: draft.name.trim(),
@@ -86,20 +111,40 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
         totalCap,
         dailyCap,
         active: draft.active,
+        ...(expiryChanged ? { expiresAt } : {}),
         ...(reasonRequired ? { reason: composeAdminReason(reason) } : {}),
       };
-      return editing ? updateGrantPackage(editing.id, body) : createGrantPackage(body);
+      if (current) return { pkg: await updateGrantPackage(current.id, body), failure: null };
+      const pkg = await createGrantPackage(body);
+      for (const [index, code] of queuedCodes.entries()) {
+        try {
+          await createRegInvites({ multiple: 1, unlimitedUse: code.unlimitedUse, grantPackageId: pkg.id });
+        } catch (error) {
+          const missing = queuedCodes.length - index;
+          return {
+            pkg,
+            failure: `Created ${pkg.name}, but ${missing} of ${queuedCodes.length} codes were not created: ${getErrorMessage(error)}. Add them below.`,
+          };
+        }
+      }
+      return { pkg, failure: null };
     },
-    onSuccess: pkg => {
-      toast.success(editing ? `Updated ${pkg.name}` : `Created ${pkg.name}`);
+    onSuccess: ({ pkg, failure }) => {
       onSaved();
+      if (failure) {
+        setSaved(pkg);
+        setQueuedCodes([]);
+        setFormError(failure);
+        return;
+      }
+      toast.success(current ? `Updated ${pkg.name}` : `Created ${pkg.name}`);
       onClose();
     },
     onError: (error: unknown) => setFormError(getErrorMessage(error)),
   });
 
   const blocked = !valid
-    ? 'Fill in a name, credits and valid caps.'
+    ? 'Fill in a name, credits, valid caps and a future expiry date.'
     : reasonRequired && !isAdminReasonComplete(reason)
       ? ADMIN_REASON_HINT
       : null;
@@ -109,7 +154,7 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
     <AdminDialog
       open={open}
       onClose={onClose}
-      title={editing ? 'Edit grant package' : 'Create grant package'}
+      title={current ? 'Edit grant package' : 'Create grant package'}
       width={520}
       data-testid="grant-package-form"
     >
@@ -160,7 +205,19 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
             </FormControl>
           </Stack>
           <FormHelperText>Leave a cap empty for no limit. Daily caps reset at midnight UTC.</FormHelperText>
-          {editing && (
+          <FormControl error={expiryInvalid}>
+            <FormLabel>Expires on</FormLabel>
+            <Input
+              type="date"
+              value={draft.expiresOn}
+              onChange={e => set({ expiresOn: e.target.value })}
+              slotProps={{ input: { 'data-testid': 'grant-package-expires-input' } }}
+            />
+            <FormHelperText>
+              Redeemable through the end of this day (UTC). Leave empty and the package never expires.
+            </FormHelperText>
+          </FormControl>
+          {current && (
             <FormControl orientation="horizontal" sx={{ gap: 1 }}>
               <Switch
                 checked={draft.active}
@@ -183,6 +240,7 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
               />
             </>
           )}
+          <GrantPackageCodesSection pkg={current} queued={queuedCodes} onQueuedChange={setQueuedCodes} />
           {blocked && <FormHelperText data-testid="grant-package-blocked-hint">{blocked}</FormHelperText>}
         </Stack>
       </DialogContent>
@@ -193,7 +251,7 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
           disabled={blocked !== null}
           data-testid="grant-package-save-btn"
         >
-          {editing ? 'Save package' : 'Create package'}
+          {current ? 'Save package' : 'Create package'}
         </Button>
         <Button variant="plain" color="neutral" onClick={onClose} data-testid="grant-package-cancel-btn">
           Cancel

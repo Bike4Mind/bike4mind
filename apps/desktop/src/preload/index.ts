@@ -516,6 +516,8 @@ const api: DesktopApi = {
     refresh: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prRefresh, sessionId),
     setOption: (sessionId: string, option: PrOption, enabled: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.prSetOption, sessionId, option, enabled),
+    getAutoFixAttempts: () => ipcRenderer.invoke(IPC_CHANNELS.prGetAutoFixAttempts),
+    setAutoFixAttempts: (attempts: number) => ipcRenderer.invoke(IPC_CHANNELS.prSetAutoFixAttempts, attempts),
     onStateChanged: listener => {
       const handler = (_event: unknown, state: PrBarState) => listener(state);
       ipcRenderer.on(IPC_CHANNELS.prStateChanged, handler);

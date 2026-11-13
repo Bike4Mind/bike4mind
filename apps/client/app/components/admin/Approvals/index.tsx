@@ -203,6 +203,7 @@ const Approvals: React.FC = () => {
     {
       id: 'summary',
       label: 'Request',
+      wrap: true,
       render: row => (
         <Stack spacing={0.25}>
           <Typography level="body-sm" fontWeight={500}>
@@ -360,6 +361,8 @@ const Approvals: React.FC = () => {
         }
         rowTestId={row => `admin-approval-row-${row.id}`}
         rowActions={rowActions}
+        // Details, Approve and Reject (or Withdraw) are text buttons on pending rows.
+        actionsWidth="17rem"
         pagination={false}
       />
       {approvals.hasNextPage && (

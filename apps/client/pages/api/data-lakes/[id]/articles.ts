@@ -20,6 +20,7 @@ import { adminBypassLakeIds } from '@bike4mind/server-utils/dataLakes/index';
 import {
   dataLakeArticleListResponseSchema,
   getFileMembershipArm,
+  readableGroupIds,
   type DataLakeMembershipArm,
   type IFabFileDocument,
 } from '@bike4mind/common';
@@ -138,7 +139,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         // what keeps buildOwnershipConditions' restrictToDataLake-with-no-lake-arm throw unreachable.
         lakeMemberships: [lakeMembership],
         includeShared: true,
-        userGroups: req.user.groups ?? [],
+        userGroups: readableGroupIds(req.user),
         // Single-lake browser: only this lake's files.
         restrictToDataLake: true,
         ...(uncategorizedOnly ? { lacksContentPrefixTags: [dataLake.fileTagPrefix] } : {}),

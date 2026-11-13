@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { IOrgApiKeySecretResponse, IOrgApiKeyView, IOrgMemberApiKeyView } from '@bike4mind/common';
+import type { IOrgApiKeySecretResponse, IOrgApiKeyView, IOrgMemberApiKeyView, OrgApiKeyGrant } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 
@@ -28,7 +28,30 @@ export function useOrgApiKeys(organizationId: string) {
   });
 }
 
-export type CreateOrgApiKeyRequest = { name: string; scopes: string[]; expiresAt?: string };
+export type CreateOrgApiKeyRequest = { name: string; scopes: string[]; grants: OrgApiKeyGrant[]; expiresAt?: string };
+
+/** What an admin may pick for an org key (pages/api/organizations/[id]/api-keys/options). */
+export type OrgApiKeyOptions = { scopes: string[]; groups: { id: string; name: string }[] };
+
+export function useOrgApiKeyOptions(organizationId: string, enabled = true) {
+  return useQuery<OrgApiKeyOptions>({
+    queryKey: [...orgApiKeysQueryKey(organizationId), 'options'],
+    queryFn: async () => (await api.get(`/api/organizations/${organizationId}/api-keys/options`)).data,
+    enabled,
+  });
+}
+
+export type UpdateOrgApiKeyRequest = { keyId: string; scopes: string[]; grants: OrgApiKeyGrant[] };
+
+export function useUpdateOrgApiKey(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<IOrgApiKeyView, unknown, UpdateOrgApiKeyRequest>({
+    mutationFn: async ({ keyId, ...body }) =>
+      (await api.patch(`/api/organizations/${organizationId}/api-keys/${keyId}`, body)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: orgApiKeysQueryKey(organizationId) }),
+    onError: error => toast.error(errorMessage(error, 'Failed to update the API key')),
+  });
+}
 
 export function useCreateOrgApiKey(organizationId: string) {
   const queryClient = useQueryClient();

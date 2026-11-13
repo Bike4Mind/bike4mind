@@ -19,7 +19,23 @@ describe('canOpenAdminTab', () => {
   it('keeps unmapped tabs full-admin only, whatever the delegate holds', () => {
     const everything = delegate('support:read', 'settings:manage', 'users:moderate', 'credits:adjust');
     expect(canOpenAdminTab(everything, AdminTab.Users)).toBe(false);
-    expect(canOpenAdminTab(everything, AdminTab.WhatsNewModals)).toBe(false);
+    expect(canOpenAdminTab(everything, AdminTab.LLMDashboard)).toBe(false);
+    expect(canOpenAdminTab(everything, AdminTab.SecretsRotation)).toBe(false);
+    expect(canOpenAdminTab(everything, AdminTab.Tutorials)).toBe(false);
+  });
+
+  it('opens the platform settings tabs to a settings manager and not to a support reader', () => {
+    const settingsTabs = [
+      AdminTab.AdminSettings,
+      AdminTab.SystemPrompts,
+      AdminTab.SystemSecrets,
+      AdminTab.ReleaseNotes,
+      AdminTab.WhatsNewModals,
+    ];
+    for (const tab of settingsTabs) {
+      expect(canOpenAdminTab(delegate('settings:manage'), tab)).toBe(true);
+      expect(canOpenAdminTab(delegate('support:read'), tab)).toBe(false);
+    }
   });
 
   it('refuses a mapped tab to a delegate without its permission', () => {

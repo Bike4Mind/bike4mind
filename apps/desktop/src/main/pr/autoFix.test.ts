@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PrBinding, PrChangeRequest, PrReviewThread } from '@shared/pullRequest';
-import { MAX_AUTO_FIX_ATTEMPTS, autoFixRefusal, autoFixToolRefusal, planAutoFix } from './autoFix';
+import { DEFAULT_AUTO_FIX_ATTEMPTS } from '@shared/autoFixSetting';
+import { autoFixRefusal, autoFixToolRefusal, planAutoFix } from './autoFix';
 import { REF, check, snapshot } from './prTestSupport';
 
 const binding: PrBinding = {
@@ -8,7 +9,7 @@ const binding: PrBinding = {
   source: 'shell',
   boundAt: '',
   autoFix: true,
-  autoFixMax: MAX_AUTO_FIX_ATTEMPTS,
+  autoFixMax: DEFAULT_AUTO_FIX_ATTEMPTS,
   lastState: 'OPEN',
 };
 
@@ -47,7 +48,7 @@ describe('planAutoFix', () => {
     if (plan.kind !== 'start') return;
     expect(plan.fingerprints).toEqual(['ci:sha-bad']);
     expect(plan.summary).toBe('1 failing check on #611');
-    expect(plan.prompt).toContain(`Attempt 1 of ${MAX_AUTO_FIX_ATTEMPTS}`);
+    expect(plan.prompt).toContain(`Attempt 1 of ${DEFAULT_AUTO_FIX_ATTEMPTS}`);
     expect(plan.prompt).toContain('Never force-push');
   });
 
@@ -70,7 +71,7 @@ describe('planAutoFix', () => {
   });
 
   it('gives up after the attempt limit', () => {
-    expect(planAutoFix({ ...binding, autoFixAttempts: MAX_AUTO_FIX_ATTEMPTS }, failing, false)).toEqual({
+    expect(planAutoFix({ ...binding, autoFixAttempts: DEFAULT_AUTO_FIX_ATTEMPTS }, failing, false)).toEqual({
       kind: 'exhausted',
     });
   });
@@ -187,7 +188,7 @@ describe('planAutoFix on merge conflicts', () => {
   });
 
   it('counts against the attempt limit', () => {
-    expect(planAutoFix({ ...binding, autoFixAttempts: MAX_AUTO_FIX_ATTEMPTS }, conflicting, false)).toEqual({
+    expect(planAutoFix({ ...binding, autoFixAttempts: DEFAULT_AUTO_FIX_ATTEMPTS }, conflicting, false)).toEqual({
       kind: 'exhausted',
     });
   });
