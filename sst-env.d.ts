@@ -48,11 +48,6 @@ declare module "sst" {
       "type": "sst.aws.Function"
       "url": string
     }
-    "CliWsCompletionHandler": {
-      "name": string
-      "type": "sst.aws.Function"
-      "url": string
-    }
     "DataSyncer": {
       "name": string
       "type": "sst.aws.Function"

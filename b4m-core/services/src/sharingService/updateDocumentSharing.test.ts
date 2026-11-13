@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { NotFoundError } from '@bike4mind/utils';
 import { updateDocumentSharing } from './updateDocumentSharing';
 
+type Adapters = Parameters<typeof updateDocumentSharing>[2];
+
 describe('sharingService - updateDocumentSharing', () => {
   const user = { id: 'user-1' } as any;
 
@@ -10,6 +12,7 @@ describe('sharingService - updateDocumentSharing', () => {
   let db: {
     sessions: { shareable: { findShareAccessById: Mock }; update: Mock };
     fabFiles: { shareable: { findShareAccessById: Mock }; update: Mock };
+    organizations: { findById: Mock };
   };
 
   beforeEach(() => {
@@ -18,6 +21,7 @@ describe('sharingService - updateDocumentSharing', () => {
     db = {
       sessions: { shareable: { findShareAccessById: vi.fn() }, update: vi.fn() },
       fabFiles: { shareable: { findShareAccessById: vi.fn() }, update: vi.fn() },
+      organizations: { findById: vi.fn() },
     };
   });
 
@@ -137,5 +141,59 @@ describe('sharingService - updateDocumentSharing', () => {
       } as any)
     ).rejects.toThrow(NotFoundError);
     expect(db.sessions.update).not.toHaveBeenCalled();
+  });
+
+  describe('organization sharing policy', () => {
+    const lockedOrg = {
+      userId: 'owner',
+      users: [],
+      sharingPolicy: { allowPublicLinks: false, allowExternalSharing: true, allowedDomains: [] },
+    };
+
+    it('refuses making an org-bound file global when the org disallows public links', async () => {
+      db.fabFiles.shareable.findShareAccessById.mockResolvedValue({ id: 'f1', organizationId: 'org-1' });
+      db.organizations.findById.mockResolvedValue(lockedOrg);
+
+      await expect(
+        updateDocumentSharing(user, { id: 'f1', type: 'files', isGlobalRead: true, isGlobalWrite: false }, {
+          db,
+          storage,
+        } as unknown as Adapters)
+      ).rejects.toThrow('public links');
+      expect(db.organizations.findById).toHaveBeenCalledWith('org-1');
+      expect(db.fabFiles.update).not.toHaveBeenCalled();
+    });
+
+    it('lets an org-bound file be turned private, or stay global, without a policy check', async () => {
+      db.fabFiles.shareable.findShareAccessById.mockResolvedValue({
+        id: 'f1',
+        organizationId: 'org-1',
+        isGlobalRead: true,
+      });
+
+      await updateDocumentSharing(user, { id: 'f1', type: 'files', isGlobalRead: true, isGlobalWrite: false }, {
+        db,
+        storage,
+      } as unknown as Adapters);
+      await updateDocumentSharing(user, { id: 'f1', type: 'files', isGlobalRead: false, isGlobalWrite: false }, {
+        db,
+        storage,
+      } as unknown as Adapters);
+
+      expect(db.organizations.findById).not.toHaveBeenCalled();
+      expect(db.fabFiles.update).toHaveBeenCalledTimes(2);
+    });
+
+    it('makes a personal file global without consulting any organization', async () => {
+      db.fabFiles.shareable.findShareAccessById.mockResolvedValue({ id: 'f1' });
+
+      await updateDocumentSharing(user, { id: 'f1', type: 'files', isGlobalRead: true, isGlobalWrite: true }, {
+        db,
+        storage,
+      } as unknown as Adapters);
+
+      expect(db.organizations.findById).not.toHaveBeenCalled();
+      expect(db.fabFiles.update).toHaveBeenCalledWith({ id: 'f1', isGlobalRead: true, isGlobalWrite: true });
+    });
   });
 });

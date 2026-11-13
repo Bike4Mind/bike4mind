@@ -22,11 +22,13 @@ import {
   isOrgMember,
   MAX_STORAGE_LIMIT_MB,
   toSafeOrganization,
+  OrganizationSharingPolicySchema,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Request } from 'express';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { recordOrganizationAuditEvent } from '@bike4mind/server-utils/utils/organizationAudit';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 const updateOrgBodySchema = z.object({
@@ -40,6 +42,7 @@ const updateOrgBodySchema = z.object({
     .optional(),
   systemPrompt: z.string().max(10000).optional(),
   redactPushContent: z.boolean().optional(),
+  sharingPolicy: OrganizationSharingPolicySchema.optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
   loopsGreenCiMergeDisabled: z.boolean().optional(),
@@ -146,10 +149,19 @@ const handler = baseApi()
         Object.values(profile).some(value => value !== undefined);
       let updatedOrganization = !profileSent
         ? null
-        : req.user!.isAdmin && currentCredits !== undefined
+        : profile.sharingPolicy !== undefined || (req.user!.isAdmin && currentCredits !== undefined)
           ? await withTransaction(async () => {
-              await applyAdminCreditEdit(req, orgId, currentCredits);
-              return updateProfile();
+              if (req.user!.isAdmin && currentCredits !== undefined)
+                await applyAdminCreditEdit(req, orgId, currentCredits);
+              const updated = await updateProfile();
+              if (profile.sharingPolicy !== undefined) {
+                await recordOrganizationAuditEvent({
+                  organizationId: orgId,
+                  actorUserId: req.user!.impersonatedBy ?? req.user!.id,
+                  action: 'policy.updated',
+                });
+              }
+              return updated;
             })
           : await updateProfile();
       if (loopsGreenCiMergeDisabled !== undefined) {

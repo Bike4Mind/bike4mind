@@ -82,7 +82,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { id } = req.query;
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      db: { ...gateDeps.db, settings: adminSettingsRepository },
+      logger: req.logger,
     });
     // `failedCount` distinguishes "rebuild finished" from "some files gave up": a failed re-chunk
     // (error set, no chunks) is invisible to detection, so the badge alone would read it as done.

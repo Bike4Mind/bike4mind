@@ -606,6 +606,7 @@ describe('role routing and task runtime compatibility', () => {
     await drain([parent.id, child.id], { parentId: parent.id, childId: child.id });
     await service.actOnTask(parent.id, child.id, { kind: 'cancel', reason: 'Closing out: the work is finished.' });
     await drain([parent.id, child.id]);
+    await service.setSessionOrchestrate(parent.id, true);
     const canceled = await store.get(child.id);
     if (canceled?.workerTask?.state.status !== 'canceled') throw new Error('Task was not canceled');
     return { parent, child: canceled };

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+const audit = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({ recordOrganizationAuditEvent: audit }));
 
 /**
  * GET/PUT /api/organizations/[id] are access-gated to org members already; this test
@@ -137,6 +139,25 @@ describe('GET /api/organizations/[id] - safe serialization', () => {
 
 describe('PUT /api/organizations/[id] - URL id wins', () => {
   beforeEach(() => update.mockClear());
+
+  it('awaits policy audit persistence inside the transaction', async () => {
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    req.body = { sharingPolicy: { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: [] } };
+    await mockRefs.putHandler!(req, res);
+    expect(audit).toHaveBeenCalledWith({ organizationId: 'org1', actorUserId: 'owner1', action: 'policy.updated' });
+    expect(credits.withTransaction).toHaveBeenCalled();
+    audit.mockRejectedValueOnce(new Error('audit unavailable'));
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow('audit unavailable');
+  });
+
+  it('attributes policy audit to the real impersonating administrator', async () => {
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    Object.assign(req.user, { impersonatedBy: 'real-admin' });
+    req.body = { sharingPolicy: { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: [] } };
+    await mockRefs.putHandler!(req, res);
+    expect(audit).toHaveBeenCalledWith({ organizationId: 'org1', actorUserId: 'real-admin', action: 'policy.updated' });
+    expect(update.mock.calls.at(-1)?.[0]).toMatchObject({ id: 'owner1' });
+  });
 
   it('takes the org id from the URL, not from any id field in the body', async () => {
     const { req, res } = mocks({ id: 'caller', isAdmin: true }, 'PUT');

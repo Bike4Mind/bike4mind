@@ -516,7 +516,14 @@ jobs:
           if [ "$MAC_RELEASE_MODE" = adhoc ]; then
             printf '\nmacOS beta: ad-hoc signed, not Developer ID signed or notarized. The install command above avoids the Gatekeeper prompt; a browser-downloaded dmg needs Privacy & Security > Open Anyway. macOS in-app updates are disabled in this build; rerun the install command to update. Linux updates are unchanged.\n' >> notes/desktop-release-notes.md
           elif [ "$MAC_RELEASE_MODE" = selfsigned ]; then
-            printf '\nmacOS beta: signed with a self-signed certificate, not Developer ID signed or notarized. The install command above is the way to install it; a browser-downloaded dmg needs Privacy & Security > Open Anyway. macOS in-app updates are enabled from this build onward; an earlier ad-hoc build needs the install command once to reach it.\n' >> notes/desktop-release-notes.md
+            # The quoted Settings sentence is the one UpdateSettings.tsx shows on a build without updates.
+            printf '%s\n' '' \
+              '## macOS: in-app updates' '' \
+              'This build updates itself: when a new version is out, the app shows an Update button, downloads it and restarts into it.' '' \
+              'Already have Bike4Mind on this Mac? Open Settings in the app. If it says "This build does not check for updates.", it was installed before in-app updates and cannot switch over by itself. Run the install command above once more. Your chats and settings are kept, and macOS may ask for your login password once on the first launch so the app can read its saved sign-in.' '' \
+              'After that one reinstall the app updates itself and the install command is no longer needed.' '' \
+              'macOS beta: signed with a self-signed certificate, not Developer ID signed or notarized. The install command above is the way to install it; a browser-downloaded dmg needs Privacy & Security > Open Anyway. macOS in-app updates are enabled from this build onward.' \
+              >> notes/desktop-release-notes.md
           else
             printf '\nmacOS Developer ID signing and notarization enabled.\n' >> notes/desktop-release-notes.md
           fi
