@@ -156,6 +156,7 @@ const MFAModal: React.FC<MFAModalProps> = ({
       className="mfa-modal"
       open={open}
       onClose={isEnforced || showSignOut ? undefined : handleClose}
+      slotProps={{ backdrop: { 'data-testid': 'mfa-modal-backdrop' } }}
       sx={{
         display: 'flex',
         alignItems: 'center',

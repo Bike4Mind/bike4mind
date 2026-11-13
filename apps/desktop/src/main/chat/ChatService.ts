@@ -5,6 +5,7 @@ import {
   renderTaskBrief,
   resolveWorkerModel,
   validateWorkerModel,
+  type WorkerLocality,
   spawnOptionsSchema,
   taskActionSchema,
   rolePolicySchema,
@@ -1354,6 +1355,11 @@ export class ChatService {
     return !this.deps.getApiClient() && this.deps.isDeviceLocal?.() === true;
   }
 
+  private workerLocality(localWork: boolean, context: 'local-work' | 'local-parent' = 'local-work'): WorkerLocality {
+    if (this.deviceLocal()) return 'device';
+    return localWork ? context : false;
+  }
+
   /**
    * The base a workspace session is cut from: the picked branch, else the repository's default.
    * Only a repository with nothing to base on is refused.
@@ -1820,8 +1826,9 @@ export class ChatService {
     if (session?.workerSelection) {
       if (this.hasTurnInFlight(sessionId))
         throw new Error('Stop the worker attempt before explicitly changing its model.');
+      // An explicit pick is how local work moves to a hosted model, so only device-local mode blocks it.
       validateWorkerModel(model, (await this.listModels()).models, {
-        localOnly: this.deviceLocal() || isLocalModel(session.model),
+        localOnly: this.workerLocality(false),
         ...session.workerSelection?.requirements,
       });
       const updated = await this.deps.store.setWorkerModel(sessionId, model, scope);
@@ -1996,7 +2003,7 @@ export class ChatService {
       ...policy.allowedOverrides,
       ...policy.escalation.allowedModels,
     ])) {
-      if (model !== 'inherit') validateWorkerModel(model, models, { localOnly: this.deviceLocal() });
+      if (model !== 'inherit') validateWorkerModel(model, models, { localOnly: this.workerLocality(false) });
     }
     if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen settings.');
     return this.deps.store.setRolePolicy(policy);
@@ -2072,7 +2079,7 @@ export class ChatService {
             throw new Error('Model upgrade is outside this run policy. Revise the task or cancel it.');
           nextModel = action.modelId;
           validateWorkerModel(nextModel, (await this.listModels()).models, {
-            localOnly: this.deviceLocal() || isLocalModel(child.model),
+            localOnly: this.workerLocality(isLocalModel(child.model)),
             ...child.workerSelection?.requirements,
           });
           seed = `The user approved this targeted model change. Continue the same task using the existing changes and evidence.\n\n${renderTaskBrief(task.contract)}`;
@@ -2781,7 +2788,7 @@ export class ChatService {
     if (claimed.workerSelection) {
       try {
         validateWorkerModel(claimed.model, (await this.listModels()).models, {
-          localOnly: this.deviceLocal() || isLocalModel(claimed.workerSelection.effectiveModel),
+          localOnly: this.workerLocality(isLocalModel(claimed.workerSelection.effectiveModel)),
           ...claimed.workerSelection.requirements,
         });
       } catch (error) {
@@ -3003,7 +3010,7 @@ export class ChatService {
     if (session.workerSelection) {
       try {
         validateWorkerModel(session.model, (await this.listModels()).models, {
-          localOnly: this.deviceLocal() || isLocalModel(session.model),
+          localOnly: this.workerLocality(isLocalModel(session.model)),
           ...session.workerSelection?.requirements,
         });
       } catch (error) {
@@ -6242,7 +6249,7 @@ export class ChatService {
           const contextWindow = models.find(model => model.id === resolved.effectiveModel)?.contextWindow;
           const briefTokens = Math.ceil((validated.contract ? renderTaskBrief(validated.contract) : seed).length / 3);
           validateWorkerModel(resolved.effectiveModel, models, {
-            localOnly: this.deviceLocal() || isLocalModel(parent.model),
+            localOnly: this.workerLocality(isLocalModel(parent.model), 'local-parent'),
             ...validated.requirements,
             contextTokens:
               validated.requirements?.contextTokens !== undefined
@@ -7160,10 +7167,21 @@ export class ChatService {
     }
 
     // Only the reasons beyond the tool's own: an ask rule, untrusted content, a loop.
-    const askedBecause =
-      [askedByRule, tainted ? untrustedReason(tainted) : null, stuck ? LOOP_ASK_REASON : null]
-        .filter((reason): reason is string => !!reason)
-        .join(' ') || undefined;
+    const askedReasons = [
+      askedByRule,
+      tainted ? untrustedReason(tainted) : null,
+      stuck ? LOOP_ASK_REASON : null,
+    ].filter((reason): reason is string => !!reason);
+    const askedBecause = askedReasons.join(' ') || undefined;
+    // The tool's reasons plus this gate's own, so no reason to ask leaves the call looking quick.
+    // 'ask' sets no `tainted`, yet a sending call over untrusted content still needs its reason here.
+    const untrusted = directories.untrusted;
+    const untrustedInAsk = !tainted && untrusted && taintedParts() ? untrustedReason(untrusted) : null;
+    const approvalReasons = [
+      ...(asked.prompt.reasons ?? []),
+      ...askedReasons,
+      ...(untrustedInAsk ? [untrustedInAsk] : []),
+    ];
     let requestedAt: string | undefined;
     // What answered this card when another card's "always" or a newly saved rule covered it.
     let coveredBy: ChatApprovalDecidedBy | undefined;
@@ -7196,11 +7214,13 @@ export class ChatService {
             status: 'awaiting-approval',
             approvalId,
             approvalDetail: asked.prompt.detail,
+            ...(approvalReasons.length > 0 ? { approvalReasons } : {}),
             ...(asked.parts ? { approvalParts: asked.parts } : {}),
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
             ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
             ...(prompt.allowOnce ? { approvalOnceOnly: true } : {}),
+            ...(asked.prompt.askInFull || spendsCredits(call.name) ? { approvalInAppOnly: true } : {}),
             ...(alwaysScope
               ? {
                   approvalAlways: alwaysScope.shown,

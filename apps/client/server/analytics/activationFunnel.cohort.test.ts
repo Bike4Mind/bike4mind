@@ -10,7 +10,12 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({ Subscription: {} }));
 
-import { classifyFunnelCohort, FUNNEL_COHORT_MAX, funnelStepUserIds, paidWindowOpen } from './activationFunnel';
+import {
+  classifyFunnelCohort,
+  FUNNEL_COHORT_MAX,
+  funnelStepUserIds,
+  paidWindowOpen,
+} from '@bike4mind/server-utils/analytics/activationFunnel';
 
 const NOW = new Date('2026-11-04T12:00:00.000Z');
 const window = { start: new Date('2026-10-01T00:00:00.000Z'), end: new Date('2026-11-05T00:00:00.000Z') };

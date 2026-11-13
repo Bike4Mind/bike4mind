@@ -20,7 +20,7 @@ import {
   MISSION_MODEL_REFUSED_BLOCKER,
   MISSION_NEEDS_CREDITS_BLOCKER,
   MissionModelRefusedError,
-} from '@server/deepAgent/wakeMetering';
+} from '@bike4mind/server-utils/deepAgent/wakeMetering';
 
 const NEUTRAL: DriveVector = {
   curiosity: 0.5,

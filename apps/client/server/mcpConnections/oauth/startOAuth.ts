@@ -11,7 +11,7 @@ import { decryptToken, encryptToken } from '@bike4mind/server-utils/security/tok
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { assertPolicyAllows, audit, userOwner, type ConnectionActor } from '../connectionService';
 import type { CustomMcpContext } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
-import { cleanScope } from '../invokeRemoteMcp';
+import { cleanScope } from '@bike4mind/server-utils/mcpConnections/invokeRemoteMcp';
 import {
   loadConnectionClient,
   resolveOAuthClient,

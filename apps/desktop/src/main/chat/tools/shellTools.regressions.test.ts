@@ -8,6 +8,7 @@ import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
+import { runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import { gitRefusesImplicitBare } from './shellWrites';
 import type { ToolContext } from './types';
@@ -410,7 +411,7 @@ describe('shell approval in a project with a large node_modules', () => {
     ).catch(() => null);
     return {
       auto: !prompt.askInAuto && (prompt.always?.directories ?? []).length === 0,
-      full: !prompt.askInFull,
+      full: runsCheckedInFull(prompt),
       allowed: subject !== null && rules.evaluate(subject).decision === 'allow',
     };
   };
@@ -1192,6 +1193,13 @@ describe('shell approval in a project with a large node_modules', () => {
   ])('runs %s unasked, as git starts no program the script names there', async command => {
     expect(await judge(command)).toMatchObject({ auto: true, full: true });
   });
+
+  it.each(['git show --format= HEAD', 'git log --pretty= -1', 'git show --format= --remerge-diff HEAD'])(
+    'runs %s unasked, as an empty option value names no place',
+    async command => {
+      expect(await judge(command)).toMatchObject({ auto: true, full: true });
+    }
+  );
 
   it('asks in every mode for a rebase continued with an editor that runs nothing', async () => {
     expect(await judge('GIT_EDITOR=true git rebase --continue')).toMatchObject(asks);

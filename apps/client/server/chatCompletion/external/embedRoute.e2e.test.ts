@@ -107,7 +107,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 const auth = vi.hoisted(() => ({
   info: {} as Record<string, unknown>,
 }));
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyEmbedApiKey: vi.fn(async () => auth.info),
   verifyEmbedKeyById: vi.fn(async () => auth.info),
 }));

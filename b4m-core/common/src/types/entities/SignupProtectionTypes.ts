@@ -43,7 +43,7 @@ export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_POLICY_VERSION = 2;
 export const SIGNUP_DOMAIN_HOLD_JUDGMENTS = ['abuse', 'legitimate', 'insufficient_evidence'] as const;
 export type SignupDomainHoldJudgment = (typeof SIGNUP_DOMAIN_HOLD_JUDGMENTS)[number];
 /**
- * PlatformDecisionFailureCode (apps/client/server/decisions/platformDecision.ts) plus `summary_timeout`;
+ * PlatformDecisionFailureCode (packages/server-utils/src/decisions/platformDecision.ts) plus `summary_timeout`;
  * must stay in sync with it.
  */
 export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES = [

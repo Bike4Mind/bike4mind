@@ -5,6 +5,8 @@ const h = vi.hoisted(() => ({
   listByLake: vi.fn(),
   countByLake: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
+  record: vi.fn(),
+  adminBypassLakeIds: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -19,10 +21,21 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => unknown) => next(),
 }));
-vi.mock('@bike4mind/services', () => ({
-  dataLakeService: { assertLakeWriteAccess: h.assertLakeWriteAccess },
+vi.mock('@bike4mind/services', async () => ({
+  dataLakeService: {
+    assertLakeWriteAccess: h.assertLakeWriteAccess,
+    recordLakeAccessEvent: (
+      await import('../../../../../../../b4m-core/services/src/dataLakeService/recordLakeAccessEvent')
+    ).recordLakeAccessEvent,
+  },
 }));
+vi.mock('@bike4mind/server-utils/dataLakes/index', () => ({ adminBypassLakeIds: h.adminBypassLakeIds }));
 vi.mock('@bike4mind/database', () => ({
+  lakeAccessEventRepository: { record: h.record },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   lakeSkippedFileRepository: { listByLake: h.listByLake, countByLake: h.countByLake },
@@ -30,12 +43,22 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../skipped-files';
+import { describeLakeReadAudit } from '../../__tests__/lakeReadAuditCases';
 
 const route = handler as unknown as (req: unknown, res: unknown) => Promise<void>;
 
-const invoke = async (query: Record<string, unknown> = {}) => {
+const invoke = async (query: Record<string, unknown> = {}, reqExtra: Record<string, unknown> = {}) => {
   const json = vi.fn();
-  await route({ method: 'GET', query: { id: 'lake-slug', ...query }, user: { id: 'u1' } }, { json });
+  await route(
+    {
+      method: 'GET',
+      query: { id: 'lake-slug', ...query },
+      user: { id: 'u1' },
+      logger: { warn: vi.fn(), error: vi.fn() },
+      ...reqExtra,
+    },
+    { json }
+  );
   return json.mock.calls[0]?.[0];
 };
 
@@ -58,6 +81,8 @@ beforeEach(() => {
   h.assertLakeWriteAccess.mockResolvedValue({ id: 'lakeDoc1' });
   h.listByLake.mockResolvedValue([]);
   h.countByLake.mockResolvedValue(0);
+  h.record.mockResolvedValue(undefined);
+  h.adminBypassLakeIds.mockResolvedValue([]);
 });
 
 describe('GET /api/data-lakes/[id]/skipped-files', () => {
@@ -111,5 +136,35 @@ describe('GET /api/data-lakes/[id]/skipped-files', () => {
   it('rejects an out-of-range or repeated limit', async () => {
     await expect(invoke({ limit: '500' })).rejects.toThrow();
     await expect(invoke({ limit: ['10', '20'] })).rejects.toThrow();
+  });
+});
+
+describeLakeReadAudit({
+  surface: 'data-lake-skipped-files',
+  lakeId: 'lakeDoc1',
+  record: h.record,
+  bypass: h.adminBypassLakeIds,
+  run: async () => {
+    h.listByLake.mockResolvedValue([row('a')]);
+    h.countByLake.mockResolvedValue(1);
+    return (await invoke()) !== undefined;
+  },
+  runEmpty: async () => (await invoke()) !== undefined,
+});
+
+describe('skipped-files audit principal', () => {
+  it('marks an admin-scope API-key caller and records the key as the principal', async () => {
+    h.adminBypassLakeIds.mockResolvedValue(['lakeDoc1']);
+    h.listByLake.mockResolvedValue([row('a')]);
+    h.countByLake.mockResolvedValue(1);
+
+    await invoke({}, { user: { id: 'u1', isAdmin: true, organizationId: 'org1' }, apiKeyInfo: { keyId: 'key1' } });
+
+    expect(h.record.mock.calls[0][0]).toMatchObject({
+      principalKind: 'apiKey',
+      principalId: 'key1',
+      onBehalfOfUserId: 'u1',
+      adminBypassLakeIds: ['lakeDoc1'],
+    });
   });
 });

@@ -7,6 +7,7 @@ import SwiftUI
 struct MediaDetailView: View {
   @State private var model: MediaDetailViewModel
   @State private var isEditing = false
+  @State private var turnInto: TurnIntoRequest?
   @Environment(\.studioEdit) private var studioEdit
 
   init(item: MediaItem, api: any MediaAPI) {
@@ -32,6 +33,16 @@ struct MediaDetailView: View {
           .accessibilityIdentifier("media-edit-btn")
         }
       }
+      if model.state == .ready, studioEdit != nil, !TurnInto.actions(for: model.item).isEmpty {
+        ToolbarItem(placement: .topBarTrailing) {
+          Menu {
+            TurnIntoButtons(item: model.item) { turnInto = $0 }
+          } label: {
+            Label("Turn into...", systemImage: "wand.and.stars")
+          }
+          .accessibilityIdentifier("media-turn-into-btn")
+        }
+      }
       if let url = model.item.url {
         ToolbarItem(placement: .topBarTrailing) {
           // The bytes are not on disk (AsyncImage and AVPlayer stream the signed URL), so the link is what is shared.
@@ -41,6 +52,7 @@ struct MediaDetailView: View {
       }
     }
     .task { await model.prepare() }
+    .turnIntoFlow(request: $turnInto, context: studioEdit)
     .fullScreenCover(isPresented: $isEditing) {
       if let studioEdit {
         RegionEditView(item: model.item, api: studioEdit.api, media: studioEdit.media, tracker: studioEdit.tracker)

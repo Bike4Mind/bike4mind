@@ -223,10 +223,11 @@ export const updateSingleQueryDataFast = <
           };
         }
       } else if ('data' in currentData) {
+        const paginated = currentData as PaginatedResponse<T>;
         if (type === 'delete') {
           return {
-            data: currentData.data.filter(item => item.id !== data.id),
-            meta: currentData.meta,
+            ...paginated,
+            data: paginated.data.filter(item => item.id !== data.id),
           };
         } else {
           const itemIndex = currentData.data.findIndex(item => item.id === data.id);
@@ -244,8 +245,8 @@ export const updateSingleQueryDataFast = <
           }
 
           return {
+            ...paginated,
             data: updatedData,
-            meta: currentData.meta,
           };
         }
       } else if (Array.isArray(currentData)) {

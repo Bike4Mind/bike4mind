@@ -98,6 +98,43 @@ For agent execution, set `agentExecutor.enabled: true`, supply the matching sour
 - Roll back image/config-only releases with `helm history` and `helm rollback b4m <revision> -n bike4mind-eval --wait --timeout 15m`. Rollback does not reverse database migrations, bucket changes or Secret rotation. Keep compatible previous images and a [backup](#backup-and-restore) before upgrades that change persisted data.
 - `helm uninstall` leaves the three PVCs because of their retention annotations. Reinstallation requires explicit ownership/adoption of retained claims; do not assume a clean install will adopt them. Delete claims only after independently deciding their data can be discarded.
 
+### Pod roll reconnect check
+
+`apps/client/e2e/selfhost-pod-roll.spec.ts` drives one chat in a browser, replaces the app pod and then the WebSocket gateway pod, and requires the same page, never reloaded, to be back on a working realtime socket and to get a streamed reply after each. It then reads the chat back from the API and loads it cold. It sends three chat prompts, so the release needs a working model provider for the default chat model. It is not part of the default E2E suite or CI: it interrupts the release it runs against, so run it only against an evaluation release.
+
+Settings (environment, or `apps/client/.env.e2e`):
+
+| Variable | Meaning |
+|---|---|
+| `API_URL` | Browser-facing app origin, e.g. `http://localhost:3000`. |
+| `E2E_CLEANUP_SECRET` | The release's `E2E_CLEANUP_SECRET` runtime value. The check mints its own throwaway user through `/api/test/create-user`, which is off by default: the release must run with `E2E_ENDPOINTS_ENABLED` set to `true` (chart `config`) and `E2E_CLEANUP_SECRET` in the runtime Secret. Enable it on an evaluation release only. |
+| `SELFHOST_ROLL_APP_CMD` | Shell command that replaces the app pod and returns only when the replacement serves requests at `API_URL`. |
+| `SELFHOST_ROLL_WS_CMD` | The same for the gateway pod and the browser-facing WebSocket URL. |
+| `SELFHOST_ROLL_TIMEOUT_MS` | Optional budget for one roll command. Default 300000. |
+| `SELFHOST_RECONNECT_TIMEOUT_MS` | Optional budget for the client to be back on a working socket. Default 180000. |
+
+A `kubectl port-forward` ends when the pod behind it is replaced, so with the loopback forwards from the install steps each roll command must leave a forward running again (with its output redirected, so it does not hold the test run open), or the forwards must run in a loop (`while true; do kubectl port-forward ...; sleep 1; done`). With an ingress the rollout commands are enough:
+
+```sh
+cd apps/client
+export API_URL=http://localhost:3000
+export SELFHOST_ROLL_APP_CMD='kubectl -n bike4mind-eval rollout restart deployment/b4m-app && kubectl -n bike4mind-eval rollout status deployment/b4m-app --timeout=4m'
+export SELFHOST_ROLL_WS_CMD='kubectl -n bike4mind-eval rollout restart deployment/b4m-ws && kubectl -n bike4mind-eval rollout status deployment/b4m-ws --timeout=4m'
+pnpm exec playwright test --config e2e/selfhost-pod-roll.config.ts
+```
+
+The gateway holds the browser socket, so an app roll need not drop it: after the app roll the check requires a socket that carries traffic, reused or reopened. After the gateway roll it requires every earlier socket closed and a new one opened and answered. The throwaway user is left in place; the `/api/test/cleanup` sweep reclaims it.
+
+To show the check can fail, run it once with a gateway that never returns, then restore the release:
+
+```sh
+SELFHOST_ROLL_WS_CMD='kubectl -n bike4mind-eval scale deployment/b4m-ws --replicas=0' \
+  SELFHOST_RECONNECT_TIMEOUT_MS=60000 pnpm exec playwright test --config e2e/selfhost-pod-roll.config.ts
+kubectl -n bike4mind-eval scale deployment/b4m-ws --replicas=1
+```
+
+That run must fail at the gateway step with "the client did not reconnect after the gateway pod rolled".
+
 ## Upload readability check
 
 A Playwright check signs in, uploads a file through the browser, and compares every byte the browser reads back with what was uploaded: straight after the upload, after a page reload, and after the app pod is replaced. It also requires two reads to fail: the signed URL re-pointed at another object key, and a key that has no object.

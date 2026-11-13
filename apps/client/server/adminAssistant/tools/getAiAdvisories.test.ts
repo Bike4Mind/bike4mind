@@ -6,7 +6,7 @@ vi.mock('@bike4mind/server-utils/admin/aiAdvisory/aiAbuseAdvisories', () => ({
   listAiAbuseAdvisories: (...args: unknown[]) => listAiAbuseAdvisories(...args),
 }));
 const loadAbuseAssessmentSettings = vi.fn();
-vi.mock('@server/security/abuseAssessment/abuseAssessment', () => ({
+vi.mock('@bike4mind/server-utils/security/abuseAssessment/abuseAssessment', () => ({
   loadAbuseAssessmentSettings: (...args: unknown[]) => loadAbuseAssessmentSettings(...args),
 }));
 
