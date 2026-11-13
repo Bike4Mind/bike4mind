@@ -21,7 +21,7 @@ import { CreditHolderType, ICreditHolderMethods, assignConsumptionFIFO, computeC
 import { creditService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
-import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/orgAlertDispatcher';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 
 // Expiring lots debit org pools, which can cross an org's alert thresholds.
 registerOrgAlertObserver();

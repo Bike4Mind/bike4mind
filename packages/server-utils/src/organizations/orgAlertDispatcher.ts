@@ -14,7 +14,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { setOrgEventObserver, type OrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
+import type { OrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
 import { EmailEvents } from '../utils/eventBus';
 import { buildOrgAlertEmailBody, toOrgAlertSubject } from '../utils/mailer/orgAlertEmails';
 
@@ -174,18 +174,5 @@ export async function handleOrgEvent(event: OrgEvent): Promise<void> {
       return;
     case 'credit_debit':
       return;
-  }
-}
-
-let registered = false;
-
-/** Idempotent; safe to call from every lambda entry family. */
-export function registerOrgAlertObserver(): void {
-  if (registered) return;
-  registered = true;
-  try {
-    setOrgEventObserver(handleOrgEvent);
-  } catch {
-    // a partially-mocked services module throws on the missing export; alerts just stay off
   }
 }

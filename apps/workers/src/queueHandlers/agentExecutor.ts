@@ -291,7 +291,7 @@ import { loadAgentMcpTools, withAutoApprovedCustomTools, type AgentMcpTools } fr
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { Context, SQSBatchResponse, SQSEvent } from 'aws-lambda';
-import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/orgAlertDispatcher';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 
 // Credits debited here can cross an org's alert thresholds; this entry does not load queueHandlers/utils.
 registerOrgAlertObserver();

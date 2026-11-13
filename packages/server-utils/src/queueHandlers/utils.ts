@@ -3,7 +3,7 @@ import { HTTPError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '../utils/config';
 import { registerToolGearObserver } from '../services/gears/toolGearObserver';
-import { registerOrgAlertObserver } from '../organizations/orgAlertDispatcher';
+import { registerOrgAlertObserver } from '../organizations/registerOrgAlertObserver';
 import { contextToLogs } from '../utils/logger';
 import { Context, SQSEvent } from 'aws-lambda';
 import { recordFinalDlqFailures } from './dlqFailure';

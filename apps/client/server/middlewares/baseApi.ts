@@ -1,7 +1,7 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { authMiddleware, auth } from '@server/auth/auth';
 import { registerToolGearObserver } from '@bike4mind/server-utils/services/gears/toolGearObserver';
-import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/orgAlertDispatcher';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 import { logging } from '@server/middlewares/logging';
 import { deployRevision } from '@server/middlewares/deployRevision';
 import errorHandler from '@server/middlewares/errorHandler';
