@@ -9,8 +9,7 @@
  * mode, scopes and validation come from the contracts; the SPA route is unchanged.
  */
 import { deleteProjectContract, getProjectContract, ProjectEvents, updateProjectContract } from '@bike4mind/common';
-import { fabFileRepository, projectRepository, sessionRepository, userRepository, Project } from '@bike4mind/database';
-import { assertOrgServiceAccountRequest } from '@bike4mind/server-utils/auth/orgServiceAccount';
+import { fabFileRepository, projectRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
@@ -32,19 +31,6 @@ const getAccessibleProject = (userId: string, id: string) =>
 const getRoute = nextRouteForContract(getProjectContract, {
   rateLimit: perUserRateLimit('/api/v1/projects/[id]'),
 }).get(async (req, res) => {
-  if (req.user.orgServiceAccount) {
-    await assertOrgServiceAccountRequest(req.user, req.apiKeyInfo ?? {}, {
-      method: 'GET',
-      path: '/api/v1/projects/[id]',
-      resourceId: req.validatedParams.id,
-    });
-    const project = await Project.findOne({
-      _id: req.validatedParams.id,
-      organizationId: req.user.orgServiceAccount.organizationId,
-    }).setOptions({ strictQuery: false });
-    if (!project) throw new NotFoundError('Project not found');
-    return res.json({ ...toPublicProject(project), session_ids: [], file_ids: [] });
-  }
   const project = await getAccessibleProject(req.user.id, req.validatedParams.id);
   return res.json(toPublicProject(project));
 });

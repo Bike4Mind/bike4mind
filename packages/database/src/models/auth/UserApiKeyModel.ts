@@ -436,7 +436,6 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
 const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyModel>(
   {
     userId: { type: String, required: true },
-    serviceAccount: { type: Boolean, default: undefined, immutable: true },
     name: { type: String, required: true },
     keyHash: { type: String },
     keyDigest: { type: String },

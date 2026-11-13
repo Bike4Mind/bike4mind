@@ -121,7 +121,7 @@ export async function verifyJwtToken(
 
     // Fetch the user from database to ensure they still exist
     const user = await User.findById(decoded.id);
-    if (!user || user.isSystem) {
+    if (!user) {
       throw new Error('User not found');
     }
 
@@ -263,9 +263,6 @@ async function assertOwnerAccountUsable(info: ApiKeyInfo) {
   const user = await User.findById(info.userId);
   if (!user) {
     throw new UnauthorizedError('User not found or banned');
-  }
-  if (user.orgServiceAccount) {
-    throw new ForbiddenError('Service accounts require a resource-grant-aware REST endpoint');
   }
   assertAccountStateUsable(user);
   // The admin paid-only switch, mirroring apiKeyAuth so every key surface shares it.
