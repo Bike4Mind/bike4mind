@@ -14,7 +14,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const staged = process.argv.includes('--staged');
-const git = args => execFileSync('git', args, { encoding: 'utf8' });
+const git = args => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
 // Core secrets infra/ no longer declares that the committed file still lists until it is
 // next regenerated. Remove an entry once the file drops it.
