@@ -1,13 +1,14 @@
 import { IAdminSystemPromptHistory, IAdminSystemPromptHistoryDocument } from '@bike4mind/common';
 import mongoose, { Model, model, Schema } from 'mongoose';
+import { SYSTEM_PROMPT_MAX_CONTENT_LENGTH, SYSTEM_PROMPT_MAX_DESCRIPTION_LENGTH } from './systemPromptLimits';
 
 const SystemPromptHistorySchema = new Schema<IAdminSystemPromptHistory, Model<IAdminSystemPromptHistoryDocument>>(
   {
     promptId: { type: String, required: true },
     version: { type: Number, required: true },
-    content: { type: String, required: true, maxlength: 50000 },
+    content: { type: String, required: true, maxlength: SYSTEM_PROMPT_MAX_CONTENT_LENGTH },
     name: { type: String, required: true },
-    description: { type: String, required: true, maxlength: 2000 },
+    description: { type: String, required: true, maxlength: SYSTEM_PROMPT_MAX_DESCRIPTION_LENGTH },
     category: { type: String, required: true },
     tags: [{ type: String }],
     variables: [{ type: String }],
