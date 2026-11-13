@@ -8008,7 +8008,8 @@ export async function scanShell(
             if (passed.length > 0) continue;
           }
           const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
-          if (value.startsWith('-')) continue;
+          // `--format=` names no place; expandBraces would read the empty word as a dropped brace alternative.
+          if (value === '' || value.startsWith('-')) continue;
           const words = operandWords(value, scope());
           // Braces the scan cannot expand as bash does may make any name, so whatever their shape they are unread.
           if (words === null) {

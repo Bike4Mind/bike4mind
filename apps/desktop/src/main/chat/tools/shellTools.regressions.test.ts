@@ -974,7 +974,6 @@ describe('shell approval in a project with a large node_modules', () => {
     'git -c man.man.path=./x.sh help clean',
     'git -c man.man.cmd=./x.sh --help clean',
     'git -c man.x.cmd= --help clean',
-    'git -c core.pager= status',
     'git -c help.format=web -c help.browser=firefox -c browser.firefox.path=./x.sh -c help.htmlPath=./docs --help clean',
     'git -c help.format=web -c help.browser=firefox -c browser.firefox.path=./x.sh -c help.htmlPath=./docs help clean',
     'git -c browser.firefox.cmd=./x.sh help clean',
@@ -1188,10 +1187,18 @@ describe('shell approval in a project with a large node_modules', () => {
     'export GIT_EDITOR=./x.sh; git commit -m x',
     'git status; export GIT_EXEC_PATH=./bin',
     'git -c core.pager=cat log -1',
+    'git -c core.pager= status',
     'git -c core.hooksPath=/dev/null -c core.fsmonitor=false commit -m x',
   ])('runs %s unasked, as git starts no program the script names there', async command => {
     expect(await judge(command)).toMatchObject({ auto: true, full: true });
   });
+
+  it.each(['git show --format= HEAD', 'git log --pretty= -1', 'git show --format= --remerge-diff HEAD'])(
+    'runs %s unasked, as an empty option value names no place',
+    async command => {
+      expect(await judge(command)).toMatchObject({ auto: true, full: true });
+    }
+  );
 
   it('asks in every mode for a rebase continued with an editor that runs nothing', async () => {
     expect(await judge('GIT_EDITOR=true git rebase --continue')).toMatchObject(asks);
