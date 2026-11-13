@@ -34,6 +34,7 @@ export const aiHolders = {
         matchBy: 'userId',
         action: 'retain',
         ...CATALOG_PUBLICATION,
+        exportScope: 'reference',
       },
     ],
   },

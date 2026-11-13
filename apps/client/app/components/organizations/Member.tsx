@@ -33,6 +33,7 @@ import BulkInviteModal from './BulkInviteModal';
 import InviteLinksPanel from './InviteLinksPanel';
 import OrgInviteRoleSelect from './OrgInviteRoleSelect';
 import MemberCreditBudgetCard from './MemberCreditBudgetCard';
+import OrganizationMfaPolicy from './OrganizationMfaPolicy';
 import { getMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
 import {
   useOrganizationInvites,
@@ -408,6 +409,10 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
       )}
 
       <MemberCreditBudgetCard organization={organization} canManage={canManageCreditBudgets} />
+      <OrganizationMfaPolicy
+        key={`${organization.id}:${organization.mfaPolicy?.required}:${organization.mfaPolicy?.graceEndsAt}`}
+        organization={organization}
+      />
 
       {/* Search and Actions Section */}
       <Stack className="organization-members-search-container" spacing={1} mx={{ xs: 0, sm: '20px' }}>

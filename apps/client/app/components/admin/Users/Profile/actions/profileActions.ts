@@ -23,6 +23,7 @@ export type ProfileAction =
   | 'message'
   | 'scheduleDeletion'
   | 'cancelDeletion'
+  | 'dataExport'
   | 'delete';
 
 /**

@@ -46,6 +46,7 @@ vi.mock('@tanstack/react-router', () => ({
 
 // The route imports eight sibling panels; mocking them keeps this test to the two chips it pins.
 vi.mock('@client/app/components/common/Breadcrumbs', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/TeamOnboardingChecklist', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/Member', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationGroups', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationBillingSection', () => ({ default: () => null }));
