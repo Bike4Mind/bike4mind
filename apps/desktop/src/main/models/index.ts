@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { stat, statfs } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
-import { app, ipcMain, powerSaveBlocker, safeStorage } from 'electron';
+import { app, ipcMain, powerSaveBlocker } from 'electron';
 import {
   CuratedListSource,
   CuratedStore,
@@ -23,6 +23,7 @@ import { localHardware } from '../chat/localContextSizing';
 import { createMainLogger } from '../logger';
 import type { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { privateFile } from '../privateFile';
+import { appSecretCipher } from '../secrets';
 import { appWindows } from '../windows';
 import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import { BUNDLED_CURATED_TEXT } from './curated/bundled';
@@ -129,10 +130,11 @@ export function registerModels(
   };
   const logger = createMainLogger(process.env.B4M_DESKTOP_VERBOSE === '1');
   const tokens = new HuggingFaceTokenStore(
-    safeStorage,
+    appSecretCipher(),
     privateFile(join(app.getPath('userData'), 'hugging-face-token.json')),
     logger
   );
+  void tokens.reencrypt().catch(() => logger.warn('Models: could not re-save the Hugging Face token'));
   let blocker: number | null = null;
   const source = curatedSource(() => send(IPC_CHANNELS.modelsCuratedChanged));
   const service = new ModelHubService({

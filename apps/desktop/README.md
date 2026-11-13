@@ -860,12 +860,19 @@ token.
   with it and serves both `/api/oauth/device/initiate` and `/api/oauth/device/token`, because
   the token endpoint rejects a device code whose stored `clientId` differs from the redeeming
   `client_id` (RFC 8628 s3.4).
-- **Storage.** Tokens go to the OS keychain via Electron `safeStorage`, keyed per normalized
+- **Storage.** Tokens are encrypted with a key held in the OS keychain, keyed per normalized
   API URL, in `<userData>/auth-vault.json`. Deliberately not the CLI's plaintext
-  `~/.bike4mind/config.json`. `safeStorage` is only usable after the app `ready` event, so
-  `registerAuth()` must be called from inside `whenReady()`. Where
-  `safeStorage.isEncryptionAvailable()` is false (Linux with no keyring) the vault degrades to
-  memory-only and the UI says so - it never falls back to writing plaintext.
+  `~/.bike4mind/config.json`. The cipher (`src/main/secrets/`) is only usable after the app
+  `ready` event, so `registerAuth()` must be called from inside `whenReady()`. Where encryption
+  is unavailable (Linux with no keyring) the vault degrades to memory-only and the UI says so -
+  it never falls back to writing plaintext.
+- **Secret key per build type.** Windows, Linux, unpackaged runs and macOS builds signed with a
+  Developer ID use Electron `safeStorage`. A packaged macOS build whose signature has no team
+  identifier (ad-hoc or self-signed) instead encrypts with AES-256-GCM under its own key, kept in
+  the login keychain item `<app name> Secret Key` and written through `/usr/bin/security`, so an
+  update does not ask for the keychain password again. Its first launch re-saves every secret
+  `safeStorage` stored (auth, MCP, model servers, Hugging Face), and either build type still
+  reads the other's format.
 - **Dev identity.** Unpackaged runs (`pnpm dev`, `pnpm start`, `electron-vite preview`) take
   the name `Bike4Mind Dev`, so they get their own userData folder and keychain item instead of
   sharing the installed app's (`src/main/appIdentity.ts`). The first such run after upgrading

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
+import { openedAs, sealedAs, versionedCipher } from '../secrets/versionedCipher.testHelper';
 import { credentialHeaders, MAX_MODEL_SERVERS, ModelServerStore } from './ModelServerStore';
 
 const TOKEN = 'tok-secret-zz';
@@ -548,5 +549,66 @@ describe('credentialHeaders', () => {
     const two = await store.add({ ...base, name: 'second' }, { type: 'none' });
     await Promise.all([store.setModels(one.id, ['a', 'b']), store.setModels(two.id, ['c'])]);
     expect(overlapped).toBe(false);
+  });
+});
+
+describe('ModelServerStore.reencrypt', () => {
+  async function legacyFile() {
+    const file = memoryFile();
+    const legacy = new ModelServerStore(versionedCipher('old'), file, logger);
+    await legacy.add(base, { type: 'bearer', token: TOKEN });
+    await legacy.add({ ...base, name: 'open box' }, { type: 'none' });
+    return file;
+  }
+  const secrets = (file: { contents: string | null }) =>
+    (JSON.parse(file.contents ?? '{}') as { servers: { name: string; secret?: string }[] }).servers.map(server => [
+      server.name,
+      server.secret && openedAs(server.secret),
+    ]);
+
+  it('re-seals a legacy credential once, and it still opens', async () => {
+    const file = await legacyFile();
+    const writes = vi.spyOn(file, 'write');
+    const store = new ModelServerStore(versionedCipher('new'), file, logger);
+
+    await store.reencrypt();
+    await store.reencrypt();
+
+    expect(secrets(file)).toEqual([
+      ['gpu box', `new:${TOKEN}`],
+      ['open box', undefined],
+    ]);
+    expect(writes).toHaveBeenCalledTimes(1);
+    const reopened = new ModelServerStore(versionedCipher('new'), file, logger);
+    const [saved] = await reopened.list();
+    expect(reopened.headers(saved)).toEqual({ authorization: `Bearer ${TOKEN}` });
+  });
+
+  it('keeps a legacy credential it cannot open, so nothing is lost', async () => {
+    const file = await legacyFile();
+    const before = file.contents;
+    const writes = vi.spyOn(file, 'write');
+
+    await new ModelServerStore(versionedCipher('new', { opensOld: false }), file, logger).reencrypt();
+
+    expect(writes).not.toHaveBeenCalled();
+    expect(file.contents).toBe(before);
+  });
+
+  it('never rewrites a file from a newer version, or without a keychain', async () => {
+    const newer = JSON.stringify({
+      version: 2,
+      servers: [{ ...base, id: 'aaaaaaaaaaaa', auth: { type: 'bearer' }, secret: sealedAs('old', TOKEN) }],
+    });
+    const newerFile = memoryFile(newer);
+    await new ModelServerStore(versionedCipher('new'), newerFile, { debug: vi.fn(), warn: vi.fn() }).reencrypt();
+    expect(newerFile.contents).toBe(newer);
+
+    for (const current of [versionedCipher('new', { available: false }), cipher()]) {
+      const file = await legacyFile();
+      const writes = vi.spyOn(file, 'write');
+      await new ModelServerStore(current, file, logger).reencrypt();
+      expect(writes).not.toHaveBeenCalled();
+    }
   });
 });
