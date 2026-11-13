@@ -1,23 +1,20 @@
 import { FC, useState, useEffect, useMemo } from 'react';
 import { Card, Typography, Box, Button, Stack, Textarea, FormControl, FormLabel, FormHelperText } from '@mui/joy';
-import { IOrganizationDocument, orgAclRowConfersMembership } from '@bike4mind/common';
-import {
-  useDeleteOrganization,
-  useTransferOrganizationOwnership,
-  useUpdateOrganization,
-} from '@client/app/hooks/data/organizations';
+import { IOrganizationDocument, orgAclRowConfersMembership, WithId } from '@bike4mind/common';
+import { useTransferOrganizationOwnership, useUpdateOrganization } from '@client/app/hooks/data/organizations';
 import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
-import { useConfirmationModal } from '@client/app/hooks/useConfirmation';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useNavigate } from '@tanstack/react-router';
 import TransferOwnershipModal, { TransferCandidate } from './TransferOwnershipModal';
+import DeleteOrganizationDialog from './DeleteOrganizationDialog';
+import OrganizationGeneralSection from './OrganizationGeneralSection';
+import { canViewOrgBilling } from '@client/app/routes/organizations/orgTabAccess';
 
 const MAX_SYSTEM_PROMPT_LENGTH = 10000; // ~2500 tokens
 
-const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> = ({ organization }) => {
-  const deleteOrganization = useDeleteOrganization();
+const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocument> }> = ({ organization }) => {
   const updateOrganization = useUpdateOrganization();
-  const setConfirmationModal = useConfirmationModal.setState;
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const navigate = useNavigate();
   const { currentUser } = useUser();
 
@@ -83,22 +80,21 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
     setHasChanges(false);
   };
 
-  const handleDelete = () => {
-    setConfirmationModal({
-      open: true,
-      type: 'danger',
-      title: 'Delete Team',
-      description: 'Are you sure you want to delete this team? This action cannot be undone.',
-      okLabel: 'Delete',
-      onOk: async () => {
-        await deleteOrganization.mutateAsync(organization.id);
-        navigate({ to: '/organizations' });
-      },
-    });
+  const handleOpenBilling = () => {
+    setDeleteOpen(false);
+    navigate({ to: '/organizations/$id', params: { id: organization.id }, search: { tab: 'billing' }, replace: true });
+  };
+
+  // Replace, so Back does not return to the deleted team's page.
+  const handleDeleted = () => {
+    setDeleteOpen(false);
+    navigate({ to: '/organizations', replace: true });
   };
 
   return (
     <Stack spacing={3} className="organization-settings-container">
+      <OrganizationGeneralSection organization={organization} />
+
       {/* Team System Prompt */}
       <Card variant="outlined">
         <Typography level="title-sm" sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
@@ -183,8 +179,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
               <Button
                 color="danger"
                 variant="outlined"
-                onClick={handleDelete}
-                loading={deleteOrganization.isPending}
+                onClick={() => setDeleteOpen(true)}
                 className="organization-settings-delete-button"
                 data-testid="organization-settings-delete-btn"
               >
@@ -193,6 +188,16 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
             </Box>
           </Stack>
         </Card>
+      )}
+      {canDeleteOrg && (
+        <DeleteOrganizationDialog
+          open={deleteOpen}
+          organization={organization}
+          canOpenBilling={canViewOrgBilling(currentUser, organization)}
+          onClose={() => setDeleteOpen(false)}
+          onOpenBilling={handleOpenBilling}
+          onDeleted={handleDeleted}
+        />
       )}
       {canTransferOwnership && (
         <TransferOwnershipModal

@@ -15,6 +15,7 @@ import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigA
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
 import { clearDeletedOrganizationReferences } from '@server/organizations/clearDeletedOrganizationReferences';
+import { attachOrganizationLogos } from '@server/organizations/attachOrganizationLogos';
 import { creditService, organizationService } from '@bike4mind/services';
 import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -98,9 +99,10 @@ const handler = baseApi()
         }
       );
 
-      return res
-        .status(200)
-        .json(toSafeOrganization(organization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }));
+      const [safeOrganization] = await attachOrganizationLogos([
+        toSafeOrganization(organization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }),
+      ]);
+      return res.status(200).json(safeOrganization);
     })
   )
   .put(
@@ -131,7 +133,10 @@ const handler = baseApi()
             })
           : await updateProfile();
 
-      return res.json(toSafeOrganization(updatedOrganization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }));
+      const [safeOrganization] = await attachOrganizationLogos([
+        toSafeOrganization(updatedOrganization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }),
+      ]);
+      return res.json(safeOrganization);
     })
   )
   .delete<Request<unknown, unknown, unknown, { id: string }>>(async (req, res) => {

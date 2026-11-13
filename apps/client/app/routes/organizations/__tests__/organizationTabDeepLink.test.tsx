@@ -41,6 +41,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
 
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => undefined }));
+vi.mock('@client/app/components/organizations/OrganizationAvatar', () => ({ default: () => null }));
 
 vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ id: 'org1' }),
