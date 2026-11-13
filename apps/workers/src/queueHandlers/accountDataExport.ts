@@ -623,6 +623,12 @@ async function existingExport(storage: Storage, key: string) {
 }
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
+  const payload: unknown = JSON.parse(event.Records[0].body);
+  if (typeof payload === 'object' && payload !== null && 'kind' in payload && payload.kind === 'organization') {
+    const { buildOrganizationDataExport } = await import('./organizationDataExport');
+    await buildOrganizationDataExport(payload);
+    return;
+  }
   const { exportJobId, userId } = secureParameters(JSON.parse(event.Records[0].body), AccountDataExportPayload);
   logger.updateMetadata({ exportJobId, userId });
   const key = accountDataExportKey(userId, exportJobId);

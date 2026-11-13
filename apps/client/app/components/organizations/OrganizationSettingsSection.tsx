@@ -11,6 +11,7 @@ import { useConfirmationModal } from '@client/app/hooks/useConfirmation';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useNavigate } from '@tanstack/react-router';
 import TransferOwnershipModal, { TransferCandidate } from './TransferOwnershipModal';
+import OrganizationExportSection from './OrganizationExportSection';
 
 const MAX_SYSTEM_PROMPT_LENGTH = 10000; // ~2500 tokens
 
@@ -147,6 +148,9 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
       </Card>
 
       {/* Danger Zone */}
+      {currentUser?.id === organization.userId && (
+        <OrganizationExportSection key={organization.id} organizationId={organization.id} />
+      )}
       {canDeleteOrg && (
         <Card variant="outlined">
           <Typography level="title-sm" sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>

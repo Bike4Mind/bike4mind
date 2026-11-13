@@ -13,6 +13,10 @@ export const ORGANIZATION_AUDIT_ACTIONS = [
   'api_key.revoked',
   'connector.connected',
   'connector.disconnected',
+  'export.requested',
+  'export.completed',
+  'export.failed',
+  'export.downloaded',
 ] as const;
 
 export type OrganizationAuditAction = (typeof ORGANIZATION_AUDIT_ACTIONS)[number];
