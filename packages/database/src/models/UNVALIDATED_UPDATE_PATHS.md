@@ -78,7 +78,7 @@ can silently turn it into `none`.
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.markFailed` | repository-check | `literal` | writes "failed" |
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setPendingGate` | repository-check | `literal` | writes "paused" |
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setWaitingOnChild` | repository-check | `literal` | writes "awaiting_subagent" |
-| AgentExecution | `subagentConfig.thoroughness` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setSubagentConfig` | none |  | delegateToAgent casts LLM tool args (args as DelegateToAgentParams); thoroughness never enum-checked |
+| AgentExecution | `subagentConfig.thoroughness` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setSubagentConfig` | route-schema | `b4m-core/services/src/llm/tools/implementation/delegateToAgent.ts#createDelegateToAgentTool` | Tool rejects out-of-enum thoroughness before foreground or background delegation; omitted values use the agent default |
 | AgentOpsSettings | `totalGenerationsCount` | min | `ai/AgentOpsSettingsModel.ts#AgentOpsSettingsRepository.incrementGenerationCount` | none |  | no callers; writer only does $inc by literal 1 |
 | AnalyticsDaily | `day` | match | `analytics/AnalyticsDailyModel.ts#AnalyticsDailyRepository.upsertDay` | route-schema | `apps/client/server/analytics/analyticsRollup.ts#dayBounds` | Sole caller rollupDay checks YYYY-MM-DD regex via dayBounds and throws first |
 | ArenaVote | `status` | enum | `social/ArenaVoteModel.ts#ArenaVoteRepository.recordVote` | repository-check | `literal` | writes "voted" |
