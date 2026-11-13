@@ -51,29 +51,36 @@ export type LoopConfigBody = Partial<
   wakeMode?: string | null;
 };
 
-// A JSON copy: the event stores plain values, and undefined and null both mean unset. Order-only differences
-// (the edit form rebuilds stageConfig in stage order; the coach appends) and unset lanes (= 1, as the summary
-// reads them) are not changes, so a no-op save neither logs a version nor trips the undo guard.
-const versioned = (loop: Partial<ILoop>, field: LoopVersionedField): unknown => {
-  const value = JSON.parse(JSON.stringify(loop[field] ?? null));
+// A JSON copy: the event stores plain values as the loop held them (undo writes them back), and undefined and
+// null both mean unset.
+const stored = (loop: Partial<ILoop>, field: LoopVersionedField): unknown =>
+  JSON.parse(JSON.stringify(loop[field] ?? null));
+
+// For comparing only: order-only differences (the edit form rebuilds stageConfig in stage order; the coach
+// appends) and unset lanes (= 1, as the summary reads them) are not changes, so a no-op save neither logs a
+// version nor trips the undo guard.
+const comparable = (field: LoopVersionedField, value: unknown): unknown => {
   if (field === 'maxConcurrent') return value ?? 1;
-  if (field === 'tools' && value) return [...value].sort();
-  if (field === 'stageConfig' && value) {
+  if (field === 'tools' && Array.isArray(value)) return [...value].sort();
+  if (field === 'stageConfig' && Array.isArray(value)) {
     return [...value].sort((a: { stage: string }, b: { stage: string }) => a.stage.localeCompare(b.stage));
   }
-  return value;
+  return value ?? null;
 };
 
 /** The versioned fields whose values differ between two reads of a loop. */
 export function changedVersionedFields(before: Partial<ILoop>, after: Partial<ILoop>): LoopVersionedField[] {
-  return LOOP_VERSIONED_FIELDS.filter(field => !isEqual(versioned(before, field), versioned(after, field)));
+  return LOOP_VERSIONED_FIELDS.filter(
+    field => !isEqual(comparable(field, stored(before, field)), comparable(field, stored(after, field)))
+  );
 }
 
 /** Whether every field in `values` still holds that value on `loop` (the undo and revert guard). */
 export function loopMatches(loop: Partial<ILoop>, values: Partial<Record<LoopVersionedField, unknown>>): boolean {
-  return Object.entries(values).every(([field, value]) =>
-    isEqual(versioned(loop, field as LoopVersionedField), value ?? null)
-  );
+  return Object.entries(values).every(([key, value]) => {
+    const field = key as LoopVersionedField;
+    return isEqual(comparable(field, stored(loop, field)), comparable(field, value));
+  });
 }
 
 /** The model a stage runs on before any escalation. */
@@ -220,8 +227,8 @@ export async function applyLoopConfigPatch({
   if (changed.length > 0 || reason) {
     const config: ILoopConfigChange = {
       by,
-      before: Object.fromEntries(changed.map(field => [field, versioned(existing, field)])),
-      after: Object.fromEntries(changed.map(field => [field, versioned(updated, field)])),
+      before: Object.fromEntries(changed.map(field => [field, stored(existing, field)])),
+      after: Object.fromEntries(changed.map(field => [field, stored(updated, field)])),
       ...(suggestionKey && { suggestionKey }),
     };
     // Best effort: the edit is saved; only its history entry (and undo) would be missing.

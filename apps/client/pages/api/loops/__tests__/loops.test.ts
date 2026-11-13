@@ -1519,6 +1519,24 @@ describe('PATCH /api/loops/:id config_changed events', () => {
     expect(repo.updateForUser.mock.calls[1][2]).toMatchObject({ coachTrial: null });
   });
 
+  it('stores before/after as the loop held them, so undo writes back unset lanes and the tool order', async () => {
+    const existing = loop({ tools: ['web_search', 'github'] });
+    repo.findByIdAndUserId.mockResolvedValue(existing);
+    repo.updateForUser.mockImplementation(async (_id: string, _u: string, patch: Record<string, unknown>) => ({
+      ...existing,
+      ...patch,
+    }));
+    await call('item', 'patch', {
+      query: { id: OID },
+      body: { maxConcurrent: 3, tools: ['web_search', 'github', 'fetch'] },
+    }).result;
+    expect(loopEvents.recordConfigChanged.mock.calls[0][0].config).toEqual({
+      by: 'owner',
+      before: { maxConcurrent: null, tools: ['web_search', 'github'] },
+      after: { maxConcurrent: 3, tools: ['web_search', 'github', 'fetch'] },
+    });
+  });
+
   it('logs nothing for an edit outside the tracked fields', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop());
     await call('item', 'patch', { query: { id: OID }, body: { name: 'Renamed', goal: 'Another goal' } }).result;
@@ -1875,6 +1893,20 @@ describe('/api/loops/:id/coach', () => {
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
+  it('trial defaults to 10 tickets, and is a 400 for a suggestion that cannot be trialled', async () => {
+    failingBuild();
+    stored(coachLoop());
+    await coach('post', { action: 'trial', key: 'stronger_model:build' }).result;
+    expect(repo.updateForUser.mock.calls[0][2].coachTrial).toMatchObject({ tickets: 10 });
+
+    idleRuns();
+    stored(coachLoop());
+    await expect(coach('post', { action: 'trial', key: 'slower_schedule' }).result).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(repo.updateForUser).toHaveBeenCalledTimes(1);
+  });
+
   const onTrial = (overrides: Record<string, unknown> = {}) =>
     coachLoop({
       stageConfig: [{ stage: 'build', model: 'huge' }],
@@ -1968,6 +2000,24 @@ describe('/api/loops/:id/coach', () => {
       coachDismissed: [{ key: 'b', reason: 'y', at: expect.any(Date) }],
     });
     expect(loopEvents.recordConfigChanged).not.toHaveBeenCalled();
+  });
+
+  it('dismiss keeps the newest 50, replacing an earlier dismissal of the same key', async () => {
+    const at = new Date();
+    stored(coachLoop({ coachDismissed: Array.from({ length: 50 }, (_, i) => ({ key: `k${i}`, reason: 'r', at })) }));
+    await coach('post', { action: 'dismiss', key: 'k10', reason: 'again' }).result;
+    let written = repo.updateForUser.mock.calls[0][2].coachDismissed;
+    expect(written).toHaveLength(50);
+    expect(written.filter((entry: { key: string }) => entry.key === 'k10')).toEqual([
+      { key: 'k10', reason: 'again', at: expect.any(Date) },
+    ]);
+    expect(written.at(-1).key).toBe('k10');
+
+    await coach('post', { action: 'dismiss', key: 'new', reason: 'no' }).result;
+    written = repo.updateForUser.mock.calls[1][2].coachDismissed;
+    expect(written).toHaveLength(50);
+    expect(written[0].key).toBe('k1');
+    expect(written.at(-1).key).toBe('new');
   });
 
   it('refuses an unknown action', async () => {
