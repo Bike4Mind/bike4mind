@@ -54,6 +54,14 @@ describe('resolveRedeemableInvite - the share link bearer secret', () => {
   });
 
   // The other half of the chosen migration path: links already sitting in inboxes keep working.
+  it('refuses an Organization share link addressed by its _id, and resolves it by token', async () => {
+    const row = invite({ id: TOKENIZED_ID, token: TOKEN, type: 'Organization' as IInviteDocument['type'] });
+    const { db } = dbOf([row]);
+
+    await expect(resolveRedeemableInvite(TOKENIZED_ID, { db })).resolves.toBeNull();
+    await expect(resolveRedeemableInvite(TOKEN, { db })).resolves.toBe(row);
+  });
+
   it('still resolves a legacy tokenless invite by its _id', async () => {
     const { db } = dbOf([invite({ id: LEGACY_ID })]);
 

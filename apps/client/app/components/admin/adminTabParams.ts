@@ -1,6 +1,7 @@
 import { INVITE_CENTER_SEARCH_PARSERS, INVITE_CENTER_TAB_PARAMS, type InviteCenterSearch } from './inviteCenterSearch';
 import { INTEGRATION_DEMAND_TAB_PARAMS } from './integrationDemandSearch';
 import { SIGNUP_RISK_REVIEW_TAB_PARAMS } from './signupRiskReviewSearch';
+import { DLQ_TAB_PARAMS } from './dlqSearch';
 import { ANALYTICS_TAB_PARAMS } from './Analytics/analyticsTabSearch';
 import { EVENTS_TAB_PARAMS } from './EventMetrics/eventsTabSearch';
 import { CAMPAIGN_WATCH_SEARCH_PARAM, SHADOW_DETECTION_TAB_PARAMS } from './shadowDetectionSearch';
@@ -21,7 +22,6 @@ import {
   ADMIN_USERS_TAB_SLUG,
   AUDIT_ENTRY_ID_PARAM,
   AuditLogFiltersSchema,
-  DLQ_QUEUE_PARAM,
   MODERATION_INCIDENT_ID_PARAM,
   type AuditLogFilters,
 } from '@bike4mind/common';
@@ -114,7 +114,7 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_WAITLIST_TAB_SLUG]: INVITE_CENTER_TAB_PARAMS,
   [ADMIN_STRIPE_DISPUTES_TAB_SLUG]: STRIPE_DISPUTE_TAB_PARAMS,
   [ADMIN_MODEL_METRICS_TAB_SLUG]: MODEL_METRICS_TAB_PARAMS,
-  [ADMIN_DLQ_REPLAY_TAB_SLUG]: [DLQ_QUEUE_PARAM],
+  [ADMIN_DLQ_REPLAY_TAB_SLUG]: DLQ_TAB_PARAMS,
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 type AdminTabParam = (typeof ADMIN_TAB_PARAMS)[keyof typeof ADMIN_TAB_PARAMS][number];

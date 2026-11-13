@@ -79,6 +79,18 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(event.createdAt).toBeInstanceOf(Date);
     });
 
+    it.each([
+      'data-lake-health',
+      'data-lake-proposals',
+      'data-lake-findings',
+      'data-lake-inconsistencies',
+      'data-lake-skipped-files',
+      'data-lake-membership-duplicates',
+    ] as const)('persists the %s surface', async surface => {
+      const event = await repo.record(baseInput({ surface, resolvedLakeIds: ['lake-a'] }));
+      expect(event.surface).toBe(surface);
+    });
+
     it('round-trips questId and sessionId (#1867 turn linkage)', async () => {
       const event = await repo.record(baseInput({ questId: 'quest-1', sessionId: 'session-1' }));
       expect(event.questId).toBe('quest-1');

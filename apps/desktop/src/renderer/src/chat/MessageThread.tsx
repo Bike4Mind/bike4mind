@@ -15,6 +15,7 @@ import {
   type ChatMessage,
   type ChatUsage,
 } from '@shared/chat';
+import { modelEditSummary } from '@shared/modelEdit';
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
 import { CopyMessageButton, revealCopyButtonSx } from './CopyMessageButton';
@@ -134,7 +135,11 @@ function ServerCredentialsRow() {
  * not the expanded body folded away under it.
  */
 const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: string | null }) {
-  const attachments = message.attachments ?? [];
+  // A point-and-edit turn shows its parts as a chip; its close-up went to the model, not the bubble.
+  const modelEdit = modelEditSummary(message.notes);
+  const attachments = (message.attachments ?? []).filter(
+    attachment => !(modelEdit?.closeup && attachment.kind === 'image' && attachment.name === modelEdit.closeup)
+  );
   const skill = message.skill;
   const [expanded, setExpanded] = useState(false);
   const copyText = skill ? `/${skill.name}${skill.args ? ` ${skill.args}` : ''}` : message.content;
@@ -154,6 +159,17 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
           <Box sx={{ mb: message.content ? 1 : 0 }}>
             <AttachmentRow sessionId={sessionId} attachments={attachments} />
           </Box>
+        )}
+        {modelEdit && modelEdit.parts.length > 0 && (
+          <Chip
+            size="sm"
+            variant="outlined"
+            color="primary"
+            sx={{ mb: 0.75, maxWidth: '100%' }}
+            data-testid="chat-message-model-edit-chip"
+          >
+            Editing: {modelEdit.parts.join(', ')}
+          </Chip>
         )}
 
         {/* A skill turn shows the INVOCATION, because that is the sentence the user wrote. The

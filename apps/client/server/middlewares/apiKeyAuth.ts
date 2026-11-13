@@ -22,7 +22,10 @@ import { createHash } from 'crypto';
 import type { z } from 'zod';
 import {
   decideScopeGate,
+  isLegacyApiKey,
+  LEGACY_SCOPE_PASS_LOG,
   parseStagedScopes,
+  shouldLogLegacyPass,
   SCOPE_STAGING_ENV_VAR,
 } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
@@ -73,11 +76,13 @@ const hashApiKeyForLogging = (apiKey: string): string => {
  * @param options.recordUse - `false` for routes the app calls on its own (baseApi's
  *   `recordsActivity: false`): the key's `lastUsedAt` is not stamped and no USED event is
  *   counted. ApiKeyUsageLog still records the call, as it does every authenticated request.
+ * @param options.grandfatherLegacyKeys - Admit legacy keys that miss `requiredScopes`
+ *   (baseApi's `grandfatherLegacyKeys`); see LEGACY_API_KEY_WINDOW in apiKeyScopeGate.ts.
  */
 export const apiKeyAuth = (
   requiredScopes?: ApiKeyScopeValue[],
   alsoRequiredScopes?: ApiKeyScopeValue[],
-  { recordUse = true }: { recordUse?: boolean } = {}
+  { recordUse = true, grandfatherLegacyKeys = false }: { recordUse?: boolean; grandfatherLegacyKeys?: boolean } = {}
 ) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // If already authenticated via JWT, skip API key auth
@@ -139,7 +144,11 @@ export const apiKeyAuth = (
           });
         }
       }
-      const gate = decideScopeGate(requiredScopes, validation.scopes, staged, alsoRequiredScopes);
+      const grandfathered = grandfatherLegacyKeys && isLegacyApiKey(validation.createdAt);
+      const gate = decideScopeGate(requiredScopes, validation.scopes, staged, alsoRequiredScopes, {
+        grandfathered,
+        exchangeKey: !!validation.oauthExchangeClientId,
+      });
       if (gate.outcome !== 'allow') {
         // A scope 403 fires before req.apiKeyInfo is set, so log from `validation`
         // (never the raw key) - otherwise the only trace is errorHandler's generic warn.
@@ -156,6 +165,8 @@ export const apiKeyAuth = (
         };
         if (gate.outcome === 'stagedAllow') {
           req.logger?.warn('API key scope check missed but staged - allowing', context);
+        } else if (gate.outcome === 'legacyAllow') {
+          if (shouldLogLegacyPass(validation.keyId, endpointPath)) req.logger?.info(LEGACY_SCOPE_PASS_LOG, context);
         } else {
           req.logger?.warn('API key scope check failed', context);
           throw new ForbiddenError(
@@ -226,6 +237,8 @@ export const apiKeyAuth = (
         billingOwnerType: validation.billingOwnerType,
         organizationId: validation.organizationId,
         preauthorizedLakeIds: validation.preauthorizedLakeIds,
+        createdAt: validation.createdAt,
+        oauthExchangeClientId: validation.oauthExchangeClientId,
       };
 
       // Create CASL ability for the user

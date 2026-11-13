@@ -8,6 +8,7 @@ import type {
   UpdateDataLakeResearchConfigInput,
 } from '@bike4mind/common';
 import {
+  RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_RUN_TRIGGERS,
   RESEARCH_SCHEDULE_CADENCES,
@@ -60,6 +61,8 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
     reviewDomains: { type: [String], default: [] },
     // No default: its absence is how a document written before the tiers is recognized and upgraded.
     unlistedSources: { type: String, enum: RESEARCH_UNLISTED_SOURCES },
+    autoAdmitTrusted: { type: Boolean, default: false },
+    maxAutoAdmits: { type: Number, default: RESEARCH_MAX_AUTO_ADMITS_DEFAULT },
     // Derived from the three fields above on every write; kept for readers that predate them.
     allowedDomains: { type: [String], default: [] },
     blockedDomains: { type: [String], default: [] },

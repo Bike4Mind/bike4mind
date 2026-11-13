@@ -23,13 +23,14 @@ const h = vi.hoisted(() => ({
   // here rather than as a 400 at mint time (#2945).
   askedForUserId: undefined as string | undefined,
   hasOptiAccess: true,
+  bypass: false,
 }));
 
 vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
 vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
   useOverwatchAccess: () => true,
   useHearthEnabled: () => true,
-  useApiKeyScopeEntitlements: () => ({ bypass: false, entitlements: new Set<string>() }),
+  useApiKeyScopeEntitlements: () => ({ bypass: h.bypass, entitlements: new Set<string>() }),
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -70,6 +71,7 @@ beforeEach(() => {
   h.lakesError = false;
   h.askedForUserId = undefined;
   h.hasOptiAccess = true;
+  h.bypass = false;
   h.refetchLakes.mockClear();
   h.mutate.mockClear();
   h.mutate.mockResolvedValue({ key: 'secret' });
@@ -175,18 +177,23 @@ describe('AdminGenerateApiKeyModal - ingest scopes', () => {
 
   it('the generic counter ignores a selected ingest scope, and Select All replaces it', () => {
     renderModal();
+    const offered = genericApiKeyScopesFor({
+      hasOptiAccess: true,
+      hasOverwatchAccess: true,
+      hearthEnabled: true,
+      bypass: false,
+      entitlements: new Set<string>(),
+    }).length;
     const counter = () => screen.getByTestId('admin-generate-key-scopes-count').textContent;
     fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
-    expect(counter()).toContain(`(0/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`);
+    expect(counter()).toContain(`(0/${offered} selected)`);
 
     fireEvent.click(screen.getByText('Select All'));
-    expect(counter()).toContain(
-      `(${GENERIC_MODAL_API_KEY_SCOPES.length}/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`
-    );
+    expect(counter()).toContain(`(${offered}/${offered} selected)`);
     expect(scopeInput(ApiKeyScope.QA_INGEST).checked).toBe(false);
 
     fireEvent.click(screen.getByText('Clear All'));
-    expect(counter()).toContain(`(0/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`);
+    expect(counter()).toContain(`(0/${offered} selected)`);
     expect(scopeInput(ApiKeyScope.QA_INGEST).checked).toBe(false);
   });
 
@@ -335,6 +342,13 @@ describe('AdminGenerateApiKeyModal - premium scopes', () => {
     expect(screen.getByTestId('admin-generate-key-scopes-count').textContent).toContain(
       `(${offered}/${offered} selected)`
     );
+  });
+
+  it.each([false, true])('offers persona mint only with caller bypass=%s', bypass => {
+    h.bypass = bypass;
+    renderModal();
+    if (bypass) expect(scopeRow(ApiKeyScope.PERSONAS_MINT)).not.toBeNull();
+    else expect(scopeRow(ApiKeyScope.PERSONAS_MINT)).toBeNull();
   });
 
   it('offers the premium scopes with Opti access', () => {

@@ -501,7 +501,7 @@
   },
   "apps/client/app/components/admin/FilesTab/index.tsx": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 2
+      "count": 1
     }
   },
   "apps/client/app/components/admin/IdentityProvidersTab.tsx": {

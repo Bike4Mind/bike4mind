@@ -1,4 +1,4 @@
-import type { TutorialStep } from '@bike4mind/common';
+import type { TutorialStep, TutorialTurn } from '@bike4mind/common';
 
 export interface TutorialModuleIntro {
   id: string;
@@ -9,14 +9,7 @@ export interface TutorialModuleIntro {
   sheet?: { name: string; csv: string; retired?: readonly string[] };
 }
 
-export interface TutorialTurn {
-  prompt: string;
-  reply: string;
-  uiSideEffects?: { type: string; payload: unknown }[];
-  toolResults?: { tool_use_id: string; content: string; is_error?: boolean }[];
-  /** The turn on which the user's own copy of the sheet rides as the quest's attachment. */
-  attachSheet?: boolean;
-}
+export type { TutorialTurn };
 
 /** A recorded canvas, seeded when `turn` lands. The document is the owner's shape, opaque here. */
 export interface TutorialCanvas {

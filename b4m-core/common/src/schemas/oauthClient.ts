@@ -1,4 +1,16 @@
 import { z } from 'zod';
+import {
+  API_KEY_RATE_LIMIT_MAX_PER_MINUTE,
+  API_KEY_RATE_LIMIT_MAX_PER_DAY,
+  type IUserApiKeyRateLimit,
+} from '../types/entities/UserApiKeyTypes';
+
+export const oauthClientRateLimitSchema = z
+  .object({
+    requestsPerMinute: z.number().int().min(1).max(API_KEY_RATE_LIMIT_MAX_PER_MINUTE),
+    requestsPerDay: z.number().int().min(1).max(API_KEY_RATE_LIMIT_MAX_PER_DAY),
+  })
+  .strict();
 
 export const OAUTH_CLIENT_TYPES = ['first-party', 'relying-party'] as const;
 export type OAuthClientType = (typeof OAUTH_CLIENT_TYPES)[number];
@@ -133,8 +145,10 @@ export const createOAuthClientSchema = z
     redirectUris: redirectUrisSchema,
     clientType: z.enum(OAUTH_CLIENT_TYPES).default('relying-party'),
     federatedIdp: oauthFederatedIdpInputSchema.optional(),
+    rateLimit: oauthClientRateLimitSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine(data => !data.rateLimit || !!data.federatedIdp, 'A rate-limit profile requires a federated client');
 
 // Update keeps scopes a legacy client already stores, so only the shape is checked here;
 // updateOAuthClient checks newly-added scopes against OAUTH_CLIENT_SCOPES.
@@ -160,6 +174,7 @@ export const updateOAuthClientSchema = z
     isActive: z.boolean().optional(),
     allowedScopes: allowedScopesSchema.optional(),
     federatedIdp: oauthFederatedIdpInputSchema.nullable().optional(),
+    rateLimit: oauthClientRateLimitSchema.nullable().optional(),
     // null removes it: the client's new sign-ups stop being credited to a product.
     overwatchProductId: oauthOverwatchProductIdSchema.nullable().optional(),
     expectedUpdatedAt: z.string().datetime().nullable().optional(),
@@ -184,6 +199,7 @@ export interface OAuthClientView {
   allowedScopes: string[];
   isActive: boolean;
   federatedIdp?: OAuthFederatedIdpConfig;
+  rateLimit?: IUserApiKeyRateLimit;
   overwatchProductId?: string;
   // Null for legacy documents written before timestamps were enabled.
   createdAt: string | null;

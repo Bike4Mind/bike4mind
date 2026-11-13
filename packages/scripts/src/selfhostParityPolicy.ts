@@ -379,7 +379,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:dataLakeResearchQueue',
-    '731536174082da500869942ee0e77bafc8d1935d3662362fb4c6b5789c32908d',
+    'c7246a0a232128a250244202c6edf6384cb6604deac094cc58fd9706a35af2e2',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:dataLakeResearchQueue',
@@ -657,7 +657,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:accountDataExportQueue',
-    '87bfa4084fa4cfde884a58cd4c788e42073199e87dd0feba4346cb301b2be82f',
+    'e68d74fd6e11cf064f0e388e8b44cd096e16bf27a56d67a43d6774de7734731f',
     {
       source: 'apps/workers/src/selfhost/accountDataExportQueue.ts',
       symbol: 'registerAccountDataExportQueue',
@@ -1150,6 +1150,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '91bbf43d2f4288d039b17b5258fb32e0998597ed586df3b174b32311ee131ad6',
     'Hosted error triage and auto-fix dispatch; not applicable to a portable deployment.'
   ),
+  gap('schedule:infra/cron.ts:personaExpirySweep', '6994be0fdcb6a4252ee07d551f5bed1b35ddef6a986b68bd49b1c7736bc5d2cd'),
   wired(
     'schedule:infra/cron.ts:signupIpRetention',
     'b90d6f8f8b7bdc5640a0de6c90b64dcdc176e9170da8d595b5aa6a52328cb312',

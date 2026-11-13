@@ -92,6 +92,11 @@ const MODEL_FILE_CONTRACT = [
   'leave hard parts (horns, claws, spines, wings, a base) faceted so they stay crisp. Keep refine at 2-3: a whole',
   'creature smoothed this way builds in well under a second. Seams where hulled pieces meet can show as streaks, so',
   'prefer one hull per limb over many short hulls unioned together.',
+  'Point-and-edit: the user can click parts in the pane and type a change. That turn carries a note naming the parts,',
+  'the lines that build each one (the build traces every manifold call back to its line), the line that lists it and',
+  'its bounds in mm, with a close-up image. Re-read the file, change only those parts, and keep the others byte for',
+  'byte; a listed line that also builds other parts is shared, so change it only when the request needs it and say',
+  'so. Keep part names stable, since they are how the pane finds a part again.',
 ].join('\n');
 
 function requireModel(context: ToolContext): ModelContext {

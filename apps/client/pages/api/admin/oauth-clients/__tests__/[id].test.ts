@@ -102,6 +102,7 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
           { field: 'isActive', before: true, after: true },
           { field: 'allowedScopes', before: ['openid'], after: ['openid'] },
           { field: 'federatedIdp', before: null, after: null },
+          { field: 'rateLimit', before: null, after: null },
         ],
       })
     );
@@ -136,6 +137,23 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
       })
     );
   });
+
+  it.each([null, { requestsPerMinute: 300, requestsPerDay: 20_000 }])(
+    'audits a profile update to %j',
+    async rateLimit => {
+      const previous = { requestsPerMinute: 60, requestsPerDay: 1000 };
+      db.updateOAuthClient.mockResolvedValue({ before: view({ rateLimit: previous }), after: view({ rateLimit }) });
+      const { req, res } = makeReqRes('PATCH', { body: { rateLimit } });
+      await handlers.update.patch(req, res);
+      expect(db.updateOAuthClient).toHaveBeenCalledWith('c1', { rateLimit });
+      expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+        req,
+        expect.objectContaining({
+          changes: expect.arrayContaining([{ field: 'rateLimit', before: previous, after: rateLimit }]),
+        })
+      );
+    }
+  );
 
   it('passes federatedIdp null through to remove the trust config', async () => {
     db.updateOAuthClient.mockResolvedValue({ before: view(), after: view() });

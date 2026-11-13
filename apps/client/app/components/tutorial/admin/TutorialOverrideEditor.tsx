@@ -113,6 +113,8 @@ const AnchorPicker: FC<AnchorPickerProps> = ({ step, value, choices, onChange })
 
 interface Props {
   apiBase: string;
+  /** Written into the export so the apply script can refuse it in the wrong repo. */
+  owner: string;
   row: TutorialModuleOverrideRow;
   choices: TutorialAnchorChoices;
   /** The host's own step renderers, on top of the generic ones, so a step nothing renders can be flagged. */
@@ -122,7 +124,7 @@ interface Props {
 }
 
 /** Live edits to one repo module: copy, anchors, order, and a turn's prompt or reply, saved as one set. */
-const TutorialOverrideEditor: FC<Props> = ({ apiBase, row, choices, steps, onDirtyChange }) => {
+const TutorialOverrideEditor: FC<Props> = ({ apiBase, owner, row, choices, steps, onDirtyChange }) => {
   const save = useSaveTutorialEdits(apiBase);
   const modules = useTutorialModules(apiBase);
   const renderers = useMemo(() => resolveTutorialSteps(apiBase, steps), [apiBase, steps]);
@@ -442,7 +444,7 @@ const TutorialOverrideEditor: FC<Props> = ({ apiBase, row, choices, steps, onDir
           variant="outlined"
           color="neutral"
           disabled={liveUnitsOf(row).length === 0}
-          onClick={() => downloadOverrideBundle(row)}
+          onClick={() => downloadOverrideBundle(row, owner)}
           data-testid="tutorial-override-export"
         >
           Export
